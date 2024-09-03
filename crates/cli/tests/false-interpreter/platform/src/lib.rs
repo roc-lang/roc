@@ -3,12 +3,21 @@
 use core::ffi::c_void;
 use core::mem::MaybeUninit;
 use libc;
-use roc_std::{RocList, RocStr};
+use roc_std::{RocList, RocResult, RocStr};
+use std::collections::HashMap;
 use std::env;
-use std::ffi::CStr;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::raw::c_char;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
+
+static FILE_ID: AtomicU64 = AtomicU64::new(0);
+
+fn file_handles() -> &'static Mutex<HashMap<u64, BufReader<File>>> {
+    static FILE_HANDLES: OnceLock<Mutex<HashMap<u64, BufReader<File>>>> = OnceLock::new();
+
+    FILE_HANDLES.get_or_init(|| Mutex::new(HashMap::default()))
+}
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
@@ -146,81 +155,89 @@ unsafe fn call_the_closure(closure_data_ptr: *const u8) -> i64 {
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_getLine() -> RocStr {
+pub extern "C" fn roc_fx_getLine() -> RocResult<RocStr, ()> {
     let stdin = std::io::stdin();
     let line1 = stdin.lock().lines().next().unwrap().unwrap();
 
-    RocStr::from(line1.as_str())
+    RocResult::ok(RocStr::from(line1.as_str()))
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_getChar() -> u8 {
+pub extern "C" fn roc_fx_getChar() -> RocResult<u8, ()> {
     let mut buffer = [0];
 
     if let Err(ioerr) = std::io::stdin().lock().read_exact(&mut buffer[..]) {
         if ioerr.kind() == std::io::ErrorKind::UnexpectedEof {
-            u8::MAX
+            RocResult::ok(u8::MAX)
         } else {
             panic!("Got an unexpected error while reading char from stdin");
         }
     } else {
-        buffer[0]
+        RocResult::ok(buffer[0])
     }
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_putLine(line: &RocStr) {
+pub extern "C" fn roc_fx_putLine(line: &RocStr) -> RocResult<(), ()> {
     let string = line.as_str();
     println!("{}", string);
     let _ = std::io::stdout().lock().flush();
+
+    RocResult::ok(())
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_putRaw(line: &RocStr) {
+pub extern "C" fn roc_fx_putRaw(line: &RocStr) -> RocResult<(), ()> {
     let string = line.as_str();
     print!("{}", string);
     let _ = std::io::stdout().lock().flush();
+
+    RocResult::ok(())
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_getFileLine(br_ptr: *mut BufReader<File>) -> RocStr {
-    let br = unsafe { &mut *br_ptr };
+pub extern "C" fn roc_fx_getFileLine(br_id: u64) -> RocResult<RocStr, ()> {
+    let mut br_map = file_handles().lock().unwrap();
+    let br = br_map.get_mut(&br_id).unwrap();
     let mut line1 = String::default();
 
     br.read_line(&mut line1)
         .expect("Failed to read line from file");
 
-    RocStr::from(line1.as_str())
+    RocResult::ok(RocStr::from(line1.as_str()))
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_getFileBytes(br_ptr: *mut BufReader<File>) -> RocList<u8> {
-    let br = unsafe { &mut *br_ptr };
+pub extern "C" fn roc_fx_getFileBytes(br_id: u64) -> RocResult<RocList<u8>, ()> {
+    let mut br_map = file_handles().lock().unwrap();
+    let br = br_map.get_mut(&br_id).unwrap();
     let mut buffer = [0; 0x10 /* This is intentionally small to ensure correct implementation */];
 
     let count = br
         .read(&mut buffer[..])
         .expect("Failed to read bytes from file");
 
-    RocList::from_slice(&buffer[..count])
+    RocResult::ok(RocList::from_slice(&buffer[..count]))
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_closeFile(br_ptr: *mut BufReader<File>) {
-    unsafe {
-        let boxed = Box::from_raw(br_ptr);
-        drop(boxed)
-    }
+pub extern "C" fn roc_fx_closeFile(br_id: u64) -> RocResult<(), ()> {
+    file_handles().lock().unwrap().remove(&br_id);
+
+    RocResult::ok(())
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_openFile(name: &RocStr) -> *mut BufReader<File> {
+pub extern "C" fn roc_fx_openFile(name: &RocStr) -> RocResult<u64, ()> {
     let string = name.as_str();
     match File::open(string) {
         Ok(f) => {
             let br = BufReader::new(f);
+            let br_id = FILE_ID.fetch_add(1, Ordering::SeqCst);
 
-            Box::into_raw(Box::new(br))
+            file_handles().lock().unwrap().insert(br_id, br);
+
+            RocResult::ok(br_id)
         }
         Err(_) => {
             panic!(
@@ -232,7 +249,7 @@ pub extern "C" fn roc_fx_openFile(name: &RocStr) -> *mut BufReader<File> {
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_withFileOpen(_name: &RocStr, _buffer: *const u8) {
+pub extern "C" fn roc_fx_withFileOpen(_name: &RocStr, _buffer: *const u8) -> RocResult<(), ()> {
     // TODO: figure out accepting a closure in an fx and passing data to it.
     // let f = File::open(name.as_str()).expect("Unable to open file");
     // let mut br = BufReader::new(f);
@@ -241,4 +258,6 @@ pub extern "C" fn roc_fx_withFileOpen(_name: &RocStr, _buffer: *const u8) {
     //     let closure_data_ptr = buffer.offset(8);
     //     call_the_closure(closure_data_ptr);
     // }
+
+    RocResult::ok(())
 }

@@ -18,7 +18,7 @@ use roc_can::constraint::{Constraint as ConstraintSoa, Constraints, TypeOrVar};
 use roc_can::expr::{DbgLookup, Declarations, ExpectLookup, PendingDerives};
 use roc_can::module::{
     canonicalize_module_defs, ExposedByModule, ExposedForModule, ExposedModuleTypes, Module,
-    ResolvedImplementations, TypeState,
+    ModuleParams, ResolvedImplementations, TypeState,
 };
 use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecMap, VecSet};
 use roc_constrain::module::constrain_module;
@@ -251,6 +251,7 @@ fn start_phase<'a>(
 
                 let mut aliases = MutMap::default();
                 let mut abilities_store = PendingAbilitiesStore::default();
+                let mut imported_module_params = VecMap::default();
 
                 for imported in parsed.available_modules.keys() {
                     match state.module_cache.aliases.get(imported) {
@@ -293,6 +294,10 @@ fn start_phase<'a>(
                                 .union(import_store.closure_from_imported(exposed_symbols));
                         }
                     }
+
+                    if let Some(params) = state.module_cache.module_params.get(imported) {
+                        imported_module_params.insert(*imported, params.clone());
+                    }
                 }
 
                 let skip_constraint_gen = {
@@ -310,6 +315,8 @@ fn start_phase<'a>(
                     abilities_store,
                     skip_constraint_gen,
                     exposed_module_ids: state.exposed_modules,
+                    exec_mode: state.exec_mode,
+                    imported_module_params,
                 }
             }
 
@@ -356,6 +363,7 @@ fn start_phase<'a>(
                     declarations,
                     state.cached_types.clone(),
                     derived_module,
+                    state.exec_mode,
                     //
                     #[cfg(debug_assertions)]
                     checkmate,
@@ -889,6 +897,8 @@ enum BuildTask<'a> {
         abilities_store: PendingAbilitiesStore,
         exposed_module_ids: &'a [ModuleId],
         skip_constraint_gen: bool,
+        exec_mode: ExecutionMode,
+        imported_module_params: VecMap<ModuleId, ModuleParams>,
     },
     Solve {
         module: Module,
@@ -905,6 +915,7 @@ enum BuildTask<'a> {
         dep_idents: IdentIdsByModule,
         cached_subs: CachedTypeState,
         derived_module: SharedDerivedModule,
+        exec_mode: ExecutionMode,
 
         #[cfg(debug_assertions)]
         checkmate: Option<roc_checkmate::Collector>,
@@ -2318,6 +2329,7 @@ fn update<'a>(
                 extend_module_with_builtin_import(parsed, ModuleId::DECODE);
                 extend_module_with_builtin_import(parsed, ModuleId::HASH);
                 extend_module_with_builtin_import(parsed, ModuleId::INSPECT);
+                extend_module_with_builtin_import(parsed, ModuleId::TASK);
             }
 
             state
@@ -2395,11 +2407,11 @@ fn update<'a>(
                 .pending_abilities
                 .insert(module_id, constrained_module.module.abilities_store.clone());
 
-            if let Some(params_pattern) = constrained_module.module.params_pattern.clone() {
+            if let Some(module_params) = constrained_module.module.module_params.clone() {
                 state
                     .module_cache
-                    .param_patterns
-                    .insert(module_id, params_pattern);
+                    .module_params
+                    .insert(module_id, module_params);
             }
 
             state
@@ -3557,7 +3569,6 @@ fn load_builtin_module_help<'a>(
                 header_type: HeaderType::Builtin {
                     name: header::ModuleName::new(name_stem),
                     exposes: unspace(arena, header.exposes.items),
-                    generates_with: &[],
                     opt_params: header.params,
                 },
                 module_comments: comments,
@@ -3640,6 +3651,7 @@ fn load_module<'a>(
         "Decode", ModuleId::DECODE
         "Hash", ModuleId::HASH
         "Inspect", ModuleId::INSPECT
+        "Task", ModuleId::TASK
     }
 
     let (filename, opt_shorthand) = module_name_to_path(src_dir, &module_name, arc_shorthands);
@@ -3875,8 +3887,6 @@ fn parse_header<'a>(
                 header_type: HeaderType::Hosted {
                     name: header.name.value,
                     exposes: unspace(arena, header.exposes.item.items),
-                    generates: header.generates.item,
-                    generates_with: unspace(arena, header.generates_with.item.items),
                 },
                 module_comments: comments,
                 header_imports: Some(header.imports),
@@ -4311,6 +4321,7 @@ impl<'a> BuildTask<'a> {
         declarations: Declarations,
         cached_subs: CachedTypeState,
         derived_module: SharedDerivedModule,
+        exec_mode: ExecutionMode,
 
         #[cfg(debug_assertions)] checkmate: Option<roc_checkmate::Collector>,
     ) -> Self {
@@ -4334,6 +4345,7 @@ impl<'a> BuildTask<'a> {
             module_timing,
             cached_subs,
             derived_module,
+            exec_mode,
 
             #[cfg(debug_assertions)]
             checkmate,
@@ -4618,6 +4630,7 @@ struct SolveResult {
     exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     problems: Vec<TypeError>,
     abilities_store: AbilitiesStore,
+    imported_modules_with_params: Vec<ModuleId>,
 
     #[cfg(debug_assertions)]
     checkmate: Option<roc_checkmate::Collector>,
@@ -4642,7 +4655,7 @@ fn run_solve_solve(
         aliases,
         rigid_variables,
         abilities_store: pending_abilities,
-        params_pattern,
+        module_params,
         ..
     } = module;
 
@@ -4662,6 +4675,11 @@ fn run_solve_solve(
         &mut imported_rigid_vars,
         &mut imported_flex_vars,
     );
+
+    let imported_modules_with_params = imported_param_vars
+        .keys()
+        .copied()
+        .collect::<Vec<ModuleId>>();
 
     let actual_constraint = constraints.let_import_constraint(
         imported_rigid_vars,
@@ -4690,7 +4708,7 @@ fn run_solve_solve(
             derived_module,
             #[cfg(debug_assertions)]
             checkmate,
-            params_pattern: params_pattern.map(|(_, _, pattern)| pattern.value),
+            module_params,
             module_params_vars: imported_param_vars,
         };
 
@@ -4745,6 +4763,7 @@ fn run_solve_solve(
         exposed_vars_by_symbol,
         problems: errors,
         abilities_store: resolved_abilities_store,
+        imported_modules_with_params,
 
         #[cfg(debug_assertions)]
         checkmate,
@@ -4766,6 +4785,7 @@ fn run_solve<'a>(
     dep_idents: IdentIdsByModule,
     cached_types: CachedTypeState,
     derived_module: SharedDerivedModule,
+    exec_mode: ExecutionMode,
 
     #[cfg(debug_assertions)] checkmate: Option<roc_checkmate::Collector>,
 ) -> Msg<'a> {
@@ -4776,10 +4796,8 @@ fn run_solve<'a>(
     // TODO remove when we write builtins in roc
     let aliases = module.aliases.clone();
 
-    let opt_params_var = module
-        .params_pattern
-        .as_ref()
-        .map(|(params_var, _, _)| *params_var);
+    let opt_params_var = module.module_params.as_ref().map(|params| params.whole_var);
+    let home_has_params = opt_params_var.is_some();
 
     let mut module = module;
     let loc_expects = std::mem::take(&mut module.loc_expects);
@@ -4814,6 +4832,7 @@ fn run_solve<'a>(
                     exposed_vars_by_symbol,
                     problems: vec![],
                     abilities_store: abilities,
+                    imported_modules_with_params: vec![],
 
                     #[cfg(debug_assertions)]
                     checkmate: None,
@@ -4841,8 +4860,9 @@ fn run_solve<'a>(
         solved: mut solved_subs,
         solved_implementations,
         exposed_vars_by_symbol,
-        problems,
+        mut problems,
         abilities_store,
+        imported_modules_with_params,
 
         #[cfg(debug_assertions)]
         checkmate,
@@ -4856,6 +4876,20 @@ fn run_solve<'a>(
         &solved_implementations,
         &abilities_store,
     );
+
+    match exec_mode {
+        ExecutionMode::Check => {
+            // Params are not lowered in check mode
+        }
+        ExecutionMode::Executable | ExecutionMode::ExecutableIfCheck | ExecutionMode::Test => {
+            roc_lower_params::type_error::remove_module_param_arguments(
+                &mut problems,
+                home_has_params,
+                &decls.symbols,
+                imported_modules_with_params,
+            );
+        }
+    }
 
     let solved_module = SolvedModule {
         exposed_vars_by_symbol,
@@ -5006,6 +5040,8 @@ fn canonicalize_and_constrain<'a>(
     parsed: ParsedModule<'a>,
     skip_constraint_gen: bool,
     exposed_module_ids: &[ModuleId],
+    exec_mode: ExecutionMode,
+    imported_module_params: VecMap<ModuleId, ModuleParams>,
 ) -> CanAndCon {
     let canonicalize_start = Instant::now();
 
@@ -5032,7 +5068,7 @@ fn canonicalize_and_constrain<'a>(
 
     let mut var_store = VarStore::default();
 
-    let module_output = canonicalize_module_defs(
+    let mut module_output = canonicalize_module_defs(
         arena,
         parsed_defs,
         &header_type,
@@ -5091,6 +5127,26 @@ fn canonicalize_and_constrain<'a>(
     // _before has an underscore because it's unused in --release builds
     let _before = roc_types::types::get_type_clone_count();
 
+    match exec_mode {
+        ExecutionMode::Check => {
+            // No need to lower params for `roc check` and lang server
+            // If we did, we'd have to update the language server to exclude the extra arguments
+        }
+        ExecutionMode::Executable | ExecutionMode::ExecutableIfCheck | ExecutionMode::Test => {
+            // We need to lower params only if the current module has any or imports at least one with params
+            if module_output.module_params.is_some() || !imported_module_params.is_empty() {
+                roc_lower_params::lower::lower(
+                    module_id,
+                    &module_output.module_params,
+                    imported_module_params,
+                    &mut module_output.declarations,
+                    &mut module_output.scope.locals.ident_ids,
+                    &mut var_store,
+                );
+            }
+        }
+    }
+
     let mut constraints = Constraints::new();
 
     let constraint = if skip_constraint_gen {
@@ -5102,7 +5158,7 @@ fn canonicalize_and_constrain<'a>(
             module_output.symbols_from_requires,
             &module_output.scope.abilities_store,
             &module_output.declarations,
-            &module_output.params_pattern,
+            &module_output.module_params,
             module_id,
         )
     };
@@ -5140,6 +5196,7 @@ fn canonicalize_and_constrain<'a>(
                         | ModuleId::SET
                         | ModuleId::HASH
                         | ModuleId::INSPECT
+                        | ModuleId::TASK
                 );
 
                 if !name.is_builtin() || should_include_builtin {
@@ -5159,7 +5216,7 @@ fn canonicalize_and_constrain<'a>(
         abilities_store: module_output.scope.abilities_store,
         loc_expects: module_output.loc_expects,
         loc_dbgs: module_output.loc_dbgs,
-        params_pattern: module_output.params_pattern,
+        module_params: module_output.module_params,
     };
 
     let constrained_module = ConstrainedModule {
@@ -6209,6 +6266,8 @@ fn run_task<'a>(
             abilities_store,
             skip_constraint_gen,
             exposed_module_ids,
+            exec_mode,
+            imported_module_params,
         } => {
             let can_and_con = canonicalize_and_constrain(
                 arena,
@@ -6220,6 +6279,8 @@ fn run_task<'a>(
                 parsed,
                 skip_constraint_gen,
                 exposed_module_ids,
+                exec_mode,
+                imported_module_params,
             );
 
             Ok(Msg::CanonicalizedAndConstrained(can_and_con))
@@ -6239,6 +6300,7 @@ fn run_task<'a>(
             dep_idents,
             cached_subs,
             derived_module,
+            exec_mode,
 
             #[cfg(debug_assertions)]
             checkmate,
@@ -6257,6 +6319,7 @@ fn run_task<'a>(
             dep_idents,
             cached_subs,
             derived_module,
+            exec_mode,
             //
             #[cfg(debug_assertions)]
             checkmate,

@@ -48,24 +48,22 @@ mod cli_run {
     #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
     const TEST_LEGACY_LINKER: bool = false;
 
-    #[test]
-    #[cfg_attr(windows, ignore)]
-    fn hello_world() {
-        let expected_ending = "Hello, World!\n🔨 Building host ...\n";
-        let runner = Run::new_roc()
-            .arg(CMD_RUN)
-            .arg(BUILD_HOST_FLAG)
-            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-            .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .with_valigrind(ALLOW_VALGRIND)
-            .arg(file_from_root("examples", "helloWorld.roc").as_path());
-
-        let out = runner.run();
-        out.assert_clean_success();
-        out.assert_stdout_and_stderr_ends_with(expected_ending);
+    #[derive(Debug, PartialEq, Eq)]
+    enum Arg<'a> {
+        ExamplePath(&'a str),
+        // allow because we may need PlainText in the future
+        #[allow(dead_code)]
+        PlainText(&'a str),
     }
 
-    #[test]
+    fn check_compile_error(file: &Path, flags: &[&str], expected: &str) {
+        check_compile_error_with(CMD_CHECK, file, flags, expected);
+    }
+
+    fn check_compile_error_with(cmd: &str, file: &Path, flags: &[&str], expected: &str) {
+        let compile_out = run_roc([cmd, file.to_str().unwrap()].iter().chain(flags), &[], &[]);
+        let err = compile_out.stdout.trim();
+        let err = strip_colors(err);
     #[cfg_attr(windows, ignore)]
     // uses C platform
     fn platform_switching_main() {
@@ -1214,14 +1212,9 @@ mod cli_run {
 
             But the type annotation on main says it should be:
 
-                Effect.Effect (Result {} [])
+                    Task {} []
 
             Tip: Add type annotations to functions or values to help you figure
-            this out.
-
-            ────────────────────────────────────────────────────────────────────────────────
-
-            1 error and 0 warning found in <ignored for test> ms
             "#
         );
 
@@ -1335,7 +1328,6 @@ mod cli_run {
             4│      generates Effect with [after, map, always, foobar]
                                                                ^^^^^^
 
-            Only specific functions like `after` and `map` can be generated.Learn
             more about hosted modules at TODO.
 
             ────────────────────────────────────────────────────────────────────────────────

@@ -38,6 +38,7 @@ pub enum Parens {
     InFunctionType,
     InApply,
     InOperator,
+    InAsPattern,
 }
 
 /// In an AST node, do we show newlines around it

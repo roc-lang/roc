@@ -7,12 +7,23 @@ mod suffixed_tests {
     use insta::assert_snapshot;
     use roc_can::desugar::desugar_defs_node_values;
     use roc_parse::test_helpers::parse_defs_with;
+    use roc_types::subs::VarStore;
 
     macro_rules! run_test {
         ($src:expr) => {{
             let arena = &Bump::new();
+            let mut var_store = VarStore::default();
             let mut defs = parse_defs_with(arena, indoc!($src)).unwrap();
-            desugar_defs_node_values(arena, &mut defs, $src, &mut None, "test.roc", true);
+            desugar_defs_node_values(
+                arena,
+                &mut var_store,
+                &mut defs,
+                $src,
+                &mut None,
+                "test.roc",
+                true,
+                &mut Default::default(),
+            );
 
             let snapshot = format!("{:#?}", &defs);
             println!("{}", snapshot);
@@ -429,6 +440,16 @@ mod suffixed_tests {
                 foo = getFoo!
                 dbg foo
                 bar! foo
+            "#
+        );
+    }
+
+    #[test]
+    fn dbg_expr() {
+        run_test!(
+            r#"
+            main =
+                dbg (dbg 1 + 1)
             "#
         );
     }

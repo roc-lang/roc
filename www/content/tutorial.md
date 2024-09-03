@@ -154,10 +154,9 @@ Let's move out of the REPL and create our first Roc application!
 Make a file named `main.roc` and put this in it:
 
 ```roc
-app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.12.0/Lb8EgiejTUzbggO2HVVuPJFkwvvsfW6LojkLR20kTVE.tar.br" }
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.15.0/SlwdbJ-3GR7uBWQo6zlmYWNYOxnvo8r6YABXD-45UOw.tar.br" }
 
 import pf.Stdout
-import pf.Task
 
 main =
     Stdout.line! "I'm a Roc application!"
@@ -476,6 +475,7 @@ third = tuple.2 # ["list"]
 # tuple destructuring
 (first, second, third) = ("hello", 42, ["list"])
 ```
+
 <details>
     <summary>Pronouncing Tuple</summary>
     By the way, there are two common ways to pronounce "tuple"—one sounds like "two-pull" and the other rhymes with "supple"—and although no clear consensus has emerged in the programming world, people seem generally accepting when others pronounce it differently than they do.
@@ -1458,13 +1458,19 @@ Each `.roc` file is a separate module and contains Roc code for different purpos
 
 There are several modules that are built into the Roc compiler, which are imported automatically into every Roc module. They are:
 
-1.  `Bool`
-2.  `Str`
-3.  `Num`
-4.  `List`
-5.  `Result`
-6.  `Dict`
-7.  `Set`
+1.  [Str](https://www.roc-lang.org/builtins/Str)
+2.  [Num](https://www.roc-lang.org/builtins/Num)
+3.  [Bool](https://www.roc-lang.org/builtins/Bool)
+4.  [Result](https://www.roc-lang.org/builtins/Result)
+5.  [List](https://www.roc-lang.org/builtins/List)
+6.  [Dict](https://www.roc-lang.org/builtins/Dict)
+7.  [Set](https://www.roc-lang.org/builtins/Set)
+8.  [Decode](https://www.roc-lang.org/builtins/Decode)
+9.  [Encode](https://www.roc-lang.org/builtins/Encode)
+10. [Hash](https://www.roc-lang.org/builtins/Hash)
+11. [Box](https://www.roc-lang.org/builtins/Box)
+12. [Inspect](https://www.roc-lang.org/builtins/Inspect)
+13. [Task](https://www.roc-lang.org/builtins/Task)
 
 You may have noticed that we already used the first five. For example, when we wrote `Str.concat` and `Num.isEven`, we were referencing functions stored in the `Str` and `Num` modules.
 
@@ -1480,7 +1486,7 @@ Besides being built into the compiler, the builtin modules are different from ot
 Let's take a closer look at the part of `main.roc` above the `main` def:
 
 ```roc
-app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.12.0/Lb8EgiejTUzbggO2HVVuPJFkwvvsfW6LojkLR20kTVE.tar.br" }
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.15.0/SlwdbJ-3GR7uBWQo6zlmYWNYOxnvo8r6YABXD-45UOw.tar.br" }
 
 import pf.Stdout
 ```
@@ -1584,7 +1590,7 @@ See the [Ingest Files Example](https://www.roc-lang.org/examples/IngestFiles/REA
 
 ## [Tasks](#tasks) {#tasks}
 
-Tasks are not currently part of the Roc builtins—for now, each platform exposes their own `Task` implementation, but the plan is to standardize them into a builtin `Task` like module like the builtin modules we already have for `List`, `Str`, and so on—but they're an important part of building Roc applications, so let's continue using the [basic-cli](https://github.com/roc-lang/basic-cli) platform we've been using up to this point as an example!
+Tasks are provided in a builtin `Task` module like the `List`, `Str` modules. They're an important part of building Roc applications, so let's continue using the [basic-cli](https://github.com/roc-lang/basic-cli) platform we've been using up to this point as an example!
 
 In the `basic-cli` platform, here are four operations we can do:
 
@@ -1598,7 +1604,7 @@ We'll use these four operations to learn about tasks.
 Let's start with a basic "Hello World" program.
 
 ```roc
-app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.12.0/Lb8EgiejTUzbggO2HVVuPJFkwvvsfW6LojkLR20kTVE.tar.br" }
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.15.0/SlwdbJ-3GR7uBWQo6zlmYWNYOxnvo8r6YABXD-45UOw.tar.br" }
 
 import pf.Stdout
 
@@ -1626,22 +1632,20 @@ Stdin.line : Task [Input Str, End] *
 
 Once this task runs, we'll end up with the [tag union](https://www.roc-lang.org/tutorial#tags-with-payloads) `[Input Str, End]`. Then we can check whether we got an `End` or some actual `Input`, and print out a message accordingly.
 
-### [Reading values from tasks](#inspect) {#task-input}
+### [Reading values from tasks](#task-input) {#task-input}
 
 Let's change `main` to read a line from `stdin`, and then print what we got:
 
 ```roc
-app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.12.0/Lb8EgiejTUzbggO2HVVuPJFkwvvsfW6LojkLR20kTVE.tar.br" }
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.15.0/SlwdbJ-3GR7uBWQo6zlmYWNYOxnvo8r6YABXD-45UOw.tar.br" }
 
 import pf.Stdout
 import pf.Stdin
-import pf.Task
 
 main =
     Stdout.line! "Type in something and press Enter:"
     input = Stdin.line!
     Stdout.line! "Your input was: $(input)"
-
 ```
 
 If you run this program, it will print "Type in something and press Enter:" and then pause.

@@ -1,6 +1,6 @@
 app [main] {
-    cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.12.0/Lb8EgiejTUzbggO2HVVuPJFkwvvsfW6LojkLR20kTVE.tar.br",
-    parser: "https://github.com/lukewilliamboswell/roc-parser/releases/download/0.7.1/MvLlME9RxOBjl0QCxyn3LIaoG9pSlaNxCa-t3BfbPNc.tar.br",
+    cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.15.0/SlwdbJ-3GR7uBWQo6zlmYWNYOxnvo8r6YABXD-45UOw.tar.br",
+    parser: "https://github.com/lukewilliamboswell/roc-parser/releases/download/0.5.2/9VrPjwfQQ1QeSL3CfmWr2Pr9DESdDIXy97pwpuq84Ck.tar.br",
 }
 
 import cli.Stdout
@@ -26,18 +26,17 @@ Letter : [A, B, C, Other]
 
 letterParser : Parser (List U8) Letter
 letterParser =
-    input <- buildPrimitiveParser
+    buildPrimitiveParser \input ->
+        valResult =
+            when input is
+                [] -> Err (ParsingFailure "Nothing to parse")
+                ['A', ..] -> Ok A
+                ['B', ..] -> Ok B
+                ['C', ..] -> Ok C
+                _ -> Ok Other
 
-    valResult =
-        when input is
-            [] -> Err (ParsingFailure "Nothing to parse")
-            ['A', ..] -> Ok A
-            ['B', ..] -> Ok B
-            ['C', ..] -> Ok C
-            _ -> Ok Other
-
-    valResult
-    |> Result.map \val -> { val, input: List.dropFirst input 1 }
+        valResult
+        |> Result.map \val -> { val, input: List.dropFirst input 1 }
 
 expect
     input = "B"

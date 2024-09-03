@@ -509,6 +509,10 @@ impl<'a> RocDocAllocator<'a> {
         self.text(name).annotate(Annotation::Shorthand)
     }
 
+    pub fn backpassing_arrow(&'a self) -> DocBuilder<'a, Self, Annotation> {
+        self.text("<-").annotate(Annotation::BinOp)
+    }
+
     pub fn binop(
         &'a self,
         content: roc_module::called_via::BinOp,
@@ -519,6 +523,13 @@ impl<'a> RocDocAllocator<'a> {
     pub fn unop(
         &'a self,
         content: roc_module::called_via::UnaryOp,
+    ) -> DocBuilder<'a, Self, Annotation> {
+        self.text(content.to_string()).annotate(Annotation::UnaryOp)
+    }
+
+    pub fn suffix(
+        &'a self,
+        content: roc_module::called_via::Suffix,
     ) -> DocBuilder<'a, Self, Annotation> {
         self.text(content.to_string()).annotate(Annotation::UnaryOp)
     }
