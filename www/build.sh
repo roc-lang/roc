@@ -97,8 +97,9 @@ fi
 
 $roc version
 
-echo 'Building site markdown content'
-$roc dev www/main.roc -- www/content/ www/build/
+echo 'Generating site markdown content'
+$roc build www/main.roc
+./www/main www/content/ www/build/
 
 echo "Adding github link to examples' html..."
 source www/scripts/add-github-link-to-examples.sh
