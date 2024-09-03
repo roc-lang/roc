@@ -1,7 +1,6 @@
 module [Context, Data, with, getChar, Option, pushStack, popStack, toStr, inWhileScope]
 
 import pf.File
-import pf.Task exposing [Task]
 import Variable exposing [Variable]
 
 Option a : [Some a, None]
@@ -61,43 +60,43 @@ toStr = \{ scopes, stack, state, vars } ->
 
 with : Str, (Context -> Task {} a) -> Task {} a
 with = \path, callback ->
-    handle <- File.withOpen path
-    # I cant define scope here and put it in the list in callback. It breaks alias anaysis.
-    # Instead I have to inline this.
-    # root_scope = { data: Some handle, index: 0, buf: [], whileInfo: None }
-    callback { scopes: [{ data: Some handle, index: 0, buf: [], whileInfo: None }], state: Executing, stack: [], vars: List.repeat (Number 0) Variable.totalCount }
+    File.withOpen path \handle ->
+        # I cant define scope here and put it in the list in callback. It breaks alias anaysis.
+        # Instead I have to inline this.
+        # root_scope = { data: Some handle, index: 0, buf: [], whileInfo: None }
+        callback { scopes: [{ data: Some handle, index: 0, buf: [], whileInfo: None }], state: Executing, stack: [], vars: List.repeat (Number 0) Variable.totalCount }
 
 # I am pretty sure there is a syntax to destructure and keep a reference to the whole, but Im not sure what it is.
 getChar : Context -> Task [T U8 Context] [EndOfData, NoScope]
 getChar = \ctx ->
     when List.last ctx.scopes is
         Ok scope ->
-            (T val newScope) <- Task.await (getCharScope scope)
-            Task.succeed (T val { ctx & scopes: List.set ctx.scopes (List.len ctx.scopes - 1) newScope })
+            (T val newScope) = getCharScope! scope
+            Task.ok (T val { ctx & scopes: List.set ctx.scopes (List.len ctx.scopes - 1) newScope })
 
         Err ListWasEmpty ->
-            Task.fail NoScope
+            Task.err NoScope
 
 getCharScope : Scope -> Task [T U8 Scope] [EndOfData, NoScope]
 getCharScope = \scope ->
     when List.get scope.buf scope.index is
         Ok val ->
-            Task.succeed (T val { scope & index: scope.index + 1 })
+            Task.ok (T val { scope & index: scope.index + 1 })
 
         Err OutOfBounds ->
             when scope.data is
                 Some h ->
-                    bytes <- Task.await (File.chunk h)
+                    bytes = File.chunk! h
                     when List.first bytes is
                         Ok val ->
                             # This starts at 1 because the first character is already being returned.
-                            Task.succeed (T val { scope & buf: bytes, index: 1 })
+                            Task.ok (T val { scope & buf: bytes, index: 1 })
 
                         Err ListWasEmpty ->
-                            Task.fail EndOfData
+                            Task.err EndOfData
 
                 None ->
-                    Task.fail EndOfData
+                    Task.err EndOfData
 
 inWhileScope : Context -> Bool
 inWhileScope = \ctx ->

@@ -7,9 +7,10 @@ use crate::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_num, float_expr_from_result,
     int_expr_from_result, num_expr_from_result, FloatBound, IntBound, NumBound,
 };
+use crate::params_in_abilities_unimplemented;
 use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern, PermitShadows};
 use crate::procedure::{QualifiedReference, References};
-use crate::scope::Scope;
+use crate::scope::{Scope, SymbolLookup};
 use crate::traverse::{walk_expr, Visitor};
 use roc_collections::soa::Index;
 use roc_collections::{SendMap, VecMap, VecSet};
@@ -17,7 +18,7 @@ use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{IdentId, ModuleId, Symbol};
 use roc_parse::ast::{self, Defs, PrecedenceConflict, StrLiteral};
 use roc_parse::ident::Accessor;
 use roc_parse::pattern::PatternType::*;
@@ -107,6 +108,13 @@ pub enum Expr {
 
     // Lookups
     Var(Symbol, Variable),
+    /// Like Var, but from a module with params
+    ParamsVar {
+        symbol: Symbol,
+        var: Variable,
+        params_symbol: Symbol,
+        params_var: Variable,
+    },
     AbilityMember(
         /// Actual member name
         Symbol,
@@ -176,6 +184,9 @@ pub enum Expr {
         tuple_var: Variable,
         elems: Vec<(Variable, Box<Loc<Expr>>)>,
     },
+
+    /// Module params expression in import
+    ImportParams(ModuleId, Region, Option<(Variable, Box<Expr>)>),
 
     /// The "crash" keyword
     Crash {
@@ -308,6 +319,12 @@ impl Expr {
             Self::SingleQuote(..) => Category::Character,
             Self::List { .. } => Category::List,
             &Self::Var(sym, _) => Category::Lookup(sym),
+            &Self::ParamsVar {
+                symbol,
+                var: _,
+                params_symbol: _,
+                params_var: _,
+            } => Category::Lookup(symbol),
             &Self::AbilityMember(sym, _, _) => Category::Lookup(sym),
             Self::When { .. } => Category::When,
             Self::If { .. } => Category::If,
@@ -324,6 +341,8 @@ impl Expr {
             Self::RecordAccessor(data) => Category::Accessor(data.field.clone()),
             Self::TupleAccess { index, .. } => Category::TupleAccess(*index),
             Self::RecordUpdate { .. } => Category::Record,
+            Self::ImportParams(_, _, Some((_, expr))) => expr.category(),
+            Self::ImportParams(_, _, None) => Category::Unknown,
             Self::Tag {
                 name, arguments, ..
             } => Category::TagApply {
@@ -631,34 +650,7 @@ pub fn canonicalize_expr<'a>(
 
             (answer, Output::default())
         }
-        ast::Expr::Record(fields) => {
-            if fields.is_empty() {
-                (EmptyRecord, Output::default())
-            } else {
-                match canonicalize_fields(env, var_store, scope, region, fields.items) {
-                    Ok((can_fields, output)) => (
-                        Record {
-                            record_var: var_store.fresh(),
-                            fields: can_fields,
-                        },
-                        output,
-                    ),
-                    Err(CanonicalizeRecordProblem::InvalidOptionalValue {
-                        field_name,
-                        field_region,
-                        record_region,
-                    }) => (
-                        Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidOptionalValue {
-                            field_name,
-                            field_region,
-                            record_region,
-                        }),
-                        Output::default(),
-                    ),
-                }
-            }
-        }
-
+        ast::Expr::Record(fields) => canonicalize_record(env, var_store, scope, region, *fields),
         ast::Expr::RecordUpdate {
             fields,
             update: loc_update,
@@ -1030,6 +1022,9 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::Backpassing(_, _, _) => {
             internal_error!("Backpassing should have been desugared by now")
         }
+        ast::Expr::RecordUpdater(_) => {
+            internal_error!("Record updater should have been desugared by now")
+        }
         ast::Expr::Closure(loc_arg_patterns, loc_body_expr) => {
             let (closure_data, output) =
                 canonicalize_closure(env, var_store, scope, loc_arg_patterns, loc_body_expr, None);
@@ -1127,7 +1122,9 @@ pub fn canonicalize_expr<'a>(
                 output,
             )
         }
-        ast::Expr::TaskAwaitBang(..) => internal_error!("a Expr::TaskAwaitBang expression was not completely removed in desugar_value_def_suffixed"),
+        ast::Expr::TrySuffix { .. } => internal_error!(
+            "a Expr::TrySuffix expression was not completely removed in desugar_value_def_suffixed"
+        ),
         ast::Expr::Tag(tag) => {
             let variant_var = var_store.fresh();
             let ext_var = var_store.fresh();
@@ -1212,7 +1209,7 @@ pub fn canonicalize_expr<'a>(
                 output,
             )
         }
-        ast::Expr::Dbg(_, _) => {
+        ast::Expr::Dbg | ast::Expr::DbgStmt(_, _) => {
             internal_error!("Dbg should have been desugared by now")
         }
         ast::Expr::LowLevelDbg((source_location, source), message, continuation) => {
@@ -1379,7 +1376,10 @@ pub fn canonicalize_expr<'a>(
             use roc_problem::can::RuntimeError::*;
 
             let sub_region = Region::span_across(&loc_name.region, &loc_value.region);
-            let problem = OptionalFieldInRecordBuilder {record: region, field: sub_region };
+            let problem = OptionalFieldInRecordBuilder {
+                record: region,
+                field: sub_region,
+            };
             env.problem(Problem::RuntimeError(problem.clone()));
 
             (RuntimeError(problem), Output::default())
@@ -1452,6 +1452,42 @@ pub fn canonicalize_expr<'a>(
     )
 }
 
+pub fn canonicalize_record<'a>(
+    env: &mut Env<'a>,
+    var_store: &mut VarStore,
+    scope: &mut Scope,
+    region: Region,
+    fields: ast::Collection<'a, Loc<ast::AssignedField<'a, ast::Expr<'a>>>>,
+) -> (Expr, Output) {
+    use Expr::*;
+
+    if fields.is_empty() {
+        (EmptyRecord, Output::default())
+    } else {
+        match canonicalize_fields(env, var_store, scope, region, fields.items) {
+            Ok((can_fields, output)) => (
+                Record {
+                    record_var: var_store.fresh(),
+                    fields: can_fields,
+                },
+                output,
+            ),
+            Err(CanonicalizeRecordProblem::InvalidOptionalValue {
+                field_name,
+                field_region,
+                record_region,
+            }) => (
+                Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidOptionalValue {
+                    field_name,
+                    field_region,
+                    record_region,
+                }),
+                Output::default(),
+            ),
+        }
+    }
+}
+
 pub fn canonicalize_closure<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
@@ -1520,6 +1556,8 @@ fn canonicalize_closure_body<'a>(
         &loc_body_expr.value,
     );
 
+    let mut references_top_level = false;
+
     let mut captured_symbols: Vec<_> = new_output
         .references
         .value_lookups()
@@ -1530,7 +1568,11 @@ fn canonicalize_closure_body<'a>(
         .filter(|s| !new_output.references.bound_symbols().any(|x| x == s))
         .filter(|s| bound_by_argument_patterns.iter().all(|(k, _)| s != k))
         // filter out top-level symbols those will be globally available, and don't need to be captured
-        .filter(|s| !env.top_level_symbols.contains(s))
+        .filter(|s| {
+            let is_top_level = env.top_level_symbols.contains(s);
+            references_top_level = references_top_level || is_top_level;
+            !is_top_level
+        })
         // filter out imported symbols those will be globally available, and don't need to be captured
         .filter(|s| s.module_id() == env.home)
         // filter out functions that don't close over anything
@@ -1538,6 +1580,15 @@ fn canonicalize_closure_body<'a>(
         .filter(|s| !output.non_closures.contains(s))
         .map(|s| (s, var_store.fresh()))
         .collect();
+
+    if references_top_level {
+        if let Some(params_record) = env.home_params_record {
+            // If this module has params and the closure references top-level symbols,
+            // we need to capture the whole record so we can pass it.
+            // The lower_params pass will take care of removing the captures for top-level fns.
+            captured_symbols.push(params_record);
+        }
+    }
 
     output.union(new_output);
 
@@ -1846,6 +1897,11 @@ fn canonicalize_field<'a>(
             field_region: Region::span_across(&label.region, &loc_expr.region),
         }),
 
+        // An ignored value, e.g. `{ _name: 123 }`
+        IgnoredValue(_, _, _) => {
+            internal_error!("Somehow an IgnoredValue record field was not desugared!");
+        }
+
         // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
         LabelOnly(_) => {
             internal_error!("Somehow a LabelOnly record field was not desugared!");
@@ -1876,19 +1932,19 @@ fn canonicalize_var_lookup(
         // Since module_name was empty, this is an unqualified var.
         // Look it up in scope!
         match scope.lookup_str(ident, region) {
-            Ok(symbol) => {
+            Ok(lookup) => {
                 output
                     .references
-                    .insert_value_lookup(symbol, QualifiedReference::Unqualified);
+                    .insert_value_lookup(lookup, QualifiedReference::Unqualified);
 
-                if scope.abilities_store.is_ability_member_name(symbol) {
+                if scope.abilities_store.is_ability_member_name(lookup.symbol) {
                     AbilityMember(
-                        symbol,
+                        params_in_abilities_unimplemented!(lookup),
                         Some(scope.abilities_store.fresh_specialization_id()),
                         var_store.fresh(),
                     )
                 } else {
-                    Var(symbol, var_store.fresh())
+                    lookup_to_expr(var_store, lookup)
                 }
             }
             Err(problem) => {
@@ -1901,19 +1957,19 @@ fn canonicalize_var_lookup(
         // Since module_name was nonempty, this is a qualified var.
         // Look it up in the env!
         match env.qualified_lookup(scope, module_name, ident, region) {
-            Ok(symbol) => {
+            Ok(lookup) => {
                 output
                     .references
-                    .insert_value_lookup(symbol, QualifiedReference::Qualified);
+                    .insert_value_lookup(lookup, QualifiedReference::Qualified);
 
-                if scope.abilities_store.is_ability_member_name(symbol) {
+                if scope.abilities_store.is_ability_member_name(lookup.symbol) {
                     AbilityMember(
-                        symbol,
+                        params_in_abilities_unimplemented!(lookup),
                         Some(scope.abilities_store.fresh_specialization_id()),
                         var_store.fresh(),
                     )
                 } else {
-                    Var(symbol, var_store.fresh())
+                    lookup_to_expr(var_store, lookup)
                 }
             }
             Err(problem) => {
@@ -1929,6 +1985,25 @@ fn canonicalize_var_lookup(
     // If it's valid, this ident should be in scope already.
 
     (can_expr, output)
+}
+
+fn lookup_to_expr(
+    var_store: &mut VarStore,
+    SymbolLookup {
+        symbol,
+        module_params,
+    }: SymbolLookup,
+) -> Expr {
+    if let Some((params_var, params_symbol)) = module_params {
+        Expr::ParamsVar {
+            symbol,
+            var: var_store.fresh(),
+            params_symbol,
+            params_var,
+        }
+    } else {
+        Expr::Var(symbol, var_store.fresh())
+    }
 }
 
 /// Currently uses the heuristic of "only inline if it's a builtin"
@@ -1949,6 +2024,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
         | other @ RecordAccessor { .. }
         | other @ RecordUpdate { .. }
         | other @ Var(..)
+        | other @ ParamsVar { .. }
         | other @ AbilityMember(..)
         | other @ RunLowLevel { .. }
         | other @ TypedHole { .. }
@@ -2212,6 +2288,14 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
             );
         }
 
+        ImportParams(module_id, region, Some((var, expr))) => ImportParams(
+            module_id,
+            region,
+            Some((var, Box::new(inline_calls(var_store, *expr)))),
+        ),
+
+        ImportParams(module_id, region, None) => ImportParams(module_id, region, None),
+
         RecordAccess {
             record_var,
             ext_var,
@@ -2402,22 +2486,30 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         | ast::Expr::Num(_)
         | ast::Expr::NonBase10Int { .. }
         | ast::Expr::AccessorFunction(_)
+        | ast::Expr::RecordUpdater(_)
         | ast::Expr::Crash
+        | ast::Expr::Dbg
         | ast::Expr::Underscore(_)
         | ast::Expr::MalformedIdent(_, _)
         | ast::Expr::Tag(_)
         | ast::Expr::OpaqueRef(_)
         | ast::Expr::MalformedClosure => true,
         // Newlines are disallowed inside interpolation, and these all require newlines
-        ast::Expr::Dbg(_, _)
+        ast::Expr::DbgStmt(_, _)
         | ast::Expr::LowLevelDbg(_, _, _)
-        | ast::Expr::Defs(_, _)
         | ast::Expr::Expect(_, _)
         | ast::Expr::When(_, _)
         | ast::Expr::Backpassing(_, _, _)
         | ast::Expr::SpaceBefore(_, _)
         | ast::Expr::Str(StrLiteral::Block(_))
         | ast::Expr::SpaceAfter(_, _) => false,
+        // Desugared dbg expression
+        ast::Expr::Defs(_, loc_ret) => match loc_ret.value {
+            ast::Expr::LowLevelDbg(_, _, continuation) => {
+                is_valid_interpolation(&continuation.value)
+            }
+            _ => false,
+        },
         // These can contain subexpressions, so we need to recursively check those
         ast::Expr::Str(StrLiteral::Line(segments)) => {
             segments.iter().all(|segment| match segment {
@@ -2433,7 +2525,8 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         }
         ast::Expr::Record(fields) => fields.iter().all(|loc_field| match loc_field.value {
             ast::AssignedField::RequiredValue(_label, loc_comments, loc_val)
-            | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val) => {
+            | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val)
+            | ast::AssignedField::IgnoredValue(_label, loc_comments, loc_val) => {
                 loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
             }
             ast::AssignedField::Malformed(_) | ast::AssignedField::LabelOnly(_) => true,
@@ -2454,7 +2547,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         ast::Expr::TupleAccess(sub_expr, _)
         | ast::Expr::ParensAround(sub_expr)
         | ast::Expr::RecordAccess(sub_expr, _)
-        | ast::Expr::TaskAwaitBang(sub_expr) => is_valid_interpolation(sub_expr),
+        | ast::Expr::TrySuffix { expr: sub_expr, .. } => is_valid_interpolation(sub_expr),
         ast::Expr::Apply(loc_expr, args, _called_via) => {
             is_valid_interpolation(&loc_expr.value)
                 && args
@@ -2481,7 +2574,8 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
             is_valid_interpolation(&update.value)
                 && fields.iter().all(|loc_field| match loc_field.value {
                     ast::AssignedField::RequiredValue(_label, loc_comments, loc_val)
-                    | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val) => {
+                    | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val)
+                    | ast::AssignedField::IgnoredValue(_label, loc_comments, loc_val) => {
                         loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
                     }
                     ast::AssignedField::Malformed(_) | ast::AssignedField::LabelOnly(_) => true,
@@ -2514,7 +2608,8 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
             is_valid_interpolation(&mapper.value)
                 && fields.iter().all(|loc_field| match loc_field.value {
                     ast::AssignedField::RequiredValue(_label, loc_comments, loc_val)
-                    | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val) => {
+                    | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val)
+                    | ast::AssignedField::IgnoredValue(_label, loc_comments, loc_val) => {
                         loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
                     }
                     ast::AssignedField::Malformed(_) | ast::AssignedField::LabelOnly(_) => true,
@@ -2704,6 +2799,9 @@ pub struct Declarations {
     // used for ability member specializatons.
     pub specializes: VecMap<usize, Symbol>,
 
+    // used while lowering params.
+    arity_by_name: VecMap<IdentId, usize>,
+
     pub host_exposed_annotations: VecMap<usize, (Variable, crate::def::Annotation)>,
 
     pub function_bodies: Vec<Loc<FunctionDef>>,
@@ -2732,6 +2830,7 @@ impl Declarations {
             expressions: Vec::with_capacity(capacity),
             specializes: VecMap::default(), // number of specializations is probably low
             destructs: Vec::new(),          // number of destructs is probably low
+            arity_by_name: VecMap::with_capacity(capacity),
         }
     }
 
@@ -2769,6 +2868,9 @@ impl Declarations {
             captured_symbols: loc_closure_data.value.captured_symbols,
             arguments: loc_closure_data.value.arguments,
         };
+
+        self.arity_by_name
+            .insert(symbol.value.ident_id(), function_def.arguments.len());
 
         let loc_function_def = Loc::at(loc_closure_data.region, function_def);
 
@@ -2817,6 +2919,9 @@ impl Declarations {
             captured_symbols: loc_closure_data.value.captured_symbols,
             arguments: loc_closure_data.value.arguments,
         };
+
+        self.arity_by_name
+            .insert(symbol.value.ident_id(), function_def.arguments.len());
 
         let loc_function_def = Loc::at(loc_closure_data.region, function_def);
 
@@ -2893,6 +2998,8 @@ impl Declarations {
             self.host_exposed_annotations
                 .insert(self.declarations.len(), annotation);
         }
+
+        self.arity_by_name.insert(symbol.value.ident_id(), 0);
 
         self.declarations.push(DeclarationTag::Value);
         self.variables.push(expr_var);
@@ -3010,6 +3117,60 @@ impl Declarations {
         }
     }
 
+    /// Convert a value def to a function def with the given arguments
+    /// Currently used in lower_params
+    pub fn convert_value_to_function(
+        &mut self,
+        index: usize,
+        new_arguments: Vec<(Variable, AnnotatedMark, Loc<Pattern>)>,
+        var_store: &mut VarStore,
+    ) {
+        match self.declarations[index] {
+            DeclarationTag::Value => {
+                let new_args_len = new_arguments.len();
+
+                let loc_body = self.expressions[index].clone();
+                let region = loc_body.region;
+
+                let closure_data = ClosureData {
+                    function_type: var_store.fresh(),
+                    closure_type: var_store.fresh(),
+                    return_type: var_store.fresh(),
+                    name: self.symbols[index].value,
+                    captured_symbols: vec![],
+                    recursive: Recursive::NotRecursive,
+                    arguments: new_arguments,
+                    loc_body: Box::new(loc_body),
+                };
+
+                let loc_closure_data = Loc::at(region, closure_data);
+
+                let function_def = FunctionDef {
+                    closure_type: loc_closure_data.value.closure_type,
+                    return_type: loc_closure_data.value.return_type,
+                    captured_symbols: loc_closure_data.value.captured_symbols,
+                    arguments: loc_closure_data.value.arguments,
+                };
+
+                let loc_function_def = Loc::at(region, function_def);
+
+                let function_def_index =
+                    Index::push_new(&mut self.function_bodies, loc_function_def);
+
+                if let Some(annotation) = &mut self.annotations[index] {
+                    annotation.convert_to_fn(new_args_len, var_store);
+                }
+
+                if let Some((_var, annotation)) = self.host_exposed_annotations.get_mut(&index) {
+                    annotation.convert_to_fn(new_args_len, var_store);
+                }
+
+                self.declarations[index] = DeclarationTag::Function(function_def_index);
+            }
+            _ => internal_error!("Expected value declaration"),
+        };
+    }
+
     pub fn len(&self) -> usize {
         self.declarations.len()
     }
@@ -3079,6 +3240,11 @@ impl Declarations {
 
         collector
     }
+
+    pub(crate) fn take_arity_by_name(&mut self) -> VecMap<IdentId, usize> {
+        // `arity_by_name` is only needed for lowering module params
+        std::mem::take(&mut self.arity_by_name)
+    }
 }
 
 roc_error_macros::assert_sizeof_default!(DeclarationTag, 8);
@@ -3133,6 +3299,12 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
     while let Some(expr) = stack.pop() {
         match expr {
             Expr::Var(symbol, var)
+            | Expr::ParamsVar {
+                symbol,
+                var,
+                params_symbol: _,
+                params_var: _,
+            }
             | Expr::RecordUpdate {
                 symbol,
                 record_var: var,
@@ -3237,6 +3409,9 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
             Expr::Tuple { elems, .. } => {
                 stack.extend(elems.iter().map(|(_, elem)| &elem.value));
             }
+            Expr::ImportParams(_, _, Some((_, expr))) => {
+                stack.push(expr);
+            }
             Expr::Expect {
                 loc_continuation, ..
             }
@@ -3263,6 +3438,7 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
             | Expr::EmptyRecord
             | Expr::TypedHole(_)
             | Expr::RuntimeError(_)
+            | Expr::ImportParams(_, _, None)
             | Expr::OpaqueWrapFunction(_) => {}
         }
     }

@@ -247,6 +247,73 @@ pub fn type_problem<'b>(
                 severity,
             })
         }
+        UnexpectedModuleParams(region, module_id) => {
+            let stack = [
+                alloc.reflow("This import specifies module params:"),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.concat([
+                    alloc.reflow("However, "),
+                    alloc.module(module_id),
+                    alloc.reflow(
+                        " does not expect any. Did you intend to import a different module?",
+                    ),
+                ]),
+            ];
+
+            Some(Report {
+                title: "UNEXPECTED MODULE PARAMS".to_string(),
+                filename,
+                doc: alloc.stack(stack),
+                severity,
+            })
+        }
+        MissingModuleParams(region, module_id, expected) => {
+            let stack = [
+                alloc.reflow("This import specifies no module params:"),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.concat([
+                    alloc.reflow("However, "),
+                    alloc.module(module_id),
+                    alloc.reflow(" expects the following to be provided:"),
+                ]),
+                alloc.type_block(error_type_to_doc(alloc, expected)),
+                alloc.reflow("You can provide params after the module name, like:"),
+                alloc
+                    .parser_suggestion("import Menu { echo, read }")
+                    .indent(4),
+            ];
+            Some(Report {
+                title: "MISSING MODULE PARAMS".to_string(),
+                filename,
+                doc: alloc.stack(stack),
+                severity,
+            })
+        }
+        ModuleParamsMismatch(region, module_id, actual_type, expected_type) => {
+            let stack = [
+                alloc.reflow("Something is off with the params provided by this import:"),
+                alloc.region(lines.convert_region(region), severity),
+                type_comparison(
+                    alloc,
+                    actual_type,
+                    expected_type,
+                    ExpectationContext::Arbitrary,
+                    alloc.reflow("This is the type I inferred:"),
+                    alloc.concat([
+                        alloc.reflow("However, "),
+                        alloc.module(module_id),
+                        alloc.reflow(" expects:"),
+                    ]),
+                    None,
+                ),
+            ];
+            Some(Report {
+                title: "MODULE PARAMS MISMATCH".to_string(),
+                filename,
+                doc: alloc.stack(stack),
+                severity,
+            })
+        }
     }
 }
 
@@ -1198,7 +1265,7 @@ fn to_expr_report<'b>(
                                     alloc.concat([
                                         alloc.tip(),
                                         alloc.reflow("Remove "),
-                                        alloc.keyword("<-"),
+                                        alloc.backpassing_arrow(),
                                         alloc.reflow(" to assign the field directly.")
                                     ])
                                 }
@@ -1206,7 +1273,7 @@ fn to_expr_report<'b>(
                                     alloc.concat([
                                         alloc.note(""),
                                         alloc.reflow("Record builders need a mapper function before the "),
-                                        alloc.keyword("<-"),
+                                        alloc.backpassing_arrow(),
                                         alloc.reflow(" to combine fields together with.")
                                     ])
                                 }
@@ -1592,6 +1659,7 @@ fn to_expr_report<'b>(
             Reason::RecordDefaultField(_) => {
                 unimplemented!("record default field is not implemented yet")
             }
+            Reason::ImportParams(_) => unreachable!(),
         },
     }
 }

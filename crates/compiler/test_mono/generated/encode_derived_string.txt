@@ -1,110 +1,110 @@
-procedure Encode.23 (Encode.98):
-    ret Encode.98;
+procedure Encode.23 (Encode.100):
+    ret Encode.100;
 
-procedure Encode.24 (Encode.99, Encode.107, Encode.101):
-    let Encode.111 : List U8 = CallByName Test.56 Encode.99 Encode.101 Encode.107;
-    ret Encode.111;
+procedure Encode.24 (Encode.101, Encode.109, Encode.103):
+    let Encode.113 : List U8 = CallByName Test.57 Encode.101 Encode.103 Encode.109;
+    ret Encode.113;
 
-procedure Encode.26 (Encode.105, Encode.106):
-    let Encode.109 : List U8 = Array [];
-    let Encode.110 : Str = CallByName Test.19 Encode.105;
-    let Encode.108 : List U8 = CallByName Encode.24 Encode.109 Encode.110 Encode.106;
-    ret Encode.108;
+procedure Encode.26 (Encode.107, Encode.108):
+    let Encode.111 : List U8 = Array [];
+    let Encode.112 : Str = CallByName Test.20 Encode.107;
+    let Encode.110 : List U8 = CallByName Encode.24 Encode.111 Encode.112 Encode.108;
+    ret Encode.110;
 
-procedure List.4 (List.127, List.128):
-    let List.632 : U64 = 1i64;
-    let List.631 : List U8 = CallByName List.70 List.127 List.632;
-    let List.630 : List U8 = CallByName List.71 List.631 List.128;
-    ret List.630;
+procedure List.4 (List.130, List.131):
+    let List.635 : U64 = 1i64;
+    let List.634 : List U8 = CallByName List.70 List.130 List.635;
+    let List.633 : List U8 = CallByName List.71 List.634 List.131;
+    ret List.633;
 
 procedure List.70 (#Attr.2, #Attr.3):
-    let List.626 : List U8 = lowlevel ListReserve #Attr.2 #Attr.3;
-    ret List.626;
+    let List.629 : List U8 = lowlevel ListReserve #Attr.2 #Attr.3;
+    ret List.629;
 
 procedure List.71 (#Attr.2, #Attr.3):
-    let List.624 : List U8 = lowlevel ListAppendUnsafe #Attr.2 #Attr.3;
-    ret List.624;
+    let List.627 : List U8 = lowlevel ListAppendUnsafe #Attr.2 #Attr.3;
+    ret List.627;
 
 procedure List.8 (#Attr.2, #Attr.3):
-    let List.634 : List U8 = lowlevel ListConcat #Attr.2 #Attr.3;
-    ret List.634;
+    let List.637 : List U8 = lowlevel ListConcat #Attr.2 #Attr.3;
+    ret List.637;
 
 procedure Num.127 (#Attr.2):
-    let Num.280 : U8 = lowlevel NumIntCast #Attr.2;
-    ret Num.280;
+    let Num.282 : U8 = lowlevel NumIntCast #Attr.2;
+    ret Num.282;
 
 procedure Num.96 (#Attr.2):
-    let Num.279 : Str = lowlevel NumToStr #Attr.2;
-    ret Num.279;
+    let Num.281 : Str = lowlevel NumToStr #Attr.2;
+    ret Num.281;
 
 procedure Str.12 (#Attr.2):
-    let Str.241 : List U8 = lowlevel StrToUtf8 #Attr.2;
-    ret Str.241;
+    let Str.245 : List U8 = lowlevel StrToUtf8 #Attr.2;
+    ret Str.245;
 
 procedure Str.36 (#Attr.2):
-    let Str.242 : U64 = lowlevel StrCountUtf8Bytes #Attr.2;
-    ret Str.242;
+    let Str.246 : U64 = lowlevel StrCountUtf8Bytes #Attr.2;
+    ret Str.246;
 
 procedure Str.43 (#Attr.2):
-    let Str.239 : {U64, Str, Int1, U8} = lowlevel StrFromUtf8 #Attr.2;
-    ret Str.239;
+    let Str.243 : {U64, Str, Int1, U8} = lowlevel StrFromUtf8 #Attr.2;
+    ret Str.243;
 
-procedure Str.9 (Str.67):
-    let Str.68 : {U64, Str, Int1, U8} = CallByName Str.43 Str.67;
-    let Str.236 : Int1 = StructAtIndex 2 Str.68;
-    if Str.236 then
-        let Str.238 : Str = StructAtIndex 1 Str.68;
-        let Str.237 : [C {U64, U8}, C Str] = TagId(1) Str.238;
-        ret Str.237;
+procedure Str.9 (Str.71):
+    let Str.72 : {U64, Str, Int1, U8} = CallByName Str.43 Str.71;
+    let Str.240 : Int1 = StructAtIndex 2 Str.72;
+    if Str.240 then
+        let Str.242 : Str = StructAtIndex 1 Str.72;
+        let Str.241 : [C {U64, U8}, C Str] = TagId(1) Str.242;
+        ret Str.241;
     else
-        let Str.234 : U8 = StructAtIndex 3 Str.68;
-        let Str.235 : U64 = StructAtIndex 0 Str.68;
-        let #Derived_gen.3 : Str = StructAtIndex 1 Str.68;
+        let Str.238 : U8 = StructAtIndex 3 Str.72;
+        let Str.239 : U64 = StructAtIndex 0 Str.72;
+        let #Derived_gen.3 : Str = StructAtIndex 1 Str.72;
         dec #Derived_gen.3;
-        let Str.233 : {U64, U8} = Struct {Str.235, Str.234};
-        let Str.232 : [C {U64, U8}, C Str] = TagId(0) Str.233;
-        ret Str.232;
+        let Str.237 : {U64, U8} = Struct {Str.239, Str.238};
+        let Str.236 : [C {U64, U8}, C Str] = TagId(0) Str.237;
+        ret Str.236;
 
-procedure Test.19 (Test.55):
-    let Test.258 : Str = CallByName Encode.23 Test.55;
+procedure Test.20 (Test.56):
+    let Test.259 : Str = CallByName Encode.23 Test.56;
+    ret Test.259;
+
+procedure Test.3 ():
+    let Test.258 : {} = Struct {};
     ret Test.258;
 
-procedure Test.2 ():
-    let Test.257 : {} = Struct {};
-    ret Test.257;
+procedure Test.4 (Test.49, Test.50, Test.51):
+    let Test.276 : U8 = CallByName Num.127 Test.50;
+    let Test.273 : List U8 = CallByName List.4 Test.49 Test.276;
+    let Test.275 : Str = CallByName Num.96 Test.51;
+    let Test.274 : List U8 = CallByName Str.12 Test.275;
+    let Test.271 : List U8 = CallByName List.8 Test.273 Test.274;
+    let Test.272 : U8 = 32i64;
+    let Test.270 : List U8 = CallByName List.4 Test.271 Test.272;
+    ret Test.270;
 
-procedure Test.3 (Test.48, Test.49, Test.50):
-    let Test.275 : U8 = CallByName Num.127 Test.49;
-    let Test.272 : List U8 = CallByName List.4 Test.48 Test.275;
-    let Test.274 : Str = CallByName Num.96 Test.50;
-    let Test.273 : List U8 = CallByName Str.12 Test.274;
-    let Test.270 : List U8 = CallByName List.8 Test.272 Test.273;
-    let Test.271 : U8 = 32i64;
-    let Test.269 : List U8 = CallByName List.4 Test.270 Test.271;
-    ret Test.269;
-
-procedure Test.56 (Test.57, Test.260, Test.55):
-    let Test.267 : I64 = 115i64;
-    let Test.268 : U64 = CallByName Str.36 Test.55;
-    let Test.265 : List U8 = CallByName Test.3 Test.57 Test.267 Test.268;
-    let Test.266 : List U8 = CallByName Str.12 Test.55;
-    let Test.263 : List U8 = CallByName List.8 Test.265 Test.266;
-    let Test.264 : U8 = 32i64;
-    let Test.262 : List U8 = CallByName List.4 Test.263 Test.264;
-    ret Test.262;
+procedure Test.57 (Test.58, Test.261, Test.56):
+    let Test.268 : I64 = 115i64;
+    let Test.269 : U64 = CallByName Str.36 Test.56;
+    let Test.266 : List U8 = CallByName Test.4 Test.58 Test.268 Test.269;
+    let Test.267 : List U8 = CallByName Str.12 Test.56;
+    let Test.264 : List U8 = CallByName List.8 Test.266 Test.267;
+    let Test.265 : U8 = 32i64;
+    let Test.263 : List U8 = CallByName List.4 Test.264 Test.265;
+    ret Test.263;
 
 procedure Test.0 ():
-    let Test.255 : Str = "abc";
-    let Test.256 : {} = CallByName Test.2;
-    let Test.254 : List U8 = CallByName Encode.26 Test.255 Test.256;
-    let Test.209 : [C {U64, U8}, C Str] = CallByName Str.9 Test.254;
-    let Test.251 : U8 = 1i64;
-    let Test.252 : U8 = GetTagId Test.209;
-    let Test.253 : Int1 = lowlevel Eq Test.251 Test.252;
-    if Test.253 then
-        let Test.210 : Str = UnionAtIndex (Id 1) (Index 0) Test.209;
-        ret Test.210;
+    let Test.256 : Str = "abc";
+    let Test.257 : {} = CallByName Test.3;
+    let Test.255 : List U8 = CallByName Encode.26 Test.256 Test.257;
+    let Test.210 : [C {U64, U8}, C Str] = CallByName Str.9 Test.255;
+    let Test.252 : U8 = 1i64;
+    let Test.253 : U8 = GetTagId Test.210;
+    let Test.254 : Int1 = lowlevel Eq Test.252 Test.253;
+    if Test.254 then
+        let Test.211 : Str = UnionAtIndex (Id 1) (Index 0) Test.210;
+        ret Test.211;
     else
-        dec Test.209;
-        let Test.250 : Str = "<bad>";
-        ret Test.250;
+        dec Test.210;
+        let Test.251 : Str = "<bad>";
+        ret Test.251;

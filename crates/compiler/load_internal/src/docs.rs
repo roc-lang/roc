@@ -465,7 +465,8 @@ fn contains_unexposed_type(
             while let Some(field) = fields_to_process.pop() {
                 match field {
                     AssignedField::RequiredValue(_field, _spaces, loc_val)
-                    | AssignedField::OptionalValue(_field, _spaces, loc_val) => {
+                    | AssignedField::OptionalValue(_field, _spaces, loc_val)
+                    | AssignedField::IgnoredValue(_field, _spaces, loc_val) => {
                         if contains_unexposed_type(&loc_val.value, exposed_module_ids, module_ids) {
                             return true;
                         }
@@ -721,7 +722,7 @@ fn record_field_to_doc(
         AssignedField::LabelOnly(label) => Some(RecordField::LabelOnly {
             name: label.value.to_string(),
         }),
-        AssignedField::Malformed(_) => None,
+        AssignedField::Malformed(_) | AssignedField::IgnoredValue(_, _, _) => None,
     }
 }
 

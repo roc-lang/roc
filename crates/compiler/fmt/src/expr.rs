@@ -10,7 +10,7 @@ use crate::Buf;
 use roc_module::called_via::{self, BinOp};
 use roc_parse::ast::{
     is_expr_suffixed, AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces,
-    OldRecordBuilderField, Pattern, WhenBranch,
+    OldRecordBuilderField, Pattern, TryTarget, WhenBranch,
 };
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_parse::ident::Accessor;
@@ -39,15 +39,17 @@ impl<'a> Formattable for Expr<'a> {
             | NonBase10Int { .. }
             | SingleQuote(_)
             | AccessorFunction(_)
+            | RecordUpdater(_)
             | Var { .. }
             | Underscore { .. }
             | MalformedIdent(_, _)
             | MalformedClosure
             | Tag(_)
             | OpaqueRef(_)
-            | Crash => false,
+            | Crash
+            | Dbg => false,
 
-            RecordAccess(inner, _) | TupleAccess(inner, _) | TaskAwaitBang(inner) => {
+            RecordAccess(inner, _) | TupleAccess(inner, _) | TrySuffix { expr: inner, .. } => {
                 inner.is_multiline()
             }
 
@@ -64,7 +66,7 @@ impl<'a> Formattable for Expr<'a> {
             Expect(condition, continuation) => {
                 condition.is_multiline() || continuation.is_multiline()
             }
-            Dbg(condition, _) => condition.is_multiline(),
+            DbgStmt(condition, _) => condition.is_multiline(),
             LowLevelDbg(_, _, _) => unreachable!(
                 "LowLevelDbg should only exist after desugaring, not during formatting"
             ),
@@ -452,8 +454,12 @@ impl<'a> Formattable for Expr<'a> {
             Expect(condition, continuation) => {
                 fmt_expect(buf, condition, continuation, self.is_multiline(), indent);
             }
-            Dbg(condition, continuation) => {
-                fmt_dbg(buf, condition, continuation, self.is_multiline(), indent);
+            Dbg => {
+                buf.indent(indent);
+                buf.push_str("dbg");
+            }
+            DbgStmt(condition, continuation) => {
+                fmt_dbg_stmt(buf, condition, continuation, self.is_multiline(), indent);
             }
             LowLevelDbg(_, _, _) => unreachable!(
                 "LowLevelDbg should only exist after desugaring, not during formatting"
@@ -510,6 +516,11 @@ impl<'a> Formattable for Expr<'a> {
                     Accessor::TupleIndex(key) => buf.push_str(key),
                 }
             }
+            RecordUpdater(key) => {
+                buf.indent(indent);
+                buf.push('&');
+                buf.push_str(key);
+            }
             RecordAccess(expr, key) => {
                 expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
                 buf.push('.');
@@ -520,9 +531,12 @@ impl<'a> Formattable for Expr<'a> {
                 buf.push('.');
                 buf.push_str(key);
             }
-            TaskAwaitBang(expr) => {
+            TrySuffix { expr, target } => {
                 expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
-                buf.push('!');
+                match target {
+                    TryTarget::Task => buf.push('!'),
+                    TryTarget::Result => buf.push('?'),
+                }
             }
             MalformedIdent(str, _) => {
                 buf.indent(indent);
@@ -615,6 +629,22 @@ fn starts_with_newline(expr: &Expr) -> bool {
     }
 }
 
+fn fmt_str_body(body: &str, buf: &mut Buf) {
+    for c in body.chars() {
+        match c {
+            // Format blank characters as unicode escapes
+            '\u{200a}' => buf.push_str("\\u(200a)"),
+            '\u{200b}' => buf.push_str("\\u(200b)"),
+            '\u{200c}' => buf.push_str("\\u(200c)"),
+            '\u{feff}' => buf.push_str("\\u(feff)"),
+            // Don't change anything else in the string
+            ' ' => buf.push_str_allow_spaces(" "),
+            '\n' => buf.push_str_allow_spaces("\n"),
+            _ => buf.push(c),
+        }
+    }
+}
+
 fn format_str_segment(seg: &StrSegment, buf: &mut Buf, indent: u16) {
     use StrSegment::*;
 
@@ -624,10 +654,10 @@ fn format_str_segment(seg: &StrSegment, buf: &mut Buf, indent: u16) {
             // a line break in the input string
             match string.strip_suffix('\n') {
                 Some(string_without_newline) => {
-                    buf.push_str_allow_spaces(string_without_newline);
+                    fmt_str_body(string_without_newline, buf);
                     buf.newline();
                 }
-                None => buf.push_str_allow_spaces(string),
+                None => fmt_str_body(string, buf),
             }
         }
         Unicode(loc_str) => {
@@ -687,7 +717,7 @@ pub fn fmt_str_literal(buf: &mut Buf, literal: StrLiteral, indent: u16) {
                 buf.push_newline_literal();
                 for line in string.split('\n') {
                     buf.indent(indent);
-                    buf.push_str_allow_spaces(line);
+                    fmt_str_body(line, buf);
                     buf.push_newline_literal();
                 }
                 buf.indent(indent);
@@ -695,7 +725,7 @@ pub fn fmt_str_literal(buf: &mut Buf, literal: StrLiteral, indent: u16) {
             } else {
                 buf.indent(indent);
                 buf.push('"');
-                buf.push_str_allow_spaces(string);
+                fmt_str_body(string, buf);
                 buf.push('"');
             };
         }
@@ -993,7 +1023,7 @@ fn fmt_when<'a>(
     }
 }
 
-fn fmt_dbg<'a>(
+fn fmt_dbg_stmt<'a>(
     buf: &mut Buf,
     condition: &'a Loc<Expr<'a>>,
     continuation: &'a Loc<Expr<'a>>,
@@ -1215,7 +1245,7 @@ fn fmt_closure<'a>(
     let mut it = loc_patterns.iter().peekable();
 
     while let Some(loc_pattern) = it.next() {
-        loc_pattern.format(buf, indent);
+        loc_pattern.format_with_options(buf, Parens::InAsPattern, Newlines::No, indent);
 
         if it.peek().is_some() {
             buf.indent(indent);
@@ -1525,6 +1555,23 @@ fn format_assigned_field_multiline<T>(
 
             buf.push_str(separator_prefix);
             buf.push_str("?");
+            buf.spaces(1);
+            ann.value.format(buf, indent);
+            buf.push(',');
+        }
+        IgnoredValue(name, spaces, ann) => {
+            buf.newline();
+            buf.indent(indent);
+            buf.push('_');
+            buf.push_str(name.value);
+
+            if !spaces.is_empty() {
+                fmt_spaces(buf, spaces.iter(), indent);
+                buf.indent(indent);
+            }
+
+            buf.push_str(separator_prefix);
+            buf.push_str(":");
             buf.spaces(1);
             ann.value.format(buf, indent);
             buf.push(',');

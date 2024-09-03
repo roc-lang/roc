@@ -1,20 +1,12 @@
-app "test-astar"
-    packages { pf: "platform/main.roc" }
-    imports [pf.Task, AStar]
-    provides [main] to pf
+app [main] { pf: platform "platform/main.roc" }
 
-main : Task.Task {} []
+import pf.PlatformTasks
+import AStar
+
+#main : Task {} *
 main =
-    Task.putLine (showBool test1)
+    PlatformTasks.putLine! (showBool test1)
 
-#     Task.after Task.getInt \n ->
-#         when n is
-#             1 ->
-#                 Task.putLine (showBool test1)
-#
-#             _ ->
-#                 ns = Num.toStr n
-#                 Task.putLine "No test $(ns)"
 showBool : Bool -> Str
 showBool = \b ->
     if

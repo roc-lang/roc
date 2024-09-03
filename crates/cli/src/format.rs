@@ -5,11 +5,12 @@ use std::path::{Path, PathBuf};
 use bumpalo::Bump;
 use roc_error_macros::{internal_error, user_error};
 use roc_fmt::def::fmt_defs;
-use roc_fmt::module::fmt_module;
-use roc_fmt::{Ast, Buf};
-use roc_parse::module::parse_module_defs;
-use roc_parse::remove_spaces::RemoveSpaces;
-use roc_parse::{module, parser::SyntaxError, state::State};
+use roc_fmt::header::fmt_header;
+use roc_fmt::Buf;
+use roc_parse::ast::{FullAst, SpacesBefore};
+use roc_parse::header::parse_module_defs;
+use roc_parse::normalize::Normalize;
+use roc_parse::{header, parser::SyntaxError, state::State};
 
 #[derive(Copy, Clone, Debug)]
 pub enum FormatMode {
@@ -199,8 +200,8 @@ pub fn format_src(arena: &Bump, src: &str) -> Result<String, FormatProblem> {
         }
     };
 
-    let ast_normalized = ast.remove_spaces(arena);
-    let reparsed_ast_normalized = reparsed_ast.remove_spaces(arena);
+    let ast_normalized = ast.normalize(arena);
+    let reparsed_ast_normalized = reparsed_ast.normalize(arena);
 
     // HACK!
     // We compare the debug format strings of the ASTs, because I'm finding in practice that _somewhere_ deep inside the ast,
@@ -230,19 +231,25 @@ pub fn format_src(arena: &Bump, src: &str) -> Result<String, FormatProblem> {
     Ok(buf.as_str().to_string())
 }
 
-fn parse_all<'a>(arena: &'a Bump, src: &'a str) -> Result<Ast<'a>, SyntaxError<'a>> {
-    let (module, state) = module::parse_header(arena, State::new(src.as_bytes()))
+fn parse_all<'a>(arena: &'a Bump, src: &'a str) -> Result<FullAst<'a>, SyntaxError<'a>> {
+    let (header, state) = header::parse_header(arena, State::new(src.as_bytes()))
         .map_err(|e| SyntaxError::Header(e.problem))?;
 
-    let (module, defs) = module.upgrade_header_imports(arena);
+    let (h, defs) = header.item.upgrade_header_imports(arena);
 
     let defs = parse_module_defs(arena, state, defs)?;
 
-    Ok(Ast { module, defs })
+    Ok(FullAst {
+        header: SpacesBefore {
+            before: header.before,
+            item: h,
+        },
+        defs,
+    })
 }
 
-fn fmt_all<'a>(buf: &mut Buf<'a>, ast: &'a Ast) {
-    fmt_module(buf, &ast.module);
+fn fmt_all<'a>(buf: &mut Buf<'a>, ast: &'a FullAst) {
+    fmt_header(buf, &ast.header);
 
     fmt_defs(buf, &ast.defs, 0);
 
@@ -256,7 +263,7 @@ mod tests {
     use std::io::Write;
     use tempfile::{tempdir, TempDir};
 
-    const FORMATTED_ROC: &str = r#"app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.12.0/Lb8EgiejTUzbggO2HVVuPJFkwvvsfW6LojkLR20kTVE.tar.br" }
+    const FORMATTED_ROC: &str = r#"app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.15.0/SlwdbJ-3GR7uBWQo6zlmYWNYOxnvo8r6YABXD-45UOw.tar.br" }
 
 import pf.Stdout
 import pf.Task
@@ -264,7 +271,7 @@ import pf.Task
 main =
     Stdout.line! "I'm a Roc application!""#;
 
-    const UNFORMATTED_ROC: &str = r#"app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.12.0/Lb8EgiejTUzbggO2HVVuPJFkwvvsfW6LojkLR20kTVE.tar.br" }
+    const UNFORMATTED_ROC: &str = r#"app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.15.0/SlwdbJ-3GR7uBWQo6zlmYWNYOxnvo8r6YABXD-45UOw.tar.br" }
 
 
 import pf.Stdout

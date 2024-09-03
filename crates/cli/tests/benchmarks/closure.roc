@@ -1,18 +1,15 @@
-app "closure"
-    packages { pf: "platform/main.roc" }
-    imports [pf.Task]
-    provides [main] to pf
+app [main] { pf: platform "platform/main.roc" }
 
 # see https://github.com/roc-lang/roc/issues/985
-main : Task.Task {} []
+main : Task {} []
 main = closure1 {}
 # |> Task.after (\_ -> closure2 {})
 # |> Task.after (\_ -> closure3 {})
 # |> Task.after (\_ -> closure4 {})
 # ---
-closure1 : {} -> Task.Task {} []
+closure1 : {} -> Task {} []
 closure1 = \_ ->
-    Task.succeed (foo toUnitBorrowed "a long string such that it's malloced")
+    Task.ok (foo toUnitBorrowed "a long string such that it's malloced")
     |> Task.map \_ -> {}
 
 toUnitBorrowed = \x -> Str.countUtf8Bytes x

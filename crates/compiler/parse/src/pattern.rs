@@ -25,6 +25,7 @@ pub enum PatternType {
     DefExpr,
     FunctionArg,
     WhenBranch,
+    ModuleParams,
 }
 
 pub fn closure_param<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
@@ -434,6 +435,10 @@ fn loc_ident_pattern_help<'a>(
             Ident::AccessorFunction(_string) => Err((
                 MadeProgress,
                 EPattern::AccessorFunction(loc_ident.region.start()),
+            )),
+            Ident::RecordUpdaterFunction(_string) => Err((
+                MadeProgress,
+                EPattern::RecordUpdaterFunction(loc_ident.region.start()),
             )),
             Ident::Malformed(malformed, problem) => {
                 debug_assert!(!malformed.is_empty());

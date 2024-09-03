@@ -626,120 +626,17 @@ pub fn canonicalize_pattern<'a>(
         RecordDestructure(patterns) => {
             let ext_var = var_store.fresh();
             let whole_var = var_store.fresh();
-            let mut destructs = Vec::with_capacity(patterns.len());
-            let mut opt_erroneous = None;
 
-            for loc_pattern in patterns.iter() {
-                match loc_pattern.value {
-                    Identifier { ident: label } => {
-                        match scope.introduce(label.into(), region) {
-                            Ok(symbol) => {
-                                output.references.insert_bound(symbol);
-
-                                destructs.push(Loc {
-                                    region: loc_pattern.region,
-                                    value: RecordDestruct {
-                                        var: var_store.fresh(),
-                                        label: Lowercase::from(label),
-                                        symbol,
-                                        typ: DestructType::Required,
-                                    },
-                                });
-                            }
-                            Err((shadowed_symbol, shadow, new_symbol)) => {
-                                env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
-                                    original_region: shadowed_symbol.region,
-                                    shadow: shadow.clone(),
-                                    kind: ShadowKind::Variable,
-                                }));
-
-                                // No matter what the other patterns
-                                // are, we're definitely shadowed and will
-                                // get a runtime exception as soon as we
-                                // encounter the first bad pattern.
-                                opt_erroneous = Some(Pattern::Shadowed(
-                                    shadowed_symbol.region,
-                                    shadow,
-                                    new_symbol,
-                                ));
-                            }
-                        };
-                    }
-
-                    RequiredField(label, loc_guard) => {
-                        // a guard does not introduce the label into scope!
-                        let symbol =
-                            scope.scopeless_symbol(&Ident::from(label), loc_pattern.region);
-                        let can_guard = canonicalize_pattern(
-                            env,
-                            var_store,
-                            scope,
-                            output,
-                            pattern_type,
-                            &loc_guard.value,
-                            loc_guard.region,
-                            permit_shadows,
-                        );
-
-                        destructs.push(Loc {
-                            region: loc_pattern.region,
-                            value: RecordDestruct {
-                                var: var_store.fresh(),
-                                label: Lowercase::from(label),
-                                symbol,
-                                typ: DestructType::Guard(var_store.fresh(), can_guard),
-                            },
-                        });
-                    }
-                    OptionalField(label, loc_default) => {
-                        // an optional DOES introduce the label into scope!
-                        match scope.introduce(label.into(), region) {
-                            Ok(symbol) => {
-                                let (can_default, expr_output) = canonicalize_expr(
-                                    env,
-                                    var_store,
-                                    scope,
-                                    loc_default.region,
-                                    &loc_default.value,
-                                );
-
-                                // an optional field binds the symbol!
-                                output.references.insert_bound(symbol);
-
-                                output.union(expr_output);
-
-                                destructs.push(Loc {
-                                    region: loc_pattern.region,
-                                    value: RecordDestruct {
-                                        var: var_store.fresh(),
-                                        label: Lowercase::from(label),
-                                        symbol,
-                                        typ: DestructType::Optional(var_store.fresh(), can_default),
-                                    },
-                                });
-                            }
-                            Err((shadowed_symbol, shadow, new_symbol)) => {
-                                env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
-                                    original_region: shadowed_symbol.region,
-                                    shadow: shadow.clone(),
-                                    kind: ShadowKind::Variable,
-                                }));
-
-                                // No matter what the other patterns
-                                // are, we're definitely shadowed and will
-                                // get a runtime exception as soon as we
-                                // encounter the first bad pattern.
-                                opt_erroneous = Some(Pattern::Shadowed(
-                                    shadowed_symbol.region,
-                                    shadow,
-                                    new_symbol,
-                                ));
-                            }
-                        };
-                    }
-                    _ => unreachable!("Any other pattern should have given a parse error"),
-                }
-            }
+            let (destructs, opt_erroneous) = canonicalize_record_destructs(
+                env,
+                var_store,
+                scope,
+                output,
+                pattern_type,
+                patterns,
+                region,
+                permit_shadows,
+            );
 
             // If we encountered an erroneous pattern (e.g. one with shadowing),
             // use the resulting RuntimeError. Otherwise, return a successful record destructure.
@@ -892,6 +789,136 @@ pub fn canonicalize_pattern<'a>(
         region,
         value: can_pattern,
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn canonicalize_record_destructs<'a>(
+    env: &mut Env<'a>,
+    var_store: &mut VarStore,
+    scope: &mut Scope,
+    output: &mut Output,
+    pattern_type: PatternType,
+    patterns: &ast::Collection<Loc<ast::Pattern<'a>>>,
+    region: Region,
+    permit_shadows: PermitShadows,
+) -> (Vec<Loc<RecordDestruct>>, Option<Pattern>) {
+    use ast::Pattern::*;
+
+    let mut destructs = Vec::with_capacity(patterns.len());
+    let mut opt_erroneous = None;
+
+    for loc_pattern in patterns.iter() {
+        match loc_pattern.value {
+            Identifier { ident: label } => {
+                match scope.introduce(label.into(), region) {
+                    Ok(symbol) => {
+                        output.references.insert_bound(symbol);
+
+                        destructs.push(Loc {
+                            region: loc_pattern.region,
+                            value: RecordDestruct {
+                                var: var_store.fresh(),
+                                label: Lowercase::from(label),
+                                symbol,
+                                typ: DestructType::Required,
+                            },
+                        });
+                    }
+                    Err((shadowed_symbol, shadow, new_symbol)) => {
+                        env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
+                            original_region: shadowed_symbol.region,
+                            shadow: shadow.clone(),
+                            kind: ShadowKind::Variable,
+                        }));
+
+                        // No matter what the other patterns
+                        // are, we're definitely shadowed and will
+                        // get a runtime exception as soon as we
+                        // encounter the first bad pattern.
+                        opt_erroneous = Some(Pattern::Shadowed(
+                            shadowed_symbol.region,
+                            shadow,
+                            new_symbol,
+                        ));
+                    }
+                };
+            }
+
+            RequiredField(label, loc_guard) => {
+                // a guard does not introduce the label into scope!
+                let symbol = scope.scopeless_symbol(&Ident::from(label), loc_pattern.region);
+                let can_guard = canonicalize_pattern(
+                    env,
+                    var_store,
+                    scope,
+                    output,
+                    pattern_type,
+                    &loc_guard.value,
+                    loc_guard.region,
+                    permit_shadows,
+                );
+
+                destructs.push(Loc {
+                    region: loc_pattern.region,
+                    value: RecordDestruct {
+                        var: var_store.fresh(),
+                        label: Lowercase::from(label),
+                        symbol,
+                        typ: DestructType::Guard(var_store.fresh(), can_guard),
+                    },
+                });
+            }
+            OptionalField(label, loc_default) => {
+                // an optional DOES introduce the label into scope!
+                match scope.introduce(label.into(), region) {
+                    Ok(symbol) => {
+                        let (can_default, expr_output) = canonicalize_expr(
+                            env,
+                            var_store,
+                            scope,
+                            loc_default.region,
+                            &loc_default.value,
+                        );
+
+                        // an optional field binds the symbol!
+                        output.references.insert_bound(symbol);
+
+                        output.union(expr_output);
+
+                        destructs.push(Loc {
+                            region: loc_pattern.region,
+                            value: RecordDestruct {
+                                var: var_store.fresh(),
+                                label: Lowercase::from(label),
+                                symbol,
+                                typ: DestructType::Optional(var_store.fresh(), can_default),
+                            },
+                        });
+                    }
+                    Err((shadowed_symbol, shadow, new_symbol)) => {
+                        env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
+                            original_region: shadowed_symbol.region,
+                            shadow: shadow.clone(),
+                            kind: ShadowKind::Variable,
+                        }));
+
+                        // No matter what the other patterns
+                        // are, we're definitely shadowed and will
+                        // get a runtime exception as soon as we
+                        // encounter the first bad pattern.
+                        opt_erroneous = Some(Pattern::Shadowed(
+                            shadowed_symbol.region,
+                            shadow,
+                            new_symbol,
+                        ));
+                    }
+                };
+            }
+            _ => unreachable!("Any other pattern should have given a parse error"),
+        }
+    }
+
+    (destructs, opt_erroneous)
 }
 
 /// When we detect an unsupported pattern type (e.g. 5 = 1 + 2 is unsupported because you can't

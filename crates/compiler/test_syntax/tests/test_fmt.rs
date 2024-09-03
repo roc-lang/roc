@@ -5,10 +5,10 @@ extern crate indoc;
 mod test_fmt {
     use bumpalo::Bump;
     use roc_fmt::def::fmt_defs;
-    use roc_fmt::module::fmt_module;
+    use roc_fmt::header::fmt_header;
     use roc_fmt::Buf;
-    use roc_parse::ast::{Defs, Module};
-    use roc_parse::module::{self, parse_module_defs};
+    use roc_parse::ast::{Defs, Header, SpacesBefore};
+    use roc_parse::header::{self, parse_module_defs};
     use roc_parse::state::State;
     use roc_test_utils::assert_multiline_str_eq;
     use roc_test_utils_dir::workspace_root;
@@ -32,11 +32,11 @@ mod test_fmt {
     fn fmt_module_and_defs<'a>(
         arena: &Bump,
         src: &str,
-        module: &Module<'a>,
+        header: &SpacesBefore<'a, Header<'a>>,
         state: State<'a>,
         buf: &mut Buf<'_>,
     ) {
-        fmt_module(buf, module);
+        fmt_header(buf, header);
 
         match parse_module_defs(arena, state, Defs::default()) {
             Ok(loc_defs) => {
@@ -61,9 +61,9 @@ mod test_fmt {
         let src = src.trim();
         let expected = expected.trim();
 
-        match module::parse_header(&arena, State::new(src.as_bytes())) {
+        match header::parse_header(&arena, State::new(src.as_bytes())) {
             Ok((actual, state)) => {
-                use roc_parse::remove_spaces::RemoveSpaces;
+                use roc_parse::normalize::Normalize;
 
                 let mut buf = Buf::new_in(&arena);
 
@@ -71,14 +71,14 @@ mod test_fmt {
 
                 let output = buf.as_str().trim();
 
-                let (reparsed_ast, state) = module::parse_header(&arena, State::new(output.as_bytes())).unwrap_or_else(|err| {
+                let (reparsed_ast, state) = header::parse_header(&arena, State::new(output.as_bytes())).unwrap_or_else(|err| {
                     panic!(
                         "After formatting, the source code no longer parsed!\n\nParse error was: {err:?}\n\nThe code that failed to parse:\n\n{output}\n\n"
                     );
                 });
 
-                let ast_normalized = actual.remove_spaces(&arena);
-                let reparsed_ast_normalized = reparsed_ast.remove_spaces(&arena);
+                let ast_normalized = actual.normalize(&arena);
+                let reparsed_ast_normalized = reparsed_ast.normalize(&arena);
 
                 // HACK!
                 // We compare the debug format strings of the ASTs, because I'm finding in practice that _somewhere_ deep inside the ast,
@@ -5030,10 +5030,10 @@ mod test_fmt {
     fn single_line_platform() {
         module_formats_same(
             "platform \"folkertdev/foo\" \
-            requires { Model, Msg } { main : Effect {} } \
+            requires { Model, Msg } { main : Task {} [] } \
             exposes [] \
             packages {} \
-            imports [Task.{ Task }] \
+            imports [] \
             provides [mainForHost]",
         );
     }
@@ -5102,7 +5102,7 @@ mod test_fmt {
     fn single_line_hosted() {
         module_formats_same(indoc!(
             r"
-                hosted Foo exposes [] imports [] generates Bar with []"
+                hosted Foo exposes [] imports []"
         ));
     }
 
@@ -5119,11 +5119,6 @@ mod test_fmt {
                     imports [
                         Blah,
                         Baz.{ stuff, things },
-                    ]
-                    generates Bar with [
-                        map,
-                        after,
-                        loop,
                     ]"
         ));
     }
@@ -6331,6 +6326,83 @@ mod test_fmt {
             "
             ),
         );
+    }
+
+    #[test]
+    fn keep_explicit_blank_chars() {
+        expr_formats_same(indoc!(
+            r#"
+                x = "a\u(200a)b\u(200b)c\u(200c)d\u(feff)e"
+                x
+            "#
+        ));
+    }
+
+    #[test]
+    fn make_blank_chars_explicit() {
+        expr_formats_to(
+            indoc!(
+                "
+                    x = \"a\u{200A}b\u{200B}c\u{200C}d\u{FEFF}e\"
+                    x
+                "
+            ),
+            indoc!(
+                r#"
+                    x = "a\u(200a)b\u(200b)c\u(200c)d\u(feff)e"
+                    x
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn make_blank_chars_explicit_when_interpolating() {
+        expr_formats_to(
+            indoc!(
+                "
+                    x = \"foo:\u{200B} $(bar).\"
+                    x
+                "
+            ),
+            indoc!(
+                r#"
+                    x = "foo:\u(200b) $(bar)."
+                    x
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn make_blank_chars_explicit_in_multiline_string() {
+        expr_formats_to(
+            indoc!(
+                "
+                    x =
+                        \"\"\"
+                        foo:\u{200B} $(bar).
+                        \"\"\"
+                    x
+                "
+            ),
+            indoc!(
+                r#"
+                    x =
+                        """
+                        foo:\u(200b) $(bar).
+                        """
+                    x
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn preserve_multiline_string_trailing_whitespace() {
+        expr_formats_same(indoc!(
+            "x =\n    \"\"\"\n    foo\n    bar                \n    baz\n    \"\"\"\nx"
+        ));
     }
 
     // this is a parse error atm

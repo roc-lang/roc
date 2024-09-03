@@ -33,6 +33,7 @@ roc_tracing = { path = "../../tracing" }
 roc_types = { path = "../types" }
 roc_unify = { path = "../unify" }
 roc_worker = { path = "../worker" }
+roc_lower_params = { path = "../lower_params" }
 
 ven_pretty = { path = "../../vendor/pretty" }
 

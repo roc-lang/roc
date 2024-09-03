@@ -1,7 +1,6 @@
-app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.12.0/Lb8EgiejTUzbggO2HVVuPJFkwvvsfW6LojkLR20kTVE.tar.br" }
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.15.0/SlwdbJ-3GR7uBWQo6zlmYWNYOxnvo8r6YABXD-45UOw.tar.br" }
 
 import pf.Stdout
-import pf.Task exposing [Task]
 
 main =
     multipleIn =
@@ -9,8 +8,8 @@ main =
             a: Task.ok 123,
             b: Task.ok "abc",
             c: Task.ok [123],
-            d: Task.ok ["abc"],
-            e: Task.ok (Dict.single "a" "b"),
+            _d: Task.ok ["abc"],
+            _: Task.ok (Dict.single "a" "b"),
         }!
 
     Stdout.line! "For multiple tasks: $(Inspect.toStr multipleIn)"

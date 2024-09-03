@@ -1,9 +1,9 @@
 platform "effects"
-    requires {} { main : Effect.Effect {} }
+    requires {} { main : Task {} [] }
     exposes []
     packages {}
-    imports [Effect]
+    imports []
     provides [mainForHost]
 
-mainForHost : Effect.Effect {}
+mainForHost : Task {} []
 mainForHost = main

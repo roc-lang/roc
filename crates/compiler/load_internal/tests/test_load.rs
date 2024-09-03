@@ -27,10 +27,11 @@ use roc_module::symbol::{Interns, ModuleId};
 use roc_packaging::cache::RocCacheDir;
 use roc_problem::can::Problem;
 use roc_region::all::LineInfo;
-use roc_reporting::report::RocDocAllocator;
 use roc_reporting::report::{can_problem, DEFAULT_PALETTE};
 use roc_reporting::report::{strip_colors, RenderTarget};
+use roc_reporting::report::{type_problem, RocDocAllocator};
 use roc_solve::FunctionKind;
+use roc_solve_problem::TypeError;
 use roc_target::Target;
 use roc_test_utils_dir::TmpDir;
 use roc_types::pretty_print::name_and_print_var;
@@ -107,6 +108,33 @@ fn format_can_problems(
     buf
 }
 
+fn format_type_problems(
+    problems: Vec<TypeError>,
+    home: ModuleId,
+    interns: &Interns,
+    filename: PathBuf,
+    src: &str,
+) -> String {
+    use ven_pretty::DocAllocator;
+
+    let src_lines: Vec<&str> = src.split('\n').collect();
+    let lines = LineInfo::new(src);
+    let alloc = RocDocAllocator::new(&src_lines, home, interns);
+    let reports = problems
+        .into_iter()
+        .flat_map(|problem| type_problem(&alloc, &lines, filename.clone(), problem))
+        .map(|report| report.pretty(&alloc));
+
+    let mut buf = String::new();
+    alloc
+        .stack(reports)
+        .append(alloc.line())
+        .1
+        .render_raw(70, &mut roc_reporting::report::CiWrite::new(&mut buf))
+        .unwrap();
+    buf
+}
+
 fn multiple_modules(subdir: &str, files: Vec<(&str, &str)>) -> Result<LoadedModule, String> {
     let arena = Bump::new();
     let arena = &arena;
@@ -130,11 +158,19 @@ fn multiple_modules(subdir: &str, files: Vec<(&str, &str)>) -> Result<LoadedModu
                 ));
             }
 
-            assert!(loaded_module
+            let type_problems = loaded_module
                 .type_problems
                 .remove(&home)
-                .unwrap_or_default()
-                .is_empty(),);
+                .unwrap_or_default();
+            if !type_problems.is_empty() {
+                return Err(format_type_problems(
+                    type_problems,
+                    home,
+                    &loaded_module.interns,
+                    filepath.clone(),
+                    src,
+                ));
+            }
 
             Ok(loaded_module)
         }
@@ -279,6 +315,13 @@ fn expect_types(mut loaded_module: LoadedModule, mut expected_types: HashMap<&st
 
         match declarations.declarations[index] {
             Value | Function(_) | Recursive(_) | TailRecursive(_) => {
+                let body = declarations.expressions[index].clone();
+
+                if let roc_can::expr::Expr::ImportParams(_, _, None) = body.value {
+                    // Skip import defs without params
+                    continue;
+                }
+
                 let symbol = declarations.symbols[index].value;
                 let expr_var = declarations.variables[index];
 
@@ -407,7 +450,13 @@ fn module_with_deps() {
 
         match declarations.declarations[index] {
             Value | Function(_) | Recursive(_) | TailRecursive(_) => {
-                def_count += 1;
+                let body = declarations.expressions[index].clone();
+
+                if let roc_can::expr::Expr::ImportParams(_, _, None) = body.value {
+                    // Skip import defs without params
+                } else {
+                    def_count += 1;
+                }
             }
             Destructure(_) => {
                 def_count += 1;
@@ -1564,6 +1613,325 @@ fn cannot_use_original_name_if_imported_with_alias() {
 }
 
 #[test]
+fn module_params_checks() {
+    let modules = vec![
+        (
+            "Api.roc",
+            indoc!(
+                r#"
+            module { key } -> [url]
+
+            url = "example.com/$(key)"
+            "#
+            ),
+        ),
+        (
+            "Main.roc",
+            indoc!(
+                r#"
+        module [example]
+
+        import Api { key: "abcdef" }
+
+        example = Api.url
+            "#
+            ),
+        ),
+    ];
+
+    let result = multiple_modules("module_params_checks", modules);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn module_params_optional() {
+    let modules = vec![
+        (
+            "Api.roc",
+            indoc!(
+                r#"
+            module { key, exp ? "default" } -> [url]
+
+            url = "example.com/$(key)?exp=$(exp)"
+            "#
+            ),
+        ),
+        (
+            "Main.roc",
+            indoc!(
+                r#"
+        module [example]
+
+        import Api { key: "abcdef" }
+
+        example = Api.url
+            "#
+            ),
+        ),
+    ];
+
+    let result = multiple_modules("module_params_optional", modules);
+    assert!(result.is_ok())
+}
+
+#[test]
+fn module_params_typecheck_fail() {
+    let modules = vec![
+        (
+            "Api.roc",
+            indoc!(
+                r#"
+            module { key } -> [url]
+
+            url = "example.com/$(key)"
+            "#
+            ),
+        ),
+        (
+            "Main.roc",
+            indoc!(
+                r#"
+        module [example]
+
+        import Api { key: 123 }
+
+        example = Api.url
+            "#
+            ),
+        ),
+    ];
+
+    let result = multiple_modules("module_params_typecheck_fail", modules).unwrap_err();
+    assert_eq!(
+        result,
+        indoc!(
+            r#"
+            ── MODULE PARAMS MISMATCH in tmp/module_params_typecheck_fail/Main.roc ─────────
+
+            Something is off with the params provided by this import:
+
+            3│  import Api { key: 123 }
+                           ^^^^^^^^^^^^
+
+            This is the type I inferred:
+
+                { key : Num * }
+
+            However, Api expects:
+
+                { key : Str }
+            "#
+        )
+    );
+}
+
+#[test]
+fn module_params_missing_fields() {
+    let modules = vec![
+        (
+            "Api.roc",
+            indoc!(
+                r#"
+            module { key } -> [url]
+
+            url = "example.com/$(key)"
+            "#
+            ),
+        ),
+        (
+            "Main.roc",
+            indoc!(
+                r#"
+        module [example]
+
+        import Api {}
+
+        example = Api.url
+            "#
+            ),
+        ),
+    ];
+
+    let result = multiple_modules("module_params_missing_fields", modules).unwrap_err();
+    assert_eq!(
+        result,
+        indoc!(
+            r#"
+            ── MODULE PARAMS MISMATCH in tmp/module_params_missing_fields/Main.roc ─────────
+
+            Something is off with the params provided by this import:
+
+            3│  import Api {}
+                           ^^
+
+            This is the type I inferred:
+
+                {}
+
+            However, Api expects:
+
+                { key : Str }
+
+            Tip: Looks like the key field is missing.
+            "#
+        )
+    );
+}
+
+#[test]
+fn module_params_extra_fields() {
+    let modules = vec![
+        (
+            "Api.roc",
+            indoc!(
+                r#"
+            module { key } -> [url]
+
+            url = "example.com/$(key)"
+            "#
+            ),
+        ),
+        (
+            "Main.roc",
+            indoc!(
+                r#"
+        module [example]
+
+        import Api { key: "123", doesNotExist: Bool.true }
+
+        example = Api.url
+            "#
+            ),
+        ),
+    ];
+
+    let result = multiple_modules("module_params_extra_fields", modules).unwrap_err();
+    assert_eq!(
+        result,
+        indoc!(
+            r#"
+            ── MODULE PARAMS MISMATCH in tmp/module_params_extra_fields/Main.roc ───────────
+
+            Something is off with the params provided by this import:
+
+            3│  import Api { key: "123", doesNotExist: Bool.true }
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+            This is the type I inferred:
+
+                { doesNotExist : Bool, … }
+
+            However, Api expects:
+
+                { … }
+
+
+            "#
+        )
+    );
+}
+
+#[test]
+fn module_params_unexpected() {
+    let modules = vec![
+        (
+            "Api.roc",
+            indoc!(
+                r#"
+            module [url]
+
+            url = "example.com"
+            "#
+            ),
+        ),
+        (
+            "Main.roc",
+            indoc!(
+                r#"
+        module [example]
+
+        import Api { key: 123 }
+
+        example = Api.url
+            "#
+            ),
+        ),
+    ];
+
+    let err = multiple_modules("module_params_unexpected", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r#"
+            ── UNEXPECTED MODULE PARAMS in tmp/module_params_unexpected/Main.roc ───────────
+
+            This import specifies module params:
+
+            3│  import Api { key: 123 }
+                           ^^^^^^^^^^^^
+
+            However, Api does not expect any. Did you intend to import a different
+            module?
+            "#
+        )
+    )
+}
+
+#[test]
+fn module_params_missing() {
+    let modules = vec![
+        (
+            "Api.roc",
+            indoc!(
+                r#"
+            module { key, exp } -> [url]
+
+            url = "example.com/$(key)?exp=$(Num.toStr exp)"
+            "#
+            ),
+        ),
+        (
+            "Main.roc",
+            indoc!(
+                r#"
+        module [example]
+
+        import Api
+
+        example = Api.url
+            "#
+            ),
+        ),
+    ];
+
+    let err = multiple_modules("module_params_missing", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r#"
+            ── MISSING MODULE PARAMS in tmp/module_params_missing/Main.roc ─────────────────
+
+            This import specifies no module params:
+
+            3│  import Api
+                ^^^^^^^^^^
+
+            However, Api expects the following to be provided:
+
+                {
+                    exp : Num *,
+                    key : Str,
+                }
+
+            You can provide params after the module name, like:
+
+                import Menu { echo, read }
+            "#
+        )
+    )
+}
+
+#[test]
 fn issue_2863_module_type_does_not_exist() {
     let modules = vec![
         (
@@ -1783,7 +2151,7 @@ fn roc_file_no_extension() {
         indoc!(
             r#"
             app "helloWorld"
-                packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.12.0/Lb8EgiejTUzbggO2HVVuPJFkwvvsfW6LojkLR20kTVE.tar.br" }
+                packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.15.0/SlwdbJ-3GR7uBWQo6zlmYWNYOxnvo8r6YABXD-45UOw.tar.br" }
                 imports [pf.Stdout]
                 provides [main] to pf
 

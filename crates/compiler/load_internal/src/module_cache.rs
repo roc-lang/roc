@@ -4,6 +4,7 @@ use crate::module::{
     ModuleHeader, ParsedModule, TypeCheckedModule,
 };
 use roc_can::abilities::PendingAbilitiesStore;
+use roc_can::module::ModuleParams;
 use roc_collections::{MutMap, MutSet, VecMap};
 use roc_module::ident::ModuleName;
 use roc_module::symbol::{ModuleId, PQModuleName, Symbol};
@@ -26,6 +27,7 @@ pub(crate) struct ModuleCache<'a> {
     pub(crate) aliases: MutMap<ModuleId, MutMap<Symbol, (bool, Alias)>>,
     pub(crate) pending_abilities: MutMap<ModuleId, PendingAbilitiesStore>,
     pub(crate) constrained: MutMap<ModuleId, ConstrainedModule>,
+    pub(crate) module_params: MutMap<ModuleId, ModuleParams>,
     pub(crate) typechecked: MutMap<ModuleId, TypeCheckedModule<'a>>,
     pub(crate) checked: MutMap<ModuleId, CheckedModule>,
     pub(crate) found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
@@ -91,6 +93,7 @@ impl Default for ModuleCache<'_> {
             DECODE,
             HASH,
             INSPECT,
+            TASK,
         }
 
         Self {
@@ -100,6 +103,7 @@ impl Default for ModuleCache<'_> {
             aliases: Default::default(),
             pending_abilities: Default::default(),
             constrained: Default::default(),
+            module_params: Default::default(),
             typechecked: Default::default(),
             checked: Default::default(),
             found_specializations: Default::default(),

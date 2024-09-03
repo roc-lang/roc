@@ -1,7 +1,6 @@
-use bumpalo::Bump;
-use roc_parse::{ast::CommentOrNewline, remove_spaces::RemoveSpaces};
+use roc_parse::ast::CommentOrNewline;
 
-use crate::{Ast, Buf};
+use crate::Buf;
 
 /// The number of spaces to indent.
 pub const INDENT: u16 = 4;
@@ -191,13 +190,4 @@ fn fmt_docs(buf: &mut Buf, docs: &str) {
         buf.spaces(1);
     }
     buf.push_str(docs.trim_end());
-}
-
-impl<'a> RemoveSpaces<'a> for Ast<'a> {
-    fn remove_spaces(&self, arena: &'a Bump) -> Self {
-        Ast {
-            module: self.module.remove_spaces(arena),
-            defs: self.defs.remove_spaces(arena),
-        }
-    }
 }
