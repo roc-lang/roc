@@ -124,18 +124,7 @@ impl Symbol {
     }
 
     pub fn is_generated(self, interns: &Interns) -> bool {
-        let ident_ids = interns
-            .all_ident_ids
-            .get(&self.module_id())
-            .unwrap_or_else(|| {
-                internal_error!(
-                    "ident_string could not find IdentIds for module {:?} in {:?}",
-                    self.module_id(),
-                    interns
-                )
-            });
-
-        ident_ids.is_generated_id(self.ident_id())
+        self.ident_ids(interns).is_generated_id(self.ident_id())
     }
 
     pub fn module_string<'a>(&self, interns: &'a Interns) -> &'a ModuleName {
@@ -152,24 +141,15 @@ impl Symbol {
     }
 
     pub fn as_str(self, interns: &Interns) -> &str {
-        let ident_ids = interns
-            .all_ident_ids
-            .get(&self.module_id())
+        self.ident_ids(interns)
+            .get_name(self.ident_id())
             .unwrap_or_else(|| {
                 internal_error!(
-                    "ident_string could not find IdentIds for module {:?} in {:?}",
-                    self.module_id(),
-                    interns
+                    "ident_string's IdentIds did not contain an entry for {} in module {:?}",
+                    self.ident_id().0,
+                    self.module_id()
                 )
-            });
-
-        ident_ids.get_name(self.ident_id()).unwrap_or_else(|| {
-            internal_error!(
-                "ident_string's IdentIds did not contain an entry for {} in module {:?}",
-                self.ident_id().0,
-                self.module_id()
-            )
-        })
+            })
     }
 
     pub const fn as_u64(self) -> u64 {
@@ -200,6 +180,19 @@ impl Symbol {
     #[cfg(debug_assertions)]
     pub fn contains(self, needle: &str) -> bool {
         format!("{self:?}").contains(needle)
+    }
+
+    fn ident_ids(self, interns: &Interns) -> &IdentIds {
+        interns
+            .all_ident_ids
+            .get(&self.module_id())
+            .unwrap_or_else(|| {
+                internal_error!(
+                    "ident_string could not find IdentIds for module {:?} in {:?}",
+                    self.module_id(),
+                    interns
+                )
+            })
     }
 }
 
