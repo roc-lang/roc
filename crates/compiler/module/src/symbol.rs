@@ -1740,8 +1740,6 @@ define_builtins! {
         3 CRYPT_ADD_BYTES: "addBytes"
         4 CRYPT_DIGEST: "digest"
         5 CRYPT_HASH_SHA_256: "hashSha256"
-        6 CRYPT_DIGEST_256_EQ: "digest256Eq"
-        7 CRYPT_DIGEST_256_BYTE_LIST: "digest256ByteList"
     }
 
     num_modules: 17 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
