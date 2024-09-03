@@ -2,6 +2,7 @@ use crate::ast::{Collection, Implements, Pattern, PatternAs};
 use crate::blankspace::{parse_space, space0_e, spaces, spaces_before, with_spaces_after};
 use crate::ident::{parse_ident, parse_lowercase_ident, Accessor, Ident};
 use crate::keyword;
+use crate::number_literal::parse_number_base;
 use crate::parser::{at_keyword, Progress::*};
 use crate::parser::{
     byte, collection_inner, fail_when, loc, specialize_err_ref, then, three_bytes, two_bytes,
@@ -12,7 +13,7 @@ use crate::string_literal::{parse_str_like_literal, StrLikeLiteral};
 use bumpalo::collections::string::String;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_region::all::{Loc, Region};
+use roc_region::all::{Loc, Position, Region};
 
 /// Different patterns are supported in different circumstances.
 /// For example, when branches can pattern match on number literals, but
@@ -33,23 +34,24 @@ pub fn parse_closure_param<'a>(
     min_indent: u32,
 ) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     if let Some(b) = state.bytes().first() {
+        let start = state.pos();
         match b {
             b'_' => {
                 // Underscore is also common, e.g. \_ -> ...
-                parse_underscore_pattern(state.inc())
+                parse_rest_of_underscore_pattern(start, state.inc())
             }
             b'{' => {
                 // You can destructure records in params, e.g. \{ x, y } -> ...
-                parse_record_pattern(arena, state.clone())
+                parse_rest_of_record_pattern(start, arena, state.inc())
             }
             b'(' => {
                 // If you wrap it in parens, you can match any arbitrary pattern at all. But what about the list pattern?
                 // e.g. \(User.UserId userId) -> ...
-                parse_pattern_in_parens(arena, state.clone())
+                parse_rest_of_pattern_in_parens(start, arena, state.inc())
             }
             // todo: @wip can we have a list in a closure pattern?
             // b'[' => parse_list_pattern(arena, state.clone()),
-            _ => parse_ident_pattern(true, arena, state.clone(), min_indent),
+            _ => parse_ident_pattern(start, true, arena, state, min_indent),
         }
     } else {
         Err((NoProgress, EPattern::Start(state.pos())))
@@ -89,21 +91,19 @@ pub fn loc_pattern_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>>
 fn parse_loc_pattern_etc<'a>(
     can_have_arguments: bool,
     arena: &'a Bump,
-    mut state: State<'a>,
+    state: State<'a>,
     min_indent: u32,
 ) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     if let Some(b) = state.bytes().first() {
+        let start = state.pos();
         match b {
-            b'_' => parse_underscore_pattern(state.inc()),
-            b'{' => parse_record_pattern(arena, state.clone()),
-            b'(' => parse_pattern_in_parens(arena, state.clone()),
-            b'[' => parse_list_pattern(arena, state.clone()),
+            b'_' => parse_rest_of_underscore_pattern(start, state.inc()),
+            b'{' => parse_rest_of_record_pattern(start, arena, state.inc()),
+            b'(' => parse_rest_of_pattern_in_parens(start, arena, state.inc()),
+            b'[' => parse_rest_of_list_pattern(start, arena, state.inc()),
             b'"' | &b'\'' => {
-                let start = state.pos();
                 let column = state.column();
-                let is_single_quote = *b == b'\'';
-                state.advance_mut(1);
-                match parse_str_like_literal(is_single_quote, column, arena, state, min_indent) {
+                match parse_str_like_literal(*b == b'\'', column, arena, state.inc(), min_indent) {
                     Ok((p, literal, state)) => {
                         let literal = match literal {
                             StrLikeLiteral::Str(s) => Pattern::StrLiteral(s),
@@ -117,13 +117,21 @@ fn parse_loc_pattern_etc<'a>(
                     Err((p, _)) => Err((p, EPattern::Start(start))),
                 }
             }
-            _ => {
-                match parse_number_pattern(state.clone()) {
-                    Err((NoProgress, _)) => {}
-                    res => return res,
-                }
-                parse_ident_pattern(can_have_arguments, arena, state.clone(), min_indent)
+            b'0'..=b'9' => {
+                let (p, literal, state) = parse_number_base(false, state.bytes(), state)
+                    .map_err(|(p, fail)| (p, EPattern::NumLiteral(fail, start)))?;
+                let pattern = literal_to_pattern(literal);
+                Ok((p, Loc::pos(start, state.pos(), pattern), state))
             }
+            b'-' => match parse_number_base(true, &state.bytes()[1..], state) {
+                Ok((p, literal, state)) => {
+                    let pattern = literal_to_pattern(literal);
+                    Ok((p, Loc::pos(start, state.pos(), pattern), state))
+                }
+                Err((MadeProgress, fail)) => Err((MadeProgress, EPattern::NumLiteral(fail, start))),
+                Err(_) => Err((NoProgress, EPattern::Start(start))),
+            },
+            _ => parse_ident_pattern(start, can_have_arguments, arena, state.clone(), min_indent),
         }
     } else {
         Err((NoProgress, EPattern::Start(state.pos())))
@@ -227,17 +235,11 @@ pub fn loc_implements_parser<'a>() -> impl Parser<'a, Loc<Implements<'a>>, EPatt
     )
 }
 
-fn parse_pattern_in_parens<'a>(
+fn parse_rest_of_pattern_in_parens<'a>(
+    start: Position,
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
-    let start = state.pos();
-    if state.bytes().first() != Some(&b'(') {
-        let fail = PInParens::Open(start);
-        return Err((NoProgress, EPattern::PInParens(fail, start)));
-    }
-    let state = state.advance(1);
-
     let elem_parser = specialize_err_ref(PInParens::Pattern, loc_pattern_help());
     let parser = collection_inner(
         elem_parser,
@@ -252,7 +254,7 @@ fn parse_pattern_in_parens<'a>(
         let fail = PInParens::End(state.pos());
         return Err((MadeProgress, EPattern::PInParens(fail, start)));
     }
-    let state = state.advance(1);
+    let state = state.inc();
 
     if pats.is_empty() {
         let fail = PInParens::Empty(state.pos());
@@ -270,41 +272,28 @@ fn parse_pattern_in_parens<'a>(
     Ok((MadeProgress, pats, state))
 }
 
-fn parse_number_pattern<'a>(state: State<'a>) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
-    let start = state.pos();
-    match crate::number_literal::parse_number_literal(state) {
-        Ok((p, literal, state)) => {
-            use crate::number_literal::NumLiteral::*;
-            let literal = match literal {
-                Num(s) => Pattern::NumLiteral(s),
-                Float(s) => Pattern::FloatLiteral(s),
-                NonBase10Int {
-                    string,
-                    base,
-                    is_negative,
-                } => Pattern::NonBase10Literal {
-                    string,
-                    base,
-                    is_negative,
-                },
-            };
-            Ok((p, Loc::pos(start, state.pos(), literal), state))
-        }
-        Err((p, fail)) => Err((p, EPattern::NumLiteral(fail, start))),
+fn literal_to_pattern(literal: crate::number_literal::NumLiteral<'_>) -> Pattern<'_> {
+    use crate::number_literal::NumLiteral::*;
+    match literal {
+        Num(s) => Pattern::NumLiteral(s),
+        Float(s) => Pattern::FloatLiteral(s),
+        NonBase10Int {
+            string,
+            base,
+            is_negative,
+        } => Pattern::NonBase10Literal {
+            string,
+            base,
+            is_negative,
+        },
     }
 }
 
-fn parse_list_pattern<'a>(
+fn parse_rest_of_list_pattern<'a>(
+    start: Position,
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
-    let start = state.pos();
-    if state.bytes().first() != Some(&b'[') {
-        let fail = PList::Open(state.pos());
-        return Err((NoProgress, EPattern::List(fail, start)));
-    }
-    let state = state.advance(1);
-
     let inner = collection_inner(
         list_element_pattern(),
         byte(b',', PList::End),
@@ -320,7 +309,7 @@ fn parse_list_pattern<'a>(
         let fail = PList::End(state.pos());
         return Err((MadeProgress, EPattern::List(fail, start)));
     }
-    let state = state.advance(1);
+    let state = state.inc();
 
     let pattern = Loc::pos(start, state.pos(), Pattern::List(elems));
     return Ok((MadeProgress, pattern, state));
@@ -371,12 +360,12 @@ fn list_rest_pattern<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PList<'a>> {
 }
 
 fn parse_ident_pattern<'a>(
+    start: Position,
     can_have_arguments: bool,
     arena: &'a Bump,
     state: State<'a>,
     min_indent: u32,
 ) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
-    let start = state.pos();
     let (_, ident, state) =
         parse_ident(arena, state, min_indent).map_err(|(p, _)| (p, EPattern::Start(start)))?;
 
@@ -464,10 +453,10 @@ fn parse_ident_pattern<'a>(
     }
 }
 
-fn parse_underscore_pattern<'a>(
+fn parse_rest_of_underscore_pattern<'a>(
+    start: Position,
     state: State<'a>,
 ) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
-    let start = state.pos().prev();
     let after_underscore = state.clone();
     match parse_lowercase_ident(state) {
         Ok((_, name, state)) => {
@@ -482,18 +471,30 @@ fn parse_underscore_pattern<'a>(
     }
 }
 
-fn parse_record_pattern<'a>(
+fn parse_rest_of_record_pattern<'a>(
+    start: Position,
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
-    let start = state.pos();
-    match parse_record_pattern_fields(arena, state) {
-        Ok((p, pats, state)) => {
-            let pat = Loc::pos(start, state.pos(), Pattern::RecordDestructure(pats));
-            Ok((p, pat, state))
-        }
-        Err((p, fail)) => Err((p, EPattern::Record(fail, start))),
+    let inner = collection_inner(
+        record_pattern_field(),
+        byte(b',', PRecord::End),
+        Pattern::SpaceBefore,
+    );
+
+    let (fields, state) = match inner.parse(arena, state, 0) {
+        Ok((_, fields, state)) => (fields, state),
+        Err((_, fail)) => return Err((MadeProgress, EPattern::Record(fail, start))),
+    };
+
+    if state.bytes().first() != Some(&b'}') {
+        let fail = PRecord::End(state.pos());
+        return Err((MadeProgress, EPattern::Record(fail, start)));
     }
+    let state = state.inc();
+
+    let pattern = Pattern::RecordDestructure(fields);
+    Ok((MadeProgress, Loc::pos(start, state.pos(), pattern), state))
 }
 
 pub fn parse_record_pattern_fields<'a>(

@@ -989,7 +989,7 @@ where
     E: 'a,
     F: Fn(&'a Bump, State<'a>, Progress, Before) -> ParseResult<'a, After, E>,
 {
-    move |arena, state, min_indent| {
+    move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
         parser
             .parse(arena, state, min_indent)
             .and_then(|(progress, output, next_state)| {
@@ -1236,7 +1236,7 @@ where
     P2: Parser<'a, Second, E>,
     E: 'a,
 {
-    move |arena, state: crate::state::State<'a>, min_indent: u32| match p1
+    move |arena: &'a Bump, state: crate::state::State<'a>, min_indent: u32| match p1
         .parse(arena, state, min_indent)
     {
         Ok((p1, _, state)) => match p2.parse(arena, state, min_indent) {

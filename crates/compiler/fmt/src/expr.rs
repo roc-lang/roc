@@ -758,6 +758,7 @@ pub fn fmt_str_literal(buf: &mut Buf, literal: StrLiteral, indent: u16) {
     }
 }
 
+// todo: @ip look here to skip reformatting \|>, \+, etc.
 fn fmt_binops<'a>(
     buf: &mut Buf,
     lefts: &'a [(Loc<Expr<'a>>, Loc<BinOp>)],

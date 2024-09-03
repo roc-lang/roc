@@ -12,27 +12,7 @@ pub enum NumLiteral<'a> {
     },
 }
 
-pub fn parse_positive_number_literal<'a>(
-    state: State<'a>,
-) -> ParseResult<'a, NumLiteral<'a>, ENumber> {
-    match state.bytes().first() {
-        Some(b) if (*b as char).is_ascii_digit() => parse_number_base(false, state.bytes(), state),
-        _ => Err((Progress::NoProgress, ENumber::End)),
-    }
-}
-
-pub fn parse_number_literal<'a>(state: State<'a>) -> ParseResult<'a, NumLiteral<'a>, ENumber> {
-    match state.bytes().first() {
-        Some(b) if *b == b'-' => {
-            // drop the minus
-            parse_number_base(true, &state.bytes()[1..], state)
-        }
-        Some(b) if (*b as char).is_ascii_digit() => parse_number_base(false, state.bytes(), state),
-        _ => Err((Progress::NoProgress, ENumber::End)),
-    }
-}
-
-fn parse_number_base<'a>(
+pub fn parse_number_base<'a>(
     is_negated: bool,
     bytes: &'a [u8],
     state: State<'a>,
