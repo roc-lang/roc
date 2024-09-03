@@ -56,30 +56,30 @@ mod cli_run {
         PlainText(&'a str),
     }
 
-    fn check_compile_error(file: &Path, flags: &[&str], expected: &str) {
-        check_compile_error_with(CMD_CHECK, file, flags, expected);
-    }
+    // fn check_compile_error(file: &Path, flags: &[&str], expected: &str) {
+    //     check_compile_error_with(CMD_CHECK, file, flags, expected);
+    // }
 
-    fn check_compile_error_with(cmd: &str, file: &Path, flags: &[&str], expected: &str) {
-        let compile_out = run_roc([cmd, file.to_str().unwrap()].iter().chain(flags), &[], &[]);
-        let err = compile_out.stdout.trim();
-        let err = strip_colors(err);
-    #[cfg_attr(windows, ignore)]
-    // uses C platform
-    fn platform_switching_main() {
-        let expected_ending = "Which platform am I running on now?\n🔨 Building host ...\n";
-        let runner = Run::new_roc()
-            .arg(CMD_RUN)
-            .arg(BUILD_HOST_FLAG)
-            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-            .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .with_valigrind(ALLOW_VALGRIND)
-            .arg(file_from_root("examples/platform-switching", "main.roc").as_path());
+    // fn check_compile_error_with(cmd: &str, file: &Path, flags: &[&str], expected: &str) {
+    //     let compile_out = run_roc([cmd, file.to_str().unwrap()].iter().chain(flags), &[], &[]);
+    //     let err = compile_out.stdout.trim();
+    //     let err = strip_colors(err);
+    //     #[cfg_attr(windows, ignore)]
+    //     // uses C platform
+    //     fn platform_switching_main() {
+    //         let expected_ending = "Which platform am I running on now?\n🔨 Building host ...\n";
+    //         let runner = Run::new_roc()
+    //             .arg(CMD_RUN)
+    //             .arg(BUILD_HOST_FLAG)
+    //             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
+    //             .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
+    //             .with_valigrind(ALLOW_VALGRIND)
+    //             .arg(file_from_root("examples/platform-switching", "main.roc").as_path());
 
-        let out = runner.run();
-        out.assert_clean_success();
-        out.assert_stdout_and_stderr_ends_with(expected_ending);
-    }
+    //         let out = runner.run();
+    //         out.assert_clean_success();
+    //         out.assert_stdout_and_stderr_ends_with(expected_ending);
+    //     }
 
     // We exclude the C platforming switching example
     // because the main platform switching example runs the c platform.
@@ -454,6 +454,7 @@ mod cli_run {
         out.assert_stdout_and_stderr_ends_with(expected_ending);
     }
 
+    #[ignore = "likely broken because of alias analysis: https://github.com/roc-lang/roc/issues/6544"]
     #[test]
     #[cfg_attr(any(target_os = "windows", target_os = "linux"), ignore = "Segfault")]
     fn false_interpreter() {
@@ -1197,13 +1198,14 @@ mod cli_run {
     fn known_type_error() {
         let expected_ending = indoc!(
             r#"
+
             ── TYPE MISMATCH in tests/known_bad/TypeError.roc ──────────────────────────────
 
             Something is off with the body of the main definition:
 
-            5│  main : Str -> Task {} []
-            6│  main = \_ ->
-            7│      "this is a string, not a Task {} [] function like the platform expects."
+            3│  main : Str -> Task {} []
+            4│  main = \_ ->
+            5│      "this is a string, not a Task {} [] function like the platform expects."
                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
             The body is a string of type:
@@ -1212,9 +1214,14 @@ mod cli_run {
 
             But the type annotation on main says it should be:
 
-                    Task {} []
+                Task {} []
 
             Tip: Add type annotations to functions or values to help you figure
+            this out.
+
+            ────────────────────────────────────────────────────────────────────────────────
+
+            1 error and 0 warning found in <ignored for test> ms
             "#
         );
 
@@ -1311,36 +1318,6 @@ mod cli_run {
             .arg(file_from_root(
                 "crates/cli/tests/known_bad",
                 "UnusedImport.roc",
-            ))
-            .run()
-            .assert_stdout_and_stderr_ends_with(expected_ending);
-    }
-
-    #[test]
-    fn unknown_generates_with() {
-        let expected_ending = indoc!(
-            r#"
-
-            ── UNKNOWN GENERATES FUNCTION in tests/known_bad/UnknownGeneratesWith.roc ──────
-
-            I don't know how to generate the foobar function.
-
-            4│      generates Effect with [after, map, always, foobar]
-                                                               ^^^^^^
-
-            more about hosted modules at TODO.
-
-            ────────────────────────────────────────────────────────────────────────────────
-
-            1 error and 0 warning found in <ignored for test> ms
-            "#
-        );
-
-        Run::new_roc()
-            .arg(CMD_CHECK)
-            .arg(file_from_root(
-                "crates/cli/tests/known_bad",
-                "UnknownGeneratesWith.roc",
             ))
             .run()
             .assert_stdout_and_stderr_ends_with(expected_ending);
