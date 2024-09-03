@@ -123,6 +123,21 @@ impl Symbol {
                 .any(|(_, (s, _))| *s == self)
     }
 
+    pub fn is_generated(self, interns: &Interns) -> bool {
+        let ident_ids = interns
+            .all_ident_ids
+            .get(&self.module_id())
+            .unwrap_or_else(|| {
+                internal_error!(
+                    "ident_string could not find IdentIds for module {:?} in {:?}",
+                    self.module_id(),
+                    interns
+                )
+            });
+
+        ident_ids.is_generated_id(self.ident_id())
+    }
+
     pub fn module_string<'a>(&self, interns: &'a Interns) -> &'a ModuleName {
         interns
             .module_ids
@@ -705,6 +720,12 @@ impl IdentIds {
     /// to generate a unique symbol to refer to that closure.
     pub fn gen_unique(&mut self) -> IdentId {
         IdentId(self.interner.insert_index_str() as u32)
+    }
+
+    pub fn is_generated_id(&self, id: IdentId) -> bool {
+        self.interner
+            .try_get(id.0 as usize)
+            .map_or(false, |str| str.starts_with(|c: char| c.is_ascii_digit()))
     }
 
     #[inline(always)]
