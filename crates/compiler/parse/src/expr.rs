@@ -6,9 +6,8 @@ use crate::ast::{
     TryTarget, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use crate::blankspace::{
-    loc_space0_e, parse_space, require_newline_or_eof, space0_after_e, space0_around_ee,
-    space0_before_e, space0_e, spaces, spaces_around_help, spaces_before, with_spaces,
-    with_spaces_before,
+    loc_space0_e, parse_space, require_newline_or_eof, space0_around_ee, space0_before_e, space0_e,
+    spaces, spaces_around_help, spaces_before, with_spaces, with_spaces_after, with_spaces_before,
 };
 use crate::header::module_name_help;
 use crate::ident::{
@@ -2643,38 +2642,6 @@ fn import<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>> {
     )
 }
 
-fn if_branch<'a>() -> impl Parser<'a, (Loc<Expr<'a>>, Loc<Expr<'a>>), EIf<'a>> {
-    let options = ExprParseOptions {
-        accept_multi_backpassing: true,
-        check_for_arrow: true,
-    };
-    skip_second(
-        and(
-            skip_second(
-                space0_around_ee(
-                    specialize_err_ref(EIf::Condition, loc_expr(true)),
-                    EIf::IndentCondition,
-                    EIf::IndentThenToken,
-                ),
-                parser::keyword(keyword::THEN, EIf::Then),
-            ),
-            map_with_arena(
-                space0_after_e(
-                    block(options, false, EIf::IndentThenBranch, EIf::ThenBranch),
-                    EIf::IndentElseToken,
-                ),
-                |arena: &'a Bump, block: Loc<Expr<'a>>| match block.value {
-                    Expr::SpaceAfter(&Expr::SpaceBefore(x, before), after) => block.with_value(
-                        Expr::SpaceBefore(arena.alloc(Expr::SpaceAfter(x, after)), before),
-                    ),
-                    _ => block,
-                },
-            ),
-        ),
-        parser::keyword(keyword::ELSE, EIf::Else),
-    )
-}
-
 /// If Ok it always returns MadeProgress
 fn parse_rest_of_if_expr<'a>(
     options: ExprParseOptions,
@@ -2686,10 +2653,48 @@ fn parse_rest_of_if_expr<'a>(
 
     let mut loop_state = state;
 
-    let state_final_else = loop {
-        let (_, (cond, then_branch), state) = if_branch().parse(arena, loop_state, min_indent)?;
+    let if_options = ExprParseOptions {
+        accept_multi_backpassing: true,
+        check_for_arrow: true,
+    };
+    let cond_parser = skip_second(
+        space0_around_ee(
+            specialize_err_ref(EIf::Condition, loc_expr(true)),
+            EIf::IndentCondition,
+            EIf::IndentThenToken,
+        ),
+        parser::keyword(keyword::THEN, EIf::Then),
+    );
 
-        branches.push((cond, then_branch));
+    let then_parser = block(if_options, false, EIf::IndentThenBranch, EIf::ThenBranch);
+
+    let then_parser = parser::map_with_arena(
+        and(then_parser, space0_e(EIf::IndentElseToken)),
+        |arena: &'a Bump, (expr, spaces)| with_spaces_after(expr, spaces, arena),
+    );
+
+    let state_final_else = loop {
+        let (_, cond, state) = cond_parser.parse(arena, loop_state, min_indent)?;
+
+        let (then_block, state) = match then_parser.parse(arena, state, min_indent) {
+            Ok((_, block, state)) => {
+                let expr = match block.value {
+                    Expr::SpaceAfter(&Expr::SpaceBefore(x, before), after) => block.with_value(
+                        Expr::SpaceBefore(arena.alloc(Expr::SpaceAfter(x, after)), before),
+                    ),
+                    _ => block,
+                };
+                (expr, state)
+            }
+            Err((_, fail)) => return Err((MadeProgress, fail)),
+        };
+
+        if !at_keyword(keyword::ELSE, &state) {
+            return Err((MadeProgress, EIf::Else(state.pos())));
+        }
+        let state = state.advance(keyword::ELSE.len());
+
+        branches.push((cond, then_block));
 
         // try to parse another `if`
         // NOTE this drops spaces between the `else` and the `if`

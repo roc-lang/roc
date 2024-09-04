@@ -144,23 +144,6 @@ pub fn with_spaces_after<'a, T: 'a + Spaceable<'a>>(
     }
 }
 
-pub fn space0_after_e<'a, P, S, E>(
-    parser: P,
-    indent_problem: fn(Position) -> E,
-) -> impl Parser<'a, Loc<S>, E>
-where
-    S: 'a + Spaceable<'a>,
-    P: 'a + Parser<'a, Loc<S>, E>,
-    E: 'a + SpaceProblem,
-{
-    parser::map_with_arena(
-        and(parser, space0_e(indent_problem)),
-        |arena: &'a Bump, (loc_expr, space_list): (Loc<S>, &'a [CommentOrNewline<'a>])| {
-            with_spaces_after(loc_expr, space_list, arena)
-        },
-    )
-}
-
 pub fn simple_eat_whitespace(bytes: &[u8]) -> usize {
     let mut i = 0;
     while i < bytes.len() {
