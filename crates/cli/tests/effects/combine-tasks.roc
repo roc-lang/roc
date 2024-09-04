@@ -1,6 +1,6 @@
-app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.15.0/SlwdbJ-3GR7uBWQo6zlmYWNYOxnvo8r6YABXD-45UOw.tar.br" }
+app [main] { pf: platform "platform/main.roc" }
 
-import pf.Stdout
+import pf.PlatformTasks
 
 main =
     multipleIn =
@@ -12,7 +12,7 @@ main =
             _: Task.ok (Dict.single "a" "b"),
         }!
 
-    Stdout.line! "For multiple tasks: $(Inspect.toStr multipleIn)"
+    PlatformTasks.putLine! "For multiple tasks: $(Inspect.toStr multipleIn)"
 
 sequential : Task a err, Task b err, (a, b -> c) -> Task c err
 sequential = \firstTask, secondTask, mapper ->

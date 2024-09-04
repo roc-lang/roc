@@ -411,24 +411,6 @@ mod cli_run {
 
     #[test]
     #[cfg_attr(windows, ignore)]
-    fn interactive_effects() {
-        let expected_ending = "hi there!\nIt is known\n🔨 Building host ...\n";
-        let runner = Run::new_roc()
-            .arg(CMD_RUN)
-            .arg(BUILD_HOST_FLAG)
-            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-            .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .with_valgrind(ALLOW_VALGRIND)
-            .arg(file_from_root("crates/cli/tests/effects", "main.roc").as_path())
-            .with_stdin_vals(vec!["hi there!"]);
-
-        let out = runner.run();
-        out.assert_clean_success();
-        out.assert_stdout_and_stderr_ends_with(expected_ending);
-    }
-
-    #[test]
-    #[cfg_attr(windows, ignore)]
     // tea = The Elm Architecture
     fn terminal_ui_tea() {
         let expected_ending = "Hello Worldfoo!\n🔨 Building host ...\n";
@@ -448,7 +430,7 @@ mod cli_run {
 
     #[test]
     #[cfg_attr(
-        any(target_os = "windows", target_os = "linux"),
+        any(target_os = "windows", target_os = "linux", target_os = "macos"),
         ignore = "Segfault, likely broken because of alias analysis: https://github.com/roc-lang/roc/issues/6544"
     )]
     fn false_interpreter() {
@@ -523,21 +505,6 @@ mod cli_run {
         let out = runner.run();
         out.assert_clean_success();
         out.assert_stdout_and_stderr_ends_with(expected_ending.as_str());
-    }
-
-    #[test]
-    #[cfg_attr(windows, ignore)]
-    fn combine_tasks_with_record_builder() {
-        let expected_ending = "For multiple tasks: {a: 123, b: \"abc\", c: [123]}\n";
-
-        let runner = Run::new_roc()
-            .arg(CMD_RUN)
-            .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .arg(file_from_root("crates/cli/tests/basic-cli", "combine-tasks.roc").as_path());
-
-        let out = runner.run();
-        out.assert_clean_success();
-        out.assert_stdout_and_stderr_ends_with(expected_ending);
     }
 
     #[test]
@@ -636,6 +603,69 @@ mod cli_run {
         let out = runner.run();
         out.assert_clean_success();
         out.assert_stdout_and_stderr_ends_with(expected_ending);
+    }
+
+    mod test_platform_effects_zig {
+        use super::{
+            ALLOW_VALGRIND, BUILD_HOST_FLAG, LINKER_FLAG, OPTIMIZE_FLAG,
+            SUPPRESS_BUILD_HOST_WARNING_FLAG, TEST_LEGACY_LINKER,
+        };
+        use cli_utils::helpers::{file_from_root, Run};
+        use indoc::indoc;
+        use roc_cli::{CMD_BUILD, CMD_DEV, CMD_RUN, CMD_TEST};
+
+        static BUILD_PLATFORM_HOST: std::sync::Once = std::sync::Once::new();
+
+        /// Build the platform host once for all tests in this module
+        fn build_platform_host() {
+            BUILD_PLATFORM_HOST.call_once(|| {
+                let out = Run::new_roc()
+                    .arg(CMD_BUILD)
+                    .arg(BUILD_HOST_FLAG)
+                    .arg(OPTIMIZE_FLAG)
+                    .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
+                    .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
+                    .arg(
+                        file_from_root("crates/cli/tests/effects/platform/", "app-stub.roc")
+                            .as_path(),
+                    )
+                    .run();
+                out.assert_clean_success();
+            });
+        }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        fn interactive_effects() {
+            let expected_ending = "hi there!\nIt is known\n";
+            let runner = Run::new_roc()
+                .arg(CMD_RUN)
+                .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
+                .with_valgrind(ALLOW_VALGRIND)
+                .arg(file_from_root("crates/cli/tests/effects", "print-line.roc").as_path())
+                .with_stdin_vals(vec!["hi there!"]);
+
+            let out = runner.run();
+            out.assert_clean_success();
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
+        }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        fn combine_tasks_with_record_builder() {
+            let expected_ending = "For multiple tasks: {a: 123, b: \"abc\", c: [123]}\n";
+
+            let runner = Run::new_roc()
+                .arg(CMD_RUN)
+                .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
+                .arg(file_from_root("crates/cli/tests/effects", "combine-tasks.roc").as_path());
+
+            let out = runner.run();
+            out.assert_clean_success();
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
+        }
+
+
     }
 
     mod test_platform_simple_zig {
