@@ -3804,7 +3804,7 @@ mod test_reporting {
     10│      y = { Test.example & age: 3 }
                    ^^^^^^^^^^^^
 
-    Only variables can be updated with record update syntax. 
+    Only variables can be updated with record update syntax.
     "
     );
 
@@ -6190,7 +6190,7 @@ All branches in an `if` must have the same type!
                 r#"
                 app "broken"
                     packages {
-                        pf: "https://github.com/roc-lang/basic-cli/releases/download/0.5.0/Cufzl36_SnJ4QbOoEmiJ5dIpUxBvdB3NEySvuH82Wio.tar.br",
+                        pf: "generic-test-platform/main.roc",
                     }
                     imports [
                         pf.Stdout,
