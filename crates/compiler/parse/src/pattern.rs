@@ -319,25 +319,12 @@ fn parse_rest_of_list_pattern<'a>(
 
 fn list_element_pattern<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PList<'a>> {
     move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
-        let start = state.pos();
-        // let parser = loc(three_bytes(b'.', b'.', b'.', PList::Rest));
-        // match fail_when(PList::Rest, parser).parse(arena, state.clone(), min_indent) {
-        //     Err((NoProgress, _)) => {}
-        //     res => return res,
-        // }
-
         if state.bytes().starts_with(b"...") {
-            // let _ = state.advance(3);
             return Err((MadeProgress, PList::Rest(start)));
         }
 
-        // match parser.parse(arena, state, min_indent) {
-        //     Err((NoProgress, _)) => {}
-        //     Ok(_) => return Err((MadeProgress, PList::Rest(start))),
-        //     Err(fail) => return Err(fail),
-        // }
-
-        match list_rest_pattern().parse(arena, state.clone(), min_indent) {
+        let start = state.pos();
+        match parse_list_rest_pattern(start, arena, state.clone(), min_indent) {
             Err((NoProgress, _)) => {}
             res => return res,
         }
@@ -349,34 +336,35 @@ fn list_element_pattern<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PList<'a>> {
     }
 }
 
-fn list_rest_pattern<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PList<'a>> {
-    move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
-        let start = state.pos();
-        if !state.bytes().starts_with(b"..") {
-            return Err((NoProgress, PList::Open(state.pos())));
-        }
-        let state = state.advance(2);
-        let dots_at = Region::new(start, state.pos());
+fn parse_list_rest_pattern<'a>(
+    start: Position,
+    arena: &'a Bump,
+    state: State<'a>,
+    min_indent: u32,
+) -> ParseResult<'a, Loc<Pattern<'a>>, PList<'a>> {
+    if !state.bytes().starts_with(b"..") {
+        return Err((NoProgress, PList::Open(start)));
+    }
+    let state = state.advance(2);
+    let dots_at = Region::new(start, state.pos());
 
-        let no_as = Loc::at(dots_at, Pattern::ListRest(None));
+    let no_as = Loc::at(dots_at, Pattern::ListRest(None));
 
-        let pattern_state = state.clone();
-        let (pattern_spaces, state) =
-            match parse_space(EPattern::AsKeyword, arena, state, min_indent) {
-                Ok((_, pattern_spaces, state)) => (pattern_spaces, state),
-                Err(_) => return Ok((MadeProgress, no_as, pattern_state)),
-            };
+    let pattern_state = state.clone();
+    let (pattern_spaces, state) = match parse_space(EPattern::AsKeyword, arena, state, min_indent) {
+        Ok((_, pattern_spaces, state)) => (pattern_spaces, state),
+        Err(_) => return Ok((MadeProgress, no_as, pattern_state)),
+    };
 
-        let position = state.pos();
-        match parse_pattern_as(arena, state, min_indent) {
-            Err((MadeProgress, e)) => Err((MadeProgress, PList::Pattern(arena.alloc(e), position))),
-            Err(_) => Ok((MadeProgress, no_as, pattern_state)),
-            Ok((_, pattern_as, state)) => {
-                let region = Region::span_across(&dots_at, &pattern_as.identifier.region);
+    let position = state.pos();
+    match parse_pattern_as(arena, state, min_indent) {
+        Err((MadeProgress, e)) => Err((MadeProgress, PList::Pattern(arena.alloc(e), position))),
+        Err(_) => Ok((MadeProgress, no_as, pattern_state)),
+        Ok((_, pattern_as, state)) => {
+            let region = Region::span_across(&dots_at, &pattern_as.identifier.region);
 
-                let as_pattern = Pattern::ListRest(Some((pattern_spaces, pattern_as)));
-                Ok((MadeProgress, Loc::at(region, as_pattern), state))
-            }
+            let as_pattern = Pattern::ListRest(Some((pattern_spaces, pattern_as)));
+            Ok((MadeProgress, Loc::at(region, as_pattern), state))
         }
     }
 }
@@ -553,6 +541,7 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
         let start = state.pos();
         let (label_progress, label, state) =
             parse_lowercase_ident(state).map_err(|(p, _)| (p, PRecord::Field(start)))?;
+
         debug_assert_eq!(label_progress, MadeProgress);
         let label_at = Region::new(start, state.pos());
 
