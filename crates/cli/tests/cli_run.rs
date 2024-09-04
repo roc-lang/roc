@@ -363,23 +363,6 @@ mod cli_run {
         out.assert_stdout_and_stderr_ends_with(expected_ending);
     }
 
-    #[test]
-    #[cfg_attr(windows, ignore)]
-    fn inspect_logging() {
-        let expected_ending = r#"(@Community {friends: [{2}, {2}, {0, 1}], people: [(@Person {age: 27, favoriteColor: Blue, firstName: "John", hasBeard: Bool.true, lastName: "Smith"}), (@Person {age: 47, favoriteColor: Green, firstName: "Debby", hasBeard: Bool.false, lastName: "Johnson"}), (@Person {age: 33, favoriteColor: (RGB (255, 255, 0)), firstName: "Jane", hasBeard: Bool.false, lastName: "Doe"})]})
-"#;
-        let runner = Run::new_roc()
-            .arg(CMD_RUN)
-            .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .with_valgrind(ALLOW_VALGRIND)
-            // uses basic-cli release
-            .arg(file_from_root("examples", "inspect-logging.roc").as_path());
-
-        let out = runner.run();
-        out.assert_clean_success();
-        out.assert_stdout_and_stderr_ends_with(expected_ending);
-    }
-
     mod test_platform_effects_zig {
         use super::*;
         use cli_utils::helpers::{file_from_root, Run};
@@ -434,6 +417,24 @@ mod cli_run {
                 .arg(CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
                 .arg(file_from_root("crates/cli/tests/effects", "combine-tasks.roc").as_path());
+
+            let out = runner.run();
+            out.assert_clean_success();
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
+        }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        fn inspect_logging() {
+            build_platform_host();
+
+            let expected_ending = "(@Community {friends: [{2}, {2}, {0, 1}], people: [(@Person {age: 27, favoriteColor: Blue, firstName: \"John\", hasBeard: Bool.true, lastName: \"Smith\"}), (@Person {age: 47, favoriteColor: Green, firstName: \"Debby\", hasBeard: Bool.false, lastName: \"Johnson\"}), (@Person {age: 33, favoriteColor: (RGB (255, 255, 0)), firstName: \"Jane\", hasBeard: Bool.false, lastName: \"Doe\"})]})\n";
+            let runner = Run::new_roc()
+                .arg(CMD_RUN)
+                .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
+                .with_valgrind(ALLOW_VALGRIND)
+                // uses basic-cli release
+                .arg(file_from_root("crates/cli/tests/effects", "inspect-logging.roc").as_path());
 
             let out = runner.run();
             out.assert_clean_success();

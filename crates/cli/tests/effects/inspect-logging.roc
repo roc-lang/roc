@@ -1,9 +1,9 @@
 #
 # Shows how Roc values can be logged
 #
-app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.15.0/SlwdbJ-3GR7uBWQo6zlmYWNYOxnvo8r6YABXD-45UOw.tar.br" }
+app [main] { pf: platform "platform/main.roc" }
 
-import pf.Stdout
+import pf.PlatformTasks
 import Community
 
 main =
@@ -32,4 +32,4 @@ main =
         |> Community.addFriend 0 2
         |> Community.addFriend 1 2
         |> Inspect.toStr
-        |> Stdout.line!
+        |> PlatformTasks.putLine!
