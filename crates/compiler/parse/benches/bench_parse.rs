@@ -6,7 +6,7 @@ use roc_parse::{
     state::State,
 };
 use std::path::PathBuf;
-
+// todo: @wip evaluate the parser performance improvements and list them here
 pub fn parse_benchmark(c: &mut Criterion) {
     c.bench_function("parse false-interpreter", |b| {
         let mut path = PathBuf::from(std::env!("ROC_WORKSPACE_DIR"));

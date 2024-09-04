@@ -1052,64 +1052,6 @@ pub fn at_keyword(kw: &'static str, state: &State<'_>) -> bool {
         None | Some(b' ' | b'#' | b'\n' | b'\r') if bs.starts_with(kw.as_bytes()))
 }
 
-/// Parse zero or more values separated by a delimiter (e.g. a comma) whose
-/// values are discarded
-pub fn sep_by0<'a, P, D, Val, Error>(
-    delimiter: D,
-    parser: P,
-) -> impl Parser<'a, Vec<'a, Val>, Error>
-where
-    D: Parser<'a, (), Error>,
-    P: Parser<'a, Val, Error>,
-    Error: 'a,
-{
-    move |arena, state: State<'a>, min_indent: u32| {
-        let original_state = state.clone();
-        let start_bytes_len = state.bytes().len();
-
-        match parser.parse(arena, state, min_indent) {
-            Ok((elem_progress, first_output, next_state)) => {
-                // in practice, we want elements to make progress
-                debug_assert_eq!(elem_progress, MadeProgress);
-
-                let mut state = next_state;
-                let mut buf = Vec::with_capacity_in(1, arena);
-
-                buf.push(first_output);
-
-                loop {
-                    match delimiter.parse(arena, state.clone(), min_indent) {
-                        Ok((_, (), next_state)) => {
-                            // If the delimiter passed, check the element parser.
-                            match parser.parse(arena, next_state.clone(), min_indent) {
-                                Ok((element_progress, next_output, next_state)) => {
-                                    // in practice, we want elements to make progress
-                                    debug_assert_eq!(element_progress, MadeProgress);
-                                    state = next_state;
-                                    buf.push(next_output);
-                                }
-                                Err((_, fail)) => {
-                                    // If the delimiter parsed, but the following
-                                    // element did not, that's a fatal error.
-                                    let progress = Progress::from_lengths(
-                                        start_bytes_len,
-                                        next_state.bytes().len(),
-                                    );
-                                    return Err((progress, fail));
-                                }
-                            }
-                        }
-                        Err((NoProgress, _)) => return Ok((NoProgress, buf, state)),
-                        Err(fail) => return Err(fail),
-                    }
-                }
-            }
-            Err((NoProgress, _)) => Ok((NoProgress, Vec::new_in(arena), original_state)),
-            Err(fail) => Err(fail),
-        }
-    }
-}
-
 /// Make the given parser optional, it can complete or not consume anything,
 /// but it can't error with progress made.
 ///
@@ -1416,51 +1358,6 @@ pub fn collection_trailing_sep_e<
 pub fn succeed<'a, T: Clone, E: 'a>(value: T) -> impl Parser<'a, T, E> {
     move |_arena: &'a bumpalo::Bump, state: crate::state::State<'a>, _min_indent: u32| {
         Ok((NoProgress, value.clone(), state))
-    }
-}
-
-/// Creates a parser that always fails.
-/// If the given parser succeeds, the error is customized with the given function.
-///
-/// # Examples
-/// ```
-/// # #![forbid(unused_imports)]
-/// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, word, fail_when};
-/// # use roc_region::all::Position;
-/// # use bumpalo::Bump;
-/// # #[derive(Debug, PartialEq)]
-/// # enum Problem {
-/// #     NotFound(Position),
-/// #     OtherProblem(Position),
-/// # }
-/// # let arena = Bump::new();
-/// let parser = fail_when(Problem::OtherProblem, word("hello", Problem::NotFound));
-///
-/// // When given parser succeeds:
-/// let (progress, err) = Parser::<(), Problem>::parse(&parser, &arena, State::new("hello, world".as_bytes()), 0).unwrap_err();
-/// assert_eq!(progress, Progress::MadeProgress);
-/// assert_eq!(err, Problem::OtherProblem(Position::new(0)));
-///
-/// // When given parser errors:
-/// let (progress, err) = Parser::<(), Problem>::parse(&parser, &arena, State::new("bye, world".as_bytes()), 0).unwrap_err();
-/// assert_eq!(progress, Progress::NoProgress);
-/// assert_eq!(err, Problem::NotFound(Position::new(0)));
-/// ```
-pub fn fail_when<'a, T, T2, E, F, P>(f: F, p: P) -> impl Parser<'a, T, E>
-where
-    T: 'a,
-    T2: 'a,
-    E: 'a,
-    F: Fn(Position) -> E,
-    P: Parser<'a, T2, E>,
-{
-    move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
-        let original_state = state.clone();
-        match p.parse(arena, state, min_indent) {
-            Ok((_, _, _)) => Err((MadeProgress, f(original_state.pos()))),
-            Err((progress, err)) => Err((progress, err)),
-        }
     }
 }
 
@@ -1935,60 +1832,6 @@ where
     }
 }
 
-/// Matches three `u8` in a row.
-///
-/// # Example
-///
-/// ```
-/// # #![forbid(unused_imports)]
-/// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, three_bytes};
-/// # use roc_region::all::Position;
-/// # use bumpalo::Bump;
-/// # #[derive(Debug, PartialEq)]
-/// # enum Problem {
-/// #     NotFound(Position),
-/// # }
-/// # let arena = Bump::new();
-/// let parser = three_bytes(b'h', b'e', b'l', Problem::NotFound);
-///
-/// // Success case
-/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
-/// assert_eq!(progress, Progress::MadeProgress);
-/// assert_eq!(output, ());
-/// assert_eq!(state.pos(), Position::new(3));
-///
-/// // Error case
-/// let (progress, err) = parser.parse(&arena, State::new("hi, world".as_bytes()), 0).unwrap_err();
-/// assert_eq!(progress, Progress::NoProgress);
-/// assert_eq!(err, Problem::NotFound(Position::zero()));
-/// ```
-pub fn three_bytes<'a, ToError, E>(
-    byte_1: u8,
-    byte_2: u8,
-    byte_3: u8,
-    to_error: ToError,
-) -> impl Parser<'a, (), E>
-where
-    ToError: Fn(Position) -> E,
-    E: 'a,
-{
-    debug_assert_ne!(byte_1, b'\n');
-    debug_assert_ne!(byte_2, b'\n');
-    debug_assert_ne!(byte_3, b'\n');
-
-    let needle = [byte_1, byte_2, byte_3];
-
-    move |_arena: &'a Bump, state: State<'a>, _min_indent: u32| {
-        if state.bytes().starts_with(&needle) {
-            let state = state.advance(3);
-            Ok((MadeProgress, (), state))
-        } else {
-            Err((NoProgress, to_error(state.pos())))
-        }
-    }
-}
-
 #[macro_export]
 macro_rules! byte_check_indent {
     ($byte_to_match:expr, $problem:expr, $min_indent:expr, $indent_problem:expr) => {
@@ -2099,76 +1942,6 @@ pub fn zero_or_more<'a, Output, E: 'a>(
                 }
             }
         }
-    }
-}
-
-/// Creates a parser that matches one or more times.
-/// Will fail if the given parser fails to match or matches partially.
-///
-/// # Example
-///
-/// ```
-/// # #![forbid(unused_imports)]
-/// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, word, one_or_more};
-/// # use roc_region::all::Position;
-/// # use bumpalo::Bump;
-/// # #[derive(Debug, PartialEq)]
-/// # enum Problem {
-/// #     NotFound(Position),
-/// # }
-/// # let arena = Bump::new();
-/// # fn foo<'a>(arena: &'a Bump) {
-/// let parser = one_or_more(
-///     word("hello, ", Problem::NotFound),
-///     Problem::NotFound
-/// );
-///
-/// // Success case
-/// let (progress, output, state) = parser.parse(&arena, State::new("hello, hello, world".as_bytes()), 0).unwrap();
-/// assert_eq!(progress, Progress::MadeProgress);
-/// assert_eq!(output, bumpalo::vec![in &arena; (),()]);
-/// assert_eq!(state.pos(), Position::new(14));
-///
-/// // Error case
-/// let (progress, err) = parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap_err();
-/// assert_eq!(progress, Progress::NoProgress);
-/// assert_eq!(err, Problem::NotFound(Position::zero()));
-/// # }
-/// # foo(&arena);
-/// ```
-pub fn one_or_more<'a, Output, E: 'a>(
-    parser: impl Parser<'a, Output, E>,
-    to_error: impl Fn(Position) -> E,
-) -> impl Parser<'a, bumpalo::collections::Vec<'a, Output>, E> {
-    move |arena, state: State<'a>, min_indent: u32| match parser.parse(
-        arena,
-        state.clone(),
-        min_indent,
-    ) {
-        Ok((_, first_output, next_state)) => {
-            let mut state = next_state;
-            let mut buf = Vec::with_capacity_in(1, arena);
-
-            buf.push(first_output);
-
-            loop {
-                let old_state = state.clone();
-                match parser.parse(arena, state, min_indent) {
-                    Ok((_, next_output, next_state)) => {
-                        state = next_state;
-                        buf.push(next_output);
-                    }
-                    Err((NoProgress, _)) => {
-                        return Ok((MadeProgress, buf, old_state));
-                    }
-                    Err((MadeProgress, fail)) => {
-                        return Err((MadeProgress, fail));
-                    }
-                }
-            }
-        }
-        Err((progress, _)) => Err((progress, to_error(state.pos()))),
     }
 }
 
