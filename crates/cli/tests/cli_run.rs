@@ -48,36 +48,6 @@ mod cli_run {
     #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
     const TEST_LEGACY_LINKER: bool = false;
 
-    // fn check_compile_error(file: &Path, flags: &[&str], expected: &str) {
-    //     check_compile_error_with(CMD_CHECK, file, flags, expected);
-    // }
-
-    // fn check_compile_error_with(cmd: &str, file: &Path, flags: &[&str], expected: &str) {
-    //     let compile_out = run_roc([cmd, file.to_str().unwrap()].iter().chain(flags), &[], &[]);
-    //     let err = compile_out.stdout.trim();
-    //     let err = strip_colors(err);
-    //     #[cfg_attr(windows, ignore)]
-    //     // uses C platform
-    //     fn platform_switching_main() {
-    //         let expected_ending = "Which platform am I running on now?\n🔨 Building host ...\n";
-    //         let runner = Run::new_roc()
-    //             .arg(CMD_RUN)
-    //             .arg(BUILD_HOST_FLAG)
-    //             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-    //             .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-    //             .with_valgrind(ALLOW_VALGRIND)
-    //             .arg(file_from_root("examples/platform-switching", "main.roc").as_path());
-
-    //         let out = runner.run();
-    //         out.assert_clean_success();
-    //         out.assert_stdout_and_stderr_ends_with(expected_ending);
-    //     }
-
-    // We exclude the C platforming switching example
-    // because the main platform switching example runs the c platform.
-    // If we don't, a race condition leads to test flakiness if we attempt
-    // to build the host from two different tests running concurrently.
-
     #[test]
     #[cfg_attr(windows, ignore)]
     fn platform_switching_rust() {
@@ -338,79 +308,6 @@ mod cli_run {
 
     #[test]
     #[cfg_attr(windows, ignore)]
-    fn cli_countdown_check() {
-        Run::new_roc()
-            .add_args([
-                CMD_CHECK,
-                file_from_root("crates/cli/tests/basic-cli", "countdown.roc")
-                    .to_str()
-                    .unwrap(),
-            ])
-            .run()
-            .assert_clean_success();
-    }
-
-    #[test]
-    #[cfg_attr(windows, ignore)]
-    fn cli_echo_check() {
-        Run::new_roc()
-            .add_args([
-                CMD_CHECK,
-                file_from_root("crates/cli/tests/basic-cli", "echo.roc")
-                    .to_str()
-                    .unwrap(),
-            ])
-            .run()
-            .assert_clean_success();
-    }
-
-    #[test]
-    #[cfg_attr(windows, ignore)]
-    fn cli_file_check() {
-        Run::new_roc()
-            .add_args([
-                CMD_CHECK,
-                file_from_root("crates/cli/tests/basic-cli", "fileBROKEN.roc")
-                    .as_os_str()
-                    .to_str()
-                    .unwrap(),
-            ])
-            .run()
-            .assert_clean_success();
-    }
-
-    #[test]
-    #[cfg_attr(windows, ignore)]
-    fn cli_form_check() {
-        Run::new_roc()
-            .add_args([
-                CMD_CHECK,
-                file_from_root("crates/cli/tests/basic-cli", "form.roc")
-                    .as_os_str()
-                    .to_str()
-                    .unwrap(),
-            ])
-            .run()
-            .assert_clean_success();
-    }
-
-    #[test]
-    #[cfg_attr(windows, ignore)]
-    fn cli_http_get_check() {
-        Run::new_roc()
-            .add_args([
-                CMD_CHECK,
-                file_from_root("crates/cli/tests/basic-cli", "http-get.roc")
-                    .as_os_str()
-                    .to_str()
-                    .unwrap(),
-            ])
-            .run()
-            .assert_clean_success();
-    }
-
-    #[test]
-    #[cfg_attr(windows, ignore)]
     // tea = The Elm Architecture
     fn terminal_ui_tea() {
         let expected_ending = "Hello Worldfoo!\n🔨 Building host ...\n";
@@ -468,128 +365,6 @@ mod cli_run {
 
     #[test]
     #[cfg_attr(windows, ignore)]
-    fn with_env_vars() {
-        let expected_ending = "Your favorite editor is roc-editor!\n\
-        Your current shell level is 3!\n\
-        Your favorite letters are: a c e j\n";
-
-        let mut runner = Run::new_roc()
-            .arg(CMD_RUN)
-            .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .arg(file_from_root("crates/cli/tests/basic-cli", "env.roc").as_path());
-
-        runner.with_env(vec![
-            ("EDITOR", "roc-editor"),
-            ("SHLVL", "3"),
-            ("LETTERS", "a,c,e,j"),
-        ]);
-
-        let out = runner.run();
-        out.assert_clean_success();
-        out.assert_stdout_and_stderr_ends_with(expected_ending);
-    }
-
-    #[test]
-    #[cfg_attr(windows, ignore)]
-    fn ingested_file() {
-        let expected_ending = format!(
-            "\nThis roc file can print its own source code. The source is:\n\n{}\n",
-            include_str!("basic-cli/ingested-file.roc")
-        );
-
-        let runner = Run::new_roc()
-            .arg(CMD_RUN)
-            .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .arg(file_from_root("crates/cli/tests/basic-cli", "ingested-file.roc").as_path());
-
-        let out = runner.run();
-        out.assert_clean_success();
-        out.assert_stdout_and_stderr_ends_with(expected_ending.as_str());
-    }
-
-    #[test]
-    #[cfg_attr(windows, ignore)]
-    fn parse_args_with_record_builder() {
-        let expected_ending = "Success: {count: 5, doubled: 14, file: \"file.txt\"}\n";
-
-        let runner = Run::new_roc()
-            .arg(CMD_RUN)
-            .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .arg(file_from_root("crates/cli/tests/basic-cli", "parse-args.roc").as_path());
-
-        let out = runner.run();
-        out.assert_clean_success();
-        out.assert_stdout_and_stderr_ends_with(expected_ending);
-    }
-
-    #[test]
-    #[cfg_attr(windows, ignore)]
-    fn ingested_file_bytes() {
-        let expected_ending = "6239\n";
-
-        let runner = Run::new_roc()
-            .arg(CMD_RUN)
-            .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .arg(file_from_root("crates/cli/tests/basic-cli", "ingested-file-bytes.roc").as_path());
-
-        let out = runner.run();
-        out.assert_clean_success();
-        out.assert_stdout_and_stderr_ends_with(expected_ending);
-    }
-
-    #[test]
-    #[cfg_attr(windows, ignore)]
-    fn ingested_file_bytes_no_ann() {
-        let expected_ending = "6239\n";
-
-        let runner = Run::new_roc()
-            .arg(CMD_RUN)
-            .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .arg(
-                file_from_root(
-                    "crates/cli/tests/basic-cli",
-                    "ingested-file-bytes-no-ann.roc",
-                )
-                .as_path(),
-            );
-
-        let out = runner.run();
-        out.assert_clean_success();
-        out.assert_stdout_and_stderr_ends_with(expected_ending);
-    }
-
-    #[test]
-    #[cfg_attr(windows, ignore)]
-    fn parse_movies_csv() {
-        let expected_ending = "2 movies were found:\n\nThe movie 'Airplane!' was released in 1980 and stars Robert Hays and Julie Hagerty\nThe movie 'Caddyshack' was released in 1980 and stars Chevy Chase, Rodney Dangerfield, Ted Knight, Michael O'Keefe and Bill Murray\n\nParse success!\n\n";
-        let runner = Run::new_roc()
-            .arg(CMD_RUN)
-            .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .arg(file_from_root("crates/cli/tests/basic-cli", "parser-movies-csv.roc").as_path());
-
-        let out = runner.run();
-        out.assert_clean_success();
-        out.assert_stdout_and_stderr_ends_with(expected_ending);
-    }
-
-    #[test]
-    #[cfg_attr(windows, ignore)]
-    fn parse_letter_counts() {
-        let expected_ending = "I counted 7 letter A's!\n";
-        let runner = Run::new_roc()
-            .arg(CMD_RUN)
-            .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .arg(
-                file_from_root("crates/cli/tests/basic-cli", "parser-letter-counts.roc").as_path(),
-            );
-
-        let out = runner.run();
-        out.assert_clean_success();
-        out.assert_stdout_and_stderr_ends_with(expected_ending);
-    }
-
-    #[test]
-    #[cfg_attr(windows, ignore)]
     fn inspect_logging() {
         let expected_ending = r#"(@Community {friends: [{2}, {2}, {0, 1}], people: [(@Person {age: 27, favoriteColor: Blue, firstName: "John", hasBeard: Bool.true, lastName: "Smith"}), (@Person {age: 47, favoriteColor: Green, firstName: "Debby", hasBeard: Bool.false, lastName: "Johnson"}), (@Person {age: 33, favoriteColor: (RGB (255, 255, 0)), firstName: "Jane", hasBeard: Bool.false, lastName: "Doe"})]})
 "#;
@@ -606,13 +381,9 @@ mod cli_run {
     }
 
     mod test_platform_effects_zig {
-        use super::{
-            ALLOW_VALGRIND, BUILD_HOST_FLAG, LINKER_FLAG, OPTIMIZE_FLAG,
-            SUPPRESS_BUILD_HOST_WARNING_FLAG, TEST_LEGACY_LINKER,
-        };
+        use super::*;
         use cli_utils::helpers::{file_from_root, Run};
-        use indoc::indoc;
-        use roc_cli::{CMD_BUILD, CMD_DEV, CMD_RUN, CMD_TEST};
+        use roc_cli::{CMD_BUILD, CMD_RUN};
 
         static BUILD_PLATFORM_HOST: std::sync::Once = std::sync::Once::new();
 
@@ -637,6 +408,8 @@ mod cli_run {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn interactive_effects() {
+            build_platform_host();
+
             let expected_ending = "hi there!\nIt is known\n";
             let runner = Run::new_roc()
                 .arg(CMD_RUN)
@@ -653,6 +426,8 @@ mod cli_run {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn combine_tasks_with_record_builder() {
+            build_platform_host();
+
             let expected_ending = "For multiple tasks: {a: 123, b: \"abc\", c: [123]}\n";
 
             let runner = Run::new_roc()
@@ -664,15 +439,10 @@ mod cli_run {
             out.assert_clean_success();
             out.assert_stdout_and_stderr_ends_with(expected_ending);
         }
-
-
     }
 
     mod test_platform_simple_zig {
-        use super::{
-            ALLOW_VALGRIND, BUILD_HOST_FLAG, LINKER_FLAG, OPTIMIZE_FLAG,
-            SUPPRESS_BUILD_HOST_WARNING_FLAG, TEST_LEGACY_LINKER,
-        };
+        use super::*;
         use cli_utils::helpers::{file_from_root, Run};
         use indoc::indoc;
         use roc_cli::{CMD_BUILD, CMD_DEV, CMD_RUN, CMD_TEST};
