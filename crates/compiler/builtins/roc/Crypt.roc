@@ -8,9 +8,10 @@ module [
     Digest256,
 ]
 
+import Bool exposing [Eq]
 import List
-import Num exposing [U8, U64, U128, Int]
-import Num
+import Num exposing [U8, U64, U128]
+
 
 Sha256 := {
     location : U64,
@@ -19,7 +20,7 @@ Sha256 := {
 Digest256 := {
     firstHalf : U128,
     secondHalf : U128,
-} implements[Eq, Hash]
+} implements[Eq]
 
 emptySha256 : {} -> Sha256
 
@@ -37,7 +38,7 @@ u128Bytes = \ number ->
         if place == 16 then bytes
         else  
             newByte = n |> Num.bitwiseAnd 255 |> Num.toU8 
-            loop (Num.shiftRightBy n 8) (List.append bytes newByte) (place + 1)
+            loop (Num.shiftRightBy n 8) (List.prepend bytes newByte) (place + 1)
     loop number [] 0
 
 digest256ToBytes : Digest256 -> List U8
