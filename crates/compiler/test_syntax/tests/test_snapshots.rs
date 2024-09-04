@@ -442,6 +442,7 @@ mod test_snapshots {
         pass/pattern_as_spaces.expr,
         pass/pattern_with_space_in_parens.expr, // https://github.com/roc-lang/roc/issues/929
         pass/pizza_bang.moduledefs,
+        pass/pizza_dbg.expr,
         pass/plus_if.expr,
         pass/plus_when.expr,
         pass/pos_inf_float.expr,

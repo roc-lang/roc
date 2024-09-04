@@ -469,6 +469,19 @@ mod suffixed_tests {
     }
 
     #[test]
+    fn pizza_dbg() {
+        run_test!(
+            r#"
+            main =
+                1
+                |> dbg
+                |> Num.add 2
+                |> dbg
+            "#
+        )
+    }
+
+    #[test]
     fn apply_argument_single() {
         run_test!(
             r#"

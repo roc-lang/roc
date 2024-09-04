@@ -25,7 +25,7 @@ use roc_region::all::{Loc, Region};
 
 fn new_op_call_expr<'a>(
     env: &mut Env<'a>,
-    _scope: &mut Scope,
+    scope: &mut Scope,
     left: &'a Loc<Expr<'a>>,
     loc_op: Loc<BinOp>,
     right: &'a Loc<Expr<'a>>,
@@ -47,6 +47,7 @@ fn new_op_call_expr<'a>(
 
                     Apply(function, args, CalledVia::BinOp(Pizza))
                 }
+                Dbg => *desugar_dbg_expr(env, scope, left, region),
                 _ => {
                     // e.g. `1 |> (if b then (\a -> a) else (\c -> c))`
                     Apply(right, env.arena.alloc([left]), CalledVia::BinOp(Pizza))
@@ -1020,14 +1021,8 @@ pub fn desugar_expr<'a>(
             })
         }
         Dbg => {
-            env.problem(Problem::UnappliedDbg {
-                region: loc_expr.region,
-            });
-
-            env.arena.alloc(Loc {
-                value: *desugar_invalid_dbg_expr(env, scope, loc_expr.region),
-                region: loc_expr.region,
-            })
+            // Allow naked dbg, necessary for piping values into dbg with the `Pizza` binop
+            loc_expr
         }
         DbgStmt(condition, continuation) => {
             let desugared_condition = &*env.arena.alloc(desugar_expr(env, scope, condition));
@@ -1321,7 +1316,7 @@ fn desugar_dbg_expr<'a>(
 
 /// Build a desugared `dbg {}` expression to act as a placeholder when the AST
 /// is invalid.
-fn desugar_invalid_dbg_expr<'a>(
+pub fn desugar_invalid_dbg_expr<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
     outer_region: Region,
