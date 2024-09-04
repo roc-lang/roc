@@ -3319,9 +3319,9 @@ fn capture_void_layout_task() {
 
         Fx a : {} -> a
 
-        Task ok err : Fx (Result ok err)
+        OtherTask ok err : Fx (Result ok err)
 
-        succeed : ok -> Task ok *
+        succeed : ok -> OtherTask ok *
         succeed = \ok -> \{} -> Ok ok
 
         after : Fx a, (a -> Fx b) -> Fx b
@@ -3333,7 +3333,7 @@ fn capture_void_layout_task() {
 
             afterInner
 
-        await : Task a err, (a -> Task b err) -> Task b err
+        await : OtherTask a err, (a -> OtherTask b err) -> OtherTask b err
         await = \fx, toNext ->
             inner = after fx \result ->
                 when result is
@@ -3343,12 +3343,12 @@ fn capture_void_layout_task() {
                     Err e -> (\{} -> Err e)
             inner
 
-        forEach : List a, (a -> Task {} err) -> Task {} err
+        forEach : List a, (a -> OtherTask {} err) -> OtherTask {} err
         forEach = \list, fromElem ->
             List.walk list (succeed {}) \task, elem ->
                 await task \{} -> fromElem elem
 
-        main : Task {} []
+        main : OtherTask {} []
         main =
             forEach [] \_ -> succeed {}
         "#
@@ -3389,8 +3389,8 @@ fn inspect_custom_type() {
 
         myToInspector : HelloWorld -> Inspector f where f implements InspectFormatter
         myToInspector = \@HellowWorld {} ->
-            fmt <- Inspect.custom
-            Inspect.apply (Inspect.str "Hello, World!\n") fmt
+            Inspect.custom \fmt ->
+                Inspect.apply (Inspect.str "Hello, World!\n") fmt
 
         main =
             Inspect.inspect (@HelloWorld {})

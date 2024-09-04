@@ -2,7 +2,7 @@ platform "benchmarks"
     requires {} { main : Task {} [] }
     exposes []
     packages {}
-    imports [Task.{ Task }]
+    imports []
     provides [mainForHost]
 
 mainForHost : Task {} []

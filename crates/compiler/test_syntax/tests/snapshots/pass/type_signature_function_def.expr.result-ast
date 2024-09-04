@@ -1,7 +1,7 @@
 Defs(
     Defs {
         tags: [
-            Index(2147483649),
+            Index(2147483648),
         ],
         regions: [
             @0-42,
@@ -15,30 +15,6 @@ Defs(
         spaces: [],
         type_defs: [],
         value_defs: [
-            Annotation(
-                @0-3 Identifier {
-                    ident: "foo",
-                },
-                @6-24 Function(
-                    [
-                        @6-9 Apply(
-                            "",
-                            "Int",
-                            [],
-                        ),
-                        @11-16 Apply(
-                            "",
-                            "Float",
-                            [],
-                        ),
-                    ],
-                    @20-24 Apply(
-                        "",
-                        "Bool",
-                        [],
-                    ),
-                ),
-            ),
             AnnotatedBody {
                 ann_pattern: @0-3 Identifier {
                     ident: "foo",
@@ -62,7 +38,9 @@ Defs(
                         [],
                     ),
                 ),
-                comment: None,
+                lines_between: [
+                    Newline,
+                ],
                 body_pattern: @25-28 Identifier {
                     ident: "foo",
                 },

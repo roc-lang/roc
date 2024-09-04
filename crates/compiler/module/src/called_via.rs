@@ -3,7 +3,7 @@ use self::BinOp::*;
 use std::cmp::Ordering;
 use std::fmt;
 
-const PRECEDENCES: [(BinOp, u8); 20] = [
+const PRECEDENCES: [(BinOp, u8); 16] = [
     (Caret, 8),
     (Star, 7),
     (Slash, 7),
@@ -20,14 +20,9 @@ const PRECEDENCES: [(BinOp, u8); 20] = [
     (GreaterThanOrEq, 2),
     (And, 1),
     (Or, 0),
-    // These should never come up
-    (Assignment, 255),
-    (IsAliasType, 255),
-    (IsOpaqueType, 255),
-    (Backpassing, 255),
 ];
 
-const ASSOCIATIVITIES: [(BinOp, Associativity); 20] = [
+const ASSOCIATIVITIES: [(BinOp, Associativity); 16] = [
     (Caret, RightAssociative),
     (Star, LeftAssociative),
     (Slash, LeftAssociative),
@@ -44,14 +39,9 @@ const ASSOCIATIVITIES: [(BinOp, Associativity); 20] = [
     (GreaterThanOrEq, NonAssociative),
     (And, RightAssociative),
     (Or, RightAssociative),
-    // These should never come up
-    (Assignment, LeftAssociative),
-    (IsAliasType, LeftAssociative),
-    (IsOpaqueType, LeftAssociative),
-    (Backpassing, LeftAssociative),
 ];
 
-const DISPLAY_STRINGS: [(BinOp, &str); 20] = [
+const DISPLAY_STRINGS: [(BinOp, &str); 16] = [
     (Caret, "^"),
     (Star, "*"),
     (Slash, "/"),
@@ -68,10 +58,6 @@ const DISPLAY_STRINGS: [(BinOp, &str); 20] = [
     (GreaterThanOrEq, ">="),
     (And, "&&"),
     (Or, "||"),
-    (Assignment, "="),
-    (IsAliasType, ":"),
-    (IsOpaqueType, ":="),
-    (Backpassing, "<-"),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -89,13 +75,33 @@ pub enum CalledVia {
     /// e.g. "$(first) $(last)" is transformed into Str.concat (Str.concat first " ") last.
     StringInterpolation,
 
-    /// This call is the result of desugaring a Record Builder field.
+    /// This call is the result of desugaring an old style Record Builder field.
     /// e.g. succeed { a <- get "a" } is transformed into (get "a") (succeed \a -> { a })
+    OldRecordBuilder,
+
+    /// This call is the result of desugaring a map2-based Record Builder field. e.g.
+    /// ```roc
+    /// { Task.parallel <-
+    ///     foo: get "a",
+    ///     bar: get "b",
+    /// }
+    /// ```
+    /// is transformed into
+    /// ```roc
+    /// Task.parallel (get "a") (get "b") \foo, bar -> { foo, bar }
+    /// ```
     RecordBuilder,
 
     /// This call is the result of desugaring a Task.await from `!` syntax
     /// e.g. Stdout.line! "Hello" becomes Task.await (Stdout.line "Hello") \{} -> ...
     BangSuffix,
+
+    /// This call is the result of desugaring a Result.try from `?` syntax
+    /// e.g. Dict.get? items "key" becomes Result.try (Dict.get items "key") \item -> ...
+    QuestionSuffix,
+
+    /// This call is a result of lowering a reference to a module-params-extended def
+    NakedParamsVar,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -111,6 +117,23 @@ impl std::fmt::Display for UnaryOp {
         match self {
             UnaryOp::Negate => write!(f, "-"),
             UnaryOp::Not => write!(f, "!"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Suffix {
+    /// (!), e.g. (Stdin.line!)
+    Bang,
+    /// (?), e.g. (parseData? data)
+    Question,
+}
+
+impl std::fmt::Display for Suffix {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Suffix::Bang => write!(f, "!"),
+            Suffix::Question => write!(f, "?"),
         }
     }
 }
@@ -134,10 +157,6 @@ pub enum BinOp {
     GreaterThanOrEq,
     And,
     Or,
-    Assignment,
-    IsAliasType,
-    IsOpaqueType,
-    Backpassing,
     // lowest precedence
 }
 
@@ -148,7 +167,6 @@ impl BinOp {
             Caret | Star | Slash | Percent | Plus | Minus | LessThan | GreaterThan => 1,
             DoubleSlash | Equals | NotEquals | LessThanOrEq | GreaterThanOrEq | And | Or
             | Pizza => 2,
-            Assignment | IsAliasType | IsOpaqueType | Backpassing => unreachable!(),
         }
     }
 }
@@ -182,25 +200,13 @@ pub enum Associativity {
 
 impl BinOp {
     pub fn associativity(self) -> Associativity {
-        // The compiler should never pass any of these to this function!
-        debug_assert_ne!(self, Assignment);
-        debug_assert_ne!(self, IsAliasType);
-        debug_assert_ne!(self, IsOpaqueType);
-        debug_assert_ne!(self, Backpassing);
-
-        const ASSOCIATIVITY_TABLE: [Associativity; 20] = generate_associativity_table();
+        const ASSOCIATIVITY_TABLE: [Associativity; 16] = generate_associativity_table();
 
         ASSOCIATIVITY_TABLE[self as usize]
     }
 
     fn precedence(self) -> u8 {
-        // The compiler should never pass any of these to this function!
-        debug_assert_ne!(self, Assignment);
-        debug_assert_ne!(self, IsAliasType);
-        debug_assert_ne!(self, IsOpaqueType);
-        debug_assert_ne!(self, Backpassing);
-
-        const PRECEDENCE_TABLE: [u8; 20] = generate_precedence_table();
+        const PRECEDENCE_TABLE: [u8; 16] = generate_precedence_table();
 
         PRECEDENCE_TABLE[self as usize]
     }
@@ -220,19 +226,14 @@ impl Ord for BinOp {
 
 impl std::fmt::Display for BinOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        debug_assert_ne!(*self, Assignment);
-        debug_assert_ne!(*self, IsAliasType);
-        debug_assert_ne!(*self, IsOpaqueType);
-        debug_assert_ne!(*self, Backpassing);
-
-        const DISPLAY_TABLE: [&str; 20] = generate_display_table();
+        const DISPLAY_TABLE: [&str; 16] = generate_display_table();
 
         write!(f, "{}", DISPLAY_TABLE[*self as usize])
     }
 }
 
-const fn generate_precedence_table() -> [u8; 20] {
-    let mut table = [0u8; 20];
+const fn generate_precedence_table() -> [u8; 16] {
+    let mut table = [0u8; 16];
     let mut i = 0;
 
     while i < PRECEDENCES.len() {
@@ -243,8 +244,8 @@ const fn generate_precedence_table() -> [u8; 20] {
     table
 }
 
-const fn generate_associativity_table() -> [Associativity; 20] {
-    let mut table = [NonAssociative; 20];
+const fn generate_associativity_table() -> [Associativity; 16] {
+    let mut table = [NonAssociative; 16];
     let mut i = 0;
 
     while i < ASSOCIATIVITIES.len() {
@@ -255,8 +256,8 @@ const fn generate_associativity_table() -> [Associativity; 20] {
     table
 }
 
-const fn generate_display_table() -> [&'static str; 20] {
-    let mut table = [""; 20];
+const fn generate_display_table() -> [&'static str; 16] {
+    let mut table = [""; 16];
     let mut i = 0;
 
     while i < DISPLAY_STRINGS.len() {

@@ -9,9 +9,11 @@ Defs {
         Slice(start = 0, length = 0),
     ],
     space_after: [
-        Slice(start = 0, length = 0),
+        Slice(start = 0, length = 1),
     ],
-    spaces: [],
+    spaces: [
+        Newline,
+    ],
     type_defs: [],
     value_defs: [
         Body(
@@ -22,7 +24,7 @@ Defs {
                 Defs(
                     Defs {
                         tags: [
-                            Index(2147483649),
+                            Index(2147483648),
                         ],
                         regions: [
                             @11-93,
@@ -36,26 +38,6 @@ Defs {
                         spaces: [],
                         type_defs: [],
                         value_defs: [
-                            Annotation(
-                                @11-23 Identifier {
-                                    ident: "wrappedNotEq",
-                                },
-                                @26-38 Function(
-                                    [
-                                        @26-27 BoundVariable(
-                                            "a",
-                                        ),
-                                        @29-30 BoundVariable(
-                                            "a",
-                                        ),
-                                    ],
-                                    @34-38 Apply(
-                                        "",
-                                        "Bool",
-                                        [],
-                                    ),
-                                ),
-                            ),
                             AnnotatedBody {
                                 ann_pattern: @11-23 Identifier {
                                     ident: "wrappedNotEq",
@@ -75,7 +57,9 @@ Defs {
                                         [],
                                     ),
                                 ),
-                                comment: None,
+                                lines_between: [
+                                    Newline,
+                                ],
                                 body_pattern: @43-55 Identifier {
                                     ident: "wrappedNotEq",
                                 },

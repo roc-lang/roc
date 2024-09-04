@@ -25,6 +25,7 @@ pub enum PatternType {
     DefExpr,
     FunctionArg,
     WhenBranch,
+    ModuleParams,
 }
 
 pub fn closure_param<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
@@ -63,9 +64,14 @@ pub fn loc_pattern_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>>
             },
             Ok((_, pattern_as, state)) => {
                 let region = Region::span_across(&pattern.region, &pattern_as.identifier.region);
-                let pattern = arena
-                    .alloc(pattern.value)
-                    .with_spaces_after(pattern_spaces, pattern.region);
+
+                let mut pattern = pattern;
+                if !pattern_spaces.is_empty() {
+                    pattern = arena
+                        .alloc(pattern.value)
+                        .with_spaces_after(pattern_spaces, pattern.region)
+                }
+
                 let as_pattern = Pattern::As(arena.alloc(pattern), pattern_as);
 
                 Ok((MadeProgress, Loc::at(region, as_pattern), state))
@@ -429,6 +435,10 @@ fn loc_ident_pattern_help<'a>(
             Ident::AccessorFunction(_string) => Err((
                 MadeProgress,
                 EPattern::AccessorFunction(loc_ident.region.start()),
+            )),
+            Ident::RecordUpdaterFunction(_string) => Err((
+                MadeProgress,
+                EPattern::RecordUpdaterFunction(loc_ident.region.start()),
             )),
             Ident::Malformed(malformed, problem) => {
                 debug_assert!(!malformed.is_empty());

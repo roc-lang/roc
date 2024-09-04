@@ -6,44 +6,43 @@ procedure Bool.11 (#Attr.2, #Attr.3):
     let Bool.24 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
     ret Bool.24;
 
-procedure Decode.24 (Decode.101):
-    ret Decode.101;
+procedure Decode.24 (Decode.105):
+    ret Decode.105;
 
-procedure Decode.25 (Decode.102, Decode.121, Decode.104):
-    let Decode.124 : {List U8, [C {}, C Str]} = CallByName Test.76 Decode.102 Decode.104;
-    ret Decode.124;
+procedure Decode.25 (Decode.106, Decode.125, Decode.108):
+    let Decode.128 : {List U8, [C {}, C Str]} = CallByName Test.76 Decode.106 Decode.108;
+    ret Decode.128;
 
-procedure Decode.26 (Decode.105, Decode.106):
-    let Decode.123 : {} = CallByName Test.15;
-    let Decode.122 : {List U8, [C {}, C Str]} = CallByName Decode.25 Decode.105 Decode.123 Decode.106;
-    ret Decode.122;
+procedure Decode.26 (Decode.109, Decode.110):
+    let Decode.127 : {} = CallByName Test.15;
+    let Decode.126 : {List U8, [C {}, C Str]} = CallByName Decode.25 Decode.109 Decode.127 Decode.110;
+    ret Decode.126;
 
 procedure Str.12 (#Attr.2):
-    let Str.241 : List U8 = lowlevel StrToUtf8 #Attr.2;
-    ret Str.241;
+    let Str.245 : List U8 = lowlevel StrToUtf8 #Attr.2;
+    ret Str.245;
 
-procedure Str.27 (Str.78):
-    let Str.232 : [C {}, C I64] = CallByName Str.60 Str.78;
-    ret Str.232;
+procedure Str.27 (Str.82):
+    let Str.236 : [C {}, C I64] = CallByName Str.64 Str.82;
+    ret Str.236;
 
 procedure Str.42 (#Attr.2):
-    let Str.240 : {I64, U8} = lowlevel StrToNum #Attr.2;
-    ret Str.240;
+    let Str.244 : {I64, U8} = lowlevel StrToNum #Attr.2;
+    ret Str.244;
 
-procedure Str.60 (Str.185):
-    let Str.186 : {I64, U8} = CallByName Str.42 Str.185;
-    dec Str.185;
-    let Str.238 : U8 = StructAtIndex 1 Str.186;
-    let Str.239 : U8 = 0i64;
-    let Str.235 : Int1 = CallByName Bool.11 Str.238 Str.239;
-    if Str.235 then
-        let Str.237 : I64 = StructAtIndex 0 Str.186;
-        let Str.236 : [C {}, C I64] = TagId(1) Str.237;
-        ret Str.236;
+procedure Str.64 (Str.189):
+    let Str.190 : {I64, U8} = CallByName Str.42 Str.189;
+    let Str.242 : U8 = StructAtIndex 1 Str.190;
+    let Str.243 : U8 = 0i64;
+    let Str.239 : Int1 = CallByName Bool.11 Str.242 Str.243;
+    if Str.239 then
+        let Str.241 : I64 = StructAtIndex 0 Str.190;
+        let Str.240 : [C {}, C I64] = TagId(1) Str.241;
+        ret Str.240;
     else
-        let Str.234 : {} = Struct {};
-        let Str.233 : [C {}, C I64] = TagId(0) Str.234;
-        ret Str.233;
+        let Str.238 : {} = Struct {};
+        let Str.237 : [C {}, C I64] = TagId(0) Str.238;
+        ret Str.237;
 
 procedure Test.103 ():
     let Test.101 : [C Str, C {List U8, I64}] = CallByName Test.19;
@@ -68,6 +67,7 @@ procedure Test.19 ():
     let Test.133 : List U8 = CallByName Str.12 Test.135;
     let Test.134 : {} = Struct {};
     let Test.132 : {List U8, [C {}, C Str]} = CallByName Decode.26 Test.133 Test.134;
+    dec Test.133;
     let Test.93 : List U8 = StructAtIndex 0 Test.132;
     let Test.92 : [C {}, C Str] = StructAtIndex 1 Test.132;
     let Test.129 : U8 = 1i64;
@@ -76,6 +76,7 @@ procedure Test.19 ():
     if Test.131 then
         let Test.94 : Str = UnionAtIndex (Id 1) (Index 0) Test.92;
         let Test.117 : [C {}, C I64] = CallByName Str.27 Test.94;
+        dec Test.94;
         let Test.123 : U8 = 1i64;
         let Test.124 : U8 = GetTagId Test.117;
         let Test.125 : Int1 = lowlevel Eq Test.123 Test.124;
@@ -90,8 +91,8 @@ procedure Test.19 ():
             let Test.120 : [C Str, C {List U8, I64}] = TagId(0) Test.122;
             ret Test.120;
     else
-        dec Test.92;
         dec Test.93;
+        dec Test.92;
         let Test.128 : Str = "not a number";
         let Test.126 : [C Str, C {List U8, I64}] = TagId(0) Test.128;
         ret Test.126;
@@ -99,5 +100,6 @@ procedure Test.19 ():
 procedure Test.76 (Test.77, Test.138):
     let Test.141 : {} = Struct {};
     let Test.140 : [C {}, C Str] = TagId(0) Test.141;
+    inc Test.77;
     let Test.139 : {List U8, [C {}, C Str]} = Struct {Test.77, Test.140};
     ret Test.139;

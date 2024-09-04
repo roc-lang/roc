@@ -1,10 +1,11 @@
 use roc_collections::all::MutSet;
+use roc_module::called_via::Suffix;
 use roc_module::ident::{Ident, Lowercase, ModuleName};
-use roc_module::symbol::{ScopeModuleSource, DERIVABLE_ABILITIES};
+use roc_module::symbol::DERIVABLE_ABILITIES;
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::{
     BadPattern, CycleEntry, ExtensionTypeKind, FloatErrorKind, IntErrorKind, Problem, RuntimeError,
-    ShadowKind,
+    ScopeModuleSource, ShadowKind,
 };
 use roc_problem::Severity;
 use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Loc, Region};
@@ -28,7 +29,6 @@ const WILDCARD_NOT_ALLOWED: &str = "WILDCARD NOT ALLOWED HERE";
 const UNDERSCORE_NOT_ALLOWED: &str = "UNDERSCORE NOT ALLOWED HERE";
 const UNUSED_ARG: &str = "UNUSED ARGUMENT";
 const MISSING_DEFINITION: &str = "MISSING DEFINITION";
-const UNKNOWN_GENERATES_WITH: &str = "UNKNOWN GENERATES FUNCTION";
 const DUPLICATE_FIELD_NAME: &str = "DUPLICATE FIELD NAME";
 const DUPLICATE_TAG_NAME: &str = "DUPLICATE TAG NAME";
 const INVALID_UNICODE: &str = "INVALID UNICODE";
@@ -246,6 +246,26 @@ pub fn can_problem<'b>(
             title = DUPLICATE_NAME.to_string();
         }
 
+        Problem::DeprecatedBackpassing(region) => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("Backpassing ("),
+                    alloc.backpassing_arrow(),
+                    alloc.reflow(") like this will soon be deprecated:"),
+                ]),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.concat([
+                    alloc.reflow("You should use a "),
+                    alloc.suffix(Suffix::Bang),
+                    alloc.reflow(" for awaiting tasks or a "),
+                    alloc.suffix(Suffix::Question),
+                    alloc.reflow(" for trying results, and functions everywhere else."),
+                ]),
+            ]);
+
+            title = "BACKPASSING DEPRECATED".to_string();
+        }
+
         Problem::DefsOnlyUsedInRecursion(1, region) => {
             doc = alloc.stack([
                 alloc.reflow("This definition is only used in recursion with itself:"),
@@ -270,7 +290,7 @@ pub fn can_problem<'b>(
                 ),
             ]);
 
-            title = "DEFINITIONs ONLY USED IN RECURSION".to_string();
+            title = "DEFINITIONS ONLY USED IN RECURSION".to_string();
         }
         Problem::ExposedButNotDefined(symbol) => {
             doc = alloc.stack([
@@ -286,20 +306,6 @@ pub fn can_problem<'b>(
             ]);
 
             title = MISSING_DEFINITION.to_string();
-        }
-        Problem::UnknownGeneratesWith(loc_ident) => {
-            doc = alloc.stack([
-                alloc
-                    .reflow("I don't know how to generate the ")
-                    .append(alloc.ident(loc_ident.value))
-                    .append(alloc.reflow(" function.")),
-                alloc.region(lines.convert_region(loc_ident.region), severity),
-                alloc
-                    .reflow("Only specific functions like `after` and `map` can be generated.")
-                    .append(alloc.reflow("Learn more about hosted modules at TODO.")),
-            ]);
-
-            title = UNKNOWN_GENERATES_WITH.to_string();
         }
         Problem::UnusedArgument(closure_symbol, is_anonymous, argument_symbol, region) => {
             let line = "\". Adding an underscore at the start of a variable name is a way of saying that the variable is not used.";
@@ -390,6 +396,7 @@ pub fn can_problem<'b>(
                 TopLevelDef => "a top-level definition:",
                 DefExpr => "a value definition:",
                 FunctionArg => "function arguments:",
+                ModuleParams => "module params:",
                 WhenBranch => unreachable!("all patterns are allowed in a When"),
             };
 
@@ -1422,6 +1429,22 @@ fn to_bad_ident_expr_report<'b>(
             ]),
         ]),
 
+        StrayAmpersand(pos) => {
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            alloc.stack([
+                alloc.reflow(r"I am trying to parse a record updater function here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
+                alloc.concat([
+                    alloc.reflow("So I expect to see a lowercase letter next, like "),
+                    alloc.parser_suggestion("&name"),
+                    alloc.reflow(" or "),
+                    alloc.parser_suggestion("&height"),
+                    alloc.reflow("."),
+                ]),
+            ])
+        }
+
         WeirdDotQualified(pos) => {
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
@@ -1607,6 +1630,22 @@ fn to_bad_ident_pattern_report<'b>(
                     alloc.reflow(" or "),
                     alloc.parser_suggestion(".height"),
                     alloc.reflow(" that accesses a value from a record."),
+                ]),
+            ])
+        }
+
+        StrayAmpersand(pos) => {
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            alloc.stack([
+                alloc.reflow(r"I am trying to parse a record updater function here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
+                alloc.concat([
+                    alloc.reflow("Something like "),
+                    alloc.parser_suggestion("&name"),
+                    alloc.reflow(" or "),
+                    alloc.parser_suggestion("&height"),
+                    alloc.reflow(" that updates a field in a record."),
                 ]),
             ])
         }
@@ -2421,23 +2460,23 @@ fn pretty_runtime_error<'b>(
 
             title = "DEGENERATE BRANCH";
         }
-        RuntimeError::MultipleRecordBuilders(region) => {
+        RuntimeError::MultipleOldRecordBuilders(region) => {
             let tip = alloc
                 .tip()
                 .append(alloc.reflow("You can combine them or apply them separately."));
 
             doc = alloc.stack([
-                alloc.reflow("This function is applied to multiple record builders:"),
+                alloc.reflow("This function is applied to multiple old-style record builders:"),
                 alloc.region(lines.convert_region(region), severity),
-                alloc.note("Functions can only take at most one record builder!"),
+                alloc.note("Functions can only take at most one old-style record builder!"),
                 tip,
             ]);
 
-            title = "MULTIPLE RECORD BUILDERS";
+            title = "MULTIPLE OLD-STYLE RECORD BUILDERS";
         }
-        RuntimeError::UnappliedRecordBuilder(region) => {
+        RuntimeError::UnappliedOldRecordBuilder(region) => {
             doc = alloc.stack([
-                alloc.reflow("This record builder was not applied to a function:"),
+                alloc.reflow("This old-style record builder was not applied to a function:"),
                 alloc.region(lines.convert_region(region), severity),
                 alloc.reflow("However, we need a function to construct the record."),
                 alloc.note(
@@ -2445,7 +2484,41 @@ fn pretty_runtime_error<'b>(
                 ),
             ]);
 
-            title = "UNAPPLIED RECORD BUILDER";
+            title = "UNAPPLIED OLD-STYLE RECORD BUILDER";
+        }
+        RuntimeError::EmptyRecordBuilder(region) => {
+            doc = alloc.stack([
+                alloc.reflow("This record builder has no fields:"),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.reflow("I need at least two fields to combine their values into a record."),
+            ]);
+
+            title = "EMPTY RECORD BUILDER";
+        }
+        RuntimeError::SingleFieldRecordBuilder(region) => {
+            doc = alloc.stack([
+                alloc.reflow("This record builder only has one field:"),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.reflow("I need at least two fields to combine their values into a record."),
+            ]);
+
+            title = "NOT ENOUGH FIELDS IN RECORD BUILDER";
+        }
+        RuntimeError::OptionalFieldInRecordBuilder {
+            record: record_region,
+            field: field_region,
+        } => {
+            doc = alloc.stack([
+                alloc.reflow("Optional fields are not allowed to be used in record builders."),
+                alloc.region_with_subregion(
+                    lines.convert_region(record_region),
+                    lines.convert_region(field_region),
+                    severity,
+                ),
+                alloc.reflow("Record builders can only have required values for their fields."),
+            ]);
+
+            title = "OPTIONAL FIELD IN RECORD BUILDER";
         }
     }
 

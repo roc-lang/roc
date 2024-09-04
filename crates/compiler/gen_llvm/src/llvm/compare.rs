@@ -14,7 +14,7 @@ use roc_mono::layout::{
     Builtin, InLayout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
 };
 
-use super::build::{load_roc_value, BuilderExt};
+use super::build::{create_entry_block_alloca, load_roc_value, BuilderExt};
 use super::convert::{argument_type_from_layout, argument_type_from_union_layout};
 use super::lowlevel::dec_binop_with_unchecked;
 use super::struct_;
@@ -529,14 +529,14 @@ fn build_list_eq_help<'a, 'ctx>(
         let builder = env.builder;
         let element_type = basic_type_from_layout(env, layout_interner, element_layout);
         let ptr_type = element_type.ptr_type(AddressSpace::default());
-        let ptr1 = load_list_ptr(env.builder, list1, ptr_type);
-        let ptr2 = load_list_ptr(env.builder, list2, ptr_type);
+        let ptr1 = load_list_ptr(env, list1, ptr_type);
+        let ptr2 = load_list_ptr(env, list2, ptr_type);
 
         // we know that len1 == len2
         let end = len1;
 
         // allocate a stack slot for the current index
-        let index_alloca = builder.new_build_alloca(env.ptr_int(), "index");
+        let index_alloca = create_entry_block_alloca(env, env.ptr_int(), "index");
         builder.new_build_store(index_alloca, env.ptr_int().const_zero());
 
         let loop_bb = ctx.append_basic_block(parent, "loop");

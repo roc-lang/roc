@@ -13,7 +13,7 @@ pub mod header;
 pub mod highlight;
 pub mod ident;
 pub mod keyword;
-pub mod module;
+pub mod normalize;
 pub mod number_literal;
 pub mod pattern;
 pub mod problems;

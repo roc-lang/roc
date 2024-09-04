@@ -4,7 +4,7 @@ use crate::{aliases::Aliases, solve};
 use roc_can::abilities::{AbilitiesStore, ResolvedImpl};
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::expr::PendingDerives;
-use roc_can::module::{ExposedByModule, ResolvedImplementations, RigidVariables};
+use roc_can::module::{ExposedByModule, ModuleParams, ResolvedImplementations, RigidVariables};
 use roc_collections::all::MutMap;
 use roc_collections::VecMap;
 use roc_derive::SharedDerivedModule;
@@ -80,6 +80,10 @@ pub struct SolveConfig<'a> {
     #[cfg(debug_assertions)]
     /// The checkmate collector for this module.
     pub checkmate: Option<roc_checkmate::Collector>,
+
+    /// Module params
+    pub module_params: Option<ModuleParams>,
+    pub module_params_vars: VecMap<ModuleId, Variable>,
 }
 
 pub struct SolveOutput {
@@ -144,6 +148,7 @@ pub fn exposed_types_storage_subs(
     home: ModuleId,
     solved_subs: &mut Solved<Subs>,
     exposed_vars_by_symbol: &[(Symbol, Variable)],
+    params_var: Option<Variable>,
     solved_implementations: &ResolvedImplementations,
     abilities_store: &AbilitiesStore,
 ) -> ExposedTypesStorageSubs {
@@ -155,6 +160,9 @@ pub fn exposed_types_storage_subs(
         let new_var = storage_subs.import_variable_from(subs, *var).variable;
         stored_vars_by_symbol.insert(*symbol, new_var);
     }
+
+    let stored_params_var =
+        params_var.map(|params_var| storage_subs.import_variable_from(subs, params_var).variable);
 
     let mut stored_specialization_lambda_set_vars =
         VecMap::with_capacity(solved_implementations.len());
@@ -213,6 +221,7 @@ pub fn exposed_types_storage_subs(
         stored_vars_by_symbol,
         stored_specialization_lambda_set_vars,
         stored_ability_member_vars,
+        stored_params_var,
     }
 }
 

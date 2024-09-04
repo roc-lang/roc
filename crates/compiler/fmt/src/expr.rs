@@ -10,7 +10,7 @@ use crate::Buf;
 use roc_module::called_via::{self, BinOp};
 use roc_parse::ast::{
     is_expr_suffixed, AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces,
-    Pattern, RecordBuilderField, WhenBranch,
+    OldRecordBuilderField, Pattern, TryTarget, WhenBranch,
 };
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_parse::ident::Accessor;
@@ -39,6 +39,7 @@ impl<'a> Formattable for Expr<'a> {
             | NonBase10Int { .. }
             | SingleQuote(_)
             | AccessorFunction(_)
+            | RecordUpdater(_)
             | Var { .. }
             | Underscore { .. }
             | MalformedIdent(_, _)
@@ -47,7 +48,7 @@ impl<'a> Formattable for Expr<'a> {
             | OpaqueRef(_)
             | Crash => false,
 
-            RecordAccess(inner, _) | TupleAccess(inner, _) | TaskAwaitBang(inner) => {
+            RecordAccess(inner, _) | TupleAccess(inner, _) | TrySuffix { expr: inner, .. } => {
                 inner.is_multiline()
             }
 
@@ -85,8 +86,11 @@ impl<'a> Formattable for Expr<'a> {
             | PrecedenceConflict(roc_parse::ast::PrecedenceConflict {
                 expr: loc_subexpr, ..
             })
-            | MultipleRecordBuilders(loc_subexpr)
-            | UnappliedRecordBuilder(loc_subexpr) => loc_subexpr.is_multiline(),
+            | MultipleOldRecordBuilders(loc_subexpr)
+            | UnappliedOldRecordBuilder(loc_subexpr)
+            | EmptyRecordBuilder(loc_subexpr)
+            | SingleFieldRecordBuilder(loc_subexpr)
+            | OptionalFieldInRecordBuilder(_, loc_subexpr) => loc_subexpr.is_multiline(),
 
             ParensAround(subexpr) => subexpr.is_multiline(),
 
@@ -109,7 +113,8 @@ impl<'a> Formattable for Expr<'a> {
             Record(fields) => is_collection_multiline(fields),
             Tuple(fields) => is_collection_multiline(fields),
             RecordUpdate { fields, .. } => is_collection_multiline(fields),
-            RecordBuilder(fields) => is_collection_multiline(fields),
+            OldRecordBuilder(fields) => is_collection_multiline(fields),
+            RecordBuilder { fields, .. } => is_collection_multiline(fields),
         }
     }
 
@@ -237,7 +242,7 @@ impl<'a> Formattable for Expr<'a> {
                                     Expr::Tuple(_)
                                         | Expr::List(_)
                                         | Expr::Record(_)
-                                        | Expr::RecordBuilder(_)
+                                        | Expr::OldRecordBuilder(_)
                                 )
                                 && a.extract_spaces().before == [CommentOrNewline::Newline]
                         })
@@ -365,14 +370,24 @@ impl<'a> Formattable for Expr<'a> {
             RecordUpdate { update, fields } => {
                 fmt_record_like(
                     buf,
-                    Some(*update),
+                    Some(RecordPrefix::Update(update)),
                     *fields,
                     indent,
                     format_assigned_field_multiline,
                     assigned_field_to_space_before,
                 );
             }
-            RecordBuilder(fields) => {
+            RecordBuilder { mapper, fields } => {
+                fmt_record_like(
+                    buf,
+                    Some(RecordPrefix::Mapper(mapper)),
+                    *fields,
+                    indent,
+                    format_assigned_field_multiline,
+                    assigned_field_to_space_before,
+                );
+            }
+            OldRecordBuilder(fields) => {
                 fmt_record_like(
                     buf,
                     None,
@@ -496,6 +511,11 @@ impl<'a> Formattable for Expr<'a> {
                     Accessor::TupleIndex(key) => buf.push_str(key),
                 }
             }
+            RecordUpdater(key) => {
+                buf.indent(indent);
+                buf.push('&');
+                buf.push_str(key);
+            }
             RecordAccess(expr, key) => {
                 expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
                 buf.push('.');
@@ -506,9 +526,12 @@ impl<'a> Formattable for Expr<'a> {
                 buf.push('.');
                 buf.push_str(key);
             }
-            TaskAwaitBang(expr) => {
+            TrySuffix { expr, target } => {
                 expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
-                buf.push('!');
+                match target {
+                    TryTarget::Task => buf.push('!'),
+                    TryTarget::Result => buf.push('?'),
+                }
             }
             MalformedIdent(str, _) => {
                 buf.indent(indent);
@@ -520,13 +543,16 @@ impl<'a> Formattable for Expr<'a> {
             }
             MalformedClosure => {}
             PrecedenceConflict { .. } => {}
-            MultipleRecordBuilders { .. } => {}
-            UnappliedRecordBuilder { .. } => {}
+            MultipleOldRecordBuilders { .. } => {}
+            UnappliedOldRecordBuilder { .. } => {}
+            EmptyRecordBuilder { .. } => {}
+            SingleFieldRecordBuilder { .. } => {}
+            OptionalFieldInRecordBuilder(_, _) => {}
         }
     }
 }
 
-fn is_str_multiline(literal: &StrLiteral) -> bool {
+pub fn is_str_multiline(literal: &StrLiteral) -> bool {
     use roc_parse::ast::StrLiteral::*;
 
     match literal {
@@ -582,7 +608,7 @@ fn is_outdentable(expr: &Expr) -> bool {
         Expr::Tuple(_)
             | Expr::List(_)
             | Expr::Record(_)
-            | Expr::RecordBuilder(_)
+            | Expr::OldRecordBuilder(_)
             | Expr::Closure(..)
     )
 }
@@ -598,6 +624,22 @@ fn starts_with_newline(expr: &Expr) -> bool {
     }
 }
 
+fn fmt_str_body(body: &str, buf: &mut Buf) {
+    for c in body.chars() {
+        match c {
+            // Format blank characters as unicode escapes
+            '\u{200a}' => buf.push_str("\\u(200a)"),
+            '\u{200b}' => buf.push_str("\\u(200b)"),
+            '\u{200c}' => buf.push_str("\\u(200c)"),
+            '\u{feff}' => buf.push_str("\\u(feff)"),
+            // Don't change anything else in the string
+            ' ' => buf.push_str_allow_spaces(" "),
+            '\n' => buf.push_str_allow_spaces("\n"),
+            _ => buf.push(c),
+        }
+    }
+}
+
 fn format_str_segment(seg: &StrSegment, buf: &mut Buf, indent: u16) {
     use StrSegment::*;
 
@@ -607,10 +649,10 @@ fn format_str_segment(seg: &StrSegment, buf: &mut Buf, indent: u16) {
             // a line break in the input string
             match string.strip_suffix('\n') {
                 Some(string_without_newline) => {
-                    buf.push_str_allow_spaces(string_without_newline);
+                    fmt_str_body(string_without_newline, buf);
                     buf.newline();
                 }
-                None => buf.push_str_allow_spaces(string),
+                None => fmt_str_body(string, buf),
             }
         }
         Unicode(loc_str) => {
@@ -654,10 +696,6 @@ fn push_op(buf: &mut Buf, op: BinOp) {
         called_via::BinOp::And => buf.push_str("&&"),
         called_via::BinOp::Or => buf.push_str("||"),
         called_via::BinOp::Pizza => buf.push_str("|>"),
-        called_via::BinOp::Assignment => unreachable!(),
-        called_via::BinOp::IsAliasType => unreachable!(),
-        called_via::BinOp::IsOpaqueType => unreachable!(),
-        called_via::BinOp::Backpassing => unreachable!(),
     }
 }
 
@@ -674,7 +712,7 @@ pub fn fmt_str_literal(buf: &mut Buf, literal: StrLiteral, indent: u16) {
                 buf.push_newline_literal();
                 for line in string.split('\n') {
                     buf.indent(indent);
-                    buf.push_str_allow_spaces(line);
+                    fmt_str_body(line, buf);
                     buf.push_newline_literal();
                 }
                 buf.indent(indent);
@@ -682,7 +720,7 @@ pub fn fmt_str_literal(buf: &mut Buf, literal: StrLiteral, indent: u16) {
             } else {
                 buf.indent(indent);
                 buf.push('"');
-                buf.push_str_allow_spaces(string);
+                fmt_str_body(string, buf);
                 buf.push('"');
             };
         }
@@ -1366,9 +1404,14 @@ fn pattern_needs_parens_when_backpassing(pat: &Pattern) -> bool {
     }
 }
 
+enum RecordPrefix<'a> {
+    Update(&'a Loc<Expr<'a>>),
+    Mapper(&'a Loc<Expr<'a>>),
+}
+
 fn fmt_record_like<'a, Field, Format, ToSpaceBefore>(
     buf: &mut Buf,
-    update: Option<&'a Loc<Expr<'a>>>,
+    prefix: Option<RecordPrefix<'a>>,
     fields: Collection<'a, Loc<Field>>,
     indent: u16,
     format_field_multiline: Format,
@@ -1381,21 +1424,26 @@ fn fmt_record_like<'a, Field, Format, ToSpaceBefore>(
     let loc_fields = fields.items;
     let final_comments = fields.final_comments();
     buf.indent(indent);
-    if loc_fields.is_empty() && final_comments.iter().all(|c| c.is_newline()) && update.is_none() {
+    if loc_fields.is_empty() && final_comments.iter().all(|c| c.is_newline()) && prefix.is_none() {
         buf.push_str("{}");
     } else {
         buf.push('{');
 
-        match update {
+        match prefix {
             None => {}
             // We are presuming this to be a Var()
             // If it wasnt a Var() we would not have made
             // it this far. For example "{ 4 & hello = 9 }"
             // doesnt make sense.
-            Some(record_var) => {
+            Some(RecordPrefix::Update(record_var)) => {
                 buf.spaces(1);
                 record_var.format(buf, indent);
                 buf.push_str(" &");
+            }
+            Some(RecordPrefix::Mapper(mapper_var)) => {
+                buf.spaces(1);
+                mapper_var.format(buf, indent);
+                buf.push_str(" <-");
             }
         }
 
@@ -1506,6 +1554,23 @@ fn format_assigned_field_multiline<T>(
             ann.value.format(buf, indent);
             buf.push(',');
         }
+        IgnoredValue(name, spaces, ann) => {
+            buf.newline();
+            buf.indent(indent);
+            buf.push('_');
+            buf.push_str(name.value);
+
+            if !spaces.is_empty() {
+                fmt_spaces(buf, spaces.iter(), indent);
+                buf.indent(indent);
+            }
+
+            buf.push_str(separator_prefix);
+            buf.push_str(":");
+            buf.spaces(1);
+            ann.value.format(buf, indent);
+            buf.push(',');
+        }
         LabelOnly(name) => {
             buf.newline();
             buf.indent(indent);
@@ -1554,11 +1619,11 @@ fn assigned_field_to_space_before<'a, T>(
 
 fn format_record_builder_field_multiline(
     buf: &mut Buf,
-    field: &RecordBuilderField,
+    field: &OldRecordBuilderField,
     indent: u16,
     separator_prefix: &str,
 ) {
-    use self::RecordBuilderField::*;
+    use self::OldRecordBuilderField::*;
     match field {
         Value(name, spaces, ann) => {
             buf.newline();
@@ -1651,10 +1716,10 @@ fn format_record_builder_field_multiline(
 }
 
 fn record_builder_field_to_space_before<'a>(
-    field: &'a RecordBuilderField<'a>,
-) -> Option<(&RecordBuilderField<'a>, &'a [CommentOrNewline<'a>])> {
+    field: &'a OldRecordBuilderField<'a>,
+) -> Option<(&OldRecordBuilderField<'a>, &'a [CommentOrNewline<'a>])> {
     match field {
-        RecordBuilderField::SpaceBefore(sub_field, spaces) => Some((sub_field, spaces)),
+        OldRecordBuilderField::SpaceBefore(sub_field, spaces) => Some((sub_field, spaces)),
         _ => None,
     }
 }
@@ -1681,10 +1746,6 @@ fn sub_expr_requests_parens(expr: &Expr<'_>) -> bool {
                     | BinOp::And
                     | BinOp::Or
                     | BinOp::Pizza => true,
-                    BinOp::Assignment
-                    | BinOp::IsAliasType
-                    | BinOp::IsOpaqueType
-                    | BinOp::Backpassing => false,
                 })
         }
         Expr::If(_, _) => true,

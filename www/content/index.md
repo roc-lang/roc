@@ -110,7 +110,7 @@ Here's a code sample that shows a few different aspects of Roc:
 - File I/O and HTTP requests
 - Pattern matching for error handling
 - JSON deserialization via type inference
-- Common syntax sugar: string interpolation, pipelines, and backpassing
+- Common syntax sugar: pipelines, the `!` operator, and string interpolation
 
 The [tutorial](/tutorial) introduces these gradually and in more depth, but this gives a brief overview.
 

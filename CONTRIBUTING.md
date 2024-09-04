@@ -43,19 +43,9 @@ Execute `cargo fmt --all` to fix the formatting.
 - The [compiler's README](https://github.com/roc-lang/roc/tree/main/crates/compiler) contains important info.
 - The AI chat in the [cursor editor](https://www.cursor.com/) can also help you find your way in the codebase.
 
-<details>
-<summary>:beetle: Debugging Tips</summary>
+### Debugging tips
 
-- At the bottom of [.cargo/config.toml](https://github.com/roc-lang/roc/blob/main/.cargo/config.toml) we have useful debug flags that activate certain debug prints.
-- For Roc code; minimize the code that produces the issue.
-- For segmentation faults:
-    + In general we recommend using linux to investigate, it has better tools for this. 
-    + Use `roc build myApp.roc --linker=legacy` followed by `valgrind ./myApp`.
-    + Use gdb to step through the code, [this gdb script](https://roc.zulipchat.com/#narrow/stream/395097-compiler-development/topic/gdb.20script/near/424422545) can be helpful.
-    + Inspect the generated LLVM IR (`roc build myApp.roc --emit-llvm-ir`) between Roc code that encounters the segfault and code that doesn't.
-  
-
-</details>
+If you need to do some debugging, check out [our tips](devtools/debug_tips.md).
 
 ### Commit signing
 

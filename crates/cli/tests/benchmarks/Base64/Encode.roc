@@ -1,7 +1,4 @@
-interface Base64.Encode
-    exposes [toBytes]
-    imports []
-
+module [toBytes]
 
 import Bytes.Encode exposing [ByteEncoder]
 

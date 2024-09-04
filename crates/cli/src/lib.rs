@@ -13,15 +13,18 @@ use roc_build::program::{
     handle_error_module, handle_loading_problem, standard_load_config, BuildFileError,
     BuildOrdering, BuiltFile, CodeGenBackend, CodeGenOptions, DEFAULT_ROC_FILENAME,
 };
+#[cfg(not(windows))]
 use roc_collections::MutMap;
 use roc_error_macros::{internal_error, user_error};
 use roc_gen_dev::AssemblyBackendMode;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_load::{ExpectMetadata, Threading};
+#[cfg(not(windows))]
 use roc_module::symbol::ModuleId;
 use roc_mono::ir::OptLevel;
 use roc_packaging::cache::RocCacheDir;
 use roc_packaging::tarball::Compression;
+#[cfg(not(windows))]
 use roc_reporting::report::ANSI_STYLE_CODES;
 use roc_target::{Architecture, Target};
 use std::env;
@@ -31,7 +34,9 @@ use std::mem::ManuallyDrop;
 use std::os::raw::{c_char, c_int};
 use std::path::{Path, PathBuf};
 use std::process;
-use std::time::{Duration, Instant};
+#[cfg(not(windows))]
+use std::time::Duration;
+use std::time::Instant;
 use strum::IntoEnumIterator;
 #[cfg(not(target_os = "linux"))]
 use tempfile::TempDir;
@@ -427,6 +432,14 @@ pub fn build_app() -> Command {
                     .action(ArgAction::SetTrue)
                     .required(false)
             )
+            .arg(
+                Arg::new(FLAG_TARGET)
+                    .long(FLAG_TARGET)
+                    .help("Choose a different target")
+                    .default_value(Into::<&'static str>::into(Target::default()))
+                    .value_parser(build_target_values_parser.clone())
+                    .required(false),
+            )
         )
         .arg(flag_optimize)
         .arg(flag_max_threads)
@@ -468,6 +481,7 @@ pub fn test(_matches: &ArgMatches, _target: Target) -> io::Result<i32> {
     todo!("running tests does not work on windows right now")
 }
 
+#[cfg(not(windows))]
 struct ModuleTestResults {
     module_id: ModuleId,
     failed_count: usize,
@@ -516,8 +530,7 @@ pub fn test(matches: &ArgMatches, target: Target) -> io::Result<i32> {
     }
 
     let arena = &arena;
-    // TODO may need to determine this dynamically based on dev builds.
-    let function_kind = FunctionKind::LambdaSet;
+    let function_kind = FunctionKind::from_env();
 
     let opt_main_path = matches.get_one::<PathBuf>(FLAG_MAIN);
 
@@ -647,6 +660,7 @@ pub fn test(matches: &ArgMatches, target: Target) -> io::Result<i32> {
     }
 }
 
+#[cfg(not(windows))]
 fn print_test_results(
     module_test_results: ModuleTestResults,
     sources: &MutMap<ModuleId, (PathBuf, Box<str>)>,
@@ -666,6 +680,7 @@ fn print_test_results(
     println!("\n{module_name}:\n    {test_summary_str}",);
 }
 
+#[cfg(not(windows))]
 fn test_summary(failed_count: usize, passed_count: usize, tests_duration: Duration) -> String {
     let failed_color = if failed_count == 0 {
         ANSI_STYLE_CODES.green

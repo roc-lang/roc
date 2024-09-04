@@ -129,6 +129,10 @@ impl<'a> State<'a> {
     pub fn len_region(&self, length: u32) -> Region {
         Region::new(self.pos(), self.pos().bump_column(length))
     }
+
+    pub fn is_at_start_of_file(&self) -> bool {
+        self.offset == 0
+    }
 }
 
 impl<'a> fmt::Debug for State<'a> {

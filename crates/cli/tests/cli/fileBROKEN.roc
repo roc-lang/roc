@@ -1,25 +1,25 @@
-app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.15.0/SlwdbJ-3GR7uBWQo6zlmYWNYOxnvo8r6YABXD-45UOw.tar.br" }
 
 import pf.Stdout
-import pf.Task exposing [Task]
 import pf.File
 import pf.Path
 import pf.Env
-import pf.Dir
 
 main : Task {} [Exit I32 Str]_
 main =
-    path = Path.fromStr "out.txt"
+    pathStr = "out.txt"
 
     task =
-        cwd = Env.cwd!
-        Stdout.line! "cwd: $(Path.display cwd)"
-        dirEntries = Dir.list! cwd
+        cwdPath = Env.cwd!
+        cwdStr = Path.display cwdPath
+        Stdout.line! "Current working directory: $(cwdStr)"
+
+        dirEntries = Path.listDir! cwdPath
         contentsStr = Str.joinWith (List.map dirEntries Path.display) "\n    "
         Stdout.line! "Directory contents:\n    $(contentsStr)\n"
         Stdout.line! "Writing a string to out.txt"
-        File.writeUtf8! path "a string!"
-        contents = File.readUtf8! path
+        File.writeUtf8! pathStr "a string!"
+        contents = File.readUtf8! pathStr
         Stdout.line! "I read the file back. Its contents: \"$(contents)\""
 
     when Task.result! task is

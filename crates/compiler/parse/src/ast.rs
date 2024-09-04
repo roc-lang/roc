@@ -14,11 +14,23 @@ use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
 use roc_module::ident::QualifiedModuleName;
 use roc_region::all::{Loc, Position, Region};
 
+#[derive(Debug, Clone)]
+pub struct FullAst<'a> {
+    pub header: SpacesBefore<'a, Header<'a>>,
+    pub defs: Defs<'a>,
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Spaces<'a, T> {
     pub before: &'a [CommentOrNewline<'a>],
     pub item: T,
     pub after: &'a [CommentOrNewline<'a>],
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct SpacesBefore<'a, T> {
+    pub before: &'a [CommentOrNewline<'a>],
+    pub item: T,
 }
 
 #[derive(Copy, Clone, PartialEq)]
@@ -105,15 +117,9 @@ impl<'a, T: ExtractSpaces<'a>> ExtractSpaces<'a> for Loc<T> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct Module<'a> {
-    pub comments: &'a [CommentOrNewline<'a>],
-    pub header: Header<'a>,
-}
-
-impl<'a> Module<'a> {
+impl<'a> Header<'a> {
     pub fn upgrade_header_imports(self, arena: &'a Bump) -> (Self, Defs<'a>) {
-        let (header, defs) = match self.header {
+        let (header, defs) = match self {
             Header::Module(header) => (
                 Header::Module(ModuleHeader {
                     interface_imports: None,
@@ -128,12 +134,10 @@ impl<'a> Module<'a> {
                 }),
                 Self::header_imports_to_defs(arena, header.old_imports),
             ),
-            Header::Package(_) | Header::Platform(_) | Header::Hosted(_) => {
-                (self.header, Defs::default())
-            }
+            Header::Package(_) | Header::Platform(_) | Header::Hosted(_) => (self, Defs::default()),
         };
 
-        (Module { header, ..self }, defs)
+        (header, defs)
     }
 
     pub fn header_imports_to_defs(
@@ -388,6 +392,15 @@ pub enum StrLiteral<'a> {
     Block(&'a [&'a [StrSegment<'a>]]),
 }
 
+/// Values that can be tried, extracting success values or "returning early" on failure
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TryTarget {
+    /// Tasks suffixed with ! are `Task.await`ed
+    Task,
+    /// Results suffixed with ? are `Result.try`ed
+    Result,
+}
+
 /// A parsed expression. This uses lifetimes extensively for two reasons:
 ///
 /// 1. It uses Bump::alloc for all allocations, which returns a reference.
@@ -419,11 +432,17 @@ pub enum Expr<'a> {
     /// e.g. `.foo` or `.0`
     AccessorFunction(Accessor<'a>),
 
+    /// Update the value of a field in a record, e.g. `&foo`
+    RecordUpdater(&'a str),
+
     /// Look up exactly one field on a tuple, e.g. `(x, y).1`.
     TupleAccess(&'a Expr<'a>, &'a str),
 
-    /// Task await bang - i.e. the ! in `File.readUtf8! path`
-    TaskAwaitBang(&'a Expr<'a>),
+    /// Early return on failures - e.g. the ! in `File.readUtf8! path`
+    TrySuffix {
+        target: TryTarget,
+        expr: &'a Expr<'a>,
+    },
 
     // Collection Literals
     List(Collection<'a, &'a Loc<Expr<'a>>>),
@@ -438,7 +457,21 @@ pub enum Expr<'a> {
     Tuple(Collection<'a, &'a Loc<Expr<'a>>>),
 
     // Record Builders
-    RecordBuilder(Collection<'a, Loc<RecordBuilderField<'a>>>),
+    /// Applicative record builders, e.g.
+    /// build {
+    ///     foo: <- getData Foo,
+    ///     bar: <- getData Bar,
+    /// }
+    OldRecordBuilder(Collection<'a, Loc<OldRecordBuilderField<'a>>>),
+    /// Mapper-based record builders, e.g.
+    /// { Task.parallel <-
+    ///     foo: Task.getData Foo,
+    ///     bar: Task.getData Bar,
+    /// }
+    RecordBuilder {
+        mapper: &'a Loc<Expr<'a>>,
+        fields: Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>,
+    },
 
     // Lookups
     Var {
@@ -501,8 +534,11 @@ pub enum Expr<'a> {
     // Both operators were non-associative, e.g. (True == False == False).
     // We should tell the author to disambiguate by grouping them with parens.
     PrecedenceConflict(&'a PrecedenceConflict<'a>),
-    MultipleRecordBuilders(&'a Loc<Expr<'a>>),
-    UnappliedRecordBuilder(&'a Loc<Expr<'a>>),
+    MultipleOldRecordBuilders(&'a Loc<Expr<'a>>),
+    UnappliedOldRecordBuilder(&'a Loc<Expr<'a>>),
+    EmptyRecordBuilder(&'a Loc<Expr<'a>>),
+    SingleFieldRecordBuilder(&'a Loc<Expr<'a>>),
+    OptionalFieldInRecordBuilder(&'a Loc<&'a str>, &'a Loc<Expr<'a>>),
 }
 
 impl Expr<'_> {
@@ -534,9 +570,9 @@ pub fn split_loc_exprs_around<'a>(
 
 /// Checks if the bang suffix is applied only at the top level of expression
 pub fn is_top_level_suffixed(expr: &Expr) -> bool {
-    // TODO: should we check BinOps with pizza where the last expression is TaskAwaitBang?
+    // TODO: should we check BinOps with pizza where the last expression is TrySuffix?
     match expr {
-        Expr::TaskAwaitBang(..) => true,
+        Expr::TrySuffix { .. } => true,
         Expr::Apply(a, _, _) => is_top_level_suffixed(&a.value),
         Expr::SpaceBefore(a, _) => is_top_level_suffixed(a),
         Expr::SpaceAfter(a, _) => is_top_level_suffixed(a),
@@ -550,7 +586,7 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         // expression without arguments, `read!`
         Expr::Var { .. } => false,
 
-        Expr::TaskAwaitBang(..) => true,
+        Expr::TrySuffix { .. } => true,
 
         // expression with arguments, `line! "Foo"`
         Expr::Apply(sub_loc_expr, apply_args, _) => {
@@ -603,6 +639,7 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::SingleQuote(_) => false,
         Expr::RecordAccess(a, _) => is_expr_suffixed(a),
         Expr::AccessorFunction(_) => false,
+        Expr::RecordUpdater(_) => false,
         Expr::TupleAccess(a, _) => is_expr_suffixed(a),
         Expr::List(items) => items.iter().any(|x| is_expr_suffixed(&x.value)),
         Expr::RecordUpdate { update, fields } => {
@@ -615,9 +652,12 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
             .iter()
             .any(|field| is_assigned_value_suffixed(&field.value)),
         Expr::Tuple(items) => items.iter().any(|x| is_expr_suffixed(&x.value)),
-        Expr::RecordBuilder(items) => items
+        Expr::OldRecordBuilder(items) => items
             .iter()
             .any(|rbf| is_record_builder_field_suffixed(&rbf.value)),
+        Expr::RecordBuilder { mapper: _, fields } => fields
+            .iter()
+            .any(|field| is_assigned_value_suffixed(&field.value)),
         Expr::Underscore(_) => false,
         Expr::Crash => false,
         Expr::Tag(_) => false,
@@ -637,8 +677,11 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::MalformedClosure => false,
         Expr::MalformedSuffixed(_) => false,
         Expr::PrecedenceConflict(_) => false,
-        Expr::MultipleRecordBuilders(_) => false,
-        Expr::UnappliedRecordBuilder(_) => false,
+        Expr::MultipleOldRecordBuilders(_) => false,
+        Expr::UnappliedOldRecordBuilder(_) => false,
+        Expr::EmptyRecordBuilder(_) => false,
+        Expr::SingleFieldRecordBuilder(_) => false,
+        Expr::OptionalFieldInRecordBuilder(_, _) => false,
     }
 }
 
@@ -652,9 +695,9 @@ fn is_when_branch_suffixed(branch: &WhenBranch<'_>) -> bool {
 
 fn is_assigned_value_suffixed<'a>(value: &AssignedField<'a, Expr<'a>>) -> bool {
     match value {
-        AssignedField::RequiredValue(_, _, a) | AssignedField::OptionalValue(_, _, a) => {
-            is_expr_suffixed(&a.value)
-        }
+        AssignedField::RequiredValue(_, _, a)
+        | AssignedField::OptionalValue(_, _, a)
+        | AssignedField::IgnoredValue(_, _, a) => is_expr_suffixed(&a.value),
         AssignedField::LabelOnly(_) => false,
         AssignedField::SpaceBefore(a, _) | AssignedField::SpaceAfter(a, _) => {
             is_assigned_value_suffixed(a)
@@ -663,14 +706,14 @@ fn is_assigned_value_suffixed<'a>(value: &AssignedField<'a, Expr<'a>>) -> bool {
     }
 }
 
-fn is_record_builder_field_suffixed(field: &RecordBuilderField<'_>) -> bool {
+fn is_record_builder_field_suffixed(field: &OldRecordBuilderField<'_>) -> bool {
     match field {
-        RecordBuilderField::Value(_, _, a) => is_expr_suffixed(&a.value),
-        RecordBuilderField::ApplyValue(_, _, _, a) => is_expr_suffixed(&a.value),
-        RecordBuilderField::LabelOnly(_) => false,
-        RecordBuilderField::SpaceBefore(a, _) => is_record_builder_field_suffixed(a),
-        RecordBuilderField::SpaceAfter(a, _) => is_record_builder_field_suffixed(a),
-        RecordBuilderField::Malformed(_) => false,
+        OldRecordBuilderField::Value(_, _, a) => is_expr_suffixed(&a.value),
+        OldRecordBuilderField::ApplyValue(_, _, _, a) => is_expr_suffixed(&a.value),
+        OldRecordBuilderField::LabelOnly(_) => false,
+        OldRecordBuilderField::SpaceBefore(a, _) => is_record_builder_field_suffixed(a),
+        OldRecordBuilderField::SpaceAfter(a, _) => is_record_builder_field_suffixed(a),
+        OldRecordBuilderField::Malformed(_) => false,
     }
 }
 
@@ -772,7 +815,7 @@ pub enum ValueDef<'a> {
     AnnotatedBody {
         ann_pattern: &'a Loc<Pattern<'a>>,
         ann_type: &'a Loc<TypeAnnotation<'a>>,
-        comment: Option<&'a str>,
+        lines_between: &'a [CommentOrNewline<'a>],
         body_pattern: &'a Loc<Pattern<'a>>,
         body_expr: &'a Loc<Expr<'a>>,
     },
@@ -840,10 +883,10 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                         use AssignedField::*;
 
                         match current {
-                            RequiredValue(_, _, loc_val) => break expr_stack.push(&loc_val.value),
-                            OptionalValue(_, _, loc_val) => break expr_stack.push(&loc_val.value),
-                            SpaceBefore(next, _) => current = *next,
-                            SpaceAfter(next, _) => current = *next,
+                            RequiredValue(_, _, loc_val)
+                            | OptionalValue(_, _, loc_val)
+                            | IgnoredValue(_, _, loc_val) => break expr_stack.push(&loc_val.value),
+                            SpaceBefore(next, _) | SpaceAfter(next, _) => current = *next,
                             LabelOnly(_) | Malformed(_) => break,
                         }
                     }
@@ -881,13 +924,13 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                         expr_stack.push(&loc_expr.value);
                     }
                 }
-                RecordBuilder(fields) => {
+                OldRecordBuilder(fields) => {
                     expr_stack.reserve(fields.len());
                     for loc_record_builder_field in fields.items {
                         let mut current_field = loc_record_builder_field.value;
 
                         loop {
-                            use RecordBuilderField::*;
+                            use OldRecordBuilderField::*;
 
                             match current_field {
                                 Value(_, _, loc_val) => break expr_stack.push(&loc_val.value),
@@ -900,6 +943,14 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                             }
                         }
                     }
+                }
+                RecordBuilder {
+                    mapper: map2,
+                    fields,
+                } => {
+                    expr_stack.reserve(fields.len() + 1);
+                    expr_stack.push(&map2.value);
+                    push_stack_from_record_fields!(fields);
                 }
                 Closure(_, body) => expr_stack.push(&body.value),
                 Backpassing(_, a, b) => {
@@ -960,14 +1011,16 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                 }
                 RecordAccess(expr, _)
                 | TupleAccess(expr, _)
-                | TaskAwaitBang(expr)
+                | TrySuffix { expr, .. }
                 | SpaceBefore(expr, _)
                 | SpaceAfter(expr, _)
                 | ParensAround(expr) => expr_stack.push(expr),
 
-                MultipleRecordBuilders(loc_expr) | UnappliedRecordBuilder(loc_expr) => {
-                    expr_stack.push(&loc_expr.value)
-                }
+                MultipleOldRecordBuilders(loc_expr)
+                | UnappliedOldRecordBuilder(loc_expr)
+                | EmptyRecordBuilder(loc_expr)
+                | SingleFieldRecordBuilder(loc_expr)
+                | OptionalFieldInRecordBuilder(_, loc_expr) => expr_stack.push(&loc_expr.value),
 
                 Float(_)
                 | Num(_)
@@ -975,6 +1028,7 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                 | Str(_)
                 | SingleQuote(_)
                 | AccessorFunction(_)
+                | RecordUpdater(_)
                 | Var { .. }
                 | Underscore(_)
                 | Crash
@@ -1005,7 +1059,7 @@ impl<'a, 'b> Iterator for RecursiveValueDefIter<'a, 'b> {
                         ValueDef::AnnotatedBody {
                             ann_pattern: _,
                             ann_type: _,
-                            comment: _,
+                            lines_between: _,
                             body_pattern: _,
                             body_expr,
                         } => self.push_pending_from_expr(&body_expr.value),
@@ -1031,7 +1085,7 @@ impl<'a, 'b> Iterator for RecursiveValueDefIter<'a, 'b> {
                             params,
                         }) => {
                             if let Some(ModuleImportParams { before: _, params }) = params {
-                                for loc_assigned_field in params.items {
+                                for loc_assigned_field in params.value.items {
                                     if let Some(expr) = loc_assigned_field.value.value() {
                                         self.push_pending_from_expr(&expr.value);
                                     }
@@ -1079,7 +1133,7 @@ pub struct ModuleImport<'a> {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ModuleImportParams<'a> {
     pub before: &'a [CommentOrNewline<'a>],
-    pub params: Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>,
+    pub params: Loc<Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1146,8 +1200,6 @@ impl<'a> ImportAlias<'a> {
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Defs<'a> {
-    /// A collection of references by index to either `type_defs` or `value_defs`
-    /// It's an entry point for actual definitions, while `type_defs` and `value_defs` are append-only collections
     pub tags: std::vec::Vec<EitherIndex<TypeDef<'a>, ValueDef<'a>>>,
     pub regions: std::vec::Vec<Region>,
     pub space_before: std::vec::Vec<Slice<CommentOrNewline<'a>>>,
@@ -1171,6 +1223,21 @@ impl<'a> Defs<'a> {
             Ok(type_index) => Ok(&self.type_defs[type_index.index()]),
             Err(value_index) => Err(&self.value_defs[value_index.index()]),
         })
+    }
+
+    pub fn loc_defs<'b>(
+        &'b self,
+    ) -> impl Iterator<Item = Result<Loc<TypeDef<'a>>, Loc<ValueDef<'a>>>> + 'b {
+        self.tags
+            .iter()
+            .enumerate()
+            .map(|(i, tag)| match tag.split() {
+                Ok(type_index) => Ok(Loc::at(self.regions[i], self.type_defs[type_index.index()])),
+                Err(value_index) => Err(Loc::at(
+                    self.regions[i],
+                    self.value_defs[value_index.index()],
+                )),
+            })
     }
 
     pub fn list_value_defs(&self) -> impl Iterator<Item = (usize, &ValueDef<'a>)> {
@@ -1227,29 +1294,25 @@ impl<'a> Defs<'a> {
             .split()
         {
             Ok(type_index) => {
-                let index = type_index.index();
-
                 // remove from vec
-                self.type_defs.remove(index);
+                self.type_defs.remove(type_index.index());
 
                 // update all of the remaining indexes in type_defs
-                for (tag_index, tag) in self.tags.iter_mut().enumerate() {
+                for (current_tag_index, tag) in self.tags.iter_mut().enumerate() {
                     // only update later indexes into type_defs
-                    if tag_index > index && tag.split().is_ok() {
+                    if current_tag_index > tag_index && tag.split().is_ok() {
                         tag.decrement_index();
                     }
                 }
             }
             Err(value_index) => {
-                let index: usize = value_index.index();
-
                 // remove from vec
-                self.value_defs.remove(index);
+                self.value_defs.remove(value_index.index());
 
                 // update all of the remaining indexes in value_defs
-                for (tag_index, tag) in self.tags.iter_mut().enumerate() {
+                for (current_tag_index, tag) in self.tags.iter_mut().enumerate() {
                     // only update later indexes into value_defs
-                    if tag_index > index && tag.split().is_err() {
+                    if current_tag_index > tag_index && tag.split().is_err() {
                         tag.decrement_index();
                     }
                 }
@@ -1292,18 +1355,26 @@ impl<'a> Defs<'a> {
         self.push_def_help(tag, region, spaces_before, spaces_after)
     }
 
-    /// Replace the `value_def` at the given index
+    /// Replace with `value_def` at the given index
     pub fn replace_with_value_def(
         &mut self,
-        index: usize,
+        tag_index: usize,
         value_def: ValueDef<'a>,
         region: Region,
     ) {
-        let value_def_index = Index::push_new(&mut self.value_defs, value_def);
-        let tag = EitherIndex::from_right(value_def_index);
-
-        self.tags[index] = tag;
-        self.regions[index] = region;
+        // split() converts `EitherIndex<TypeDef<'a>, ValueDef<'a>>` to:
+        // `Result<Index<TypeDef<'a>>, Index<ValueDef<'a>>>`
+        //
+        match self.tags[tag_index].split() {
+            Ok(_type_index) => {
+                self.remove_tag(tag_index);
+                self.push_value_def(value_def, region, &[], &[]);
+            }
+            Err(value_index) => {
+                self.regions[tag_index] = region;
+                self.value_defs[value_index.index()] = value_def;
+            }
+        }
     }
 
     pub fn push_type_def(
@@ -1542,6 +1613,9 @@ pub enum AssignedField<'a, Val> {
     // and in destructuring patterns (e.g. `{ name ? "blah" }`)
     OptionalValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Val>),
 
+    // An ignored field, e.g. `{ _name: "blah" }` or `{ _ : Str }`
+    IgnoredValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Val>),
+
     // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
     LabelOnly(Loc<&'a str>),
 
@@ -1559,7 +1633,9 @@ impl<'a, Val> AssignedField<'a, Val> {
 
         loop {
             match current {
-                Self::RequiredValue(_, _, val) | Self::OptionalValue(_, _, val) => break Some(val),
+                Self::RequiredValue(_, _, val)
+                | Self::OptionalValue(_, _, val)
+                | Self::IgnoredValue(_, _, val) => break Some(val),
                 Self::LabelOnly(_) | Self::Malformed(_) => break None,
                 Self::SpaceBefore(next, _) | Self::SpaceAfter(next, _) => current = *next,
             }
@@ -1568,7 +1644,7 @@ impl<'a, Val> AssignedField<'a, Val> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum RecordBuilderField<'a> {
+pub enum OldRecordBuilderField<'a> {
     // A field with a value, e.g. `{ name: "blah" }`
     Value(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Expr<'a>>),
 
@@ -1584,8 +1660,8 @@ pub enum RecordBuilderField<'a> {
     LabelOnly(Loc<&'a str>),
 
     // We preserve this for the formatter; canonicalization ignores it.
-    SpaceBefore(&'a RecordBuilderField<'a>, &'a [CommentOrNewline<'a>]),
-    SpaceAfter(&'a RecordBuilderField<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceBefore(&'a OldRecordBuilderField<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a OldRecordBuilderField<'a>, &'a [CommentOrNewline<'a>]),
 
     /// A malformed assigned field, which will code gen to a runtime error
     Malformed(&'a str),
@@ -1677,6 +1753,10 @@ pub enum Pattern<'a> {
     },
     FloatLiteral(&'a str),
     StrLiteral(StrLiteral<'a>),
+
+    /// Underscore pattern
+    /// Contains the name of underscore pattern (e.g. "a" is for "_a" in code)
+    /// Empty string is unnamed pattern ("" is for "_" in code)
     Underscore(&'a str),
     SingleQuote(&'a str),
 
@@ -2033,6 +2113,28 @@ pub trait Spaceable<'a> {
     fn before(&'a self, _: &'a [CommentOrNewline<'a>]) -> Self;
     fn after(&'a self, _: &'a [CommentOrNewline<'a>]) -> Self;
 
+    fn maybe_before(self, arena: &'a Bump, spaces: &'a [CommentOrNewline<'a>]) -> Self
+    where
+        Self: Sized + 'a,
+    {
+        if spaces.is_empty() {
+            self
+        } else {
+            arena.alloc(self).before(spaces)
+        }
+    }
+
+    fn maybe_after(self, arena: &'a Bump, spaces: &'a [CommentOrNewline<'a>]) -> Self
+    where
+        Self: Sized + 'a,
+    {
+        if spaces.is_empty() {
+            self
+        } else {
+            arena.alloc(self).after(spaces)
+        }
+    }
+
     fn with_spaces_before(&'a self, spaces: &'a [CommentOrNewline<'a>], region: Region) -> Loc<Self>
     where
         Self: Sized,
@@ -2099,12 +2201,12 @@ impl<'a, Val> Spaceable<'a> for AssignedField<'a, Val> {
     }
 }
 
-impl<'a> Spaceable<'a> for RecordBuilderField<'a> {
+impl<'a> Spaceable<'a> for OldRecordBuilderField<'a> {
     fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        RecordBuilderField::SpaceBefore(self, spaces)
+        OldRecordBuilderField::SpaceBefore(self, spaces)
     }
     fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        RecordBuilderField::SpaceAfter(self, spaces)
+        OldRecordBuilderField::SpaceAfter(self, spaces)
     }
 }
 
@@ -2351,9 +2453,9 @@ pub trait Malformed {
     fn is_malformed(&self) -> bool;
 }
 
-impl<'a> Malformed for Module<'a> {
+impl<'a> Malformed for FullAst<'a> {
     fn is_malformed(&self) -> bool {
-        self.header.is_malformed()
+        self.header.item.is_malformed() || self.defs.is_malformed()
     }
 }
 
@@ -2375,6 +2477,12 @@ impl<'a, T: Malformed> Malformed for Spaces<'a, T> {
     }
 }
 
+impl<'a, T: Malformed> Malformed for SpacesBefore<'a, T> {
+    fn is_malformed(&self) -> bool {
+        self.item.is_malformed()
+    }
+}
+
 impl<'a> Malformed for Expr<'a> {
     fn is_malformed(&self) -> bool {
         use Expr::*;
@@ -2384,6 +2492,7 @@ impl<'a> Malformed for Expr<'a> {
             Num(_) |
             NonBase10Int { .. } |
             AccessorFunction(_) |
+            RecordUpdater(_) |
             Var { .. } |
             Underscore(_) |
             Tag(_) |
@@ -2395,7 +2504,7 @@ impl<'a> Malformed for Expr<'a> {
 
             RecordAccess(inner, _) |
             TupleAccess(inner, _) |
-            TaskAwaitBang(inner) => inner.is_malformed(),
+            TrySuffix { expr: inner, .. } => inner.is_malformed(),
 
             List(items) => items.is_malformed(),
 
@@ -2403,7 +2512,8 @@ impl<'a> Malformed for Expr<'a> {
             Record(items) => items.is_malformed(),
             Tuple(items) => items.is_malformed(),
 
-            RecordBuilder(items) => items.is_malformed(),
+            OldRecordBuilder(items) => items.is_malformed(),
+            RecordBuilder { mapper: map2, fields } => map2.is_malformed() || fields.is_malformed(),
 
             Closure(args, body) => args.iter().any(|arg| arg.is_malformed()) || body.is_malformed(),
             Defs(defs, body) => defs.is_malformed() || body.is_malformed(),
@@ -2425,8 +2535,11 @@ impl<'a> Malformed for Expr<'a> {
             MalformedClosure |
             MalformedSuffixed(..) |
             PrecedenceConflict(_) |
-            MultipleRecordBuilders(_) |
-            UnappliedRecordBuilder(_) => true,
+            MultipleOldRecordBuilders(_) |
+            UnappliedOldRecordBuilder(_) |
+            EmptyRecordBuilder(_) |
+            SingleFieldRecordBuilder(_) |
+            OptionalFieldInRecordBuilder(_, _) => true,
         }
     }
 }
@@ -2491,9 +2604,9 @@ impl<T: Malformed> Malformed for Option<T> {
 impl<'a, T: Malformed> Malformed for AssignedField<'a, T> {
     fn is_malformed(&self) -> bool {
         match self {
-            AssignedField::RequiredValue(_, _, val) | AssignedField::OptionalValue(_, _, val) => {
-                val.is_malformed()
-            }
+            AssignedField::RequiredValue(_, _, val)
+            | AssignedField::OptionalValue(_, _, val)
+            | AssignedField::IgnoredValue(_, _, val) => val.is_malformed(),
             AssignedField::LabelOnly(_) => false,
             AssignedField::SpaceBefore(field, _) | AssignedField::SpaceAfter(field, _) => {
                 field.is_malformed()
@@ -2503,15 +2616,15 @@ impl<'a, T: Malformed> Malformed for AssignedField<'a, T> {
     }
 }
 
-impl<'a> Malformed for RecordBuilderField<'a> {
+impl<'a> Malformed for OldRecordBuilderField<'a> {
     fn is_malformed(&self) -> bool {
         match self {
-            RecordBuilderField::Value(_, _, expr)
-            | RecordBuilderField::ApplyValue(_, _, _, expr) => expr.is_malformed(),
-            RecordBuilderField::LabelOnly(_) => false,
-            RecordBuilderField::SpaceBefore(field, _)
-            | RecordBuilderField::SpaceAfter(field, _) => field.is_malformed(),
-            RecordBuilderField::Malformed(_) => true,
+            OldRecordBuilderField::Value(_, _, expr)
+            | OldRecordBuilderField::ApplyValue(_, _, _, expr) => expr.is_malformed(),
+            OldRecordBuilderField::LabelOnly(_) => false,
+            OldRecordBuilderField::SpaceBefore(field, _)
+            | OldRecordBuilderField::SpaceAfter(field, _) => field.is_malformed(),
+            OldRecordBuilderField::Malformed(_) => true,
         }
     }
 }
@@ -2640,7 +2753,7 @@ impl<'a> Malformed for ValueDef<'a> {
             ValueDef::AnnotatedBody {
                 ann_pattern,
                 ann_type,
-                comment: _,
+                lines_between: _,
                 body_pattern,
                 body_expr,
             } => {

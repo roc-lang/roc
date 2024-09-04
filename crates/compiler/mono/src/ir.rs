@@ -396,6 +396,16 @@ impl<'a> Proc<'a> {
         w.push(b'\n');
         String::from_utf8(w).unwrap()
     }
+
+    pub fn proc_layout(&self, arena: &'a Bump) -> ProcLayout<'a> {
+        let args = Vec::from_iter_in(self.args.iter().map(|(a, _)| *a), arena);
+
+        ProcLayout {
+            arguments: args.into_bump_slice(),
+            result: self.ret_layout,
+            niche: Niche::NONE,
+        }
+    }
 }
 
 /// A host-exposed function must be specialized; it's a seed for subsequent specializations
@@ -2739,7 +2749,18 @@ fn from_can_let<'a>(
     let (mono_pattern, assignments) =
         match from_can_pattern(env, procs, layout_cache, &def.loc_pattern.value) {
             Ok(v) => v,
-            Err(_) => todo!(),
+            Err(_) => {
+                eprintln!(indoc::indoc! {"
+                    Error:
+                        This can happen if you redefine a variable in the repl, for example:
+
+                            x = 1
+                            x = 2
+
+                        Roc does not allow this yet.
+                "});
+                std::process::exit(1);
+            }
         };
 
     // convert the continuation
@@ -2849,7 +2870,6 @@ fn pattern_to_when(
     body: Loc<roc_can::expr::Expr>,
 ) -> (Symbol, Loc<roc_can::expr::Expr>) {
     use roc_can::expr::Expr::*;
-    use roc_can::expr::{WhenBranch, WhenBranchPattern};
     use roc_can::pattern::Pattern::{self, *};
 
     match &pattern.value {
@@ -2867,7 +2887,7 @@ fn pattern_to_when(
             (*new_symbol, Loc::at_zero(RuntimeError(error)))
         }
 
-        As(_, _) => todo!("as bindings are not supported yet"),
+        As(pattern, symbol) => pattern_to_when_help(pattern_var, pattern, body_var, body, *symbol),
 
         UnsupportedPattern(region) => {
             // create the runtime error here, instead of delegating to When.
@@ -2894,28 +2914,7 @@ fn pattern_to_when(
         | TupleDestructure { .. }
         | UnwrappedOpaque { .. } => {
             let symbol = env.unique_symbol();
-
-            let wrapped_body = When {
-                cond_var: pattern_var,
-                expr_var: body_var,
-                region: Region::zero(),
-                loc_cond: Box::new(Loc::at_zero(Var(symbol, pattern_var))),
-                branches: vec![WhenBranch {
-                    patterns: vec![WhenBranchPattern {
-                        pattern,
-                        degenerate: false,
-                    }],
-                    value: body,
-                    guard: None,
-                    // If this type-checked, it's non-redundant
-                    redundant: RedundantMark::known_non_redundant(),
-                }],
-                branches_cond_var: pattern_var,
-                // If this type-checked, it's exhaustive
-                exhaustive: ExhaustiveMark::known_exhaustive(),
-            };
-
-            (symbol, Loc::at_zero(wrapped_body))
+            pattern_to_when_help(pattern_var, &pattern, body_var, body, symbol)
         }
 
         Pattern::List { .. } => todo!(),
@@ -2937,6 +2936,38 @@ fn pattern_to_when(
             )
         }
     }
+}
+
+fn pattern_to_when_help(
+    pattern_var: Variable,
+    pattern: &Loc<roc_can::pattern::Pattern>,
+    body_var: Variable,
+    body: Loc<roc_can::expr::Expr>,
+    symbol: Symbol,
+) -> (Symbol, Loc<roc_can::expr::Expr>) {
+    use roc_can::expr::{Expr, WhenBranch, WhenBranchPattern};
+
+    let wrapped_body = Expr::When {
+        cond_var: pattern_var,
+        expr_var: body_var,
+        region: Region::zero(),
+        loc_cond: Box::new(Loc::at_zero(Expr::Var(symbol, pattern_var))),
+        branches: vec![WhenBranch {
+            patterns: vec![WhenBranchPattern {
+                pattern: pattern.to_owned(),
+                degenerate: false,
+            }],
+            value: body,
+            guard: None,
+            // If this type-checked, it's non-redundant
+            redundant: RedundantMark::known_non_redundant(),
+        }],
+        branches_cond_var: pattern_var,
+        // If this type-checked, it's exhaustive
+        exhaustive: ExhaustiveMark::known_exhaustive(),
+    };
+
+    (symbol, Loc::at_zero(wrapped_body))
 }
 
 fn specialize_suspended<'a>(
@@ -4422,6 +4453,15 @@ pub fn with_hole<'a>(
 
             specialize_naked_symbol(env, variable, procs, layout_cache, assigned, hole, symbol)
         }
+        ParamsVar { .. } => {
+            internal_error!("ParamsVar should've been lowered to Var")
+        }
+        ImportParams(_, _, Some((_, value))) => {
+            with_hole(env, *value, variable, procs, layout_cache, assigned, hole)
+        }
+        ImportParams(_, _, None) => {
+            internal_error!("Missing module params should've been dropped by now");
+        }
         AbilityMember(member, specialization_id, specialization_var) => {
             let specialization_symbol = late_resolve_ability_specialization(
                 env,
@@ -5791,42 +5831,10 @@ pub fn with_hole<'a>(
 
             use LowLevel::*;
             match op {
-                ListMap => {
-                    debug_assert_eq!(arg_symbols.len(), 2);
-                    let xs = arg_symbols[0];
-                    match_on_closure_argument!(ListMap, [xs])
-                }
                 ListSortWith => {
                     debug_assert_eq!(arg_symbols.len(), 2);
                     let xs = arg_symbols[0];
                     match_on_closure_argument!(ListSortWith, [xs])
-                }
-                ListMap2 => {
-                    debug_assert_eq!(arg_symbols.len(), 3);
-
-                    let xs = arg_symbols[0];
-                    let ys = arg_symbols[1];
-
-                    match_on_closure_argument!(ListMap2, [xs, ys])
-                }
-                ListMap3 => {
-                    debug_assert_eq!(arg_symbols.len(), 4);
-
-                    let xs = arg_symbols[0];
-                    let ys = arg_symbols[1];
-                    let zs = arg_symbols[2];
-
-                    match_on_closure_argument!(ListMap3, [xs, ys, zs])
-                }
-                ListMap4 => {
-                    debug_assert_eq!(arg_symbols.len(), 5);
-
-                    let xs = arg_symbols[0];
-                    let ys = arg_symbols[1];
-                    let zs = arg_symbols[2];
-                    let ws = arg_symbols[3];
-
-                    match_on_closure_argument!(ListMap4, [xs, ys, zs, ws])
                 }
                 BoxExpr => {
                     debug_assert_eq!(arg_symbols.len(), 1);
@@ -6151,7 +6159,7 @@ fn late_resolve_ability_specialization(
             member,
             specialization_var,
         )
-        .expect("Ability specialization is unknown - code generation cannot proceed!");
+        .expect("Ability specialization is unknown. Tip: check out <https://roc.zulipchat.com/#narrow/stream/231634-beginners/topic/Non-Functions.20in.20Abilities/near/456068617>");
 
         match specialization {
             Resolved::Specialization(symbol) => symbol,

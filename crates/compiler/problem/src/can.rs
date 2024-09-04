@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use roc_collections::all::MutSet;
 use roc_module::called_via::BinOp;
 use roc_module::ident::{Ident, Lowercase, ModuleName, TagName};
-use roc_module::symbol::{ModuleId, ScopeModuleSource, Symbol};
+use roc_module::symbol::{ModuleId, Symbol};
 use roc_parse::ast::Base;
 use roc_parse::pattern::PatternType;
 use roc_region::all::{Loc, Region};
@@ -39,7 +39,6 @@ pub enum Problem {
     UnusedImport(Symbol, Region),
     UnusedModuleImport(ModuleId, Region),
     ExposedButNotDefined(Symbol),
-    UnknownGeneratesWith(Loc<Ident>),
     ImportNameConflict {
         name: ModuleName,
         is_alias: bool,
@@ -54,6 +53,7 @@ pub enum Problem {
         new_symbol: Symbol,
         existing_symbol_region: Region,
     },
+    DeprecatedBackpassing(Region),
     /// First symbol is the name of the closure with that argument
     /// Bool is whether the closure is anonymous
     /// Second symbol is the name of the argument that is unused
@@ -238,6 +238,13 @@ pub enum Problem {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeModuleSource {
+    Builtin,
+    Current,
+    Import(Region),
+}
+
 impl Problem {
     pub fn severity(&self) -> Severity {
         use Severity::{Fatal, RuntimeError, Warning};
@@ -250,8 +257,8 @@ impl Problem {
             Problem::ExplicitBuiltinImport(_, _) => Warning,
             Problem::ExplicitBuiltinTypeImport(_, _) => Warning,
             Problem::ImportShadowsSymbol { .. } => RuntimeError,
+            Problem::DeprecatedBackpassing(_) => Warning,
             Problem::ExposedButNotDefined(_) => RuntimeError,
-            Problem::UnknownGeneratesWith(_) => RuntimeError,
             Problem::UnusedArgument(_, _, _, _) => Warning,
             Problem::UnusedBranchDef(_, _) => Warning,
             Problem::PrecedenceProblem(_) => RuntimeError,
@@ -333,7 +340,7 @@ impl Problem {
             | Problem::ExplicitBuiltinImport(_, region)
             | Problem::ExplicitBuiltinTypeImport(_, region)
             | Problem::ImportShadowsSymbol { region, .. }
-            | Problem::UnknownGeneratesWith(Loc { region, .. })
+            | Problem::DeprecatedBackpassing(region)
             | Problem::UnusedArgument(_, _, _, region)
             | Problem::UnusedBranchDef(_, region)
             | Problem::PrecedenceProblem(PrecedenceProblem::BothNonAssociative(region, _, _))
@@ -412,8 +419,14 @@ impl Problem {
             | Problem::RuntimeError(RuntimeError::EmptySingleQuote(region))
             | Problem::RuntimeError(RuntimeError::MultipleCharsInSingleQuote(region))
             | Problem::RuntimeError(RuntimeError::DegenerateBranch(region))
-            | Problem::RuntimeError(RuntimeError::MultipleRecordBuilders(region))
-            | Problem::RuntimeError(RuntimeError::UnappliedRecordBuilder(region))
+            | Problem::RuntimeError(RuntimeError::MultipleOldRecordBuilders(region))
+            | Problem::RuntimeError(RuntimeError::UnappliedOldRecordBuilder(region))
+            | Problem::RuntimeError(RuntimeError::EmptyRecordBuilder(region))
+            | Problem::RuntimeError(RuntimeError::SingleFieldRecordBuilder(region))
+            | Problem::RuntimeError(RuntimeError::OptionalFieldInRecordBuilder {
+                record: _,
+                field: region,
+            })
             | Problem::RuntimeError(RuntimeError::ReadIngestedFileError { region, .. })
             | Problem::InvalidAliasRigid { region, .. }
             | Problem::InvalidInterpolation(region)
@@ -663,8 +676,15 @@ pub enum RuntimeError {
 
     DegenerateBranch(Region),
 
-    MultipleRecordBuilders(Region),
-    UnappliedRecordBuilder(Region),
+    MultipleOldRecordBuilders(Region),
+    UnappliedOldRecordBuilder(Region),
+
+    EmptyRecordBuilder(Region),
+    SingleFieldRecordBuilder(Region),
+    OptionalFieldInRecordBuilder {
+        record: Region,
+        field: Region,
+    },
 
     MalformedSuffixed(Region),
 }
@@ -709,8 +729,14 @@ impl RuntimeError {
             | RuntimeError::DegenerateBranch(region)
             | RuntimeError::InvalidInterpolation(region)
             | RuntimeError::InvalidHexadecimal(region)
-            | RuntimeError::MultipleRecordBuilders(region)
-            | RuntimeError::UnappliedRecordBuilder(region)
+            | RuntimeError::MultipleOldRecordBuilders(region)
+            | RuntimeError::UnappliedOldRecordBuilder(region)
+            | RuntimeError::EmptyRecordBuilder(region)
+            | RuntimeError::SingleFieldRecordBuilder(region)
+            | RuntimeError::OptionalFieldInRecordBuilder {
+                record: _,
+                field: region,
+            }
             | RuntimeError::ReadIngestedFileError { region, .. } => *region,
             RuntimeError::InvalidUnicodeCodePt(region) => *region,
             RuntimeError::UnresolvedTypeVar | RuntimeError::ErroneousType => Region::zero(),

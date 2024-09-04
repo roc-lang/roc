@@ -1027,7 +1027,7 @@ impl<'a> UnionLayout<'a> {
         tags.iter()
             .map(|field_layouts| LayoutRepr::struct_(field_layouts).alignment_bytes(interner))
             .max()
-            .unwrap_or(0)
+            .unwrap_or(1)
     }
 
     pub fn allocation_alignment_bytes<I>(&self, interner: &I) -> u32
@@ -1196,8 +1196,8 @@ impl Discriminant {
         }
     }
 
-    pub const fn alignment_bytes(&self) -> u32 {
-        self.stack_size()
+    pub fn alignment_bytes(&self) -> u32 {
+        self.stack_size().max(1)
     }
 
     pub const fn layout(&self) -> InLayout<'static> {
@@ -2381,9 +2381,9 @@ impl<'a, 'b> Env<'a, 'b> {
     }
 }
 
-pub const fn round_up_to_alignment(width: u32, alignment: u32) -> u32 {
+pub fn round_up_to_alignment(width: u32, alignment: u32) -> u32 {
     match alignment {
-        0 => width,
+        0 => panic!("Alignment invalid: Got 0, but alignment must be at least 1"),
         1 => width,
         _ => {
             if width % alignment > 0 {
@@ -2770,7 +2770,7 @@ impl<'a> LayoutRepr<'a> {
                 .iter()
                 .map(|x| interner.get_repr(*x).alignment_bytes(interner))
                 .max()
-                .unwrap_or(0),
+                .unwrap_or(1),
 
             Union(variant) => {
                 use UnionLayout::*;
@@ -3362,32 +3362,36 @@ fn layout_from_flat_type<'a>(
                 }
             }
 
-            sortables.sort_by(|(label1, layout1), (label2, layout2)| {
-                cmp_fields(&env.cache.interner, label1, *layout1, label2, *layout2)
-            });
-
-            let ordered_field_names = Vec::from_iter_in(
-                sortables
-                    .iter()
-                    .map(|(label, _)| &*arena.alloc_str(label.as_str())),
-                arena,
-            )
-            .into_bump_slice();
-            let semantic = SemanticRepr::record(ordered_field_names);
-
-            let repr = if sortables.len() == 1 {
-                // If the record has only one field that isn't zero-sized,
-                // unwrap it.
-                let inner_repr = sortables.pop().unwrap().1;
-                inner_repr.newtype()
+            if sortables.is_empty() {
+                Cacheable(Ok(Layout::UNIT), criteria)
             } else {
-                let layouts = Vec::from_iter_in(sortables.into_iter().map(|t| t.1), arena);
-                LayoutRepr::Struct(layouts.into_bump_slice()).direct()
-            };
+                sortables.sort_by(|(label1, layout1), (label2, layout2)| {
+                    cmp_fields(&env.cache.interner, label1, *layout1, label2, *layout2)
+                });
 
-            let result = Ok(env.cache.put_in(Layout { repr, semantic }));
+                let ordered_field_names = Vec::from_iter_in(
+                    sortables
+                        .iter()
+                        .map(|(label, _)| &*arena.alloc_str(label.as_str())),
+                    arena,
+                )
+                .into_bump_slice();
+                let semantic = SemanticRepr::record(ordered_field_names);
 
-            Cacheable(result, criteria)
+                let repr = if sortables.len() == 1 {
+                    // If the record has only one field that isn't zero-sized,
+                    // unwrap it.
+                    let inner_repr = sortables.pop().unwrap().1;
+                    inner_repr.newtype()
+                } else {
+                    let layouts = Vec::from_iter_in(sortables.into_iter().map(|t| t.1), arena);
+                    LayoutRepr::struct_(layouts.into_bump_slice()).direct()
+                };
+
+                let result = Ok(env.cache.put_in(Layout { repr, semantic }));
+
+                Cacheable(result, criteria)
+            }
         }
         Tuple(elems, ext_var) => {
             let mut criteria = CACHEABLE;

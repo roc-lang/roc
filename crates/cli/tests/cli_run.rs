@@ -10,8 +10,8 @@ extern crate roc_module;
 #[cfg(test)]
 mod cli_run {
     use cli_utils::helpers::{
-        extract_valgrind_errors, file_path_from_root, fixture_file, fixtures_dir, has_error,
-        known_bad_file, run_cmd, run_roc, run_with_valgrind, Out, ValgrindError,
+        cli_testing_dir, extract_valgrind_errors, file_path_from_root, fixture_file, fixtures_dir,
+        has_error, known_bad_file, run_cmd, run_roc, run_with_valgrind, Out, ValgrindError,
         ValgrindErrorXWhat,
     };
     use const_format::concatcp;
@@ -23,6 +23,7 @@ mod cli_run {
     use serial_test::serial;
     use std::iter;
     use std::path::Path;
+    use std::process::ExitStatus;
 
     #[cfg(all(unix, not(target_os = "macos")))]
     const ALLOW_VALGRIND: bool = true;
@@ -79,15 +80,17 @@ mod cli_run {
     #[derive(Debug, PartialEq, Eq)]
     enum Arg<'a> {
         ExamplePath(&'a str),
+        // allow because we may need PlainText in the future
+        #[allow(dead_code)]
         PlainText(&'a str),
     }
 
     fn check_compile_error(file: &Path, flags: &[&str], expected: &str) {
-        let compile_out = run_roc(
-            [CMD_CHECK, file.to_str().unwrap()].iter().chain(flags),
-            &[],
-            &[],
-        );
+        check_compile_error_with(CMD_CHECK, file, flags, expected);
+    }
+
+    fn check_compile_error_with(cmd: &str, file: &Path, flags: &[&str], expected: &str) {
+        let compile_out = run_roc([cmd, file.to_str().unwrap()].iter().chain(flags), &[], &[]);
         let err = compile_out.stdout.trim();
         let err = strip_colors(err);
 
@@ -102,6 +105,11 @@ mod cli_run {
         let err = err.replace('\r', "");
 
         assert_multiline_str_eq!(err.as_str(), expected);
+    }
+
+    fn assert_valid_roc_check_status(status: ExitStatus) {
+        // 0 means no errors or warnings, 2 means just warnings
+        assert!(status.code().is_some_and(|code| code == 0 || code == 2))
     }
 
     fn check_format_check_as_expected(file: &Path, expects_success_exit_code: bool) {
@@ -541,16 +549,6 @@ mod cli_run {
     }
 
     #[test]
-    fn platform_switching_swift() {
-        test_roc_app_slim(
-            "examples/platform-switching",
-            "rocLovesSwift.roc",
-            "Roc <3 Swift!\n",
-            UseValgrind::Yes,
-        )
-    }
-
-    #[test]
     fn expects_dev_and_test() {
         // these are in the same test function so we don't have to worry about race conditions
         // on the building of the platform
@@ -721,6 +719,192 @@ mod cli_run {
 
     #[test]
     #[cfg_attr(windows, ignore)]
+    fn platform_requires_pkg() {
+        test_roc_app_slim(
+            "crates/cli/tests/platform_requires_pkg",
+            "app.roc",
+            "from app from package",
+            UseValgrind::No,
+        )
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn module_params() {
+        test_roc_app(
+            "crates/cli/tests/module_params",
+            "app.roc",
+            &[],
+            &[],
+            &[],
+            indoc!(
+                r#"
+                App1.baseUrl: https://api.example.com/one
+                App2.baseUrl: http://api.example.com/two
+                App3.baseUrl: https://api.example.com/three
+                App1.getUser 1: https://api.example.com/one/users/1
+                App2.getUser 2: http://api.example.com/two/users/2
+                App3.getUser 3: https://api.example.com/three/users/3
+                App1.getPost 1: https://api.example.com/one/posts/1
+                App2.getPost 2: http://api.example.com/two/posts/2
+                App3.getPost 3: https://api.example.com/three/posts/3
+                App1.getPosts [1, 2]: ["https://api.example.com/one/posts/1", "https://api.example.com/one/posts/2"]
+                App2.getPosts [3, 4]: ["http://api.example.com/two/posts/3", "http://api.example.com/two/posts/4"]
+                App2.getPosts [5, 6]: ["http://api.example.com/two/posts/5", "http://api.example.com/two/posts/6"]
+                App1.getPostComments 1: https://api.example.com/one/posts/1/comments
+                App2.getPostComments 2: http://api.example.com/two/posts/2/comments
+                App2.getPostComments 3: http://api.example.com/two/posts/3/comments
+                App1.getCompanies [1, 2]: ["https://api.example.com/one/companies/1", "https://api.example.com/one/companies/2"]
+                App2.getCompanies [3, 4]: ["http://api.example.com/two/companies/3", "http://api.example.com/two/companies/4"]
+                App2.getCompanies [5, 6]: ["http://api.example.com/two/companies/5", "http://api.example.com/two/companies/6"]
+                App1.getPostAliased 1: https://api.example.com/one/posts/1
+                App2.getPostAliased 2: http://api.example.com/two/posts/2
+                App3.getPostAliased 3: https://api.example.com/three/posts/3
+                App1.baseUrlAliased: https://api.example.com/one
+                App2.baseUrlAliased: http://api.example.com/two
+                App3.baseUrlAliased: https://api.example.com/three
+                App1.getUserSafe 1: https://api.example.com/one/users/1
+                Prod.getUserSafe 2: http://api.example.com/prod_1/users/2?safe=true
+                usersApp1: ["https://api.example.com/one/users/1", "https://api.example.com/one/users/2", "https://api.example.com/one/users/3"]
+                getUserApp3Nested 3: https://api.example.com/three/users/3
+                usersApp3Passed: ["https://api.example.com/three/users/1", "https://api.example.com/three/users/2", "https://api.example.com/three/users/3"]
+                "#
+            ),
+            UseValgrind::No,
+            TestCliCommands::Run,
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn module_params_arity_mismatch() {
+        check_compile_error_with(
+            CMD_DEV,
+            &cli_testing_dir("/module_params/arity_mismatch.roc"),
+            &[],
+            indoc!(
+                r#"
+                ── TOO MANY ARGS in tests/module_params/arity_mismatch.roc ─────────────────────
+
+                The getUser function expects 1 argument, but it got 2 instead:
+
+                12│      $(Api.getUser 1 2)
+                           ^^^^^^^^^^^
+
+                Are there any missing commas? Or missing parentheses?
+
+
+                ── TOO MANY ARGS in tests/module_params/arity_mismatch.roc ─────────────────────
+
+                This value is not a function, but it was given 1 argument:
+
+                13│      $(Api.baseUrl 1)
+                           ^^^^^^^^^^^
+
+                Are there any missing commas? Or missing parentheses?
+
+
+                ── TOO FEW ARGS in tests/module_params/arity_mismatch.roc ──────────────────────
+
+                The getPostComment function expects 2 arguments, but it got only 1:
+
+                16│      $(Api.getPostComment 1)
+                           ^^^^^^^^^^^^^^^^^^
+
+                Roc does not allow functions to be partially applied. Use a closure to
+                make partial application explicit.
+
+                ────────────────────────────────────────────────────────────────────────────────
+
+                3 errors and 0 warnings found in <ignored for test> ms."#
+            ),
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn module_params_unexpected_fn() {
+        check_compile_error_with(
+            CMD_DEV,
+            &cli_testing_dir("/module_params/unexpected_fn.roc"),
+            &[],
+            indoc!(
+                r#"
+                ── TYPE MISMATCH in tests/module_params/unexpected_fn.roc ──────────────────────
+
+                This argument to this string interpolation has an unexpected type:
+
+                11│      $(Api.getPost)
+                           ^^^^^^^^^^^
+
+                The argument is an anonymous function of type:
+
+                    U32 -> Str
+
+                But this string interpolation needs its argument to be:
+
+                    Str
+
+                ────────────────────────────────────────────────────────────────────────────────
+
+                1 error and 0 warnings found in <ignored for test> ms."#
+            ),
+        )
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn module_params_bad_ann() {
+        check_compile_error_with(
+            CMD_DEV,
+            &cli_testing_dir("/module_params/bad_ann.roc"),
+            &[],
+            indoc!(
+                r#"
+                ── TYPE MISMATCH in tests/module_params/BadAnn.roc ─────────────────────────────
+
+                Something is off with the body of the fnAnnotatedAsValue definition:
+
+                3│   fnAnnotatedAsValue : Str
+                4│>  fnAnnotatedAsValue = /postId, commentId ->
+                5│>      "/posts/$(postId)/comments/$(Num.toStr commentId)"
+
+                The body is an anonymous function of type:
+
+                    Str, Num * -> Str
+
+                But the type annotation on fnAnnotatedAsValue says it should be:
+
+                    Str
+
+
+                ── TYPE MISMATCH in tests/module_params/BadAnn.roc ─────────────────────────────
+
+                Something is off with the body of the missingArg definition:
+
+                7│   missingArg : Str -> Str
+                8│>  missingArg = /postId, _ ->
+                9│>      "/posts/$(postId)/comments"
+
+                The body is an anonymous function of type:
+
+                    (Str, ? -> Str)
+
+                But the type annotation on missingArg says it should be:
+
+                    (Str -> Str)
+
+                Tip: It looks like it takes too many arguments. I'm seeing 1 extra.
+
+                ────────────────────────────────────────────────────────────────────────────────
+
+                2 errors and 1 warning found in <ignored for test> ms."#
+            ),
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
     fn transitive_expects() {
         test_roc_expect(
             "crates/cli/tests/expects_transitive",
@@ -784,11 +968,6 @@ mod cli_run {
     }
 
     #[test]
-    fn hello_gui() {
-        test_roc_app_slim("examples/gui", "hello-guiBROKEN.roc", "", UseValgrind::No)
-    }
-
-    #[test]
     #[cfg_attr(windows, ignore)]
     fn quicksort() {
         test_roc_app_slim(
@@ -799,46 +978,13 @@ mod cli_run {
         )
     }
 
-    #[test]
-    #[ignore = "currently broken in basic-cli platform"]
-    #[cfg_attr(windows, ignore = "missing __udivdi3 and some other symbols")]
-    #[serial(cli_platform)]
-    fn cli_args() {
-        test_roc_app(
-            "examples/cli",
-            "argsBROKEN.roc",
-            &[],
-            &[
-                Arg::PlainText("log"),
-                Arg::PlainText("-b"),
-                Arg::PlainText("3"),
-                Arg::PlainText("--num"),
-                Arg::PlainText("81"),
-            ],
-            &[],
-            "4\n",
-            UseValgrind::No,
-            TestCliCommands::Run,
-        )
-    }
-
-    // TODO: remove in favor of cli_args once mono bugs are resolved in investigation
-    #[test]
-    #[cfg_attr(windows, ignore = "missing __udivdi3 and some other symbols")]
-    #[serial(cli_platform)]
-    fn cli_args_check() {
-        let path = file_path_from_root("crates/cli/tests/cli", "argsBROKEN.roc");
-        let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
-        assert!(out.status.success());
-    }
-
     // TODO: write a new test once mono bugs are resolved in investigation
     #[test]
     #[cfg(not(debug_assertions))] // https://github.com/roc-lang/roc/issues/4806
     fn check_virtual_dom_server() {
         let path = file_path_from_root("examples/virtual-dom-wip", "example-server.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
-        assert!(out.status.success());
+        assert_valid_roc_check_status(out.status);
     }
 
     // TODO: write a new test once mono bugs are resolved in investigation
@@ -847,7 +993,7 @@ mod cli_run {
     fn check_virtual_dom_client() {
         let path = file_path_from_root("examples/virtual-dom-wip", "example-client.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
-        assert!(out.status.success());
+        assert_valid_roc_check_status(out.status);
     }
 
     #[test]
@@ -856,7 +1002,7 @@ mod cli_run {
     fn cli_countdown_check() {
         let path = file_path_from_root("crates/cli/tests/cli", "countdown.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
-        assert!(out.status.success());
+        assert_valid_roc_check_status(out.status);
     }
 
     #[test]
@@ -865,7 +1011,7 @@ mod cli_run {
     fn cli_echo_check() {
         let path = file_path_from_root("crates/cli/tests/cli", "echo.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
-        assert!(out.status.success());
+        assert_valid_roc_check_status(out.status);
     }
 
     #[test]
@@ -874,7 +1020,7 @@ mod cli_run {
     fn cli_file_check() {
         let path = file_path_from_root("crates/cli/tests/cli", "fileBROKEN.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
-        assert!(out.status.success());
+        assert_valid_roc_check_status(out.status);
     }
 
     #[test]
@@ -883,7 +1029,8 @@ mod cli_run {
     fn cli_form_check() {
         let path = file_path_from_root("crates/cli/tests/cli", "form.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
-        assert!(out.status.success());
+        dbg!(out.stdout, out.stderr);
+        assert_valid_roc_check_status(out.status);
     }
 
     #[test]
@@ -892,7 +1039,7 @@ mod cli_run {
     fn cli_http_get_check() {
         let path = file_path_from_root("crates/cli/tests/cli", "http-get.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
-        assert!(out.status.success());
+        assert_valid_roc_check_status(out.status);
     }
 
     #[test]
@@ -926,8 +1073,8 @@ mod cli_run {
         )
     }
 
+    #[ignore = "likely broken because of alias analysis: https://github.com/roc-lang/roc/issues/6544"]
     #[test]
-    #[cfg_attr(any(target_os = "windows", target_os = "linux"), ignore = "Segfault")]
     fn false_interpreter() {
         test_roc_app(
             "examples/cli/false-interpreter",
@@ -939,11 +1086,6 @@ mod cli_run {
             UseValgrind::Yes,
             TestCliCommands::Many,
         )
-    }
-
-    #[test]
-    fn swift_ui() {
-        test_roc_app_slim("examples/swiftui", "main.roc", "", UseValgrind::No)
     }
 
     #[test]
@@ -991,6 +1133,38 @@ mod cli_run {
     #[test]
     #[serial(cli_platform)]
     #[cfg_attr(windows, ignore)]
+    fn combine_tasks_with_record_builder() {
+        test_roc_app(
+            "crates/cli/tests/cli",
+            "combine-tasks.roc",
+            &[],
+            &[],
+            &[],
+            "For multiple tasks: {a: 123, b: \"abc\", c: [123]}\n",
+            UseValgrind::No,
+            TestCliCommands::Run,
+        )
+    }
+
+    #[test]
+    #[serial(cli_platform)]
+    #[cfg_attr(windows, ignore)]
+    fn parse_args_with_record_builder() {
+        test_roc_app(
+            "crates/cli/tests/cli",
+            "parse-args.roc",
+            &[],
+            &[],
+            &[],
+            "Success: {count: 5, doubled: 14, file: \"file.txt\"}\n",
+            UseValgrind::No,
+            TestCliCommands::Run,
+        )
+    }
+
+    #[test]
+    #[serial(cli_platform)]
+    #[cfg_attr(windows, ignore)]
     fn ingested_file_bytes() {
         test_roc_app(
             "crates/cli/tests/cli",
@@ -998,7 +1172,7 @@ mod cli_run {
             &[],
             &[],
             &[],
-            "27101\n",
+            "6239\n",
             UseValgrind::No,
             TestCliCommands::Run,
         )
@@ -1013,7 +1187,7 @@ mod cli_run {
             &[],
             &[],
             &[],
-            "27101\n",
+            "6239\n",
             UseValgrind::No,
             TestCliCommands::Run,
         )
@@ -1053,11 +1227,6 @@ mod cli_run {
 "#,
             UseValgrind::Yes,
         )
-    }
-
-    #[test]
-    fn inspect_gui() {
-        test_roc_app_slim("examples", "inspect-gui.roc", "", UseValgrind::No)
     }
 
     // TODO not sure if this cfg should still be here: #[cfg(not(debug_assertions))]
@@ -1495,9 +1664,9 @@ mod cli_run {
 
                 Something is off with the body of the main definition:
 
-                6│  main : Str -> Task {} []
-                7│  main = /_ ->
-                8│      "this is a string, not a Task {} [] function like the platform expects."
+                3│  main : Str -> Task {} []
+                4│  main = /_ ->
+                5│      "this is a string, not a Task {} [] function like the platform expects."
                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 The body is a string of type:
@@ -1506,12 +1675,10 @@ mod cli_run {
 
                 But the type annotation on main says it should be:
 
-                    Effect.Effect (Result {} [])
+                    Task {} []
 
-                Tip: Type comparisons between an opaque type are only ever equal if
-                both types are the same opaque type. Did you mean to create an opaque
-                type by wrapping it? If I have an opaque type Age := U32 I can create
-                an instance of this opaque type by doing @Age 23.
+                Tip: Add type annotations to functions or values to help you figure
+                this out.
 
                 ────────────────────────────────────────────────────────────────────────────────
 
@@ -1583,30 +1750,6 @@ mod cli_run {
                 ────────────────────────────────────────────────────────────────────────────────
 
                 0 errors and 1 warning found in <ignored for test> ms."#
-            ),
-        );
-    }
-
-    #[test]
-    fn unknown_generates_with() {
-        check_compile_error(
-            &known_bad_file("UnknownGeneratesWith.roc"),
-            &[],
-            indoc!(
-                r#"
-                ── UNKNOWN GENERATES FUNCTION in tests/known_bad/UnknownGeneratesWith.roc ──────
-
-                I don't know how to generate the foobar function.
-
-                4│      generates Effect with [after, map, always, foobar]
-                                                                   ^^^^^^
-
-                Only specific functions like `after` and `map` can be generated.Learn
-                more about hosted modules at TODO.
-
-                ────────────────────────────────────────────────────────────────────────────────
-
-                1 error and 0 warnings found in <ignored for test> ms."#
             ),
         );
     }

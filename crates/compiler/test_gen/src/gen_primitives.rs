@@ -1885,22 +1885,22 @@ fn task_always_twice() {
             effectAfter : Effect a, (a -> Effect b) -> Effect b
             effectAfter = \(@Effect thunk), transform -> transform (thunk {})
 
-            Task a err : Effect (Result a err)
+            MyTask a err : Effect (Result a err)
 
-            always : a -> Task a *
+            always : a -> MyTask a *
             always = \x -> effectAlways (Ok x)
 
-            fail : err -> Task * err
+            fail : err -> MyTask * err
             fail = \x -> effectAlways (Err x)
 
-            after : Task a err, (a -> Task b err) -> Task b err
+            after : MyTask a err, (a -> MyTask b err) -> MyTask b err
             after = \task, transform ->
                 effectAfter task \res ->
                     when res is
                         Ok x -> transform x
                         Err e -> fail e
 
-            main : Task {} F64
+            main : MyTask {} F64
             main = after (always "foo") (\_ -> always {})
 
             "#
@@ -1921,17 +1921,17 @@ fn wildcard_rigid() {
 
             Effect a := {} -> a
 
-            Task a err : Effect (Result a err)
+            MyTask a err : Effect (Result a err)
 
             # this failed because of the `*`, but worked with `err`
-            always : a -> Task a *
+            always : a -> MyTask a *
             always = \x ->
                 inner = \{} -> (Ok x)
 
                 @Effect inner
 
 
-            main : Task {} (Frac *)
+            main : MyTask {} (Frac *)
             main = always {}
             "#
         ),
@@ -1950,16 +1950,16 @@ fn alias_of_alias_with_type_arguments() {
 
             Effect a := a
 
-            Task a err : Effect (Result a err)
+            MyTask a err : Effect (Result a err)
 
-            always : a -> Task a *
+            always : a -> MyTask a *
             always = \x ->
                 inner = (Ok x)
 
                 @Effect inner
 
 
-            main : Task {} F64
+            main : MyTask {} F64
             main = always {}
             "#
         ),
@@ -1989,24 +1989,24 @@ fn todo_bad_error_message() {
             effectAfter : Effect a, (a -> Effect b) -> Effect b
             effectAfter = \(@Effect thunk), transform -> transform (thunk {})
 
-            Task a err : Effect (Result a err)
+            MyTask a err : Effect (Result a err)
 
-            always : a -> Task a (Frac *)
+            always : a -> MyTask a (Frac *)
             always = \x -> effectAlways (Ok x)
 
-            # the problem is that this restricts to `Task {} *`
-            fail : err -> Task {} err
+            # the problem is that this restricts to `MyTask {} *`
+            fail : err -> MyTask {} err
             fail = \x -> effectAlways (Err x)
 
-            after : Task a err, (a -> Task b err) -> Task b err
+            after : MyTask a err, (a -> MyTask b err) -> MyTask b err
             after = \task, transform ->
                 effectAfter task \res ->
                     when res is
                         Ok x -> transform x
-                        # but here it must be `forall b. Task b {}`
+                        # but here it must be `forall b. MyTask b {}`
                         Err e -> fail e
 
-            main : Task {} (Frac *)
+            main : MyTask {} (Frac *)
             main =
                 after (always "foo") (\_ -> always {})
             "#
@@ -2471,39 +2471,6 @@ fn expanded_result() {
                 when helper is
                     Ok v -> v
                     Err _ -> 0
-
-            "#
-        ),
-        4,
-        i64
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn backpassing_result() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            app "test" provides [main] to "./platform"
-
-            a : Result I64 Str
-            a = Ok 1
-
-            f = \x -> Ok (x + 1)
-            g = \y -> Ok (y * 2)
-
-            main : I64
-            main =
-                helper =
-                    x <- Result.try a
-                    y <- Result.try (f x)
-                    z <- Result.try (g y)
-
-                    Ok z
-
-                helper
-                    |> Result.withDefault 0
 
             "#
         ),
@@ -4662,5 +4629,69 @@ fn multiple_uses_of_bool_true_tag_union() {
         ),
         true,
         bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn issue_6139_contains() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            buggy = \node, seen ->
+                if List.contains seen node then
+                    seen
+                else
+                    # node = "B"
+                    nextNode = stepNode node
+
+                    # node = "C"
+                    buggy nextNode (List.append seen node)
+
+            stepNode = \node ->
+                when node is
+                    "A" -> "B"
+                    "B" -> "C"
+                    "C" -> "D"
+                    "D" -> "A"
+                    _ -> crash ""
+
+            buggy "A" []
+            "#
+        ),
+        RocList::from_slice(&[
+            RocStr::from("A"),
+            RocStr::from("B"),
+            RocStr::from("C"),
+            RocStr::from("D"),
+        ]),
+        RocList<RocStr>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn issue_6139_prefixes() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            prefixes = \str, soFar ->
+                if Str.isEmpty str then
+                    soFar
+
+                else
+                    graphemes =
+                        Str.toUtf8 str
+                        |> List.map \c -> Str.fromUtf8 [c] |> Result.withDefault ""
+                    remaining = List.dropFirst graphemes 1
+                    next = Str.joinWith remaining ""
+
+                    prefixes next (List.append soFar str)
+
+            prefixes "abc" []
+            "#
+        ),
+        RocList::from_slice(&[RocStr::from("abc"), RocStr::from("bc"), RocStr::from("c")]),
+        RocList<RocStr>
     );
 }
