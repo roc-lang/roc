@@ -433,12 +433,27 @@ mod cli_run {
                 .arg(CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
                 .with_valgrind(ALLOW_VALGRIND)
-                // uses basic-cli release
                 .arg(file_from_root("crates/cli/tests/effects", "inspect-logging.roc").as_path());
 
             let out = runner.run();
             out.assert_clean_success();
             out.assert_stdout_and_stderr_ends_with(expected_ending);
+        }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        fn module_params_pass_task() {
+            build_platform_host();
+
+            let runner = Run::new_roc()
+                .arg(CMD_RUN)
+                .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
+                .with_valgrind(ALLOW_VALGRIND)
+                .arg(file_from_root("crates/cli/tests/module_params", "pass_task.roc").as_path());
+
+            let out = runner.run();
+            out.assert_clean_success();
+            out.assert_stdout_and_stderr_ends_with("Hi, Agus!\n");
         }
     }
 
