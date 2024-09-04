@@ -319,11 +319,11 @@ fn parse_rest_of_list_pattern<'a>(
 
 fn list_element_pattern<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PList<'a>> {
     move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
+        let start = state.pos();
         if state.bytes().starts_with(b"...") {
             return Err((MadeProgress, PList::Rest(start)));
         }
 
-        let start = state.pos();
         match parse_list_rest_pattern(start, arena, state.clone(), min_indent) {
             Err((NoProgress, _)) => {}
             res => return res,
