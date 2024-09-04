@@ -5761,28 +5761,6 @@ mod test_reporting {
     );
 
     test_report!(
-        dbg_without_final_expression,
-        indoc!(
-            r"
-            dbg 42
-            "
-        ),
-        @r#"
-    ── INDENT ENDS AFTER EXPRESSION in tmp/dbg_without_final_expression/Test.roc ───
-
-    I am partway through parsing a dbg statement, but I got stuck here:
-
-    4│      dbg 42
-                  ^
-
-    I was expecting a final expression, like so
-
-        dbg 42
-        "done"
-    "#
-    );
-
-    test_report!(
         expect_without_final_expression,
         indoc!(
             r"
@@ -14515,6 +14493,76 @@ All branches in an `if` must have the same type!
     Roc does not allow functions to be partially applied. Use a closure to
     make partial application explicit.
     "
+    );
+
+    test_report!(
+        dbg_unapplied,
+        indoc!(
+            r"
+            1 + dbg + 2
+            "
+        ),
+    @r"
+    ── UNAPPLIED DBG in /code/proj/Main.roc ────────────────────────────────────────
+
+    This `dbg` doesn't have a value given to it:
+
+    4│      1 + dbg + 2
+                ^^^
+
+    `dbg` must be passed a value to print at the exact place it's used. `dbg`
+    can't be used as a value that's passed around, like functions can be -
+    it must be applied immediately!
+
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+
+    This 2nd argument to + has an unexpected type:
+
+    4│      1 + dbg + 2
+                ^^^
+
+    This `63` value is a:
+
+        {}
+
+    But + needs its 2nd argument to be:
+
+        Num *
+    "
+    );
+
+    test_report!(
+        dbg_overapplied,
+        indoc!(
+            r#"
+            1 + dbg "" "" + 2
+            "#
+        ),
+    @r#"
+    ── OVERAPPLIED DBG in /code/proj/Main.roc ──────────────────────────────────────
+
+    This `dbg` has too many values given to it:
+
+    4│      1 + dbg "" "" + 2
+                    ^^^^^
+
+    `dbg` must be given exactly one value to print.
+
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+
+    This 2nd argument to + has an unexpected type:
+
+    4│      1 + dbg "" "" + 2
+                ^^^^^^^^^
+
+    This `63` value is a:
+
+        {}
+
+    But + needs its 2nd argument to be:
+
+        Num *
+    "#
     );
 
     // TODO: add the following tests after built-in Tasks are added

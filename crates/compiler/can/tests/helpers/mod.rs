@@ -55,6 +55,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     // rules multiple times unnecessarily.
     let loc_expr = desugar::desugar_expr(
         arena,
+        &mut var_store,
         &loc_expr,
         expr_str,
         &mut None,
