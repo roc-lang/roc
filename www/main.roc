@@ -1,4 +1,6 @@
-app [main] { pf: platform "https://github.com/lukewilliamboswell/basic-ssg/releases/download/0.5.0/MlW8VJCTuOFrlKRiW9h-WPOv4_5FqTrqlZZOi5fMqdo.tar.br" }
+app [main] {
+    pf: platform "https://github.com/lukewilliamboswell/basic-ssg/releases/download/0.5.0/MlW8VJCTuOFrlKRiW9h-WPOv4_5FqTrqlZZOi5fMqdo.tar.br",
+}
 
 import pf.SSG
 import pf.Types exposing [Args]
