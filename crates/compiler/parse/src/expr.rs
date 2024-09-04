@@ -452,7 +452,6 @@ fn parse_expr_start<'a>(
                 state = new_state;
                 prev_state = state.clone();
 
-                // todo: @wip move 6 lines below to fn
                 if !expr_state.spaces_after.is_empty() {
                     arg = with_spaces_before(arg, expr_state.spaces_after, arena);
                     expr_state.spaces_after = &[];
@@ -2692,21 +2691,15 @@ fn parse_rest_of_if_expr<'a>(
 
         branches.push((cond, then_branch));
 
-        // todo: @wip inline this
         // try to parse another `if`
         // NOTE this drops spaces between the `else` and the `if`
-        let optional_if = and(
-            backtrackable(space0_e(EIf::IndentIf)),
-            parser::keyword(keyword::IF, EIf::If),
-        );
-
-        match optional_if.parse(arena, state.clone(), min_indent) {
-            Err((_, _)) => break state,
-            Ok((_, _, state)) => {
-                loop_state = state;
+        if let Ok((_, _, state)) = parse_space(EIf::IndentIf, arena, state.clone(), min_indent) {
+            if at_keyword(keyword::IF, &state) {
+                loop_state = state.advance(keyword::IF.len());
                 continue;
             }
         }
+        break state;
     };
 
     let (_, else_branch, state) = parse_block(
