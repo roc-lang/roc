@@ -1209,7 +1209,7 @@ pub fn canonicalize_expr<'a>(
                 output,
             )
         }
-        ast::Expr::Dbg(_, _) => {
+        ast::Expr::Dbg | ast::Expr::DbgStmt(_, _) => {
             internal_error!("Dbg should have been desugared by now")
         }
         ast::Expr::LowLevelDbg((source_location, source), message, continuation) => {
@@ -2488,21 +2488,28 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         | ast::Expr::AccessorFunction(_)
         | ast::Expr::RecordUpdater(_)
         | ast::Expr::Crash
+        | ast::Expr::Dbg
         | ast::Expr::Underscore(_)
         | ast::Expr::MalformedIdent(_, _)
         | ast::Expr::Tag(_)
         | ast::Expr::OpaqueRef(_)
         | ast::Expr::MalformedClosure => true,
         // Newlines are disallowed inside interpolation, and these all require newlines
-        ast::Expr::Dbg(_, _)
+        ast::Expr::DbgStmt(_, _)
         | ast::Expr::LowLevelDbg(_, _, _)
-        | ast::Expr::Defs(_, _)
         | ast::Expr::Expect(_, _)
         | ast::Expr::When(_, _)
         | ast::Expr::Backpassing(_, _, _)
         | ast::Expr::SpaceBefore(_, _)
         | ast::Expr::Str(StrLiteral::Block(_))
         | ast::Expr::SpaceAfter(_, _) => false,
+        // Desugared dbg expression
+        ast::Expr::Defs(_, loc_ret) => match loc_ret.value {
+            ast::Expr::LowLevelDbg(_, _, continuation) => {
+                is_valid_interpolation(&continuation.value)
+            }
+            _ => false,
+        },
         // These can contain subexpressions, so we need to recursively check those
         ast::Expr::Str(StrLiteral::Line(segments)) => {
             segments.iter().all(|segment| match segment {

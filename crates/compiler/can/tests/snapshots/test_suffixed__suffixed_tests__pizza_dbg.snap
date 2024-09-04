@@ -1,0 +1,81 @@
+---
+source: crates/compiler/can/tests/test_suffixed.rs
+assertion_line: 459
+expression: snapshot
+---
+Defs {
+    tags: [
+        Index(2147483648),
+    ],
+    regions: [
+        @0-19,
+    ],
+    space_before: [
+        Slice(start = 0, length = 0),
+    ],
+    space_after: [
+        Slice(start = 0, length = 1),
+    ],
+    spaces: [
+        Newline,
+    ],
+    type_defs: [],
+    value_defs: [
+        Body(
+            @0-4 Identifier {
+                ident: "main",
+            },
+            @11-19 Defs(
+                Defs {
+                    tags: [
+                        Index(2147483648),
+                    ],
+                    regions: [
+                        @11-12,
+                    ],
+                    space_before: [
+                        Slice(start = 0, length = 0),
+                    ],
+                    space_after: [
+                        Slice(start = 0, length = 0),
+                    ],
+                    spaces: [],
+                    type_defs: [],
+                    value_defs: [
+                        Body(
+                            @11-12 Identifier {
+                                ident: "63",
+                            },
+                            @11-12 Num(
+                                "1",
+                            ),
+                        ),
+                    ],
+                },
+                @11-19 LowLevelDbg(
+                    (
+                        "test.roc:2",
+                        " ",
+                    ),
+                    @11-12 Apply(
+                        @11-12 Var {
+                            module_name: "Inspect",
+                            ident: "toStr",
+                        },
+                        [
+                            @11-12 Var {
+                                module_name: "",
+                                ident: "63",
+                            },
+                        ],
+                        Space,
+                    ),
+                    @11-12 Var {
+                        module_name: "",
+                        ident: "63",
+                    },
+                ),
+            ),
+        ),
+    ],
+}
