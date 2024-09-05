@@ -2491,18 +2491,18 @@ mod when {
             if state.bytes().first() == Some(&b'|') {
                 state.advance_mut(1);
 
-                let (_, spaces_before, next_state) = space0_e(EWhen::IndentPattern)
-                    .parse(arena, state, pattern_indent)
-                    .map_err(|(_, fail)| (MadeProgress, fail))?;
+                let (_, spaces_before, next_state) =
+                    parse_space(EWhen::IndentPattern, arena, state, pattern_indent)
+                        .map_err(|(_, fail)| (MadeProgress, fail))?;
 
                 let pattern_pos = next_state.pos();
                 let (_, pat, next_state) = crate::pattern::loc_pattern_help()
                     .parse(arena, next_state, pattern_indent)
                     .map_err(|(_, fail)| (MadeProgress, EWhen::Pattern(fail, pattern_pos)))?;
 
-                let (_, spaces_after, next_state) = space0_e(EWhen::IndentPattern)
-                    .parse(arena, next_state, pattern_indent)
-                    .map_err(|(_, fail)| (MadeProgress, fail))?;
+                let (_, spaces_after, next_state) =
+                    parse_space(EWhen::IndentPattern, arena, next_state, pattern_indent)
+                        .map_err(|(_, fail)| (MadeProgress, fail))?;
 
                 let pattern = with_spaces(arena, spaces_before, pat, spaces_after);
                 state = next_state;
