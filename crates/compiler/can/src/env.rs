@@ -47,6 +47,9 @@ pub struct Env<'a> {
 
     pub src: &'a str,
 
+    /// Lazily calculated line info. This data is only needed if the code contains calls to `dbg`,
+    /// otherwise we can leave it as `None` and never pay the cost of scanning the source an extra
+    /// time.
     line_info: &'a mut Option<LineInfo>,
 }
 
@@ -227,9 +230,6 @@ impl<'a> Env<'a> {
         self.problems.push(problem)
     }
 
-    /// Lazily calculate line_info only if required. This way it there are no
-    /// `dbg` statements, we never pay the cast of scanning the source an extra
-    /// time.
     pub fn line_info(&mut self) -> &LineInfo {
         if self.line_info.is_none() {
             *self.line_info = Some(LineInfo::new(self.src));
