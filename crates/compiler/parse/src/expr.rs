@@ -2382,7 +2382,7 @@ mod when {
                 .map_err(|(_, fail)| (MadeProgress, fail))?;
 
         // Parse the first "->" and the expression after it.
-        let (_, value, mut state) = parse_branch_result(pattern_indent + 1, arena, state)?;
+        let (_, value, mut state) = parse_branch_result(arena, state)?;
 
         // Record this as the first branch, then optionally parse additional branches.
         let mut branches: Vec<'a, &'a WhenBranch<'a>> = Vec::with_capacity_in(2, arena);
@@ -2402,8 +2402,7 @@ mod when {
             ) {
                 Ok((_, ((indent_column, patterns), guard), m_state)) => {
                     if pattern_indent == indent_column {
-                        let (_, value, next_state) =
-                            parse_branch_result(pattern_indent + 1, arena, m_state)?;
+                        let (_, value, next_state) = parse_branch_result(arena, m_state)?;
 
                         let branch = WhenBranch {
                             patterns: patterns.into_bump_slice(),
@@ -2469,18 +2468,18 @@ mod when {
 
         let pattern_indent = min_indent.max(pattern_indent.unwrap_or(min_indent));
 
-        let (p1, spaces_before, state) = space0_e(EWhen::IndentPattern)
-            .parse(arena, state, pattern_indent)
-            .map_err(|(_, fail)| (NoProgress, fail))?;
+        let (p1, spaces_before, state) =
+            parse_space(EWhen::IndentPattern, arena, state, pattern_indent)
+                .map_err(|(_, fail)| (NoProgress, fail))?;
 
         let pattern_pos = state.pos();
         let (_, pattern, state) = crate::pattern::loc_pattern_help()
             .parse(arena, state, pattern_indent)
             .map_err(|(p2, fail)| (p1.or(p2), EWhen::Pattern(fail, pattern_pos)))?;
 
-        let (_, spaces_after, mut state) = space0_e(EWhen::IndentPattern)
-            .parse(arena, state, pattern_indent)
-            .map_err(|(_, fail)| (MadeProgress, fail))?;
+        let (_, spaces_after, mut state) =
+            parse_space(EWhen::IndentPattern, arena, state, pattern_indent)
+                .map_err(|(_, fail)| (MadeProgress, fail))?;
 
         let first_pattern = with_spaces(arena, spaces_before, pattern, spaces_after);
         let mut patterns = Vec::with_capacity_in(1, arena);
@@ -2546,23 +2545,28 @@ mod when {
     /// Parsing the righthandside of a branch in a when conditional.
     /// Always makes progress because called in the middle of parsing when and does not make sense alone
     fn parse_branch_result<'a>(
-        indent: u32,
         arena: &'a Bump,
         state: State<'a>,
     ) -> ParseResult<'a, Loc<Expr<'a>>, EWhen<'a>> {
+        if !state.bytes().starts_with(b"->") {
+            return Err((MadeProgress, EWhen::Arrow(state.pos())));
+        }
+        let state = state.advance(2);
+
         let options = ExprParseOptions {
             accept_multi_backpassing: true,
             check_for_arrow: true,
         };
-        if state.bytes().starts_with(b"->") {
-            let state = state.advance(2);
-            let parser = block(options, true, EWhen::IndentBranch, EWhen::Branch);
-            match parser.parse(arena, state, indent) {
-                Ok((_, value, state)) => Ok((MadeProgress, value, state)),
-                Err((_, fail)) => Err((MadeProgress, fail)),
-            }
-        } else {
-            Err((MadeProgress, EWhen::Arrow(state.pos())))
+        match parse_block(
+            options,
+            arena,
+            state,
+            true,
+            EWhen::IndentBranch,
+            EWhen::Branch,
+        ) {
+            Ok((_, value, state)) => Ok((MadeProgress, value, state)),
+            Err((_, fail)) => Err((MadeProgress, fail)),
         }
     }
 }
@@ -2686,11 +2690,10 @@ fn parse_rest_of_if_expr<'a>(
         let then_expr = if spaces_after_then.is_empty() {
             then_expr
         } else {
-            let expr = then_expr.value;
-            let expr = if let Expr::SpaceBefore(x, before) = expr {
+            let expr = if let Expr::SpaceBefore(x, before) = then_expr.value {
                 Expr::SpaceBefore(arena.alloc(Expr::SpaceAfter(x, spaces_after_then)), before)
             } else {
-                Expr::SpaceAfter(arena.alloc(expr), spaces_after_then)
+                Expr::SpaceAfter(arena.alloc(then_expr.value), spaces_after_then)
             };
             Loc::at(then_expr.region, expr)
         };
@@ -2713,7 +2716,7 @@ fn parse_rest_of_if_expr<'a>(
         break state;
     };
 
-    let (_, else_branch, state) = parse_block(
+    let (_, else_expr, state) = parse_block(
         options,
         arena,
         state_final_else,
@@ -2722,31 +2725,8 @@ fn parse_rest_of_if_expr<'a>(
         EIf::ElseBranch,
     )?;
 
-    let expr = Expr::If(branches.into_bump_slice(), arena.alloc(else_branch));
+    let expr = Expr::If(branches.into_bump_slice(), arena.alloc(else_expr));
     Ok((MadeProgress, expr, state))
-}
-
-/// Parse a block of statements (parser combinator version of `parse_block`)
-fn block<'a, E>(
-    options: ExprParseOptions,
-    require_indent: bool,
-    indent_problem: fn(Position) -> E,
-    wrap_error: fn(&'a EExpr<'a>, Position) -> E,
-) -> impl Parser<'a, Loc<Expr<'a>>, E>
-where
-    E: 'a + SpaceProblem,
-{
-    (move |arena: &'a Bump, state, _min_indent| {
-        parse_block(
-            options,
-            arena,
-            state,
-            require_indent,
-            indent_problem,
-            wrap_error,
-        )
-    })
-    .trace("block")
 }
 
 /// Parse a block of statements.
