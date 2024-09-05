@@ -2170,7 +2170,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::Backpassing(_, _, _)
         | Expr::BinOps { .. }
         | Expr::Defs(_, _)
-        | Expr::If(_, _)
+        | Expr::If { .. }
         | Expr::When(_, _)
         | Expr::Expect(_, _)
         | Expr::Dbg
@@ -2704,6 +2704,8 @@ fn if_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EIf<
         let (_, _, state) =
             parser::keyword(keyword::IF, EIf::If).parse(arena, state, min_indent)?;
 
+        let if_indent = state.line_indent();
+
         let mut branches = Vec::with_capacity_in(1, arena);
 
         let mut loop_state = state;
@@ -2730,6 +2732,8 @@ fn if_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EIf<
             }
         };
 
+        let else_indent = state_final_else.line_indent();
+
         let (_, else_branch, state) = parse_block(
             options,
             arena,
@@ -2739,7 +2743,11 @@ fn if_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EIf<
             EIf::ElseBranch,
         )?;
 
-        let expr = Expr::If(branches.into_bump_slice(), arena.alloc(else_branch));
+        let expr = Expr::If {
+            if_thens: branches.into_bump_slice(),
+            final_else: arena.alloc(else_branch),
+            indented_else: else_indent > if_indent,
+        };
 
         Ok((MadeProgress, expr, state))
     }

@@ -1341,12 +1341,16 @@ pub fn desugar_expr<'a>(
                 region: loc_expr.region,
             })
         }
-        If(if_thens, final_else_branch) => {
+        If {
+            if_thens,
+            final_else,
+            indented_else,
+        } => {
             // If does not get desugared into `when` so we can give more targeted error messages during type checking.
             let desugared_final_else = &*arena.alloc(desugar_expr(
                 arena,
                 var_store,
-                final_else_branch,
+                final_else,
                 src,
                 line_info,
                 module_path,
@@ -1379,7 +1383,11 @@ pub fn desugar_expr<'a>(
             }
 
             arena.alloc(Loc {
-                value: If(desugared_if_thens.into_bump_slice(), desugared_final_else),
+                value: If {
+                    if_thens: desugared_if_thens.into_bump_slice(),
+                    final_else: desugared_final_else,
+                    indented_else: *indented_else,
+                },
                 region: loc_expr.region,
             })
         }
