@@ -1030,7 +1030,7 @@ pub fn desugar_expr<'a>(
             let desugared_continuation = &*env.arena.alloc(desugar_expr(env, scope, continuation));
 
             env.arena.alloc(Loc {
-                value: *desugar_dbg_stmt(env, scope, desugared_condition, desugared_continuation),
+                value: *desugar_dbg_stmt(env, desugared_condition, desugared_continuation),
                 region: loc_expr.region,
             })
         }
@@ -1307,7 +1307,7 @@ fn desugar_dbg_expr<'a>(
 
     // LowLevelDbg
     let dbg_stmt = env.arena.alloc(Loc {
-        value: *desugar_dbg_stmt(env, scope, tmp_var, tmp_var),
+        value: *desugar_dbg_stmt(env, tmp_var, tmp_var),
         region: outer_region,
     });
 
@@ -1332,7 +1332,6 @@ pub fn desugar_invalid_dbg_expr<'a>(
 /// Desugars a `dbg x` statement into essentially `Inspect.toStr x |> LowLevelDbg`
 fn desugar_dbg_stmt<'a>(
     env: &mut Env<'a>,
-    _scope: &mut Scope,
     condition: &'a Loc<Expr<'a>>,
     continuation: &'a Loc<Expr<'a>>,
 ) -> &'a Expr<'a> {
