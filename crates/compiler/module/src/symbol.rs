@@ -1,10 +1,9 @@
 use crate::ident::{Ident, Lowercase, ModuleName};
-use crate::module_err::{IdentIdNotFoundSnafu, ModuleIdNotFoundSnafu, ModuleResult};
+use crate::module_err::{ModuleError, ModuleResult};
 use roc_collections::{SmallStringInterner, VecMap};
 use roc_error_macros::internal_error;
 use roc_ident::IdentStr;
 use roc_region::all::Region;
-use snafu::OptionExt;
 use std::num::NonZeroU32;
 use std::{fmt, u32};
 
@@ -324,7 +323,7 @@ pub fn get_module_ident_ids<'a>(
 ) -> ModuleResult<&'a IdentIds> {
     all_ident_ids
         .get(module_id)
-        .with_context(|| ModuleIdNotFoundSnafu {
+        .ok_or_else(|| ModuleError::ModuleIdNotFound {
             module_id: format!("{module_id:?}"),
             all_ident_ids: format!("{all_ident_ids:?}"),
         })
@@ -336,9 +335,10 @@ pub fn get_module_ident_ids_mut<'a>(
 ) -> ModuleResult<&'a mut IdentIds> {
     all_ident_ids
         .get_mut(module_id)
-        .with_context(|| ModuleIdNotFoundSnafu {
+        .ok_or_else(|| ModuleError::ModuleIdNotFound {
             module_id: format!("{module_id:?}"),
-            all_ident_ids: "I could not return all_ident_ids here because of borrowing issues.",
+            all_ident_ids: "I could not return all_ident_ids here because of borrowing issues."
+                .into(),
         })
 }
 
@@ -727,7 +727,7 @@ impl IdentIds {
 
     pub fn get_name_str_res(&self, ident_id: IdentId) -> ModuleResult<&str> {
         self.get_name(ident_id)
-            .with_context(|| IdentIdNotFoundSnafu {
+            .ok_or_else(|| ModuleError::IdentIdNotFound {
                 ident_id,
                 ident_ids_str: format!("{self:?}"),
             })
@@ -1666,6 +1666,23 @@ define_builtins! {
         32 INSPECT_TO_INSPECTOR: "toInspector"
         33 INSPECT_TO_STR: "toStr"
     }
+    15 TASK: "Task" => {
+        0 TASK_TASK: "Task" exposed_type=true // the Task.Task opaque type
+        1 TASK_FOREVER: "forever"
+        2 TASK_LOOP: "loop"
+        3 TASK_OK: "ok"
+        4 TASK_ERR: "err"
+        5 TASK_ATTEMPT: "attempt"
+        6 TASK_AWAIT: "await"
+        7 TASK_ON_ERR: "onErr"
+        8 TASK_MAP: "map"
+        9 TASK_MAP_ERR: "mapErr"
+        10 TASK_FROM_RESULT: "fromResult"
+        11 TASK_BATCH: "batch"
+        12 TASK_SEQUENCE: "sequence"
+        13 TASK_FOR_EACH: "forEach"
+        14 TASK_RESULT: "result"
+    }
 
-    num_modules: 15 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
+    num_modules: 16 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
 }

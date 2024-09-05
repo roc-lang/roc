@@ -1129,7 +1129,7 @@ fn link_macos(
         Architecture::Aarch64 => {
             ld_child.wait()?;
 
-            let mut codesign_cmd = Command::new("codesign");
+            let mut codesign_cmd = Command::new("/usr/bin/codesign");
             codesign_cmd.args(["-s", "-", output_path.to_str().unwrap()]);
             debug_print_command(&codesign_cmd);
             let codesign_child = codesign_cmd.spawn()?;

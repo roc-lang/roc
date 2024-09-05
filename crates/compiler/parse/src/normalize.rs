@@ -13,19 +13,18 @@ use crate::{
         TypeDef, TypeHeader, ValueDef, WhenBranch,
     },
     header::{
-        AppHeader, ExposedName, ExposesKeyword, GeneratesKeyword, HostedHeader, ImportsEntry,
-        ImportsKeyword, KeywordItem, ModuleHeader, ModuleName, ModuleParams, PackageEntry,
-        PackageHeader, PackageKeyword, PackageName, PackagesKeyword, PlatformHeader,
-        PlatformKeyword, PlatformRequires, ProvidesKeyword, ProvidesTo, RequiresKeyword, To,
-        ToKeyword, TypedIdent, WithKeyword,
+        AppHeader, ExposedName, ExposesKeyword, HostedHeader, ImportsEntry, ImportsKeyword,
+        KeywordItem, ModuleHeader, ModuleName, ModuleParams, PackageEntry, PackageHeader,
+        PackageKeyword, PackageName, PackagesKeyword, PlatformHeader, PlatformKeyword,
+        PlatformRequires, ProvidesKeyword, ProvidesTo, RequiresKeyword, To, ToKeyword, TypedIdent,
     },
     ident::{BadIdent, UppercaseIdent},
     parser::{
-        EAbility, EClosure, EExpect, EExposes, EExpr, EGenerates, EGeneratesWith, EHeader, EIf,
-        EImport, EImportParams, EImports, EInParens, EList, EPackageEntry, EPackageName, EPackages,
-        EParams, EPattern, EProvides, ERecord, ERequires, EString, EType, ETypeAbilityImpl,
-        ETypeApply, ETypeInParens, ETypeInlineAlias, ETypeRecord, ETypeTagUnion, ETypedIdent,
-        EWhen, PInParens, PList, PRecord, SyntaxError,
+        EAbility, EClosure, EExpect, EExposes, EExpr, EHeader, EIf, EImport, EImportParams,
+        EImports, EInParens, EList, EPackageEntry, EPackageName, EPackages, EParams, EPattern,
+        EProvides, ERecord, ERequires, EString, EType, ETypeAbilityImpl, ETypeApply, ETypeInParens,
+        ETypeInlineAlias, ETypeRecord, ETypeTagUnion, ETypedIdent, EWhen, PInParens, PList,
+        PRecord, SyntaxError,
     },
 };
 
@@ -59,8 +58,6 @@ macro_rules! keywords {
 keywords! {
     ExposesKeyword,
     ImportsKeyword,
-    WithKeyword,
-    GeneratesKeyword,
     PackageKeyword,
     PackagesKeyword,
     RequiresKeyword,
@@ -179,8 +176,6 @@ impl<'a> Normalize<'a> for Header<'a> {
                 name: header.name.normalize(arena),
                 exposes: header.exposes.normalize(arena),
                 imports: header.imports.normalize(arena),
-                generates: header.generates.normalize(arena),
-                generates_with: header.generates_with.normalize(arena),
             }),
         }
     }
@@ -624,7 +619,7 @@ impl<'a> Normalize<'a> for StrLiteral<'a> {
                     new_segments.push(StrSegment::Plaintext(last_text.into_bump_str()));
                 }
 
-                StrLiteral::Line(new_segments.into_bump_slice())
+                normalize_str_line(new_segments)
             }
             StrLiteral::Block(t) => {
                 let mut new_segments = Vec::new_in(arena);
@@ -636,10 +631,20 @@ impl<'a> Normalize<'a> for StrLiteral<'a> {
                     new_segments.push(StrSegment::Plaintext(last_text.into_bump_str()));
                 }
 
-                StrLiteral::Line(new_segments.into_bump_slice())
+                normalize_str_line(new_segments)
             }
         }
     }
+}
+
+fn normalize_str_line<'a>(new_segments: Vec<'a, StrSegment<'a>>) -> StrLiteral<'a> {
+    if new_segments.len() == 1 {
+        if let StrSegment::Plaintext(t) = new_segments[0] {
+            return StrLiteral::PlainLine(t);
+        }
+    }
+
+    StrLiteral::Line(new_segments.into_bump_slice())
 }
 
 fn normalize_str_segments<'a>(
@@ -721,8 +726,12 @@ impl<'a> Normalize<'a> for Expr<'a> {
             Expr::Str(a) => Expr::Str(a.normalize(arena)),
             Expr::RecordAccess(a, b) => Expr::RecordAccess(arena.alloc(a.normalize(arena)), b),
             Expr::AccessorFunction(a) => Expr::AccessorFunction(a),
+            Expr::RecordUpdater(a) => Expr::RecordUpdater(a),
             Expr::TupleAccess(a, b) => Expr::TupleAccess(arena.alloc(a.normalize(arena)), b),
-            Expr::TaskAwaitBang(a) => Expr::TaskAwaitBang(arena.alloc(a.normalize(arena))),
+            Expr::TrySuffix { expr: a, target } => Expr::TrySuffix {
+                expr: arena.alloc(a.normalize(arena)),
+                target,
+            },
             Expr::List(a) => Expr::List(a.normalize(arena)),
             Expr::RecordUpdate { update, fields } => Expr::RecordUpdate {
                 update: arena.alloc(update.normalize(arena)),
@@ -770,7 +779,8 @@ impl<'a> Normalize<'a> for Expr<'a> {
                 arena.alloc(a.normalize(arena)),
                 arena.alloc(b.normalize(arena)),
             ),
-            Expr::Dbg(a, b) => Expr::Dbg(
+            Expr::Dbg => Expr::Dbg,
+            Expr::DbgStmt(a, b) => Expr::DbgStmt(
                 arena.alloc(a.normalize(arena)),
                 arena.alloc(b.normalize(arena)),
             ),
@@ -837,6 +847,7 @@ fn remove_spaces_bad_ident(ident: BadIdent) -> BadIdent {
         BadIdent::WeirdDotAccess(_) => BadIdent::WeirdDotAccess(Position::zero()),
         BadIdent::WeirdDotQualified(_) => BadIdent::WeirdDotQualified(Position::zero()),
         BadIdent::StrayDot(_) => BadIdent::StrayDot(Position::zero()),
+        BadIdent::StrayAmpersand(_) => BadIdent::StrayAmpersand(Position::zero()),
         BadIdent::BadOpaqueRef(_) => BadIdent::BadOpaqueRef(Position::zero()),
         BadIdent::QualifiedTupleAccessor(_) => BadIdent::QualifiedTupleAccessor(Position::zero()),
     }
@@ -1224,6 +1235,7 @@ impl<'a> Normalize<'a> for EPattern<'a> {
             EPattern::IndentEnd(_) => EPattern::IndentEnd(Position::zero()),
             EPattern::AsIndentStart(_) => EPattern::AsIndentStart(Position::zero()),
             EPattern::AccessorFunction(_) => EPattern::AccessorFunction(Position::zero()),
+            EPattern::RecordUpdaterFunction(_) => EPattern::RecordUpdaterFunction(Position::zero()),
         }
     }
 }
@@ -1571,38 +1583,6 @@ impl<'a> Normalize<'a> for EAbility<'a> {
     }
 }
 
-impl<'a> Normalize<'a> for EGeneratesWith {
-    fn normalize(&self, _arena: &'a Bump) -> Self {
-        match self {
-            EGeneratesWith::Open(_) => EGeneratesWith::Open(Position::zero()),
-            EGeneratesWith::With(_) => EGeneratesWith::With(Position::zero()),
-            EGeneratesWith::IndentWith(_) => EGeneratesWith::IndentWith(Position::zero()),
-            EGeneratesWith::IndentListStart(_) => EGeneratesWith::IndentListStart(Position::zero()),
-            EGeneratesWith::IndentListEnd(_) => EGeneratesWith::IndentListEnd(Position::zero()),
-            EGeneratesWith::ListStart(_) => EGeneratesWith::ListStart(Position::zero()),
-            EGeneratesWith::ListEnd(_) => EGeneratesWith::ListEnd(Position::zero()),
-            EGeneratesWith::Identifier(_) => EGeneratesWith::Identifier(Position::zero()),
-            EGeneratesWith::Space(inner_err, _) => {
-                EGeneratesWith::Space(*inner_err, Position::zero())
-            }
-        }
-    }
-}
-
-impl<'a> Normalize<'a> for EGenerates {
-    fn normalize(&self, _arena: &'a Bump) -> Self {
-        match self {
-            EGenerates::Open(_) => EGenerates::Open(Position::zero()),
-            EGenerates::Generates(_) => EGenerates::Generates(Position::zero()),
-            EGenerates::IndentGenerates(_) => EGenerates::IndentGenerates(Position::zero()),
-            EGenerates::Identifier(_) => EGenerates::Identifier(Position::zero()),
-            EGenerates::Space(inner_err, _) => EGenerates::Space(*inner_err, Position::zero()),
-            EGenerates::IndentTypeStart(_) => EGenerates::IndentTypeStart(Position::zero()),
-            EGenerates::IndentTypeEnd(_) => EGenerates::IndentTypeEnd(Position::zero()),
-        }
-    }
-}
-
 impl<'a> Normalize<'a> for EPackages<'a> {
     fn normalize(&self, arena: &'a Bump) -> Self {
         match self {
@@ -1641,12 +1621,6 @@ impl<'a> Normalize<'a> for EHeader<'a> {
             }
             EHeader::Packages(inner_err, _) => {
                 EHeader::Packages(inner_err.normalize(arena), Position::zero())
-            }
-            EHeader::Generates(inner_err, _) => {
-                EHeader::Generates(inner_err.normalize(arena), Position::zero())
-            }
-            EHeader::GeneratesWith(inner_err, _) => {
-                EHeader::GeneratesWith(inner_err.normalize(arena), Position::zero())
             }
             EHeader::Space(inner_err, _) => EHeader::Space(*inner_err, Position::zero()),
             EHeader::Start(_) => EHeader::Start(Position::zero()),

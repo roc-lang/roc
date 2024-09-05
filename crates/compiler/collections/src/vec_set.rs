@@ -17,6 +17,10 @@ impl<T> VecSet<T> {
     pub fn into_vec(self) -> Vec<T> {
         self.elements
     }
+
+    pub fn reserve(&mut self, additional: usize) {
+        self.elements.reserve(additional)
+    }
 }
 
 impl<T: PartialEq> VecSet<T> {

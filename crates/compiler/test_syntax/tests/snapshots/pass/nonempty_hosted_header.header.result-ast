@@ -95,58 +95,6 @@ SpacesBefore {
                     ],
                 },
             },
-            generates: KeywordItem {
-                keyword: Spaces {
-                    before: [
-                        Newline,
-                    ],
-                    item: GeneratesKeyword,
-                    after: [],
-                },
-                item: UppercaseIdent(
-                    "Bar",
-                ),
-            },
-            generates_with: KeywordItem {
-                keyword: Spaces {
-                    before: [],
-                    item: WithKeyword,
-                    after: [
-                        Newline,
-                    ],
-                },
-                item: Collection {
-                    items: [
-                        @239-242 SpaceBefore(
-                            ExposedName(
-                                "map",
-                            ),
-                            [
-                                Newline,
-                            ],
-                        ),
-                        @256-261 SpaceBefore(
-                            ExposedName(
-                                "after",
-                            ),
-                            [
-                                Newline,
-                            ],
-                        ),
-                        @275-279 SpaceBefore(
-                            ExposedName(
-                                "loop",
-                            ),
-                            [
-                                Newline,
-                            ],
-                        ),
-                    ],
-                    final_comments: [
-                        Newline,
-                    ],
-                },
-            },
         },
     ),
 }

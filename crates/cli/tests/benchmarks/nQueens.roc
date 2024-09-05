@@ -1,20 +1,24 @@
-app "nqueens"
-    packages { pf: "platform/main.roc" }
-    imports [pf.Task]
-    provides [main] to pf
+app [main] { pf: platform "platform/main.roc" }
 
-main : Task.Task {} []
+import pf.PlatformTasks
+
+main : Task {} []
 main =
-    inputResult <- Task.attempt Task.getInt
+    { value, isError } = PlatformTasks.getInt!
+    inputResult =
+        if isError then
+            Err GetIntError
+        else
+            Ok value
 
     when inputResult is
         Ok n ->
             queens n # original koka 13
             |> Num.toStr
-            |> Task.putLine
+            |> PlatformTasks.putLine
 
         Err GetIntError ->
-            Task.putLine "Error: Failed to get Integer from stdin."
+            PlatformTasks.putLine "Error: Failed to get Integer from stdin."
 
 ConsList a : [Nil, Cons a (ConsList a)]
 

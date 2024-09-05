@@ -1,10 +1,13 @@
 module [line, raw]
 
-import pf.Effect
-import Task exposing [Task]
+import pf.PlatformTasks
 
 line : Str -> Task {} *
-line = \str -> Effect.map (Effect.putLine str) (\_ -> Ok {})
+line = \text ->
+    PlatformTasks.putLine text
+    |> Task.mapErr \_ -> crash "unreachable Stdout.line"
 
 raw : Str -> Task {} *
-raw = \str -> Effect.map (Effect.putRaw str) (\_ -> Ok {})
+raw = \text ->
+    PlatformTasks.putRaw text
+    |> Task.mapErr \_ -> crash "unreachable Stdout.raw"

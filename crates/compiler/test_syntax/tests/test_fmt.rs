@@ -5030,10 +5030,10 @@ mod test_fmt {
     fn single_line_platform() {
         module_formats_same(
             "platform \"folkertdev/foo\" \
-            requires { Model, Msg } { main : Effect {} } \
+            requires { Model, Msg } { main : Task {} [] } \
             exposes [] \
             packages {} \
-            imports [Task.{ Task }] \
+            imports [] \
             provides [mainForHost]",
         );
     }
@@ -5102,7 +5102,7 @@ mod test_fmt {
     fn single_line_hosted() {
         module_formats_same(indoc!(
             r"
-                hosted Foo exposes [] imports [] generates Bar with []"
+                hosted Foo exposes [] imports []"
         ));
     }
 
@@ -5119,11 +5119,6 @@ mod test_fmt {
                     imports [
                         Blah,
                         Baz.{ stuff, things },
-                    ]
-                    generates Bar with [
-                        map,
-                        after,
-                        loop,
                     ]"
         ));
     }
@@ -6331,6 +6326,83 @@ mod test_fmt {
             "
             ),
         );
+    }
+
+    #[test]
+    fn keep_explicit_blank_chars() {
+        expr_formats_same(indoc!(
+            r#"
+                x = "a\u(200a)b\u(200b)c\u(200c)d\u(feff)e"
+                x
+            "#
+        ));
+    }
+
+    #[test]
+    fn make_blank_chars_explicit() {
+        expr_formats_to(
+            indoc!(
+                "
+                    x = \"a\u{200A}b\u{200B}c\u{200C}d\u{FEFF}e\"
+                    x
+                "
+            ),
+            indoc!(
+                r#"
+                    x = "a\u(200a)b\u(200b)c\u(200c)d\u(feff)e"
+                    x
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn make_blank_chars_explicit_when_interpolating() {
+        expr_formats_to(
+            indoc!(
+                "
+                    x = \"foo:\u{200B} $(bar).\"
+                    x
+                "
+            ),
+            indoc!(
+                r#"
+                    x = "foo:\u(200b) $(bar)."
+                    x
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn make_blank_chars_explicit_in_multiline_string() {
+        expr_formats_to(
+            indoc!(
+                "
+                    x =
+                        \"\"\"
+                        foo:\u{200B} $(bar).
+                        \"\"\"
+                    x
+                "
+            ),
+            indoc!(
+                r#"
+                    x =
+                        """
+                        foo:\u(200b) $(bar).
+                        """
+                    x
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn preserve_multiline_string_trailing_whitespace() {
+        expr_formats_same(indoc!(
+            "x =\n    \"\"\"\n    foo\n    bar                \n    baz\n    \"\"\"\nx"
+        ));
     }
 
     // this is a parse error atm

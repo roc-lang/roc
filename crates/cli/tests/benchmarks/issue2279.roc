@@ -1,7 +1,7 @@
-app "issue2279"
-    packages { pf: "platform/main.roc" }
-    imports [Issue2279Help, pf.Task]
-    provides [main] to pf
+app [main] { pf: platform "platform/main.roc" }
+
+import Issue2279Help
+import pf.PlatformTasks
 
 main =
     text =
@@ -10,4 +10,4 @@ main =
         else
             Issue2279Help.asText 42
 
-    Task.putLine text
+    PlatformTasks.putLine text

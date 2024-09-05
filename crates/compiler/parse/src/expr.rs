@@ -3,7 +3,7 @@ use crate::ast::{
     Implements, ImplementsAbilities, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
     ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport,
     ModuleImportParams, OldRecordBuilderField, Pattern, Spaceable, Spaced, Spaces, SpacesBefore,
-    TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    TryTarget, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use crate::blankspace::{
     loc_space0_e, require_newline_or_eof, space0_after_e, space0_around_ee, space0_before_e,
@@ -169,7 +169,12 @@ fn record_field_access_chain<'a>() -> impl Parser<'a, Vec<'a, Suffix<'a>>, EExpr
                 )
             )
         ),
-        map(byte(b'!', EExpr::Access), |_| Suffix::TaskAwaitBang),
+        map(byte(b'!', EExpr::Access), |_| Suffix::TrySuffix(
+            TryTarget::Task
+        )),
+        map(byte(b'?', EExpr::Access), |_| Suffix::TrySuffix(
+            TryTarget::Result
+        )),
     ))
 }
 
@@ -189,6 +194,7 @@ fn loc_term_or_underscore_or_conditional<'a>(
         )),
         loc(specialize_err(EExpr::Closure, closure_help(options))),
         loc(crash_kw()),
+        loc(specialize_err(EExpr::Dbg, dbg_kw())),
         loc(underscore_expression()),
         loc(record_literal_help()),
         loc(specialize_err(EExpr::List, list_literal_help())),
@@ -210,6 +216,7 @@ fn loc_term_or_underscore<'a>(
             positive_number_literal_help()
         )),
         loc(specialize_err(EExpr::Closure, closure_help(options))),
+        loc(specialize_err(EExpr::Dbg, dbg_kw())),
         loc(underscore_expression()),
         loc(record_literal_help()),
         loc(specialize_err(EExpr::List, list_literal_help())),
@@ -227,6 +234,7 @@ fn loc_term<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr<'a>>, EEx
             positive_number_literal_help()
         )),
         loc(specialize_err(EExpr::Closure, closure_help(options))),
+        loc(specialize_err(EExpr::Dbg, dbg_kw())),
         loc(record_literal_help()),
         loc(specialize_err(EExpr::List, list_literal_help())),
         ident_seq(),
@@ -536,7 +544,7 @@ fn stmt_start<'a>(
         )),
         loc(specialize_err(
             EExpr::Dbg,
-            dbg_help(options, preceding_comment)
+            dbg_stmt_help(options, preceding_comment)
         )),
         loc(specialize_err(EExpr::Import, map(import(), Stmt::ValueDef))),
         map(
@@ -2165,7 +2173,8 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::If(_, _)
         | Expr::When(_, _)
         | Expr::Expect(_, _)
-        | Expr::Dbg(_, _)
+        | Expr::Dbg
+        | Expr::DbgStmt(_, _)
         | Expr::LowLevelDbg(_, _, _)
         | Expr::MalformedClosure
         | Expr::MalformedSuffixed(..)
@@ -2176,8 +2185,9 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::SingleFieldRecordBuilder(_)
         | Expr::OptionalFieldInRecordBuilder(_, _)
         | Expr::RecordUpdate { .. }
+        | Expr::RecordUpdater(_)
         | Expr::UnaryOp(_, _)
-        | Expr::TaskAwaitBang(..)
+        | Expr::TrySuffix { .. }
         | Expr::Crash
         | Expr::OldRecordBuilder(..)
         | Expr::RecordBuilder { .. } => return Err(()),
@@ -2641,7 +2651,7 @@ fn expect_help<'a>(
     }
 }
 
-fn dbg_help<'a>(
+fn dbg_stmt_help<'a>(
     options: ExprParseOptions,
     preceding_comment: Region,
 ) -> impl Parser<'a, Stmt<'a>, EExpect<'a>> {
@@ -2666,7 +2676,17 @@ fn dbg_help<'a>(
 
         Ok((MadeProgress, stmt, state))
     })
-    .trace("dbg_help")
+    .trace("dbg_stmt_help")
+}
+
+fn dbg_kw<'a>() -> impl Parser<'a, Expr<'a>, EExpect<'a>> {
+    (move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
+        let (_, _, next_state) =
+            parser::keyword(keyword::DBG, EExpect::Dbg).parse(arena, state, min_indent)?;
+
+        Ok((MadeProgress, Expr::Dbg, next_state))
+    })
+    .trace("dbg_kw")
 }
 
 fn import<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>> {
@@ -2980,14 +3000,17 @@ fn stmts_to_expr<'a>(
                     arena.alloc(e).before(space)
                 }
             }
-            Stmt::ValueDef(ValueDef::Dbg { .. }) => {
-                return Err(EExpr::Dbg(
-                    EExpect::Continuation(
-                        arena.alloc(EExpr::IndentEnd(loc_stmt.region.end())),
-                        loc_stmt.region.end(),
-                    ),
-                    loc_stmt.region.start(),
-                ));
+            Stmt::ValueDef(ValueDef::Dbg { condition, .. }) => {
+                // If we parse a `dbg` as the last thing in a series of statements then it's
+                // actually an expression.
+                Expr::Apply(
+                    arena.alloc(Loc {
+                        value: Expr::Dbg,
+                        region: loc_stmt.region,
+                    }),
+                    arena.alloc([condition]),
+                    CalledVia::Space,
+                )
             }
             Stmt::ValueDef(ValueDef::Expect { .. }) => {
                 return Err(EExpr::Expect(
@@ -3139,13 +3162,19 @@ fn stmts_to_defs<'a>(
                 } = vd
                 {
                     if exprify_dbg {
-                        if i + 1 >= stmts.len() {
-                            return Err(EExpr::DbgContinue(sp_stmt.item.region.end()));
-                        }
-
-                        let rest = stmts_to_expr(&stmts[i + 1..], arena)?;
-
-                        let e = Expr::Dbg(arena.alloc(condition), arena.alloc(rest));
+                        let e = if i + 1 < stmts.len() {
+                            let rest = stmts_to_expr(&stmts[i + 1..], arena)?;
+                            Expr::DbgStmt(arena.alloc(condition), arena.alloc(rest))
+                        } else {
+                            Expr::Apply(
+                                arena.alloc(Loc {
+                                    value: Expr::Dbg,
+                                    region: sp_stmt.item.region,
+                                }),
+                                arena.alloc([condition]),
+                                CalledVia::Space,
+                            )
+                        };
 
                         let e = if sp_stmt.before.is_empty() {
                             e
@@ -3246,7 +3275,7 @@ pub fn join_alias_to_body<'a>(
 /// 2. The beginning of a function call (e.g. `foo bar baz`)
 /// 3. The beginning of a definition (e.g. `foo =`)
 /// 4. The beginning of a type annotation (e.g. `foo :`)
-/// 5. A reserved keyword (e.g. `if ` or `case `), meaning we should do something else.
+/// 5. A reserved keyword (e.g. `if ` or `when `), meaning we should do something else.
 
 fn assign_or_destructure_identifier<'a>() -> impl Parser<'a, Ident<'a>, EExpr<'a>> {
     parse_ident
@@ -3308,6 +3337,7 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
             answer
         }
         Ident::AccessorFunction(string) => Expr::AccessorFunction(string),
+        Ident::RecordUpdaterFunction(string) => Expr::RecordUpdater(string),
         Ident::Malformed(string, problem) => Expr::MalformedIdent(string, problem),
     }
 }
@@ -3749,7 +3779,10 @@ fn apply_expr_access_chain<'a>(
             Suffix::Accessor(Accessor::TupleIndex(field)) => {
                 Expr::TupleAccess(arena.alloc(value), field)
             }
-            Suffix::TaskAwaitBang => Expr::TaskAwaitBang(arena.alloc(value)),
+            Suffix::TrySuffix(target) => Expr::TrySuffix {
+                target,
+                expr: arena.alloc(value),
+            },
         })
 }
 

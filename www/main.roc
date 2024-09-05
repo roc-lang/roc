@@ -1,6 +1,7 @@
-app [main] { pf: platform "https://github.com/lukewilliamboswell/basic-ssg/releases/download/0.1.0/EMH2OFwcXCUEzbwP6gyfeRQu7Phr-slc-vE8FPPreys.tar.br" }
+app [main] {
+    pf: platform "https://github.com/lukewilliamboswell/basic-ssg/releases/download/0.5.0/MlW8VJCTuOFrlKRiW9h-WPOv4_5FqTrqlZZOi5fMqdo.tar.br",
+}
 
-import pf.Task exposing [Task]
 import pf.SSG
 import pf.Types exposing [Args]
 import pf.Html exposing [header, nav, div, link, attribute, text, a, span, html, head, body, meta, script, footer, br]

@@ -305,14 +305,11 @@ impl IterTokens for HostedHeader<'_> {
             name,
             exposes,
             imports,
-            generates: _,
-            generates_with,
         } = self;
 
         (name.iter_tokens(arena).into_iter())
             .chain(exposes.item.iter_tokens(arena))
             .chain(imports.item.iter_tokens(arena))
-            .chain(generates_with.item.iter_tokens(arena))
             .collect_in(arena)
     }
 }
@@ -666,8 +663,9 @@ impl IterTokens for Loc<Expr<'_>> {
             Expr::SingleQuote(_) => onetoken(Token::String, region, arena),
             Expr::RecordAccess(rcd, _field) => Loc::at(region, *rcd).iter_tokens(arena),
             Expr::AccessorFunction(accessor) => Loc::at(region, accessor).iter_tokens(arena),
+            Expr::RecordUpdater(updater) => Loc::at(region, updater).iter_tokens(arena),
             Expr::TupleAccess(tup, _field) => Loc::at(region, *tup).iter_tokens(arena),
-            Expr::TaskAwaitBang(inner) => Loc::at(region, *inner).iter_tokens(arena),
+            Expr::TrySuffix { expr: inner, .. } => Loc::at(region, *inner).iter_tokens(arena),
             Expr::List(lst) => lst.iter_tokens(arena),
             Expr::RecordUpdate { update, fields } => (update.iter_tokens(arena).into_iter())
                 .chain(fields.iter().flat_map(|f| f.iter_tokens(arena)))
@@ -696,7 +694,8 @@ impl IterTokens for Loc<Expr<'_>> {
             Expr::Expect(e1, e2) => (e1.iter_tokens(arena).into_iter())
                 .chain(e2.iter_tokens(arena))
                 .collect_in(arena),
-            Expr::Dbg(e1, e2) => (e1.iter_tokens(arena).into_iter())
+            Expr::Dbg => onetoken(Token::Keyword, region, arena),
+            Expr::DbgStmt(e1, e2) => (e1.iter_tokens(arena).into_iter())
                 .chain(e2.iter_tokens(arena))
                 .collect_in(arena),
             Expr::LowLevelDbg(_, e1, e2) => (e1.iter_tokens(arena).into_iter())

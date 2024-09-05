@@ -94,6 +94,21 @@ If so, you can fix it like so:
 sudo apt-get install libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 ```
 
+### libz libzstd libraries
+
+You may see an error like this during builds:
+
+```text
+/usr/bin/ld: cannot find -lz: No such file or directory
+/usr/bin/ld: cannot find -lzstd: No such file or directory
+```
+
+If so, you can fix it like so:
+
+```sh
+sudo apt-get install libz-dev libzstd-dev
+```
+
 ### Zig
 
 **version: 0.11.0**

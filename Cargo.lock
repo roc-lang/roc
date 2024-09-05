@@ -738,17 +738,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "derive_more"
-version = "0.99.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4fb810d30a7c1953f91334de7244731fc3f3c10d7fe163338a35b9f640960321"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 1.0.109",
-]
-
-[[package]]
 name = "diff"
 version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -797,12 +786,6 @@ name = "distance"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6d9d8664cf849d7d0f3114a3a387d2f5e4303176d746d5a951aaddc66dfe9240"
-
-[[package]]
-name = "doc-comment"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fea41bba32d969b513997752735605054bc0dfa92b4c56bf1189f2e174be7a10"
 
 [[package]]
 name = "dunce"
@@ -1715,11 +1698,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6a622008b6e321afc04970976f62ee297fdbaa6f95318ca343e3eebb9648441"
 dependencies = [
  "crc32fast",
- "flate2",
  "hashbrown",
  "indexmap",
  "memchr",
- "ruzstd",
 ]
 
 [[package]]
@@ -2537,7 +2518,6 @@ dependencies = [
  "roc_solve",
  "roc_target",
  "roc_types",
- "snafu",
  "ven_pretty",
 ]
 
@@ -2557,9 +2537,6 @@ version = "0.0.1"
 [[package]]
 name = "roc_error_utils"
 version = "0.0.1"
-dependencies = [
- "snafu",
-]
 
 [[package]]
 name = "roc_exhaustive"
@@ -2650,7 +2627,6 @@ dependencies = [
 name = "roc_glue"
 version = "0.0.1"
 dependencies = [
- "backtrace",
  "bumpalo",
  "cli_utils",
  "dircpy",
@@ -2816,6 +2792,7 @@ dependencies = [
  "roc_derive_key",
  "roc_error_macros",
  "roc_late_solve",
+ "roc_lower_params",
  "roc_module",
  "roc_mono",
  "roc_packaging",
@@ -2837,6 +2814,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_lower_params"
+version = "0.0.1"
+dependencies = [
+ "bumpalo",
+ "roc_can",
+ "roc_collections",
+ "roc_module",
+ "roc_region",
+ "roc_solve_problem",
+ "roc_types",
+]
+
+[[package]]
 name = "roc_module"
 version = "0.0.1"
 dependencies = [
@@ -2845,7 +2835,6 @@ dependencies = [
  "roc_error_macros",
  "roc_ident",
  "roc_region",
- "snafu",
  "static_assertions",
 ]
 
@@ -3378,17 +3367,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ruzstd"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "58c4eb8a81997cf040a091d1f7e1938aeab6749d3a0dfa73af43cdc32393483d"
-dependencies = [
- "byteorder",
- "derive_more",
- "twox-hash",
-]
-
-[[package]]
 name = "ryu"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3619,29 +3597,6 @@ name = "smallvec"
 version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "942b4a808e05215192e39f4ab80813e599068285906cc91aa64f923db842bd5a"
-
-[[package]]
-name = "snafu"
-version = "0.7.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4de37ad025c587a29e8f3f5605c00f70b98715ef90b9061a815b9e59e9042d6"
-dependencies = [
- "backtrace",
- "doc-comment",
- "snafu-derive",
-]
-
-[[package]]
-name = "snafu-derive"
-version = "0.7.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "990079665f075b699031e9c08fd3ab99be5029b96f3b78dc0709e8f77e4efebf"
-dependencies = [
- "heck",
- "proc-macro2",
- "quote",
- "syn 1.0.109",
-]
 
 [[package]]
 name = "socket2"
@@ -4247,16 +4202,6 @@ name = "try-lock"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3528ecfd12c466c6f163363caf2d02a71161dd5e1cc6ae7b34207ea2d42d81ed"
-
-[[package]]
-name = "twox-hash"
-version = "1.6.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
-dependencies = [
- "cfg-if",
- "static_assertions",
-]
 
 [[package]]
 name = "typed-arena"
