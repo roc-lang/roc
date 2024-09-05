@@ -905,6 +905,25 @@ mod cli_run {
 
     #[test]
     #[cfg_attr(windows, ignore)]
+    fn module_params_pass_task() {
+        test_roc_app(
+            "crates/cli/tests/module_params",
+            "pass_task.roc",
+            &[],
+            &[],
+            &[],
+            indoc!(
+                r#"
+                Hi, Agus!
+                "#
+            ),
+            UseValgrind::No,
+            TestCliCommands::Run,
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
     fn transitive_expects() {
         test_roc_expect(
             "crates/cli/tests/expects_transitive",

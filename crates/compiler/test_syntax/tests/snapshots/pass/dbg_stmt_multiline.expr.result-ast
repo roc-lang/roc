@@ -1,5 +1,5 @@
 SpaceAfter(
-    Dbg(
+    DbgStmt(
         @4-16 Tuple(
             [
                 @5-6 Num(

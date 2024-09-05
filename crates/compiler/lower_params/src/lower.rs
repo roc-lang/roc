@@ -6,7 +6,7 @@ use roc_can::{
         Expr::{self, *},
     },
     module::ModuleParams,
-    pattern::Pattern,
+    pattern::{Pattern, RecordDestruct},
 };
 use roc_collections::VecMap;
 use roc_module::symbol::{IdentId, IdentIds, ModuleId, Symbol};
@@ -184,14 +184,14 @@ impl<'a> LowerParams<'a> {
                                 }
                             }
                         }
-                        Var(symbol, _var) => {
+                        Var(symbol, var) => {
                             if let Some((params, arity)) = self.params_extended_home_symbol(&symbol)
                             {
                                 if arity == 0 {
                                     // Calling the result of a top-level value def in the current module
                                     fun.1.value = self.call_value_def_with_params(
                                         symbol,
-                                        params.whole_var,
+                                        var,
                                         params.whole_symbol,
                                         params.whole_var,
                                     );
@@ -410,11 +410,33 @@ impl<'a> LowerParams<'a> {
     fn home_params_argument(&mut self) -> Option<(Variable, AnnotatedMark, Loc<Pattern>)> {
         match &self.home_params {
             Some(module_params) => {
-                let new_var = self.var_store.fresh();
+                let destructs: Vec<Loc<RecordDestruct>> = module_params
+                    .destructs
+                    .iter()
+                    .map(|destructure| {
+                        destructure.map(|d| RecordDestruct {
+                            symbol: d.symbol,
+                            var: self.var_store.fresh(),
+                            label: d.label.clone(),
+                            typ: d.typ.clone(),
+                        })
+                    })
+                    .collect();
+
+                let record_pattern = Pattern::RecordDestructure {
+                    whole_var: module_params.record_var,
+                    ext_var: module_params.record_ext_var,
+                    destructs,
+                };
+                let loc_record_pattern = Loc::at(module_params.region, record_pattern);
+                let as_pattern =
+                    Pattern::As(Box::new(loc_record_pattern), module_params.whole_symbol);
+                let loc_pattern = Loc::at(module_params.region, as_pattern);
+
                 Some((
-                    new_var,
+                    self.var_store.fresh(),
                     AnnotatedMark::new(self.var_store),
-                    module_params.pattern(),
+                    loc_pattern,
                 ))
             }
             None => None,
