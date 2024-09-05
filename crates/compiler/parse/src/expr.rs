@@ -76,6 +76,13 @@ pub struct ExprParseOptions {
     pub check_for_arrow: bool,
 }
 
+impl ExprParseOptions {
+    pub const ALL: ExprParseOptions = ExprParseOptions {
+        accept_multi_backpassing: true,
+        check_for_arrow: true,
+    };
+}
+
 pub fn expr_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     move |arena, state: State<'a>, min_indent: u32| {
         loc_expr(true)
@@ -494,10 +501,7 @@ pub fn parse_repl_defs_and_optional_expr<'a>(
         arena,
         state,
         |e, _| e.clone(),
-        ExprParseOptions {
-            accept_multi_backpassing: true,
-            check_for_arrow: true,
-        },
+        ExprParseOptions::ALL,
         0,
         spaces_before,
         EExpr::IndentEnd,
@@ -2118,10 +2122,7 @@ pub fn parse_top_level_defs<'a>(
         arena,
         state,
         |e, _| e.clone(),
-        ExprParseOptions {
-            accept_multi_backpassing: true,
-            check_for_arrow: true,
-        },
+        ExprParseOptions::ALL,
         0,
         loc_first_space,
         EExpr::IndentEnd,
@@ -2553,12 +2554,8 @@ mod when {
         }
         let state = state.advance(2);
 
-        let options = ExprParseOptions {
-            accept_multi_backpassing: true,
-            check_for_arrow: true,
-        };
         match parse_block(
-            options,
+            ExprParseOptions::ALL,
             arena,
             state,
             true,
@@ -2657,10 +2654,6 @@ fn parse_rest_of_if_expr<'a>(
 
     let mut loop_state = state;
 
-    let if_options = ExprParseOptions {
-        accept_multi_backpassing: true,
-        check_for_arrow: true,
-    };
     let cond_parser = skip_second(
         space0_around_ee(
             specialize_err_ref(EIf::Condition, loc_expr(true)),
@@ -2674,7 +2667,7 @@ fn parse_rest_of_if_expr<'a>(
         let (_, cond, state) = cond_parser.parse(arena, loop_state, min_indent)?;
 
         let (_, then_expr, state) = parse_block(
-            if_options,
+            ExprParseOptions::ALL,
             arena,
             state,
             false,
