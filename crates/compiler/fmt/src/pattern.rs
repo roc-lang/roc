@@ -244,9 +244,19 @@ impl<'a> Formattable for Pattern<'a> {
             }
 
             As(pattern, pattern_as) => {
+                let needs_parens = parens == Parens::InAsPattern;
+
+                if needs_parens {
+                    buf.push('(');
+                }
+
                 fmt_pattern(buf, &pattern.value, indent, parens);
 
                 pattern_as.format(buf, indent + INDENT);
+
+                if needs_parens {
+                    buf.push(')');
+                }
             }
 
             // Space

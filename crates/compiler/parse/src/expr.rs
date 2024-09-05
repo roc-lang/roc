@@ -218,7 +218,15 @@ fn parse_term<'a>(
                 let expr = literal_to_expr(literal);
                 Ok((p, Loc::pos(start, state.pos(), expr), state))
             }
-            _ => parse_ident_seq(arena, state.clone(), min_indent),
+            _ => {
+                if at_keyword(keyword::DBG, &state) {
+                    let state = state.advance(keyword::DBG.len());
+                    let dbg_expr = Loc::pos(start, state.pos(), Expr::Dbg);
+                    return Ok((MadeProgress, dbg_expr, state));
+                }
+
+                parse_ident_seq(arena, state.clone(), min_indent)
+            }
         }
     } else {
         Err((NoProgress, EExpr::Start(start)))
@@ -245,6 +253,7 @@ fn parse_ident_seq<'a>(
     Ok((MadeProgress, Loc::pos(ident_start, ident_end, expr), state))
 }
 
+// todo: @wip inline
 fn parse_rest_of_underscore_expr<'a>(
     start: Position,
     state: State<'a>,
@@ -346,10 +355,16 @@ fn parse_negative_or_term<'a>(
                 }
             }
             _ => {
-                if at_keyword(crate::keyword::CRASH, &state) {
-                    let state = state.advance(crate::keyword::CRASH.len());
+                if at_keyword(keyword::CRASH, &state) {
+                    let state = state.advance(keyword::CRASH.len());
                     let expr = Loc::pos(start, state.pos(), Expr::Crash);
                     return Ok((MadeProgress, expr, state));
+                }
+
+                if at_keyword(keyword::DBG, &state) {
+                    let state = state.advance(keyword::DBG.len());
+                    let dbg_expr = Loc::pos(start, state.pos(), Expr::Dbg);
+                    return Ok((MadeProgress, dbg_expr, state));
                 }
 
                 parse_ident_seq(arena, state.clone(), min_indent)
@@ -523,6 +538,7 @@ pub fn parse_repl_defs_and_optional_expr<'a>(
     Ok((MadeProgress, (defs, last_expr), state))
 }
 
+// todo: @wip review and simplify
 fn parse_stmt_start<'a>(
     options: ExprParseOptions,
     preceding_comment: Region,
@@ -543,7 +559,7 @@ fn parse_stmt_start<'a>(
         Err((MadeProgress, fail)) => return Err((MadeProgress, EExpr::Expect(fail, start))),
     }
 
-    match parse_dbg(options, preceding_comment, arena, state.clone()) {
+    match parse_dbg_stmt(options, preceding_comment, arena, state.clone()) {
         Err((NoProgress, _)) => {}
         Ok((p, stmt, state)) => return Ok((p, Loc::pos(start, state.pos(), stmt), state)),
         Err((MadeProgress, fail)) => return Err((MadeProgress, EExpr::Dbg(fail, start))),
@@ -604,7 +620,7 @@ fn parse_stmt_operator_chain<'a>(
                     value:
                         Expr::Var {
                             module_name: "",
-                            ident: crate::keyword::IMPLEMENTS,
+                            ident: keyword::IMPLEMENTS,
                             ..
                         },
                     ..
@@ -2027,7 +2043,8 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::If(_, _)
         | Expr::When(_, _)
         | Expr::Expect(_, _)
-        | Expr::Dbg(_, _)
+        | Expr::Dbg
+        | Expr::DbgStmt(_, _)
         | Expr::LowLevelDbg(_, _, _)
         | Expr::MalformedClosure
         | Expr::MalformedSuffixed(..)
@@ -2573,8 +2590,8 @@ fn expect_help<'a>(
     preceding_comment: Region,
 ) -> impl Parser<'a, Stmt<'a>, EExpect<'a>> {
     move |arena: &'a Bump, state: State<'a>, min_indent| {
-        let parse_expect_vanilla = crate::parser::keyword(crate::keyword::EXPECT, EExpect::Expect);
-        let parse_expect_fx = crate::parser::keyword(crate::keyword::EXPECT_FX, EExpect::Expect);
+        let parse_expect_vanilla = parser::keyword(keyword::EXPECT, EExpect::Expect);
+        let parse_expect_fx = parser::keyword(keyword::EXPECT_FX, EExpect::Expect);
         let parse_expect = either(parse_expect_vanilla, parse_expect_fx);
 
         let (_, kw, state) = parse_expect.parse(arena, state, min_indent)?;
@@ -2604,7 +2621,7 @@ fn expect_help<'a>(
     }
 }
 
-fn parse_dbg<'a>(
+fn parse_dbg_stmt<'a>(
     options: ExprParseOptions,
     preceding_comment: Region,
     arena: &'a Bump,
@@ -2932,14 +2949,17 @@ fn stmts_to_expr<'a>(
                     arena.alloc(e).before(space)
                 }
             }
-            Stmt::ValueDef(ValueDef::Dbg { .. }) => {
-                return Err(EExpr::Dbg(
-                    EExpect::Continuation(
-                        arena.alloc(EExpr::IndentEnd(loc_stmt.region.end())),
-                        loc_stmt.region.end(),
-                    ),
-                    loc_stmt.region.start(),
-                ));
+            Stmt::ValueDef(ValueDef::Dbg { condition, .. }) => {
+                // If we parse a `dbg` as the last thing in a series of statements then it's
+                // actually an expression.
+                Expr::Apply(
+                    arena.alloc(Loc {
+                        value: Expr::Dbg,
+                        region: loc_stmt.region,
+                    }),
+                    arena.alloc([condition]),
+                    CalledVia::Space,
+                )
             }
             Stmt::ValueDef(ValueDef::Expect { .. }) => {
                 return Err(EExpr::Expect(
@@ -3091,13 +3111,16 @@ fn stmts_to_defs<'a>(
                 } = vd
                 {
                     if exprify_dbg {
-                        if i + 1 >= stmts.len() {
-                            return Err(EExpr::DbgContinue(sp_stmt.item.region.end()));
-                        }
-
-                        let rest = stmts_to_expr(&stmts[i + 1..], arena)?;
-
-                        let e = Expr::Dbg(arena.alloc(condition), arena.alloc(rest));
+                        let e = if i + 1 < stmts.len() {
+                            let rest = stmts_to_expr(&stmts[i + 1..], arena)?;
+                            Expr::DbgStmt(arena.alloc(condition), arena.alloc(rest))
+                        } else {
+                            Expr::Apply(
+                                arena.alloc(Loc::at(sp_stmt.item.region, Expr::Dbg)),
+                                arena.alloc([condition]),
+                                CalledVia::Space,
+                            )
+                        };
 
                         let e = if sp_stmt.before.is_empty() {
                             e

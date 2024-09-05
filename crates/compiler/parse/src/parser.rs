@@ -822,8 +822,7 @@ where
         }
 
         // This should be enough for anyone. Right? RIGHT?
-        let indent_text =
-            "| ; : ! | ; : ! | ; : ! | ; : ! | ; : ! | ; : ! | ; : ! | ; : ! | ; : ! ";
+        let indent_text = "| ; : ! ".repeat(20);
 
         let cur_indent = INDENT.with(|i| *i.borrow());
 
