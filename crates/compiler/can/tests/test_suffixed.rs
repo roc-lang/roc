@@ -6,17 +6,24 @@ mod suffixed_tests {
     use bumpalo::Bump;
     use insta::assert_snapshot;
     use roc_can::desugar::desugar_defs_node_values;
+    use roc_can::scope::Scope;
+    use roc_module::symbol::{IdentIds, ModuleIds};
     use roc_parse::test_helpers::parse_defs_with;
-    use roc_types::subs::VarStore;
 
     macro_rules! run_test {
         ($src:expr) => {{
             let arena = &Bump::new();
-            let mut var_store = VarStore::default();
+            let home = ModuleIds::default().get_or_insert(&"Test".into());
+            let mut scope = Scope::new(
+                home,
+                "TestPath".into(),
+                IdentIds::default(),
+                Default::default(),
+            );
             let mut defs = parse_defs_with(arena, indoc!($src)).unwrap();
             desugar_defs_node_values(
                 arena,
-                &mut var_store,
+                &mut scope,
                 &mut defs,
                 $src,
                 &mut None,

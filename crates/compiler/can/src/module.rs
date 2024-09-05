@@ -268,7 +268,7 @@ pub fn canonicalize_module_defs<'a>(
 
     crate::desugar::desugar_defs_node_values(
         arena,
-        var_store,
+        &mut scope,
         loc_defs,
         src,
         &mut None,

@@ -14521,7 +14521,7 @@ All branches in an `if` must have the same type!
     4│      1 + dbg + 2
                 ^^^
 
-    This `63` value is a:
+    This value is a:
 
         {}
 
@@ -14555,7 +14555,7 @@ All branches in an `if` must have the same type!
     4│      1 + dbg "" "" + 2
                 ^^^^^^^^^
 
-    This `63` value is a:
+    This value is a:
 
         {}
 

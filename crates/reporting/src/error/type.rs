@@ -1796,6 +1796,9 @@ fn format_category<'b>(
     let t = if capitalize_start { "T" } else { "t" };
 
     match category {
+        Lookup(name) if name.is_generated(alloc.interns) => {
+            (text!(alloc, "{}his value", t), alloc.text(" is a:"))
+        }
         Lookup(name) => (
             alloc.concat([
                 text!(alloc, "{}his ", t),
@@ -1804,7 +1807,6 @@ fn format_category<'b>(
             ]),
             alloc.text(" is a:"),
         ),
-
         If => (
             alloc.concat([
                 text!(alloc, "{}his ", t),
