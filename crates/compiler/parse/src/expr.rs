@@ -7,7 +7,7 @@ use crate::ast::{
 };
 use crate::blankspace::{
     loc_space0_e, parse_space, require_newline_or_eof, space0_around_ee, space0_before_e, space0_e,
-    spaces, spaces_around_help, spaces_before, with_spaces, with_spaces_after, with_spaces_before,
+    spaces, spaces_around_help, spaces_before, with_spaces, with_spaces_before,
 };
 use crate::header::module_name_help;
 use crate::ident::{
@@ -2666,27 +2666,33 @@ fn parse_rest_of_if_expr<'a>(
         parser::keyword(keyword::THEN, EIf::Then),
     );
 
-    let then_parser = block(if_options, false, EIf::IndentThenBranch, EIf::ThenBranch);
-
-    let then_parser = parser::map_with_arena(
-        and(then_parser, space0_e(EIf::IndentElseToken)),
-        |arena: &'a Bump, (expr, spaces)| with_spaces_after(expr, spaces, arena),
-    );
-
     let state_final_else = loop {
         let (_, cond, state) = cond_parser.parse(arena, loop_state, min_indent)?;
 
-        let (then_block, state) = match then_parser.parse(arena, state, min_indent) {
-            Ok((_, block, state)) => {
-                let expr = match block.value {
-                    Expr::SpaceAfter(&Expr::SpaceBefore(x, before), after) => block.with_value(
-                        Expr::SpaceBefore(arena.alloc(Expr::SpaceAfter(x, after)), before),
-                    ),
-                    _ => block,
-                };
-                (expr, state)
-            }
-            Err((_, fail)) => return Err((MadeProgress, fail)),
+        let (_, then_expr, state) = parse_block(
+            if_options,
+            arena,
+            state,
+            false,
+            EIf::IndentThenBranch,
+            EIf::ThenBranch,
+        )
+        .map_err(|(_, fail)| (MadeProgress, fail))?;
+
+        let (_, spaces_after_then, state) =
+            parse_space(EIf::IndentElseToken, arena, state, min_indent)
+                .map_err(|(_, fail)| (MadeProgress, fail))?;
+
+        let then_expr = if spaces_after_then.is_empty() {
+            then_expr
+        } else {
+            let expr = then_expr.value;
+            let expr = if let Expr::SpaceBefore(x, before) = expr {
+                Expr::SpaceBefore(arena.alloc(Expr::SpaceAfter(x, spaces_after_then)), before)
+            } else {
+                Expr::SpaceAfter(arena.alloc(expr), spaces_after_then)
+            };
+            Loc::at(then_expr.region, expr)
         };
 
         if !at_keyword(keyword::ELSE, &state) {
@@ -2694,7 +2700,7 @@ fn parse_rest_of_if_expr<'a>(
         }
         let state = state.advance(keyword::ELSE.len());
 
-        branches.push((cond, then_block));
+        branches.push((cond, then_expr));
 
         // try to parse another `if`
         // NOTE this drops spaces between the `else` and the `if`

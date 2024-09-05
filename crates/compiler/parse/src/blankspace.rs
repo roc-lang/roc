@@ -125,9 +125,10 @@ pub fn with_spaces_before<'a, T: 'a + Spaceable<'a>>(
     if spaces.is_empty() {
         loc
     } else {
-        arena
-            .alloc(loc.value)
-            .with_spaces_before(spaces, loc.region)
+        Loc {
+            region: loc.region,
+            value: arena.alloc(loc.value).before(spaces),
+        }
     }
 }
 
@@ -140,7 +141,10 @@ pub fn with_spaces_after<'a, T: 'a + Spaceable<'a>>(
     if spaces.is_empty() {
         loc
     } else {
-        arena.alloc(loc.value).with_spaces_after(spaces, loc.region)
+        Loc {
+            region: loc.region,
+            value: arena.alloc(loc.value).after(spaces),
+        }
     }
 }
 
