@@ -2733,20 +2733,35 @@ fn if_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EIf<
         };
 
         let else_indent = state_final_else.line_indent();
+        let indented_else = else_indent > if_indent;
 
-        let (_, else_branch, state) = parse_block(
+        let min_indent = if !indented_else {
+            else_indent + 1
+        } else {
+            if_indent
+        };
+
+        let (_, loc_first_space, state_final_else) =
+            loc_space0_e(EIf::IndentElseBranch).parse(arena, state_final_else, min_indent)?;
+
+        let allow_defs = !loc_first_space.value.is_empty();
+
+        // use parse_block_inner so we can set min_indent
+        let (_, else_branch, state) = parse_block_inner(
             options,
             arena,
             state_final_else,
-            true,
+            min_indent,
             EIf::IndentElseBranch,
             EIf::ElseBranch,
+            loc_first_space,
+            allow_defs,
         )?;
 
         let expr = Expr::If {
             if_thens: branches.into_bump_slice(),
             final_else: arena.alloc(else_branch),
-            indented_else: else_indent > if_indent,
+            indented_else,
         };
 
         Ok((MadeProgress, expr, state))
