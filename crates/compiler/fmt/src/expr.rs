@@ -1224,20 +1224,22 @@ fn fmt_if<'a>(
         }
     }
 
-    buf.indent(indent);
-    if is_multiline {
-        buf.push_str("else");
-        buf.newline();
-    } else if indented_else {
+    if indented_else {
         buf.indent(indent + INDENT);
         buf.push_str("else");
         buf.newline();
         buf.newline();
+    } else if is_multiline {
+        buf.indent(indent);
+        buf.push_str("else");
+        buf.newline();
     } else {
+        buf.indent(indent);
         buf.push_str(" else");
         buf.spaces(1);
     }
-    final_else.format(buf, if indented_else { indent } else { return_indent });
+    let indent = if indented_else { indent } else { return_indent };
+    final_else.format(buf, indent);
 }
 
 fn fmt_closure<'a>(
