@@ -506,11 +506,11 @@ pub fn parse_repl_defs_and_optional_expr<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, (Defs<'a>, Option<Loc<Expr<'a>>>), EExpr<'a>> {
-    let initial_state = state.clone();
-    let (spaces_before, state) = match loc(space0_e(EExpr::IndentEnd)).parse(arena, state, 0) {
-        Err((NoProgress, _)) => return Ok((NoProgress, (Defs::default(), None), initial_state)),
+    let start = state.pos();
+    let (spaces_before, state) = match parse_space(EExpr::IndentEnd, arena, state.clone(), 0) {
+        Err((NoProgress, _)) => return Ok((NoProgress, (Defs::default(), None), state)),
         Err((MadeProgress, e)) => return Err((MadeProgress, e)),
-        Ok((_, sp, state)) => (sp, state),
+        Ok((_, sp, state)) => (Loc::pos(start, state.pos(), sp), state),
     };
 
     let (_, stmts, state) = parse_stmt_seq(
@@ -569,8 +569,8 @@ fn parse_stmt_start<'a>(
     } else {
         match parse_stmt_operator_chain(options, arena, state, min_indent) {
             Err((NoProgress, _)) => Err((NoProgress, EExpr::Start(start))),
-            Ok((p, stmt, state)) => return Ok((p, Loc::pos(start, state.pos(), stmt), state)),
-            Err(fail) => return Err(fail),
+            Ok((p, stmt, state)) => Ok((p, Loc::pos(start, state.pos(), stmt), state)),
+            Err(fail) => Err(fail),
         }
     }
 }
