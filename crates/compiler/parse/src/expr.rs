@@ -179,7 +179,7 @@ fn parse_underscore_or_term<'a>(
     if state.bytes().first() == Some(&b'_') {
         parse_rest_of_underscore_expr(state.pos(), state.inc())
     } else {
-        parse_term(options, arena, state.clone(), min_indent)
+        parse_term(options, arena, state, min_indent)
     }
 }
 
@@ -197,7 +197,7 @@ fn parse_term<'a>(
                 Err((p, fail)) => Err((p, EExpr::Closure(fail, start))),
             },
             b'(' => parse_rest_of_expr_in_parens_etc(start, arena, state.inc(), min_indent),
-            b'{' => parse_record_expr(start, arena, state.clone(), min_indent),
+            b'{' => parse_record_expr(start, arena, state, min_indent),
             b'[' => parse_rest_of_list_expr(start, arena, state.inc()),
             b'"' | b'\'' => {
                 let column = state.column();
@@ -225,7 +225,7 @@ fn parse_term<'a>(
                     return Ok((MadeProgress, dbg_expr, state));
                 }
 
-                parse_ident_seq(arena, state.clone(), min_indent)
+                parse_ident_seq(arena, state, min_indent)
             }
         }
     } else {
@@ -315,7 +315,7 @@ fn parse_negative_or_term<'a>(
                 .map(|b| b.is_ascii_whitespace() || *b == b'#')
                 .unwrap_or(false) =>
             {
-                parse_unary_minus(start, options, arena, state.clone(), min_indent)
+                parse_unary_minus(start, options, arena, state, min_indent)
             }
             b'-' => {
                 // drop the minus
@@ -340,7 +340,7 @@ fn parse_negative_or_term<'a>(
             }
             b'!' => parse_rest_of_logical_not(start, options, arena, state.inc(), min_indent),
             b'(' => parse_rest_of_expr_in_parens_etc(start, arena, state.inc(), min_indent),
-            b'{' => parse_record_expr(start, arena, state.clone(), min_indent),
+            b'{' => parse_record_expr(start, arena, state, min_indent),
             b'[' => parse_rest_of_list_expr(start, arena, state.inc()),
             b'"' | b'\'' => {
                 let column = state.column();
@@ -368,7 +368,7 @@ fn parse_negative_or_term<'a>(
                     return Ok((MadeProgress, dbg_expr, state));
                 }
 
-                parse_ident_seq(arena, state.clone(), min_indent)
+                parse_ident_seq(arena, state, min_indent)
             }
         }
     } else {

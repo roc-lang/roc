@@ -4840,6 +4840,7 @@ mod test_fmt {
         );
     }
 
+    // todo: @wip
     #[test]
     fn simple_closure_with_pipe_sugar() {
         expr_formats_to(
