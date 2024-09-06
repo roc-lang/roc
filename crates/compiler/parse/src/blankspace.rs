@@ -291,22 +291,6 @@ where
     }
 }
 
-pub fn require_newline_or_eof<'a, E>(newline_problem: fn(Position) -> E) -> impl Parser<'a, (), E>
-where
-    E: 'a + SpaceProblem,
-{
-    move |arena: &'a Bump, state: State<'a>, min_indent| {
-        // TODO: we can do this more efficiently by stopping as soon as we see a '#' or a newline
-        let (_, spaces, _) = parse_space(newline_problem, arena, state.clone(), min_indent)?;
-
-        if !spaces.is_empty() || state.has_reached_end() {
-            Ok((NoProgress, (), state))
-        } else {
-            Err((NoProgress, newline_problem(state.pos())))
-        }
-    }
-}
-
 pub fn loc_space0_e<'a, E>(
     indent_problem: fn(Position) -> E,
 ) -> impl Parser<'a, Loc<&'a [CommentOrNewline<'a>]>, E>

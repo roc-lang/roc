@@ -1414,13 +1414,11 @@ fn to_dbg_or_expect_report<'a>(
             to_space_report(alloc, lines, filename, err, *pos)
         }
 
-        roc_parse::parser::EExpect::Dbg(_) => unreachable!("another branch would be taken"),
-        roc_parse::parser::EExpect::Expect(_) => unreachable!("another branch would be taken"),
-
         roc_parse::parser::EExpect::Condition(e_expr, condition_start) => {
             // is adding context helpful here?
             to_expr_report(alloc, lines, filename, context, e_expr, *condition_start)
         }
+
         roc_parse::parser::EExpect::Continuation(e_expr, continuation_start) => {
             let context = Context::InNode(node, start);
             to_expr_report(alloc, lines, filename, context, e_expr, *continuation_start)

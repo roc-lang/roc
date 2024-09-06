@@ -1491,8 +1491,6 @@ impl<'a> Normalize<'a> for EExpect<'a> {
     fn normalize(&self, arena: &'a Bump) -> Self {
         match self {
             EExpect::Space(inner_err, _) => EExpect::Space(*inner_err, Position::zero()),
-            EExpect::Dbg(_) => EExpect::Dbg(Position::zero()),
-            EExpect::Expect(_) => EExpect::Expect(Position::zero()),
             EExpect::Condition(inner_err, _) => {
                 EExpect::Condition(arena.alloc(inner_err.normalize(arena)), Position::zero())
             }

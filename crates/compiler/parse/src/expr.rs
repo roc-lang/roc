@@ -6,8 +6,8 @@ use crate::ast::{
     TryTarget, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use crate::blankspace::{
-    loc_space0_e, parse_space, require_newline_or_eof, space0_around_ee, space0_before_e, space0_e,
-    spaces, spaces_around_help, spaces_before, with_spaces, with_spaces_before,
+    loc_space0_e, parse_space, space0_around_ee, space0_before_e, space0_e, spaces,
+    spaces_around_help, spaces_before, with_spaces, with_spaces_before,
 };
 use crate::header::module_name_help;
 use crate::ident::{
@@ -192,7 +192,7 @@ fn parse_term<'a>(
     let start = state.pos();
     if let Some(b) = state.bytes().first() {
         match b {
-            b'\\' => match parse_closure(options, arena, state.clone()) {
+            b'\\' => match parse_rest_of_closure(options, arena, state.inc()) {
                 Ok((p, expr, state)) => Ok((p, Loc::pos(start, state.pos(), expr), state)),
                 Err((p, fail)) => Err((p, EExpr::Closure(fail, start))),
             },
@@ -271,25 +271,26 @@ fn parse_rest_of_underscore_expr<'a>(
 fn parse_if_when_closure<'a>(
     options: ExprParseOptions,
     arena: &'a Bump,
-    state: State<'a>,
+    mut state: State<'a>,
     min_indent: u32,
 ) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
     let start = state.pos();
+    // All closures start with a '\' - e.g. (\x -> x + 1)
     if state.bytes().first() == Some(&b'\\') {
-        match parse_closure(options, arena, state) {
+        match parse_rest_of_closure(options, arena, state.inc()) {
             Ok((p, expr, state)) => Ok((p, Loc::pos(start, state.pos(), expr), state)),
             Err((p, fail)) => Err((p, EExpr::Closure(fail, start))),
         }
     } else if at_keyword(keyword::IF, &state) {
-        let state = state.advance(keyword::IF.len());
+        state.advance_mut(keyword::IF.len());
         match parse_rest_of_if_expr(options, arena, state, min_indent) {
             Ok((p, expr, state)) => Ok((p, Loc::pos(start, state.pos(), expr), state)),
             Err((p, err)) => Err((p, EExpr::If(err, start))),
         }
     } else if at_keyword(keyword::WHEN, &state) {
-        let min_indent = state.line_indent() + 1;
-        let state = state.advance(keyword::WHEN.len());
-        match when::parse_rest_of_when_expr(options, arena, state, min_indent) {
+        state.advance_mut(keyword::WHEN.len());
+        let indent = state.line_indent();
+        match when::parse_rest_of_when_expr(options, arena, state, indent) {
             Ok((p, expr, state)) => Ok((p, Loc::pos(start, state.pos(), expr), state)),
             Err((p, err)) => Err((p, EExpr::When(err, start))),
         }
@@ -538,12 +539,11 @@ pub fn parse_repl_defs_and_optional_expr<'a>(
     Ok((MadeProgress, (defs, last_expr), state))
 }
 
-// todo: @wip review and simplify
 fn parse_stmt_start<'a>(
     options: ExprParseOptions,
     preceding_comment: Region,
     arena: &'a Bump,
-    state: State<'a>,
+    mut state: State<'a>,
     min_indent: u32,
 ) -> ParseResult<'a, Loc<Stmt<'a>>, EExpr<'a>> {
     match parse_if_when_closure(options, arena, state.clone(), min_indent) {
@@ -553,33 +553,26 @@ fn parse_stmt_start<'a>(
     }
 
     let start = state.pos();
-    match expect_help(options, preceding_comment).parse(arena, state.clone(), min_indent) {
-        Err((NoProgress, _)) => {}
-        Ok((p, stmt, state)) => return Ok((p, Loc::pos(start, state.pos(), stmt), state)),
-        Err((MadeProgress, fail)) => return Err((MadeProgress, EExpr::Expect(fail, start))),
-    }
 
-    match parse_dbg_stmt(options, preceding_comment, arena, state.clone()) {
-        Err((NoProgress, _)) => {}
-        Ok((p, stmt, state)) => return Ok((p, Loc::pos(start, state.pos(), stmt), state)),
-        Err((MadeProgress, fail)) => return Err((MadeProgress, EExpr::Dbg(fail, start))),
-    }
-
-    match import().parse(arena, state.clone(), min_indent) {
-        Err((NoProgress, _)) => {}
-        Ok((p, stmt, state)) => {
-            return Ok((p, Loc::pos(start, state.pos(), Stmt::ValueDef(stmt)), state))
+    if at_keyword(keyword::EXPECT, &state) {
+        state.advance_mut(keyword::EXPECT.len());
+        parse_rest_of_expect_stmt(false, start, options, preceding_comment, arena, state)
+    } else if at_keyword(&keyword::EXPECT_FX, &state) {
+        state.advance_mut(keyword::EXPECT_FX.len());
+        parse_rest_of_expect_stmt(true, start, options, preceding_comment, arena, state)
+    } else if at_keyword(keyword::DBG, &state) {
+        state.advance_mut(keyword::DBG.len());
+        parse_rest_of_dbg_stmt(start, options, preceding_comment, arena, state)
+    } else if at_keyword(keyword::IMPORT, &state) {
+        state.advance_mut(keyword::IMPORT.len());
+        parse_rest_of_import(start, arena, state, min_indent)
+    } else {
+        match parse_stmt_operator_chain(options, arena, state, min_indent) {
+            Err((NoProgress, _)) => Err((NoProgress, EExpr::Start(start))),
+            Ok((p, stmt, state)) => return Ok((p, Loc::pos(start, state.pos(), stmt), state)),
+            Err(fail) => return Err(fail),
         }
-        Err((MadeProgress, fail)) => return Err((MadeProgress, EExpr::Import(fail, start))),
     }
-
-    match parse_stmt_operator_chain(options, arena, state.clone(), min_indent) {
-        Err((NoProgress, _)) => {}
-        Ok((p, stmt, state)) => return Ok((p, Loc::pos(start, state.pos(), stmt), state)),
-        Err(fail) => return Err(fail),
-    }
-
-    Err((NoProgress, EExpr::Start(start)))
 }
 
 fn parse_stmt_operator_chain<'a>(
@@ -891,19 +884,6 @@ fn numeric_negate_expression<'a>(
     with_spaces_before(new_loc_expr, spaces, arena)
 }
 
-fn import_body<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>> {
-    map(
-        record!(ModuleImport {
-            before_name: space0_e(EImport::IndentStart),
-            name: loc(imported_module_name()),
-            params: optional(specialize_err(EImport::Params, import_params())),
-            alias: optional(import_as()),
-            exposed: optional(import_exposing())
-        }),
-        ValueDef::ModuleImport,
-    )
-}
-
 fn import_params<'a>() -> impl Parser<'a, ModuleImportParams<'a>, EImportParams<'a>> {
     then(
         and(
@@ -1026,22 +1006,6 @@ fn import_exposed_name<'a>(
     map(
         specialize_err(|_, pos| EImport::ExposedName(pos), unqualified_ident()),
         |n| Spaced::Item(crate::header::ExposedName::new(n)),
-    )
-}
-
-#[inline(always)]
-fn import_ingested_file_body<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>> {
-    map(
-        record!(IngestedFileImport {
-            before_path: space0_e(EImport::IndentStart),
-            path: loc(specialize_err(
-                |_, pos| EImport::IngestedPath(pos),
-                string_literal::parse_str_literal()
-            )),
-            name: import_ingested_file_as(),
-            annotation: optional(import_ingested_file_annotation())
-        }),
-        ValueDef::IngestedFileImport,
     )
 }
 
@@ -2172,7 +2136,7 @@ pub fn parse_top_level_defs<'a>(
 const CLOSURE_PIPE_PARAM: &str = "x321";
 
 /// If Ok it always returns MadeProgress
-fn parse_closure<'a>(
+fn parse_rest_of_closure<'a>(
     options: ExprParseOptions,
     arena: &'a Bump,
     state: State<'a>,
@@ -2182,12 +2146,6 @@ fn parse_closure<'a>(
     if slash_indent > state.column() {
         return Err((NoProgress, EClosure::Start(state.pos())));
     }
-
-    // All closures start with a '\' - e.g. (\x -> x + 1)
-    if state.bytes().first() != Some(&b'\\') {
-        return Err((NoProgress, EClosure::Start(state.pos())));
-    }
-    let state = state.advance(1);
 
     // Fun feature that turns `\> expr` into the `\x321->x321|> expr`
     if state.bytes().first() == Some(&b'>') {
@@ -2585,79 +2543,116 @@ mod when {
     }
 }
 
-fn expect_help<'a>(
-    options: ExprParseOptions,
-    preceding_comment: Region,
-) -> impl Parser<'a, Stmt<'a>, EExpect<'a>> {
-    move |arena: &'a Bump, state: State<'a>, min_indent| {
-        let parse_expect_vanilla = parser::keyword(keyword::EXPECT, EExpect::Expect);
-        let parse_expect_fx = parser::keyword(keyword::EXPECT_FX, EExpect::Expect);
-        let parse_expect = either(parse_expect_vanilla, parse_expect_fx);
-
-        let (_, kw, state) = parse_expect.parse(arena, state, min_indent)?;
-
-        let (_, condition, state) = parse_block(
-            options,
-            arena,
-            state,
-            true,
-            EExpect::IndentCondition,
-            EExpect::Condition,
-        )
-        .map_err(|(_, f)| (MadeProgress, f))?;
-
-        let vd = match kw {
-            Either::First(_) => ValueDef::Expect {
-                condition: arena.alloc(condition),
-                preceding_comment,
-            },
-            Either::Second(_) => ValueDef::ExpectFx {
-                condition: arena.alloc(condition),
-                preceding_comment,
-            },
-        };
-
-        Ok((MadeProgress, Stmt::ValueDef(vd), state))
-    }
-}
-
-fn parse_dbg_stmt<'a>(
+fn parse_rest_of_expect_stmt<'a>(
+    is_fx: bool,
+    start: Position,
     options: ExprParseOptions,
     preceding_comment: Region,
     arena: &'a Bump,
     state: State<'a>,
-) -> ParseResult<'a, Stmt<'a>, EExpect<'a>> {
-    if !at_keyword(keyword::DBG, &state) {
-        return Err((NoProgress, EExpect::Dbg(state.pos())));
-    }
-    let state = state.advance(keyword::DBG.len());
-
-    let (_, condition, state) = parse_block(
+) -> ParseResult<'a, Loc<Stmt<'a>>, EExpr<'a>> {
+    match parse_block(
         options,
         arena,
         state,
         true,
         EExpect::IndentCondition,
         EExpect::Condition,
-    )
-    .map_err(|(_, f)| (MadeProgress, f))?;
-
-    let stmt = Stmt::ValueDef(ValueDef::Dbg {
-        condition: arena.alloc(condition),
-        preceding_comment,
-    });
-
-    Ok((MadeProgress, stmt, state))
+    ) {
+        Ok((_, condition, state)) => {
+            let vd = if !is_fx {
+                ValueDef::Expect {
+                    condition: arena.alloc(condition),
+                    preceding_comment,
+                }
+            } else {
+                ValueDef::ExpectFx {
+                    condition: arena.alloc(condition),
+                    preceding_comment,
+                }
+            };
+            let stmt = Loc::pos(start, state.pos(), Stmt::ValueDef(vd));
+            Ok((MadeProgress, stmt, state))
+        }
+        Err((_, fail)) => Err((MadeProgress, EExpr::Expect(fail, start))),
+    }
 }
 
-fn import<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>> {
-    skip_second(
-        skip_first(
-            parser::keyword(keyword::IMPORT, EImport::Import),
-            increment_min_indent(one_of!(import_body(), import_ingested_file_body())),
-        ),
-        require_newline_or_eof(EImport::EndNewline),
-    )
+fn parse_rest_of_dbg_stmt<'a>(
+    start: Position,
+    options: ExprParseOptions,
+    preceding_comment: Region,
+    arena: &'a Bump,
+    state: State<'a>,
+) -> ParseResult<'a, Loc<Stmt<'a>>, EExpr<'a>> {
+    match parse_block(
+        options,
+        arena,
+        state,
+        true,
+        EExpect::IndentCondition,
+        EExpect::Condition,
+    ) {
+        Ok((_, condition, state)) => {
+            let vd = ValueDef::Dbg {
+                condition: arena.alloc(condition),
+                preceding_comment,
+            };
+            let stmt = Loc::pos(start, state.pos(), Stmt::ValueDef(vd));
+            Ok((MadeProgress, stmt, state))
+        }
+        Err((_, fail)) => Err((MadeProgress, EExpr::Dbg(fail, start))),
+    }
+}
+
+fn parse_rest_of_import<'a>(
+    start: Position,
+    arena: &'a Bump,
+    state: State<'a>,
+    min_indent: u32,
+) -> ParseResult<'a, Loc<Stmt<'a>>, EExpr<'a>> {
+    let import_body = record!(ModuleImport {
+        before_name: space0_e(EImport::IndentStart),
+        name: loc(imported_module_name()),
+        params: optional(specialize_err(EImport::Params, import_params())),
+        alias: optional(import_as()),
+        exposed: optional(import_exposing())
+    });
+
+    let (vd, state) = match import_body.parse(arena, state.clone(), min_indent + 1) {
+        Ok((_, vd, state)) => (ValueDef::ModuleImport(vd), state),
+        Err((MadeProgress, fail)) => return Err((MadeProgress, EExpr::Import(fail, start))),
+        Err(_) => {
+            let import_ingested_file_body = record!(IngestedFileImport {
+                before_path: space0_e(EImport::IndentStart),
+                path: loc(specialize_err(
+                    |_, pos| EImport::IngestedPath(pos),
+                    string_literal::parse_str_literal()
+                )),
+                name: import_ingested_file_as(),
+                annotation: optional(import_ingested_file_annotation())
+            });
+
+            match import_ingested_file_body.parse(arena, state.clone(), min_indent + 1) {
+                Ok((_, vd, state)) => (ValueDef::IngestedFileImport(vd), state),
+                Err((_, fail)) => return Err((MadeProgress, EExpr::Import(fail, start))),
+            }
+        }
+    };
+
+    let has_reached_new_line_or_eof = state.has_reached_end();
+    let (_, spaces_after, _) = parse_space(EImport::EndNewline, arena, state.clone(), min_indent)
+        .map_err(|(_, fail)| (MadeProgress, EExpr::Import(fail, start)))?;
+
+    if !has_reached_new_line_or_eof && spaces_after.is_empty() {
+        return Err((
+            MadeProgress,
+            EExpr::Import(EImport::EndNewline(state.pos()), start),
+        ));
+    }
+
+    let stmt = Loc::pos(start, state.pos(), Stmt::ValueDef(vd));
+    Ok((MadeProgress, stmt, state))
 }
 
 /// If Ok it always returns MadeProgress
