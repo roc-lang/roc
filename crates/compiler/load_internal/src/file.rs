@@ -1665,7 +1665,7 @@ fn state_thread_step<'a>(
                     Ok(ControlFlow::Break(LoadResult::Monomorphized(monomorphized)))
                 }
                 Msg::FailedToReadFile { filename, error } => {
-                    let buf = to_file_problem_report_string(filename, error);
+                    let buf = to_file_problem_report_string(filename, error, true);
                     Err(LoadingProblem::FormattedReport(buf))
                 }
 
@@ -1839,7 +1839,7 @@ pub fn report_loading_problem(
         }
         LoadingProblem::FormattedReport(report) => report,
         LoadingProblem::FileProblem { filename, error } => {
-            to_file_problem_report_string(filename, error)
+            to_file_problem_report_string(filename, error, true)
         }
         LoadingProblem::NoPlatformPackage {
             filename,
