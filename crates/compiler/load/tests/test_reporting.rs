@@ -3793,9 +3793,9 @@ mod test_reporting {
     of these?
 
         Set
+        Task
         List
         Dict
-        Hash
 
     ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
@@ -3804,7 +3804,7 @@ mod test_reporting {
     10│      y = { Test.example & age: 3 }
                    ^^^^^^^^^^^^
 
-    Only variables can be updated with record update syntax.
+    Only variables can be updated with record update syntax. 
     "
     );
 
@@ -5761,28 +5761,6 @@ mod test_reporting {
     );
 
     test_report!(
-        dbg_without_final_expression,
-        indoc!(
-            r"
-            dbg 42
-            "
-        ),
-        @r#"
-    ── INDENT ENDS AFTER EXPRESSION in tmp/dbg_without_final_expression/Test.roc ───
-
-    I am partway through parsing a dbg statement, but I got stuck here:
-
-    4│      dbg 42
-                  ^
-
-    I was expecting a final expression, like so
-
-        dbg 42
-        "done"
-    "#
-    );
-
-    test_report!(
         expect_without_final_expression,
         indoc!(
             r"
@@ -6318,16 +6296,17 @@ All branches in an `if` must have the same type!
         )
     }
 
+    // TODO: this test seems out of date (what is the `effects` clause?) and as such should be removed
     #[test]
     fn platform_requires_rigids() {
         report_header_problem_as(
             indoc!(
                 r#"
                 platform "folkertdev/foo"
-                    requires { main : Effect {} }
+                    requires { main : Task {} [] }
                     exposes []
                     packages {}
-                    imports [Task]
+                    imports []
                     provides [mainForHost]
                     effects fx.Effect
                          {
@@ -6344,13 +6323,13 @@ All branches in an `if` must have the same type!
                 I am partway through parsing a header, but I got stuck here:
 
                 1│  platform "folkertdev/foo"
-                2│      requires { main : Effect {} }
+                2│      requires { main : Task {} [] }
                                    ^
 
                 I am expecting a list of type names like `{}` or `{ Model }` next. A full
                 `requires` definition looks like
 
-                    requires { Model, Msg } {main : Effect {}}
+                    requires { Model, Msg } {main : Task {} []}
             "#
             ),
         )
@@ -8116,7 +8095,7 @@ All branches in an `if` must have the same type!
         unimported_modules_reported,
         indoc!(
             r#"
-            alt : Task.Task {} []
+            alt : Unimported.CustomType
             alt = "whatever man you don't even know my type"
             alt
             "#
@@ -8124,18 +8103,18 @@ All branches in an `if` must have the same type!
         @r"
     ── MODULE NOT IMPORTED in /code/proj/Main.roc ──────────────────────────────────
 
-    The `Task` module is not imported:
+    The `Unimported` module is not imported:
 
-    4│      alt : Task.Task {} []
-                  ^^^^^^^^^^^^^^^
+    4│      alt : Unimported.CustomType
+                  ^^^^^^^^^^^^^^^^^^^^^
 
     Is there an import missing? Perhaps there is a typo. Did you mean one
     of these?
 
-        Hash
+        Encode
+        Inspect
+        Dict
         List
-        Num
-        Box
     "
     );
 
@@ -14514,6 +14493,76 @@ All branches in an `if` must have the same type!
     Roc does not allow functions to be partially applied. Use a closure to
     make partial application explicit.
     "
+    );
+
+    test_report!(
+        dbg_unapplied,
+        indoc!(
+            r"
+            1 + dbg + 2
+            "
+        ),
+    @r"
+    ── UNAPPLIED DBG in /code/proj/Main.roc ────────────────────────────────────────
+
+    This `dbg` doesn't have a value given to it:
+
+    4│      1 + dbg + 2
+                ^^^
+
+    `dbg` must be passed a value to print at the exact place it's used. `dbg`
+    can't be used as a value that's passed around, like functions can be -
+    it must be applied immediately!
+
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+
+    This 2nd argument to + has an unexpected type:
+
+    4│      1 + dbg + 2
+                ^^^
+
+    This value is a:
+
+        {}
+
+    But + needs its 2nd argument to be:
+
+        Num *
+    "
+    );
+
+    test_report!(
+        dbg_overapplied,
+        indoc!(
+            r#"
+            1 + dbg "" "" + 2
+            "#
+        ),
+    @r#"
+    ── OVERAPPLIED DBG in /code/proj/Main.roc ──────────────────────────────────────
+
+    This `dbg` has too many values given to it:
+
+    4│      1 + dbg "" "" + 2
+                    ^^^^^
+
+    `dbg` must be given exactly one value to print.
+
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+
+    This 2nd argument to + has an unexpected type:
+
+    4│      1 + dbg "" "" + 2
+                ^^^^^^^^^
+
+    This value is a:
+
+        {}
+
+    But + needs its 2nd argument to be:
+
+        Num *
+    "#
     );
 
     // TODO: add the following tests after built-in Tasks are added

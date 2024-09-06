@@ -305,14 +305,11 @@ impl IterTokens for HostedHeader<'_> {
             name,
             exposes,
             imports,
-            generates: _,
-            generates_with,
         } = self;
 
         (name.iter_tokens(arena).into_iter())
             .chain(exposes.item.iter_tokens(arena))
             .chain(imports.item.iter_tokens(arena))
-            .chain(generates_with.item.iter_tokens(arena))
             .collect_in(arena)
     }
 }
@@ -697,7 +694,8 @@ impl IterTokens for Loc<Expr<'_>> {
             Expr::Expect(e1, e2) => (e1.iter_tokens(arena).into_iter())
                 .chain(e2.iter_tokens(arena))
                 .collect_in(arena),
-            Expr::Dbg(e1, e2) => (e1.iter_tokens(arena).into_iter())
+            Expr::Dbg => onetoken(Token::Keyword, region, arena),
+            Expr::DbgStmt(e1, e2) => (e1.iter_tokens(arena).into_iter())
                 .chain(e2.iter_tokens(arena))
                 .collect_in(arena),
             Expr::LowLevelDbg(_, e1, e2) => (e1.iter_tokens(arena).into_iter())

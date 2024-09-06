@@ -1,3 +1,4 @@
+use roc_can::module::ModuleParams;
 use roc_module::symbol::Symbol;
 use roc_types::subs::Variable;
 
@@ -9,29 +10,19 @@ pub struct Scope {
 }
 
 impl Scope {
-    pub fn new(params_pattern: Option<roc_can::pattern::Pattern>) -> Self {
-        match params_pattern {
-            Some(params_pattern) => match params_pattern {
-                roc_can::pattern::Pattern::RecordDestructure {
-                    whole_var: _,
-                    ext_var: _,
-                    destructs,
-                } => {
-                    let mut symbols = Vec::with_capacity(destructs.len());
-                    let mut variables = Vec::with_capacity(destructs.len());
+    pub fn new(opt_module_params: Option<ModuleParams>) -> Self {
+        match opt_module_params {
+            Some(module_params) => {
+                let mut symbols = Vec::with_capacity(module_params.destructs.len());
+                let mut variables = Vec::with_capacity(module_params.destructs.len());
 
-                    for destruct in destructs {
-                        symbols.push(destruct.value.symbol);
-                        variables.push(destruct.value.var);
-                    }
-
-                    Self { symbols, variables }
+                for destruct in module_params.destructs {
+                    symbols.push(destruct.value.symbol);
+                    variables.push(destruct.value.var);
                 }
-                _ => unreachable!(
-                    "other pattern types should have parsed: {:?}",
-                    params_pattern
-                ),
-            },
+
+                Self { symbols, variables }
+            }
             None => Self {
                 symbols: Vec::default(),
                 variables: Vec::default(),

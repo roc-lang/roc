@@ -1295,8 +1295,8 @@ fn roc_dev_native(
                         break if libc::WIFEXITED(status) {
                             libc::WEXITSTATUS(status)
                         } else {
-                            // we don't have an exit code, so we probably shouldn't make one up
-                            0
+                            // we don't have an exit code, but something went wrong if we're in this else
+                            1
                         };
                     }
                     ChildProcessMsg::Expect => {

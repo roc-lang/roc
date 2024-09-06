@@ -29,7 +29,6 @@ const WILDCARD_NOT_ALLOWED: &str = "WILDCARD NOT ALLOWED HERE";
 const UNDERSCORE_NOT_ALLOWED: &str = "UNDERSCORE NOT ALLOWED HERE";
 const UNUSED_ARG: &str = "UNUSED ARGUMENT";
 const MISSING_DEFINITION: &str = "MISSING DEFINITION";
-const UNKNOWN_GENERATES_WITH: &str = "UNKNOWN GENERATES FUNCTION";
 const DUPLICATE_FIELD_NAME: &str = "DUPLICATE FIELD NAME";
 const DUPLICATE_TAG_NAME: &str = "DUPLICATE TAG NAME";
 const INVALID_UNICODE: &str = "INVALID UNICODE";
@@ -307,20 +306,6 @@ pub fn can_problem<'b>(
             ]);
 
             title = MISSING_DEFINITION.to_string();
-        }
-        Problem::UnknownGeneratesWith(loc_ident) => {
-            doc = alloc.stack([
-                alloc
-                    .reflow("I don't know how to generate the ")
-                    .append(alloc.ident(loc_ident.value))
-                    .append(alloc.reflow(" function.")),
-                alloc.region(lines.convert_region(loc_ident.region), severity),
-                alloc
-                    .reflow("Only specific functions like `after` and `map` can be generated.")
-                    .append(alloc.reflow("Learn more about hosted modules at TODO.")),
-            ]);
-
-            title = UNKNOWN_GENERATES_WITH.to_string();
         }
         Problem::UnusedArgument(closure_symbol, is_anonymous, argument_symbol, region) => {
             let line = "\". Adding an underscore at the start of a variable name is a way of saying that the variable is not used.";
@@ -1327,6 +1312,34 @@ pub fn can_problem<'b>(
                 ]),
             ]);
             title = "OVERAPPLIED CRASH".to_string();
+        }
+        Problem::UnappliedDbg { region } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This "), alloc.keyword("dbg"), alloc.reflow(" doesn't have a value given to it:")
+                ]),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.concat([
+                    alloc.keyword("dbg"), alloc.reflow(" must be passed a value to print at the exact place it's used. "),
+                    alloc.keyword("dbg"), alloc.reflow(" can't be used as a value that's passed around, like functions can be - it must be applied immediately!"),
+                ])
+            ]);
+            title = "UNAPPLIED DBG".to_string();
+        }
+        Problem::OverAppliedDbg { region } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This "),
+                    alloc.keyword("dbg"),
+                    alloc.reflow(" has too many values given to it:"),
+                ]),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.concat([
+                    alloc.keyword("dbg"),
+                    alloc.reflow(" must be given exactly one value to print."),
+                ]),
+            ]);
+            title = "OVERAPPLIED DBG".to_string();
         }
         Problem::FileProblem { filename, error } => {
             let report = to_file_problem_report(alloc, filename, error);

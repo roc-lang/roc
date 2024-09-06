@@ -497,7 +497,10 @@ pub enum Expr<'a> {
 
     Backpassing(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
     Expect(&'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
-    Dbg(&'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
+
+    Dbg,
+    DbgStmt(&'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
+
     // This form of debug is a desugared call to roc_dbg
     LowLevelDbg(&'a (&'a str, &'a str), &'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
 
@@ -663,9 +666,9 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::Tag(_) => false,
         Expr::OpaqueRef(_) => false,
         Expr::Backpassing(_, _, _) => false, // TODO: we might want to check this?
-        Expr::Expect(a, b) | Expr::Dbg(a, b) => {
-            is_expr_suffixed(&a.value) || is_expr_suffixed(&b.value)
-        }
+        Expr::Expect(a, b) => is_expr_suffixed(&a.value) || is_expr_suffixed(&b.value),
+        Expr::Dbg => false,
+        Expr::DbgStmt(a, b) => is_expr_suffixed(&a.value) || is_expr_suffixed(&b.value),
         Expr::LowLevelDbg(_, a, b) => is_expr_suffixed(&a.value) || is_expr_suffixed(&b.value),
         Expr::UnaryOp(a, _) => is_expr_suffixed(&a.value),
         Expr::When(cond, branches) => {
@@ -958,9 +961,17 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                     expr_stack.push(&a.value);
                     expr_stack.push(&b.value);
                 }
-                Expect(condition, cont)
-                | Dbg(condition, cont)
-                | LowLevelDbg(_, condition, cont) => {
+                Expect(condition, cont) => {
+                    expr_stack.reserve(2);
+                    expr_stack.push(&condition.value);
+                    expr_stack.push(&cont.value);
+                }
+                DbgStmt(condition, cont) => {
+                    expr_stack.reserve(2);
+                    expr_stack.push(&condition.value);
+                    expr_stack.push(&cont.value);
+                }
+                LowLevelDbg(_, condition, cont) => {
                     expr_stack.reserve(2);
                     expr_stack.push(&condition.value);
                     expr_stack.push(&cont.value);
@@ -1032,6 +1043,7 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                 | Var { .. }
                 | Underscore(_)
                 | Crash
+                | Dbg
                 | Tag(_)
                 | OpaqueRef(_)
                 | MalformedIdent(_, _)
@@ -2518,8 +2530,9 @@ impl<'a> Malformed for Expr<'a> {
             Closure(args, body) => args.iter().any(|arg| arg.is_malformed()) || body.is_malformed(),
             Defs(defs, body) => defs.is_malformed() || body.is_malformed(),
             Backpassing(args, call, body) => args.iter().any(|arg| arg.is_malformed()) || call.is_malformed() || body.is_malformed(),
-            Expect(condition, continuation) |
-            Dbg(condition, continuation) => condition.is_malformed() || continuation.is_malformed(),
+            Expect(condition, continuation) => condition.is_malformed() || continuation.is_malformed(),
+            Dbg => false,
+            DbgStmt(condition, continuation) => condition.is_malformed() || continuation.is_malformed(),
             LowLevelDbg(_, condition, continuation) => condition.is_malformed() || continuation.is_malformed(),
             Apply(func, args, _) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
             BinOps(firsts, last) => firsts.iter().any(|(expr, _)| expr.is_malformed()) || last.is_malformed(),

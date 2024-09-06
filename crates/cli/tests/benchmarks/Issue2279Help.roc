@@ -1,6 +1,4 @@
-interface Issue2279Help
-    exposes [text, asText]
-    imports []
+module [text, asText]
 
 text = "Hello, world!"
 

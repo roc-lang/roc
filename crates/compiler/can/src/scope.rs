@@ -466,13 +466,19 @@ impl Scope {
         self.home.register_debug_idents(&self.locals.ident_ids)
     }
 
-    /// Generates a unique, new symbol like "$1" or "$5",
+    /// Generates a unique, new symbol like "1" or "5",
     /// using the home module as the module_id.
     ///
     /// This is used, for example, during canonicalization of an Expr::Closure
     /// to generate a unique symbol to refer to that closure.
     pub fn gen_unique_symbol(&mut self) -> Symbol {
         Symbol::new(self.home, self.locals.gen_unique())
+    }
+
+    /// Generates a unique new symbol and return the symbol's unqualified identifier name.
+    pub fn gen_unique_symbol_name(&mut self) -> &str {
+        let ident_id = self.locals.gen_unique();
+        self.locals.ident_ids.get_name(ident_id).unwrap()
     }
 
     /// Introduce a new ignored variable (variable starting with an underscore).
@@ -669,7 +675,7 @@ pub struct ScopeModules {
     /// Why is this module in scope?
     sources: Vec<ScopeModuleSource>,
     /// The params of a module if any
-    params: Vec<Option<Symbol>>,
+    params: Vec<Option<(Variable, Symbol)>>,
 }
 
 impl ScopeModules {
@@ -731,7 +737,7 @@ impl ScopeModules {
         &mut self,
         module_name: ModuleName,
         module_id: ModuleId,
-        params_symbol: Option<Symbol>,
+        params: Option<(Variable, Symbol)>,
         region: Region,
     ) -> Result<(), ScopeModuleSource> {
         if let Some(index) = self.names.iter().position(|name| name == &module_name) {
@@ -745,7 +751,7 @@ impl ScopeModules {
         self.ids.push(module_id);
         self.names.push(module_name);
         self.sources.push(ScopeModuleSource::Import(region));
-        self.params.push(params_symbol);
+        self.params.push(params);
         Ok(())
     }
 
@@ -768,14 +774,14 @@ impl ScopeModules {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct SymbolLookup {
     pub symbol: Symbol,
-    pub module_params: Option<Symbol>,
+    pub module_params: Option<(Variable, Symbol)>,
 }
 
 impl SymbolLookup {
-    pub fn new(symbol: Symbol, params: Option<Symbol>) -> Self {
+    pub fn new(symbol: Symbol, params: Option<(Variable, Symbol)>) -> Self {
         Self {
             symbol,
             module_params: params,
@@ -789,7 +795,7 @@ impl SymbolLookup {
 
 pub struct ModuleLookup {
     pub id: ModuleId,
-    pub params: Option<Symbol>,
+    pub params: Option<(Variable, Symbol)>,
 }
 
 impl ModuleLookup {

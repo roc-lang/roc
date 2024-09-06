@@ -1,7 +1,6 @@
 module [Context, Data, with, getChar, Option, pushStack, popStack, toStr, inWhileScope]
 
 import pf.File
-import pf.Task exposing [Task]
 import Variable exposing [Variable]
 
 Option a : [Some a, None]
@@ -73,16 +72,16 @@ getChar = \ctx ->
     when List.last ctx.scopes is
         Ok scope ->
             (T val newScope) = getCharScope! scope
-            Task.succeed (T val { ctx & scopes: List.set ctx.scopes (List.len ctx.scopes - 1) newScope })
+            Task.ok (T val { ctx & scopes: List.set ctx.scopes (List.len ctx.scopes - 1) newScope })
 
         Err ListWasEmpty ->
-            Task.fail NoScope
+            Task.err NoScope
 
 getCharScope : Scope -> Task [T U8 Scope] [EndOfData, NoScope]
 getCharScope = \scope ->
     when List.get scope.buf scope.index is
         Ok val ->
-            Task.succeed (T val { scope & index: scope.index + 1 })
+            Task.ok (T val { scope & index: scope.index + 1 })
 
         Err OutOfBounds ->
             when scope.data is
@@ -91,13 +90,13 @@ getCharScope = \scope ->
                     when List.first bytes is
                         Ok val ->
                             # This starts at 1 because the first character is already being returned.
-                            Task.succeed (T val { scope & buf: bytes, index: 1 })
+                            Task.ok (T val { scope & buf: bytes, index: 1 })
 
                         Err ListWasEmpty ->
-                            Task.fail EndOfData
+                            Task.err EndOfData
 
                 None ->
-                    Task.fail EndOfData
+                    Task.err EndOfData
 
 inWhileScope : Context -> Bool
 inWhileScope = \ctx ->
