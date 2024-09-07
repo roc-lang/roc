@@ -202,6 +202,7 @@ mod test_snapshots {
         fail/expression_indentation_end.expr,
         fail/if_guard_without_condition.expr,
         fail/if_missing_else.expr,
+        fail/if_outdented_else_branch.expr,
         fail/if_outdented_then.expr,
         fail/import_with_lowercase_alias.moduledefs,
         fail/imports_missing_comma.header,

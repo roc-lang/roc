@@ -1261,7 +1261,11 @@ pub fn canonicalize_expr<'a>(
                 output,
             )
         }
-        ast::Expr::If(if_thens, final_else_branch) => {
+        ast::Expr::If {
+            if_thens,
+            final_else: final_else_branch,
+            ..
+        } => {
             let mut branches = Vec::with_capacity(if_thens.len());
             let mut output = Output::default();
 
@@ -2572,7 +2576,11 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
                     .iter()
                     .all(|(loc_expr, _binop)| is_valid_interpolation(&loc_expr.value))
         }
-        ast::Expr::If(branches, final_branch) => {
+        ast::Expr::If {
+            if_thens: branches,
+            final_else: final_branch,
+            ..
+        } => {
             is_valid_interpolation(&final_branch.value)
                 && branches.iter().all(|(loc_before, loc_after)| {
                     is_valid_interpolation(&loc_before.value)

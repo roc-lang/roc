@@ -8,8 +8,8 @@ SpaceAfter(
                 @2-3 Star,
             ),
         ],
-        @4-30 If(
-            [
+        @4-30 If {
+            if_thens: [
                 (
                     @7-16 Var {
                         module_name: "Bool",
@@ -20,10 +20,11 @@ SpaceAfter(
                     ),
                 ),
             ],
-            @29-30 Num(
+            final_else: @29-30 Num(
                 "1",
             ),
-        ),
+            indented_else: false,
+        },
     ),
     [
         Newline,
