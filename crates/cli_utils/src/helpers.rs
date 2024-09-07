@@ -39,7 +39,7 @@ pub struct Out {
     pub stdout: String,
     pub stderr: String,
     pub status: ExitStatus,
-    pub run: Run,
+    pub run: ExecCLI,
     pub valgrind_xml: Option<NamedTempFile>,
 }
 
@@ -136,7 +136,8 @@ impl Out {
 /// Unlike `std::process::Command`, this builder is clonable and provides convenience methods for
 /// constructing Commands for the configured run and instrumenting the configured command with valgrind.
 #[derive(Debug, Clone)]
-pub struct Run {
+pub struct ExecCLI {
+    mode: Mode,
     args: Vec<OsString>,
     env: Vec<(String, String)>,
     stdin_vals: Vec<&'static str>,
@@ -144,13 +145,23 @@ pub struct Run {
     run_with_valgrind: bool,
 }
 
-impl Run {
+#[derive(Debug, Clone)]
+pub enum Mode {
+    /// `roc build app.roc` followed by `./app` 
+    BuildAndRun,
+    /// dev/test/check/...
+    SingleCmd
+}
+
+// We're using the builder pattern to enable optional arguments
+impl ExecCLI {
     pub fn new<S>(exe: S) -> Self
     where
         S: AsRef<OsStr>,
     {
         let exe: OsString = exe.as_ref().into();
         Self {
+            mode: Mode::SingleCmd,
             args: vec![exe],
             stdin_vals: vec![],
             env: vec![],
@@ -206,6 +217,11 @@ impl Run {
         }
 
         (cmd, named_tempfile)
+    }
+
+    pub fn set_mode(mut self, mode: Mode) -> Self {
+        self.mode = mode;
+        self
     }
 
     pub fn arg<S>(mut self, arg: S) -> Self
@@ -317,11 +333,11 @@ impl Run {
 
     pub fn run(self) -> Out {
         if self.run_with_valgrind {
-            return self.run_with_valgrind();
+            self.run_with_valgrind()
+        } else {
+            let command = self.command();
+            self.run_with_command(command)
         }
-
-        let command = self.command();
-        self.run_with_command(command)
     }
 
     pub fn run_glue(self) -> Out {

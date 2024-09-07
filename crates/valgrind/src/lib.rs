@@ -162,7 +162,7 @@ fn run_with_valgrind(binary_path: &std::path::Path) {
         .to_str()
         .unwrap();
 
-    let valgrind_out = cli_utils::helpers::Run::new_roc()
+    let valgrind_out = cli_utils::helpers::ExecCLI::new_roc()
         .arg(generated_filename)
         .run_with_valgrind();
 

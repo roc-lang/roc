@@ -90,6 +90,7 @@ criterion.workspace = true
 indoc.workspace = true
 parking_lot.workspace = true
 pretty_assertions.workspace = true
+lazy_static.workspace = true
 
 [[bench]]
 name = "time_bench"

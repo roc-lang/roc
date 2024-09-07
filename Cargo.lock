@@ -2374,6 +2374,7 @@ dependencies = [
  "errno",
  "indoc",
  "inkwell",
+ "lazy_static",
  "libc",
  "libloading",
  "mimalloc",

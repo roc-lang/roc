@@ -16,7 +16,7 @@ jobs:
 
       - uses: cachix/install-nix-action@v22
 
-      - name: execute cli_run tests only, the full tests take too long but are run nightly
+      - name: execute cli_tests tests only, the full tests take too long but are run nightly
         run: nix develop -c cargo test --locked --release -p roc_cli -- --skip hello_gui
         # see 5932 for hello_gui
 

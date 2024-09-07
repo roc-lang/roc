@@ -48,7 +48,7 @@
         # DevInputs are not necessary to build roc as a user
         linuxDevInputs = with pkgs;
           lib.optionals stdenv.isLinux [
-            valgrind # used in cli tests, see cli/tests/cli_run.rs
+            valgrind # used in cli tests, see cli/tests/cli_tests.rs
             vulkan-headers # here and below is all graphics stuff for examples/gui
             vulkan-loader
             vulkan-tools

@@ -1,4 +1,4 @@
-use crate::helpers::{file_from_root, Run};
+use crate::helpers::{file_from_root, ExecCLI};
 use criterion::{black_box, measurement::Measurement, BenchmarkGroup};
 use std::{path::Path, thread};
 
@@ -14,7 +14,7 @@ fn exec_bench_w_input<T: Measurement>(
     expected_ending: &str,
     bench_group_opt: Option<&mut BenchmarkGroup<T>>,
 ) {
-    let runner = Run::new_roc().add_args([
+    let runner = ExecCLI::new_roc().add_args([
         "build",
         BUILD_HOST_FLAG,
         OPTIMIZE_FLAG,
@@ -49,7 +49,7 @@ fn check_cmd_output(
         .unwrap()
         .to_string();
 
-    let runner = Run::new(&cmd_str).with_stdin_vals([stdin_str]);
+    let runner = ExecCLI::new(&cmd_str).with_stdin_vals([stdin_str]);
 
     let out = if cmd_str.contains("cfold") {
         thread::scope(|s| {
@@ -103,13 +103,13 @@ fn bench_cmd<T: Measurement>(
     if let Some(bench_group) = bench_group_opt {
         bench_group.bench_function(&format!("Benchmarking {executable_filename:?}"), |b| {
             b.iter(|| {
-                Run::new(black_box(&cmd_str))
+                ExecCLI::new(black_box(&cmd_str))
                     .with_stdin_vals([stdin_str])
                     .run()
             })
         });
     } else {
-        Run::new(file.with_file_name(executable_filename).to_str().unwrap())
+        ExecCLI::new(file.with_file_name(executable_filename).to_str().unwrap())
             .with_stdin_vals([stdin_str])
             .run();
     }
