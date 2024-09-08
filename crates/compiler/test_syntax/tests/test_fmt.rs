@@ -4799,10 +4799,20 @@ mod test_fmt {
     }
 
     #[test]
-    fn func_call_trailing_lambda_with_pipe_sugar() {
+    fn func_call_trailing_lambda_pizza_shortcut() {
         expr_formats_same(indoc!(
             r"
                 list = List.map [1, 2, 3] \|> Num.add 1
+                list
+            "
+        ));
+    }
+
+    #[test]
+    fn func_call_trailing_lambda_plus_shortcut() {
+        expr_formats_same(indoc!(
+            r"
+                list = List.map [1, 2, 3] \+ 1
                 list
             "
         ));
@@ -4832,7 +4842,6 @@ mod test_fmt {
         );
     }
 
-    // todo: @wip
     #[test]
     fn simple_closure_pizza() {
         expr_formats_same(indoc!(

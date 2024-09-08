@@ -422,7 +422,7 @@ fn parse_expr_start<'a>(
                 // We're part way thru parsing an expression, e.g. `bar foo `.
                 // We just tried parsing an argument and determined we couldn't -
                 // so we're going to try parsing an operator.
-                let op_res = match parse_bin_op(true, state.clone()) {
+                let op_res = match parse_bin_op(MadeProgress, state.clone()) {
                     Err((NoProgress, _)) => {
                         // roll back space parsing
                         let expr = parse_expr_final(expr_state, arena);
@@ -1758,7 +1758,12 @@ fn parse_expr_end<'a>(
             // We just tried parsing an argument and determined we couldn't -
             // so we're going to try parsing an operator.
             let before_op = state.clone();
-            match parse_bin_op(check_for_defs, state.clone()) {
+            let err_progress = if check_for_defs {
+                MadeProgress
+            } else {
+                NoProgress
+            };
+            match parse_bin_op(err_progress, state.clone()) {
                 Err((MadeProgress, f)) => Err((MadeProgress, f)),
                 Ok((_, op, state)) => {
                     let op_start = before_op.pos();
@@ -2133,7 +2138,7 @@ pub fn parse_top_level_defs<'a>(
     Ok((MadeProgress, output, state))
 }
 
-// todo: @wip can we create a special unique name, like use some symbol at end, that normally rejected by ident names?
+// todo: @wip is it possible to create a special unique name, like use some symbol at end, that normally rejected by ident names?
 const CLOSURE_ARG_BINOP_LEFT: &str = "pq";
 
 /// If Ok it always returns MadeProgress
@@ -2151,12 +2156,12 @@ fn parse_rest_of_closure<'a>(
     // note: @feat closure+binop shortcut
     // todo: @wip Fun feature for expanding:
     // - [X] `\|> f` into the `\p -> p |> f`,
-    // - [ ] `\+ 1` into `\p -> p + 1`,
+    // - [X] the rest of BinOp's, e.g. `\+ 1` into `\p -> p + 1`,
     // - [ ] `\.foo.bar + 1` into `\p -> p.foo.bar + 1`
     // - [ ] `\?> Ok _ -> 1, Err _ -> 0` into ???
-    if state.bytes().starts_with(b"|>") {
-        let after_slash = state.pos();
-        let state = state.advance(2);
+    //
+    let after_slash = state.pos();
+    if let Ok((_, binop, state)) = parse_bin_op(MadeProgress, state.clone()) {
         let after_binop = state.pos();
 
         let param = Pattern::Identifier {
@@ -2181,7 +2186,6 @@ fn parse_rest_of_closure<'a>(
             end: after_slash,
         };
 
-        let binop = BinOp::Pizza;
         let loc_op = Loc::pos(after_slash, after_binop, binop);
 
         let min_indent = slash_indent + 1;
@@ -3825,14 +3829,9 @@ enum OperatorOrDef {
     Backpassing,
 }
 
-fn parse_bin_op<'a>(check_for_defs: bool, state: State<'a>) -> ParseResult<'a, BinOp, EExpr<'a>> {
+fn parse_bin_op<'a>(err_progress: Progress, state: State<'a>) -> ParseResult<'a, BinOp, EExpr<'a>> {
     let start = state.pos();
     let (_, op, state) = parse_operator(EExpr::Start, EExpr::BadOperator, state)?;
-    let err_progress = if check_for_defs {
-        MadeProgress
-    } else {
-        NoProgress
-    };
     match op {
         OperatorOrDef::BinOp(op) => Ok((MadeProgress, op, state)),
         OperatorOrDef::Assignment => Err((err_progress, EExpr::BadOperator("=", start))),
