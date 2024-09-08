@@ -1025,7 +1025,7 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::RecordUpdater(_) => {
             internal_error!("Record updater should have been desugared by now")
         }
-        ast::Expr::Closure(loc_arg_patterns, loc_body_expr) => {
+        ast::Expr::Closure(loc_arg_patterns, loc_body_expr, _) => {
             let (closure_data, output) =
                 canonicalize_closure(env, var_store, scope, loc_arg_patterns, loc_body_expr, None);
 
@@ -2543,7 +2543,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         | ast::Expr::OptionalFieldInRecordBuilder(_, loc_expr)
         | ast::Expr::PrecedenceConflict(PrecedenceConflict { expr: loc_expr, .. })
         | ast::Expr::UnaryOp(loc_expr, _)
-        | ast::Expr::Closure(_, loc_expr) => is_valid_interpolation(&loc_expr.value),
+        | ast::Expr::Closure(_, loc_expr, _) => is_valid_interpolation(&loc_expr.value),
         ast::Expr::TupleAccess(sub_expr, _)
         | ast::Expr::ParensAround(sub_expr)
         | ast::Expr::RecordAccess(sub_expr, _)

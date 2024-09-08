@@ -2000,7 +2000,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::RecordAccess(_, _)
         | Expr::TupleAccess(_, _)
         | Expr::List { .. }
-        | Expr::Closure(_, _)
+        | Expr::Closure(_, _, _)
         | Expr::Backpassing(_, _, _)
         | Expr::BinOps { .. }
         | Expr::Defs(_, _)
@@ -2133,7 +2133,8 @@ pub fn parse_top_level_defs<'a>(
     Ok((MadeProgress, output, state))
 }
 
-const CLOSURE_PIPE_PARAM: &str = "x321";
+// todo: @wip can we create a special unique name, like use some symbol at end, that normally rejected by ident names?
+const CLOSURE_ARG_BINOP_LEFT: &str = "pq";
 
 /// If Ok it always returns MadeProgress
 fn parse_rest_of_closure<'a>(
@@ -2147,25 +2148,26 @@ fn parse_rest_of_closure<'a>(
         return Err((NoProgress, EClosure::Start(state.pos())));
     }
 
-    // Fun feature that turns `\> expr` into the `\x321->x321|> expr`
-    if state.bytes().first() == Some(&b'>') {
+    // note: @feat closure+binop shortcut
+    // Fun feature that turns `\|> expr` into the `\pq -> pq |> expr`
+    if state.bytes().starts_with(b"|>") {
         let after_slash = state.pos();
-        let state = state.advance(1);
-        let after_greater = state.pos();
+        let state = state.advance(2);
+        let after_binop = state.pos();
 
         let param = Pattern::Identifier {
-            ident: &CLOSURE_PIPE_PARAM,
+            ident: &CLOSURE_ARG_BINOP_LEFT,
         };
-        let loc_param = Loc::pos(after_slash, after_greater, param);
+        let loc_param = Loc::pos(after_slash, after_binop, param);
         let mut params = Vec::with_capacity_in(1, arena);
         params.push(loc_param);
 
         // usage of param before `|>`
         let term = Expr::Var {
             module_name: "",
-            ident: CLOSURE_PIPE_PARAM,
+            ident: CLOSURE_ARG_BINOP_LEFT,
         };
-        let loc_term = Loc::pos(after_slash, after_greater, term);
+        let loc_term = Loc::pos(after_slash, after_binop, term);
 
         let expr_state = ExprState {
             operators: Vec::new_in(arena),
@@ -2175,13 +2177,13 @@ fn parse_rest_of_closure<'a>(
             end: after_slash,
         };
 
-        let op = BinOp::Pizza;
-        let loc_op = Loc::pos(after_slash, after_greater, op);
+        let binop = BinOp::Pizza;
+        let loc_op = Loc::pos(after_slash, after_binop, binop);
 
         let min_indent = slash_indent + 1;
         let (_, spaces_after_op, state) =
             parse_space(EExpr::IndentEnd, arena, state, min_indent)
-                .map_err(|(_, e)| (MadeProgress, EClosure::Body(arena.alloc(e), after_greater)))?;
+                .map_err(|(_, e)| (MadeProgress, EClosure::Body(arena.alloc(e), after_binop)))?;
 
         let (_, body, state) = parse_after_binop(
             arena,
@@ -2194,12 +2196,12 @@ fn parse_rest_of_closure<'a>(
             expr_state,
             loc_op,
         )
-        .map_err(|(_, e)| (MadeProgress, EClosure::Body(arena.alloc(e), after_greater)))?;
+        .map_err(|(_, e)| (MadeProgress, EClosure::Body(arena.alloc(e), after_binop)))?;
 
-        let loc_body = Loc::pos(after_greater, state.pos(), body);
+        let loc_body = Loc::pos(after_binop, state.pos(), body);
 
-        let closure = Expr::Closure(params.into_bump_slice(), arena.alloc(loc_body));
-        return Ok((MadeProgress, closure, state));
+        let short_closure = Expr::Closure(params.into_bump_slice(), arena.alloc(loc_body), true);
+        return Ok((MadeProgress, short_closure, state));
     }
 
     // Once we see the '\', we're committed to parsing this as a closure.
@@ -2311,7 +2313,7 @@ fn parse_rest_of_closure<'a>(
         (body, state)
     };
 
-    let closure = Expr::Closure(params.into_bump_slice(), arena.alloc(body));
+    let closure = Expr::Closure(params.into_bump_slice(), arena.alloc(body), false);
     Ok((MadeProgress, closure, state))
 }
 

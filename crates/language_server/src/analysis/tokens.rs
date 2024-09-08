@@ -681,7 +681,7 @@ impl IterTokens for Loc<Expr<'_>> {
             Expr::Crash => onetoken(Token::Keyword, region, arena),
             Expr::Tag(_) => onetoken(Token::Tag, region, arena),
             Expr::OpaqueRef(_) => onetoken(Token::Type, region, arena),
-            Expr::Closure(patterns, body) => (patterns.iter_tokens(arena).into_iter())
+            Expr::Closure(patterns, body, _) => (patterns.iter_tokens(arena).into_iter())
                 .chain(body.iter_tokens(arena))
                 .collect_in(arena),
             Expr::Defs(defs, exprs) => (defs.iter_tokens(arena).into_iter())

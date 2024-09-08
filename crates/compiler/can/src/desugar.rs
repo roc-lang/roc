@@ -675,10 +675,11 @@ pub fn desugar_expr<'a>(
                         ),
                     ]),
                     arena.alloc(Loc::at(region, closure_body)),
+                    false,
                 ),
             })
         }
-        Closure(loc_patterns, loc_ret) => arena.alloc(Loc {
+        Closure(loc_patterns, loc_ret, is_short) => arena.alloc(Loc {
             region: loc_expr.region,
             value: Closure(
                 desugar_loc_patterns(
@@ -699,6 +700,7 @@ pub fn desugar_expr<'a>(
                     module_path,
                     problems,
                 ),
+                *is_short,
             ),
         }),
         Backpassing(loc_patterns, loc_body, loc_ret) => {
@@ -741,7 +743,7 @@ pub fn desugar_expr<'a>(
                 module_path,
                 problems,
             );
-            let closure = Expr::Closure(desugared_loc_patterns, desugared_ret);
+            let closure = Expr::Closure(desugared_loc_patterns, desugared_ret, false);
             let loc_closure = Loc::at(loc_expr.region, closure);
 
             match &desugared_body.value {
@@ -909,6 +911,7 @@ pub fn desugar_expr<'a>(
                             ),
                         ]),
                         arena.alloc(Loc::at(region, closure_body)),
+                        false,
                     ),
                 ))
             };
@@ -979,6 +982,7 @@ pub fn desugar_expr<'a>(
                 value: Closure(
                     closure_args,
                     arena.alloc(Loc::at(loc_expr.region, record_val)),
+                    false,
                 ),
             });
 
@@ -2080,7 +2084,7 @@ fn old_record_builder_arg<'a>(
         });
 
         body = arena.alloc(Loc {
-            value: Closure(std::slice::from_ref(arg_pattern), body),
+            value: Closure(std::slice::from_ref(arg_pattern), body, false),
             region,
         });
     }

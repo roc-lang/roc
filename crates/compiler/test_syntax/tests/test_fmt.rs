@@ -4803,13 +4803,13 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r"
-                list = List.map [1, 2, 3] \> Num.add 1
+                list = List.map [1, 2, 3] \|> Num.add 1
                 list
             "
             ),
             indoc!(
                 r"
-                list = List.map [1, 2, 3] \x321 -> x321 |> Num.add 1
+                list = List.map [1, 2, 3] \pq -> pq |> Num.add 1
                 list
             "
             ),
@@ -4846,12 +4846,12 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r"
-                \> Num.add 1
+                \|> Num.add 1
             "
             ),
             indoc!(
                 r"
-                \x321 -> x321 |> Num.add 1
+                \pq -> pq |> Num.add 1
             "
             ),
         );

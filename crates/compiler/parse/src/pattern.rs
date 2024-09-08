@@ -49,7 +49,6 @@ pub fn parse_closure_param<'a>(
                 // e.g. \(User.UserId userId) -> ...
                 parse_rest_of_pattern_in_parens(start, arena, state.inc())
             }
-            // todo: @wip can we have a list in a closure pattern?
             // b'[' => parse_list_pattern(arena, state.clone()),
             _ => parse_ident_pattern(start, true, arena, state, min_indent),
         }

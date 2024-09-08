@@ -95,7 +95,7 @@ impl<'a> Formattable for Expr<'a> {
 
             ParensAround(subexpr) => subexpr.is_multiline(),
 
-            Closure(loc_patterns, loc_body) => {
+            Closure(loc_patterns, loc_body, _) => {
                 // check the body first because it's more likely to be multiline
                 loc_body.is_multiline()
                     || loc_patterns
@@ -398,8 +398,8 @@ impl<'a> Formattable for Expr<'a> {
                     record_builder_field_to_space_before,
                 );
             }
-            Closure(loc_patterns, loc_ret) => {
-                fmt_closure(buf, loc_patterns, loc_ret, indent);
+            Closure(loc_patterns, loc_body, is_short) => {
+                fmt_closure(buf, loc_patterns, loc_body, *is_short, indent);
             }
             Backpassing(loc_patterns, loc_body, loc_ret) => {
                 fmt_backpassing(buf, loc_patterns, loc_body, loc_ret, indent);
@@ -789,7 +789,6 @@ fn fmt_binops<'a>(
 
     for (loc_left_side, loc_binop) in lefts {
         let binop = loc_binop.value;
-
         loc_left_side.format_with_options(buf, Parens::InOperator, Newlines::No, adjusted_indent);
 
         if is_first {
@@ -1220,11 +1219,12 @@ fn fmt_if<'a>(
 
     final_else.format(buf, return_indent);
 }
-
+// todo: @wip
 fn fmt_closure<'a>(
     buf: &mut Buf,
     loc_patterns: &'a [Loc<Pattern<'a>>],
     loc_ret: &'a Loc<Expr<'a>>,
+    is_short: bool,
     indent: u16,
 ) {
     use self::Expr::*;

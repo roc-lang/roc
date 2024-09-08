@@ -2583,7 +2583,7 @@ fn canonicalize_pending_body<'a>(
                     ident: defined_symbol,
                     ..
                 },
-                ast::Expr::Closure(arguments, body),
+                ast::Expr::Closure(arguments, body, _),
             ) => {
                 // bookkeeping for tail-call detection.
                 let outer_tailcallable = env.tailcallable_symbol;

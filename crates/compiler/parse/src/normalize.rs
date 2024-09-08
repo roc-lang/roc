@@ -748,9 +748,10 @@ impl<'a> Normalize<'a> for Expr<'a> {
             Expr::Underscore(a) => Expr::Underscore(a),
             Expr::Tag(a) => Expr::Tag(a),
             Expr::OpaqueRef(a) => Expr::OpaqueRef(a),
-            Expr::Closure(a, b) => Expr::Closure(
-                arena.alloc(a.normalize(arena)),
+            Expr::Closure(p, b, s) => Expr::Closure(
+                arena.alloc(p.normalize(arena)),
                 arena.alloc(b.normalize(arena)),
+                s,
             ),
             Expr::Crash => Expr::Crash,
             Expr::Defs(a, b) => {

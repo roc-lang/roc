@@ -8,6 +8,7 @@ use crate::ident::Accessor;
 use crate::parser::ESingleQuote;
 use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
+use educe::Educe;
 use roc_collections::soa::{EitherIndex, Index, Slice};
 use roc_error_macros::internal_error;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
@@ -410,7 +411,8 @@ pub enum TryTarget {
 /// we move on to canonicalization, which often needs to allocate more because
 /// it's doing things like turning local variables into fully qualified symbols.
 /// Once canonicalization is done, the arena and the input string get dropped.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Educe)]
+#[educe(Debug(bound(*)))]
 pub enum Expr<'a> {
     // Number Literals
     Float(&'a str),
@@ -490,8 +492,13 @@ pub enum Expr<'a> {
     // Reference to an opaque type, e.g. @Opaq
     OpaqueRef(&'a str),
 
-    // Pattern Matching
-    Closure(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>),
+    // Closure with parameter patterns, body, and flag saying if it is a @feat shortcut closure
+    Closure(
+        &'a [Loc<Pattern<'a>>],
+        &'a Loc<Expr<'a>>,
+        #[educe(Debug(ignore))] bool,
+    ),
+
     /// Multiple defs in a row
     Defs(&'a Defs<'a>, &'a Loc<Expr<'a>>),
 
@@ -620,7 +627,7 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::ParensAround(sub_loc_expr) => is_expr_suffixed(sub_loc_expr),
 
         // expression in a closure
-        Expr::Closure(_, sub_loc_expr) => is_expr_suffixed(&sub_loc_expr.value),
+        Expr::Closure(_, sub_loc_expr, _) => is_expr_suffixed(&sub_loc_expr.value),
 
         // expressions inside a Defs
         Expr::Defs(defs, expr) => {
@@ -955,7 +962,7 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                     expr_stack.push(&map2.value);
                     push_stack_from_record_fields!(fields);
                 }
-                Closure(_, body) => expr_stack.push(&body.value),
+                Closure(_, body, _) => expr_stack.push(&body.value),
                 Backpassing(_, a, b) => {
                     expr_stack.reserve(2);
                     expr_stack.push(&a.value);
@@ -2505,7 +2512,7 @@ impl<'a> Malformed for Expr<'a> {
             OldRecordBuilder(items) => items.is_malformed(),
             RecordBuilder { mapper: map2, fields } => map2.is_malformed() || fields.is_malformed(),
 
-            Closure(args, body) => args.iter().any(|arg| arg.is_malformed()) || body.is_malformed(),
+            Closure(args, body, _) => args.iter().any(|arg| arg.is_malformed()) || body.is_malformed(),
             Defs(defs, body) => defs.is_malformed() || body.is_malformed(),
             Backpassing(args, call, body) => args.iter().any(|arg| arg.is_malformed()) || call.is_malformed() || body.is_malformed(),
             Expect(condition, continuation) => condition.is_malformed() || continuation.is_malformed(),

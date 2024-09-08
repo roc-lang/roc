@@ -81,7 +81,11 @@ pub fn jit_to_ast<'a, A: ReplApp<'a>>(
 
             let body_expr = Loc::at_zero(Expr::Record(Collection::empty()));
 
-            Expr::Closure(arg_patterns.into_bump_slice(), arena.alloc(body_expr))
+            Expr::Closure(
+                arg_patterns.into_bump_slice(),
+                arena.alloc(body_expr),
+                false,
+            )
         }
     }
 }

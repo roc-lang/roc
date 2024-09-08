@@ -47,6 +47,7 @@ fn to_encoder<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
         env.arena
             .alloc([Loc::at(DERIVED_REGION, opaque_apply_pattern)]),
         call_member,
+        false,
     )
 }
 
@@ -101,6 +102,7 @@ fn decoder<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
                 Loc::at(DERIVED_REGION, ast::Pattern::Identifier { ident: fmt }),
             ]),
             alloc_expr(call_map_result),
+            false,
         );
 
         // Decode.custom \bytes, fmt -> ...
@@ -160,6 +162,7 @@ fn hash<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
             Loc::at(DERIVED_REGION, opaque_apply_pattern),
         ]),
         call_member,
+        false,
     )
 }
 
@@ -214,6 +217,7 @@ fn is_eq<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
             Loc::at(DERIVED_REGION, opaque2),
         ]),
         call_member,
+        false,
     )
 }
 
@@ -286,6 +290,7 @@ fn to_inspector<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
             ast::Pattern::Identifier { ident: fmt },
         )]),
         apply_opaque_inspector,
+        false,
     ));
 
     // Inspect.custom \fmt -> ...
@@ -304,6 +309,7 @@ fn to_inspector<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
             .arena
             .alloc([Loc::at(DERIVED_REGION, opaque_apply_pattern)]),
         custom,
+        false,
     )
 }
 

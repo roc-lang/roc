@@ -263,17 +263,17 @@ pub fn unwrap_suffixed_expression_closure_help<'a>(
     _maybe_def_pat: Option<&'a Loc<Pattern<'a>>>,
 ) -> Result<&'a Loc<Expr<'a>>, EUnwrapped<'a>> {
     match loc_expr.value {
-        Expr::Closure(closure_args, closure_loc_ret) => {
+        Expr::Closure(closure_args, closure_loc_ret, _) => {
             // note we use `None` here as we don't want to pass a DefExpr up and
             // unwrap the definition pattern for the closure
             match unwrap_suffixed_expression(arena, closure_loc_ret, None) {
                 Ok(unwrapped_expr) => {
-                    let new_closure = arena.alloc(Loc::at(loc_expr.region, Expr::Closure(closure_args, unwrapped_expr)));
+                    let new_closure = arena.alloc(Loc::at(loc_expr.region, Expr::Closure(closure_args, unwrapped_expr, false)));
                     Ok(new_closure)
                 }
                 Err(EUnwrapped::UnwrappedSubExpr { sub_arg, sub_pat, sub_new, target }) => {
                     let new_closure_loc_ret = apply_try_function(arena, loc_expr.region, sub_arg, sub_pat, sub_new, None, target);
-                    let new_closure = arena.alloc(Loc::at(loc_expr.region, Expr::Closure(closure_args, new_closure_loc_ret)));
+                    let new_closure = arena.alloc(Loc::at(loc_expr.region, Expr::Closure(closure_args, new_closure_loc_ret, false)));
                     Ok(new_closure)
                 }
                 Err(err) => {
@@ -1012,7 +1012,10 @@ pub fn apply_try_function<'a>(
     }
 
     // \loc_pat -> loc_cont
-    let closure = arena.alloc(Loc::at(region, Closure(arena.alloc([*loc_pat]), loc_cont)));
+    let closure = arena.alloc(Loc::at(
+        region,
+        Closure(arena.alloc([*loc_pat]), loc_cont, false),
+    ));
 
     // try_function first_arg closure
     let (try_function_module, try_function_ident, called_via) = match target {
