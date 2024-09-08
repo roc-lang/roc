@@ -4800,20 +4800,12 @@ mod test_fmt {
 
     #[test]
     fn func_call_trailing_lambda_with_pipe_sugar() {
-        expr_formats_to(
-            indoc!(
-                r"
+        expr_formats_same(indoc!(
+            r"
                 list = List.map [1, 2, 3] \|> Num.add 1
                 list
             "
-            ),
-            indoc!(
-                r"
-                list = List.map [1, 2, 3] \pq -> pq |> Num.add 1
-                list
-            "
-            ),
-        );
+        ));
     }
 
     #[test]
@@ -4842,19 +4834,22 @@ mod test_fmt {
 
     // todo: @wip
     #[test]
-    fn simple_closure_with_pipe_sugar() {
-        expr_formats_to(
-            indoc!(
-                r"
-                \|> Num.add 1
+    fn simple_closure_pizza() {
+        expr_formats_same(indoc!(
+            r"
+            \|> Num.add 1
             "
-            ),
-            indoc!(
-                r"
-                \pq -> pq |> Num.add 1
+        ));
+    }
+
+    #[test]
+    fn simple_closure_pizza_with_right_on_the_newline() {
+        expr_formats_same(indoc!(
+            r"
+            \|>
+                Num.add 1
             "
-            ),
-        );
+        ));
     }
 
     #[test]

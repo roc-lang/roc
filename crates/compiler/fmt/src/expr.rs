@@ -763,7 +763,6 @@ pub fn fmt_str_literal(buf: &mut Buf, literal: StrLiteral, indent: u16) {
     }
 }
 
-// todo: @wip look here to skip reformatting \|>, \+, etc.
 fn fmt_binops<'a>(
     buf: &mut Buf,
     lefts: &'a [(Loc<Expr<'a>>, Loc<BinOp>)],
@@ -794,7 +793,7 @@ fn fmt_binops<'a>(
         if is_first {
             // indent the remaining lines, but only if the expression is suffixed.
             is_first = false;
-            adjusted_indent = indent + 4;
+            adjusted_indent = indent + INDENT;
         }
 
         if is_multiline {
@@ -1219,7 +1218,7 @@ fn fmt_if<'a>(
 
     final_else.format(buf, return_indent);
 }
-// todo: @wip
+
 fn fmt_closure<'a>(
     buf: &mut Buf,
     loc_patterns: &'a [Loc<Pattern<'a>>],
@@ -1231,6 +1230,30 @@ fn fmt_closure<'a>(
 
     buf.indent(indent);
     buf.push('\\');
+
+    if is_short {
+        if let BinOps([(_, binop)], loc_right) = loc_ret.value {
+            push_op(buf, binop.value);
+            buf.spaces(1);
+
+            // If the body is multiline, go down a line and indent.
+            let body_indent = if loc_ret.value.is_multiline() {
+                indent + INDENT
+            } else {
+                indent
+            };
+
+            // we only want to indent the remaining lines if this is a suffixed expression.
+            let right_indent = if is_expr_suffixed(&loc_right.value) {
+                body_indent + INDENT
+            } else {
+                body_indent
+            };
+
+            loc_right.format_with_options(buf, Parens::InOperator, Newlines::Yes, right_indent);
+            return;
+        }
+    }
 
     let arguments_are_multiline = loc_patterns
         .iter()
