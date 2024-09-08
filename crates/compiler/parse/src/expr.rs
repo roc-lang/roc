@@ -2149,7 +2149,11 @@ fn parse_rest_of_closure<'a>(
     }
 
     // note: @feat closure+binop shortcut
-    // Fun feature that turns `\|> expr` into the `\pq -> pq |> expr`
+    // todo: @wip Fun feature for expanding:
+    // - [X] `\|> f` into the `\p -> p |> f`,
+    // - [ ] `\+ 1` into `\p -> p + 1`,
+    // - [ ] `\.foo.bar + 1` into `\p -> p.foo.bar + 1`
+    // - [ ] `\?> Ok _ -> 1, Err _ -> 0` into ???
     if state.bytes().starts_with(b"|>") {
         let after_slash = state.pos();
         let state = state.advance(2);
@@ -2162,7 +2166,7 @@ fn parse_rest_of_closure<'a>(
         let mut params = Vec::with_capacity_in(1, arena);
         params.push(loc_param);
 
-        // usage of param before `|>`
+        // the closure parameter is the left value of binary operator
         let term = Expr::Var {
             module_name: "",
             ident: CLOSURE_ARG_BINOP_LEFT,
