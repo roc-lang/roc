@@ -440,7 +440,7 @@ You can give `dbg` any expression you like, for example:
 dbg Str.concat singular plural
 ```
 
-You can also use `dbg` inside an expression: it will print its input to stderr and return it to the caller. For example:
+You can also use `dbg` as a function inside an expression, which will print the function argument to stderr and then return the argument to the caller. For example:
 
 ```roc
 inc = \n -> 1 + dbg n
