@@ -3,7 +3,7 @@ module [
     addBytes,
     digest,
     hashSha256,
-    digest256ToBytes,
+   digest256ToBytes,
     Sha256,
     Digest256,
 ]
@@ -33,7 +33,7 @@ hashSha256 = \bytes ->
     digest (addBytes (emptySha256 {}) bytes)
     
 u128Bytes : U128 -> List  U8
-u128Bytes = \ number ->
+u128Bytes = \number ->
     loop = \ n, bytes, place ->
         if place == 16 then bytes
         else  
@@ -41,6 +41,9 @@ u128Bytes = \ number ->
             loop (Num.shiftRightBy n 8) (List.prepend bytes newByte) (place + 1)
     loop number [] 0
 
+
+
 digest256ToBytes : Digest256 -> List U8
-digest256ToBytes \ digest256 -> 
-    List.append (u128Bytes digest256.firstHalf) (u128Bytes digest256.secondHalf)
+digest256ToBytes = \@Digest256{firstHalf, secondHalf} ->
+    List.concat (u128Bytes firstHalf) (u128Bytes secondHalf)
+
