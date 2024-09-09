@@ -7,7 +7,7 @@ use crate::ast::{
 };
 use crate::blankspace::{
     loc_space0_e, parse_space, space0_around_ee, space0_before_e, space0_e, spaces,
-    spaces_around_help, spaces_before, with_spaces, with_spaces_before,
+    spaces_around_help, with_spaces, with_spaces_before,
 };
 use crate::header::module_name_help;
 use crate::ident::{
@@ -81,6 +81,11 @@ impl ExprParseOptions {
         accept_multi_backpassing: true,
         check_for_arrow: true,
     };
+
+    pub const NO_ACCEPT_MULTI_BACKPASSING: ExprParseOptions = ExprParseOptions {
+        accept_multi_backpassing: false,
+        check_for_arrow: true,
+    };
 }
 
 pub fn expr_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
@@ -138,6 +143,7 @@ fn parse_rest_of_expr_in_parens_etc<'a>(
 
     Ok((MadeProgress, loc_elems, state))
 }
+
 // todo: @wip unwind
 fn record_field_access_chain<'a>() -> impl Parser<'a, Vec<'a, Suffix<'a>>, EExpr<'a>> {
     zero_or_more(one_of!(
@@ -1890,7 +1896,7 @@ pub fn loc_expr_block<'a>(
         }
     }
 }
-
+// todo: @wip replace with ExprParseOptions parameter, created once
 pub fn loc_expr<'a>(accept_multi_backpassing: bool) -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
     move |arena, state: State<'a>, min_indent| {
         let options = ExprParseOptions {
@@ -3430,103 +3436,136 @@ impl<'a> Spaceable<'a> for RecordField<'a> {
     }
 }
 
-pub fn record_field<'a>() -> impl Parser<'a, RecordField<'a>, ERecord<'a>> {
+pub fn parse_record_field<'a>(
+    arena: &'a Bump,
+    state: State<'a>,
+    min_indent: u32,
+) -> ParseResult<'a, RecordField<'a>, ERecord<'a>> {
     use RecordField::*;
+    let start = state.pos();
+    match parse_lowercase_ident(state.clone()) {
+        Err((NoProgress, _)) => { /* skip below */ }
+        Err(_) => return Err((MadeProgress, ERecord::Field(start))),
+        Ok((_, label, state)) => {
+            let field_label = Loc::pos(start, state.pos(), label);
 
-    map_with_arena(
-        either(
-            and(
-                specialize_err(|_, pos| ERecord::Field(pos), loc(lowercase_ident())),
-                and(
-                    spaces(),
-                    optional(either(
-                        and(byte(b':', ERecord::Colon), record_field_expr()),
-                        and(
-                            byte(b'?', ERecord::QuestionMark),
-                            spaces_before(specialize_err_ref(ERecord::Expr, loc_expr(false))),
-                        ),
-                    )),
-                ),
-            ),
-            and(
-                loc(skip_first(
-                    byte(b'_', ERecord::UnderscoreField),
-                    optional(specialize_err(
-                        |_, pos| ERecord::Field(pos),
-                        lowercase_ident(),
-                    )),
-                )),
-                and(
-                    spaces(),
-                    skip_first(
-                        byte(b':', ERecord::Colon),
-                        spaces_before(specialize_err_ref(ERecord::Expr, loc_expr(false))),
-                    ),
-                ),
-            ),
-        ),
-        |arena: &'a bumpalo::Bump, field_data| {
-            match field_data {
-                Either::First((loc_label, (spaces, opt_loc_val))) => {
-                    match opt_loc_val {
-                        Some(Either::First((_, RecordFieldExpr::Value(loc_val)))) => {
-                            RequiredValue(loc_label, spaces, arena.alloc(loc_val))
-                        }
+            let (label_spaces, mut state) = match spaces().parse(arena, state, min_indent) {
+                Ok((_, out, state)) => (out, state),
+                Err((_, fail)) => return Err((MadeProgress, fail)),
+            };
 
-                        Some(Either::First((_, RecordFieldExpr::Apply(arrow_spaces, loc_val)))) => {
-                            ApplyValue(loc_label, spaces, arrow_spaces, arena.alloc(loc_val))
-                        }
+            if state.bytes().first() == Some(&b':') {
+                state.advance_mut(1);
 
-                        Some(Either::Second((_, loc_val))) => {
-                            OptionalValue(loc_label, spaces, arena.alloc(loc_val))
-                        }
+                let (colon_spaces, mut state) = match spaces().parse(arena, state, min_indent) {
+                    Ok((_, out, state)) => (out, state),
+                    Err((_, fail)) => return Err((MadeProgress, fail)),
+                };
 
-                        // If no value was provided, record it as a Var.
-                        // Canonicalize will know what to do with a Var later.
-                        None => {
-                            if !spaces.is_empty() {
-                                SpaceAfter(arena.alloc(LabelOnly(loc_label)), spaces)
-                            } else {
-                                LabelOnly(loc_label)
-                            }
+                let has_back_arrow = state.bytes().starts_with(b"<-");
+                if has_back_arrow {
+                    state.advance_mut(2);
+                }
+
+                let before_field_val = state.pos();
+                let (field_val, state) =
+                    match loc_expr(false).parse(arena, state.clone(), min_indent) {
+                        Ok((_, expr, state)) => (expr, state),
+                        Err((_, fail)) => {
+                            let fail = ERecord::Expr(arena.alloc(fail), before_field_val);
+                            return Err((MadeProgress, fail));
                         }
+                    };
+
+                let field = if has_back_arrow {
+                    let field_val = arena.alloc(field_val);
+                    ApplyValue(field_label, label_spaces, colon_spaces, field_val)
+                } else {
+                    let field_val = with_spaces_before(field_val, colon_spaces, arena);
+                    RequiredValue(field_label, label_spaces, arena.alloc(field_val))
+                };
+                return Ok((MadeProgress, field, state));
+            }
+
+            if state.bytes().first() == Some(&b'?') {
+                state.advance_mut(1);
+
+                let (question_mark_spaces, state) =
+                    match spaces().parse(arena, state.clone(), min_indent) {
+                        Ok((_, out, state)) => (out, state),
+                        Err((_, fail)) => return Err((MadeProgress, fail)),
+                    };
+
+                let after_question_mark = state.pos();
+                match loc_expr(false).parse(arena, state.clone(), min_indent) {
+                    Err((_, fail)) => {
+                        let fail = ERecord::Expr(arena.alloc(fail), after_question_mark);
+                        return Err((MadeProgress, fail));
+                    }
+                    Ok((_, field_val, state)) => {
+                        let field_val = with_spaces_before(field_val, question_mark_spaces, arena);
+                        let field =
+                            OptionalValue(field_label, label_spaces, arena.alloc(field_val));
+                        return Ok((MadeProgress, field, state));
                     }
                 }
-                Either::Second((loc_opt_label, (spaces, loc_val))) => {
-                    let loc_label = loc_opt_label
-                        .map(|opt_label| opt_label.unwrap_or_else(|| arena.alloc_str("")));
-
-                    IgnoredValue(loc_label, spaces, arena.alloc(loc_val))
-                }
             }
-        },
-    )
-}
 
-enum RecordFieldExpr<'a> {
-    Apply(&'a [CommentOrNewline<'a>], Loc<Expr<'a>>),
-    Value(Loc<Expr<'a>>),
-}
+            let field = if !label_spaces.is_empty() {
+                SpaceAfter(arena.alloc(LabelOnly(field_label)), label_spaces)
+            } else {
+                LabelOnly(field_label)
+            };
+            return Ok((MadeProgress, field, state));
+        }
+    }
 
-fn record_field_expr<'a>() -> impl Parser<'a, RecordFieldExpr<'a>, ERecord<'a>> {
-    map_with_arena(
-        and(
-            spaces(),
-            either(
-                and(
-                    two_bytes(b'<', b'-', ERecord::Arrow),
-                    spaces_before(specialize_err_ref(ERecord::Expr, loc_expr(false))),
-                ),
-                specialize_err_ref(ERecord::Expr, loc_expr(false)),
-            ),
-        ),
-        |arena: &'a bumpalo::Bump, (spaces, either)| match either {
-            Either::First((_, loc_expr)) => RecordFieldExpr::Apply(spaces, loc_expr),
-            Either::Second(loc_expr) => {
-                RecordFieldExpr::Value(with_spaces_before(loc_expr, spaces, arena))
-            }
-        },
-    )
+    // Or parse the ignored field, e.g. `_ : val_expr` or `_foo: val_expr`
+    if state.bytes().first() != Some(&b'_') {
+        return Err((NoProgress, ERecord::UnderscoreField(start)));
+    }
+    let state = state.inc();
+
+    let after_underscore = state.pos();
+    let (field_label, state) = match parse_lowercase_ident(state.clone()) {
+        Ok((_, label, state)) => (label, state),
+        Err((NoProgress, _)) => ("", state),
+        Err(_) => return Err((MadeProgress, ERecord::Field(after_underscore))),
+    };
+
+    let field_label_end = state.pos();
+
+    let (label_spaces, mut state) = match spaces().parse(arena, state, min_indent) {
+        Ok((_, out, state)) => (out, state),
+        Err((_, fail)) => return Err((MadeProgress, fail)),
+    };
+
+    let colon_pos = state.pos();
+    if state.bytes().first() != Some(&b':') {
+        return Err((MadeProgress, ERecord::Colon(colon_pos)));
+    }
+    state.advance_mut(1);
+
+    let (colon_spaces, state) = match spaces().parse(arena, state, min_indent) {
+        Ok((_, out, state)) => (out, state),
+        Err((_, fail)) => return Err((MadeProgress, fail)),
+    };
+
+    let before_field_val = state.pos();
+    let (field_val, state) = match loc_expr(false).parse(arena, state, min_indent) {
+        Ok((_, out, state)) => (out, state),
+        Err((_, fail)) => {
+            let fail = ERecord::Expr(arena.alloc(fail), before_field_val);
+            return Err((MadeProgress, fail));
+        }
+    };
+
+    let field_val = with_spaces_before(field_val, colon_spaces, arena);
+
+    let field_label = Loc::pos(start, field_label_end, field_label);
+
+    let field = IgnoredValue(field_label, label_spaces, arena.alloc(field_val));
+    Ok((MadeProgress, field, state))
 }
 
 enum RecordHelpPrefix {
@@ -3572,7 +3611,7 @@ fn record_help<'a>() -> impl Parser<'a, RecordHelp<'a>, ERecord<'a>> {
         ),
     );
     let fields_parser = collection_inner(
-        loc(record_field()),
+        loc(parse_record_field),
         byte(b',', ERecord::End),
         RecordField::SpaceBefore,
     );

@@ -1193,7 +1193,6 @@ impl<'a> Normalize<'a> for ERecord<'a> {
             ERecord::Field(_pos) => ERecord::Field(Position::zero()),
             ERecord::UnderscoreField(_pos) => ERecord::Field(Position::zero()),
             ERecord::Colon(_) => ERecord::Colon(Position::zero()),
-            ERecord::QuestionMark(_) => ERecord::QuestionMark(Position::zero()),
             ERecord::Arrow(_) => ERecord::Arrow(Position::zero()),
             ERecord::Ampersand(_) => ERecord::Ampersand(Position::zero()),
             ERecord::Expr(inner_err, _) => {

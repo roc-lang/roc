@@ -403,7 +403,6 @@ pub enum ERecord<'a> {
     Field(Position),
     UnderscoreField(Position),
     Colon(Position),
-    QuestionMark(Position),
     Arrow(Position),
     Ampersand(Position),
 
@@ -731,7 +730,6 @@ impl<'a> From<ERecord<'a>> for ETypeAbilityImpl<'a> {
             ERecord::Arrow(p) => ETypeAbilityImpl::Arrow(p),
             ERecord::Space(s, p) => ETypeAbilityImpl::Space(s, p),
             ERecord::Prefix(p) => ETypeAbilityImpl::Prefix(p),
-            ERecord::QuestionMark(p) => ETypeAbilityImpl::QuestionMark(p),
             ERecord::Ampersand(p) => ETypeAbilityImpl::Ampersand(p),
             ERecord::Expr(e, p) => ETypeAbilityImpl::Expr(e, p),
         }
