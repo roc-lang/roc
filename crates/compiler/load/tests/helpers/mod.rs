@@ -161,23 +161,6 @@ pub fn can_expr_with<'a>(
     // ensure the Test module is accessible in our tests
     module_ids.get_or_insert(&PQModuleName::Unqualified("Test".into()));
 
-    // Desugar operators (convert them to Apply calls, taking into account
-    // operator precedence and associativity rules), before doing other canonicalization.
-    //
-    // If we did this *during* canonicalization, then each time we
-    // visited a BinOp node we'd recursively try to apply this to each of its nested
-    // operators, and then again on *their* nested operators, ultimately applying the
-    // rules multiple times unnecessarily.
-    let loc_expr = desugar::desugar_expr(
-        arena,
-        &mut var_store,
-        &loc_expr,
-        expr_str,
-        &mut None,
-        arena.alloc("TestPath"),
-        &mut Default::default(),
-    );
-
     let mut scope = Scope::new(
         home,
         "TestPath".into(),
@@ -188,12 +171,23 @@ pub fn can_expr_with<'a>(
     let dep_idents = IdentIds::exposed_builtins(0);
     let mut env = Env::new(
         arena,
+        expr_str,
         home,
         Path::new("Test.roc"),
         &dep_idents,
         &module_ids,
         None,
     );
+
+    // Desugar operators (convert them to Apply calls, taking into account
+    // operator precedence and associativity rules), before doing other canonicalization.
+    //
+    // If we did this *during* canonicalization, then each time we
+    // visited a BinOp node we'd recursively try to apply this to each of its nested
+    // operators, and then again on *their* nested operators, ultimately applying the
+    // rules multiple times unnecessarily.
+    let loc_expr = desugar::desugar_expr(&mut env, &mut scope, &loc_expr);
+
     let (loc_expr, output) = canonicalize_expr(
         &mut env,
         &mut var_store,

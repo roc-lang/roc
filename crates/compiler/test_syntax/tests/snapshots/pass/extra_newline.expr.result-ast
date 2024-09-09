@@ -1,6 +1,6 @@
 SpaceAfter(
-    If(
-        [
+    If {
+        if_thens: [
             (
                 @3-6 Var {
                     module_name: "",
@@ -60,7 +60,7 @@ SpaceAfter(
                 ),
             ),
         ],
-        @49-50 SpaceBefore(
+        final_else: @49-50 SpaceBefore(
             Var {
                 module_name: "",
                 ident: "c",
@@ -71,7 +71,8 @@ SpaceAfter(
                 ),
             ],
         ),
-    ),
+        indented_else: false,
+    },
     [
         LineComment(
             " 4",

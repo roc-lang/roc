@@ -101,8 +101,8 @@ Defs {
                                     ident: "#!0_arg",
                                 },
                             ],
-                            @76-189 If(
-                                [
+                            @76-189 If {
+                                if_thens: [
                                     (
                                         @79-87 Var {
                                             module_name: "",
@@ -124,7 +124,7 @@ Defs {
                                         ),
                                     ),
                                 ],
-                                @125-132 Apply(
+                                final_else: @125-132 Apply(
                                     @125-132 Var {
                                         module_name: "Task",
                                         ident: "await",
@@ -140,8 +140,8 @@ Defs {
                                                     ident: "#!1_arg",
                                                 },
                                             ],
-                                            @76-189 If(
-                                                [
+                                            @76-189 If {
+                                                if_thens: [
                                                     (
                                                         @125-132 Var {
                                                             module_name: "",
@@ -163,7 +163,7 @@ Defs {
                                                         ),
                                                     ),
                                                 ],
-                                                @178-189 Apply(
+                                                final_else: @178-189 Apply(
                                                     @178-182 Var {
                                                         module_name: "",
                                                         ident: "line",
@@ -177,12 +177,14 @@ Defs {
                                                     ],
                                                     Space,
                                                 ),
-                                            ),
+                                                indented_else: false,
+                                            },
                                         ),
                                     ],
                                     BangSuffix,
                                 ),
-                            ),
+                                indented_else: false,
+                            },
                         ),
                     ],
                     BangSuffix,
