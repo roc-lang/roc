@@ -7,7 +7,7 @@ license.workspace = true
 version.workspace = true
 
 [dev-dependencies]
-cli_utils = { path = "../cli_utils" }
+cli_test_utils = { path = "../cli_test_utils" }
 roc_command_utils = { path = "../utils/command" }
 roc_build = { path = "../compiler/build" }
 roc_linker = { path = "../linker" }

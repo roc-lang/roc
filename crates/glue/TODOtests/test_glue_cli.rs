@@ -252,7 +252,7 @@ mod glue_cli_tests {
     fn run_app<'a, 'b, I: IntoIterator<Item = &'a str>>(app_file: &'b Path, args: I) -> Out {
         // Generate test_glue for this platform
         let roc_cli_out = run_roc(
-
+            
         );
             .add_args(
                 // converting these all to String avoids lifetime issues

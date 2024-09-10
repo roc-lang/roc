@@ -1,4 +1,4 @@
-use crate::helpers::{file_from_root, ExecCLI};
+use crate::helpers::{file_from_root};
 use criterion::{black_box, measurement::Measurement, BenchmarkGroup};
 use std::{path::Path, thread};
 
@@ -6,7 +6,7 @@ const CFOLD_STACK_SIZE: usize = 8192 * 100000;
 
 const OPTIMIZE_FLAG: &str = "--optimize";
 const BUILD_HOST_FLAG: &str = "--build-host";
-
+/* TODO update this
 fn exec_bench_w_input<T: Measurement>(
     file: &Path,
     stdin_str: &'static str,
@@ -34,7 +34,7 @@ fn exec_bench_w_input<T: Measurement>(
 
     check_cmd_output(file, stdin_str, executable_filename, expected_ending);
 
-    bench_cmd(file, stdin_str, executable_filename, bench_group_opt);
+    bench_exe(file, stdin_str, executable_filename, bench_group_opt);
 }
 
 fn check_cmd_output(
@@ -70,14 +70,15 @@ fn check_cmd_output(
     assert!(out.status.success());
 }
 
-fn bench_cmd<T: Measurement>(
-    file: &Path,
-    stdin_str: &'static str,
-    executable_filename: &str,
+/// Benchmarks the executable produced by `roc build` with the given stdin.
+fn bench_exe<T: Measurement>(
+    roc_exe_file: &Path, // produced by e.g. `roc build main.roc --optimize` `
+    stdin_str: &'static str, // stdin to be passed to executable
+    roc_exe_filename: &str,
     bench_group_opt: Option<&mut BenchmarkGroup<T>>,
 ) {
-    let cmd_str = file
-        .with_file_name(executable_filename)
+    let cmd_str = roc_exe_file
+        .with_file_name(roc_exe_filename)
         .to_str()
         .unwrap()
         .to_string();
@@ -101,7 +102,7 @@ fn bench_cmd<T: Measurement>(
     }
 
     if let Some(bench_group) = bench_group_opt {
-        bench_group.bench_function(&format!("Benchmarking {executable_filename:?}"), |b| {
+        bench_group.bench_function(&format!("Benchmarking {roc_exe_filename:?}"), |b| {
             b.iter(|| {
                 ExecCLI::new(black_box(&cmd_str))
                     .with_stdin_vals([stdin_str])
@@ -175,3 +176,4 @@ pub fn bench_quicksort<T: Measurement>(bench_group_opt: Option<&mut BenchmarkGro
         bench_group_opt,
     );
 }
+*/

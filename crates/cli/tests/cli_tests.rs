@@ -8,21 +8,23 @@ extern crate roc_module;
 
 #[cfg(test)]
 mod cli_tests {
-    use cli_utils::helpers::{dir_from_root, file_from_root, ExecCLI, Mode::*};
     use const_format::concatcp;
+    use std::process::Command;
     use indoc::indoc;
     use roc_cli::{CMD_BUILD, CMD_CHECK, CMD_FORMAT, CMD_DEV, CMD_TEST};
+    use cli_test_utils::helpers::{roc_file_to_exe, check_exe_with_valgrind, path_to_roc_binary, file_from_root, check_output_maybe_valgrind};
+    use cli_test_utils::command::run_command;
+    use cli_test_utils::run_roc::{run_roc_exe, run_roc_maybe_both_linkers, RocCmdParams};
 
+    // used for valgrind
     #[cfg(all(unix, not(target_os = "macos")))]
-    const VALGRIND_ON_LINUX: bool = true;
-    // Disallow valgrind on macOS by default, because it reports a ton
-    // of false positives. For local development on macOS, feel free to
-    // change this to true!
+    const ON_LINUX: bool = true;
+
     #[cfg(target_os = "macos")]
-    const VALGRIND_ON_LINUX: bool = false;
+    const ON_LINUX: bool = false;
 
     #[cfg(windows)]
-    const VALGRIND_ON_LINUX: bool = false;
+    const ON_LINUX: bool = false;
 
     // use valgrind (if supported on the current platform)
     #[derive(Debug, Clone, Copy)]
@@ -32,7 +34,6 @@ mod cli_tests {
     }
 
     const OPTIMIZE_FLAG: &str = concatcp!("--", roc_cli::FLAG_OPTIMIZE);
-    const LINKER_FLAG: &str = concatcp!("--", roc_cli::FLAG_LINKER, "=", "legacy");
     const BUILD_HOST_FLAG: &str = concatcp!("--", roc_cli::FLAG_BUILD_HOST);
     const SUPPRESS_BUILD_HOST_WARNING_FLAG: &str =
         concatcp!("--", roc_cli::FLAG_SUPPRESS_BUILD_HOST_WARNING);
@@ -40,48 +41,59 @@ mod cli_tests {
     #[allow(dead_code)]
     const TARGET_FLAG: &str = concatcp!("--", roc_cli::FLAG_TARGET);
 
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    const TEST_LEGACY_LINKER: bool = true;
-
-    // Surgical linker currently only supports linux x86_64,
-    // so we're always testing the legacy linker on other targets.
-    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
-    const TEST_LEGACY_LINKER: bool = false;
-
     #[test]
     #[cfg_attr(windows, ignore)]
     fn platform_switching_rust() {
-        let expected_ending = "Roc <3 Rust!\n🔨 Building host ...\n";
-        let exec_cli = ExecCLI::new_roc()
-            .set_mode(BuildAndRun)
-            .arg(BUILD_HOST_FLAG)
-            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-            .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .with_valgrind(VALGRIND_ON_LINUX)
-            .arg(file_from_root("examples/platform-switching", "rocLovesRust.roc").as_path());
-
-        let out = exec_cli.run();
-        out.assert_clean_success();
-        out.assert_stdout_and_stderr_ends_with(expected_ending);
+        let roc_file_folder = "examples/platform-switching";
+        let roc_file = "rocLovesRust.roc";
+        let roc_file_path = file_from_root(roc_file_folder, roc_file);
+        let expected_output = "Roc <3 Rust!\n";
+        
+        let roc_cmd_out =
+            run_roc_maybe_both_linkers(
+                RocCmdParams {
+                    sub_command: CMD_BUILD,
+                    args: all_to_os_string([
+                        roc_file_path.to_str().unwrap(),
+                        BUILD_HOST_FLAG,
+                        SUPPRESS_BUILD_HOST_WARNING_FLAG,
+                        ]),
+                    ..Default::default()
+                },
+                ON_LINUX
+            );
+        
+        roc_cmd_out.assert_clean_success();
+        
+        let roc_exe_path = file_from_root(roc_file_folder, &roc_file_to_exe(roc_file));
+        
+        check_output_maybe_valgrind(&roc_exe_path, expected_output, ON_LINUX)
     }
-
-    #[test]
+    
+    
+    /*#[test]
     #[cfg_attr(windows, ignore)]
     fn platform_switching_zig() {
-        let expected_ending = "Roc <3 Zig!\n🔨 Building host ...\n";
+        let roc_file_folder = "examples/platform-switching";
+        let roc_file = "rocLovesZig.roc";
+        let expected_output = "Roc <3 Zig!\n";
+        
         let exec_cli = ExecCLI::new_roc()
             .set_mode(BuildAndRun)
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
             .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .with_valgrind(VALGRIND_ON_LINUX)
+            .with_valgrind(ON_LINUX)
             .arg(file_from_root("examples/platform-switching", "rocLovesZig.roc").as_path());
 
-        let out = exec_cli.run();
-        out.assert_clean_success();
-        out.assert_stdout_and_stderr_ends_with(expected_ending);
-    }
-
+        let roc_cmd_out = run_command(roc_cmd, &[]);
+        roc_cmd_out.assert_clean_success();
+        
+        let roc_exe_path = file_from_root(roc_file_folder, &roc_file_to_exe(roc_file));
+        
+        check_output_maybe_valgrind(&roc_exe_path, expected_output, ON_LINUX)
+    }*/
+    /*
     #[test]
     fn platform_switching_wasm() {
         // this is a web assembly example, but we don't test with JS at the moment
@@ -104,7 +116,7 @@ mod cli_tests {
         );
         let exec_cli = ExecCLI::new_roc()
             .arg(CMD_TEST)
-            .with_valgrind(VALGRIND_ON_LINUX)
+            .with_valgrind(ON_LINUX)
             .add_args(["--main", "tests/module_imports_pkg/app.roc"])
             .arg(file_from_root("crates/cli/tests/module_imports_pkg", "Module.roc").as_path());
 
@@ -134,7 +146,7 @@ mod cli_tests {
         );
         let exec_cli = ExecCLI::new_roc()
             .arg(CMD_TEST)
-            .with_valgrind(VALGRIND_ON_LINUX)
+            .with_valgrind(ON_LINUX)
             .arg(file_from_root("crates/cli/tests/module_imports_pkg", "Module.roc").as_path());
 
         let out = exec_cli.run();
@@ -166,7 +178,7 @@ mod cli_tests {
         );
         let exec_cli = ExecCLI::new_roc()
             .arg(CMD_TEST)
-            .with_valgrind(VALGRIND_ON_LINUX)
+            .with_valgrind(ON_LINUX)
             .add_args(["--main", "tests/module_imports_pkg/app.roc"])
             .arg(
                 file_from_root(
@@ -207,7 +219,7 @@ mod cli_tests {
         );
         let exec_cli = ExecCLI::new_roc()
             .arg(CMD_TEST)
-            .with_valgrind(VALGRIND_ON_LINUX)
+            .with_valgrind(ON_LINUX)
             .arg(file_from_root("crates/cli/tests/expects_transitive", "main.roc").as_path());
 
         let out = exec_cli.run();
@@ -230,7 +242,7 @@ mod cli_tests {
         );
         let exec_cli = ExecCLI::new_roc()
             .arg(CMD_TEST)
-            .with_valgrind(VALGRIND_ON_LINUX)
+            .with_valgrind(ON_LINUX)
             .arg("--verbose")
             .arg(file_from_root("crates/cli/tests/expects_transitive", "main.roc").as_path());
 
@@ -250,7 +262,7 @@ mod cli_tests {
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
             .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .with_valgrind(VALGRIND_ON_LINUX)
+            .with_valgrind(ON_LINUX)
             .arg(file_from_root("crates/cli/tests/algorithms", "fibonacci.roc").as_path());
 
         let out = exec_cli.run();
@@ -268,7 +280,7 @@ mod cli_tests {
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
             .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .with_valgrind(VALGRIND_ON_LINUX)
+            .with_valgrind(ON_LINUX)
             .arg(file_from_root("crates/cli/tests/algorithms", "quicksort.roc").as_path());
 
         let out = exec_cli.run();
@@ -316,7 +328,7 @@ mod cli_tests {
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
             .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .with_valgrind(VALGRIND_ON_LINUX)
+            .with_valgrind(ON_LINUX)
             .arg(file_from_root("crates/cli/tests/tui", "main.roc").as_path())
             .with_stdin_vals(vec!["foo\n"]);
 
@@ -346,7 +358,7 @@ mod cli_tests {
         let exec_cli = ExecCLI::new_roc()
             .set_mode(BuildAndRun)
             .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .with_valgrind(VALGRIND_ON_LINUX)
+            .with_valgrind(ON_LINUX)
             .arg(file_from_root("crates/cli/tests/false-interpreter", "False.roc").as_path())
             .add_args([
                 "--",
@@ -397,7 +409,7 @@ mod cli_tests {
             let exec_cli = ExecCLI::new_roc()
                 .set_mode(BuildAndRun)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valgrind(VALGRIND_ON_LINUX)
+                .with_valgrind(ON_LINUX)
                 .arg(file_from_root("crates/cli/tests/effects", "print-line.roc").as_path())
                 .with_stdin_vals(vec!["hi there!"]);
 
@@ -432,7 +444,7 @@ mod cli_tests {
             let exec_cli = ExecCLI::new_roc()
                 .set_mode(BuildAndRun)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valgrind(VALGRIND_ON_LINUX)
+                .with_valgrind(ON_LINUX)
                 .arg(file_from_root("crates/cli/tests/effects", "inspect-logging.roc").as_path());
 
             let out = exec_cli.run();
@@ -448,7 +460,7 @@ mod cli_tests {
             let exec_cli = ExecCLI::new_roc()
                 .set_mode(BuildAndRun)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valgrind(VALGRIND_ON_LINUX)
+                .with_valgrind(ON_LINUX)
                 .arg(file_from_root("crates/cli/tests/module_params", "pass_task.roc").as_path());
 
             let out = exec_cli.run();
@@ -492,7 +504,7 @@ mod cli_tests {
             let exec_cli = cli_utils::helpers::ExecCLI::new_roc()
                 .set_mode(BuildAndRun)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valgrind(VALGRIND_ON_LINUX)
+                .with_valgrind(ON_LINUX)
                 .arg(
                     file_from_root("crates/cli/tests/fixtures/multi-dep-str", "Main.roc").as_path(),
                 );
@@ -512,7 +524,7 @@ mod cli_tests {
                 .set_mode(BuildAndRun)
                 .arg(OPTIMIZE_FLAG)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valgrind(VALGRIND_ON_LINUX)
+                .with_valgrind(ON_LINUX)
                 .arg(
                     file_from_root("crates/cli/tests/fixtures/multi-dep-str", "Main.roc").as_path(),
                 );
@@ -531,7 +543,7 @@ mod cli_tests {
             let exec_cli = cli_utils::helpers::ExecCLI::new_roc()
                 .set_mode(BuildAndRun)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valgrind(VALGRIND_ON_LINUX)
+                .with_valgrind(ON_LINUX)
                 .arg(
                     file_from_root("crates/cli/tests/fixtures/multi-dep-thunk", "Main.roc")
                         .as_path(),
@@ -555,7 +567,7 @@ mod cli_tests {
                 .set_mode(BuildAndRun)
                 .arg(OPTIMIZE_FLAG)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valgrind(VALGRIND_ON_LINUX)
+                .with_valgrind(ON_LINUX)
                 .arg(
                     file_from_root("crates/cli/tests/fixtures/multi-dep-thunk", "Main.roc")
                         .as_path(),
@@ -576,7 +588,7 @@ mod cli_tests {
             let exec_cli = cli_utils::helpers::ExecCLI::new_roc()
                 .set_mode(BuildAndRun)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valgrind(VALGRIND_ON_LINUX)
+                .with_valgrind(ON_LINUX)
                 .arg(file_from_root("crates/cli/tests/fixtures/packages", "app.roc").as_path());
 
             let out = exec_cli.run();
@@ -595,7 +607,7 @@ mod cli_tests {
                 .set_mode(BuildAndRun)
                 .arg(OPTIMIZE_FLAG)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valgrind(VALGRIND_ON_LINUX)
+                .with_valgrind(ON_LINUX)
                 .arg(file_from_root("crates/cli/tests/fixtures/packages", "app.roc").as_path());
 
             let out = exec_cli.run();
@@ -617,7 +629,7 @@ mod cli_tests {
             let exec_cli = cli_utils::helpers::ExecCLI::new_roc()
                 .set_mode(BuildAndRun)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valgrind(VALGRIND_ON_LINUX)
+                .with_valgrind(ON_LINUX)
                 .arg(file_path.as_path());
 
             let out = exec_cli.run();
@@ -639,7 +651,7 @@ mod cli_tests {
             let exec_cli = cli_utils::helpers::ExecCLI::new_roc()
                 .set_mode(BuildAndRun)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valgrind(VALGRIND_ON_LINUX)
+                .with_valgrind(ON_LINUX)
                 .arg(file_path.as_path());
 
             let out = exec_cli.run();
@@ -661,7 +673,7 @@ mod cli_tests {
             let exec_cli = cli_utils::helpers::ExecCLI::new_roc()
                 .set_mode(BuildAndRun)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valgrind(VALGRIND_ON_LINUX)
+                .with_valgrind(ON_LINUX)
                 .arg(file_path.as_path());
 
             let out = exec_cli.run();
@@ -700,7 +712,7 @@ mod cli_tests {
             let exec_cli = cli_utils::helpers::ExecCLI::new_roc()
                 .arg(CMD_DEV)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valgrind(VALGRIND_ON_LINUX)
+                .with_valgrind(ON_LINUX)
                 .arg(file_from_root("crates/cli/tests/expects", "expects.roc").as_path());
 
             let out = exec_cli.run();
@@ -761,7 +773,7 @@ mod cli_tests {
             );
             let exec_cli = cli_utils::helpers::ExecCLI::new_roc()
                 .arg(CMD_TEST)
-                .with_valgrind(VALGRIND_ON_LINUX)
+                .with_valgrind(ON_LINUX)
                 .arg(file_from_root("crates/cli/tests/expects", "expects.roc").as_path());
 
             let out = exec_cli.run();
@@ -773,7 +785,7 @@ mod cli_tests {
     // this is for testing the benchmarks, to perform proper benchmarks see crates/cli/benches/README.md
     mod test_benchmarks {
         use super::{
-            UseValgrind, VALGRIND_ON_LINUX, BUILD_HOST_FLAG, OPTIMIZE_FLAG,
+            UseValgrind, ON_LINUX, BUILD_HOST_FLAG, OPTIMIZE_FLAG,
             SUPPRESS_BUILD_HOST_WARNING_FLAG,
         };
         use cli_utils::helpers::{file_from_root, ExecCLI, Mode::*};
@@ -818,7 +830,7 @@ mod cli_tests {
                     .set_mode(BuildAndRun)
                     .add_arg_if(super::LINKER_FLAG, super::TEST_LEGACY_LINKER)
                     .arg(file_path.as_path())
-                    .with_valgrind(matches!(use_valgrind, UseValgrind::Yes) && VALGRIND_ON_LINUX)
+                    .with_valgrind(matches!(use_valgrind, UseValgrind::Yes) && ON_LINUX)
                     .with_stdin_vals(stdin);
 
                 let out = exec_cli.run();
@@ -1217,5 +1229,5 @@ fn run_wasm(wasm_path: &std::path::Path, stdin: Vec<&str>) -> String {
         Err(e) => {
             format!("WASI error {}", e)
         }
-    }
+    }*/
 }

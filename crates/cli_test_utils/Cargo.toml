@@ -1,6 +1,6 @@
 [package]
-name = "cli_utils"
-description = "Provides shared code for cli tests and benchmarks."
+name = "cli_test_utils"
+description = "Provides shared code for cli tests, cli benchmarks, glue tests, valgrind crate"
 
 authors.workspace = true
 edition.workspace = true
@@ -14,14 +14,16 @@ roc_load = { path = "../compiler/load" }
 roc_module = { path = "../compiler/module" }
 roc_reporting = { path = "../reporting" }
 roc_command_utils = { path = "../utils/command" }
+roc_cli = { path = "../cli" }
 
 bumpalo.workspace = true
 criterion.workspace = true
 regex.workspace = true
-serde-xml-rs.workspace = true
 serde.workspace = true
 tempfile.workspace = true
 lazy_static.workspace = true
+indoc.workspace = true
+const_format.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 rlimit.workspace = true
