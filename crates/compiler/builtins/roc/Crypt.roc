@@ -30,14 +30,18 @@ sha256Digest : Sha256 -> Digest256
 
 hashSha256 : List U8 -> Digest256
 hashSha256 = \bytes ->
-    sha256Digest (sha256AddBytes (emptySha256 {}) bytes)
+    {} |> emptySha256
+    |> sha256AddBytes bytes
+    |> sha256Digest
     
 u128Bytes : U128 -> List  U8
 u128Bytes = \number ->
     loop = \ n, bytes, place ->
         if place == 16 then bytes
         else  
-            newByte = n |> Num.bitwiseAnd 255 |> Num.toU8 
+            newByte = n 
+                |> Num.bitwiseAnd 255 
+                |> Num.toU8
             loop (Num.shiftRightBy n 8) (List.prepend bytes newByte) (place + 1)
     loop number [] 0
 
