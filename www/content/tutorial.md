@@ -440,6 +440,12 @@ You can give `dbg` any expression you like, for example:
 dbg Str.concat singular plural
 ```
 
+You can also use `dbg` as a function inside an expression, which will print the function argument to stderr and then return the argument to the caller. For example:
+
+```roc
+inc = \n -> 1 + dbg n
+```
+
 ### [Tuples](#tuples) {#tuples}
 
 One way to have `dbg` print multiple values at a time is to wrap them in a record:
