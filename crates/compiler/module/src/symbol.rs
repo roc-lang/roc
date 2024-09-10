@@ -1737,8 +1737,8 @@ define_builtins! {
         0 CRYPT_SHA_256: "Sha256" exposed_type=true
         1 CRYPT_DIGEST_256: "Digest256" exposed_type=true
         2 CRYPT_EMPTY_SHA_256: "emptySha256"
-        3 CRYPT_ADD_BYTES: "addBytes"
-        4 CRYPT_DIGEST: "digest"
+        3 CRYPT_SHA256_ADD_BYTES: "sha256AddBytes"
+        4 CRYPT_SHA256_DIGEST: "sha256Digest"
         5 CRYPT_HASH_SHA_256: "hashSha256"
     }
 

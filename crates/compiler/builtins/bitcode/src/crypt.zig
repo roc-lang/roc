@@ -20,7 +20,7 @@ pub fn emptySha256() callconv(.C) Sha256 {
     };
 }
 
-pub fn addBytes(sha: Sha256, data: list.RocList) callconv(.C) Sha256 {
+pub fn sha256AddBytes(sha: Sha256, data: list.RocList) callconv(.C) Sha256 {
     var out = emptySha256();
     out.pointer().* = sha.pointer().*;
     if (data.bytes) |bytes| {
@@ -35,6 +35,6 @@ pub const Digest256 = extern struct {
     secondHalf: u128,
 };
 
-pub fn digest(sha: Sha256) callconv(.C) Digest256 {
+pub fn sha256Digest(sha: Sha256) callconv(.C) Digest256 {
     return @bitCast(sha.pointer().*.peek());
 }

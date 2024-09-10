@@ -14,8 +14,8 @@ const STR = "str";
 const crypt = @import("crypt.zig");
 comptime {
     exportCryptFn(crypt.emptySha256, "emptySha256");
-    exportCryptFn(crypt.addBytes, "addBytes");
-    exportCryptFn(crypt.digest, "digest");
+    exportCryptFn(crypt.sha256AddBytes, "sha256AddBytes");
+    exportCryptFn(crypt.sha256Digest, "sha256Digest");
 }
 
 // Dec Module

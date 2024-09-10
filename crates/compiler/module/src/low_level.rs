@@ -130,8 +130,8 @@ pub enum LowLevel {
     LongJmp,
     SetLongJmpBuffer,
     CryptEmptySha256,
-    CryptAddBytes,
-    CryptDigest,
+    CryptSha256AddBytes,
+    CryptSha256Digest,
 }
 
 macro_rules! higher_order {
@@ -352,6 +352,6 @@ map_symbol_to_lowlevel! {
     Unreachable <= LIST_UNREACHABLE;
     DictPseudoSeed <= DICT_PSEUDO_SEED;
     CryptEmptySha256 <= CRYPT_EMPTY_SHA_256;
-    CryptAddBytes <= CRYPT_ADD_BYTES;
-    CryptDigest <= CRYPT_DIGEST;
+    CryptSha256AddBytes <= CRYPT_SHA256_ADD_BYTES;
+    CryptSha256Digest <= CRYPT_SHA256_DIGEST;
 }
