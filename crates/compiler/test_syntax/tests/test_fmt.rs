@@ -3629,6 +3629,60 @@ mod test_fmt {
     }
 
     #[test]
+    fn early_return_else() {
+        expr_formats_same(indoc!(
+            r"
+            if foo then
+                bar
+                else
+
+            baz
+            "
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r"
+                if thing then
+                    whatever
+                    else
+                too close
+                "
+            ),
+            indoc!(
+                r"
+                if thing then
+                    whatever
+                    else
+
+                too close
+                "
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r"
+                if isGrowing plant then
+                    LetBe
+                    else
+
+                    Water
+                "
+            ),
+            indoc!(
+                r"
+                if isGrowing plant then
+                    LetBe
+                    else
+
+                Water
+                "
+            ),
+        );
+    }
+
+    #[test]
     fn multi_line_application() {
         expr_formats_same(indoc!(
             r"

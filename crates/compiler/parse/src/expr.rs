@@ -2015,7 +2015,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::Backpassing(_, _, _)
         | Expr::BinOps { .. }
         | Expr::Defs(_, _)
-        | Expr::If(_, _)
+        | Expr::If { .. }
         | Expr::When(_, _)
         | Expr::Expect(_, _)
         | Expr::Dbg
@@ -2678,6 +2678,8 @@ fn parse_rest_of_if_expr<'a>(
     state: State<'a>,
     min_indent: u32,
 ) -> ParseResult<'a, Expr<'a>, EIf<'a>> {
+    let if_indent = state.line_indent();
+
     let mut branches = Vec::with_capacity_in(1, arena);
 
     let mut loop_state = state;
@@ -2737,16 +2739,38 @@ fn parse_rest_of_if_expr<'a>(
         break state;
     };
 
-    let (_, else_expr, state) = parse_block(
+    let else_indent = state_final_else.line_indent();
+    let indented_else = else_indent > if_indent;
+
+    let min_indent = if !indented_else {
+        else_indent + 1
+    } else {
+        if_indent
+    };
+
+    let (_, loc_first_space, state_final_else) =
+        loc_space0_e(EIf::IndentElseBranch).parse(arena, state_final_else, min_indent)?;
+
+    let allow_defs = !loc_first_space.value.is_empty();
+
+    // use parse_block_inner so we can set min_indent
+    let (_, else_branch, state) = parse_block_inner(
         options,
         arena,
         state_final_else,
-        true,
+        min_indent,
         EIf::IndentElseBranch,
         EIf::ElseBranch,
+        loc_first_space,
+        allow_defs,
     )?;
 
-    let expr = Expr::If(branches.into_bump_slice(), arena.alloc(else_expr));
+    let expr = Expr::If {
+        if_thens: branches.into_bump_slice(),
+        final_else: arena.alloc(else_branch),
+        indented_else,
+    };
+
     Ok((MadeProgress, expr, state))
 }
 

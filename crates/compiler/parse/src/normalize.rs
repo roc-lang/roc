@@ -797,7 +797,15 @@ impl<'a> Normalize<'a> for Expr<'a> {
             Expr::UnaryOp(a, b) => {
                 Expr::UnaryOp(arena.alloc(a.normalize(arena)), b.normalize(arena))
             }
-            Expr::If(a, b) => Expr::If(a.normalize(arena), arena.alloc(b.normalize(arena))),
+            Expr::If {
+                if_thens,
+                final_else,
+                indented_else,
+            } => Expr::If {
+                if_thens: if_thens.normalize(arena),
+                final_else: arena.alloc(final_else.normalize(arena)),
+                indented_else,
+            },
             Expr::When(a, b) => Expr::When(arena.alloc(a.normalize(arena)), b.normalize(arena)),
             Expr::ParensAround(a) => {
                 // The formatter can remove redundant parentheses, so also remove these when normalizing for comparison.

@@ -69,6 +69,8 @@ pub const FLAG_NO_LINK: &str = "no-link";
 pub const FLAG_TARGET: &str = "target";
 pub const FLAG_TIME: &str = "time";
 pub const FLAG_VERBOSE: &str = "verbose";
+pub const FLAG_NO_COLOR: &str = "no-color";
+pub const FLAG_NO_HEADER: &str = "no-header";
 pub const FLAG_LINKER: &str = "linker";
 pub const FLAG_PREBUILT: &str = "prebuilt-platform";
 pub const FLAG_CHECK: &str = "check";
@@ -271,6 +273,20 @@ pub fn build_app() -> Command {
         )
         .subcommand(Command::new(CMD_REPL)
             .about("Launch the interactive Read Eval Print Loop (REPL)")
+            .arg(
+                Arg::new(FLAG_NO_COLOR)
+                    .long(FLAG_NO_COLOR)
+                    .help("Do not use any ANSI color codes in the repl output")
+                    .action(ArgAction::SetTrue)
+                    .required(false)
+            )
+            .arg(
+                Arg::new(FLAG_NO_HEADER)
+                    .long(FLAG_NO_HEADER)
+                    .help("Do not print the repl header")
+                    .action(ArgAction::SetTrue)
+                    .required(false)
+            )
         )
         .subcommand(Command::new(CMD_RUN)
             .about("Run a .roc file even if it has build errors")

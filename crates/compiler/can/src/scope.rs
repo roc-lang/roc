@@ -466,13 +466,19 @@ impl Scope {
         self.home.register_debug_idents(&self.locals.ident_ids)
     }
 
-    /// Generates a unique, new symbol like "$1" or "$5",
+    /// Generates a unique, new symbol like "1" or "5",
     /// using the home module as the module_id.
     ///
     /// This is used, for example, during canonicalization of an Expr::Closure
     /// to generate a unique symbol to refer to that closure.
     pub fn gen_unique_symbol(&mut self) -> Symbol {
         Symbol::new(self.home, self.locals.gen_unique())
+    }
+    // todo: @wip use this for the @feat closure shortcut parameter name?
+    /// Generates a unique new symbol and return the symbol's unqualified identifier name.
+    pub fn gen_unique_symbol_name(&mut self) -> &str {
+        let ident_id = self.locals.gen_unique();
+        self.locals.ident_ids.get_name(ident_id).unwrap()
     }
 
     /// Introduce a new ignored variable (variable starting with an underscore).

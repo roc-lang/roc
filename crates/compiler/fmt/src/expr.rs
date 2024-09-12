@@ -71,7 +71,11 @@ impl<'a> Formattable for Expr<'a> {
                 "LowLevelDbg should only exist after desugaring, not during formatting"
             ),
 
-            If(branches, final_else) => {
+            If {
+                if_thens: branches,
+                final_else,
+                ..
+            } => {
                 final_else.is_multiline()
                     || branches
                         .iter()
@@ -464,8 +468,19 @@ impl<'a> Formattable for Expr<'a> {
             LowLevelDbg(_, _, _) => unreachable!(
                 "LowLevelDbg should only exist after desugaring, not during formatting"
             ),
-            If(branches, final_else) => {
-                fmt_if(buf, branches, final_else, self.is_multiline(), indent);
+            If {
+                if_thens: branches,
+                final_else,
+                indented_else,
+            } => {
+                fmt_if(
+                    buf,
+                    branches,
+                    final_else,
+                    self.is_multiline(),
+                    *indented_else,
+                    indent,
+                );
             }
             When(loc_condition, branches) => fmt_when(buf, loc_condition, branches, indent),
             Tuple(items) => fmt_collection(buf, indent, Braces::Round, *items, Newlines::No),
@@ -1075,6 +1090,7 @@ fn fmt_if<'a>(
     branches: &'a [(Loc<Expr<'a>>, Loc<Expr<'a>>)],
     final_else: &'a Loc<Expr<'a>>,
     is_multiline: bool,
+    indented_else: bool,
     indent: u16,
 ) {
     //    let is_multiline_then = loc_then.is_multiline();
@@ -1207,16 +1223,22 @@ fn fmt_if<'a>(
         }
     }
 
-    buf.indent(indent);
-    if is_multiline {
+    if indented_else {
+        buf.indent(indent + INDENT);
+        buf.push_str("else");
+        buf.newline();
+        buf.newline();
+    } else if is_multiline {
+        buf.indent(indent);
         buf.push_str("else");
         buf.newline();
     } else {
+        buf.indent(indent);
         buf.push_str(" else");
         buf.spaces(1);
     }
-
-    final_else.format(buf, return_indent);
+    let indent = if indented_else { indent } else { return_indent };
+    final_else.format(buf, indent);
 }
 
 fn fmt_closure<'a>(
@@ -1777,7 +1799,7 @@ fn sub_expr_requests_parens(expr: &Expr<'_>) -> bool {
                     | BinOp::Pizza => true,
                 })
         }
-        Expr::If(_, _) => true,
+        Expr::If { .. } => true,
         Expr::SpaceBefore(e, _) => sub_expr_requests_parens(e),
         Expr::SpaceAfter(e, _) => sub_expr_requests_parens(e),
         _ => false,

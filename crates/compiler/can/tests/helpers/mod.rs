@@ -46,6 +46,24 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     let var = var_store.fresh();
     let qualified_module_ids = PackageModuleIds::default();
 
+    let mut scope = Scope::new(
+        home,
+        "TestPath".into(),
+        IdentIds::default(),
+        Default::default(),
+    );
+
+    let dep_idents = IdentIds::exposed_builtins(0);
+    let mut env = Env::new(
+        arena,
+        expr_str,
+        home,
+        Path::new("Test.roc"),
+        &dep_idents,
+        &qualified_module_ids,
+        None,
+    );
+
     // Desugar operators (convert them to Apply calls, taking into account
     // operator precedence and associativity rules), before doing other canonicalization.
     //
@@ -53,22 +71,8 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     // visited a BinOp node we'd recursively try to apply this to each of its nested
     // operators, and then again on *their* nested operators, ultimately applying the
     // rules multiple times unnecessarily.
-    let loc_expr = desugar::desugar_expr(
-        arena,
-        &mut var_store,
-        &loc_expr,
-        expr_str,
-        &mut None,
-        arena.alloc("TestPath"),
-        &mut Default::default(),
-    );
+    let loc_expr = desugar::desugar_expr(&mut env, &mut scope, &loc_expr);
 
-    let mut scope = Scope::new(
-        home,
-        "TestPath".into(),
-        IdentIds::default(),
-        Default::default(),
-    );
     scope.add_alias(
         Symbol::NUM_INT,
         Region::zero(),
@@ -81,15 +85,6 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
         roc_types::types::AliasKind::Structural,
     );
 
-    let dep_idents = IdentIds::exposed_builtins(0);
-    let mut env = Env::new(
-        arena,
-        home,
-        Path::new("Test.roc"),
-        &dep_idents,
-        &qualified_module_ids,
-        None,
-    );
     let (loc_expr, output) = canonicalize_expr(
         &mut env,
         &mut var_store,
