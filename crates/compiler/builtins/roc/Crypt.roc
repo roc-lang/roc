@@ -17,7 +17,7 @@ import Str
 ## Represents, as an opaque type, the state of a SHA256 cryptographic hashing function, after some (or no) data have been added to the hash.
 Sha256 := { location : U64 }
 
-## Represents the digest of soem data produced by the SHA256 cryptographic hashing function as an opaque type.
+## Represents the digest of some data produced by the SHA256 cryptographic hashing function as an opaque type.
 ## `Digest256`implements the `Eq` ability.
 Digest256 := { firstHalf : U128, secondHalf : U128 } implements [Eq]
 

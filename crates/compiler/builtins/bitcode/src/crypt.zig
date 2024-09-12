@@ -38,4 +38,3 @@ pub const Digest256 = extern struct {
 pub fn sha256Digest(sha: Sha256) callconv(.C) Digest256 {
     return @bitCast(sha.pointer().*.peek());
 }
-                                                                                                                                         
