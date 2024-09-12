@@ -3,7 +3,7 @@ use crate::ast::{
     ImplementsClause, Pattern, Spaceable, Spaced, Tag, TypeAnnotation, TypeHeader,
 };
 use crate::blankspace::{
-    space0_around_ee, space0_before_e, space0_before_optional_after, space0_e,
+    parse_space, space0_around_ee, space0_before_e, space0_before_optional_after, space0_e,
 };
 use crate::expr::{parse_record_field, FoundApplyValue};
 use crate::ident::{lowercase_ident, lowercase_ident_keyword_e};
@@ -322,9 +322,9 @@ fn record_type_field<'a>() -> impl Parser<'a, AssignedField<'a, TypeAnnotation<'
         .parse(arena, state, min_indent)?;
         debug_assert_eq!(progress, MadeProgress);
 
-        let (_, spaces, state) =
-            space0_e(ETypeRecord::IndentEnd).parse(arena, state, min_indent)?;
+        let (_, spaces, state) = parse_space(ETypeRecord::IndentEnd, arena, state, min_indent)?;
 
+        // todo: @wip inline this stuff
         // Having a value is optional; both `{ email }` and `{ email: blah }` work.
         // (This is true in both literals and types.)
         let (_, opt_loc_val, state) = optional(either(

@@ -399,12 +399,9 @@ pub enum ERecord<'a> {
     End(Position),
     Open(Position),
 
-    Prefix(Position),
     Field(Position),
     UnderscoreField(Position),
     Colon(Position),
-    Arrow(Position),
-    Ampersand(Position),
 
     // TODO remove
     Expr(&'a EExpr<'a>, Position),
@@ -705,15 +702,12 @@ pub enum ETypeAbilityImpl<'a> {
     Field(Position),
     UnderscoreField(Position),
     Colon(Position),
-    Arrow(Position),
     Optional(Position),
     Type(&'a EType<'a>, Position),
 
     Space(BadInputError, Position),
 
-    Prefix(Position),
     QuestionMark(Position),
-    Ampersand(Position),
     Expr(&'a EExpr<'a>, Position),
     IndentBar(Position),
     IndentAmpersand(Position),
@@ -727,10 +721,7 @@ impl<'a> From<ERecord<'a>> for ETypeAbilityImpl<'a> {
             ERecord::Field(p) => ETypeAbilityImpl::Field(p),
             ERecord::UnderscoreField(p) => ETypeAbilityImpl::UnderscoreField(p),
             ERecord::Colon(p) => ETypeAbilityImpl::Colon(p),
-            ERecord::Arrow(p) => ETypeAbilityImpl::Arrow(p),
             ERecord::Space(s, p) => ETypeAbilityImpl::Space(s, p),
-            ERecord::Prefix(p) => ETypeAbilityImpl::Prefix(p),
-            ERecord::Ampersand(p) => ETypeAbilityImpl::Ampersand(p),
             ERecord::Expr(e, p) => ETypeAbilityImpl::Expr(e, p),
         }
     }
@@ -1225,6 +1216,7 @@ pub fn collection_inner<'a, Elem: 'a + crate::ast::Spaceable<'a> + Clone, E: 'a 
     space_before: impl Fn(&'a Elem, &'a [crate::ast::CommentOrNewline<'a>]) -> Elem,
 ) -> impl Parser<'a, crate::ast::Collection<'a, Loc<Elem>>, E> {
     let elem_parser = move |arena, state: State<'a>, min_indent| {
+        // todo: @wip review working with spaces, avoid lambdas and not required calculation
         let mut newlines = Vec::new_in(arena);
         let (p0, state) = consume_spaces(state, |_, space, _| newlines.push(space))?;
         let spaces_before = newlines.into_bump_slice();
@@ -1561,6 +1553,18 @@ macro_rules! one_of {
         one_of!($p1, $($others),+)
     };
 }
+
+// todo: @wip
+// #[macro_export]
+// macro_rules! parse_spaces_or_return_err {
+//     ($arena:ident, $state:expr, $min_indent:expr, $err_progress:ident) => {{
+//         let mut newlines = bumpalo::collections::vec::Vec::new_in($arena);
+//         match crate::blankspace::consume_spaces($state, |_, space, _| newlines.push(space)) {
+//             Ok((_, state)) => (newlines.into_bump_slice(), state),
+//             Err((_, fail)) => return Err(($err_progress, fail)),
+//         }
+//     };};
+// }
 
 pub fn reset_min_indent<'a, P, T, X: 'a>(parser: P) -> impl Parser<'a, T, X>
 where

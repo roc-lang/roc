@@ -6,8 +6,8 @@ use crate::ast::{
     TryTarget, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use crate::blankspace::{
-    loc_space0_e, parse_space, space0_around_ee, space0_before_e, space0_e, spaces,
-    spaces_around_help, with_spaces, with_spaces_before,
+    loc_space0_e, parse_space, space0_around_ee, space0_before_e, space0_e, spaces, with_spaces,
+    with_spaces_before,
 };
 use crate::header::module_name_help;
 use crate::ident::{
@@ -17,10 +17,10 @@ use crate::ident::{
 use crate::number_literal::parse_number_base;
 use crate::parser::{
     self, and, at_keyword, backtrackable, byte, collection_inner, collection_trailing_sep_e,
-    either, increment_min_indent, loc, map, map_with_arena, optional, set_min_indent, skip_first,
-    skip_second, specialize_err, specialize_err_ref, then, two_bytes, zero_or_more, EClosure,
-    EExpect, EExpr, EIf, EImport, EImportParams, EInParens, EList, EPattern, ERecord, EType, EWhen,
-    Either, ParseResult, Parser, SpaceProblem,
+    increment_min_indent, loc, map, optional, set_min_indent, skip_first, skip_second,
+    specialize_err, specialize_err_ref, then, zero_or_more, EClosure, EExpect, EExpr, EIf, EImport,
+    EImportParams, EInParens, EList, EPattern, ERecord, EType, EWhen, ParseResult, Parser,
+    SpaceProblem,
 };
 use crate::pattern::parse_closure_param;
 use crate::state::State;
@@ -3579,37 +3579,6 @@ struct RecordHelp<'a> {
 }
 
 fn record_help<'a>() -> impl Parser<'a, RecordHelp<'a>, ERecord<'a>> {
-    // You can optionally have an identifier followed by an '&' to
-    // make this a record update, e.g. { Foo.user & username: "blah" }.
-    let prefix_parser = and(
-        // We wrap the ident in an Expr here,
-        // so that we have a Spaceable value to work with,
-        // and then in canonicalization verify that it's an Expr::Var
-        // (and not e.g. an `Expr::Access`) and extract its string.
-        map_with_arena(
-            and(
-                spaces(),
-                and(
-                    loc(specialize_err(
-                        |_, pos| ERecord::Prefix(pos),
-                        map_with_arena(parse_ident, ident_to_expr),
-                    )),
-                    spaces(),
-                ),
-            ),
-            spaces_around_help,
-        ),
-        map_with_arena(
-            either(
-                byte(b'&', ERecord::Ampersand),
-                two_bytes(b'<', b'-', ERecord::Arrow),
-            ),
-            |_, output| match output {
-                Either::First(()) => RecordHelpPrefix::Update,
-                Either::Second(()) => RecordHelpPrefix::Mapper,
-            },
-        ),
-    );
     let fields_parser = collection_inner(
         loc(parse_record_field),
         byte(b',', ERecord::End),
@@ -3623,9 +3592,39 @@ fn record_help<'a>() -> impl Parser<'a, RecordHelp<'a>, ERecord<'a>> {
         }
         let state = state.inc();
 
-        let (prefix, state) = match prefix_parser.parse(arena, state.clone(), 0) {
-            Ok((_, pr, state)) => (Some(pr), state),
-            Err(_) => (None, state),
+        // You can optionally have an identifier followed by an '&' to
+        // make this a record update, e.g. { Foo.user & username: "blah" }.
+
+        // We wrap the ident in an Expr here,
+        // so that we have a Spaceable value to work with,
+        // and then in canonicalization verify that it's an Expr::Var
+        // (and not e.g. an `Expr::Access`) and extract its string.
+        let before_prefix = state.clone();
+        let (prefix, state) = match spaces::<'_, ERecord<'_>>().parse(arena, state, 0) {
+            Err(_) => (None, before_prefix),
+            Ok((_, spaces_before, state)) => {
+                let ident_at = state.pos();
+                match parse_ident.parse(arena, state, 0) {
+                    Err(_) => (None, before_prefix),
+                    Ok((_, ident, state)) => {
+                        let ident = Loc::pos(ident_at, state.pos(), ident_to_expr(arena, ident));
+                        match spaces::<'_, ERecord<'_>>().parse(arena, state, 0) {
+                            Err(_) => (None, before_prefix),
+                            Ok((_, spaces_after, state)) => {
+                                let ident = with_spaces(arena, spaces_before, ident, spaces_after);
+
+                                if state.bytes().first() == Some(&b'&') {
+                                    (Some((ident, RecordHelpPrefix::Update)), state.inc())
+                                } else if state.bytes().starts_with(b"<-") {
+                                    (Some((ident, RecordHelpPrefix::Mapper)), state.advance(2))
+                                } else {
+                                    (None, before_prefix)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         };
 
         let (fields, state) = match fields_parser.parse(arena, state, 0) {

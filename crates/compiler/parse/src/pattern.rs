@@ -544,7 +544,11 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
         debug_assert_eq!(label_progress, MadeProgress);
         let label_at = Region::new(start, state.pos());
 
-        let (_, spaces, state) = spaces().parse(arena, state, min_indent)?;
+        // let (_, spaces, state) = spaces().parse(arena, state, min_indent)?;
+        let (label_spaces, state) = match spaces().parse(arena, state, min_indent) {
+            Ok((_, out, state)) => (out, state),
+            Err((_, fail)) => return Err((MadeProgress, fail)),
+        };
 
         // Having a value is optional; both `{ email }` and `{ email: blah }` work.
         // (This is true in both literals and types.)
@@ -578,8 +582,8 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
             return Ok((MadeProgress, Loc::at(region, opt_field), state));
         }
 
-        let value = if !spaces.is_empty() {
-            Pattern::SpaceAfter(arena.alloc(Pattern::Identifier { ident: label }), spaces)
+        let value = if !label_spaces.is_empty() {
+            Pattern::SpaceAfter(arena.alloc(Pattern::Identifier { ident: label }), label_spaces)
         } else {
             Pattern::Identifier { ident: label }
         };

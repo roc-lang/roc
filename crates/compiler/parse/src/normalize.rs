@@ -1193,13 +1193,10 @@ impl<'a> Normalize<'a> for ERecord<'a> {
             ERecord::Field(_pos) => ERecord::Field(Position::zero()),
             ERecord::UnderscoreField(_pos) => ERecord::Field(Position::zero()),
             ERecord::Colon(_) => ERecord::Colon(Position::zero()),
-            ERecord::Arrow(_) => ERecord::Arrow(Position::zero()),
-            ERecord::Ampersand(_) => ERecord::Ampersand(Position::zero()),
             ERecord::Expr(inner_err, _) => {
                 ERecord::Expr(arena.alloc(inner_err.normalize(arena)), Position::zero())
             }
             ERecord::Space(inner_err, _) => ERecord::Space(*inner_err, Position::zero()),
-            ERecord::Prefix(_) => ERecord::Prefix(Position::zero()),
         }
     }
 }
@@ -1356,7 +1353,6 @@ impl<'a> Normalize<'a> for ETypeAbilityImpl<'a> {
                 ETypeAbilityImpl::UnderscoreField(Position::zero())
             }
             ETypeAbilityImpl::Colon(_) => ETypeAbilityImpl::Colon(Position::zero()),
-            ETypeAbilityImpl::Arrow(_) => ETypeAbilityImpl::Arrow(Position::zero()),
             ETypeAbilityImpl::Optional(_) => ETypeAbilityImpl::Optional(Position::zero()),
             ETypeAbilityImpl::Type(inner_err, _) => {
                 ETypeAbilityImpl::Type(arena.alloc(inner_err.normalize(arena)), Position::zero())
@@ -1365,7 +1361,6 @@ impl<'a> Normalize<'a> for ETypeAbilityImpl<'a> {
                 ETypeAbilityImpl::Space(*inner_err, Position::zero())
             }
             ETypeAbilityImpl::QuestionMark(_) => ETypeAbilityImpl::QuestionMark(Position::zero()),
-            ETypeAbilityImpl::Ampersand(_) => ETypeAbilityImpl::Ampersand(Position::zero()),
             ETypeAbilityImpl::Expr(inner_err, _) => {
                 ETypeAbilityImpl::Expr(arena.alloc(inner_err.normalize(arena)), Position::zero())
             }
@@ -1373,7 +1368,6 @@ impl<'a> Normalize<'a> for ETypeAbilityImpl<'a> {
             ETypeAbilityImpl::IndentAmpersand(_) => {
                 ETypeAbilityImpl::IndentAmpersand(Position::zero())
             }
-            ETypeAbilityImpl::Prefix(_) => ETypeAbilityImpl::Prefix(Position::zero()),
         }
     }
 }

@@ -10,7 +10,6 @@ use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_region::all::Loc;
 use roc_region::all::Position;
-use roc_region::all::Region;
 
 pub fn space0_around_ee<'a, P, S, E>(
     parser: P,
@@ -301,22 +300,22 @@ where
         let initial_pos = state.pos();
 
         let mut newlines = Vec::new_in(arena);
-        let mut comment_start = None;
-        let mut comment_end = None;
+        let mut newline_start = None;
+        let mut newline_end = None;
 
         let (p, state) = consume_spaces(state, |start, space, end| {
             newlines.push(space);
             if !matches!(space, CommentOrNewline::Newline) {
-                if comment_start.is_none() {
-                    comment_start = Some(start);
+                if newline_start.is_none() {
+                    newline_start = Some(start);
                 }
-                comment_end = Some(end);
+                newline_end = Some(end);
             }
         })?;
 
         if newlines.is_empty() || state.column() >= min_indent {
-            let start = comment_start.unwrap_or(state.pos());
-            let end = comment_end.unwrap_or(state.pos());
+            let start = newline_start.unwrap_or(state.pos());
+            let end = newline_end.unwrap_or(state.pos());
             Ok((p, Loc::pos(start, end, newlines.into_bump_slice()), state))
         } else {
             Err((p, indent_problem(initial_pos)))
@@ -328,6 +327,7 @@ fn begins_with_crlf(bytes: &[u8]) -> bool {
     bytes.len() >= 2 && bytes[0] == b'\r' && bytes[1] == b'\n'
 }
 
+// todo: @wip convert to normal fn, take the E: 'a + SpaceProblem into account
 pub fn spaces<'a, E>() -> impl Parser<'a, &'a [CommentOrNewline<'a>], E>
 where
     E: 'a + SpaceProblem,
@@ -349,7 +349,7 @@ where
         let mut newlines = Vec::new_in(arena);
 
         match consume_spaces(state, |start, space, end| {
-            newlines.push(Loc::at(Region::between(start, end), space))
+            newlines.push(Loc::pos(start, end, space))
         }) {
             Ok((progress, state)) => Ok((progress, newlines.into_bump_slice(), state)),
             Err((progress, err)) => Err((progress, err)),
