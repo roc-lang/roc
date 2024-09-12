@@ -710,7 +710,11 @@ impl IterTokens for Loc<Expr<'_>> {
             Expr::UnaryOp(e1, op) => (op.iter_tokens(arena).into_iter())
                 .chain(e1.iter_tokens(arena))
                 .collect_in(arena),
-            Expr::If(e1, e2) => (e1.iter_tokens(arena).into_iter())
+            Expr::If {
+                if_thens: e1,
+                final_else: e2,
+                ..
+            } => (e1.iter_tokens(arena).into_iter())
                 .chain(e2.iter_tokens(arena))
                 .collect_in(arena),
             Expr::When(e, branches) => (e.iter_tokens(arena).into_iter())

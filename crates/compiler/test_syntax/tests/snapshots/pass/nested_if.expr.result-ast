@@ -1,6 +1,6 @@
 SpaceAfter(
-    If(
-        [
+    If {
+        if_thens: [
             (
                 @3-5 Var {
                     module_name: "",
@@ -40,7 +40,7 @@ SpaceAfter(
                 ),
             ),
         ],
-        @42-43 SpaceBefore(
+        final_else: @42-43 SpaceBefore(
             Num(
                 "3",
             ),
@@ -48,7 +48,8 @@ SpaceAfter(
                 Newline,
             ],
         ),
-    ),
+        indented_else: false,
+    },
     [
         Newline,
     ],
