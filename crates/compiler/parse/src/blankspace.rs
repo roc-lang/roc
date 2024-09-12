@@ -84,20 +84,6 @@ where
     with_spaces_before(loc_with_after, spaces_before, &arena)
 }
 
-pub fn spaces_before<'a, P, S, E>(parser: P) -> impl Parser<'a, Loc<S>, E>
-where
-    S: 'a + Spaceable<'a>,
-    P: 'a + Parser<'a, Loc<S>, E>,
-    E: 'a + SpaceProblem,
-{
-    parser::map_with_arena(
-        and(spaces(), parser),
-        |arena: &'a Bump, (space_list, loc_expr): (&'a [CommentOrNewline<'a>], Loc<S>)| {
-            with_spaces_before(loc_expr, space_list, arena)
-        },
-    )
-}
-
 pub fn space0_before_e<'a, P, S, E>(
     parser: P,
     indent_problem: fn(Position) -> E,

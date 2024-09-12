@@ -1,5 +1,6 @@
 use crate::ast::{Collection, Implements, Pattern, PatternAs};
-use crate::blankspace::{parse_space, spaces, spaces_before, with_spaces_after};
+use crate::blankspace::{parse_space, spaces, with_spaces_after, with_spaces_before};
+use crate::expr::loc_expr;
 use crate::ident::{parse_ident, parse_lowercase_ident, Accessor, Ident};
 use crate::keyword;
 use crate::number_literal::parse_number_base;
@@ -544,8 +545,7 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
         debug_assert_eq!(label_progress, MadeProgress);
         let label_at = Region::new(start, state.pos());
 
-        // let (_, spaces, state) = spaces().parse(arena, state, min_indent)?;
-        let (label_spaces, state) = match spaces().parse(arena, state, min_indent) {
+        let (label_spaces, state) = match spaces().parse(arena, state, 0) {
             Ok((_, out, state)) => (out, state),
             Err((_, fail)) => return Err((MadeProgress, fail)),
         };
@@ -553,37 +553,64 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
         // Having a value is optional; both `{ email }` and `{ email: blah }` work.
         // (This is true in both literals and types.)
         if state.bytes().first() == Some(&b':') {
-            let state = state.advance(1);
+            let state = state.inc();
 
-            let val_parser = specialize_err_ref(PRecord::Pattern, loc_pattern_help());
+            let (colon_spaces, state) = match spaces().parse(arena, state, 0) {
+                Ok((_, out, state)) => (out, state),
+                Err((_, fail)) => return Err((MadeProgress, fail)),
+            };
 
-            let (_, loc_val, state) = spaces_before(val_parser).parse(arena, state, min_indent)?;
+            let pattern_pos = state.pos();
+            let (pattern_val, state) = match loc_pattern_help().parse(arena, state, min_indent) {
+                Ok((_, out, state)) => (out, state),
+                Err((_, fail)) => {
+                    let fail = PRecord::Pattern(arena.alloc(fail), pattern_pos);
+                    return Err((MadeProgress, fail));
+                }
+            };
 
-            let region = Region::span_across(&label_at, &loc_val.region);
+            let pattern_val = with_spaces_before(pattern_val, colon_spaces, arena);
+
+            let region = Region::span_across(&label_at, &pattern_val.region);
 
             // TODO spaces are dropped here
             // arena.alloc(arena.alloc(value).with_spaces_before(spaces, region)),
-            let req_field = Pattern::RequiredField(label, arena.alloc(loc_val));
+            let req_field = Pattern::RequiredField(label, arena.alloc(pattern_val));
             return Ok((MadeProgress, Loc::at(region, req_field), state));
         }
 
         if state.bytes().first() == Some(&b'?') {
-            let state = state.advance(1);
+            let state = state.inc();
 
-            let val_parser = specialize_err_ref(PRecord::Expr, crate::expr::loc_expr(false));
+            let (question_spaces, state) = match spaces().parse(arena, state, 0) {
+                Ok((_, out, state)) => (out, state),
+                Err((_, fail)) => return Err((MadeProgress, fail)),
+            };
 
-            let (_, loc_val, state) = spaces_before(val_parser).parse(arena, state, min_indent)?;
+            let optional_val_pos = state.pos();
+            let (optional_val, state) = match loc_expr(false).parse(arena, state, min_indent) {
+                Ok((_, out, state)) => (out, state),
+                Err((_, fail)) => {
+                    let fail = PRecord::Expr(arena.alloc(fail), optional_val_pos);
+                    return Err((MadeProgress, fail));
+                }
+            };
 
-            let region = Region::span_across(&label_at, &loc_val.region);
+            let optional_val = with_spaces_before(optional_val, question_spaces, arena);
+
+            let region = Region::span_across(&label_at, &optional_val.region);
 
             // TODO spaces are dropped
             // arena.alloc(arena.alloc(value).with_spaces_before(spaces, region)),
-            let opt_field = Pattern::OptionalField(label, arena.alloc(loc_val));
+            let opt_field = Pattern::OptionalField(label, arena.alloc(optional_val));
             return Ok((MadeProgress, Loc::at(region, opt_field), state));
         }
 
         let value = if !label_spaces.is_empty() {
-            Pattern::SpaceAfter(arena.alloc(Pattern::Identifier { ident: label }), label_spaces)
+            Pattern::SpaceAfter(
+                arena.alloc(Pattern::Identifier { ident: label }),
+                label_spaces,
+            )
         } else {
             Pattern::Identifier { ident: label }
         };
