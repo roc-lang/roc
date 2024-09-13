@@ -111,7 +111,7 @@ fromHexString = \hex ->
         if smallNumber <= '9' then
             smallNumber - '0'
         else
-            smallNumber - 'a'
+            smallNumber - 'a' + 10
 
     fromHexDigits = \pair ->
         first = pair |> List.first |> Result.withDefault 0
