@@ -14,23 +14,24 @@ import Num exposing [U8, U64, U128]
 import Result
 import Str
 
-## Represents, as an opaque type, the state of a SHA256 cryptographic hashing function, after some (or no) data have been added to the hash.
+## Represents the state of a SHA-256 cryptographic hashing function, after some (or no) data has been added to the hash.
 Sha256 := { location : U64 }
 
-## Represents the digest of some data produced by the SHA256 cryptographic hashing function as an opaque type.
-## `Digest256`implements the `Eq` ability.
+## Represents the digest of some data produced by the SHA-256 cryptographic hashing function as an opaque type.
+
+## `Digest256` implements the `Eq` ability.
 Digest256 := { firstHalf : U128, secondHalf : U128 } implements [Eq]
 
-## Returns a `Sha256` to which no data have been added.
+## Returns an empty SHA-256 hasher.
 emptySha256 : {} -> Sha256
 
-## Adds bytes of data to be hashed in the `Sha256`.
+## Adds bytes of data to be hashed by a SHA-256 hasher..
 sha256AddBytes : Sha256, List U8 -> Sha256
 
-## Returns the  digest of the cryptographic hashing function represted by a`Sha256`.
+## Returns the digest of the cryptographic hashing function represented by a SHA-256 hasher..
 sha256Digest : Sha256 -> Digest256
 
-## Applies the SHA256 crytographic hashing function to some bytes.
+## Applies the SHA-256 crytographic hashing function to some bytes.
 hashSha256 : List U8 -> Digest256
 hashSha256 = \bytes -> emptySha256 {} |> sha256AddBytes bytes |> sha256Digest
 
@@ -44,7 +45,7 @@ u128Bytes = \number ->
             loop (Num.shiftRightBy n 8) (List.prepend bytes newByte) (place + 1)
     loop number [] 0
 
-## Returns the bytes of a `Digest256`as a list.
+## Returns the bytes of a SHA-256 digest as a list.
 digest256ToBytes : Digest256 -> List U8
 digest256ToBytes = \@Digest256 { firstHalf, secondHalf } ->
     List.concat (u128Bytes firstHalf) (u128Bytes secondHalf)
@@ -84,7 +85,7 @@ expect
     want == got
 
 expect
-    data = Str.toUtf8 "abc"
+    data = ['a', 'b', 'c']
     want = digestBytesOfAbc
     got =
         emptySha256 {}
