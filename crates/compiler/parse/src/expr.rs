@@ -18,7 +18,7 @@ use crate::number_literal::parse_number_base;
 use crate::parser::{
     self, and, at_keyword, backtrackable, byte, collection_inner, collection_trailing_sep_e,
     increment_min_indent, loc, map, optional, set_min_indent, skip_first, skip_second,
-    specialize_err, specialize_err_ref, then, zero_or_more, EClosure, EExpect, EExpr, EIf, EImport,
+    specialize_err, specialize_err_ref, then, EClosure, EExpect, EExpr, EIf, EImport,
     EImportParams, EInParens, EList, EPattern, ERecord, EType, EWhen, ParseResult, Parser,
     SpaceProblem,
 };
@@ -144,30 +144,44 @@ fn parse_rest_of_expr_in_parens_etc<'a>(
     Ok((MadeProgress, loc_elems, state))
 }
 
-// todo: @wip unwind
 fn record_field_access_chain<'a>() -> impl Parser<'a, Vec<'a, Suffix<'a>>, EExpr<'a>> {
-    zero_or_more(one_of!(
-        skip_first(
-            byte(b'.', EExpr::Access),
-            specialize_err(
-                |_, pos| EExpr::Access(pos),
-                one_of!(
-                    map(lowercase_ident(), |x| Suffix::Accessor(
-                        Accessor::RecordField(x)
-                    )),
-                    map(integer_ident(), |x| Suffix::Accessor(Accessor::TupleIndex(
-                        x
-                    ))),
-                )
-            )
-        ),
-        map(byte(b'!', EExpr::Access), |_| Suffix::TrySuffix(
-            TryTarget::Task
-        )),
-        map(byte(b'?', EExpr::Access), |_| Suffix::TrySuffix(
-            TryTarget::Result
-        )),
-    ))
+    move |arena: &'a Bump, mut state: State<'a>, min_indent: u32| {
+        let mut fields = Vec::with_capacity_in(1, arena);
+        loop {
+            let prev_state = state.clone();
+            let (next_field, next_state) = match state.bytes().first() {
+                Some(b) => match b {
+                    b'.' => {
+                        let state = state.inc();
+                        let before_ident = state.pos();
+                        match lowercase_ident().parse(arena, state.clone(), min_indent) {
+                            Ok((_, x, state)) => {
+                                (Suffix::Accessor(Accessor::RecordField(x)), state)
+                            }
+                            Err((NoProgress, _)) => {
+                                match integer_ident().parse(arena, state, min_indent) {
+                                    Ok((_, x, state)) => {
+                                        (Suffix::Accessor(Accessor::TupleIndex(x)), state)
+                                    }
+                                    Err(_) => {
+                                        return Err((MadeProgress, EExpr::Access(before_ident)))
+                                    }
+                                }
+                            }
+                            Err(_) => return Err((MadeProgress, EExpr::Access(before_ident))),
+                        }
+                    }
+                    b'!' => (Suffix::TrySuffix(TryTarget::Task), state.inc()),
+                    b'?' => (Suffix::TrySuffix(TryTarget::Result), state.inc()),
+                    _ => return Ok((Progress::when(fields.len() != 0), fields, prev_state)),
+                },
+                _ => return Ok((Progress::when(fields.len() != 0), fields, prev_state)),
+            };
+
+            state = next_state;
+            fields.push(next_field);
+        }
+    }
 }
 
 /// In some contexts we want to parse the `_` as an expression, so it can then be turned into a
@@ -1279,11 +1293,7 @@ mod ability {
 
                             // We might be trying to parse at EOF, at which case the indent level
                             // will be off, but there is actually nothing left.
-                            let progress = if state.has_reached_end() {
-                                NoProgress
-                            } else {
-                                MadeProgress
-                            };
+                            let progress = Progress::when(!state.has_reached_end());
 
                             Err((
                                 progress,
@@ -2840,24 +2850,28 @@ where
             indent_problem,
         )?;
 
-        let err_pos = state.pos();
+        let last_pos = state.pos();
         if stmts.is_empty() {
-            let fail = wrap_error(arena.alloc(EExpr::Start(err_pos)), err_pos);
+            let fail = wrap_error(arena.alloc(EExpr::Start(last_pos)), last_pos);
             return Err((NoProgress, fail));
         }
 
-        let loc_expr = stmts_to_expr(&stmts, arena)
-            .map_err(|e| (MadeProgress, wrap_error(arena.alloc(e), err_pos)))?;
-
-        let loc_expr = with_spaces_before(loc_expr, first_space.value, arena);
-        Ok((MadeProgress, loc_expr, state))
+        match stmts_to_expr(&stmts, arena) {
+            Ok(expr) => {
+                let expr = with_spaces_before(expr, first_space.value, arena);
+                Ok((MadeProgress, expr, state))
+            }
+            Err(e) => Err((MadeProgress, wrap_error(arena.alloc(e), last_pos))),
+        }
     } else {
-        let last_pos = state.pos();
-        let (_, loc_expr, state) = parse_expr_start(options, arena, state, min_indent)
-            .map_err(|(p, e)| (p, wrap_error(arena.alloc(e), last_pos)))?;
-
-        let loc_expr = with_spaces_before(loc_expr, first_space.value, arena);
-        Ok((MadeProgress, loc_expr, state))
+        let prev_pos = state.pos();
+        match parse_expr_start(options, arena, state, min_indent) {
+            Ok((_, expr, state)) => {
+                let expr = with_spaces_before(expr, first_space.value, arena);
+                Ok((MadeProgress, expr, state))
+            }
+            Err((_, e)) => Err((MadeProgress, wrap_error(arena.alloc(e), prev_pos))),
+        }
     }
 }
 

@@ -28,10 +28,11 @@ impl Progress {
         Self::from_consumed(before - after)
     }
     pub fn from_consumed(chars_consumed: usize) -> Self {
-        Self::progress_when(chars_consumed != 0)
+        Self::when(chars_consumed != 0)
     }
 
-    pub fn progress_when(made_progress: bool) -> Self {
+    #[inline(always)]
+    pub fn when(made_progress: bool) -> Self {
         if made_progress {
             Progress::MadeProgress
         } else {
@@ -1888,57 +1889,19 @@ pub fn map<'a, Output, MappedOutput, E: 'a>(
 pub fn zero_or_more<'a, Output, E: 'a>(
     parser: impl Parser<'a, Output, E>,
 ) -> impl Parser<'a, bumpalo::collections::Vec<'a, Output>, E> {
-    move |arena, state: State<'a>, min_indent: u32| {
-        let original_state = state.clone();
-
-        let start_bytes_len = state.bytes().len();
-
-        match parser.parse(arena, state, min_indent) {
-            Ok((_, first_output, next_state)) => {
-                let mut state = next_state;
-                let mut buf = Vec::with_capacity_in(1, arena);
-
-                buf.push(first_output);
-
-                loop {
-                    let old_state = state.clone();
-                    match parser.parse(arena, state, min_indent) {
-                        Ok((_, next_output, next_state)) => {
-                            state = next_state;
-                            buf.push(next_output);
-                        }
-                        Err((fail_progress, fail)) => {
-                            match fail_progress {
-                                MadeProgress => {
-                                    // made progress on an element and then failed; that's an error
-                                    return Err((MadeProgress, fail));
-                                }
-                                NoProgress => {
-                                    // the next element failed with no progress
-                                    // report whether we made progress before
-                                    let progress = Progress::from_lengths(
-                                        start_bytes_len,
-                                        old_state.bytes().len(),
-                                    );
-                                    return Ok((progress, buf, old_state));
-                                }
-                            }
-                        }
-                    }
+    move |arena, mut state: State<'a>, min_indent: u32| {
+        let mut buf = Vec::with_capacity_in(1, arena);
+        loop {
+            let prev_state = state.clone();
+            match parser.parse(arena, state, min_indent) {
+                Ok((_, next_elem, next_state)) => {
+                    state = next_state;
+                    buf.push(next_elem);
                 }
-            }
-            Err((fail_progress, fail)) => {
-                match fail_progress {
-                    MadeProgress => {
-                        // made progress on an element and then failed; that's an error
-                        Err((MadeProgress, fail))
-                    }
-                    NoProgress => {
-                        // the first element failed (with no progress), but that's OK
-                        // because we only need to parse 0 elements
-                        Ok((NoProgress, Vec::new_in(arena), original_state))
-                    }
+                Err((NoProgress, _)) => {
+                    return Ok((Progress::when(buf.len() != 0), buf, prev_state))
                 }
+                Err(fail) => return Err(fail),
             }
         }
     }
