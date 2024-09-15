@@ -1,5 +1,5 @@
 use crate::{
-    blankspace::{consume_spaces, with_spaces},
+    blankspace::{consume_spaces, spaces, with_spaces},
     state::State,
 };
 use bumpalo::collections::vec::Vec;
@@ -637,8 +637,6 @@ pub enum ETypeRecord<'a> {
     Open(Position),
 
     Field(Position),
-    Colon(Position),
-    Optional(Position),
     Type(&'a EType<'a>, Position),
 
     Space(BadInputError, Position),
@@ -703,7 +701,6 @@ pub enum ETypeAbilityImpl<'a> {
     Field(Position),
     UnderscoreField(Position),
     Colon(Position),
-    Optional(Position),
     Type(&'a EType<'a>, Position),
 
     Space(BadInputError, Position),
@@ -1247,7 +1244,7 @@ pub fn collection_inner<'a, Elem: 'a + crate::ast::Spaceable<'a> + Clone, E: 'a 
 
         // Parse zero or more values separated by a delimiter (e.g. a comma)
         // with an optional trailing delimiter whose values are discarded
-        let before_elems_state = state.clone();
+        let prev_state = state.clone();
 
         let (mut elems, state) = match elem_parser.parse(arena, state, min_indent) {
             Ok((first_elem_p, first_elem, first_elem_state)) => {
@@ -1279,27 +1276,27 @@ pub fn collection_inner<'a, Elem: 'a + crate::ast::Spaceable<'a> + Clone, E: 'a 
                 }
                 (elems, state)
             }
-            Err((NoProgress, _)) => (Vec::new_in(arena), before_elems_state),
+            Err((NoProgress, _)) => (Vec::new_in(arena), prev_state),
             Err(fail) => return Err(fail),
         };
 
-        let (_, mut final_comments, state) = crate::blankspace::spaces()
-            .parse(arena, state, min_indent)
+        let (_, mut final_spaces, state) = spaces()
+            .parse(arena, state, 0)
             .map_err(|(_, fail)| (MadeProgress, fail))?;
 
         if !spaces_before.is_empty() {
             if let Some(first) = elems.first_mut() {
                 first.value = space_before(arena.alloc(first.value.clone()), spaces_before);
             } else {
-                debug_assert!(final_comments.is_empty());
-                final_comments = spaces_before;
+                debug_assert!(final_spaces.is_empty());
+                final_spaces = spaces_before;
             }
         }
 
         let elems = crate::ast::Collection::with_items_and_comments(
             arena,
             elems.into_bump_slice(),
-            final_comments,
+            final_spaces,
         );
 
         Ok((MadeProgress, elems, state))
@@ -1943,68 +1940,6 @@ macro_rules! debug {
             dbg!($parser.parse(arena, state, min_indent))
         }
     };
-}
-
-/// Matches either of the two given parsers.
-/// If the first parser succeeds, its result is used,
-/// otherwise, the second parser's result is used.
-///
-/// # Example
-///
-/// ```
-/// # #![forbid(unused_imports)]
-/// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, word, either, Either};
-/// # use roc_region::all::Position;
-/// # use bumpalo::Bump;
-/// # #[derive(Debug, PartialEq)]
-/// # enum Problem {
-/// #     NotFound(Position),
-/// # }
-/// # let arena = Bump::new();
-/// # fn foo<'a>(arena: &'a Bump) {
-/// let parser = either(
-///     word("hello", Problem::NotFound),
-///     word("bye", Problem::NotFound)
-/// );
-///
-/// // Success cases
-/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
-/// assert_eq!(progress, Progress::MadeProgress);
-/// assert_eq!(output, Either::First(()));
-/// assert_eq!(state.pos().offset, 5);
-///
-/// let (progress, output, state) = parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap();
-/// assert_eq!(progress, Progress::MadeProgress);
-/// assert_eq!(output, Either::Second(()));
-/// assert_eq!(state.pos().offset, 3);
-///
-/// // Error case
-/// let (progress, err) = parser.parse(&arena, State::new("later, world".as_bytes()), 0).unwrap_err();
-/// assert_eq!(progress, Progress::NoProgress);
-/// assert_eq!(err, Problem::NotFound(Position::zero()));
-/// # }
-/// # foo(&arena);
-/// ```
-pub fn either<'a, OutputLeft, OutputRight, E: 'a>(
-    p1: impl Parser<'a, OutputLeft, E>,
-    p2: impl Parser<'a, OutputRight, E>,
-) -> impl Parser<'a, Either<OutputLeft, OutputRight>, E> {
-    move |arena: &'a bumpalo::Bump, state: crate::state::State<'a>, min_indent: u32| {
-        let original_state = state.clone();
-        match p1.parse(arena, state, min_indent) {
-            Ok((progress, output, state)) => {
-                Ok((progress, crate::parser::Either::First(output), state))
-            }
-            Err((NoProgress, _)) => match p2.parse(arena, original_state.clone(), min_indent) {
-                Ok((progress, output, state)) => {
-                    Ok((progress, crate::parser::Either::Second(output), state))
-                }
-                Err((progress, fail)) => Err((progress, fail)),
-            },
-            Err((MadeProgress, fail)) => Err((MadeProgress, fail)),
-        }
-    }
 }
 
 /// Given three parsers, parse them all but ignore the output of the first and last one.

@@ -6,8 +6,7 @@ use crate::ast::{
     TryTarget, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use crate::blankspace::{
-    loc_space0_e, parse_space, space0_around_ee, space0_before_e, space0_e, spaces, with_spaces,
-    with_spaces_before,
+    loc_space0_e, parse_space, space0_around_ee, space0_before_e, space0_e, spaces, with_spaces, with_spaces_before
 };
 use crate::header::module_name_help;
 use crate::ident::{
@@ -44,9 +43,10 @@ pub fn test_parse_expr<'a>(
     let (_, spaces_before, state) =
         parse_space(EExpr::IndentStart, arena, state, min_indent).map_err(|(_, f)| f)?;
 
-    let (_, expr, state) = loc_expr_block(true)
-        .parse(arena, state, min_indent)
-        .map_err(|(_, f)| f)?;
+    let (expr, state) = match loc_expr_block(true).parse(arena, state, min_indent) {
+        Ok((_, out, state)) => (out, state),
+        Err((_, f)) => return Err(f),
+    };
 
     let (spaces_after, state) =
         match parse_space(EExpr::IndentEnd, arena, state.clone(), min_indent) {
@@ -93,7 +93,7 @@ pub fn expr_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     move |arena, state: State<'a>, min_indent: u32| {
         loc_expr(true)
             .parse(arena, state, min_indent)
-            .map(|(a, b, c)| (a, b.value, c))
+            .map(|(p, expr, state)| (p, expr.value, state))
     }
 }
 
@@ -103,8 +103,12 @@ fn parse_rest_of_expr_in_parens_etc<'a>(
     state: State<'a>,
     min_indent: u32,
 ) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
-    let elem_parser = specialize_err_ref(EInParens::Expr, loc_expr_block(false));
-    let parser = collection_inner(elem_parser, byte(b',', EInParens::End), Expr::SpaceBefore);
+    let parser = collection_inner(
+        specialize_err_ref(EInParens::Expr, loc_expr_block(false)),
+        byte(b',', EInParens::End),
+        Expr::SpaceBefore,
+    );
+
     let (_, elems, state) = parser
         .parse(arena, state.clone(), 0)
         .map_err(|(p, fail)| (p, EExpr::InParens(fail, start)))?;
@@ -192,12 +196,24 @@ fn parse_underscore_or_term<'a>(
     state: State<'a>,
     min_indent: u32,
 ) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
+    let start = state.pos();
     if state.column() < min_indent {
-        return Err((NoProgress, EExpr::Start(state.pos())));
+        return Err((NoProgress, EExpr::Start(start)));
     }
 
     if state.bytes().first() == Some(&b'_') {
-        parse_rest_of_underscore_expr(state.pos(), state.inc())
+        let state = state.inc();
+        match parse_lowercase_ident(state.clone()) {
+            Ok((_, name, state)) => {
+                let expr = Loc::pos(start, state.pos(), Expr::Underscore(name));
+                Ok((MadeProgress, expr, state))
+            }
+            Err((NoProgress, _)) => {
+                let expr = Loc::pos(start, state.pos(), Expr::Underscore(""));
+                Ok((MadeProgress, expr, state))
+            }
+            Err(_) => Err((MadeProgress, EExpr::End(start))),
+        }
     } else {
         parse_term(options, arena, state, min_indent)
     }
@@ -232,12 +248,13 @@ fn parse_term<'a>(
                     Err((p, fail)) => Err((p, EExpr::Str(fail, start))),
                 }
             }
-            b'0'..=b'9' => {
-                let (p, literal, state) = parse_number_base(false, state.bytes(), state)
-                    .map_err(|(p, fail)| (p, EExpr::Number(fail, start)))?;
-                let expr = literal_to_expr(literal);
-                Ok((p, Loc::pos(start, state.pos(), expr), state))
-            }
+            b'0'..=b'9' => match parse_number_base(false, state.bytes(), state) {
+                Ok((p, literal, state)) => {
+                    let expr = literal_to_expr(literal);
+                    Ok((p, Loc::pos(start, state.pos(), expr), state))
+                }
+                Err((p, fail)) => Err((p, EExpr::Number(fail, start))),
+            },
             _ => {
                 if at_keyword(keyword::DBG, &state) {
                     let state = state.advance(keyword::DBG.len());
@@ -245,47 +262,22 @@ fn parse_term<'a>(
                     return Ok((MadeProgress, dbg_expr, state));
                 }
 
-                parse_ident_seq(arena, state, min_indent)
+                let (_, ident, state) = parse_ident(arena, state, min_indent)?;
+                let ident_end = state.pos();
+
+                match parse_record_field_access_chain(arena, state, min_indent) {
+                    Ok((_, suffixes, state)) => {
+                        let ident = ident_to_expr(arena, ident);
+                        let expr = apply_expr_access_chain(arena, ident, suffixes);
+                        Ok((MadeProgress, Loc::pos(start, ident_end, expr), state))
+                    }
+                    Err((_, e)) => Err((MadeProgress, e)),
+                }
             }
         }
     } else {
         Err((NoProgress, EExpr::Start(start)))
     }
-}
-
-fn parse_ident_seq<'a>(
-    arena: &'a Bump,
-    state: State<'a>,
-    min_indent: u32,
-) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
-    let ident_start = state.pos();
-    let (_, ident, state) = parse_ident(arena, state, min_indent)?;
-    let ident_end = state.pos();
-
-    let ident = ident_to_expr(arena, ident);
-
-    let (suffixes, state) = match parse_record_field_access_chain(arena, state, min_indent) {
-        Ok((_, out, state)) => (out, state),
-        Err((_, e)) => return Err((MadeProgress, e)),
-    };
-
-    let expr = apply_expr_access_chain(arena, ident, suffixes);
-    Ok((MadeProgress, Loc::pos(ident_start, ident_end, expr), state))
-}
-
-// todo: @wip inline
-fn parse_rest_of_underscore_expr<'a>(
-    start: Position,
-    state: State<'a>,
-) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
-    let (name, state) = match parse_lowercase_ident(state.clone()) {
-        Ok((_, name, state)) => (name, state),
-        Err((NoProgress, _)) => ("", state),
-        Err(_) => return Err((MadeProgress, EExpr::End(start))),
-    };
-
-    let expr = Expr::Underscore(name);
-    Ok((MadeProgress, Loc::pos(start, state.pos(), expr), state))
 }
 
 fn parse_if_when_closure<'a>(
@@ -328,7 +320,20 @@ fn parse_negative_or_term<'a>(
     let start = state.pos();
     if let Some(b) = state.bytes().first() {
         match b {
-            b'_' => parse_rest_of_underscore_expr(start, state.inc()),
+            b'_' => {
+                let state = state.inc();
+                match parse_lowercase_ident(state.clone()) {
+                    Ok((_, name, state)) => {
+                        let expr = Loc::pos(start, state.pos(), Expr::Underscore(name));
+                        Ok((MadeProgress, expr, state))
+                    }
+                    Err((NoProgress, _)) => {
+                        let expr = Loc::pos(start, state.pos(), Expr::Underscore(""));
+                        Ok((MadeProgress, expr, state))
+                    }
+                    Err(_) => Err((MadeProgress, EExpr::End(start))),
+                }
+            }
             b'-' if !state
                 .bytes()
                 .get(1)
@@ -388,7 +393,17 @@ fn parse_negative_or_term<'a>(
                     return Ok((MadeProgress, dbg_expr, state));
                 }
 
-                parse_ident_seq(arena, state, min_indent)
+                let (_, ident, state) = parse_ident(arena, state, min_indent)?;
+                let ident_end = state.pos();
+
+                match parse_record_field_access_chain(arena, state, min_indent) {
+                    Ok((_, suffixes, state)) => {
+                        let ident = ident_to_expr(arena, ident);
+                        let expr = apply_expr_access_chain(arena, ident, suffixes);
+                        Ok((MadeProgress, Loc::pos(start, ident_end, expr), state))
+                    }
+                    Err((_, e)) => Err((MadeProgress, e)),
+                }
             }
         }
     } else {
@@ -1914,14 +1929,14 @@ pub fn loc_expr<'a>(accept_multi_backpassing: bool) -> impl Parser<'a, Loc<Expr<
             check_for_arrow: true,
         };
 
-        let (ps, spaces_before, state) = parse_space(EExpr::IndentEnd, arena, state, min_indent)?;
+        let (_, spaces_before, state) = parse_space(EExpr::IndentEnd, arena, state, min_indent)?;
 
         match parse_expr_start(options, arena, state, min_indent) {
             Ok((_, expr, state)) => {
                 let expr = with_spaces_before(expr, spaces_before, arena);
                 Ok((MadeProgress, expr, state))
             }
-            Err((pe, fail)) => Err((ps.or(pe), fail)),
+            Err(fail) => Err(fail),
         }
     }
 }
@@ -2234,24 +2249,24 @@ fn parse_rest_of_closure<'a>(
 
     // Parse the params, params are comma-separated
     let param_pos = state.pos();
-    let (_, spaces_before, state) = parse_space(EClosure::IndentArg, arena, state, min_indent)
-        .map_err(|(p, fail)| match p {
-            NoProgress => (MadeProgress, EClosure::Arg(param_pos)),
-            _ => (MadeProgress, fail),
-        })?;
+    let (spaces_before, state) = match parse_space(EClosure::IndentArg, arena, state, min_indent) {
+        Ok((_, out, state)) => (out, state),
+        Err((NoProgress, _)) => return Err((MadeProgress, EClosure::Arg(param_pos))),
+        Err(fail) => return Err(fail),
+    };
 
     let param_ident_pos = state.pos();
-    let (_, param, state) =
-        parse_closure_param(arena, state, min_indent).map_err(|(p, fail)| match p {
-            NoProgress => (MadeProgress, EClosure::Arg(param_pos)),
-            _ => (MadeProgress, EClosure::Pattern(fail, param_ident_pos)),
-        })?;
+    let (param, state) = match parse_closure_param(arena, state, min_indent) {
+        Ok((_, out, state)) => (out, state),
+        Err((NoProgress, _)) => return Err((MadeProgress, EClosure::Arg(param_pos))),
+        Err((_, fail)) => return Err((MadeProgress, EClosure::Pattern(fail, param_ident_pos))),
+    };
 
-    let (_, spaces_after, state) = parse_space(EClosure::IndentArrow, arena, state, min_indent)
-        .map_err(|(p, fail)| match p {
-            NoProgress => (MadeProgress, EClosure::Arg(param_pos)),
-            _ => (MadeProgress, fail),
-        })?;
+    let (spaces_after, state) = match parse_space(EClosure::IndentArrow, arena, state, min_indent) {
+        Ok((_, out, state)) => (out, state),
+        Err((NoProgress, _)) => return Err((MadeProgress, EClosure::Arg(param_pos))),
+        Err(fail) => return Err(fail),
+    };
 
     let first_param = with_spaces(arena, spaces_before, param, spaces_after);
     let mut params = Vec::with_capacity_in(1, arena);
@@ -2265,28 +2280,28 @@ fn parse_rest_of_closure<'a>(
 
             // After delimiter found, parse the parameter
             let param_pos = state.pos();
-            let (_, spaces_before, next_state) =
-                parse_space(EClosure::IndentArg, arena, state, min_indent).map_err(
-                    |(p, fail)| match p {
-                        NoProgress => (MadeProgress, EClosure::Arg(param_pos)),
-                        _ => (MadeProgress, fail),
-                    },
-                )?;
+            let (spaces_before, next_state) =
+                match parse_space(EClosure::IndentArg, arena, state, min_indent) {
+                    Ok((_, out, state)) => (out, state),
+                    Err((NoProgress, _)) => return Err((MadeProgress, EClosure::Arg(param_pos))),
+                    Err(fail) => return Err(fail),
+                };
 
             let param_ident_pos = next_state.pos();
-            let (_, param, next_state) = parse_closure_param(arena, next_state, min_indent)
-                .map_err(|(p, fail)| match p {
-                    NoProgress => (MadeProgress, EClosure::Arg(param_pos)),
-                    _ => (MadeProgress, EClosure::Pattern(fail, param_ident_pos)),
-                })?;
+            let (param, next_state) = match parse_closure_param(arena, next_state, min_indent) {
+                Ok((_, out, state)) => (out, state),
+                Err((NoProgress, _)) => return Err((MadeProgress, EClosure::Arg(param_pos))),
+                Err((_, fail)) => {
+                    return Err((MadeProgress, EClosure::Pattern(fail, param_ident_pos)))
+                }
+            };
 
-            let (_, spaces_after, next_state) =
-                parse_space(EClosure::IndentArrow, arena, next_state, min_indent).map_err(
-                    |(p, fail)| match p {
-                        NoProgress => (MadeProgress, EClosure::Arg(param_pos)),
-                        _ => (MadeProgress, fail),
-                    },
-                )?;
+            let (spaces_after, next_state) =
+                match parse_space(EClosure::IndentArrow, arena, next_state, min_indent) {
+                    Ok((_, out, state)) => (out, state),
+                    Err((NoProgress, _)) => return Err((MadeProgress, EClosure::Arg(param_pos))),
+                    Err(fail) => return Err(fail),
+                };
 
             let next_param = with_spaces(arena, spaces_before, param, spaces_after);
             params.push(next_param);
@@ -2691,20 +2706,42 @@ fn parse_rest_of_if_expr<'a>(
     let if_indent = state.line_indent();
 
     let mut branches = Vec::with_capacity_in(1, arena);
-
     let mut loop_state = state;
 
-    let cond_parser = skip_second(
-        space0_around_ee(
-            specialize_err_ref(EIf::Condition, loc_expr(true)),
-            EIf::IndentCondition,
-            EIf::IndentThenToken,
-        ),
-        parser::keyword(keyword::THEN, EIf::Then),
-    );
+    // let cond_parser = skip_second(
+    //     parser::map_with_arena(
+    //         and(
+    //             space0_e(EIf::IndentCondition),
+    //             and(specialize_err_ref(EIf::Condition, loc_expr(true)), space0_e(EIf::IndentThenToken)),
+    //         ),
+    //         spaces_around_help,
+    //     ),
+    //     parser::keyword(keyword::THEN, EIf::Then),
+    // );
 
     let state_final_else = loop {
-        let (_, cond, state) = cond_parser.parse(arena, loop_state, min_indent)?;
+        let (_, spaces_before_cond, state) = 
+            parse_space(EIf::IndentCondition, arena, loop_state.clone(), min_indent)?;
+
+        let at_cond = state.pos();
+        let (cond, state) =
+            match loc_expr(true).parse(arena, state.clone(), min_indent) {
+                Ok((_, cond, state)) => (cond, state),
+                Err((p, fail)) => return Err((p, EIf::Condition(arena.alloc(fail), at_cond))),
+            };
+
+        let (spaces_after_cond, mut state) = 
+            match parse_space(EIf::IndentThenToken, arena, state.clone(), min_indent) {
+                Ok((_, out, state)) => (out, state),
+                Err((_, fail)) => return Err((MadeProgress, fail)),
+            };
+
+        if !at_keyword(keyword::THEN, &state) {
+           return Err((MadeProgress, EIf::Then(state.pos())));
+        }
+        state.advance_mut(keyword::THEN.len());
+
+        let cond = with_spaces(arena, spaces_before_cond, cond, spaces_after_cond);
 
         let (_, then_expr, state) = parse_block(
             ExprParseOptions::ALL,

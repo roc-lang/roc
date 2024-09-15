@@ -4873,6 +4873,27 @@ mod test_fmt {
     }
 
     #[test]
+    fn func_call_trailing_lambda_field_accessor() {
+        expr_formats_same(indoc!(
+            r"
+                list = List.map [{ foo: 1 }] .foo
+                list
+            "
+        ));
+    }
+
+    // todo: @wip
+    // #[test]
+    fn _func_call_trailing_lambda_field_shortcut() {
+        expr_formats_same(indoc!(
+            r"
+                list = List.map [{ foo: 1 }] \.foo
+                list
+            "
+        ));
+    }
+
+    #[test]
     fn simple_closure_with_pipe() {
         expr_formats_same(indoc!(
             r"
@@ -4911,6 +4932,49 @@ mod test_fmt {
             r"
             \|>
                 Num.add 1
+            "
+        ));
+    }
+
+    #[test]
+    fn simple_closure_field_accessor() {
+        expr_formats_same(indoc!(
+            r"
+            f = .foo
+            f
+            "
+        ));
+    }
+
+    // note: @not_implemented but successfully parses
+    #[test]
+    fn simple_closure_nested_field_accessor() {
+        expr_formats_same(indoc!(
+            r"
+            f = .foo.bar
+            f
+            "
+        ));
+    }
+
+    // note: @not_implemented but successfully parses
+    #[test]
+    fn simple_closure_nested_field_accessor_plus_one() {
+        expr_formats_same(indoc!(
+            r"
+            f = .foo.bar + 1
+            f
+            "
+        ));
+    }
+
+    // todo: @wip
+    // #[test]
+    fn _simple_closure_field_shortcut() {
+        expr_formats_same(indoc!(
+            r"
+            f = \.foo
+            f
             "
         ));
     }

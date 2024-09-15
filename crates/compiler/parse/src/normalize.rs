@@ -1361,7 +1361,6 @@ impl<'a> Normalize<'a> for ETypeAbilityImpl<'a> {
                 ETypeAbilityImpl::UnderscoreField(Position::zero())
             }
             ETypeAbilityImpl::Colon(_) => ETypeAbilityImpl::Colon(Position::zero()),
-            ETypeAbilityImpl::Optional(_) => ETypeAbilityImpl::Optional(Position::zero()),
             ETypeAbilityImpl::Type(inner_err, _) => {
                 ETypeAbilityImpl::Type(arena.alloc(inner_err.normalize(arena)), Position::zero())
             }
@@ -1444,8 +1443,6 @@ impl<'a> Normalize<'a> for ETypeRecord<'a> {
             ETypeRecord::End(_) => ETypeRecord::End(Position::zero()),
             ETypeRecord::Open(_) => ETypeRecord::Open(Position::zero()),
             ETypeRecord::Field(_) => ETypeRecord::Field(Position::zero()),
-            ETypeRecord::Colon(_) => ETypeRecord::Colon(Position::zero()),
-            ETypeRecord::Optional(_) => ETypeRecord::Optional(Position::zero()),
             ETypeRecord::Type(inner_err, _) => {
                 ETypeRecord::Type(arena.alloc(inner_err.normalize(arena)), Position::zero())
             }

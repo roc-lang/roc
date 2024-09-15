@@ -9,9 +9,9 @@ use crate::expr::{parse_record_field, FoundApplyValue};
 use crate::ident::{lowercase_ident, lowercase_ident_keyword_e};
 use crate::keyword;
 use crate::parser::{
-    absolute_column_min_indent, and, collection_trailing_sep_e, either, increment_min_indent,
-    indented_seq, loc, map, map_with_arena, skip_first, skip_second, succeed, then, zero_or_more,
-    ERecord, ETypeAbilityImpl,
+    absolute_column_min_indent, and, collection_trailing_sep_e, increment_min_indent, indented_seq,
+    loc, map, map_with_arena, skip_first, skip_second, succeed, then, zero_or_more, ERecord,
+    ETypeAbilityImpl,
 };
 use crate::parser::{
     allocated, backtrackable, byte, fail, optional, specialize_err, specialize_err_ref, two_bytes,
@@ -308,7 +308,6 @@ where
 
 fn record_type_field<'a>() -> impl Parser<'a, AssignedField<'a, TypeAnnotation<'a>>, ETypeRecord<'a>>
 {
-    use crate::parser::Either::*;
     use AssignedField::*;
 
     (move |arena, state: State<'a>, min_indent: u32| {
@@ -324,49 +323,36 @@ fn record_type_field<'a>() -> impl Parser<'a, AssignedField<'a, TypeAnnotation<'
 
         let (_, spaces, state) = parse_space(ETypeRecord::IndentEnd, arena, state, min_indent)?;
 
-        // todo: @wip inline this stuff
         // Having a value is optional; both `{ email }` and `{ email: blah }` work.
         // (This is true in both literals and types.)
-        let (_, opt_loc_val, state) = optional(either(
-            byte(b':', ETypeRecord::Colon),
-            byte(b'?', ETypeRecord::Optional),
-        ))
-        .parse(arena, state, min_indent)?;
+        if state.bytes().first() == Some(&b':') {
+            let (_, loc_val, state) = space0_before_e(
+                specialize_err_ref(ETypeRecord::Type, expression(true, false)),
+                ETypeRecord::IndentColon,
+            )
+            .parse(arena, state.inc(), min_indent)?;
 
-        let val_parser = specialize_err_ref(ETypeRecord::Type, expression(true, false));
+            let req_val = RequiredValue(loc_label, spaces, arena.alloc(loc_val));
+            Ok((MadeProgress, req_val, state))
+        } else if state.bytes().first() == Some(&b'?') {
+            let (_, loc_val, state) = space0_before_e(
+                specialize_err_ref(ETypeRecord::Type, expression(true, false)),
+                ETypeRecord::IndentOptional,
+            )
+            .parse(arena, state.inc(), min_indent)?;
 
-        match opt_loc_val {
-            Some(First(_)) => {
-                let (_, loc_val, state) = space0_before_e(val_parser, ETypeRecord::IndentColon)
-                    .parse(arena, state, min_indent)?;
-
-                Ok((
-                    MadeProgress,
-                    RequiredValue(loc_label, spaces, arena.alloc(loc_val)),
-                    state,
-                ))
-            }
-            Some(Second(_)) => {
-                let (_, loc_val, state) = space0_before_e(val_parser, ETypeRecord::IndentOptional)
-                    .parse(arena, state, min_indent)?;
-
-                Ok((
-                    MadeProgress,
-                    OptionalValue(loc_label, spaces, arena.alloc(loc_val)),
-                    state,
-                ))
-            }
+            let opt_val = OptionalValue(loc_label, spaces, arena.alloc(loc_val));
+            Ok((MadeProgress, opt_val, state))
+        } else {
             // If no value was provided, record it as a Var.
             // Canonicalize will know what to do with a Var later.
-            None => {
-                let value = if !spaces.is_empty() {
-                    SpaceAfter(arena.alloc(LabelOnly(loc_label)), spaces)
-                } else {
-                    LabelOnly(loc_label)
-                };
+            let value = if !spaces.is_empty() {
+                SpaceAfter(arena.alloc(LabelOnly(loc_label)), spaces)
+            } else {
+                LabelOnly(loc_label)
+            };
 
-                Ok((MadeProgress, value, state))
-            }
+            Ok((MadeProgress, value, state))
         }
     })
     .trace("type_annotation:record_type_field")
@@ -581,7 +567,7 @@ fn expression<'a>(
 ) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
     (move |arena, state: State<'a>, min_indent: u32| {
         let (p1, first, state) = space0_before_e(term(stop_at_surface_has), EType::TIndentStart)
-            .parse(arena, state, min_indent)?;
+            .parse(arena, state, min_indent)?; // todo: @wip in some calls to expression we already checking for space via the same function, and similar for the `fn loc_expr` in expr.rs. Remove double check!
 
         let result = and(
             zero_or_more(skip_first(

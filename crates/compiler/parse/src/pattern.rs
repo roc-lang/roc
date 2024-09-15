@@ -242,12 +242,12 @@ fn parse_rest_of_pattern_in_parens<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
-    let elem_parser = specialize_err_ref(PInParens::Pattern, loc_pattern_help());
     let parser = collection_inner(
-        elem_parser,
+        specialize_err_ref(PInParens::Pattern, loc_pattern_help()),
         byte(b',', PInParens::End),
         Pattern::SpaceBefore,
     );
+
     let (_, pats, state) = parser
         .parse(arena, state, 0)
         .map_err(|(_, fail)| (MadeProgress, EPattern::PInParens(fail, start)))?;
@@ -514,7 +514,7 @@ pub fn parse_record_pattern_fields<'a>(
     if state.bytes().first() != Some(&b'{') {
         return Err((NoProgress, PRecord::Open(state.pos())));
     }
-    let state: State<'_> = state.inc();
+    let state = state.inc();
 
     let inner = collection_inner(
         record_pattern_field(),

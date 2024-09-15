@@ -2807,13 +2807,6 @@ fn to_trecord_report<'a>(
             }
         },
 
-        ETypeRecord::Colon(_) => {
-            unreachable!("because `foo` is a valid field; the colon is not required")
-        }
-        ETypeRecord::Optional(_) => {
-            unreachable!("because `foo` is a valid field; the question mark is not required")
-        }
-
         ETypeRecord::Type(tipe, pos) => to_type_report(alloc, lines, filename, tipe, pos),
 
         ETypeRecord::IndentOpen(pos) => {
