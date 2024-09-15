@@ -3516,6 +3516,13 @@ impl AliasKind {
             AliasKind::Opaque => "opaque",
         }
     }
+
+    pub fn as_str_plural(&self) -> &'static str {
+        match self {
+            AliasKind::Structural => "aliases",
+            AliasKind::Opaque => "opaques",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
