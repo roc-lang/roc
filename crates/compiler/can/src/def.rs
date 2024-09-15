@@ -55,6 +55,7 @@ use roc_types::types::IndexOrField;
 use roc_types::types::LambdaSet;
 use roc_types::types::MemberImpl;
 use roc_types::types::OptAbleType;
+use roc_types::types::RecordField;
 use roc_types::types::{Alias, Type};
 use std::fmt::Debug;
 use std::fs;
@@ -3579,10 +3580,10 @@ enum MakeTagUnionRecursive {
 fn make_tag_union_recursive_help<'a, 'b>(
     env: &mut Env<'a>,
     recursive_alias: Loc<Symbol>,
-    alias_args: impl Iterator<Item = Type>,
-    alias_opt_able_vars: impl Iterator<Item = OptAbleType>,
-    lambda_set_variables: impl Iterator<Item = &'b LambdaSet>,
-    infer_ext_in_output_variables: impl Iterator<Item = Type>,
+    alias_args: impl Iterator<Item = Type> + Clone,
+    alias_opt_able_vars: impl Iterator<Item = OptAbleType> + Clone,
+    lambda_set_variables: impl Iterator<Item = &'b LambdaSet> + Clone,
+    infer_ext_in_output_variables: impl Iterator<Item = Type> + Clone,
     alias_kind: AliasKind,
     region: Region,
     others: Vec<Symbol>,
@@ -3671,6 +3672,56 @@ fn make_tag_union_recursive_help<'a, 'b>(
                 var_store,
                 can_report_cyclic_error,
             )
+        }
+        Type::Record(fields, _ext) => {
+            let mut opt_recursion_var = None;
+
+            for (_name, field_typ) in fields.iter_mut() {
+                // try to make each field recursive
+                match make_tag_union_recursive_help(
+                    env,
+                    recursive_alias,
+                    alias_args.clone(),
+                    alias_opt_able_vars.clone(),
+                    lambda_set_variables.clone(),
+                    infer_ext_in_output_variables.clone(),
+                    alias_kind,
+                    region,
+                    others.clone(),
+                    field_typ.as_inner_mut(),
+                    var_store,
+                    can_report_cyclic_error,
+                ) {
+                    Cyclic => {
+                        // One of the fields was cyclic; that's enough to bail out and declare the union cyclic.
+                        return MakeTagUnionRecursive::Cyclic;
+                    }
+                    InvalidRecursion => {
+                        // One of the fields was invalid; that's enough to bail out and declare the union invalid.
+                        return MakeTagUnionRecursive::InvalidRecursion;
+                    }
+                    MadeRecursive { recursion_variable } => {
+                        if opt_recursion_var.is_none()
+                            || opt_recursion_var == Some(recursion_variable)
+                        {
+                            opt_recursion_var = Some(recursion_variable);
+                        } else {
+                            // We had two different recursion variables in different fields. Bail out as invalid.
+                            return MakeTagUnionRecursive::InvalidRecursion;
+                        }
+                    }
+                }
+            }
+
+            match opt_recursion_var {
+                Some(recursion_variable) => {
+                    MakeTagUnionRecursive::MadeRecursive { recursion_variable }
+                }
+                None => {
+                    // This should be unreachable, because we should have bailed out before now.
+                    MakeTagUnionRecursive::InvalidRecursion
+                }
+            }
         }
         _ => {
             // take care to report a cyclic alias only once (not once for each alias in the cycle)
