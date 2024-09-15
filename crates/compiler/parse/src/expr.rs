@@ -88,6 +88,7 @@ impl ExprParseOptions {
     };
 }
 
+// todo: @wip inline
 pub fn expr_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     move |arena, state: State<'a>, min_indent: u32| {
         loc_expr(true)
@@ -130,9 +131,10 @@ fn parse_rest_of_expr_in_parens_etc<'a>(
         )
     };
 
-    let (_, field_accesses, state) = record_field_access_chain()
-        .parse(arena, state, min_indent)
-        .map_err(|(_, fail)| (MadeProgress, fail))?;
+    let (field_accesses, state) = match parse_record_field_access_chain(arena, state, min_indent) {
+        Ok((_, out, state)) => (out, state),
+        Err((_, e)) => return Err((MadeProgress, e)),
+    };
 
     // if there are field accesses, include the parentheses in the region
     // otherwise, don't include the parentheses
@@ -144,43 +146,41 @@ fn parse_rest_of_expr_in_parens_etc<'a>(
     Ok((MadeProgress, loc_elems, state))
 }
 
-fn record_field_access_chain<'a>() -> impl Parser<'a, Vec<'a, Suffix<'a>>, EExpr<'a>> {
-    move |arena: &'a Bump, mut state: State<'a>, min_indent: u32| {
-        let mut fields = Vec::with_capacity_in(1, arena);
-        loop {
-            let prev_state = state.clone();
-            let (next_field, next_state) = match state.bytes().first() {
-                Some(b) => match b {
-                    b'.' => {
-                        let state = state.inc();
-                        let before_ident = state.pos();
-                        match lowercase_ident().parse(arena, state.clone(), min_indent) {
-                            Ok((_, x, state)) => {
-                                (Suffix::Accessor(Accessor::RecordField(x)), state)
-                            }
-                            Err((NoProgress, _)) => {
-                                match integer_ident().parse(arena, state, min_indent) {
-                                    Ok((_, x, state)) => {
-                                        (Suffix::Accessor(Accessor::TupleIndex(x)), state)
-                                    }
-                                    Err(_) => {
-                                        return Err((MadeProgress, EExpr::Access(before_ident)))
-                                    }
+fn parse_record_field_access_chain<'a>(
+    arena: &'a Bump,
+    mut state: State<'a>,
+    min_indent: u32,
+) -> ParseResult<'a, Vec<'a, Suffix<'a>>, EExpr<'a>> {
+    let mut fields = Vec::with_capacity_in(1, arena);
+    loop {
+        let prev_state = state.clone();
+        let (next_field, next_state) = match state.bytes().first() {
+            Some(b) => match b {
+                b'.' => {
+                    let state = state.inc();
+                    let before_ident = state.pos();
+                    match lowercase_ident().parse(arena, state.clone(), min_indent) {
+                        Ok((_, x, state)) => (Suffix::Accessor(Accessor::RecordField(x)), state),
+                        Err((NoProgress, _)) => {
+                            match integer_ident().parse(arena, state, min_indent) {
+                                Ok((_, x, state)) => {
+                                    (Suffix::Accessor(Accessor::TupleIndex(x)), state)
                                 }
+                                Err(_) => return Err((MadeProgress, EExpr::Access(before_ident))),
                             }
-                            Err(_) => return Err((MadeProgress, EExpr::Access(before_ident))),
                         }
+                        Err(_) => return Err((MadeProgress, EExpr::Access(before_ident))),
                     }
-                    b'!' => (Suffix::TrySuffix(TryTarget::Task), state.inc()),
-                    b'?' => (Suffix::TrySuffix(TryTarget::Result), state.inc()),
-                    _ => return Ok((Progress::when(fields.len() != 0), fields, prev_state)),
-                },
+                }
+                b'!' => (Suffix::TrySuffix(TryTarget::Task), state.inc()),
+                b'?' => (Suffix::TrySuffix(TryTarget::Result), state.inc()),
                 _ => return Ok((Progress::when(fields.len() != 0), fields, prev_state)),
-            };
+            },
+            _ => return Ok((Progress::when(fields.len() != 0), fields, prev_state)),
+        };
 
-            state = next_state;
-            fields.push(next_field);
-        }
+        state = next_state;
+        fields.push(next_field);
     }
 }
 
@@ -264,10 +264,10 @@ fn parse_ident_seq<'a>(
 
     let ident = ident_to_expr(arena, ident);
 
-    let (_, suffixes, state) = record_field_access_chain()
-        .trace("record_field_access_chain")
-        .parse(arena, state, min_indent)
-        .map_err(|(_, e)| (MadeProgress, e))?;
+    let (suffixes, state) = match parse_record_field_access_chain(arena, state, min_indent) {
+        Ok((_, out, state)) => (out, state),
+        Err((_, e)) => return Err((MadeProgress, e)),
+    };
 
     let expr = apply_expr_access_chain(arena, ident, suffixes);
     Ok((MadeProgress, Loc::pos(ident_start, ident_end, expr), state))
@@ -3487,7 +3487,7 @@ pub fn parse_record_field<'a>(
         Ok((_, label, state)) => {
             let field_label = Loc::pos(start, state.pos(), label);
 
-            let (label_spaces, mut state) = match spaces().parse(arena, state, min_indent) {
+            let (label_spaces, mut state) = match spaces().parse(arena, state, 0) {
                 Ok((_, out, state)) => (out, state),
                 Err((_, fail)) => return Err((MadeProgress, fail)),
             };
@@ -3495,7 +3495,7 @@ pub fn parse_record_field<'a>(
             if state.bytes().first() == Some(&b':') {
                 state.advance_mut(1);
 
-                let (colon_spaces, mut state) = match spaces().parse(arena, state, min_indent) {
+                let (colon_spaces, mut state) = match spaces().parse(arena, state, 0) {
                     Ok((_, out, state)) => (out, state),
                     Err((_, fail)) => return Err((MadeProgress, fail)),
                 };
@@ -3689,7 +3689,7 @@ fn parse_record_expr<'a>(
     let (_, record, state) =
         specialize_err(EExpr::Record, record_help()).parse(arena, state, min_indent)?;
 
-    let (accessors, state) = match record_field_access_chain().parse(arena, state, min_indent) {
+    let (accessors, state) = match parse_record_field_access_chain(arena, state, min_indent) {
         Ok((_, accessors, state)) => (accessors, state),
         Err((_, fail)) => return Err((MadeProgress, fail)),
     };
