@@ -1,6 +1,6 @@
 use crate::ast::{Collection, Implements, Pattern, PatternAs};
 use crate::blankspace::{parse_space, spaces, with_spaces_after, with_spaces_before};
-use crate::expr::loc_expr;
+use crate::expr::{parse_expr_start, ExprParseOptions};
 use crate::ident::{parse_ident, parse_lowercase_ident, Accessor, Ident};
 use crate::keyword;
 use crate::number_literal::parse_number_base;
@@ -588,13 +588,14 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
             };
 
             let optional_val_pos = state.pos();
-            let (optional_val, state) = match loc_expr(false).parse(arena, state, min_indent) {
-                Ok((_, out, state)) => (out, state),
-                Err((_, fail)) => {
-                    let fail = PRecord::Expr(arena.alloc(fail), optional_val_pos);
-                    return Err((MadeProgress, fail));
-                }
-            };
+            let (optional_val, state) =
+                match parse_expr_start(ExprParseOptions::NO_BACK_ARROW, arena, state, min_indent) {
+                    Ok((_, out, state)) => (out, state),
+                    Err((_, fail)) => {
+                        let fail = PRecord::Expr(arena.alloc(fail), optional_val_pos);
+                        return Err((MadeProgress, fail));
+                    }
+                };
 
             let optional_val = with_spaces_before(optional_val, question_spaces, arena);
 

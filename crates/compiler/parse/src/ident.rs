@@ -605,17 +605,8 @@ fn chomp_module_chain(buffer: &[u8]) -> Result<u32, Progress> {
     }
 }
 
-pub fn concrete_type<'a>() -> impl Parser<'a, (&'a str, &'a str), ()> {
-    move |_, state: State<'a>, _min_indent: u32| match chomp_concrete_type(state.bytes()) {
-        Err(progress) => Err((progress, ())),
-        Ok((module_name, type_name, width)) => {
-            Ok((MadeProgress, (module_name, type_name), state.advance(width)))
-        }
-    }
-}
-
 // parse a type name like `Result` or `Result.Result`
-fn chomp_concrete_type(buffer: &[u8]) -> Result<(&str, &str, usize), Progress> {
+pub(crate) fn chomp_concrete_type(buffer: &[u8]) -> Result<(&str, &str, usize), Progress> {
     let first = crate::ident::chomp_uppercase_part(buffer)?;
 
     if let Some(b'.') = buffer.get(first.len()) {

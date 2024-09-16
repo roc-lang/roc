@@ -1,13 +1,14 @@
 use crate::ast::{EscapedChar, SingleQuoteLiteral, StrLiteral, StrSegment};
-use crate::expr;
+use crate::blankspace::{parse_space, with_spaces_before};
+use crate::expr::{parse_expr_start, ExprParseOptions};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    allocated, between, byte, loc, reset_min_indent, skip_second, specialize_err_ref,
-    BadInputError, ESingleQuote, EString, ParseResult, Parser,
+    between, byte, loc, BadInputError, EExpr, ESingleQuote, EString, ParseResult, Parser,
 };
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
+use roc_region::all::Loc;
 
 /// One or more ASCII hex digits. (Useful when parsing unicode escape codes,
 /// which must consist entirely of ASCII hex digits.)
@@ -363,25 +364,42 @@ pub fn parse_rest_of_str_like<'a>(
                         // Parse an arbitrary expression, then give a
                         // canonicalization error if that expression variant
                         // is not allowed inside a string interpolation.
-                        let (_progress, loc_expr, new_state) = skip_second(
-                            specialize_err_ref(
-                                EString::Format,
-                                loc(allocated(reset_min_indent(expr::expr_help()))),
-                            ),
-                            byte(b')', EString::FormatEnd),
-                        )
-                        .parse(arena, state, min_indent)?;
+                        let expr_pos = state.pos();
+                        let (spaces_before, news) =
+                            match parse_space(EExpr::IndentEnd, arena, state.clone(), 0) {
+                                Ok((_, out, state)) => (out, state),
+                                Err((p, fail)) => {
+                                    return Err((p, EString::Format(arena.alloc(fail), expr_pos)));
+                                }
+                            };
+
+                        let (expr, mut news) =
+                            match parse_expr_start(ExprParseOptions::ALL, arena, news.clone(), 0) {
+                                Ok((_, expr, state)) => (expr, state),
+                                Err((p, fail)) => {
+                                    return Err((p, EString::Format(arena.alloc(fail), expr_pos)));
+                                }
+                            };
+
+                        let expr = with_spaces_before(expr, spaces_before, arena);
+                        let expr = &*arena.alloc(expr.value);
+                        let expr = Loc::pos(expr_pos, news.pos(), expr);
+
+                        if news.bytes().first() != Some(&b')') {
+                            return Err((MadeProgress, EString::FormatEnd(news.pos())));
+                        }
+                        news.advance_mut(1);
 
                         // Advance the iterator past the expr we just parsed.
-                        for _ in 0..(original_byte_count - new_state.bytes().len()) {
+                        for _ in 0..(original_byte_count - news.bytes().len()) {
                             bytes.next();
                         }
 
-                        segments.push(StrSegment::DeprecatedInterpolated(loc_expr));
+                        segments.push(StrSegment::DeprecatedInterpolated(expr));
 
                         // Reset the segment
                         segment_parsed_bytes = 0;
-                        state = new_state;
+                        state = news;
                     }
                     Some(b'u') => {
                         // Advance past the `\u` before using the expr parser
@@ -472,25 +490,42 @@ pub fn parse_rest_of_str_like<'a>(
                 let original_byte_count = state.bytes().len();
 
                 // Parse an arbitrary expression, followed by ')'
-                let (_progress, loc_expr, new_state) = skip_second(
-                    specialize_err_ref(
-                        EString::Format,
-                        loc(allocated(reset_min_indent(expr::expr_help()))),
-                    ),
-                    byte(b')', EString::FormatEnd),
-                )
-                .parse(arena, state, min_indent)?;
+                let expr_pos = state.pos();
+                let (spaces_before, news) =
+                    match parse_space(EExpr::IndentEnd, arena, state.clone(), 0) {
+                        Ok((_, out, state)) => (out, state),
+                        Err((p, fail)) => {
+                            return Err((p, EString::Format(arena.alloc(fail), expr_pos)));
+                        }
+                    };
+
+                let (expr, mut news) =
+                    match parse_expr_start(ExprParseOptions::ALL, arena, news.clone(), 0) {
+                        Ok((_, expr, state)) => (expr, state),
+                        Err((p, fail)) => {
+                            return Err((p, EString::Format(arena.alloc(fail), expr_pos)));
+                        }
+                    };
+
+                let expr = with_spaces_before(expr, spaces_before, arena);
+                let expr = &*arena.alloc(expr.value);
+                let expr = Loc::pos(expr_pos, news.pos(), expr);
+
+                if news.bytes().first() != Some(&b')') {
+                    return Err((MadeProgress, EString::FormatEnd(news.pos())));
+                }
+                news.advance_mut(1);
 
                 // Advance the iterator past the expr we just parsed.
-                for _ in 0..(original_byte_count - new_state.bytes().len()) {
+                for _ in 0..(original_byte_count - news.bytes().len()) {
                     bytes.next();
                 }
 
-                segments.push(StrSegment::Interpolated(loc_expr));
+                segments.push(StrSegment::Interpolated(expr));
 
                 // Reset the segment
                 segment_parsed_bytes = 0;
-                state = new_state;
+                state = news;
             }
             _ => {
                 // All other characters need no special handling.

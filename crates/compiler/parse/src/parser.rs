@@ -843,49 +843,6 @@ where
     }
 }
 
-/// Allocates the output of the given parser and returns a reference to it.
-/// This also happens if the given parser fails.
-///
-/// # Examples
-///
-/// ```
-/// # #![forbid(unused_imports)]
-/// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, allocated, word};
-/// # use roc_region::all::Position;
-/// # use bumpalo::Bump;
-/// # #[derive(Debug, PartialEq)]
-/// # enum Problem {
-/// #     NotFound(Position),
-/// # }
-/// # let arena = Bump::new();
-/// let parser_inner = word("hello", Problem::NotFound);
-/// let alloc_parser = allocated(parser_inner);
-///
-/// // Success case
-/// let (progress, output, state) = alloc_parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
-/// assert_eq!(progress, Progress::MadeProgress);
-/// assert_eq!(output, &());
-/// assert_eq!(state.pos(), Position::new(5));
-///
-/// // Error case
-/// let (progress, err) = alloc_parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap_err();
-/// assert_eq!(progress, Progress::NoProgress);
-/// assert_eq!(err, Problem::NotFound(Position::zero()));
-/// ```
-pub fn allocated<'a, P, Val, Error>(parser: P) -> impl Parser<'a, &'a Val, Error>
-where
-    Error: 'a,
-    P: Parser<'a, Val, Error>,
-    Val: 'a,
-{
-    move |arena, state: State<'a>, min_indent: u32| {
-        let (progress, answer, state) = parser.parse(arena, state, min_indent)?;
-
-        Ok((progress, &*arena.alloc(answer), state))
-    }
-}
-
 /// Apply transform function to turn output of given parser into another parser.
 /// Can be used to chain two parsers.
 ///
@@ -1310,6 +1267,7 @@ pub fn collection_trailing_sep_e<
 >(
     opening_brace: impl Parser<'a, (), E>,
     elem: impl Parser<'a, Loc<Elem>, E> + 'a,
+    // todo: @wip delimiter is always b',' and in case of Err always produces Err(NoProgress, _), so we may inline it and remove the Err(MadeProgress logic) handling
     delimiter: impl Parser<'a, (), E>,
     closing_brace: impl Parser<'a, (), E>,
     space_before: impl Fn(&'a Elem, &'a [crate::ast::CommentOrNewline<'a>]) -> Elem,
