@@ -386,9 +386,11 @@ impl IterTokens for PlatformRequires<'_> {
 impl IterTokens for Loc<TypeAnnotation<'_>> {
     fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
         match self.value {
-            TypeAnnotation::Function(params, ret) => (params.iter_tokens(arena).into_iter())
-                .chain(ret.iter_tokens(arena))
-                .collect_in(arena),
+            TypeAnnotation::Function(params, _arrow, ret) => {
+                (params.iter_tokens(arena).into_iter())
+                    .chain(ret.iter_tokens(arena))
+                    .collect_in(arena)
+            }
             TypeAnnotation::Apply(_mod, _type, args) => args.iter_tokens(arena),
             TypeAnnotation::BoundVariable(_) => onetoken(Token::Type, self.region, arena),
             TypeAnnotation::As(ty, _, as_ty) => (ty.iter_tokens(arena).into_iter())

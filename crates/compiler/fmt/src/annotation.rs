@@ -149,7 +149,7 @@ impl<'a> Formattable for TypeAnnotation<'a> {
             }
 
             Wildcard | Inferred | BoundVariable(_) | Malformed(_) => false,
-            Function(args, result) => {
+            Function(args, _arrow, result) => {
                 result.value.is_multiline()
                     || args.iter().any(|loc_arg| loc_arg.value.is_multiline())
             }
@@ -195,7 +195,8 @@ impl<'a> Formattable for TypeAnnotation<'a> {
         let self_is_multiline = self.is_multiline();
 
         match self {
-            Function(args, ret) => {
+            Function(args, _arrow, ret) => {
+                // [purity-infrence] TODO: format arrow
                 let needs_parens = parens != Parens::NotNeeded;
 
                 buf.indent(indent);

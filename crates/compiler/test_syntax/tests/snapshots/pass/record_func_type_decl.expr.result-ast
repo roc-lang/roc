@@ -55,6 +55,7 @@ SpaceAfter(
                                                     [],
                                                 ),
                                             ],
+                                            Pure,
                                             @65-75 Apply(
                                                 "",
                                                 "Effect",

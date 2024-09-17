@@ -273,6 +273,7 @@ mod test_snapshots {
         pass/add_var_with_spaces.expr,
         pass/add_with_spaces.expr,
         pass/ann_closed_union.expr,
+        pass/ann_effectful_fn.expr,
         pass/ann_open_union.expr,
         pass/annotated_record_destructure.expr,
         pass/annotated_tag_destructure.expr,
