@@ -125,7 +125,7 @@ impl<T> RefcountedResourceHeap<T> {
     /// Promotes all live references to constants.
     /// Does this my walking all allocations and setting the refcount to zero (constant).
     /// It will also end up walking freed elements, but their bytes are uninitialized and don't matter.
-    /// This is great for calling after an init function where all lived data is guarenteed to live until the server finishes running.
+    /// This is great for calling after an init function where all lived data is guaranteed to live until the server finishes running.
     pub fn promote_all_to_constant(&mut self) {
         for i in 0..self.0.elements {
             let offset = i * Heap::<Refcounted<T>>::node_size();
