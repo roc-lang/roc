@@ -1531,9 +1531,21 @@ impl ImplementsAbilities<'_> {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
+pub enum FunctionArrow {
+    /// ->
+    Pure,
+    /// =>
+    Effectful,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum TypeAnnotation<'a> {
-    /// A function. The types of its arguments, then the type of its return value.
-    Function(&'a [Loc<TypeAnnotation<'a>>], &'a Loc<TypeAnnotation<'a>>),
+    /// A function. The types of its arguments, the type of arrow used, then the type of its return value.
+    Function(
+        &'a [Loc<TypeAnnotation<'a>>],
+        FunctionArrow,
+        &'a Loc<TypeAnnotation<'a>>,
+    ),
 
     /// Applying a type to some arguments (e.g. Map.Map String Int)
     Apply(&'a str, &'a str, &'a [Loc<TypeAnnotation<'a>>]),
@@ -2755,7 +2767,7 @@ impl<'a> Malformed for ModuleImportParams<'a> {
 impl<'a> Malformed for TypeAnnotation<'a> {
     fn is_malformed(&self) -> bool {
         match self {
-            TypeAnnotation::Function(args, ret) => {
+            TypeAnnotation::Function(args, _arrow, ret) => {
                 args.iter().any(|arg| arg.is_malformed()) || ret.is_malformed()
             }
             TypeAnnotation::Apply(_, _, args) => args.iter().any(|arg| arg.is_malformed()),

@@ -881,8 +881,9 @@ impl<'a> Normalize<'a> for Pattern<'a> {
 impl<'a> Normalize<'a> for TypeAnnotation<'a> {
     fn normalize(&self, arena: &'a Bump) -> Self {
         match *self {
-            TypeAnnotation::Function(a, b) => TypeAnnotation::Function(
+            TypeAnnotation::Function(a, arrow, b) => TypeAnnotation::Function(
                 arena.alloc(a.normalize(arena)),
+                arrow,
                 arena.alloc(b.normalize(arena)),
             ),
             TypeAnnotation::Apply(a, b, c) => TypeAnnotation::Apply(a, b, c.normalize(arena)),

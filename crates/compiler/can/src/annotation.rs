@@ -448,7 +448,7 @@ pub fn find_type_def_symbols(
                     stack.push(&t.value);
                 }
             }
-            Function(arguments, result) => {
+            Function(arguments, _arrow, result) => {
                 for t in arguments.iter() {
                     stack.push(&t.value);
                 }
@@ -554,7 +554,8 @@ fn can_annotation_help(
     use roc_parse::ast::TypeAnnotation::*;
 
     match annotation {
-        Function(argument_types, return_type) => {
+        Function(argument_types, _arrow, return_type) => {
+            // [purity-inference] TODO: arrow
             let mut args = Vec::new();
 
             for arg in *argument_types {
