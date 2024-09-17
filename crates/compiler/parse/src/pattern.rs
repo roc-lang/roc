@@ -6,7 +6,7 @@ use crate::keyword;
 use crate::number_literal::parse_number_base;
 use crate::parser::{at_keyword, Progress::*};
 use crate::parser::{
-    byte, collection_inner, specialize_err_ref, then, zero_or_more, EPattern, PInParens, PList,
+    collection_inner, specialize_err_ref, then, zero_or_more, EPattern, PInParens, PList,
     PRecord, ParseResult, Parser,
 };
 use crate::state::State;
@@ -244,7 +244,6 @@ fn parse_rest_of_pattern_in_parens<'a>(
 ) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     let parser = collection_inner(
         specialize_err_ref(PInParens::Pattern, loc_pattern_help()),
-        byte(b',', PInParens::End),
         Pattern::SpaceBefore,
     );
 
@@ -296,11 +295,7 @@ fn parse_rest_of_list_pattern<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
-    let inner = collection_inner(
-        list_element_pattern(),
-        byte(b',', PList::End),
-        Pattern::SpaceBefore,
-    );
+    let inner = collection_inner(list_element_pattern(), Pattern::SpaceBefore);
 
     let (elems, state) = match inner.parse(arena, state, 0) {
         Ok((_, out, state)) => (out, state),
@@ -486,11 +481,7 @@ fn parse_rest_of_record_pattern<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
-    let inner = collection_inner(
-        record_pattern_field(),
-        byte(b',', PRecord::End),
-        Pattern::SpaceBefore,
-    );
+    let inner = collection_inner(record_pattern_field(), Pattern::SpaceBefore);
 
     let (fields, state) = match inner.parse(arena, state, 0) {
         Ok((_, fields, state)) => (fields, state),
@@ -516,11 +507,7 @@ pub fn parse_record_pattern_fields<'a>(
     }
     let state = state.inc();
 
-    let inner = collection_inner(
-        record_pattern_field(),
-        byte(b',', PRecord::End),
-        Pattern::SpaceBefore,
-    );
+    let inner = collection_inner(record_pattern_field(), Pattern::SpaceBefore);
 
     let (out, state) = match inner.parse(arena, state, 0) {
         Ok((_, out, state)) => (out, state),

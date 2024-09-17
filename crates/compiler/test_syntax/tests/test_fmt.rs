@@ -4968,6 +4968,16 @@ mod test_fmt {
         ));
     }
 
+    #[test]
+    fn simple_closure_field_access() {
+        expr_formats_same(indoc!(
+            r"
+            f = \u -> u.foo
+            f
+            "
+        ));
+    }
+
     // todo: @wip
     // #[test]
     fn _simple_closure_field_shortcut() {

@@ -37,7 +37,6 @@ fn tag_union_type<'a>(
         let (_, tags, state) = collection_trailing_sep_e(
             byte(b'[', ETypeTagUnion::Open),
             loc(tag_type(false)),
-            byte(b',', ETypeTagUnion::End),
             byte(b']', ETypeTagUnion::End),
             Tag::SpaceBefore,
         )
@@ -240,7 +239,6 @@ fn loc_type_in_parens<'a>(
             skip_second(
                 reset_min_indent(collection_inner(
                     specialize_err_ref(ETypeInParens::Type, expression(true, false)),
-                    byte(b',', ETypeInParens::End),
                     TypeAnnotation::SpaceBefore,
                 )),
                 byte(b')', ETypeInParens::End),
@@ -365,7 +363,6 @@ fn record_type<'a>(
         let (_, fields, state) = collection_trailing_sep_e(
             byte(b'{', ETypeRecord::Open),
             loc(record_type_field()),
-            byte(b',', ETypeRecord::End),
             byte(b'}', ETypeRecord::End),
             AssignedField::SpaceBefore,
         )
@@ -523,7 +520,6 @@ pub fn implements_abilities<'a>() -> impl Parser<'a, Loc<ImplementsAbilities<'a>
                 collection_trailing_sep_e(
                     byte(b'[', EType::TStart),
                     loc(parse_implements_ability()),
-                    byte(b',', EType::TEnd),
                     byte(b']', EType::TEnd),
                     ImplementsAbility::SpaceBefore,
                 ),
@@ -544,7 +540,6 @@ fn parse_implements_ability<'a>() -> impl Parser<'a, ImplementsAbility<'a>, ETyp
                     collection_trailing_sep_e(
                         byte(b'{', ETypeAbilityImpl::Open),
                         specialize_err(|e: ERecord<'_>, _| e.into(), loc(ability_impl_field())),
-                        byte(b',', ETypeAbilityImpl::End),
                         byte(b'}', ETypeAbilityImpl::End),
                         AssignedField::SpaceBefore
                     )

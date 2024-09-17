@@ -101,7 +101,6 @@ fn parse_rest_of_expr_in_parens_etc<'a>(
             EInParens::Expr,
             loc_expr_block(ExprParseOptions::NO_BACK_ARROW),
         ),
-        byte(b',', EInParens::End),
         Expr::SpaceBefore,
     );
 
@@ -1024,7 +1023,6 @@ fn import_exposing<'a>() -> impl Parser<
         item: collection_trailing_sep_e(
             byte(b'[', EImport::ExposingListStart),
             loc(import_exposed_name()),
-            byte(b',', EImport::ExposingListEnd),
             byte(b']', EImport::ExposingListEnd),
             Spaced::SpaceBefore
         )
@@ -3316,11 +3314,7 @@ fn parse_rest_of_list_expr<'a>(
         parse_expr_start(ExprParseOptions::NO_BACK_ARROW, arena, state, min_indent)
     };
 
-    let inner = collection_inner(
-        specialize_err_ref(EList::Expr, parser),
-        byte(b',', EList::End),
-        Expr::SpaceBefore,
-    );
+    let inner = collection_inner(specialize_err_ref(EList::Expr, parser), Expr::SpaceBefore);
 
     let (elems, state) = match inner.parse(arena, state, 0) {
         Ok((_, elems, state)) => (elems, state),
@@ -3634,11 +3628,7 @@ struct RecordHelp<'a> {
 }
 
 fn record_help<'a>() -> impl Parser<'a, RecordHelp<'a>, ERecord<'a>> {
-    let fields_parser = collection_inner(
-        loc(parse_record_field),
-        byte(b',', ERecord::End),
-        RecordField::SpaceBefore,
-    );
+    let fields_parser = collection_inner(loc(parse_record_field), RecordField::SpaceBefore);
 
     move |arena: &'a Bump, state: State<'a>, _: u32| {
         let start = state.pos();

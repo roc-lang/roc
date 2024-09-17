@@ -1167,7 +1167,6 @@ where
 
 pub fn collection_inner<'a, Elem: 'a + crate::ast::Spaceable<'a> + Clone, E: 'a + SpaceProblem>(
     elem: impl Parser<'a, Loc<Elem>, E> + 'a,
-    delimiter: impl Parser<'a, (), E>,
     space_before: impl Fn(&'a Elem, &'a [crate::ast::CommentOrNewline<'a>]) -> Elem,
 ) -> impl Parser<'a, crate::ast::Collection<'a, Loc<Elem>>, E> {
     let elem_parser = move |arena, state: State<'a>, min_indent| {
@@ -1213,22 +1212,19 @@ pub fn collection_inner<'a, Elem: 'a + crate::ast::Spaceable<'a> + Clone, E: 'a 
 
                 let mut state = first_elem_state;
                 loop {
-                    match delimiter.parse(arena, state.clone(), min_indent) {
-                        Ok((_, (), delim_state)) => {
-                            match elem_parser.parse(arena, delim_state.clone(), min_indent) {
-                                Ok((elem_p, next_output, elem_state)) => {
-                                    debug_assert_eq!(elem_p, MadeProgress);
-                                    state = elem_state;
-                                    elems.push(next_output);
-                                }
-                                Err(_) => {
-                                    state = delim_state;
-                                    break;
-                                }
-                            }
+                    if state.bytes().first() != Some(&b',') {
+                        break;
+                    }
+                    state.advance_mut(1);
+                    match elem_parser.parse(arena, state.clone(), min_indent) {
+                        Ok((elem_p, next_output, elem_state)) => {
+                            debug_assert_eq!(elem_p, MadeProgress);
+                            state = elem_state;
+                            elems.push(next_output);
                         }
-                        Err((NoProgress, _)) => break,
-                        Err(fail) => return Err(fail),
+                        Err(_) => {
+                            break;
+                        }
                     }
                 }
                 (elems, state)
@@ -1267,14 +1263,12 @@ pub fn collection_trailing_sep_e<
 >(
     opening_brace: impl Parser<'a, (), E>,
     elem: impl Parser<'a, Loc<Elem>, E> + 'a,
-    // todo: @wip delimiter is always b',' and in case of Err always produces Err(NoProgress, _), so we may inline it and remove the Err(MadeProgress logic) handling
-    delimiter: impl Parser<'a, (), E>,
     closing_brace: impl Parser<'a, (), E>,
     space_before: impl Fn(&'a Elem, &'a [crate::ast::CommentOrNewline<'a>]) -> Elem,
 ) -> impl Parser<'a, crate::ast::Collection<'a, Loc<Elem>>, E> {
     between(
         opening_brace,
-        reset_min_indent(collection_inner(elem, delimiter, space_before)),
+        reset_min_indent(collection_inner(elem, space_before)),
         closing_brace,
     )
 }

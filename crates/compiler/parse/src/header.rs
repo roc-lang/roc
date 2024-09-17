@@ -499,7 +499,6 @@ fn provides_to<'a>() -> impl Parser<'a, ProvidesTo<'a>, EProvides<'a>> {
         entries: collection_trailing_sep_e(
             byte(b'[', EProvides::ListStart),
             exposes_entry(EProvides::Identifier),
-            byte(b',', EProvides::ListEnd),
             byte(b']', EProvides::ListEnd),
             Spaced::SpaceBefore
         ),
@@ -530,7 +529,6 @@ fn provides_exposed<'a>() -> impl Parser<
         item: collection_trailing_sep_e(
             byte(b'[', EProvides::ListStart),
             exposes_entry(EProvides::Identifier),
-            byte(b',', EProvides::ListEnd),
             byte(b']', EProvides::ListEnd),
             Spaced::SpaceBefore
         ),
@@ -555,7 +553,6 @@ fn provides_types<'a>(
         collection_trailing_sep_e(
             byte(b'{', EProvides::ListStart),
             provides_type_entry(EProvides::Identifier),
-            byte(b',', EProvides::ListEnd),
             byte(b'}', EProvides::ListEnd),
             Spaced::SpaceBefore,
         ),
@@ -621,7 +618,6 @@ fn requires_rigids<'a>(
             |_, pos| ERequires::Rigid(pos),
             loc(map(ident::uppercase(), Spaced::Item)),
         ),
-        byte(b',', ERequires::ListEnd),
         byte(b'}', ERequires::ListEnd),
         Spaced::SpaceBefore,
     )
@@ -670,7 +666,6 @@ fn exposes_list<'a>() -> impl Parser<'a, Collection<'a, Loc<Spaced<'a, ExposedNa
     collection_trailing_sep_e(
         byte(b'[', EExposes::ListStart),
         exposes_entry(EExposes::Identifier),
-        byte(b',', EExposes::ListEnd),
         byte(b']', EExposes::ListEnd),
         Spaced::SpaceBefore,
     )
@@ -726,7 +721,6 @@ fn exposes_module_collection<'a>(
     collection_trailing_sep_e(
         byte(b'[', EExposes::ListStart),
         exposes_module(EExposes::Identifier),
-        byte(b',', EExposes::ListEnd),
         byte(b']', EExposes::ListEnd),
         Spaced::SpaceBefore,
     )
@@ -774,7 +768,6 @@ fn packages_collection<'a>(
     collection_trailing_sep_e(
         byte(b'{', EPackages::ListStart),
         specialize_err(EPackages::PackageEntry, loc(package_entry())),
-        byte(b',', EPackages::ListEnd),
         byte(b'}', EPackages::ListEnd),
         Spaced::SpaceBefore,
     )
@@ -796,7 +789,6 @@ fn imports<'a>() -> impl Parser<
         item: collection_trailing_sep_e(
             byte(b'[', EImports::ListStart),
             loc(imports_entry()),
-            byte(b',', EImports::ListEnd),
             byte(b']', EImports::ListEnd),
             Spaced::SpaceBefore
         )
@@ -889,7 +881,6 @@ fn imports_entry<'a>() -> impl Parser<'a, Spaced<'a, ImportsEntry<'a>>, EImports
                     collection_trailing_sep_e(
                         byte(b'{', EImports::SetStart),
                         exposes_entry(EImports::Identifier),
-                        byte(b',', EImports::SetEnd),
                         byte(b'}', EImports::SetEnd),
                         Spaced::SpaceBefore
                     )
