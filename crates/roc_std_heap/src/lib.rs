@@ -40,18 +40,21 @@ impl<T> ThreadSafeRefcountedResourceHeap<T> {
         })
     }
 
-    pub fn alloc_for(self: &Self, data: T) -> Result<RocBox<()>> {
+    pub fn alloc_for(&self, data: T) -> Result<RocBox<()>> {
         let _g = self.guard.lock().unwrap();
         unsafe { &mut *self.heap.get() }.alloc_for(data)
     }
 
-    pub fn dealloc<U>(self: &Self, ptr: *const U) {
+    /// # Safety
+    ///
+    /// This function will drop the pointed to data. It must be initialized.
+    pub unsafe fn dealloc<U>(&self, ptr: *const U) {
         let _g = self.guard.lock().unwrap();
-        unsafe { &mut *self.heap.get() }.dealloc(ptr)
+        (*self.heap.get()).dealloc(ptr)
     }
 
     // This is safe to call at any time with no lock!
-    pub fn in_range<U>(self: &Self, ptr: *const U) -> bool {
+    pub fn in_range<U>(&self, ptr: *const U) -> bool {
         unsafe { &*self.heap.get() }.in_range(ptr)
     }
 
@@ -75,7 +78,7 @@ impl<T> RefcountedResourceHeap<T> {
         Heap::new(max_elements).map(|heap| RefcountedResourceHeap(heap))
     }
 
-    pub fn alloc_for(self: &mut Self, data: T) -> Result<RocBox<()>> {
+    pub fn alloc_for(&mut self, data: T) -> Result<RocBox<()>> {
         self.0.alloc().map(|alloc_ptr| {
             unsafe { std::ptr::write(alloc_ptr, Refcounted(REFCOUNT_ONE, data)) };
             let box_ptr = alloc_ptr as usize + mem::size_of::<usize>();
@@ -83,11 +86,14 @@ impl<T> RefcountedResourceHeap<T> {
         })
     }
 
-    pub fn dealloc<U>(self: &mut Self, ptr: *const U) {
+    /// # Safety
+    ///
+    /// This function will drop the pointed to data. It must be initialized.
+    pub unsafe fn dealloc<U>(&mut self, ptr: *const U) {
         self.0.dealloc(ptr as _);
     }
 
-    pub fn in_range<U>(self: &Self, ptr: *const U) -> bool {
+    pub fn in_range<U>(&self, ptr: *const U) -> bool {
         self.0.in_range(ptr as _)
     }
 
@@ -129,12 +135,12 @@ impl<T> Heap<T> {
             elements: 0,
             max_elements,
             free_list: ptr::null(),
-            phantom: PhantomData::default(),
+            phantom: PhantomData,
         })
     }
 
-    pub fn alloc(self: &mut Self) -> Result<*mut T> {
-        if self.free_list != ptr::null() {
+    pub fn alloc(&mut self) -> Result<*mut T> {
+        if self.free_list.is_null() {
             // Open slot on the free list.
             let root = self.free_list as *const *const c_void;
             let next = unsafe { *root };
@@ -147,32 +153,33 @@ impl<T> Heap<T> {
         // If has available memory allocate at end.
         if self.elements < self.max_elements {
             let offset = self.elements * Self::node_size();
-            let elem_ptr = unsafe { self.data.as_mut_ptr().offset(offset as isize) };
+            let elem_ptr = unsafe { self.data.as_mut_ptr().add(offset) };
             self.elements += 1;
             return Ok(elem_ptr as *mut T);
         }
 
-        return Err(Error::from(ErrorKind::OutOfMemory));
+        Err(Error::from(ErrorKind::OutOfMemory))
     }
 
-    pub fn dealloc(self: &mut Self, elem_ptr: *mut T) {
+    /// # Safety
+    ///
+    /// This function will drop the pointed to data. It must be initialized.
+    pub unsafe fn dealloc(&mut self, elem_ptr: *mut T) {
         debug_assert!(self.in_range(elem_ptr));
 
         // Just push the freed value to the start of the free list.
         let old_root = self.free_list;
         self.free_list = elem_ptr as *const c_void;
-        unsafe { *(self.free_list as *mut *const c_void) = old_root };
+        *(self.free_list as *mut *const c_void) = old_root;
 
-        unsafe {
-            // Free the underlying resource.
-            std::ptr::drop_in_place(elem_ptr);
-        }
+        // Free the underlying resource.
+        std::ptr::drop_in_place(elem_ptr);
     }
 
-    pub fn in_range(self: &Self, elem_ptr: *mut T) -> bool {
+    pub fn in_range(&self, elem_ptr: *mut T) -> bool {
         let start = self.data.as_ptr();
         let offset = self.elements * Self::node_size();
-        let end = unsafe { start.offset(offset as isize) };
+        let end = unsafe { start.add(offset) };
         (start as usize) <= (elem_ptr as usize) && (elem_ptr as usize) < (end as usize)
     }
 
@@ -198,11 +205,8 @@ mod test {
         let limit = 4;
         let mut heap = Heap::<u32>::new(limit).unwrap();
         let mut ptrs = vec![];
-        loop {
-            match heap.alloc() {
-                Ok(ptr) => ptrs.push(ptr),
-                Err(_) => break,
-            }
+        while let Ok(ptr) = heap.alloc() {
+            ptrs.push(ptr);
         }
 
         assert_eq!(ptrs.len(), limit);
@@ -220,14 +224,16 @@ mod test {
         let c = heap.alloc().unwrap();
         let d = heap.alloc().unwrap();
 
-        heap.dealloc(c);
+        unsafe { heap.dealloc(c) };
         assert_eq!(c, heap.alloc().unwrap());
 
         assert!(heap.alloc().is_err());
 
-        heap.dealloc(d);
-        heap.dealloc(a);
-        heap.dealloc(b);
+        unsafe {
+            heap.dealloc(d);
+            heap.dealloc(a);
+            heap.dealloc(b);
+        }
 
         // These should be reused in reverse order.
         assert_eq!(b, heap.alloc().unwrap());
