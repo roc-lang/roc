@@ -16,7 +16,7 @@ mod test_reporting {
     use roc_load::{self, ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
     use roc_module::symbol::{Interns, ModuleId};
     use roc_packaging::cache::RocCacheDir;
-    use roc_parse::module::parse_header;
+    use roc_parse::header::parse_header;
     use roc_parse::state::State;
     use roc_parse::test_helpers::parse_expr_with;
     use roc_problem::Severity;
@@ -359,7 +359,7 @@ mod test_reporting {
         let src_lines: Vec<&str> = src.split('\n').collect();
         let lines = LineInfo::new(src);
 
-        match roc_parse::module::parse_header(arena, state) {
+        match roc_parse::header::parse_header(arena, state) {
             Err(fail) => {
                 let interns = Interns::default();
                 let home = crate::helpers::test_home();
@@ -3793,9 +3793,9 @@ mod test_reporting {
     of these?
 
         Set
+        Task
         List
         Dict
-        Hash
 
     ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
@@ -3804,7 +3804,7 @@ mod test_reporting {
     10│      y = { Test.example & age: 3 }
                    ^^^^^^^^^^^^
 
-    Only variables can be updated with record update syntax.
+    Only variables can be updated with record update syntax. 
     "
     );
 
@@ -4816,7 +4816,7 @@ mod test_reporting {
         expression_indentation_end,
         indoc!(
             r"
-            f <- Foo.foo
+            f = Foo.foo
             "
         ),
         @r#"
@@ -4827,8 +4827,8 @@ mod test_reporting {
     1│  app "test" provides [main] to "./platform"
     2│
     3│  main =
-    4│      f <- Foo.foo
-                        ^
+    4│      f = Foo.foo
+                       ^
 
     Looks like the indentation ends prematurely here. Did you mean to have
     another expression after this line?
@@ -5761,28 +5761,6 @@ mod test_reporting {
     );
 
     test_report!(
-        dbg_without_final_expression,
-        indoc!(
-            r"
-            dbg 42
-            "
-        ),
-        @r#"
-    ── INDENT ENDS AFTER EXPRESSION in tmp/dbg_without_final_expression/Test.roc ───
-
-    I am partway through parsing a dbg statement, but I got stuck here:
-
-    4│      dbg 42
-                  ^
-
-    I was expecting a final expression, like so
-
-        dbg 42
-        "done"
-    "#
-    );
-
-    test_report!(
         expect_without_final_expression,
         indoc!(
             r"
@@ -6318,16 +6296,17 @@ All branches in an `if` must have the same type!
         )
     }
 
+    // TODO: this test seems out of date (what is the `effects` clause?) and as such should be removed
     #[test]
     fn platform_requires_rigids() {
         report_header_problem_as(
             indoc!(
                 r#"
                 platform "folkertdev/foo"
-                    requires { main : Effect {} }
+                    requires { main : Task {} [] }
                     exposes []
                     packages {}
-                    imports [Task]
+                    imports []
                     provides [mainForHost]
                     effects fx.Effect
                          {
@@ -6344,13 +6323,13 @@ All branches in an `if` must have the same type!
                 I am partway through parsing a header, but I got stuck here:
 
                 1│  platform "folkertdev/foo"
-                2│      requires { main : Effect {} }
+                2│      requires { main : Task {} [] }
                                    ^
 
                 I am expecting a list of type names like `{}` or `{ Model }` next. A full
                 `requires` definition looks like
 
-                    requires { Model, Msg } {main : Effect {}}
+                    requires { Model, Msg } {main : Task {} []}
             "#
             ),
         )
@@ -6615,34 +6594,6 @@ All branches in an `if` must have the same type!
     I was expecting to see a closing parenthesis before this, so try
     adding a ) and see if that helps?
     "
-    );
-
-    test_report!(
-        backpassing_type_error,
-        indoc!(
-            r#"
-            x <- List.map ["a", "b"]
-
-            x + 1
-            "#
-        ),
-        @r#"
-    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
-
-    This 2nd argument to `map` has an unexpected type:
-
-    4│>      x <- List.map ["a", "b"]
-    5│>
-    6│>      x + 1
-
-    The argument is an anonymous function of type:
-
-        Num * -> Num *
-
-    But `map` needs its 2nd argument to be:
-
-        Str -> Num *
-    "#
     );
 
     test_report!(
@@ -8144,7 +8095,7 @@ All branches in an `if` must have the same type!
         unimported_modules_reported,
         indoc!(
             r#"
-            alt : Task.Task {} []
+            alt : Unimported.CustomType
             alt = "whatever man you don't even know my type"
             alt
             "#
@@ -8152,18 +8103,18 @@ All branches in an `if` must have the same type!
         @r"
     ── MODULE NOT IMPORTED in /code/proj/Main.roc ──────────────────────────────────
 
-    The `Task` module is not imported:
+    The `Unimported` module is not imported:
 
-    4│      alt : Task.Task {} []
-                  ^^^^^^^^^^^^^^^
+    4│      alt : Unimported.CustomType
+                  ^^^^^^^^^^^^^^^^^^^^^
 
     Is there an import missing? Perhaps there is a typo. Did you mean one
     of these?
 
-        Hash
+        Encode
+        Inspect
+        Dict
         List
-        Num
-        Box
     "
     );
 
@@ -10198,9 +10149,9 @@ All branches in an `if` must have the same type!
 
             withOpen : (Handle -> Result {} *) -> Result {} *
             withOpen = \callback ->
-                handle <- await (open {})
-                {} <- await (callback handle)
-                close handle
+                await (open {}) \handle ->
+                    await (callback handle) \_ ->
+                        close handle
 
             withOpen
             "
@@ -10212,9 +10163,9 @@ All branches in an `if` must have the same type!
 
         10│       withOpen : (Handle -> Result {} *) -> Result {} *
         11│       withOpen = \callback ->
-        12│>          handle <- await (open {})
-        13│>          {} <- await (callback handle)
-        14│>          close handle
+        12│>          await (open {}) \handle ->
+        13│>              await (callback handle) \_ ->
+        14│>                  close handle
 
         The type annotation on `withOpen` says this `await` call should have the
         type:
@@ -10227,6 +10178,7 @@ All branches in an `if` must have the same type!
         Tip: Any connection between types must use a named type variable, not
         a `*`! Maybe the annotation  on `withOpen` should have a named type
         variable in place of the `*`?
+
         "
     );
 
@@ -10830,7 +10782,7 @@ All branches in an `if` must have the same type!
     7│          a: <- "a",
                       ^^^
 
-    Tip: Remove `<-` to assign the field directly.
+    Tip: Remove <- to assign the field directly.
     "#
     );
 
@@ -10875,12 +10827,12 @@ All branches in an `if` must have the same type!
         ),
         @r#"
     ── EMPTY RECORD BUILDER in /code/proj/Main.roc ─────────────────────────────────
-    
+
     This record builder has no fields:
-    
+
     4│      { a <- }
             ^^^^^^^^
-    
+
     I need at least two fields to combine their values into a record.
     "#
     );
@@ -10898,11 +10850,11 @@ All branches in an `if` must have the same type!
     ── NOT ENOUGH FIELDS IN RECORD BUILDER in /code/proj/Main.roc ──────────────────
 
     This record builder only has one field:
-    
+
     4│>      { a <-
     5│>          b: 123
     6│>      }
-    
+
     I need at least two fields to combine their values into a record.
     "#
     );
@@ -10919,14 +10871,14 @@ All branches in an `if` must have the same type!
         ),
         @r#"
     ── OPTIONAL FIELD IN RECORD BUILDER in /code/proj/Main.roc ─────────────────────
-    
+
     Optional fields are not allowed to be used in record builders.
-    
+
     4│       { a <-
     5│           b: 123,
     6│>          c? 456
     7│       }
-    
+
     Record builders can only have required values for their fields.
     "#
     );
@@ -10962,7 +10914,7 @@ All branches in an `if` must have the same type!
     6│      { xyz <-
               ^^^
 
-    Note: Record builders need a mapper function before the `<-` to combine
+    Note: Record builders need a mapper function before the <- to combine
     fields together with.
     "#
     );
@@ -11844,6 +11796,32 @@ All branches in an `if` must have the same type!
     @r"
     "
     );
+
+    test_report!(
+        deprecated_backpassing,
+        indoc!(
+            r#"
+            foo = \bar ->
+                baz <- Result.try bar
+
+                Ok (baz * 3)
+
+            foo (Ok 123)
+            "#
+        ),
+        @r###"
+    ── BACKPASSING DEPRECATED in /code/proj/Main.roc ───────────────────────────────
+
+    Backpassing (<-) like this will soon be deprecated:
+
+    5│          baz <- Result.try bar
+                ^^^^^^^^^^^^^^^^^^^^^
+
+    You should use a ! for awaiting tasks or a ? for trying results, and
+    functions everywhere else.
+    "###
+    );
+
     test_report!(
         unknown_shorthand_no_deps,
         indoc!(
@@ -13881,7 +13859,7 @@ All branches in an `if` must have the same type!
             "#
         ),
     @r#"
-    ── DEFINITIONs ONLY USED IN RECURSION in /code/proj/Main.roc ───────────────────
+    ── DEFINITIONS ONLY USED IN RECURSION in /code/proj/Main.roc ───────────────────
 
     These 2 definitions are only used in mutual recursion with themselves:
 
@@ -13890,6 +13868,7 @@ All branches in an `if` must have the same type!
 
     If you don't intend to use or export any of them, they should all be
     removed!
+
     "#
     );
 
@@ -13953,7 +13932,7 @@ All branches in an `if` must have the same type!
             "#
         ),
     @r#"
-    ── DEFINITIONs ONLY USED IN RECURSION in /code/proj/Main.roc ───────────────────
+    ── DEFINITIONS ONLY USED IN RECURSION in /code/proj/Main.roc ───────────────────
 
     These 2 definitions are only used in mutual recursion with themselves:
 
@@ -13962,6 +13941,7 @@ All branches in an `if` must have the same type!
 
     If you don't intend to use or export any of them, they should all be
     removed!
+
     "#
     );
 
@@ -14513,6 +14493,76 @@ All branches in an `if` must have the same type!
     Roc does not allow functions to be partially applied. Use a closure to
     make partial application explicit.
     "
+    );
+
+    test_report!(
+        dbg_unapplied,
+        indoc!(
+            r"
+            1 + dbg + 2
+            "
+        ),
+    @r"
+    ── UNAPPLIED DBG in /code/proj/Main.roc ────────────────────────────────────────
+
+    This `dbg` doesn't have a value given to it:
+
+    4│      1 + dbg + 2
+                ^^^
+
+    `dbg` must be passed a value to print at the exact place it's used. `dbg`
+    can't be used as a value that's passed around, like functions can be -
+    it must be applied immediately!
+
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+
+    This 2nd argument to + has an unexpected type:
+
+    4│      1 + dbg + 2
+                ^^^
+
+    This value is a:
+
+        {}
+
+    But + needs its 2nd argument to be:
+
+        Num *
+    "
+    );
+
+    test_report!(
+        dbg_overapplied,
+        indoc!(
+            r#"
+            1 + dbg "" "" + 2
+            "#
+        ),
+    @r#"
+    ── OVERAPPLIED DBG in /code/proj/Main.roc ──────────────────────────────────────
+
+    This `dbg` has too many values given to it:
+
+    4│      1 + dbg "" "" + 2
+                    ^^^^^
+
+    `dbg` must be given exactly one value to print.
+
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+
+    This 2nd argument to + has an unexpected type:
+
+    4│      1 + dbg "" "" + 2
+                ^^^^^^^^^
+
+    This value is a:
+
+        {}
+
+    But + needs its 2nd argument to be:
+
+        Num *
+    "#
     );
 
     // TODO: add the following tests after built-in Tasks are added

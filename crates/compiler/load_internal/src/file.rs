@@ -18,7 +18,7 @@ use roc_can::constraint::{Constraint as ConstraintSoa, Constraints, TypeOrVar};
 use roc_can::expr::{DbgLookup, Declarations, ExpectLookup, PendingDerives};
 use roc_can::module::{
     canonicalize_module_defs, ExposedByModule, ExposedForModule, ExposedModuleTypes, Module,
-    ResolvedImplementations, TypeState,
+    ModuleParams, ResolvedImplementations, TypeState,
 };
 use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecMap, VecSet};
 use roc_constrain::module::constrain_module;
@@ -48,11 +48,11 @@ use roc_mono::reset_reuse;
 use roc_mono::{drop_specialization, inc_dec};
 use roc_packaging::cache::RocCacheDir;
 use roc_parse::ast::{self, CommentOrNewline, ExtractSpaces, Spaced, ValueDef};
+use roc_parse::header::parse_module_defs;
 use roc_parse::header::{
     self, AppHeader, ExposedName, HeaderType, ImportsKeywordItem, PackageEntry, PackageHeader,
     PlatformHeader, To, TypedIdent,
 };
-use roc_parse::module::parse_module_defs;
 use roc_parse::parser::{FileError, SourceError, SyntaxError};
 use roc_problem::Severity;
 use roc_region::all::{LineInfo, Loc, Region};
@@ -251,6 +251,7 @@ fn start_phase<'a>(
 
                 let mut aliases = MutMap::default();
                 let mut abilities_store = PendingAbilitiesStore::default();
+                let mut imported_module_params = VecMap::default();
 
                 for imported in parsed.available_modules.keys() {
                     match state.module_cache.aliases.get(imported) {
@@ -293,6 +294,10 @@ fn start_phase<'a>(
                                 .union(import_store.closure_from_imported(exposed_symbols));
                         }
                     }
+
+                    if let Some(params) = state.module_cache.module_params.get(imported) {
+                        imported_module_params.insert(*imported, params.clone());
+                    }
                 }
 
                 let skip_constraint_gen = {
@@ -310,6 +315,8 @@ fn start_phase<'a>(
                     abilities_store,
                     skip_constraint_gen,
                     exposed_module_ids: state.exposed_modules,
+                    exec_mode: state.exec_mode,
+                    imported_module_params,
                 }
             }
 
@@ -356,6 +363,7 @@ fn start_phase<'a>(
                     declarations,
                     state.cached_types.clone(),
                     derived_module,
+                    state.exec_mode,
                     //
                     #[cfg(debug_assertions)]
                     checkmate,
@@ -889,6 +897,8 @@ enum BuildTask<'a> {
         abilities_store: PendingAbilitiesStore,
         exposed_module_ids: &'a [ModuleId],
         skip_constraint_gen: bool,
+        exec_mode: ExecutionMode,
+        imported_module_params: VecMap<ModuleId, ModuleParams>,
     },
     Solve {
         module: Module,
@@ -905,6 +915,7 @@ enum BuildTask<'a> {
         dep_idents: IdentIdsByModule,
         cached_subs: CachedTypeState,
         derived_module: SharedDerivedModule,
+        exec_mode: ExecutionMode,
 
         #[cfg(debug_assertions)]
         checkmate: Option<roc_checkmate::Collector>,
@@ -1327,8 +1338,8 @@ fn load_packages_from_main<'a>(
 
     let parse_state = roc_parse::state::State::new(arena.alloc(src_bytes));
 
-    let (parsed_module, _) =
-        roc_parse::module::parse_header(arena, parse_state.clone()).map_err(|fail| {
+    let (parsed_header, _) =
+        roc_parse::header::parse_header(arena, parse_state.clone()).map_err(|fail| {
             LoadingProblem::ParsingFailed(
                 fail.map_problem(SyntaxError::Header)
                     .into_file_error(filename.clone()),
@@ -1337,7 +1348,7 @@ fn load_packages_from_main<'a>(
 
     use ast::Header::*;
 
-    let packages = match parsed_module.header {
+    let packages = match parsed_header.item {
         App(AppHeader { packages, .. }) | Package(PackageHeader { packages, .. }) => {
             unspace(arena, packages.value.items)
         }
@@ -1654,7 +1665,7 @@ fn state_thread_step<'a>(
                     Ok(ControlFlow::Break(LoadResult::Monomorphized(monomorphized)))
                 }
                 Msg::FailedToReadFile { filename, error } => {
-                    let buf = to_file_problem_report_string(filename, error);
+                    let buf = to_file_problem_report_string(filename, error, true);
                     Err(LoadingProblem::FormattedReport(buf))
                 }
 
@@ -1828,7 +1839,7 @@ pub fn report_loading_problem(
         }
         LoadingProblem::FormattedReport(report) => report,
         LoadingProblem::FileProblem { filename, error } => {
-            to_file_problem_report_string(filename, error)
+            to_file_problem_report_string(filename, error, true)
         }
         LoadingProblem::NoPlatformPackage {
             filename,
@@ -2318,6 +2329,7 @@ fn update<'a>(
                 extend_module_with_builtin_import(parsed, ModuleId::DECODE);
                 extend_module_with_builtin_import(parsed, ModuleId::HASH);
                 extend_module_with_builtin_import(parsed, ModuleId::INSPECT);
+                extend_module_with_builtin_import(parsed, ModuleId::TASK);
             }
 
             state
@@ -2394,6 +2406,13 @@ fn update<'a>(
                 .module_cache
                 .pending_abilities
                 .insert(module_id, constrained_module.module.abilities_store.clone());
+
+            if let Some(module_params) = constrained_module.module.module_params.clone() {
+                state
+                    .module_cache
+                    .module_params
+                    .insert(module_id, module_params);
+            }
 
             state
                 .module_cache
@@ -3349,7 +3368,7 @@ fn load_package_from_disk<'a>(
             let parse_start = Instant::now();
             let bytes = arena.alloc(bytes_vec);
             let parse_state = roc_parse::state::State::new(bytes);
-            let parsed = roc_parse::module::parse_header(arena, parse_state.clone());
+            let parsed = roc_parse::header::parse_header(arena, parse_state.clone());
             let parse_header_duration = parse_start.elapsed();
 
             // Insert the first entries for this module's timings
@@ -3360,8 +3379,8 @@ fn load_package_from_disk<'a>(
 
             match parsed {
                 Ok((
-                    ast::Module {
-                        header: ast::Header::Module(header),
+                    ast::SpacesBefore {
+                        item: ast::Header::Module(header),
                         ..
                     },
                     _parse_state,
@@ -3369,8 +3388,8 @@ fn load_package_from_disk<'a>(
                     "expected platform/package module, got Module with header\n{header:?}"
                 ))),
                 Ok((
-                    ast::Module {
-                        header: ast::Header::Hosted(header),
+                    ast::SpacesBefore {
+                        item: ast::Header::Hosted(header),
                         ..
                     },
                     _parse_state,
@@ -3378,8 +3397,8 @@ fn load_package_from_disk<'a>(
                     "expected platform/package module, got Hosted module with header\n{header:?}"
                 ))),
                 Ok((
-                    ast::Module {
-                        header: ast::Header::App(header),
+                    ast::SpacesBefore {
+                        item: ast::Header::App(header),
                         ..
                     },
                     _parse_state,
@@ -3387,9 +3406,9 @@ fn load_package_from_disk<'a>(
                     "expected platform/package module, got App with header\n{header:?}"
                 ))),
                 Ok((
-                    ast::Module {
-                        header: ast::Header::Package(header),
-                        comments,
+                    ast::SpacesBefore {
+                        item: ast::Header::Package(header),
+                        before: comments,
                     },
                     parser_state,
                 )) => {
@@ -3430,9 +3449,9 @@ fn load_package_from_disk<'a>(
                     Ok(Msg::Many(messages))
                 }
                 Ok((
-                    ast::Module {
-                        header: ast::Header::Platform(header),
-                        comments,
+                    ast::SpacesBefore {
+                        item: ast::Header::Platform(header),
+                        before: comments,
                     },
                     parser_state,
                 )) => {
@@ -3530,13 +3549,13 @@ fn load_builtin_module_help<'a>(
     let opt_shorthand = None;
     let filename = PathBuf::from(filename);
     let parse_state = roc_parse::state::State::new(src_bytes.as_bytes());
-    let parsed = roc_parse::module::parse_header(arena, parse_state.clone());
+    let parsed = roc_parse::header::parse_header(arena, parse_state.clone());
 
     match parsed {
         Ok((
-            ast::Module {
-                header: ast::Header::Module(header),
-                comments,
+            ast::SpacesBefore {
+                item: ast::Header::Module(header),
+                before: comments,
             },
             parse_state,
         )) => {
@@ -3550,7 +3569,7 @@ fn load_builtin_module_help<'a>(
                 header_type: HeaderType::Builtin {
                     name: header::ModuleName::new(name_stem),
                     exposes: unspace(arena, header.exposes.items),
-                    generates_with: &[],
+                    opt_params: header.params,
                 },
                 module_comments: comments,
                 header_imports: header.interface_imports,
@@ -3632,6 +3651,7 @@ fn load_module<'a>(
         "Decode", ModuleId::DECODE
         "Hash", ModuleId::HASH
         "Inspect", ModuleId::INSPECT
+        "Task", ModuleId::TASK
     }
 
     let (filename, opt_shorthand) = module_name_to_path(src_dir, &module_name, arc_shorthands);
@@ -3786,7 +3806,7 @@ fn parse_header<'a>(
 ) -> Result<HeaderOutput<'a>, LoadingProblem<'a>> {
     let parse_start = Instant::now();
     let parse_state = roc_parse::state::State::new(src_bytes);
-    let parsed = roc_parse::module::parse_header(arena, parse_state.clone());
+    let parsed = roc_parse::header::parse_header(arena, parse_state.clone());
     let parse_header_duration = parse_start.elapsed();
 
     if let Err(problem) = ensure_roc_file(&filename, src_bytes) {
@@ -3815,9 +3835,9 @@ fn parse_header<'a>(
 
     match parsed {
         Ok((
-            ast::Module {
-                header: ast::Header::Module(header),
-                comments,
+            ast::SpacesBefore {
+                item: ast::Header::Module(header),
+                before: comments,
             },
             parse_state,
         )) => {
@@ -3837,6 +3857,7 @@ fn parse_header<'a>(
                 header_type: HeaderType::Module {
                     name: roc_parse::header::ModuleName::new(module_name),
                     exposes: unspace(arena, header.exposes.items),
+                    opt_params: header.params,
                 },
                 module_comments: comments,
                 header_imports: header.interface_imports,
@@ -3852,9 +3873,9 @@ fn parse_header<'a>(
             })
         }
         Ok((
-            ast::Module {
-                header: ast::Header::Hosted(header),
-                comments,
+            ast::SpacesBefore {
+                item: ast::Header::Hosted(header),
+                before: comments,
             },
             parse_state,
         )) => {
@@ -3866,8 +3887,6 @@ fn parse_header<'a>(
                 header_type: HeaderType::Hosted {
                     name: header.name.value,
                     exposes: unspace(arena, header.exposes.item.items),
-                    generates: header.generates.item,
-                    generates_with: unspace(arena, header.generates_with.item.items),
                 },
                 module_comments: comments,
                 header_imports: Some(header.imports),
@@ -3883,9 +3902,9 @@ fn parse_header<'a>(
             })
         }
         Ok((
-            ast::Module {
-                header: ast::Header::App(header),
-                comments,
+            ast::SpacesBefore {
+                item: ast::Header::App(header),
+                before: comments,
             },
             parse_state,
         )) => {
@@ -3988,9 +4007,9 @@ fn parse_header<'a>(
             })
         }
         Ok((
-            ast::Module {
-                header: ast::Header::Package(header),
-                comments,
+            ast::SpacesBefore {
+                item: ast::Header::Package(header),
+                before: comments,
             },
             parse_state,
         )) => {
@@ -4015,9 +4034,9 @@ fn parse_header<'a>(
         }
 
         Ok((
-            ast::Module {
-                header: ast::Header::Platform(header),
-                comments,
+            ast::SpacesBefore {
+                item: ast::Header::Platform(header),
+                before: comments,
             },
             parse_state,
         )) => {
@@ -4302,6 +4321,7 @@ impl<'a> BuildTask<'a> {
         declarations: Declarations,
         cached_subs: CachedTypeState,
         derived_module: SharedDerivedModule,
+        exec_mode: ExecutionMode,
 
         #[cfg(debug_assertions)] checkmate: Option<roc_checkmate::Collector>,
     ) -> Self {
@@ -4325,6 +4345,7 @@ impl<'a> BuildTask<'a> {
             module_timing,
             cached_subs,
             derived_module,
+            exec_mode,
 
             #[cfg(debug_assertions)]
             checkmate,
@@ -4380,7 +4401,7 @@ pub fn add_imports(
     def_types: &mut Vec<(Symbol, Loc<TypeOrVar>)>,
     imported_rigid_vars: &mut Vec<Variable>,
     imported_flex_vars: &mut Vec<Variable>,
-) -> (Vec<Variable>, AbilitiesStore) {
+) -> (Vec<Variable>, VecMap<ModuleId, Variable>, AbilitiesStore) {
     let mut import_variables = Vec::new();
 
     let mut cached_symbol_vars = VecMap::default();
@@ -4487,7 +4508,31 @@ pub fn add_imports(
         },
     );
 
-    (import_variables, abilities_store)
+    let mut imported_param_vars = VecMap::default();
+
+    for (module_id, _) in exposed_for_module.exposed_by_module.iter_all() {
+        let ExposedModuleTypes {
+            exposed_types_storage_subs: exposed_types,
+            ..
+        } = exposed_for_module.exposed_by_module.get(module_id).unwrap();
+
+        if let Some(stored_aprams_var) = exposed_types.stored_params_var {
+            let copied_import = exposed_types
+                .storage_subs
+                .export_variable_to(subs, stored_aprams_var);
+
+            let copied_import_var = extend_imports_data_with_copied_import(
+                copied_import,
+                &mut import_variables,
+                imported_rigid_vars,
+                imported_flex_vars,
+            );
+
+            imported_param_vars.insert(*module_id, copied_import_var);
+        }
+    }
+
+    (import_variables, imported_param_vars, abilities_store)
 }
 
 enum OnSymbolNotFound {
@@ -4585,6 +4630,7 @@ struct SolveResult {
     exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     problems: Vec<TypeError>,
     abilities_store: AbilitiesStore,
+    imported_modules_with_params: Vec<ModuleId>,
 
     #[cfg(debug_assertions)]
     checkmate: Option<roc_checkmate::Collector>,
@@ -4609,6 +4655,7 @@ fn run_solve_solve(
         aliases,
         rigid_variables,
         abilities_store: pending_abilities,
+        module_params,
         ..
     } = module;
 
@@ -4618,7 +4665,7 @@ fn run_solve_solve(
 
     let mut subs = Subs::new_from_varstore(var_store);
 
-    let (import_variables, abilities_store) = add_imports(
+    let (import_variables, imported_param_vars, abilities_store) = add_imports(
         module.module_id,
         &mut constraints,
         &mut subs,
@@ -4628,6 +4675,11 @@ fn run_solve_solve(
         &mut imported_rigid_vars,
         &mut imported_flex_vars,
     );
+
+    let imported_modules_with_params = imported_param_vars
+        .keys()
+        .copied()
+        .collect::<Vec<ModuleId>>();
 
     let actual_constraint = constraints.let_import_constraint(
         imported_rigid_vars,
@@ -4656,6 +4708,8 @@ fn run_solve_solve(
             derived_module,
             #[cfg(debug_assertions)]
             checkmate,
+            module_params,
+            module_params_vars: imported_param_vars,
         };
 
         let solve_output = roc_solve::module::run_solve(
@@ -4709,6 +4763,7 @@ fn run_solve_solve(
         exposed_vars_by_symbol,
         problems: errors,
         abilities_store: resolved_abilities_store,
+        imported_modules_with_params,
 
         #[cfg(debug_assertions)]
         checkmate,
@@ -4730,6 +4785,7 @@ fn run_solve<'a>(
     dep_idents: IdentIdsByModule,
     cached_types: CachedTypeState,
     derived_module: SharedDerivedModule,
+    exec_mode: ExecutionMode,
 
     #[cfg(debug_assertions)] checkmate: Option<roc_checkmate::Collector>,
 ) -> Msg<'a> {
@@ -4739,6 +4795,9 @@ fn run_solve<'a>(
 
     // TODO remove when we write builtins in roc
     let aliases = module.aliases.clone();
+
+    let opt_params_var = module.module_params.as_ref().map(|params| params.whole_var);
+    let home_has_params = opt_params_var.is_some();
 
     let mut module = module;
     let loc_expects = std::mem::take(&mut module.loc_expects);
@@ -4773,6 +4832,7 @@ fn run_solve<'a>(
                     exposed_vars_by_symbol,
                     problems: vec![],
                     abilities_store: abilities,
+                    imported_modules_with_params: vec![],
 
                     #[cfg(debug_assertions)]
                     checkmate: None,
@@ -4800,8 +4860,9 @@ fn run_solve<'a>(
         solved: mut solved_subs,
         solved_implementations,
         exposed_vars_by_symbol,
-        problems,
+        mut problems,
         abilities_store,
+        imported_modules_with_params,
 
         #[cfg(debug_assertions)]
         checkmate,
@@ -4811,9 +4872,24 @@ fn run_solve<'a>(
         module_id,
         &mut solved_subs,
         &exposed_vars_by_symbol,
+        opt_params_var,
         &solved_implementations,
         &abilities_store,
     );
+
+    match exec_mode {
+        ExecutionMode::Check => {
+            // Params are not lowered in check mode
+        }
+        ExecutionMode::Executable | ExecutionMode::ExecutableIfCheck | ExecutionMode::Test => {
+            roc_lower_params::type_error::remove_module_param_arguments(
+                &mut problems,
+                home_has_params,
+                &decls.symbols,
+                imported_modules_with_params,
+            );
+        }
+    }
 
     let solved_module = SolvedModule {
         exposed_vars_by_symbol,
@@ -4922,6 +4998,7 @@ fn build_platform_header<'a>(
             .zip(requires.iter().copied()),
         arena,
     );
+    let packages = unspace(arena, header.packages.item.items);
     let exposes = bumpalo::collections::Vec::from_iter_in(
         unspace(arena, header.exposes.item.items).iter().copied(),
         arena,
@@ -4943,7 +5020,7 @@ fn build_platform_header<'a>(
         filename,
         is_root_module,
         opt_shorthand,
-        packages: &[],
+        packages,
         header_type,
         module_comments: comments,
         header_imports: Some(header.imports),
@@ -4963,6 +5040,8 @@ fn canonicalize_and_constrain<'a>(
     parsed: ParsedModule<'a>,
     skip_constraint_gen: bool,
     exposed_module_ids: &[ModuleId],
+    exec_mode: ExecutionMode,
+    imported_module_params: VecMap<ModuleId, ModuleParams>,
 ) -> CanAndCon {
     let canonicalize_start = Instant::now();
 
@@ -4989,7 +5068,7 @@ fn canonicalize_and_constrain<'a>(
 
     let mut var_store = VarStore::default();
 
-    let module_output = canonicalize_module_defs(
+    let mut module_output = canonicalize_module_defs(
         arena,
         parsed_defs,
         &header_type,
@@ -5048,6 +5127,26 @@ fn canonicalize_and_constrain<'a>(
     // _before has an underscore because it's unused in --release builds
     let _before = roc_types::types::get_type_clone_count();
 
+    match exec_mode {
+        ExecutionMode::Check => {
+            // No need to lower params for `roc check` and lang server
+            // If we did, we'd have to update the language server to exclude the extra arguments
+        }
+        ExecutionMode::Executable | ExecutionMode::ExecutableIfCheck | ExecutionMode::Test => {
+            // We need to lower params only if the current module has any or imports at least one with params
+            if module_output.module_params.is_some() || !imported_module_params.is_empty() {
+                roc_lower_params::lower::lower(
+                    module_id,
+                    &module_output.module_params,
+                    imported_module_params,
+                    &mut module_output.declarations,
+                    &mut module_output.scope.locals.ident_ids,
+                    &mut var_store,
+                );
+            }
+        }
+    }
+
     let mut constraints = Constraints::new();
 
     let constraint = if skip_constraint_gen {
@@ -5059,6 +5158,7 @@ fn canonicalize_and_constrain<'a>(
             module_output.symbols_from_requires,
             &module_output.scope.abilities_store,
             &module_output.declarations,
+            &module_output.module_params,
             module_id,
         )
     };
@@ -5096,6 +5196,7 @@ fn canonicalize_and_constrain<'a>(
                         | ModuleId::SET
                         | ModuleId::HASH
                         | ModuleId::INSPECT
+                        | ModuleId::TASK
                 );
 
                 if !name.is_builtin() || should_include_builtin {
@@ -5115,6 +5216,7 @@ fn canonicalize_and_constrain<'a>(
         abilities_store: module_output.scope.abilities_store,
         loc_expects: module_output.loc_expects,
         loc_dbgs: module_output.loc_dbgs,
+        module_params: module_output.module_params,
     };
 
     let constrained_module = ConstrainedModule {
@@ -5152,7 +5254,7 @@ fn parse<'a>(
     let parse_state = header.parse_state;
 
     let header_import_defs =
-        roc_parse::ast::Module::header_imports_to_defs(arena, header.header_imports);
+        roc_parse::ast::Header::header_imports_to_defs(arena, header.header_imports);
 
     let parsed_defs = match parse_module_defs(arena, parse_state.clone(), header_import_defs) {
         Ok(success) => success,
@@ -5458,6 +5560,7 @@ fn make_specializations<'a>(
 ) -> Msg<'a> {
     let make_specializations_start = Instant::now();
     let mut update_mode_ids = UpdateModeIds::new();
+
     // do the thing
     let mut mono_env = roc_mono::ir::Env {
         arena,
@@ -6163,6 +6266,8 @@ fn run_task<'a>(
             abilities_store,
             skip_constraint_gen,
             exposed_module_ids,
+            exec_mode,
+            imported_module_params,
         } => {
             let can_and_con = canonicalize_and_constrain(
                 arena,
@@ -6174,6 +6279,8 @@ fn run_task<'a>(
                 parsed,
                 skip_constraint_gen,
                 exposed_module_ids,
+                exec_mode,
+                imported_module_params,
             );
 
             Ok(Msg::CanonicalizedAndConstrained(can_and_con))
@@ -6193,6 +6300,7 @@ fn run_task<'a>(
             dep_idents,
             cached_subs,
             derived_module,
+            exec_mode,
 
             #[cfg(debug_assertions)]
             checkmate,
@@ -6211,6 +6319,7 @@ fn run_task<'a>(
             dep_idents,
             cached_subs,
             derived_module,
+            exec_mode,
             //
             #[cfg(debug_assertions)]
             checkmate,

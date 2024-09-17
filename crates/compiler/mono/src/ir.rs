@@ -2870,7 +2870,6 @@ fn pattern_to_when(
     body: Loc<roc_can::expr::Expr>,
 ) -> (Symbol, Loc<roc_can::expr::Expr>) {
     use roc_can::expr::Expr::*;
-    use roc_can::expr::{WhenBranch, WhenBranchPattern};
     use roc_can::pattern::Pattern::{self, *};
 
     match &pattern.value {
@@ -2888,7 +2887,7 @@ fn pattern_to_when(
             (*new_symbol, Loc::at_zero(RuntimeError(error)))
         }
 
-        As(_, _) => todo!("as bindings are not supported yet"),
+        As(pattern, symbol) => pattern_to_when_help(pattern_var, pattern, body_var, body, *symbol),
 
         UnsupportedPattern(region) => {
             // create the runtime error here, instead of delegating to When.
@@ -2915,28 +2914,7 @@ fn pattern_to_when(
         | TupleDestructure { .. }
         | UnwrappedOpaque { .. } => {
             let symbol = env.unique_symbol();
-
-            let wrapped_body = When {
-                cond_var: pattern_var,
-                expr_var: body_var,
-                region: Region::zero(),
-                loc_cond: Box::new(Loc::at_zero(Var(symbol, pattern_var))),
-                branches: vec![WhenBranch {
-                    patterns: vec![WhenBranchPattern {
-                        pattern,
-                        degenerate: false,
-                    }],
-                    value: body,
-                    guard: None,
-                    // If this type-checked, it's non-redundant
-                    redundant: RedundantMark::known_non_redundant(),
-                }],
-                branches_cond_var: pattern_var,
-                // If this type-checked, it's exhaustive
-                exhaustive: ExhaustiveMark::known_exhaustive(),
-            };
-
-            (symbol, Loc::at_zero(wrapped_body))
+            pattern_to_when_help(pattern_var, &pattern, body_var, body, symbol)
         }
 
         Pattern::List { .. } => todo!(),
@@ -2958,6 +2936,38 @@ fn pattern_to_when(
             )
         }
     }
+}
+
+fn pattern_to_when_help(
+    pattern_var: Variable,
+    pattern: &Loc<roc_can::pattern::Pattern>,
+    body_var: Variable,
+    body: Loc<roc_can::expr::Expr>,
+    symbol: Symbol,
+) -> (Symbol, Loc<roc_can::expr::Expr>) {
+    use roc_can::expr::{Expr, WhenBranch, WhenBranchPattern};
+
+    let wrapped_body = Expr::When {
+        cond_var: pattern_var,
+        expr_var: body_var,
+        region: Region::zero(),
+        loc_cond: Box::new(Loc::at_zero(Expr::Var(symbol, pattern_var))),
+        branches: vec![WhenBranch {
+            patterns: vec![WhenBranchPattern {
+                pattern: pattern.to_owned(),
+                degenerate: false,
+            }],
+            value: body,
+            guard: None,
+            // If this type-checked, it's non-redundant
+            redundant: RedundantMark::known_non_redundant(),
+        }],
+        branches_cond_var: pattern_var,
+        // If this type-checked, it's exhaustive
+        exhaustive: ExhaustiveMark::known_exhaustive(),
+    };
+
+    (symbol, Loc::at_zero(wrapped_body))
 }
 
 fn specialize_suspended<'a>(
@@ -4442,6 +4452,15 @@ pub fn with_hole<'a>(
             }
 
             specialize_naked_symbol(env, variable, procs, layout_cache, assigned, hole, symbol)
+        }
+        ParamsVar { .. } => {
+            internal_error!("ParamsVar should've been lowered to Var")
+        }
+        ImportParams(_, _, Some((_, value))) => {
+            with_hole(env, *value, variable, procs, layout_cache, assigned, hole)
+        }
+        ImportParams(_, _, None) => {
+            internal_error!("Missing module params should've been dropped by now");
         }
         AbilityMember(member, specialization_id, specialization_var) => {
             let specialization_symbol = late_resolve_ability_specialization(
@@ -6140,7 +6159,7 @@ fn late_resolve_ability_specialization(
             member,
             specialization_var,
         )
-        .expect("Ability specialization is unknown - code generation cannot proceed!");
+        .expect("Ability specialization is unknown. Tip: check out <https://roc.zulipchat.com/#narrow/stream/231634-beginners/topic/Non-Functions.20in.20Abilities/near/456068617>");
 
         match specialization {
             Resolved::Specialization(symbol) => symbol,

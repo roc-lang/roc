@@ -1,0 +1,145 @@
+---
+source: crates/compiler/can/tests/test_suffixed.rs
+assertion_line: 463
+expression: snapshot
+---
+Defs {
+    tags: [
+        Index(2147483648),
+    ],
+    regions: [
+        @0-26,
+    ],
+    space_before: [
+        Slice(start = 0, length = 0),
+    ],
+    space_after: [
+        Slice(start = 0, length = 1),
+    ],
+    spaces: [
+        Newline,
+    ],
+    type_defs: [],
+    value_defs: [
+        Body(
+            @0-4 Identifier {
+                ident: "main",
+            },
+            @11-26 Defs(
+                Defs {
+                    tags: [
+                        Index(2147483648),
+                    ],
+                    regions: [
+                        @15-26,
+                    ],
+                    space_before: [
+                        Slice(start = 0, length = 0),
+                    ],
+                    space_after: [
+                        Slice(start = 0, length = 0),
+                    ],
+                    spaces: [],
+                    type_defs: [],
+                    value_defs: [
+                        Body(
+                            @15-26 Identifier {
+                                ident: "1",
+                            },
+                            @15-26 ParensAround(
+                                Defs(
+                                    Defs {
+                                        tags: [
+                                            Index(2147483648),
+                                        ],
+                                        regions: [
+                                            @20-25,
+                                        ],
+                                        space_before: [
+                                            Slice(start = 0, length = 0),
+                                        ],
+                                        space_after: [
+                                            Slice(start = 0, length = 0),
+                                        ],
+                                        spaces: [],
+                                        type_defs: [],
+                                        value_defs: [
+                                            Body(
+                                                @20-25 Identifier {
+                                                    ident: "0",
+                                                },
+                                                @20-25 Apply(
+                                                    @22-23 Var {
+                                                        module_name: "Num",
+                                                        ident: "add",
+                                                    },
+                                                    [
+                                                        @20-21 Num(
+                                                            "1",
+                                                        ),
+                                                        @24-25 Num(
+                                                            "1",
+                                                        ),
+                                                    ],
+                                                    BinOp(
+                                                        Plus,
+                                                    ),
+                                                ),
+                                            ),
+                                        ],
+                                    },
+                                    @15-26 LowLevelDbg(
+                                        (
+                                            "test.roc:3",
+                                            "     ",
+                                        ),
+                                        @20-25 Apply(
+                                            @20-25 Var {
+                                                module_name: "Inspect",
+                                                ident: "toStr",
+                                            },
+                                            [
+                                                @20-25 Var {
+                                                    module_name: "",
+                                                    ident: "0",
+                                                },
+                                            ],
+                                            Space,
+                                        ),
+                                        @20-25 Var {
+                                            module_name: "",
+                                            ident: "0",
+                                        },
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+                @11-26 LowLevelDbg(
+                    (
+                        "test.roc:2",
+                        "in =\n      ",
+                    ),
+                    @15-26 Apply(
+                        @15-26 Var {
+                            module_name: "Inspect",
+                            ident: "toStr",
+                        },
+                        [
+                            @15-26 Var {
+                                module_name: "",
+                                ident: "1",
+                            },
+                        ],
+                        Space,
+                    ),
+                    @15-26 Var {
+                        module_name: "",
+                        ident: "1",
+                    },
+                ),
+            ),
+        ),
+    ],
+}

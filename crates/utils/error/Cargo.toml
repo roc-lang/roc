@@ -8,6 +8,5 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-snafu.workspace = true
 
 [dev-dependencies]

@@ -74,7 +74,7 @@ pub fn highlight(text: &str) -> Vec<Loc<Token>> {
     let header_keywords = HEADER_KEYWORDS.iter().copied().collect::<HashSet<_>>();
     let body_keywords = KEYWORDS.iter().copied().collect::<HashSet<_>>();
 
-    if let Ok((_prog, _, new_state)) = crate::module::header().parse(&arena, state.clone(), 0) {
+    if let Ok((_prog, _, new_state)) = crate::header::header().parse(&arena, state.clone(), 0) {
         let inner_state =
             State::new(text[..state.bytes().len() - new_state.bytes().len()].as_bytes());
         highlight_inner(&arena, inner_state, &mut tokens, &header_keywords);
@@ -365,7 +365,7 @@ fn fast_forward_to(
     tokens.push(Loc::at(Region::between(start, state.pos()), Token::Error));
 }
 
-pub const HEADER_KEYWORDS: [&str; 14] = [
+pub const HEADER_KEYWORDS: [&str; 12] = [
     "interface",
     "app",
     "package",
@@ -373,8 +373,6 @@ pub const HEADER_KEYWORDS: [&str; 14] = [
     "hosted",
     "exposes",
     "imports",
-    "with",
-    "generates",
     "package",
     "packages",
     "requires",

@@ -1,10 +1,9 @@
 use crate::ident::{Ident, Lowercase, ModuleName};
-use crate::module_err::{IdentIdNotFoundSnafu, ModuleIdNotFoundSnafu, ModuleResult};
+use crate::module_err::{ModuleError, ModuleResult};
 use roc_collections::{SmallStringInterner, VecMap};
 use roc_error_macros::internal_error;
 use roc_ident::IdentStr;
 use roc_region::all::Region;
-use snafu::OptionExt;
 use std::num::NonZeroU32;
 use std::{fmt, u32};
 
@@ -124,6 +123,10 @@ impl Symbol {
                 .any(|(_, (s, _))| *s == self)
     }
 
+    pub fn is_generated(self, interns: &Interns) -> bool {
+        self.ident_ids(interns).is_generated_id(self.ident_id())
+    }
+
     pub fn module_string<'a>(&self, interns: &'a Interns) -> &'a ModuleName {
         interns
             .module_ids
@@ -138,24 +141,15 @@ impl Symbol {
     }
 
     pub fn as_str(self, interns: &Interns) -> &str {
-        let ident_ids = interns
-            .all_ident_ids
-            .get(&self.module_id())
+        self.ident_ids(interns)
+            .get_name(self.ident_id())
             .unwrap_or_else(|| {
                 internal_error!(
-                    "ident_string could not find IdentIds for module {:?} in {:?}",
-                    self.module_id(),
-                    interns
+                    "ident_string's IdentIds did not contain an entry for {} in module {:?}",
+                    self.ident_id().0,
+                    self.module_id()
                 )
-            });
-
-        ident_ids.get_name(self.ident_id()).unwrap_or_else(|| {
-            internal_error!(
-                "ident_string's IdentIds did not contain an entry for {} in module {:?}",
-                self.ident_id().0,
-                self.module_id()
-            )
-        })
+            })
     }
 
     pub const fn as_u64(self) -> u64 {
@@ -186,6 +180,19 @@ impl Symbol {
     #[cfg(debug_assertions)]
     pub fn contains(self, needle: &str) -> bool {
         format!("{self:?}").contains(needle)
+    }
+
+    fn ident_ids(self, interns: &Interns) -> &IdentIds {
+        interns
+            .all_ident_ids
+            .get(&self.module_id())
+            .unwrap_or_else(|| {
+                internal_error!(
+                    "ident_string could not find IdentIds for module {:?} in {:?}",
+                    self.module_id(),
+                    interns
+                )
+            })
     }
 }
 
@@ -324,7 +331,7 @@ pub fn get_module_ident_ids<'a>(
 ) -> ModuleResult<&'a IdentIds> {
     all_ident_ids
         .get(module_id)
-        .with_context(|| ModuleIdNotFoundSnafu {
+        .ok_or_else(|| ModuleError::ModuleIdNotFound {
             module_id: format!("{module_id:?}"),
             all_ident_ids: format!("{all_ident_ids:?}"),
         })
@@ -336,9 +343,10 @@ pub fn get_module_ident_ids_mut<'a>(
 ) -> ModuleResult<&'a mut IdentIds> {
     all_ident_ids
         .get_mut(module_id)
-        .with_context(|| ModuleIdNotFoundSnafu {
+        .ok_or_else(|| ModuleError::ModuleIdNotFound {
             module_id: format!("{module_id:?}"),
-            all_ident_ids: "I could not return all_ident_ids here because of borrowing issues.",
+            all_ident_ids: "I could not return all_ident_ids here because of borrowing issues."
+                .into(),
         })
 }
 
@@ -437,13 +445,6 @@ impl fmt::Debug for ModuleId {
         self.0.fmt(f)
     }
 }
-
-/// pf.Task
-/// 1. build mapping from short name to package
-/// 2. when adding new modules from package we need to register them in some other map (this module id goes with short name) (shortname, module-name) -> moduleId
-/// 3. pass this around to other modules getting headers parsed. when parsing interfaces we need to use this map to reference shortnames
-/// 4. throw away short names. stash the module id in the can env under the resolved module name
-/// 5. test:
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PackageQualified<'a, T> {
@@ -627,67 +628,12 @@ impl ModuleIds {
     pub fn available_modules(&self) -> impl Iterator<Item = &ModuleName> {
         self.by_id.iter()
     }
-}
 
-#[derive(Debug, Clone)]
-pub struct ScopeModules {
-    modules: VecMap<ModuleName, ModuleId>,
-    sources: VecMap<ModuleId, ScopeModuleSource>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScopeModuleSource {
-    Builtin,
-    Current,
-    Import(Region),
-}
-
-impl ScopeModules {
-    pub fn get_id(&self, module_name: &ModuleName) -> Option<ModuleId> {
-        self.modules.get(module_name).copied()
-    }
-
-    pub fn has_id(&self, module_id: ModuleId) -> bool {
-        self.sources.contains_key(&module_id)
-    }
-
-    pub fn available_names(&self) -> impl Iterator<Item = &ModuleName> {
-        self.modules.keys()
-    }
-
-    pub fn insert(
-        &mut self,
-        module_name: ModuleName,
-        module_id: ModuleId,
-        region: Region,
-    ) -> Result<(), ScopeModuleSource> {
-        if let Some(existing_module_id) = self.modules.get(&module_name) {
-            if *existing_module_id == module_id {
-                return Ok(());
-            }
-
-            return Err(*self.sources.get(existing_module_id).unwrap());
-        }
-
-        self.modules.insert(module_name, module_id);
-        self.sources
-            .insert(module_id, ScopeModuleSource::Import(region));
-        Ok(())
-    }
-
-    pub fn len(&self) -> usize {
-        debug_assert_eq!(self.modules.len(), self.sources.len());
-        self.modules.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        debug_assert_eq!(self.modules.is_empty(), self.sources.is_empty());
-        self.modules.is_empty()
-    }
-
-    pub fn truncate(&mut self, len: usize) {
-        self.modules.truncate(len);
-        self.sources.truncate(len);
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (ModuleId, &ModuleName)> {
+        self.by_id
+            .iter()
+            .enumerate()
+            .map(|(index, name)| (ModuleId::from_zero_indexed(index), name))
     }
 }
 
@@ -762,6 +708,12 @@ impl IdentIds {
         IdentId(self.interner.insert_index_str() as u32)
     }
 
+    pub fn is_generated_id(&self, id: IdentId) -> bool {
+        self.interner
+            .try_get(id.0 as usize)
+            .map_or(false, |str| str.starts_with(|c: char| c.is_ascii_digit()))
+    }
+
     #[inline(always)]
     pub fn get_id(&self, ident_name: &str) -> Option<IdentId> {
         self.interner
@@ -782,7 +734,7 @@ impl IdentIds {
 
     pub fn get_name_str_res(&self, ident_id: IdentId) -> ModuleResult<&str> {
         self.get_name(ident_id)
-            .with_context(|| IdentIdNotFoundSnafu {
+            .ok_or_else(|| ModuleError::IdentIdNotFound {
                 ident_id,
                 ident_ids_str: format!("{self:?}"),
             })
@@ -1028,32 +980,6 @@ macro_rules! define_builtins {
                 )+
 
                 ModuleIds {  by_id }
-            }
-        }
-
-        impl ScopeModules {
-            pub fn new(home_id: ModuleId, home_name: ModuleName) -> Self {
-                // +1 because the user will be compiling at least 1 non-builtin module!
-                let capacity = $total + 1;
-
-                let mut modules = VecMap::with_capacity(capacity);
-                let mut sources = VecMap::with_capacity(capacity);
-
-                modules.insert(home_name, home_id);
-                sources.insert(home_id, ScopeModuleSource::Current);
-
-                let mut insert_both = |id: ModuleId, name_str: &'static str| {
-                    let name: ModuleName = name_str.into();
-
-                    modules.insert(name, id);
-                    sources.insert(id, ScopeModuleSource::Builtin);
-                };
-
-                $(
-                    insert_both(ModuleId::$module_const, $module_name);
-                )+
-
-                ScopeModules { modules, sources }
             }
         }
 
@@ -1556,6 +1482,8 @@ define_builtins! {
         5 RESULT_WITH_DEFAULT: "withDefault"
         6 RESULT_TRY: "try"
         7 RESULT_IS_OK: "isOk"
+        8 RESULT_MAP_BOTH: "mapBoth"
+        9 RESULT_MAP_TWO: "map2"
     }
     8 DICT: "Dict" => {
         0 DICT_DICT: "Dict" exposed_type=true // the Dict.Dict type alias
@@ -1745,6 +1673,23 @@ define_builtins! {
         32 INSPECT_TO_INSPECTOR: "toInspector"
         33 INSPECT_TO_STR: "toStr"
     }
+    15 TASK: "Task" => {
+        0 TASK_TASK: "Task" exposed_type=true // the Task.Task opaque type
+        1 TASK_FOREVER: "forever"
+        2 TASK_LOOP: "loop"
+        3 TASK_OK: "ok"
+        4 TASK_ERR: "err"
+        5 TASK_ATTEMPT: "attempt"
+        6 TASK_AWAIT: "await"
+        7 TASK_ON_ERR: "onErr"
+        8 TASK_MAP: "map"
+        9 TASK_MAP_ERR: "mapErr"
+        10 TASK_FROM_RESULT: "fromResult"
+        11 TASK_BATCH: "batch"
+        12 TASK_SEQUENCE: "sequence"
+        13 TASK_FOR_EACH: "forEach"
+        14 TASK_RESULT: "result"
+    }
 
-    num_modules: 15 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
+    num_modules: 16 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
 }

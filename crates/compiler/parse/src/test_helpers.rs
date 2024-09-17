@@ -1,6 +1,8 @@
 use crate::ast;
 use crate::ast::Defs;
-use crate::module::parse_module_defs;
+use crate::ast::Header;
+use crate::ast::SpacesBefore;
+use crate::header::parse_module_defs;
 use crate::parser::SourceError;
 use crate::parser::SyntaxError;
 use crate::state::State;
@@ -39,10 +41,10 @@ pub fn parse_defs_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Defs<'a>, 
 pub fn parse_header_with<'a>(
     arena: &'a Bump,
     input: &'a str,
-) -> Result<ast::Module<'a>, SyntaxError<'a>> {
+) -> Result<SpacesBefore<'a, Header<'a>>, SyntaxError<'a>> {
     let state = State::new(input.as_bytes());
 
-    match crate::module::parse_header(arena, state.clone()) {
+    match crate::header::parse_header(arena, state.clone()) {
         Ok((header, _)) => Ok(header),
         Err(fail) => Err(SyntaxError::Header(fail.problem)),
     }

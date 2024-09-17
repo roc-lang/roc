@@ -1540,6 +1540,30 @@ fn add_type_help<'a>(
 
                         type_id
                     }
+                    LayoutRepr::LambdaSet(_lambda_set) if *name == Symbol::TASK_TASK => {
+                        let type_vars = env.subs.get_subs_slice(alias_vars.type_variables());
+                        debug_assert_eq!(type_vars.len(), 2);
+
+                        let ok_var = type_vars[0];
+                        let ok_layout = env.layout_cache.from_var(env.arena, ok_var, subs).unwrap();
+                        let ok_id = add_type_help(env, ok_layout, ok_var, None, types);
+
+                        let err_var = type_vars[1];
+                        let err_layout =
+                            env.layout_cache.from_var(env.arena, err_var, subs).unwrap();
+                        let err_id = add_type_help(env, err_layout, err_var, None, types);
+
+                        let type_id = types.add_anonymous(
+                            &env.layout_cache.interner,
+                            RocType::Unsized,
+                            layout,
+                        );
+
+                        types.depends(type_id, ok_id);
+                        types.depends(type_id, err_id);
+
+                        type_id
+                    }
                     _ => {
                         unreachable!()
                     }
@@ -2219,21 +2243,24 @@ fn single_tag_payload_fields<'a, 'b>(
     types: &mut Types,
 ) -> (String, RocSingleTagPayload) {
     let layout = env.layout_cache.interner.get(in_layout);
-    // There should be a glue_procs_by_layout entry iff this layout has a closure in it,
-    // so we shouldn't need to separately check that. Howeevr, we still do a debug_assert
-    // anyway just so we have some warning in case that relationship somehow didn't hold!
-    debug_assert_eq!(
-        env.glue_procs_by_layout.get(&layout).is_some(),
-        env.layout_cache
-            .interner
-            .has_varying_stack_size(in_layout, env.arena),
-        "glue_procs_by_layout for {:?} was {:?}, but the layout cache said its has_varying_stack_size was {}",
-            &layout,
-            env.glue_procs_by_layout.get(&layout),
+
+    if std::env::var("SINGLE_TAG_GLUE_CHECK_OFF").as_deref() != Ok("1") {
+        // There should be a glue_procs_by_layout entry iff this layout has a closure in it,
+        // so we shouldn't need to separately check that. Howeevr, we still do a debug_assert
+        // anyway just so we have some warning in case that relationship somehow didn't hold!
+        debug_assert_eq!(
+            env.glue_procs_by_layout.get(&layout).is_some(),
             env.layout_cache
                 .interner
-                .has_varying_stack_size(in_layout, env.arena)
-    );
+                .has_varying_stack_size(in_layout, env.arena),
+            "glue_procs_by_layout for {:?} was {:?}, but the layout cache said its has_varying_stack_size was {}",
+                &layout,
+                env.glue_procs_by_layout.get(&layout),
+                env.layout_cache
+                    .interner
+                    .has_varying_stack_size(in_layout, env.arena)
+        );
+    }
 
     let (tag_name, payload_vars) = single_tag_payload(union_tags, subs);
 

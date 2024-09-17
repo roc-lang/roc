@@ -3,16 +3,16 @@ use crate::ast::{
     Implements, ImplementsAbilities, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
     ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport,
     ModuleImportParams, OldRecordBuilderField, Pattern, Spaceable, Spaced, Spaces, SpacesBefore,
-    TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    TryTarget, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use crate::blankspace::{
     loc_space0_e, require_newline_or_eof, space0_after_e, space0_around_ee, space0_before_e,
     space0_before_optional_after, space0_e, spaces, spaces_around, spaces_before,
 };
+use crate::header::module_name_help;
 use crate::ident::{
     integer_ident, lowercase_ident, parse_ident, unqualified_ident, Accessor, Ident, Suffix,
 };
-use crate::module::module_name_help;
 use crate::parser::{
     self, and, backtrackable, between, byte, byte_indent, collection_inner,
     collection_trailing_sep_e, either, increment_min_indent, indented_seq_skip_first, loc, map,
@@ -24,8 +24,8 @@ use crate::parser::{
 use crate::pattern::closure_param;
 use crate::state::State;
 use crate::string_literal::{self, StrLikeLiteral};
+use crate::type_annotation;
 use crate::{header, keyword};
-use crate::{module, type_annotation};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::soa::Slice;
@@ -169,7 +169,12 @@ fn record_field_access_chain<'a>() -> impl Parser<'a, Vec<'a, Suffix<'a>>, EExpr
                 )
             )
         ),
-        map(byte(b'!', EExpr::Access), |_| Suffix::TaskAwaitBang),
+        map(byte(b'!', EExpr::Access), |_| Suffix::TrySuffix(
+            TryTarget::Task
+        )),
+        map(byte(b'?', EExpr::Access), |_| Suffix::TrySuffix(
+            TryTarget::Result
+        )),
     ))
 }
 
@@ -189,6 +194,7 @@ fn loc_term_or_underscore_or_conditional<'a>(
         )),
         loc(specialize_err(EExpr::Closure, closure_help(options))),
         loc(crash_kw()),
+        loc(specialize_err(EExpr::Dbg, dbg_kw())),
         loc(underscore_expression()),
         loc(record_literal_help()),
         loc(specialize_err(EExpr::List, list_literal_help())),
@@ -210,6 +216,7 @@ fn loc_term_or_underscore<'a>(
             positive_number_literal_help()
         )),
         loc(specialize_err(EExpr::Closure, closure_help(options))),
+        loc(specialize_err(EExpr::Dbg, dbg_kw())),
         loc(underscore_expression()),
         loc(record_literal_help()),
         loc(specialize_err(EExpr::List, list_literal_help())),
@@ -227,6 +234,7 @@ fn loc_term<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr<'a>>, EEx
             positive_number_literal_help()
         )),
         loc(specialize_err(EExpr::Closure, closure_help(options))),
+        loc(specialize_err(EExpr::Dbg, dbg_kw())),
         loc(record_literal_help()),
         loc(specialize_err(EExpr::List, list_literal_help())),
         ident_seq(),
@@ -536,7 +544,7 @@ fn stmt_start<'a>(
         )),
         loc(specialize_err(
             EExpr::Dbg,
-            dbg_help(options, preceding_comment)
+            dbg_stmt_help(options, preceding_comment)
         )),
         loc(specialize_err(EExpr::Import, map(import(), Stmt::ValueDef))),
         map(
@@ -892,10 +900,10 @@ fn import_params<'a>() -> impl Parser<'a, ModuleImportParams<'a>, EImportParams<
     then(
         and(
             backtrackable(space0_e(EImportParams::Indent)),
-            specialize_err(EImportParams::Record, record_help()),
+            specialize_err(EImportParams::Record, loc(record_help())),
         ),
-        |arena, state, _, (before, record): (_, RecordHelp<'a>)| {
-            if let Some(prefix) = record.prefix {
+        |arena, state, _, (before, loc_record): (_, Loc<RecordHelp<'a>>)| {
+            if let Some(prefix) = loc_record.value.prefix {
                 match prefix {
                     (update, RecordHelpPrefix::Update) => {
                         return Err((
@@ -912,17 +920,27 @@ fn import_params<'a>() -> impl Parser<'a, ModuleImportParams<'a>, EImportParams<
                 }
             }
 
-            let params = record.fields.map_items_result(arena, |loc_field| {
-                match loc_field.value.to_assigned_field(arena) {
-                    Ok(field) => Ok(Loc::at(loc_field.region, field)),
-                    Err(FoundApplyValue) => Err((
-                        MadeProgress,
-                        EImportParams::RecordApplyFound(loc_field.region),
-                    )),
-                }
-            })?;
+            let params = loc_record
+                .value
+                .fields
+                .map_items_result(arena, |loc_field| {
+                    match loc_field.value.to_assigned_field(arena) {
+                        Ok(AssignedField::IgnoredValue(_, _, _)) => Err((
+                            MadeProgress,
+                            EImportParams::RecordIgnoredFieldFound(loc_field.region),
+                        )),
+                        Ok(field) => Ok(Loc::at(loc_field.region, field)),
+                        Err(FoundApplyValue) => Err((
+                            MadeProgress,
+                            EImportParams::RecordApplyFound(loc_field.region),
+                        )),
+                    }
+                })?;
 
-            let import_params = ModuleImportParams { before, params };
+            let import_params = ModuleImportParams {
+                before,
+                params: Loc::at(loc_record.region, params),
+            };
 
             Ok((MadeProgress, import_params, state))
         },
@@ -944,7 +962,7 @@ fn imported_module_name<'a>() -> impl Parser<'a, ImportedModuleName<'a>, EImport
 fn import_as<'a>(
 ) -> impl Parser<'a, header::KeywordItem<'a, ImportAsKeyword, Loc<ImportAlias<'a>>>, EImport<'a>> {
     record!(header::KeywordItem {
-        keyword: module::spaces_around_keyword(
+        keyword: header::spaces_around_keyword(
             ImportAsKeyword,
             EImport::As,
             EImport::IndentAs,
@@ -978,7 +996,7 @@ fn import_exposing<'a>() -> impl Parser<
     EImport<'a>,
 > {
     record!(header::KeywordItem {
-        keyword: module::spaces_around_keyword(
+        keyword: header::spaces_around_keyword(
             ImportExposingKeyword,
             EImport::Exposing,
             EImport::IndentExposing,
@@ -1023,7 +1041,7 @@ fn import_ingested_file_body<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>>
 fn import_ingested_file_as<'a>(
 ) -> impl Parser<'a, header::KeywordItem<'a, ImportAsKeyword, Loc<&'a str>>, EImport<'a>> {
     record!(header::KeywordItem {
-        keyword: module::spaces_around_keyword(
+        keyword: header::spaces_around_keyword(
             ImportAsKeyword,
             EImport::As,
             EImport::IndentAs,
@@ -2152,10 +2170,11 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::Backpassing(_, _, _)
         | Expr::BinOps { .. }
         | Expr::Defs(_, _)
-        | Expr::If(_, _)
+        | Expr::If { .. }
         | Expr::When(_, _)
         | Expr::Expect(_, _)
-        | Expr::Dbg(_, _)
+        | Expr::Dbg
+        | Expr::DbgStmt(_, _)
         | Expr::LowLevelDbg(_, _, _)
         | Expr::MalformedClosure
         | Expr::MalformedSuffixed(..)
@@ -2166,8 +2185,9 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::SingleFieldRecordBuilder(_)
         | Expr::OptionalFieldInRecordBuilder(_, _)
         | Expr::RecordUpdate { .. }
+        | Expr::RecordUpdater(_)
         | Expr::UnaryOp(_, _)
-        | Expr::TaskAwaitBang(..)
+        | Expr::TrySuffix { .. }
         | Expr::Crash
         | Expr::OldRecordBuilder(..)
         | Expr::RecordBuilder { .. } => return Err(()),
@@ -2234,6 +2254,7 @@ fn assigned_expr_field_to_pattern_help<'a>(
             spaces,
         ),
         AssignedField::Malformed(string) => Pattern::Malformed(string),
+        AssignedField::IgnoredValue(_, _, _) => return Err(()),
     })
 }
 
@@ -2630,7 +2651,7 @@ fn expect_help<'a>(
     }
 }
 
-fn dbg_help<'a>(
+fn dbg_stmt_help<'a>(
     options: ExprParseOptions,
     preceding_comment: Region,
 ) -> impl Parser<'a, Stmt<'a>, EExpect<'a>> {
@@ -2655,7 +2676,17 @@ fn dbg_help<'a>(
 
         Ok((MadeProgress, stmt, state))
     })
-    .trace("dbg_help")
+    .trace("dbg_stmt_help")
+}
+
+fn dbg_kw<'a>() -> impl Parser<'a, Expr<'a>, EExpect<'a>> {
+    (move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
+        let (_, _, next_state) =
+            parser::keyword(keyword::DBG, EExpect::Dbg).parse(arena, state, min_indent)?;
+
+        Ok((MadeProgress, Expr::Dbg, next_state))
+    })
+    .trace("dbg_kw")
 }
 
 fn import<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>> {
@@ -2672,6 +2703,8 @@ fn if_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EIf<
     move |arena: &'a Bump, state, min_indent| {
         let (_, _, state) =
             parser::keyword(keyword::IF, EIf::If).parse(arena, state, min_indent)?;
+
+        let if_indent = state.line_indent();
 
         let mut branches = Vec::with_capacity_in(1, arena);
 
@@ -2699,16 +2732,37 @@ fn if_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EIf<
             }
         };
 
-        let (_, else_branch, state) = parse_block(
+        let else_indent = state_final_else.line_indent();
+        let indented_else = else_indent > if_indent;
+
+        let min_indent = if !indented_else {
+            else_indent + 1
+        } else {
+            if_indent
+        };
+
+        let (_, loc_first_space, state_final_else) =
+            loc_space0_e(EIf::IndentElseBranch).parse(arena, state_final_else, min_indent)?;
+
+        let allow_defs = !loc_first_space.value.is_empty();
+
+        // use parse_block_inner so we can set min_indent
+        let (_, else_branch, state) = parse_block_inner(
             options,
             arena,
             state_final_else,
-            true,
+            min_indent,
             EIf::IndentElseBranch,
             EIf::ElseBranch,
+            loc_first_space,
+            allow_defs,
         )?;
 
-        let expr = Expr::If(branches.into_bump_slice(), arena.alloc(else_branch));
+        let expr = Expr::If {
+            if_thens: branches.into_bump_slice(),
+            final_else: arena.alloc(else_branch),
+            indented_else,
+        };
 
         Ok((MadeProgress, expr, state))
     }
@@ -2969,14 +3023,17 @@ fn stmts_to_expr<'a>(
                     arena.alloc(e).before(space)
                 }
             }
-            Stmt::ValueDef(ValueDef::Dbg { .. }) => {
-                return Err(EExpr::Dbg(
-                    EExpect::Continuation(
-                        arena.alloc(EExpr::IndentEnd(loc_stmt.region.end())),
-                        loc_stmt.region.end(),
-                    ),
-                    loc_stmt.region.start(),
-                ));
+            Stmt::ValueDef(ValueDef::Dbg { condition, .. }) => {
+                // If we parse a `dbg` as the last thing in a series of statements then it's
+                // actually an expression.
+                Expr::Apply(
+                    arena.alloc(Loc {
+                        value: Expr::Dbg,
+                        region: loc_stmt.region,
+                    }),
+                    arena.alloc([condition]),
+                    CalledVia::Space,
+                )
             }
             Stmt::ValueDef(ValueDef::Expect { .. }) => {
                 return Err(EExpr::Expect(
@@ -3128,13 +3185,19 @@ fn stmts_to_defs<'a>(
                 } = vd
                 {
                     if exprify_dbg {
-                        if i + 1 >= stmts.len() {
-                            return Err(EExpr::DbgContinue(sp_stmt.item.region.end()));
-                        }
-
-                        let rest = stmts_to_expr(&stmts[i + 1..], arena)?;
-
-                        let e = Expr::Dbg(arena.alloc(condition), arena.alloc(rest));
+                        let e = if i + 1 < stmts.len() {
+                            let rest = stmts_to_expr(&stmts[i + 1..], arena)?;
+                            Expr::DbgStmt(arena.alloc(condition), arena.alloc(rest))
+                        } else {
+                            Expr::Apply(
+                                arena.alloc(Loc {
+                                    value: Expr::Dbg,
+                                    region: sp_stmt.item.region,
+                                }),
+                                arena.alloc([condition]),
+                                CalledVia::Space,
+                            )
+                        };
 
                         let e = if sp_stmt.before.is_empty() {
                             e
@@ -3235,7 +3298,7 @@ pub fn join_alias_to_body<'a>(
 /// 2. The beginning of a function call (e.g. `foo bar baz`)
 /// 3. The beginning of a definition (e.g. `foo =`)
 /// 4. The beginning of a type annotation (e.g. `foo :`)
-/// 5. A reserved keyword (e.g. `if ` or `case `), meaning we should do something else.
+/// 5. A reserved keyword (e.g. `if ` or `when `), meaning we should do something else.
 
 fn assign_or_destructure_identifier<'a>() -> impl Parser<'a, Ident<'a>, EExpr<'a>> {
     parse_ident
@@ -3297,6 +3360,7 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
             answer
         }
         Ident::AccessorFunction(string) => Expr::AccessorFunction(string),
+        Ident::RecordUpdaterFunction(string) => Expr::RecordUpdater(string),
         Ident::Malformed(string, problem) => Expr::MalformedIdent(string, problem),
     }
 }
@@ -3322,6 +3386,7 @@ fn list_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EList<'a>> {
 pub enum RecordField<'a> {
     RequiredValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Expr<'a>>),
     OptionalValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Expr<'a>>),
+    IgnoredValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Expr<'a>>),
     LabelOnly(Loc<&'a str>),
     SpaceBefore(&'a RecordField<'a>, &'a [CommentOrNewline<'a>]),
     SpaceAfter(&'a RecordField<'a>, &'a [CommentOrNewline<'a>]),
@@ -3337,7 +3402,10 @@ pub enum RecordField<'a> {
 pub struct FoundApplyValue;
 
 #[derive(Debug)]
-struct FoundOptionalValue;
+pub enum NotOldBuilderFieldValue {
+    FoundOptionalValue,
+    FoundIgnoredValue,
+}
 
 impl<'a> RecordField<'a> {
     fn is_apply_value(&self) -> bool {
@@ -3346,6 +3414,20 @@ impl<'a> RecordField<'a> {
         loop {
             match current {
                 RecordField::ApplyValue(_, _, _, _) => break true,
+                RecordField::SpaceBefore(field, _) | RecordField::SpaceAfter(field, _) => {
+                    current = *field;
+                }
+                _ => break false,
+            }
+        }
+    }
+
+    fn is_ignored_value(&self) -> bool {
+        let mut current = self;
+
+        loop {
+            match current {
+                RecordField::IgnoredValue(_, _, _) => break true,
                 RecordField::SpaceBefore(field, _) | RecordField::SpaceAfter(field, _) => {
                     current = *field;
                 }
@@ -3369,6 +3451,10 @@ impl<'a> RecordField<'a> {
                 Ok(OptionalValue(loc_label, spaces, loc_expr))
             }
 
+            RecordField::IgnoredValue(loc_label, spaces, loc_expr) => {
+                Ok(IgnoredValue(loc_label, spaces, loc_expr))
+            }
+
             RecordField::LabelOnly(loc_label) => Ok(LabelOnly(loc_label)),
 
             RecordField::ApplyValue(_, _, _, _) => Err(FoundApplyValue),
@@ -3390,7 +3476,7 @@ impl<'a> RecordField<'a> {
     fn to_builder_field(
         self,
         arena: &'a Bump,
-    ) -> Result<OldRecordBuilderField<'a>, FoundOptionalValue> {
+    ) -> Result<OldRecordBuilderField<'a>, NotOldBuilderFieldValue> {
         use OldRecordBuilderField::*;
 
         match self {
@@ -3398,7 +3484,9 @@ impl<'a> RecordField<'a> {
                 Ok(Value(loc_label, spaces, loc_expr))
             }
 
-            RecordField::OptionalValue(_, _, _) => Err(FoundOptionalValue),
+            RecordField::OptionalValue(_, _, _) => Err(NotOldBuilderFieldValue::FoundOptionalValue),
+
+            RecordField::IgnoredValue(_, _, _) => Err(NotOldBuilderFieldValue::FoundIgnoredValue),
 
             RecordField::LabelOnly(loc_label) => Ok(LabelOnly(loc_label)),
 
@@ -3434,41 +3522,69 @@ pub fn record_field<'a>() -> impl Parser<'a, RecordField<'a>, ERecord<'a>> {
     use RecordField::*;
 
     map_with_arena(
-        and(
-            specialize_err(|_, pos| ERecord::Field(pos), loc(lowercase_ident())),
+        either(
             and(
-                spaces(),
-                optional(either(
-                    and(byte(b':', ERecord::Colon), record_field_expr()),
-                    and(
-                        byte(b'?', ERecord::QuestionMark),
+                specialize_err(|_, pos| ERecord::Field(pos), loc(lowercase_ident())),
+                and(
+                    spaces(),
+                    optional(either(
+                        and(byte(b':', ERecord::Colon), record_field_expr()),
+                        and(
+                            byte(b'?', ERecord::QuestionMark),
+                            spaces_before(specialize_err_ref(ERecord::Expr, loc_expr(false))),
+                        ),
+                    )),
+                ),
+            ),
+            and(
+                loc(skip_first(
+                    byte(b'_', ERecord::UnderscoreField),
+                    optional(specialize_err(
+                        |_, pos| ERecord::Field(pos),
+                        lowercase_ident(),
+                    )),
+                )),
+                and(
+                    spaces(),
+                    skip_first(
+                        byte(b':', ERecord::Colon),
                         spaces_before(specialize_err_ref(ERecord::Expr, loc_expr(false))),
                     ),
-                )),
+                ),
             ),
         ),
-        |arena: &'a bumpalo::Bump, (loc_label, (spaces, opt_loc_val))| {
-            match opt_loc_val {
-                Some(Either::First((_, RecordFieldExpr::Value(loc_val)))) => {
-                    RequiredValue(loc_label, spaces, arena.alloc(loc_val))
-                }
+        |arena: &'a bumpalo::Bump, field_data| {
+            match field_data {
+                Either::First((loc_label, (spaces, opt_loc_val))) => {
+                    match opt_loc_val {
+                        Some(Either::First((_, RecordFieldExpr::Value(loc_val)))) => {
+                            RequiredValue(loc_label, spaces, arena.alloc(loc_val))
+                        }
 
-                Some(Either::First((_, RecordFieldExpr::Apply(arrow_spaces, loc_val)))) => {
-                    ApplyValue(loc_label, spaces, arrow_spaces, arena.alloc(loc_val))
-                }
+                        Some(Either::First((_, RecordFieldExpr::Apply(arrow_spaces, loc_val)))) => {
+                            ApplyValue(loc_label, spaces, arrow_spaces, arena.alloc(loc_val))
+                        }
 
-                Some(Either::Second((_, loc_val))) => {
-                    OptionalValue(loc_label, spaces, arena.alloc(loc_val))
-                }
+                        Some(Either::Second((_, loc_val))) => {
+                            OptionalValue(loc_label, spaces, arena.alloc(loc_val))
+                        }
 
-                // If no value was provided, record it as a Var.
-                // Canonicalize will know what to do with a Var later.
-                None => {
-                    if !spaces.is_empty() {
-                        SpaceAfter(arena.alloc(LabelOnly(loc_label)), spaces)
-                    } else {
-                        LabelOnly(loc_label)
+                        // If no value was provided, record it as a Var.
+                        // Canonicalize will know what to do with a Var later.
+                        None => {
+                            if !spaces.is_empty() {
+                                SpaceAfter(arena.alloc(LabelOnly(loc_label)), spaces)
+                            } else {
+                                LabelOnly(loc_label)
+                            }
+                        }
                     }
+                }
+                Either::Second((loc_opt_label, (spaces, loc_val))) => {
+                    let loc_label = loc_opt_label
+                        .map(|opt_label| opt_label.unwrap_or_else(|| arena.alloc_str("")));
+
+                    IgnoredValue(loc_label, spaces, arena.alloc(loc_val))
                 }
             }
         },
@@ -3573,20 +3689,23 @@ fn record_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
                     new_record_builder_help(arena, mapper, record.fields)
                 }
                 None => {
-                    let is_old_record_builder = record
-                        .fields
-                        .iter()
-                        .any(|field| field.value.is_apply_value());
+                    let special_field_found = record.fields.iter().find_map(|field| {
+                        if field.value.is_apply_value() {
+                            Some(old_record_builder_help(arena, record.fields))
+                        } else if field.value.is_ignored_value() {
+                            Some(Err(EExpr::RecordUpdateIgnoredField(field.region)))
+                        } else {
+                            None
+                        }
+                    });
 
-                    if is_old_record_builder {
-                        old_record_builder_help(arena, record.fields)
-                    } else {
+                    special_field_found.unwrap_or_else(|| {
                         let fields = record.fields.map_items(arena, |loc_field| {
                             loc_field.map(|field| field.to_assigned_field(arena).unwrap())
                         });
 
                         Ok(Expr::Record(fields))
-                    }
+                    })
                 }
             };
 
@@ -3609,11 +3728,14 @@ fn record_update_help<'a>(
 ) -> Result<Expr<'a>, EExpr<'a>> {
     let result = fields.map_items_result(arena, |loc_field| {
         match loc_field.value.to_assigned_field(arena) {
+            Ok(AssignedField::IgnoredValue(_, _, _)) => {
+                Err(EExpr::RecordUpdateIgnoredField(loc_field.region))
+            }
             Ok(builder_field) => Ok(Loc {
                 region: loc_field.region,
                 value: builder_field,
             }),
-            Err(FoundApplyValue) => Err(EExpr::RecordUpdateAccumulator(loc_field.region)),
+            Err(FoundApplyValue) => Err(EExpr::RecordUpdateOldBuilderField(loc_field.region)),
         }
     });
 
@@ -3634,7 +3756,7 @@ fn new_record_builder_help<'a>(
                 region: loc_field.region,
                 value: builder_field,
             }),
-            Err(FoundApplyValue) => Err(EExpr::RecordBuilderAccumulator(loc_field.region)),
+            Err(FoundApplyValue) => Err(EExpr::RecordBuilderOldBuilderField(loc_field.region)),
         }
     });
 
@@ -3654,7 +3776,12 @@ fn old_record_builder_help<'a>(
                 region: loc_field.region,
                 value: builder_field,
             }),
-            Err(FoundOptionalValue) => Err(EExpr::OptionalValueInRecordBuilder(loc_field.region)),
+            Err(NotOldBuilderFieldValue::FoundOptionalValue) => {
+                Err(EExpr::OptionalValueInOldRecordBuilder(loc_field.region))
+            }
+            Err(NotOldBuilderFieldValue::FoundIgnoredValue) => {
+                Err(EExpr::IgnoredValueInOldRecordBuilder(loc_field.region))
+            }
         }
     });
 
@@ -3675,7 +3802,10 @@ fn apply_expr_access_chain<'a>(
             Suffix::Accessor(Accessor::TupleIndex(field)) => {
                 Expr::TupleAccess(arena.alloc(value), field)
             }
-            Suffix::TaskAwaitBang => Expr::TaskAwaitBang(arena.alloc(value)),
+            Suffix::TrySuffix(target) => Expr::TrySuffix {
+                target,
+                expr: arena.alloc(value),
+            },
         })
 }
 

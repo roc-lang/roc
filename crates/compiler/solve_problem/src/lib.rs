@@ -2,7 +2,10 @@
 use std::{path::PathBuf, str::Utf8Error};
 
 use roc_can::expected::{Expected, PExpected};
-use roc_module::{ident::Lowercase, symbol::Symbol};
+use roc_module::{
+    ident::Lowercase,
+    symbol::{ModuleId, Symbol},
+};
 use roc_problem::{can::CycleEntry, Severity};
 use roc_region::all::Region;
 
@@ -33,6 +36,9 @@ pub enum TypeError {
     },
     IngestedFileBadUtf8(Box<PathBuf>, Utf8Error),
     IngestedFileUnsupportedType(Box<PathBuf>, ErrorType),
+    UnexpectedModuleParams(Region, ModuleId),
+    MissingModuleParams(Region, ModuleId, ErrorType),
+    ModuleParamsMismatch(Region, ModuleId, ErrorType, ErrorType),
 }
 
 impl TypeError {
@@ -52,6 +58,9 @@ impl TypeError {
             TypeError::Exhaustive(exhtv) => exhtv.severity(),
             TypeError::StructuralSpecialization { .. } => RuntimeError,
             TypeError::WrongSpecialization { .. } => RuntimeError,
+            TypeError::UnexpectedModuleParams(..) => Warning,
+            TypeError::MissingModuleParams(..) => RuntimeError,
+            TypeError::ModuleParamsMismatch(..) => RuntimeError,
             TypeError::IngestedFileBadUtf8(..) => Fatal,
             TypeError::IngestedFileUnsupportedType(..) => Fatal,
         }
@@ -66,7 +75,10 @@ impl TypeError {
             | TypeError::BadExprMissingAbility(region, ..)
             | TypeError::StructuralSpecialization { region, .. }
             | TypeError::WrongSpecialization { region, .. }
-            | TypeError::BadPatternMissingAbility(region, ..) => Some(*region),
+            | TypeError::BadPatternMissingAbility(region, ..)
+            | TypeError::UnexpectedModuleParams(region, ..)
+            | TypeError::MissingModuleParams(region, ..)
+            | TypeError::ModuleParamsMismatch(region, ..) => Some(*region),
             TypeError::UnfulfilledAbility(ab, ..) => ab.region(),
             TypeError::Exhaustive(e) => Some(e.region()),
             TypeError::CircularDef(c) => c.first().map(|ce| ce.symbol_region),

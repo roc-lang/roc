@@ -1,7 +1,6 @@
-app "rbtree-ck"
-    packages { pf: "platform/main.roc" }
-    imports [pf.Task]
-    provides [main] to pf
+app [main] { pf: platform "platform/main.roc" }
+
+import pf.PlatformTasks
 
 Color : [Red, Black]
 
@@ -38,9 +37,14 @@ fold = \f, tree, b ->
         Leaf -> b
         Node _ l k v r -> fold f r (f k v (fold f l b))
 
-main : Task.Task {} []
+main : Task {} []
 main =
-    inputResult <- Task.attempt Task.getInt
+    { value, isError } = PlatformTasks.getInt!
+    inputResult =
+        if isError then
+            Err GetIntError
+        else
+            Ok value
 
     when inputResult is
         Ok n ->
@@ -54,13 +58,13 @@ main =
 
                     val
                     |> Num.toStr
-                    |> Task.putLine
+                    |> PlatformTasks.putLine
 
                 Nil ->
-                    Task.putLine "fail"
+                    PlatformTasks.putLine "fail"
 
         Err GetIntError ->
-            Task.putLine "Error: Failed to get Integer from stdin."
+            PlatformTasks.putLine "Error: Failed to get Integer from stdin."
 
 insert : Tree (Num k) v, Num k, v -> Tree (Num k) v
 insert = \t, k, v -> if isRed t then setBlack (ins t k v) else ins t k v

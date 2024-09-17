@@ -136,8 +136,8 @@ Defs {
                                                 ident: "#!1_arg",
                                             },
                                         ],
-                                        @109-298 If(
-                                            [
+                                        @109-298 If {
+                                            if_thens: [
                                                 (
                                                     @112-122 Apply(
                                                         @112-113 Var {
@@ -244,7 +244,7 @@ Defs {
                                                     ),
                                                 ),
                                             ],
-                                            Apply(
+                                            final_else: Apply(
                                                 Var {
                                                     module_name: "Task",
                                                     ident: "await",
@@ -269,8 +269,8 @@ Defs {
                                                                 ident: "#!3_arg",
                                                             },
                                                         ],
-                                                        @109-298 If(
-                                                            [
+                                                        @109-298 If {
+                                                            if_thens: [
                                                                 (
                                                                     @187-209 ParensAround(
                                                                         Var {
@@ -366,7 +366,7 @@ Defs {
                                                                     ),
                                                                 ),
                                                             ],
-                                                            @283-298 Apply(
+                                                            final_else: @283-298 Apply(
                                                                 @283-298 Var {
                                                                     module_name: "",
                                                                     ident: "line",
@@ -380,12 +380,14 @@ Defs {
                                                                 ],
                                                                 Space,
                                                             ),
-                                                        ),
+                                                            indented_else: false,
+                                                        },
                                                     ),
                                                 ],
                                                 BangSuffix,
                                             ),
-                                        ),
+                                            indented_else: false,
+                                        },
                                     ),
                                 ],
                                 BangSuffix,
