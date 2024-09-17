@@ -282,16 +282,9 @@ pub(crate) struct RocUnion<'ctx> {
     tag_type: Option<TagType>,
 }
 
-fn is_multiple_of(big: u32, small: u32) -> bool {
-    match small {
-        0 => true, // 0 is a multiple of all n, because n * 0 = 0
-        n => big % n == 0,
-    }
-}
-
 impl<'ctx> RocUnion<'ctx> {
-    pub const TAG_ID_INDEX: u32 = 2;
-    pub const TAG_DATA_INDEX: u32 = 1;
+    pub const TAG_ID_INDEX: u32 = 1;
+    pub const TAG_DATA_INDEX: u32 = 0;
 
     fn new(
         context: &'ctx Context,
@@ -301,23 +294,14 @@ impl<'ctx> RocUnion<'ctx> {
     ) -> Self {
         let bytes = round_up_to_alignment(data_width, data_align);
 
-        let byte_array_type = if is_multiple_of(bytes, 8) && is_multiple_of(data_align, 8) {
-            context
-                .i64_type()
-                .array_type(bytes / 8)
-                .as_basic_type_enum()
-        } else {
-            context.i8_type().array_type(bytes).as_basic_type_enum()
-        };
-
-        let alignment_array_type = alignment_type(context, data_align)
-            .array_type(0)
+        let align_type = alignment_type(context, data_align);
+        let byte_array_type = align_type
+            .array_type(bytes / data_align)
             .as_basic_type_enum();
 
         let struct_type = if let Some(tag_type) = tag_type {
             context.struct_type(
                 &[
-                    alignment_array_type,
                     byte_array_type,
                     match tag_type {
                         TagType::I8 => context.i8_type().into(),
@@ -327,7 +311,7 @@ impl<'ctx> RocUnion<'ctx> {
                 false,
             )
         } else {
-            context.struct_type(&[alignment_array_type, byte_array_type], false)
+            context.struct_type(&[byte_array_type], false)
         };
 
         Self {
