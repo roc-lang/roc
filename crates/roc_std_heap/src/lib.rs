@@ -170,7 +170,7 @@ impl<T> Heap<T> {
     }
 
     pub fn alloc(&mut self) -> Result<*mut T> {
-        if self.free_list.is_null() {
+        if !self.free_list.is_null() {
             // Open slot on the free list.
             let root = self.free_list as *const *const c_void;
             let next = unsafe { *root };
