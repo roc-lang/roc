@@ -20,6 +20,7 @@ use std::{
 };
 
 const REFCOUNT_ONE: usize = isize::MIN as usize;
+const REFCOUNT_CONSTANT: usize = 0;
 
 /// ThreadSafeRefcountedResourceHeap is a threadsafe version of the refcounted heap that can avoid a wrapping Mutex and RefCell.
 /// This is very important for dealloc performance.
@@ -130,7 +131,7 @@ impl<T> RefcountedResourceHeap<T> {
             let offset = i * Heap::<Refcounted<T>>::node_size();
             let elem_ptr = unsafe { self.0.data.as_mut_ptr().add(offset) };
             let rc_ptr = elem_ptr as *mut usize;
-            unsafe { *rc_ptr = 0 };
+            unsafe { *rc_ptr = REFCOUNT_CONSTANT };
         }
     }
 }
