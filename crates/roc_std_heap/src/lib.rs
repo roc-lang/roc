@@ -61,6 +61,15 @@ impl<T> ThreadSafeRefcountedResourceHeap<T> {
     pub fn box_to_resource<'a>(data: RocBox<()>) -> &'a mut T {
         RefcountedResourceHeap::box_to_resource(data)
     }
+
+    pub fn box_to_refcount<'a>(data: &RocBox<()>) -> &'a mut usize {
+        RefcountedResourceHeap::<T>::box_to_refcount(data)
+    }
+
+    pub fn promote_all_to_constant(self: &Self) {
+        let _g = self.guard.lock().unwrap();
+        unsafe { &mut *self.heap.get() }.promote_all_to_constant();
+    }
 }
 
 unsafe impl<T> Sync for ThreadSafeRefcountedResourceHeap<T> {}
@@ -103,6 +112,26 @@ impl<T> RefcountedResourceHeap<T> {
         let alloc_ptr = (box_ptr - mem::size_of::<usize>()) as *mut Refcounted<T>;
         let alloc: &mut Refcounted<T> = unsafe { &mut *alloc_ptr };
         &mut alloc.1
+    }
+
+    pub fn box_to_refcount<'a>(data: &RocBox<()>) -> &'a mut usize {
+        let box_ptr: &usize = unsafe { std::mem::transmute(data) };
+
+        let rc_ptr = (*box_ptr - mem::size_of::<usize>()) as *mut usize;
+        unsafe { &mut *rc_ptr }
+    }
+
+    /// Promotes all live references to constants.
+    /// Does this my walking all allocations and setting the refcount to zero (constant).
+    /// It will also end up walking freed elements, but their bytes are uninitialized and don't matter.
+    /// This is great for calling after an init function where all lived data is guarenteed to live until the server finishes running.
+    pub fn promote_all_to_constant(self: &mut Self) {
+        for i in 0..self.0.elements {
+            let offset = i * Heap::<Refcounted<T>>::node_size();
+            let elem_ptr = unsafe { self.0.data.as_mut_ptr().offset(offset as isize) };
+            let rc_ptr = elem_ptr as *mut usize;
+            unsafe { *rc_ptr = 0 };
+        }
     }
 }
 
