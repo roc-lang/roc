@@ -532,14 +532,14 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
         debug_assert_eq!(label_progress, MadeProgress);
         let label_at = Region::new(start, state.pos());
 
-        let (_, (label_spaces, _), state) = eat_space(arena, state, Some(MadeProgress))?;
+        let (_, (label_spaces, _), state) = eat_space(arena, state, true)?;
 
         // Having a value is optional; both `{ email }` and `{ email: blah }` work.
         // (This is true in both literals and types.)
         if state.bytes().first() == Some(&b':') {
             let state = state.inc();
 
-            let (_, (colon_spaces, _), state) = eat_space(arena, state, Some(MadeProgress))?;
+            let (_, (colon_spaces, _), state) = eat_space(arena, state, true)?;
 
             let pattern_pos = state.pos();
             let (pattern_val, state) = match loc_pattern_help().parse(arena, state, min_indent) {
@@ -563,7 +563,7 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
         if state.bytes().first() == Some(&b'?') {
             let state = state.inc();
 
-            let (_, (question_spaces, _), state) = eat_space(arena, state, Some(MadeProgress))?;
+            let (_, (question_spaces, _), state) = eat_space(arena, state, true)?;
 
             let optional_val_pos = state.pos();
             let (optional_val, state) =

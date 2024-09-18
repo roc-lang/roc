@@ -4,9 +4,13 @@ use crate::ast::{
     Collection, CommentOrNewline, Defs, Header, Malformed, Pattern, Spaced, Spaces, SpacesBefore,
     StrLiteral, TypeAnnotation,
 };
-use crate::blankspace::{parse_space, space0_around_ee, space0_before_e, space0_e};
+use crate::blankspace::{
+    eat_space_check, parse_space, space0_around_ee, space0_e, with_spaces_before,
+};
 use crate::expr::merge_spaces;
-use crate::ident::{self, lowercase_ident, unqualified_ident, UppercaseIdent};
+use crate::ident::{
+    self, lowercase_ident, parse_lowercase_ident, unqualified_ident, UppercaseIdent,
+};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
     and, backtrackable, byte, collection_trailing_sep_e, increment_min_indent, loc, map,
@@ -18,31 +22,23 @@ use crate::parser::{
 use crate::pattern::parse_record_pattern_fields;
 use crate::state::State;
 use crate::string_literal::{self, parse_str_literal};
-use crate::type_annotation;
+use crate::type_annotation::type_expr;
 use roc_module::symbol::ModuleId;
 use roc_region::all::{Loc, Position, Region};
-
-fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
-    |_arena, state: State<'a>, _min_indent: u32| {
-        if state.has_reached_end() {
-            Ok((NoProgress, (), state))
-        } else {
-            Err((NoProgress, SyntaxError::NotEndOfFile(state.pos())))
-        }
-    }
-}
 
 pub fn parse_module_defs<'a>(
     arena: &'a bumpalo::Bump,
     state: State<'a>,
     defs: Defs<'a>,
 ) -> Result<Defs<'a>, SyntaxError<'a>> {
-    let min_indent = 0;
     match crate::expr::parse_top_level_defs(arena, state.clone(), defs) {
-        Ok((_, defs, state)) => match end_of_file().parse(arena, state, min_indent) {
-            Ok(_) => Ok(defs),
-            Err((_, fail)) => Err(fail),
-        },
+        Ok((_, defs, state)) => {
+            if state.has_reached_end() {
+                Ok(defs)
+            } else {
+                Err(SyntaxError::NotEndOfFile(state.pos()))
+            }
+        }
         Err((_, fail)) => Err(SyntaxError::Expr(fail, state.pos())),
     }
 }
@@ -796,39 +792,42 @@ fn imports<'a>() -> impl Parser<
     .trace("imports")
 }
 
-#[inline(always)]
 pub fn typed_ident<'a>() -> impl Parser<'a, Spaced<'a, TypedIdent<'a>>, ETypedIdent<'a>> {
     // e.g.
     //
     // printLine : Str -> Effect {}
-    map(
-        and(
-            and(
-                loc(specialize_err(
-                    |_, pos| ETypedIdent::Identifier(pos),
-                    lowercase_ident(),
-                )),
-                space0_e(ETypedIdent::IndentHasType),
-            ),
-            skip_first(
-                byte(b':', ETypedIdent::HasType),
-                space0_before_e(
-                    specialize_err(
-                        ETypedIdent::Type,
-                        reset_min_indent(type_annotation::located(true)),
-                    ),
-                    ETypedIdent::IndentType,
-                ),
-            ),
-        ),
-        |((ident, spaces_before_colon), ann)| {
-            Spaced::Item(TypedIdent {
-                ident,
-                spaces_before_colon,
-                ann,
-            })
-        },
-    )
+    move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
+        let start = state.pos();
+
+        let (ident, state) = match parse_lowercase_ident(state) {
+            Ok((_, out, state)) => (Loc::pos(start, state.pos(), out), state),
+            Err((p, _)) => return Err((p, ETypedIdent::Identifier(start))),
+        };
+
+        let (_, spaces_before_colon, state) =
+            eat_space_check(ETypedIdent::IndentHasType, arena, state, min_indent, true)?;
+
+        if state.bytes().first() != Some(&b':') {
+            return Err((MadeProgress, ETypedIdent::HasType(state.pos())));
+        }
+        let state = state.inc();
+
+        let (_, spaces_after_colon, state) =
+            eat_space_check(ETypedIdent::IndentType, arena, state, min_indent, true)?;
+
+        let ann_pos = state.pos();
+        match type_expr(true, false).parse(arena, state, 0) {
+            Ok((_, ann, state)) => {
+                let typed_ident = Spaced::Item(TypedIdent {
+                    ident,
+                    spaces_before_colon,
+                    ann: with_spaces_before(arena, ann, spaces_after_colon),
+                });
+                Ok((MadeProgress, typed_ident, state))
+            }
+            Err((_, fail)) => Err((MadeProgress, ETypedIdent::Type(fail, ann_pos))),
+        }
+    }
 }
 
 fn shortname<'a>() -> impl Parser<'a, &'a str, EImports> {

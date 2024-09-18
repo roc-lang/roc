@@ -3,7 +3,8 @@ use crate::ast::{
     ImplementsClause, Pattern, Spaceable, Spaced, Tag, TypeAnnotation, TypeHeader,
 };
 use crate::blankspace::{
-    parse_space, space0_around_ee, space0_before_e, space0_before_optional_after, space0_e,
+    eat_space_check, parse_space, space0_around_ee, space0_before_e, space0_before_optional_after,
+    space0_e, with_spaces_before,
 };
 use crate::expr::{parse_record_field, FoundApplyValue};
 use crate::ident::{chomp_concrete_type, lowercase_ident, lowercase_ident_keyword_e};
@@ -26,7 +27,7 @@ use roc_region::all::{Loc, Position, Region};
 pub fn located<'a>(
     is_trailing_comma_valid: bool,
 ) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
-    expression(is_trailing_comma_valid, false)
+    type_expr(is_trailing_comma_valid, false)
 }
 
 #[inline(always)]
@@ -238,7 +239,7 @@ fn loc_type_in_parens<'a>(
             byte(b'(', ETypeInParens::Open),
             skip_second(
                 reset_min_indent(collection_inner(
-                    specialize_err_ref(ETypeInParens::Type, expression(true, false)),
+                    specialize_err_ref(ETypeInParens::Type, type_expr(true, false)),
                     TypeAnnotation::SpaceBefore,
                 )),
                 byte(b')', ETypeInParens::End),
@@ -324,7 +325,7 @@ fn record_type_field<'a>() -> impl Parser<'a, AssignedField<'a, TypeAnnotation<'
         // (This is true in both literals and types.)
         if state.bytes().first() == Some(&b':') {
             let (_, loc_val, state) = space0_before_e(
-                specialize_err_ref(ETypeRecord::Type, expression(true, false)),
+                specialize_err_ref(ETypeRecord::Type, type_expr(true, false)),
                 ETypeRecord::IndentColon,
             )
             .parse(arena, state.inc(), min_indent)?;
@@ -333,7 +334,7 @@ fn record_type_field<'a>() -> impl Parser<'a, AssignedField<'a, TypeAnnotation<'
             Ok((MadeProgress, req_val, state))
         } else if state.bytes().first() == Some(&b'?') {
             let (_, loc_val, state) = space0_before_e(
-                specialize_err_ref(ETypeRecord::Type, expression(true, false)),
+                specialize_err_ref(ETypeRecord::Type, type_expr(true, false)),
                 ETypeRecord::IndentOptional,
             )
             .parse(arena, state.inc(), min_indent)?;
@@ -564,13 +565,23 @@ fn ability_impl_field<'a>() -> impl Parser<'a, AssignedField<'a, Expr<'a>>, ERec
     }
 }
 
-pub(crate) fn expression<'a>(
+pub(crate) fn type_expr<'a>(
     is_trailing_comma_valid: bool,
     stop_at_surface_has: bool,
 ) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
     (move |arena, state: State<'a>, min_indent: u32| {
-        let (p1, first, state) = space0_before_e(term(stop_at_surface_has), EType::TIndentStart)
-            .parse(arena, state, min_indent)?; // todo: @wip in some calls to expression we already checking for space before via the same function. Remove double check!
+        // todo: @wip in some calls to expression we already checking for space before via the same function. Remove double check!
+
+        let (p1, spaces_before_term, state) =
+            eat_space_check(EType::TIndentStart, arena, state, min_indent, false)?;
+
+        let (p1, first, state) =
+            match term(stop_at_surface_has).parse(arena, state.clone(), min_indent) {
+                Ok(ok) => ok,
+                Err((p, fail)) => return Err((p.or(p1), fail)),
+            };
+
+        let first = with_spaces_before(arena, first, spaces_before_term);
 
         let result = and(
             zero_or_more(skip_first(

@@ -158,7 +158,7 @@ fn parse_record_field_access_chain<'a>(
                 b'.' => {
                     let state = state.inc();
                     let before_ident = state.pos();
-                    match lowercase_ident().parse(arena, state.clone(), min_indent) {
+                    match parse_lowercase_ident(state.clone()) {
                         Ok((_, x, state)) => (Suffix::Accessor(Accessor::RecordField(x)), state),
                         Err((NoProgress, _)) => {
                             match integer_ident().parse(arena, state, min_indent) {
@@ -1077,7 +1077,7 @@ fn opaque_signature<'a>() -> impl Parser<
     EExpr<'a>,
 > {
     and(
-        specialize_err(EExpr::Type, type_annotation::expression(true, true)),
+        specialize_err(EExpr::Type, type_annotation::type_expr(true, true)),
         optional(backtrackable(specialize_err(
             EExpr::Type,
             space0_before_e(type_annotation::implements_abilities(), EType::TIndentStart),
@@ -2096,6 +2096,7 @@ fn assigned_expr_field_to_pattern_help<'a>(
     })
 }
 
+// todo: @wip inline me
 pub fn parse_top_level_defs<'a>(
     arena: &'a bumpalo::Bump,
     state: State<'a>,
@@ -2346,7 +2347,7 @@ mod when {
         let (_, cond, state) = parse_expr_start(options, arena, state, min_indent)
             .map_err(|(_, fail)| (MadeProgress, EWhen::Condition(arena.alloc(fail), at_cond)))?;
 
-        let (_, (spaces_after, _), state) = eat_space(arena, state, Some(MadeProgress))?;
+        let (_, (spaces_after, _), state) = eat_space(arena, state, true)?;
 
         if !at_keyword(keyword::IS, &state) {
             return Err((MadeProgress, EWhen::Is(state.pos())));
@@ -3479,13 +3480,12 @@ pub fn parse_record_field<'a>(
         Ok((_, label, state)) => {
             let field_label = Loc::pos(start, state.pos(), label);
 
-            let (_, (label_spaces, _), mut state) = eat_space(arena, state, Some(MadeProgress))?;
+            let (_, (label_spaces, _), mut state) = eat_space(arena, state, true)?;
 
             if state.bytes().first() == Some(&b':') {
                 state.advance_mut(1);
 
-                let (_, (colon_spaces, _), mut state) =
-                    eat_space(arena, state, Some(MadeProgress))?;
+                let (_, (colon_spaces, _), mut state) = eat_space(arena, state, true)?;
 
                 let has_back_arrow = state.bytes().starts_with(b"<-");
 
@@ -3531,7 +3531,7 @@ pub fn parse_record_field<'a>(
             if state.bytes().first() == Some(&b'?') {
                 state.advance_mut(1);
 
-                let (_, (question_spaces, _), state) = eat_space(arena, state, Some(MadeProgress))?;
+                let (_, (question_spaces, _), state) = eat_space(arena, state, true)?;
 
                 let field_val_pos = state.pos();
                 match parse_expr_start(ExprParseOptions::NO_BACK_ARROW, arena, state, min_indent) {
@@ -3572,7 +3572,7 @@ pub fn parse_record_field<'a>(
 
     let field_label_end = state.pos();
 
-    let (_, (label_spaces, _), mut state) = eat_space(arena, state, Some(MadeProgress))?;
+    let (_, (label_spaces, _), mut state) = eat_space(arena, state, true)?;
 
     let colon_pos = state.pos();
     if state.bytes().first() != Some(&b':') {
@@ -3580,7 +3580,7 @@ pub fn parse_record_field<'a>(
     }
     state.advance_mut(1);
 
-    let (_, (colon_spaces, _), state) = eat_space(arena, state, Some(MadeProgress))?;
+    let (_, (colon_spaces, _), state) = eat_space(arena, state, true)?;
 
     let field_val_pos = state.pos();
     let (field_val, state) =
@@ -3628,7 +3628,7 @@ fn record_help<'a>() -> impl Parser<'a, RecordHelp<'a>, ERecord<'a>> {
         // and then in canonicalization verify that it's an Expr::Var
         // (and not e.g. an `Expr::Access`) and extract its string.
         let before_prefix = state.clone();
-        let (prefix, state) = match eat_space::<'_, ERecord<'_>>(arena, state, None) {
+        let (prefix, state) = match eat_space::<'_, ERecord<'_>>(arena, state, false) {
             Err(_) => (None, before_prefix),
             Ok((_, (spaces_before, _), state)) => {
                 let ident_at = state.pos();
@@ -3636,7 +3636,7 @@ fn record_help<'a>() -> impl Parser<'a, RecordHelp<'a>, ERecord<'a>> {
                     Err(_) => (None, before_prefix),
                     Ok((_, ident, state)) => {
                         let ident = Loc::pos(ident_at, state.pos(), ident_to_expr(arena, ident));
-                        match eat_space::<'_, ERecord<'_>>(arena, state, None) {
+                        match eat_space::<'_, ERecord<'_>>(arena, state, false) {
                             Err(_) => (None, before_prefix),
                             Ok((_, (spaces_after, _), state)) => {
                                 let ident = with_spaces(arena, spaces_before, ident, spaces_after);

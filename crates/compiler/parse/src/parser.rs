@@ -1170,10 +1170,10 @@ pub fn collection_inner<'a, Elem: 'a + crate::ast::Spaceable<'a> + Clone, E: 'a 
     space_before: impl Fn(&'a Elem, &'a [crate::ast::CommentOrNewline<'a>]) -> Elem,
 ) -> impl Parser<'a, crate::ast::Collection<'a, Loc<Elem>>, E> {
     let elem_parser = move |arena, state: State<'a>, min_indent| {
-        let (sp_p, (spaces_before, _), state) = eat_space(arena, state, None)?;
+        let (sp_p, (spaces_before, _), state) = eat_space(arena, state, false)?;
         match elem.parse(arena, state, min_indent) {
             Ok((_, expr, state)) => {
-                let (spaces_after, state) = match eat_space::<'a, E>(arena, state.clone(), None) {
+                let (spaces_after, state) = match eat_space::<'a, E>(arena, state.clone(), false) {
                     Ok((_, (sp, _), state)) => (sp, state),
                     Err(_) => (&[] as &[_], state),
                 };
@@ -1186,7 +1186,7 @@ pub fn collection_inner<'a, Elem: 'a + crate::ast::Spaceable<'a> + Clone, E: 'a 
     };
 
     move |arena, state, min_indent| {
-        let (_, (spaces_before, _), state) = eat_space(arena, state, None)?;
+        let (_, (spaces_before, _), state) = eat_space(arena, state, false)?;
 
         // Parse zero or more values separated by a delimiter (e.g. a comma)
         // with an optional trailing delimiter whose values are discarded
@@ -1223,7 +1223,7 @@ pub fn collection_inner<'a, Elem: 'a + crate::ast::Spaceable<'a> + Clone, E: 'a 
             Err(fail) => return Err(fail),
         };
 
-        let (_, (mut final_spaces, _), state) = eat_space(arena, state, Some(MadeProgress))?;
+        let (_, (mut final_spaces, _), state) = eat_space(arena, state, true)?;
 
         if !spaces_before.is_empty() {
             if let Some(first) = elems.first_mut() {

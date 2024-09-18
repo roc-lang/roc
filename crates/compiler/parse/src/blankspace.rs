@@ -256,12 +256,30 @@ where
     E: 'a + SpaceProblem,
 {
     let start = state.pos();
-    let (p, (sp, _), state) = eat_space(arena, state, None)?;
-    if sp.is_empty() || state.column() >= min_indent {
-        Ok((p, sp, state))
-    } else {
+    let (p, (sp, _), state) = eat_space(arena, state, false)?;
+    if !sp.is_empty() && state.column() < min_indent {
         Err((p, indent_problem(start)))
+    } else {
+        Ok((p, sp, state))
     }
+}
+
+pub fn eat_space_check<'a, E>(
+    indent_problem: fn(Position) -> E,
+    arena: &'a Bump,
+    state: State<'a>,
+    min_indent: u32,
+    err_made_progress: bool,
+) -> ParseResult<'a, &'a [CommentOrNewline<'a>], E>
+where
+    E: 'a + SpaceProblem,
+{
+    let start = state.pos();
+    let (p, (sp, _), state) = eat_space(arena, state, err_made_progress)?;
+    if !sp.is_empty() && state.column() < min_indent {
+        return Err((p, indent_problem(start)));
+    }
+    Ok((p, sp, state))
 }
 
 pub fn space0_e<'a, E>(
@@ -283,13 +301,11 @@ where
 {
     move |arena, state: State<'a>, min_indent: u32| {
         let start = state.pos();
-        let (p, (sp, comments_at), state) = eat_space(arena, state, None)?;
-
-        if sp.is_empty() || state.column() >= min_indent {
-            Ok((p, Loc::at(comments_at, sp), state))
-        } else {
-            Err((p, indent_problem(start)))
+        let (p, (sp, comments_at), state) = eat_space(arena, state, false)?;
+        if !(sp.is_empty() || state.column() >= min_indent) {
+            return Err((p, indent_problem(start)));
         }
+        Ok((p, Loc::at(comments_at, sp), state))
     }
 }
 
@@ -301,7 +317,7 @@ fn begins_with_crlf(bytes: &[u8]) -> bool {
 pub fn eat_space<'a, E>(
     arena: &'a Bump,
     mut state: State<'a>,
-    err_progress: Option<Progress>,
+    err_made_progress: bool,
 ) -> Result<(Progress, (&'a [CommentOrNewline<'a>], Region), State<'a>), (Progress, E)>
 where
     E: 'a + SpaceProblem,
@@ -363,7 +379,11 @@ where
             Some(b'\r') => {
                 if state.bytes().get(1) != Some(&b'\n') {
                     return Err((
-                        err_progress.unwrap_or(progress),
+                        if err_made_progress {
+                            MadeProgress
+                        } else {
+                            progress
+                        },
                         E::space_problem(BadInputError::HasMisplacedCarriageReturn, state.pos()),
                     ));
                 }
@@ -380,13 +400,21 @@ where
             }
             Some(b'\t') => {
                 return Err((
-                    err_progress.unwrap_or(progress),
+                    if err_made_progress {
+                        MadeProgress
+                    } else {
+                        progress
+                    },
                     E::space_problem(BadInputError::HasTab, state.pos()),
                 ));
             }
             Some(x) if *x < b' ' => {
                 return Err((
-                    err_progress.unwrap_or(progress),
+                    if err_made_progress {
+                        MadeProgress
+                    } else {
+                        progress
+                    },
                     E::space_problem(BadInputError::HasAsciiControl, state.pos()),
                 ));
             }
