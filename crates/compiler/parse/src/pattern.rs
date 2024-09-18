@@ -1,13 +1,13 @@
 use crate::ast::{Collection, Implements, Pattern, PatternAs};
-use crate::blankspace::{parse_space, spaces, with_spaces_after, with_spaces_before};
+use crate::blankspace::{eat_space, parse_space, with_spaces_after, with_spaces_before};
 use crate::expr::{parse_expr_start, ExprParseOptions};
 use crate::ident::{parse_ident, parse_lowercase_ident, Accessor, Ident};
 use crate::keyword;
 use crate::number_literal::parse_number_base;
 use crate::parser::{at_keyword, Progress::*};
 use crate::parser::{
-    collection_inner, specialize_err_ref, then, zero_or_more, EPattern, PInParens, PList,
-    PRecord, ParseResult, Parser,
+    collection_inner, specialize_err_ref, then, zero_or_more, EPattern, PInParens, PList, PRecord,
+    ParseResult, Parser,
 };
 use crate::state::State;
 use crate::string_literal::{parse_rest_of_str_like, StrLikeLiteral};
@@ -76,7 +76,7 @@ pub fn loc_pattern_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>>
             Ok((_, pattern_as, state)) => {
                 let region = Region::span_across(&pattern.region, &pattern_as.identifier.region);
 
-                let pattern = with_spaces_after(pattern, pattern_spaces, arena);
+                let pattern = with_spaces_after(arena, pattern, pattern_spaces);
                 let as_pattern = Pattern::As(arena.alloc(pattern), pattern_as);
 
                 Ok((MadeProgress, Loc::at(region, as_pattern), state))
@@ -532,20 +532,14 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
         debug_assert_eq!(label_progress, MadeProgress);
         let label_at = Region::new(start, state.pos());
 
-        let (label_spaces, state) = match spaces().parse(arena, state, 0) {
-            Ok((_, out, state)) => (out, state),
-            Err((_, fail)) => return Err((MadeProgress, fail)),
-        };
+        let (_, (label_spaces, _), state) = eat_space(arena, state, Some(MadeProgress))?;
 
         // Having a value is optional; both `{ email }` and `{ email: blah }` work.
         // (This is true in both literals and types.)
         if state.bytes().first() == Some(&b':') {
             let state = state.inc();
 
-            let (colon_spaces, state) = match spaces().parse(arena, state, 0) {
-                Ok((_, out, state)) => (out, state),
-                Err((_, fail)) => return Err((MadeProgress, fail)),
-            };
+            let (_, (colon_spaces, _), state) = eat_space(arena, state, Some(MadeProgress))?;
 
             let pattern_pos = state.pos();
             let (pattern_val, state) = match loc_pattern_help().parse(arena, state, min_indent) {
@@ -556,7 +550,7 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
                 }
             };
 
-            let pattern_val = with_spaces_before(pattern_val, colon_spaces, arena);
+            let pattern_val = with_spaces_before(arena, pattern_val, colon_spaces);
 
             let region = Region::span_across(&label_at, &pattern_val.region);
 
@@ -569,10 +563,7 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
         if state.bytes().first() == Some(&b'?') {
             let state = state.inc();
 
-            let (question_spaces, state) = match spaces().parse(arena, state, 0) {
-                Ok((_, out, state)) => (out, state),
-                Err((_, fail)) => return Err((MadeProgress, fail)),
-            };
+            let (_, (question_spaces, _), state) = eat_space(arena, state, Some(MadeProgress))?;
 
             let optional_val_pos = state.pos();
             let (optional_val, state) =
@@ -584,7 +575,7 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
                     }
                 };
 
-            let optional_val = with_spaces_before(optional_val, question_spaces, arena);
+            let optional_val = with_spaces_before(arena, optional_val, question_spaces);
 
             let region = Region::span_across(&label_at, &optional_val.region);
 

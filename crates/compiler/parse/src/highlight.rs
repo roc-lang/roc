@@ -6,10 +6,10 @@ use roc_region::all::{Loc, Region};
 
 use crate::{
     ast::CommentOrNewline,
-    blankspace::loc_spaces,
+    blankspace::eat_space_locs,
     keyword::KEYWORDS,
     number_literal::parse_number_base,
-    parser::{EExpr, ParseResult, Parser},
+    parser::Parser,
     state::State,
     string_literal::{parse_rest_of_str_like, StrLikeLiteral},
 };
@@ -97,9 +97,7 @@ fn highlight_inner<'a>(
         if let Ok((b, _width)) = char::from_utf8_slice_start(state.bytes()) {
             match b {
                 ' ' | '\n' | '\t' | '\r' | '#' => {
-                    let res: ParseResult<'a, _, EExpr<'a>> =
-                        loc_spaces().parse(arena, state.clone(), 0);
-                    if let Ok((_, spaces, new_state)) = res {
+                    if let Some((spaces, new_state)) = eat_space_locs(arena, state.clone()) {
                         state = new_state;
                         for space in spaces {
                             let token = match space.value {

@@ -381,7 +381,7 @@ pub fn parse_rest_of_str_like<'a>(
                                 }
                             };
 
-                        let expr = with_spaces_before(expr, spaces_before, arena);
+                        let expr = with_spaces_before(arena, expr, spaces_before);
                         let expr = &*arena.alloc(expr.value);
                         let expr = Loc::pos(expr_pos, news.pos(), expr);
 
@@ -507,7 +507,7 @@ pub fn parse_rest_of_str_like<'a>(
                         }
                     };
 
-                let expr = with_spaces_before(expr, spaces_before, arena);
+                let expr = with_spaces_before(arena, expr, spaces_before);
                 let expr = &*arena.alloc(expr.value);
                 let expr = Loc::pos(expr_pos, news.pos(), expr);
 

@@ -74,6 +74,7 @@ pub fn parse_lowercase_ident<'a>(state: State<'a>) -> ParseResult<'a, &'a str, (
     }
 }
 
+// todo: @wip inline me
 /// This is a tuple accessor, e.g. "1" in `.1`
 pub fn integer_ident<'a>() -> impl Parser<'a, &'a str, ()> {
     move |_, state: State<'a>, _min_indent: u32| match chomp_integer_part(state.bytes()) {
@@ -85,6 +86,7 @@ pub fn integer_ident<'a>() -> impl Parser<'a, &'a str, ()> {
     }
 }
 
+// todo: @wip inline me
 /// Like `lowercase_ident`, but returns an error with MadeProgress if the
 /// identifier is a keyword.
 pub fn lowercase_ident_keyword_e<'a>() -> impl Parser<'a, &'a str, ()> {

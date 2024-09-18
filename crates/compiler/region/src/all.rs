@@ -18,6 +18,10 @@ impl Region {
         Self { start, end }
     }
 
+    pub const fn at(start: Position) -> Self {
+        Self { start, end: start }
+    }
+
     pub fn contains(&self, other: &Self) -> bool {
         self.start <= other.start && self.end >= other.end
     }

@@ -1,5 +1,5 @@
 use crate::{
-    blankspace::{consume_spaces, spaces, with_spaces},
+    blankspace::{eat_space, with_spaces},
     state::State,
 };
 use bumpalo::collections::vec::Vec;
@@ -1170,33 +1170,23 @@ pub fn collection_inner<'a, Elem: 'a + crate::ast::Spaceable<'a> + Clone, E: 'a 
     space_before: impl Fn(&'a Elem, &'a [crate::ast::CommentOrNewline<'a>]) -> Elem,
 ) -> impl Parser<'a, crate::ast::Collection<'a, Loc<Elem>>, E> {
     let elem_parser = move |arena, state: State<'a>, min_indent| {
-        // todo: @wip review working with spaces, avoid lambdas and not required calculation
-        let mut newlines = Vec::new_in(arena);
-        let (p0, state) = consume_spaces(state, |_, space, _| newlines.push(space))?;
-        let spaces_before = newlines.into_bump_slice();
-
+        let (sp_p, (spaces_before, _), state) = eat_space(arena, state, None)?;
         match elem.parse(arena, state, min_indent) {
             Ok((_, expr, state)) => {
-                let mut newlines = Vec::new_in(arena);
-                let (spaces_after, state) =
-                    match consume_spaces::<'a, E, _>(state.clone(), |_, space, _| {
-                        newlines.push(space)
-                    }) {
-                        Ok((_, state)) => (newlines.into_bump_slice(), state),
-                        Err(_) => (&[] as &[_], state),
-                    };
+                let (spaces_after, state) = match eat_space::<'a, E>(arena, state.clone(), None) {
+                    Ok((_, (sp, _), state)) => (sp, state),
+                    Err(_) => (&[] as &[_], state),
+                };
 
                 let expr = with_spaces(arena, spaces_before, expr, spaces_after);
                 Ok((MadeProgress, expr, state))
             }
-            Err((p1, fail)) => Err((p0.or(p1), fail)),
+            Err((p, fail)) => Err((sp_p.or(p), fail)),
         }
     };
 
     move |arena, state, min_indent| {
-        let mut newlines = Vec::new_in(arena);
-        let (_, state) = consume_spaces(state, |_, space, _| newlines.push(space))?;
-        let spaces_before = newlines.into_bump_slice();
+        let (_, (spaces_before, _), state) = eat_space(arena, state, None)?;
 
         // Parse zero or more values separated by a delimiter (e.g. a comma)
         // with an optional trailing delimiter whose values are discarded
@@ -1233,9 +1223,7 @@ pub fn collection_inner<'a, Elem: 'a + crate::ast::Spaceable<'a> + Clone, E: 'a 
             Err(fail) => return Err(fail),
         };
 
-        let (_, mut final_spaces, state) = spaces()
-            .parse(arena, state, 0)
-            .map_err(|(_, fail)| (MadeProgress, fail))?;
+        let (_, (mut final_spaces, _), state) = eat_space(arena, state, Some(MadeProgress))?;
 
         if !spaces_before.is_empty() {
             if let Some(first) = elems.first_mut() {
@@ -1503,18 +1491,6 @@ macro_rules! one_of {
         one_of!($p1, $($others),+)
     };
 }
-
-// todo: @wip
-// #[macro_export]
-// macro_rules! parse_spaces_or_return_err {
-//     ($arena:ident, $state:expr, $min_indent:expr, $err_progress:ident) => {{
-//         let mut newlines = bumpalo::collections::vec::Vec::new_in($arena);
-//         match crate::blankspace::consume_spaces($state, |_, space, _| newlines.push(space)) {
-//             Ok((_, state)) => (newlines.into_bump_slice(), state),
-//             Err((_, fail)) => return Err(($err_progress, fail)),
-//         }
-//     };};
-// }
 
 pub fn reset_min_indent<'a, P, T, X: 'a>(parser: P) -> impl Parser<'a, T, X>
 where

@@ -88,8 +88,8 @@ impl<'a> State<'a> {
 
     #[must_use]
     #[inline(always)]
-    pub(crate) const fn advance_newline(mut self) -> State<'a> {
-        self.offset += 1;
+    pub(crate) const fn advance_newline(mut self, offset: usize) -> State<'a> {
+        self.offset += offset;
         self.line_start = self.pos();
 
         // WARNING! COULD CAUSE BUGS IF WE FORGET TO CALL mark_current_indent LATER!

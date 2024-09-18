@@ -10,6 +10,7 @@ use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_region::all::Loc;
 use roc_region::all::Position;
+use roc_region::all::Region;
 
 pub fn space0_around_ee<'a, P, S, E>(
     parser: P,
@@ -66,8 +67,8 @@ where
     S: 'a + Spaceable<'a>,
 {
     let (spaces_before, (loc, spaces_after)) = tuples;
-    let loc_with_after = with_spaces_after(loc, spaces_after, &arena);
-    with_spaces_before(loc_with_after, spaces_before, &arena)
+    let out = with_spaces_after(&arena, loc, spaces_after);
+    with_spaces_before(&arena, out, spaces_before)
 }
 
 #[inline(always)]
@@ -80,8 +81,8 @@ pub fn with_spaces<'a, S>(
 where
     S: 'a + Spaceable<'a>,
 {
-    let loc_with_after = with_spaces_after(loc, spaces_after, &arena);
-    with_spaces_before(loc_with_after, spaces_before, &arena)
+    let out = with_spaces_after(&arena, loc, spaces_after);
+    with_spaces_before(&arena, out, spaces_before)
 }
 
 pub fn space0_before_e<'a, P, S, E>(
@@ -96,16 +97,16 @@ where
     parser::map_with_arena(
         and(space0_e(indent_problem), parser),
         |arena: &'a Bump, (space_list, loc_expr): (&'a [CommentOrNewline<'a>], Loc<S>)| {
-            with_spaces_before(loc_expr, space_list, arena)
+            with_spaces_before(arena, loc_expr, space_list)
         },
     )
 }
 
 #[inline(always)]
 pub fn with_spaces_before<'a, T: 'a + Spaceable<'a>>(
+    arena: &'a Bump,
     loc: Loc<T>,
     spaces: &'a [CommentOrNewline],
-    arena: &'a Bump,
 ) -> Loc<T> {
     if spaces.is_empty() {
         loc
@@ -119,9 +120,9 @@ pub fn with_spaces_before<'a, T: 'a + Spaceable<'a>>(
 
 #[inline(always)]
 pub fn with_spaces_after<'a, T: 'a + Spaceable<'a>>(
+    arena: &'a Bump,
     loc: Loc<T>,
     spaces: &'a [CommentOrNewline],
-    arena: &'a Bump,
 ) -> Loc<T> {
     if spaces.is_empty() {
         loc
@@ -255,13 +256,11 @@ where
     E: 'a + SpaceProblem,
 {
     let start = state.pos();
-    let mut newlines = Vec::new_in(arena);
-    let (progress, state) = consume_spaces(state, |_, space, _| newlines.push(space))?;
-    let spaces = newlines.into_bump_slice();
-    if spaces.is_empty() || state.column() >= min_indent {
-        Ok((progress, spaces, state))
+    let (p, (sp, _), state) = eat_space(arena, state, None)?;
+    if sp.is_empty() || state.column() >= min_indent {
+        Ok((p, sp, state))
     } else {
-        Err((progress, indent_problem(start)))
+        Err((p, indent_problem(start)))
     }
 }
 
@@ -283,28 +282,13 @@ where
     E: 'a + SpaceProblem,
 {
     move |arena, state: State<'a>, min_indent: u32| {
-        let initial_pos = state.pos();
+        let start = state.pos();
+        let (p, (sp, comments_at), state) = eat_space(arena, state, None)?;
 
-        let mut newlines = Vec::new_in(arena);
-        let mut newline_start = None;
-        let mut newline_end = None;
-
-        let (p, state) = consume_spaces(state, |start, space, end| {
-            newlines.push(space);
-            if !matches!(space, CommentOrNewline::Newline) {
-                if newline_start.is_none() {
-                    newline_start = Some(start);
-                }
-                newline_end = Some(end);
-            }
-        })?;
-
-        if newlines.is_empty() || state.column() >= min_indent {
-            let start = newline_start.unwrap_or(state.pos());
-            let end = newline_end.unwrap_or(state.pos());
-            Ok((p, Loc::pos(start, end, newlines.into_bump_slice()), state))
+        if sp.is_empty() || state.column() >= min_indent {
+            Ok((p, Loc::at(comments_at, sp), state))
         } else {
-            Err((p, indent_problem(initial_pos)))
+            Err((p, indent_problem(start)))
         }
     }
 }
@@ -313,46 +297,19 @@ fn begins_with_crlf(bytes: &[u8]) -> bool {
     bytes.len() >= 2 && bytes[0] == b'\r' && bytes[1] == b'\n'
 }
 
-// todo: @wip convert to normal fn, take the E: 'a + SpaceProblem into account
-pub fn spaces<'a, E>() -> impl Parser<'a, &'a [CommentOrNewline<'a>], E>
-where
-    E: 'a + SpaceProblem,
-{
-    move |arena, state: State<'a>, _min_indent: u32| {
-        let mut newlines = Vec::new_in(arena);
-        match consume_spaces(state, |_, space, _| newlines.push(space)) {
-            Ok((progress, state)) => Ok((progress, newlines.into_bump_slice(), state)),
-            Err((progress, err)) => Err((progress, err)),
-        }
-    }
-}
-
-pub fn loc_spaces<'a, E>() -> impl Parser<'a, &'a [Loc<CommentOrNewline<'a>>], E>
-where
-    E: 'a + SpaceProblem,
-{
-    move |arena, state: State<'a>, _min_indent: u32| {
-        let mut newlines = Vec::new_in(arena);
-
-        match consume_spaces(state, |start, space, end| {
-            newlines.push(Loc::pos(start, end, space))
-        }) {
-            Ok((progress, state)) => Ok((progress, newlines.into_bump_slice(), state)),
-            Err((progress, err)) => Err((progress, err)),
-        }
-    }
-}
-
-pub fn consume_spaces<'a, E, F>(
+// note: @dup of the eat_space_locs
+pub fn eat_space<'a, E>(
+    arena: &'a Bump,
     mut state: State<'a>,
-    mut on_space: F,
-) -> Result<(Progress, State<'a>), (Progress, E)>
+    err_progress: Option<Progress>,
+) -> Result<(Progress, (&'a [CommentOrNewline<'a>], Region), State<'a>), (Progress, E)>
 where
     E: 'a + SpaceProblem,
-    F: FnMut(Position, CommentOrNewline<'a>, Position),
 {
+    let mut sp = Vec::new_in(arena);
     let mut progress = NoProgress;
     let mut found_newline = state.is_at_start_of_file();
+    let mut comment_at = None;
     loop {
         let whitespace = fast_eat_whitespace(state.bytes());
         if whitespace > 0 {
@@ -361,7 +318,6 @@ where
         }
 
         let start = state.pos();
-
         match state.bytes().first() {
             Some(b'#') => {
                 state.advance_mut(1);
@@ -388,47 +344,49 @@ where
                     CommentOrNewline::LineComment(text)
                 };
                 state.advance_mut(len);
-                on_space(start, comment, state.pos());
+                sp.push(comment);
                 found_newline = true;
 
+                comment_at = match comment_at {
+                    None => Some(Region::new(start, state.pos())),
+                    Some(r) => Some(Region::new(r.start(), state.pos())),
+                };
+
                 if begins_with_crlf(state.bytes()) {
-                    state.advance_mut(1);
-                    state = state.advance_newline();
+                    state = state.advance_newline(2);
                 } else if state.bytes().first() == Some(&b'\n') {
-                    state = state.advance_newline();
+                    state = state.advance_newline(1);
                 }
 
                 progress = MadeProgress;
             }
             Some(b'\r') => {
-                if state.bytes().get(1) == Some(&b'\n') {
-                    state.advance_mut(1);
-                    state = state.advance_newline();
-                    on_space(start, CommentOrNewline::Newline, state.pos());
-                    found_newline = true;
-                    progress = MadeProgress;
-                } else {
+                if state.bytes().get(1) != Some(&b'\n') {
                     return Err((
-                        progress,
+                        err_progress.unwrap_or(progress),
                         E::space_problem(BadInputError::HasMisplacedCarriageReturn, state.pos()),
                     ));
                 }
+                state = state.advance_newline(2);
+                sp.push(CommentOrNewline::Newline);
+                found_newline = true;
+                progress = MadeProgress;
             }
             Some(b'\n') => {
-                state = state.advance_newline();
-                on_space(start, CommentOrNewline::Newline, state.pos());
+                state = state.advance_newline(1);
+                sp.push(CommentOrNewline::Newline);
                 found_newline = true;
                 progress = MadeProgress;
             }
             Some(b'\t') => {
                 return Err((
-                    progress,
+                    err_progress.unwrap_or(progress),
                     E::space_problem(BadInputError::HasTab, state.pos()),
                 ));
             }
             Some(x) if *x < b' ' => {
                 return Err((
-                    progress,
+                    err_progress.unwrap_or(progress),
                     E::space_problem(BadInputError::HasAsciiControl, state.pos()),
                 ));
             }
@@ -441,7 +399,88 @@ where
         }
     }
 
-    Ok((progress, state))
+    let comment_at = comment_at.unwrap_or(Region::at(state.pos()));
+    Ok((progress, (sp.into_bump_slice(), comment_at), state))
+}
+
+// note: @dup similar to `eat_space` but without errors and progress
+pub fn eat_space_locs<'a>(
+    arena: &'a Bump,
+    mut state: State<'a>,
+) -> Option<(&'a [Loc<CommentOrNewline<'a>>], State<'a>)> {
+    let mut sp = Vec::new_in(arena);
+    let mut found_newline = state.is_at_start_of_file();
+    loop {
+        let whitespace = fast_eat_whitespace(state.bytes());
+        if whitespace > 0 {
+            state.advance_mut(whitespace);
+        }
+
+        let start = state.pos();
+        match state.bytes().first() {
+            Some(b'#') => {
+                state.advance_mut(1);
+
+                let is_doc_comment =
+                    state.bytes().first() == Some(&b'#') && state.bytes().get(1) != Some(&b'#');
+
+                if is_doc_comment {
+                    state.advance_mut(1);
+                    if state.bytes().first() == Some(&b' ') {
+                        state.advance_mut(1);
+                    }
+                }
+
+                let len = fast_eat_until_control_character(state.bytes());
+
+                // We already checked that the string is valid UTF-8
+                debug_assert!(std::str::from_utf8(&state.bytes()[..len]).is_ok());
+                let text = unsafe { std::str::from_utf8_unchecked(&state.bytes()[..len]) };
+
+                let comment = if is_doc_comment {
+                    CommentOrNewline::DocComment(text)
+                } else {
+                    CommentOrNewline::LineComment(text)
+                };
+                state.advance_mut(len);
+                sp.push(Loc::pos(start, state.pos(), comment));
+                found_newline = true;
+
+                if begins_with_crlf(state.bytes()) {
+                    state = state.advance_newline(2);
+                } else if state.bytes().first() == Some(&b'\n') {
+                    state = state.advance_newline(1);
+                }
+            }
+            Some(b'\r') => {
+                if state.bytes().get(1) != Some(&b'\n') {
+                    return None;
+                }
+                state = state.advance_newline(2);
+                sp.push(Loc::pos(start, state.pos(), CommentOrNewline::Newline));
+                found_newline = true;
+            }
+            Some(b'\n') => {
+                state = state.advance_newline(1);
+                sp.push(Loc::pos(start, state.pos(), CommentOrNewline::Newline));
+                found_newline = true;
+            }
+            Some(b'\t') => {
+                return None;
+            }
+            Some(x) if *x < b' ' => {
+                return None;
+            }
+            _ => {
+                if found_newline {
+                    state = state.mark_current_indent();
+                }
+                break;
+            }
+        }
+    }
+
+    Some((sp.into_bump_slice(), state))
 }
 
 #[cfg(test)]
