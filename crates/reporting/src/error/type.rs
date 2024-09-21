@@ -1238,14 +1238,7 @@ fn to_expr_report<'b>(
                                 ),
                             ]),
                             alloc.region(lines.convert_region(expr_region), severity),
-                            match called_via {
-                                CalledVia::OldRecordBuilder => {
-                                    alloc.hint("Did you mean to apply it to a function first?")
-                                },
-                                _ => {
-                                    alloc.reflow("I can't call an opaque type because I don't know what it is! Maybe you meant to unwrap it first?")
-                                }
-                            }
+                            alloc.reflow("I can't call an opaque type because I don't know what it is! Maybe you meant to unwrap it first?"),
                         ]),
                         Other => alloc.stack([
                             alloc.concat([
@@ -1261,14 +1254,6 @@ fn to_expr_report<'b>(
                             ]),
                             alloc.region(lines.convert_region(expr_region), severity),
                             match called_via {
-                                CalledVia::OldRecordBuilder => {
-                                    alloc.concat([
-                                        alloc.tip(),
-                                        alloc.reflow("Remove "),
-                                        alloc.backpassing_arrow(),
-                                        alloc.reflow(" to assign the field directly.")
-                                    ])
-                                }
                                 CalledVia::RecordBuilder => {
                                     alloc.concat([
                                         alloc.note(""),

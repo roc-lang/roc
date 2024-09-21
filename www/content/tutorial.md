@@ -2311,8 +2311,6 @@ expect
 
 If you want to see other examples of using record builders, look at the [Record Builder Example](https://www.roc-lang.org/examples/RecordBuilder/README.html) for a moderately-sized example or the [Arg.Builder](https://github.com/roc-lang/basic-cli/blob/main/platform/Arg/Builder.roc) module in our `basic-cli` platform for a complex example.
 
-_Note: This syntax replaces the old `field: <- value` record builder syntax using applicative functors because it is much simpler to understand and use. The old syntax will be removed soon._
-
 ### [Reserved Keywords](#reserved-keywords) {#reserved-keywords}
 
 These are reserved keywords in Roc. You can't choose any of them as names, except as record field names.
