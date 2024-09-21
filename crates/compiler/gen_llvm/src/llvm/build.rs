@@ -2915,14 +2915,16 @@ fn list_literal<'a, 'ctx>(
     let list_length = elems.len();
     let list_length_intval = env.ptr_int().const_int(list_length as _, false);
 
-    // Anything that requires refcounting contains nested pointers.
-    // Nested pointers in globals will break the surgical linker.
-    // For now, block them from being constants.
     let is_refcounted = layout_interner.contains_refcounted(element_layout);
-    // NOTE: we should be able to create a constant of records, but these literals are only primitives.
     let is_all_constant = elems.iter().all(|e| e.is_literal());
 
     if is_all_constant && !is_refcounted {
+        // Build a global literal in-place instead of GEPing and storing individual elements.
+        // Exceptions:
+        //   - Anything that is refcounted has nested pointers,
+        //     and nested pointers in globals will break the surgical linker.
+        //     Ignore such cases for now.
+
         let element_width = layout_interner.stack_size(element_layout);
 
         let alignment = layout_interner
@@ -2938,7 +2940,6 @@ fn list_literal<'a, 'ctx>(
 
         assert!(refcount_slot_elements > 0);
 
-        // There must be a generic way to do this, but types here are making me duplicate code.
         let global = if element_type.is_int_type() {
             let element_type = element_type.into_int_type();
             let mut bytes = Vec::with_capacity_in(refcount_slot_elements + data_bytes, env.arena);
@@ -2990,10 +2991,9 @@ fn list_literal<'a, 'ctx>(
         global.set_unnamed_addr(true);
         global.set_linkage(inkwell::module::Linkage::Private);
 
-        // Currently, morphic will break if we use the global directly.
-        // It will attempt to update the global in place.
-        // This is invalid due to putting the global in the read only section.
-        // For now, eagerly copy the global into a new allocation with unique refcount.
+        // Refcount the global itself in a new allocation.
+        // Necessary because morphic MAY attempt to update the global in-place, which is
+        // illegal if the global is in the read-only section.
         let with_rc_ptr = global.as_pointer_value();
 
         let const_data_ptr = unsafe {
