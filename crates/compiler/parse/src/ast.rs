@@ -512,7 +512,11 @@ pub enum Expr<'a> {
     UnaryOp(&'a Loc<Expr<'a>>, Loc<UnaryOp>),
 
     // Conditionals
-    If(&'a [(Loc<Expr<'a>>, Loc<Expr<'a>>)], &'a Loc<Expr<'a>>),
+    If {
+        if_thens: &'a [(Loc<Expr<'a>>, Loc<Expr<'a>>)],
+        final_else: &'a Loc<Expr<'a>>,
+        indented_else: bool,
+    },
     When(
         /// The condition
         &'a Loc<Expr<'a>>,
@@ -608,7 +612,11 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         }
 
         // expression in a if-then-else, `if isOk! then "ok" else doSomething!`
-        Expr::If(if_thens, final_else) => {
+        Expr::If {
+            if_thens,
+            final_else,
+            ..
+        } => {
             let any_if_thens_suffixed = if_thens.iter().any(|(if_then, else_expr)| {
                 is_expr_suffixed(&if_then.value) || is_expr_suffixed(&else_expr.value)
             });
@@ -993,14 +1001,18 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                     expr_stack.push(&expr.value);
                 }
                 UnaryOp(expr, _) => expr_stack.push(&expr.value),
-                If(ifs, alternate) => {
-                    expr_stack.reserve(ifs.len() * 2 + 1);
+                If {
+                    if_thens,
+                    final_else,
+                    ..
+                } => {
+                    expr_stack.reserve(if_thens.len() * 2 + 1);
 
-                    for (condition, consequent) in ifs.iter() {
+                    for (condition, consequent) in if_thens.iter() {
                         expr_stack.push(&condition.value);
                         expr_stack.push(&consequent.value);
                     }
-                    expr_stack.push(&alternate.value);
+                    expr_stack.push(&final_else.value);
                 }
                 When(condition, branches) => {
                     expr_stack.reserve(branches.len() + 1);
@@ -2537,7 +2549,7 @@ impl<'a> Malformed for Expr<'a> {
             Apply(func, args, _) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
             BinOps(firsts, last) => firsts.iter().any(|(expr, _)| expr.is_malformed()) || last.is_malformed(),
             UnaryOp(expr, _) => expr.is_malformed(),
-            If(chain, els) => chain.iter().any(|(cond, body)| cond.is_malformed() || body.is_malformed()) || els.is_malformed(),
+            If { if_thens, final_else, ..} => if_thens.iter().any(|(cond, body)| cond.is_malformed() || body.is_malformed()) || final_else.is_malformed(),
             When(cond, branches) => cond.is_malformed() || branches.iter().any(|branch| branch.is_malformed()),
 
             SpaceBefore(expr, _) |

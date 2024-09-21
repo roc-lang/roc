@@ -19,12 +19,8 @@ You can 💜 **sponsor** 💜 Roc on:
 - [GitHub](https://github.com/sponsors/roc-lang)
 - [Liberapay](https://liberapay.com/roc_lang)
 
-We are very grateful for our corporate sponsors [Vendr](https://www.vendr.com/), [RWX](https://www.rwx.com), [Tweede golf](https://tweedegolf.nl/en), [ohne-makler](https://www.ohne-makler.net), and [Decem](https://www.decem.com.au):
+We are very grateful for our corporate sponsors [Tweede golf](https://tweedegolf.nl/en), [ohne-makler](https://www.ohne-makler.net), and [Decem](https://www.decem.com.au):
 
-[<img src="https://user-images.githubusercontent.com/1094080/223597445-81755626-a080-4299-a38c-3c92e7548489.png" height="60" alt="Vendr logo"/>](https://www.vendr.com)
-&nbsp;&nbsp;&nbsp;&nbsp;
-[<img src="https://github.com/roc-lang/roc/assets/1094080/82c0868e-d23f-42a0-ac2d-c6e6b2e16575" height="60" alt="RWX logo"/>](https://www.rwx.com)
-&nbsp;&nbsp;&nbsp;&nbsp;
 [<img src="https://user-images.githubusercontent.com/1094080/183123052-856815b1-8cc9-410a-83b0-589f03613188.svg" height="60" alt="tweede golf logo"/>](https://tweedegolf.nl/en)
 &nbsp;&nbsp;&nbsp;&nbsp;
 [<img src="https://www.ohne-makler.net/static/img/brand/logo.svg" height="60" alt="ohne-makler logo"/>](https://www.ohne-makler.net)
@@ -35,6 +31,7 @@ If you would like your company to become a corporate sponsor of Roc's developmen
 
 We'd also like to express our gratitude to our generous [individual sponsors](https://github.com/sponsors/roc-lang/)! A special thanks to those sponsoring $25/month or more:
 
+- [Peter Marreck](https://github.com/pmarreck)
 - [Barry Moore](https://github.com/chiroptical)
 - Eric Andresen
 - [Jackson Lucky](https://github.com/jluckyiv)

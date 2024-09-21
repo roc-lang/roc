@@ -3,6 +3,7 @@ use std::path::Path;
 use crate::abilities::{AbilitiesStore, ImplKey, PendingAbilitiesStore, ResolvedImpl};
 use crate::annotation::{canonicalize_annotation, AnnotationFor};
 use crate::def::{canonicalize_defs, report_unused_imports, Def};
+use crate::desugar::desugar_record_destructures;
 use crate::env::Env;
 use crate::expr::{
     ClosureData, DbgLookup, Declarations, ExpectLookup, Expr, Output, PendingDerives,
@@ -240,6 +241,7 @@ pub fn canonicalize_module_defs<'a>(
     );
     let mut env = Env::new(
         arena,
+        src,
         home,
         arena.alloc(Path::new(module_path)),
         dep_idents,
@@ -266,16 +268,7 @@ pub fn canonicalize_module_defs<'a>(
     // operators, and then again on *their* nested operators, ultimately applying the
     // rules multiple times unnecessarily.
 
-    crate::desugar::desugar_defs_node_values(
-        arena,
-        var_store,
-        loc_defs,
-        src,
-        &mut None,
-        module_path,
-        true,
-        &mut env.problems,
-    );
+    crate::desugar::desugar_defs_node_values(&mut env, &mut scope, loc_defs, true);
 
     let mut rigid_variables = RigidVariables::default();
 
@@ -334,13 +327,16 @@ pub fn canonicalize_module_defs<'a>(
              before_arrow: _,
              after_arrow: _,
          }| {
+            let desugared_patterns =
+                desugar_record_destructures(&mut env, &mut scope, pattern.value);
+
             let (destructs, _) = canonicalize_record_destructs(
                 &mut env,
                 var_store,
                 &mut scope,
                 &mut output,
                 PatternType::ModuleParams,
-                &pattern.value,
+                &desugared_patterns,
                 pattern.region,
                 PermitShadows(false),
             );

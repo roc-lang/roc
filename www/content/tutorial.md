@@ -440,6 +440,12 @@ You can give `dbg` any expression you like, for example:
 dbg Str.concat singular plural
 ```
 
+You can also use `dbg` as a function inside an expression, which will print the function argument to stderr and then return the argument to the caller. For example:
+
+```roc
+inc = \n -> 1 + dbg n
+```
+
 ### [Tuples](#tuples) {#tuples}
 
 One way to have `dbg` print multiple values at a time is to wrap them in a record:
@@ -805,7 +811,8 @@ when List.get ["a", "b", "c"] index is
 
 There's also `List.first`, which always gets the first element, and `List.last` which always gets the last. They return `Err ListWasEmpty` instead of `Err OutOfBounds`, because the only way they can fail is if you pass them an empty list!
 
-These functions demonstrate a common pattern in Roc: operations that can fail returning either an `Ok` tag with the answer (if successful), or an `Err` tag with another tag describing what went wrong (if unsuccessful). In fact, it's such a common pattern that there's a whole module called `Result` which deals with these two tags. Here are some examples of `Result` functions:
+### [Error Handling](#error-handling) {#error-handling}
+The `List` functions such as `List.get`, `List.first`, and `List.last` demonstrate a common pattern in Roc: operations that can fail returning either an `Ok` tag with the answer (if successful), or an `Err` tag with another tag describing what went wrong (if unsuccessful). In fact, it's such a common pattern that there's a whole module called `Result` which deals with these two tags. Here are some examples of `Result` functions:
 
 ```roc
 Result.withDefault (List.get ["a", "b", "c"] 100) ""
@@ -837,11 +844,25 @@ listGet = \index ->
 
 `Result.try` is often used to chain two functions that return `Result` (as in the example above). This prevents you from needing to add error handling code at every intermediate step.
 
-<details>
-  <summary>Upcoming feature</summary>
-  
-  We plan to introduce syntax sugar to make `Result.try` nicer to use, follow [this issue](https://github.com/roc-lang/roc/issues/6828) for more.
-</details>
+Roc also has a special "try" operator `?`, which is convenient syntax sugar for `Result.try`. For example, consider the following `getLetter` function:
+
+```roc
+getLetter : Str -> Result Str [OutOfBounds, InvalidNumStr]
+getLetter = \indexStr ->
+    index = Str.toU64? indexStr
+    List.get ["a", "b", "c", "d"] index
+```
+
+Notice that we appended `?` to the function name `Str.toU64`. Here's what this does:
+* If the `Str.toU64` function returns an `Ok` value, then its payload is unwrapped.
+    - For example, if we call `getLetter "2"`, then `Str.toU64` returns `Ok 2`, and the `?` operator unwraps the integer 2, so `index` is set to 2 (not `Ok 2`). Then the `List.get` function is called and returns `Ok "c"`.
+* If the `Str.toU64` function returns an `Err` value, then the `?` operator immediately interrupts the `getLetter` function and makes it return this error.
+    - For example, if we call `getLetter "abc"`, then the call to `Str.toU64` returns `Err InvalidNumStr`, and the `?` operator ensures that the `getLetter` function returns this error immediately, without executing the rest of the function.
+
+Thanks to the `?` operator, your code can focus on the "happy path" (where nothing fails) and simply bubble up to the caller any error that might occur. Your error handling code can be neatly separated, and you can rest assured that you won't forget to handle any errors, since the compiler will let you know. See this [code example](https://github.com/roc-lang/examples/blob/main/examples/Results/main.roc) for more details on error handling.
+
+Now let's get back to lists!
+
 
 ### [Walking the elements in a list](#walking-the-elements-in-a-list) {#walking-the-elements-in-a-list}
 
@@ -1612,13 +1633,15 @@ main =
     Stdout.line! "Hello, World!"
 ```
 
-The `Stdout.line` function takes a `Str` and writes it to [standard output](<https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)>), we'll [discuss the `!` part later](https://www.roc-lang.org/tutorial#the-!-suffix). `Stdout.line` has this type:
+This code prints "Hello, World!" to the [standard output](<https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)>). `Stdout.line` has this type:
 
 ```roc
 Stdout.line : Str -> Task {} *
 ```
 
 A `Task` represents an _effect_; an interaction with state outside your Roc program, such as the terminal's standard output, or a file.
+
+ Did you notice the `!` suffix after `Stdout.line`? This operator is similar to the [`?` try operator](https://www.roc-lang.org/tutorial#error-handling), but it is used on functions that return a `Task` instead of a `Result` (we'll discuss [the `!` operator in more depth](https://www.roc-lang.org/tutorial#the-!-suffix) later in this tutorial).
 
 When we set `main` to be a `Task`, the task will get run when we run our program. Here, we've set `main` to be a task that writes `"Hello, World!"` to `stdout` when it gets run, so that's what our program does!
 
@@ -1676,7 +1699,7 @@ Let's break down what this type is saying:
 
 - `Task` tells us this is a `Task` type. Its two type parameters are just like the ones we saw in `Result` earlier: the first type tells us what this task will produce if it succeeds, and the other one tells us what it will produce if it fails.
 - `{}` tells us that this task always produces an empty record when it succeeds. (That is, it doesn't produce anything useful. Empty records don't have any information in them!) This is because the last task in `main` comes from `Stdout.line`, which doesn't produce anything. (In contrast, the `Stdin` task's first type parameter is a `Str`, because it produces a `Str` if it succeeds.)
-- `[Exit I32, StdoutErr Stdout.Err, StdinErr Stdin.Err]` tells us the different ways this task can fail. The `StdoutErr` and `StdinErr` tags are there becase we used `Stdout.line` and `Stdin.line`. We'll talk about `Exit I32` more in a moment.
+- `[Exit I32, StdoutErr Stdout.Err, StdinErr Stdin.Err]` tells us the different ways this task can fail. The `StdoutErr` and `StdinErr` tags are there because we used `Stdout.line` and `Stdin.line`. We'll talk about `Exit I32` more in a moment.
 
 To understand what the `Exit I32 Str` error means, let's try temporarily commenting out our current `main` and replacing
 it with this one:
