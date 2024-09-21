@@ -545,46 +545,6 @@ fn to_expr_report<'a>(
             to_record_report(alloc, lines, filename, erecord, *pos, start)
         }
 
-        EExpr::OptionalValueInOldRecordBuilder(region) => {
-            let surroundings = Region::new(start, region.end());
-            let region = lines.convert_region(*region);
-
-            let doc = alloc.stack([
-                alloc.reflow(
-                    r"I am partway through parsing a record builder, and I found an optional field:",
-                ),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
-                alloc.reflow("Optional fields can only appear when you destructure a record."),
-            ]);
-
-            Report {
-                filename,
-                doc,
-                title: "BAD OLD-STYLE RECORD BUILDER".to_string(),
-                severity,
-            }
-        }
-
-        EExpr::RecordUpdateOldBuilderField(region) => {
-            let surroundings = Region::new(start, region.end());
-            let region = lines.convert_region(*region);
-
-            let doc = alloc.stack([
-                alloc.reflow(
-                    r"I am partway through parsing a record update, and I found an old-style record builder field:",
-                ),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
-                alloc.reflow("Old-style record builders cannot be updated like records."),
-            ]);
-
-            Report {
-                filename,
-                doc,
-                title: "BAD RECORD UPDATE".to_string(),
-                severity,
-            }
-        }
-
         EExpr::Space(error, pos) => to_space_report(alloc, lines, filename, error, *pos),
 
         &EExpr::Number(ENumber::End, pos) => {
@@ -1549,23 +1509,6 @@ fn to_import_report<'a>(
         ),
         Params(EImportParams::Record(problem, pos), _) => {
             to_record_report(alloc, lines, filename, problem, *pos, start)
-        }
-        Params(EImportParams::RecordApplyFound(region), _) => {
-            let surroundings = Region::new(start, region.end());
-            let region = lines.convert_region(*region);
-
-            let doc = alloc.stack([
-                alloc.reflow("I was partway through parsing module params, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
-                alloc.reflow("This looks like an old-style record builder field, but those are not allowed in module params."),
-            ]);
-
-            Report {
-                filename,
-                doc,
-                title: "OLD-STYLE RECORD BUILDER IN MODULE PARAMS".to_string(),
-                severity,
-            }
         }
         Params(EImportParams::RecordIgnoredFieldFound(region), _) => {
             let surroundings = Region::new(start, region.end());

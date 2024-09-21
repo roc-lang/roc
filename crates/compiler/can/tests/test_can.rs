@@ -19,7 +19,6 @@ mod test_can {
     use roc_can::expr::{ClosureData, IntValue, Recursive};
     use roc_can::pattern::Pattern;
     use roc_module::called_via::CalledVia;
-    use roc_module::symbol::Symbol;
     use roc_problem::can::{CycleEntry, FloatErrorKind, IntErrorKind, Problem, RuntimeError};
     use roc_region::all::{Loc, Position, Region};
     use roc_types::subs::Variable;
@@ -653,101 +652,6 @@ mod test_can {
     }
 
     // RECORD BUILDERS
-    #[test]
-    fn old_record_builder_desugar() {
-        let src = indoc!(
-            r#"
-                succeed = \_ -> crash "succeed"
-                apply = \_ -> crash "get"
-
-                d = 3
-
-                succeed {
-                    a: 1,
-                    b: <- apply "b",
-                    c: <- apply "c",
-                    d
-                }
-            "#
-        );
-        let arena = Bump::new();
-        let out = can_expr_with(&arena, test_home(), src);
-
-        assert_eq!(out.problems.len(), 0);
-
-        // Assert that we desugar to:
-        //
-        // (apply "c") ((apply "b") (succeed \b -> \c -> { a: 1, b, c, d }))
-
-        // (apply "c") ..
-        let (apply_c, c_to_b) = simplify_curried_call(&out.loc_expr.value);
-        assert_apply_call(apply_c, "c", &out.interns);
-
-        // (apply "b") ..
-        let (apply_b, b_to_succeed) = simplify_curried_call(c_to_b);
-        assert_apply_call(apply_b, "b", &out.interns);
-
-        // (succeed ..)
-        let (succeed, b_closure) = simplify_curried_call(b_to_succeed);
-
-        match succeed {
-            Var(sym, _) => assert_eq!(sym.as_str(&out.interns), "succeed"),
-            _ => panic!("Not calling succeed: {:?}", succeed),
-        }
-
-        // \b -> ..
-        let (b_sym, c_closure) = simplify_builder_closure(b_closure);
-
-        // \c -> ..
-        let (c_sym, c_body) = simplify_builder_closure(c_closure);
-
-        // { a: 1, b, c, d }
-        match c_body {
-            Record { fields, .. } => {
-                match get_field_expr(fields, "a") {
-                    Num(_, num_str, _, _) => {
-                        assert_eq!(num_str.to_string(), "1");
-                    }
-                    expr => panic!("a is not a Num: {:?}", expr),
-                }
-
-                assert_eq!(get_field_var_sym(fields, "b"), b_sym);
-                assert_eq!(get_field_var_sym(fields, "c"), c_sym);
-                assert_eq!(get_field_var_sym(fields, "d").as_str(&out.interns), "d");
-            }
-            _ => panic!("Closure body wasn't a Record: {:?}", c_body),
-        }
-    }
-
-    fn simplify_curried_call(expr: &Expr) -> (&Expr, &Expr) {
-        match expr {
-            LetNonRec(_, loc_expr) => simplify_curried_call(&loc_expr.value),
-            Call(fun, args, _) => (&fun.1.value, &args[0].1.value),
-            _ => panic!("Final Expr is not a Call: {:?}", expr),
-        }
-    }
-
-    fn assert_apply_call(expr: &Expr, expected: &str, interns: &roc_module::symbol::Interns) {
-        match simplify_curried_call(expr) {
-            (Var(sym, _), Str(val)) => {
-                assert_eq!(sym.as_str(interns), "apply");
-                assert_eq!(val.to_string(), expected);
-            }
-            call => panic!("Not a valid (get {}) call: {:?}", expected, call),
-        };
-    }
-
-    fn simplify_builder_closure(expr: &Expr) -> (Symbol, &Expr) {
-        use roc_can::pattern::Pattern::*;
-
-        match expr {
-            Closure(closure) => match &closure.arguments[0].2.value {
-                Identifier(sym) => (*sym, &closure.loc_body.value),
-                pattern => panic!("Not an identifier pattern: {:?}", pattern),
-            },
-            _ => panic!("Not a closure: {:?}", expr),
-        }
-    }
 
     fn get_field_expr<'a>(
         fields: &'a roc_collections::SendMap<roc_module::ident::Lowercase, roc_can::expr::Field>,
@@ -769,97 +673,7 @@ mod test_can {
     }
 
     #[test]
-    fn old_record_builder_field_names_do_not_shadow() {
-        let src = indoc!(
-            r#"
-            succeed = \_ -> crash "succeed"
-            parse = \_ -> crash "parse"
-
-            number = "42"
-
-            succeed {
-                number: <- parse number,
-                raw: number,
-            }
-            "#
-        );
-        let arena = Bump::new();
-        let out = can_expr_with(&arena, test_home(), src);
-
-        assert_eq!(out.problems.len(), 0);
-
-        let (_, number_to_succeed) = simplify_curried_call(&out.loc_expr.value);
-        let (_, number_closure) = simplify_curried_call(number_to_succeed);
-        let (apply_number_sym, record) = simplify_builder_closure(number_closure);
-
-        match record {
-            Record { fields, .. } => {
-                assert_eq!(get_field_var_sym(fields, "number"), apply_number_sym);
-
-                match get_field_expr(fields, "raw") {
-                    Var(number_sym, _) => {
-                        assert_ne!(number_sym.ident_id(), apply_number_sym.ident_id());
-                        assert_eq!(number_sym.as_str(&out.interns), "number")
-                    }
-                    expr => panic!("a is not a Num: {:?}", expr),
-                }
-            }
-            _ => panic!("Closure body wasn't a Record: {:?}", record),
-        }
-    }
-
-    #[test]
-    fn multiple_old_record_builders_error() {
-        let src = indoc!(
-            r#"
-                succeed
-                    { a: <- apply "a" }
-                    { b: <- apply "b" }
-            "#
-        );
-        let arena = Bump::new();
-        let CanExprOut {
-            problems, loc_expr, ..
-        } = can_expr_with(&arena, test_home(), src);
-
-        assert_eq!(problems.len(), 1);
-        assert!(problems.iter().all(|problem| matches!(
-            problem,
-            Problem::RuntimeError(roc_problem::can::RuntimeError::MultipleOldRecordBuilders { .. })
-        )));
-
-        assert!(matches!(
-            loc_expr.value,
-            Expr::RuntimeError(roc_problem::can::RuntimeError::MultipleOldRecordBuilders { .. })
-        ));
-    }
-
-    #[test]
-    fn hanging_old_record_builder() {
-        let src = indoc!(
-            r#"
-                { a: <- apply "a" }
-            "#
-        );
-        let arena = Bump::new();
-        let CanExprOut {
-            problems, loc_expr, ..
-        } = can_expr_with(&arena, test_home(), src);
-
-        assert_eq!(problems.len(), 1);
-        assert!(problems.iter().all(|problem| matches!(
-            problem,
-            Problem::RuntimeError(roc_problem::can::RuntimeError::UnappliedOldRecordBuilder { .. })
-        )));
-
-        assert!(matches!(
-            loc_expr.value,
-            Expr::RuntimeError(roc_problem::can::RuntimeError::UnappliedOldRecordBuilder { .. })
-        ));
-    }
-
-    #[test]
-    fn new_record_builder_desugar() {
+    fn record_builder_desugar() {
         let src = indoc!(
             r#"
                 map2 = \a, b, combine -> combine a b

@@ -427,8 +427,6 @@ impl Problem {
             | Problem::RuntimeError(RuntimeError::EmptySingleQuote(region))
             | Problem::RuntimeError(RuntimeError::MultipleCharsInSingleQuote(region))
             | Problem::RuntimeError(RuntimeError::DegenerateBranch(region))
-            | Problem::RuntimeError(RuntimeError::MultipleOldRecordBuilders(region))
-            | Problem::RuntimeError(RuntimeError::UnappliedOldRecordBuilder(region))
             | Problem::RuntimeError(RuntimeError::EmptyRecordBuilder(region))
             | Problem::RuntimeError(RuntimeError::SingleFieldRecordBuilder(region))
             | Problem::RuntimeError(RuntimeError::OptionalFieldInRecordBuilder {
@@ -686,9 +684,6 @@ pub enum RuntimeError {
 
     DegenerateBranch(Region),
 
-    MultipleOldRecordBuilders(Region),
-    UnappliedOldRecordBuilder(Region),
-
     EmptyRecordBuilder(Region),
     SingleFieldRecordBuilder(Region),
     OptionalFieldInRecordBuilder {
@@ -739,8 +734,6 @@ impl RuntimeError {
             | RuntimeError::DegenerateBranch(region)
             | RuntimeError::InvalidInterpolation(region)
             | RuntimeError::InvalidHexadecimal(region)
-            | RuntimeError::MultipleOldRecordBuilders(region)
-            | RuntimeError::UnappliedOldRecordBuilder(region)
             | RuntimeError::EmptyRecordBuilder(region)
             | RuntimeError::SingleFieldRecordBuilder(region)
             | RuntimeError::OptionalFieldInRecordBuilder {

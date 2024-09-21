@@ -5,7 +5,7 @@ use crate::ast::{
 use crate::blankspace::{
     space0_around_ee, space0_before_e, space0_before_optional_after, space0_e,
 };
-use crate::expr::{record_field, FoundApplyValue};
+use crate::expr::record_field;
 use crate::ident::{lowercase_ident, lowercase_ident_keyword_e};
 use crate::keyword;
 use crate::parser::{
@@ -565,11 +565,10 @@ fn parse_implements_ability<'a>() -> impl Parser<'a, ImplementsAbility<'a>, ETyp
 fn ability_impl_field<'a>() -> impl Parser<'a, AssignedField<'a, Expr<'a>>, ERecord<'a>> {
     then(record_field(), move |arena, state, _, field| {
         match field.to_assigned_field(arena) {
-            Ok(AssignedField::IgnoredValue(_, _, _)) => {
+            AssignedField::IgnoredValue(_, _, _) => {
                 Err((MadeProgress, ERecord::Field(state.pos())))
             }
-            Ok(assigned_field) => Ok((MadeProgress, assigned_field, state)),
-            Err(FoundApplyValue) => Err((MadeProgress, ERecord::Field(state.pos()))),
+            assigned_field => Ok((MadeProgress, assigned_field, state)),
         }
     })
 }
