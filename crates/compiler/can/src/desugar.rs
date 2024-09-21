@@ -1187,17 +1187,7 @@ fn desugar_pattern<'a>(env: &mut Env<'a>, scope: &mut Scope, pattern: Pattern<'a
             Apply(tag, desugared_arg_patterns.into_bump_slice())
         }
         RecordDestructure(field_patterns) => {
-            let mut allocated = Vec::with_capacity_in(field_patterns.len(), env.arena);
-            for field_pattern in field_patterns.iter() {
-                let value = desugar_pattern(env, scope, field_pattern.value);
-                allocated.push(Loc {
-                    value,
-                    region: field_pattern.region,
-                });
-            }
-            let field_patterns = field_patterns.replace_items(allocated.into_bump_slice());
-
-            RecordDestructure(field_patterns)
+            RecordDestructure(desugar_record_destructures(env, scope, field_patterns))
         }
         RequiredField(name, field_pattern) => {
             RequiredField(name, desugar_loc_pattern(env, scope, field_pattern))
@@ -1233,6 +1223,23 @@ fn desugar_pattern<'a>(env: &mut Env<'a>, scope: &mut Scope, pattern: Pattern<'a
         SpaceBefore(sub_pattern, _spaces) => desugar_pattern(env, scope, *sub_pattern),
         SpaceAfter(sub_pattern, _spaces) => desugar_pattern(env, scope, *sub_pattern),
     }
+}
+
+pub fn desugar_record_destructures<'a>(
+    env: &mut Env<'a>,
+    scope: &mut Scope,
+    field_patterns: Collection<'a, Loc<Pattern<'a>>>,
+) -> Collection<'a, Loc<Pattern<'a>>> {
+    let mut allocated = Vec::with_capacity_in(field_patterns.len(), env.arena);
+    for field_pattern in field_patterns.iter() {
+        let value = desugar_pattern(env, scope, field_pattern.value);
+        allocated.push(Loc {
+            value,
+            region: field_pattern.region,
+        });
+    }
+
+    field_patterns.replace_items(allocated.into_bump_slice())
 }
 
 /// Desugars a `dbg expr` expression into a statement block that prints and returns the
