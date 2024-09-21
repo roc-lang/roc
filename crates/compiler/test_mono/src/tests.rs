@@ -3296,6 +3296,18 @@ fn dbg_inside_string() {
 }
 
 #[mono_test]
+fn pizza_dbg() {
+    indoc!(
+        r#"
+        1
+        |> dbg
+        |> Num.add 2
+        |> dbg
+        "#
+    )
+}
+
+#[mono_test]
 fn linked_list_reverse() {
     indoc!(
         r#"
