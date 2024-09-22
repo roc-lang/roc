@@ -725,7 +725,8 @@ impl IterTokens for Loc<Expr<'_>> {
             Expr::EmptyRecordBuilder(e) => e.iter_tokens(arena),
             Expr::SingleFieldRecordBuilder(e) => e.iter_tokens(arena),
             Expr::OptionalFieldInRecordBuilder(_name, e) => e.iter_tokens(arena),
-            Expr::MalformedIdent(_, _)
+            Expr::EmptyBlock(_)
+            | Expr::MalformedIdent(_, _)
             | Expr::MalformedClosure
             | Expr::PrecedenceConflict(_)
             | Expr::MalformedSuffixed(_) => {

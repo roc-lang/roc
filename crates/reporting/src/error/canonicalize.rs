@@ -2,6 +2,7 @@ use roc_collections::all::MutSet;
 use roc_module::called_via::Suffix;
 use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_module::symbol::DERIVABLE_ABILITIES;
+use roc_parse::ast::EmptyBlockParent;
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::{
     BadPattern, CycleEntry, ExtensionTypeKind, FloatErrorKind, IntErrorKind, Problem, RuntimeError,
@@ -2080,6 +2081,27 @@ fn pretty_runtime_error<'b>(
         }
         RuntimeError::MalformedSuffixed(_) => {
             todo!("error for malformed suffix");
+        }
+        RuntimeError::EmptyBlock(parent, region) => {
+            let parent_name = match parent {
+                EmptyBlockParent::IfBranch => "if branch",
+                EmptyBlockParent::ElseBranch => "else branch",
+                EmptyBlockParent::WhenBranch => "when branch",
+                EmptyBlockParent::Closure => "function",
+                EmptyBlockParent::Definition => "definition",
+            };
+
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This "),
+                    alloc.text(parent_name),
+                    alloc.reflow(" has no body:"),
+                ]),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.text("I would need to crash if I used it!"),
+            ]);
+
+            title = "MISSING BODY";
         }
         RuntimeError::InvalidFloat(sign @ FloatErrorKind::PositiveInfinity, region, _raw_str)
         | RuntimeError::InvalidFloat(sign @ FloatErrorKind::NegativeInfinity, region, _raw_str) => {
