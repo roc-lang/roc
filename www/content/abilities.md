@@ -216,8 +216,8 @@ You can provide a custom implementation for an ability. This may be useful if a 
 
 ```roc
 Color := [
-        RGBAu8 U8 U8 U8 U8,
-        RGBAf32 F32 F32 F32 F32,
+        RgbaU8 U8 U8 U8 U8,
+        RgbaF32 F32 F32 F32 F32,
     ]
     implements [
         Eq { isEq: colorEquality },
@@ -230,29 +230,29 @@ colorEquality = \a, b -> colorToU8 a == colorToU8 b
 colorToU8 : Color -> (U8, U8, U8, U8)
 colorToU8 = \@Color c->
     when c is
-        RGBAu8 r g b a -> (r, g, b, a)
-        RGBAf32 r g b a -> (f32toU8 r, f32toU8 g, f32toU8 b, f32toU8 a)
+        RgbaU8 r g b a -> (r, g, b, a)
+        RgbaF32 r g b a -> (f32toU8 r, f32toU8 g, f32toU8 b, f32toU8 a)
 
 f32toU8 : F32 -> U8
 f32toU8 = \f ->
     Num.floor (f * 255.0)
 
 fromU8 : U8, U8, U8, U8 -> Color
-fromU8 = \r, g, b, a -> @Color (RGBAu8 r g b a)
+fromU8 = \r, g, b, a -> @Color (RgbaU8 r g b a)
 
 fromI16 : I16, I16, I16, I16 -> Result Color [OutOfRange]
 fromI16 = \r, g, b, a ->
     if r < 0 || r > 255 || g < 0 || g > 255 || b < 0 || b > 255 || a < 0 || a > 255 then
         Err OutOfRange
     else
-        Ok (@Color (RGBAu8 (Num.toU8 r) (Num.toU8 g) (Num.toU8 b) (Num.toU8 a)))
+        Ok (@Color (RgbaU8 (Num.toU8 r) (Num.toU8 g) (Num.toU8 b) (Num.toU8 a)))
 
 fromF32 : F32, F32, F32, F32 -> Result Color [OutOfRange]
 fromF32 = \r, g, b, a ->
     if r < 0.0 || r > 1.0 || g < 0.0 || g > 1.0 || b < 0.0 || b > 1.0 || a < 0.0 || a > 1.0 then
         Err OutOfRange
     else
-        Ok (@Color (RGBAf32 r g b a))
+        Ok (@Color (RgbaF32 r g b a))
 ```
 
 ## [Advanced Topic: Defining a new Ability](#defining-a-new-ability) {#defining-a-new-ability}
