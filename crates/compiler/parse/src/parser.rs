@@ -344,8 +344,6 @@ pub enum EExpr<'a> {
 
     InParens(EInParens<'a>, Position),
     Record(ERecord<'a>, Position),
-    OptionalValueInOldRecordBuilder(Region),
-    IgnoredValueInOldRecordBuilder(Region),
     RecordUpdateOldBuilderField(Region),
     RecordUpdateIgnoredField(Region),
     RecordBuilderOldBuilderField(Region),
@@ -548,7 +546,6 @@ pub enum EImportParams<'a> {
     Record(ERecord<'a>, Position),
     RecordUpdateFound(Region),
     RecordBuilderFound(Region),
-    RecordApplyFound(Region),
     RecordIgnoredFieldFound(Region),
     Space(BadInputError, Position),
 }

@@ -75,10 +75,6 @@ pub enum CalledVia {
     /// e.g. "$(first) $(last)" is transformed into Str.concat (Str.concat first " ") last.
     StringInterpolation,
 
-    /// This call is the result of desugaring an old style Record Builder field.
-    /// e.g. succeed { a <- get "a" } is transformed into (get "a") (succeed \a -> { a })
-    OldRecordBuilder,
-
     /// This call is the result of desugaring a map2-based Record Builder field. e.g.
     /// ```roc
     /// { Task.parallel <-
