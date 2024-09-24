@@ -49,6 +49,17 @@ impl<'a> ListLiteralElement<'a> {
             _ => None,
         }
     }
+
+    pub fn get_literal(&self) -> Option<Literal<'a>> {
+        match self {
+            Self::Literal(l) => Some(*l),
+            _ => None,
+        }
+    }
+
+    pub fn is_literal(&self) -> bool {
+        matches!(self, Self::Literal(_))
+    }
 }
 
 pub enum NumLiteral {
