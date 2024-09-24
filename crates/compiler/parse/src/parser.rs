@@ -616,13 +616,10 @@ pub enum EType<'a> {
     TApply(ETypeApply, Position),
     TInlineAlias(ETypeInlineAlias, Position),
     TBadTypeVariable(Position),
-    TWildcard(Position),
-    TInferred(Position),
     ///
     TStart(Position),
     TEnd(Position),
     TFunctionArgument(Position),
-    TWhereBar(Position),
     TImplementsClause(Position),
     TAbilityImpl(ETypeAbilityImpl<'a>, Position),
     ///
@@ -1220,7 +1217,7 @@ pub fn collection_inner<'a, Elem: 'a + crate::ast::Spaceable<'a> + Clone, E: 'a 
                 (elems, state)
             }
             Err((NoProgress, _)) => (Vec::new_in(arena), prev_state),
-            Err(fail) => return Err(fail),
+            Err(err) => return Err(err),
         };
 
         let (_, (mut final_spaces, _), state) = eat_space(arena, state, true)?;
@@ -1283,37 +1280,6 @@ pub fn collection_trailing_sep_e<
 pub fn succeed<'a, T: Clone, E: 'a>(value: T) -> impl Parser<'a, T, E> {
     move |_arena: &'a bumpalo::Bump, state: crate::state::State<'a>, _min_indent: u32| {
         Ok((NoProgress, value.clone(), state))
-    }
-}
-
-/// Creates a parser that always fails using the given error function.
-///
-/// # Examples
-/// ```
-/// # #![forbid(unused_imports)]
-/// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, fail};
-/// # use roc_region::all::Position;
-/// # use bumpalo::Bump;
-/// # #[derive(Debug, PartialEq)]
-/// # enum Problem {
-/// #     NotFound(Position),
-/// # }
-/// # let arena = Bump::new();
-/// let parser = fail(Problem::NotFound);
-///
-/// let (progress, err) = Parser::<(), Problem>::parse(&parser, &arena, State::new("hello, world".as_bytes()), 0).unwrap_err();
-/// assert_eq!(progress, Progress::NoProgress);
-/// assert_eq!(err, Problem::NotFound(Position::new(0)));
-/// ```
-pub fn fail<'a, T, E, F>(f: F) -> impl Parser<'a, T, E>
-where
-    T: 'a,
-    E: 'a,
-    F: Fn(Position) -> E,
-{
-    move |_arena: &'a bumpalo::Bump, state: State<'a>, _min_indent: u32| {
-        Err((NoProgress, f(state.pos())))
     }
 }
 
@@ -1479,7 +1445,7 @@ macro_rules! one_of {
             match $p1.parse(arena, state, min_indent) {
                 valid @ Ok(_) => valid,
                 Err((NoProgress, _)) => $p2.parse(arena, original_state, min_indent),
-                Err(fail) => Err(fail),
+                Err(err) => Err(err),
             }
         }
     };
@@ -1499,13 +1465,6 @@ where
     move |arena, state, _min_indent| parser.parse(arena, state, 0)
 }
 
-pub fn set_min_indent<'a, P, T, X: 'a>(min_indent: u32, parser: P) -> impl Parser<'a, T, X>
-where
-    P: Parser<'a, T, X>,
-{
-    move |arena, state, _m| parser.parse(arena, state, min_indent)
-}
-
 pub fn increment_min_indent<'a, P, T, X: 'a>(parser: P) -> impl Parser<'a, T, X>
 where
     P: Parser<'a, T, X>,
@@ -1519,16 +1478,6 @@ where
 {
     move |arena, state: State<'a>, min_indent| {
         let min_indent = std::cmp::max(state.line_indent(), min_indent);
-        parser.parse(arena, state, min_indent)
-    }
-}
-
-pub fn absolute_column_min_indent<'a, P, T, X: 'a>(parser: P) -> impl Parser<'a, T, X>
-where
-    P: Parser<'a, T, X>,
-{
-    move |arena, state: State<'a>, _min_indent| {
-        let min_indent = state.column() + 1;
         parser.parse(arena, state, min_indent)
     }
 }
@@ -1824,9 +1773,9 @@ pub fn zero_or_more<'a, Output, E: 'a>(
                     buf.push(next_elem);
                 }
                 Err((NoProgress, _)) => {
-                    return Ok((Progress::when(buf.len() != 0), buf, prev_state))
+                    break Ok((Progress::when(buf.len() != 0), buf, prev_state))
                 }
-                Err(fail) => return Err(fail),
+                Err(err) => break Err(err),
             }
         }
     }

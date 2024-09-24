@@ -293,20 +293,21 @@ where
     }
 }
 
-pub fn loc_space0_e<'a, E>(
+pub fn eat_space_loc_comments<'a, E>(
     indent_problem: fn(Position) -> E,
-) -> impl Parser<'a, Loc<&'a [CommentOrNewline<'a>]>, E>
+    arena: &'a Bump,
+    state: State<'a>,
+    min_indent: u32,
+) -> ParseResult<'a, Loc<&'a [CommentOrNewline<'a>]>, E>
 where
     E: 'a + SpaceProblem,
 {
-    move |arena, state: State<'a>, min_indent: u32| {
-        let start = state.pos();
-        let (p, (sp, comments_at), state) = eat_space(arena, state, false)?;
-        if !(sp.is_empty() || state.column() >= min_indent) {
-            return Err((p, indent_problem(start)));
-        }
-        Ok((p, Loc::at(comments_at, sp), state))
+    let start = state.pos();
+    let (p, (sp, comments_at), state) = eat_space(arena, state, false)?;
+    if !sp.is_empty() && state.column() < min_indent {
+        return Err((p, indent_problem(start)));
     }
+    Ok((p, Loc::at(comments_at, sp), state))
 }
 
 fn begins_with_crlf(bytes: &[u8]) -> bool {

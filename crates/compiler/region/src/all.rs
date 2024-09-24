@@ -136,6 +136,13 @@ impl Position {
     }
 
     #[must_use]
+    pub const fn next(self) -> Self {
+        Self {
+            offset: self.offset + 1,
+        }
+    }
+
+    #[must_use]
     pub const fn prev(self) -> Self {
         Self {
             offset: self.offset - 1,

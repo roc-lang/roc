@@ -103,12 +103,6 @@ pub fn lowercase_ident_keyword_e<'a>() -> impl Parser<'a, &'a str, ()> {
     }
 }
 
-pub fn tag_name<'a>() -> impl Parser<'a, &'a str, ()> {
-    move |arena, state: State<'a>, min_indent: u32| {
-        uppercase_ident().parse(arena, state, min_indent)
-    }
-}
-
 /// This could be:
 ///
 /// * A module name
@@ -117,25 +111,7 @@ pub fn tag_name<'a>() -> impl Parser<'a, &'a str, ()> {
 pub fn uppercase<'a>() -> impl Parser<'a, UppercaseIdent<'a>, ()> {
     move |_, state: State<'a>, _min_indent: u32| match chomp_uppercase_part(state.bytes()) {
         Err(progress) => Err((progress, ())),
-        Ok(ident) => {
-            let width = ident.len();
-            Ok((MadeProgress, ident.into(), state.advance(width)))
-        }
-    }
-}
-
-/// This could be:
-///
-/// * A module name
-/// * A type name
-/// * A tag
-pub fn uppercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
-    move |_, state: State<'a>, _min_indent: u32| match chomp_uppercase_part(state.bytes()) {
-        Err(progress) => Err((progress, ())),
-        Ok(ident) => {
-            let width = ident.len();
-            Ok((MadeProgress, ident, state.advance(width)))
-        }
+        Ok(ident) => Ok((MadeProgress, ident.into(), state.advance(ident.len()))),
     }
 }
 
@@ -193,6 +169,7 @@ pub fn parse_ident<'a>(
 
             if let Ident::Access { module_name, parts } = ident {
                 if module_name.is_empty() {
+                    // todo: @wip the call site may already check the keywords first, so should we always recheck?
                     if let Some(first) = parts.first() {
                         for keyword in crate::keyword::KEYWORDS.iter() {
                             if first == &Accessor::RecordField(keyword) {
@@ -281,7 +258,7 @@ fn chomp_lowercase_part(buffer: &[u8]) -> Result<&str, Progress> {
     chomp_part(char::is_lowercase, is_alnum, buffer)
 }
 
-fn chomp_uppercase_part(buffer: &[u8]) -> Result<&str, Progress> {
+pub(crate) fn chomp_uppercase_part(buffer: &[u8]) -> Result<&str, Progress> {
     chomp_part(char::is_uppercase, is_alnum, buffer)
 }
 

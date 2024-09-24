@@ -89,7 +89,7 @@ pub fn parse_str_literal<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                 }
                 StrLikeLiteral::Str(str_literal) => Ok((p, str_literal, state)),
             },
-            Err(fail) => Err(fail),
+            Err(err) => Err(err),
         }
     }
 }

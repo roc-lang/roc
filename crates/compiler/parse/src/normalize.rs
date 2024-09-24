@@ -1298,12 +1298,9 @@ impl<'a> Normalize<'a> for EType<'a> {
                 EType::TInlineAlias(inner_err.normalize(arena), Position::zero())
             }
             EType::TBadTypeVariable(_) => EType::TBadTypeVariable(Position::zero()),
-            EType::TWildcard(_) => EType::TWildcard(Position::zero()),
-            EType::TInferred(_) => EType::TInferred(Position::zero()),
             EType::TStart(_) => EType::TStart(Position::zero()),
             EType::TEnd(_) => EType::TEnd(Position::zero()),
             EType::TFunctionArgument(_) => EType::TFunctionArgument(Position::zero()),
-            EType::TWhereBar(_) => EType::TWhereBar(Position::zero()),
             EType::TImplementsClause(_) => EType::TImplementsClause(Position::zero()),
             EType::TAbilityImpl(inner_err, _) => {
                 EType::TAbilityImpl(inner_err.normalize(arena), Position::zero())

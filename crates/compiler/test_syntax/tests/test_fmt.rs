@@ -4969,6 +4969,17 @@ mod test_fmt {
     }
 
     #[test]
+    fn simple_type_def() {
+        expr_formats_same(indoc!(
+            r"
+            truex : Boolex
+            truex = @Boolex Falsex
+            truex
+            "
+        ));
+    }
+
+    #[test]
     fn simple_closure_field_access() {
         expr_formats_same(indoc!(
             r"
