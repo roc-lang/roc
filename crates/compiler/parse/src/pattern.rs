@@ -10,7 +10,7 @@ use crate::parser::{
     ParseResult, Parser,
 };
 use crate::state::State;
-use crate::string_literal::{parse_rest_of_str_like, StrLikeLiteral};
+use crate::string_literal::{rest_of_str_like, StrLikeLiteral};
 use bumpalo::collections::string::String;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -39,16 +39,16 @@ pub fn parse_closure_param<'a>(
         match b {
             b'_' => {
                 // Underscore is also common, e.g. \_ -> ...
-                parse_rest_of_underscore_pattern(start, state.inc())
+                rest_of_underscore_pattern(start, state.inc())
             }
             b'{' => {
                 // You can destructure records in params, e.g. \{ x, y } -> ...
-                parse_rest_of_record_pattern(start, arena, state.inc())
+                rest_of_record_pattern(start, arena, state.inc())
             }
             b'(' => {
                 // If you wrap it in parens, you can match any arbitrary pattern at all. But what about the list pattern?
                 // e.g. \(User.UserId userId) -> ...
-                parse_rest_of_pattern_in_parens(start, arena, state.inc())
+                rest_of_pattern_in_parens(start, arena, state.inc())
             }
             // b'[' => parse_list_pattern(arena, state.clone()),
             _ => parse_ident_pattern(start, true, arena, state, min_indent),
@@ -94,13 +94,13 @@ fn parse_loc_pattern_etc<'a>(
     if let Some(b) = state.bytes().first() {
         let start = state.pos();
         match b {
-            b'_' => parse_rest_of_underscore_pattern(start, state.inc()),
-            b'{' => parse_rest_of_record_pattern(start, arena, state.inc()),
-            b'(' => parse_rest_of_pattern_in_parens(start, arena, state.inc()),
-            b'[' => parse_rest_of_list_pattern(start, arena, state.inc()),
+            b'_' => rest_of_underscore_pattern(start, state.inc()),
+            b'{' => rest_of_record_pattern(start, arena, state.inc()),
+            b'(' => rest_of_pattern_in_parens(start, arena, state.inc()),
+            b'[' => rest_of_list_pattern(start, arena, state.inc()),
             b'"' | b'\'' => {
                 let column = state.column();
-                match parse_rest_of_str_like(*b == b'\'', column, arena, state.inc(), min_indent) {
+                match rest_of_str_like(*b == b'\'', column, arena, state.inc(), min_indent) {
                     Ok((p, literal, state)) => {
                         let literal = match literal {
                             StrLikeLiteral::Str(s) => Pattern::StrLiteral(s),
@@ -237,7 +237,7 @@ pub fn loc_implements_parser<'a>() -> impl Parser<'a, Loc<Implements<'a>>, EPatt
     )
 }
 
-fn parse_rest_of_pattern_in_parens<'a>(
+fn rest_of_pattern_in_parens<'a>(
     start: Position,
     arena: &'a Bump,
     state: State<'a>,
@@ -290,7 +290,7 @@ fn literal_to_pattern(literal: crate::number_literal::NumLiteral<'_>) -> Pattern
     }
 }
 
-fn parse_rest_of_list_pattern<'a>(
+fn rest_of_list_pattern<'a>(
     start: Position,
     arena: &'a Bump,
     state: State<'a>,
@@ -458,7 +458,7 @@ fn parse_ident_pattern<'a>(
     }
 }
 
-fn parse_rest_of_underscore_pattern<'a>(
+fn rest_of_underscore_pattern<'a>(
     start: Position,
     state: State<'a>,
 ) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
@@ -476,7 +476,7 @@ fn parse_rest_of_underscore_pattern<'a>(
     }
 }
 
-fn parse_rest_of_record_pattern<'a>(
+fn rest_of_record_pattern<'a>(
     start: Position,
     arena: &'a Bump,
     state: State<'a>,

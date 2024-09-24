@@ -3,7 +3,7 @@ use crate::blankspace::{parse_space, with_spaces_before};
 use crate::expr::{parse_expr_start, ExprParseOptions};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    between, byte, loc, BadInputError, EExpr, ESingleQuote, EString, ParseResult, Parser,
+    byte, loc, skip_first, skip_second, BadInputError, EExpr, ESingleQuote, EString, ParseResult, Parser
 };
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
@@ -82,7 +82,7 @@ pub fn parse_str_literal<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
             _ => return Err((NoProgress, EString::Open(start))),
         };
 
-        match parse_rest_of_str_like(is_single_quote, column, arena, state.inc(), min_indent) {
+        match rest_of_str_like(is_single_quote, column, arena, state.inc(), min_indent) {
             Ok((p, str_like, state)) => match str_like {
                 StrLikeLiteral::SingleQuote(_) => {
                     Err((p, EString::ExpectedDoubleQuoteGotSingleQuote(start)))
@@ -94,7 +94,7 @@ pub fn parse_str_literal<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
     }
 }
 
-pub fn parse_rest_of_str_like<'a>(
+pub fn rest_of_str_like<'a>(
     is_single_quote: bool,
     column: u32,
     arena: &'a Bump,
@@ -410,10 +410,9 @@ pub fn parse_rest_of_str_like<'a>(
                         // Parse the hex digits, surrounded by parens, then
                         // give a canonicalization error if the digits form
                         // an invalid unicode code point.
-                        let (_progress, loc_digits, new_state) = between(
+                        let (_progress, loc_digits, new_state) = skip_first(
                             byte(b'(', EString::CodePtOpen),
-                            loc(ascii_hex_digits()),
-                            byte(b')', EString::CodePtEnd),
+                            skip_second(loc(ascii_hex_digits()), byte(b')', EString::CodePtEnd)),
                         )
                         .parse(arena, state, min_indent)?;
 

@@ -27,7 +27,7 @@ use roc_region::all::{Loc, Region};
 
 #[inline(always)]
 fn tag_union_type<'a>(
-    stop_at_surface_has: bool,
+    stop_at_first_impl: bool,
 ) -> impl Parser<'a, TypeAnnotation<'a>, ETypeTagUnion<'a>> {
     move |arena, state, min_indent| {
         let (_, tags, state) = collection_trailing_sep_e(
@@ -40,7 +40,7 @@ fn tag_union_type<'a>(
 
         // This could be an open tag union, e.g. `[Foo, Bar]a`
         let ext_pos = state.pos();
-        let (ext, state) = match term(stop_at_surface_has).parse(arena, state.clone(), min_indent) {
+        let (ext, state) = match term(stop_at_first_impl).parse(arena, state.clone(), min_indent) {
             Ok((_, out, state)) => (Some(&*arena.alloc(out)), state),
             Err((NoProgress, _)) => (None, state),
             Err((_, fail)) => {
@@ -96,22 +96,22 @@ fn parse_type_alias_after_as<'a>() -> impl Parser<'a, TypeHeader<'a>, EType<'a>>
     )
 }
 
-fn term<'a>(stop_at_surface_has: bool) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
+fn term<'a>(stop_at_first_impl: bool) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
     move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
         let start = state.pos();
         let res = match state.bytes().first() {
             Some(b) => match b {
                 b'(' => {
-                    match loc_type_in_parens(stop_at_surface_has).parse(arena, state, min_indent) {
+                    match loc_type_in_parens(stop_at_first_impl).parse(arena, state, min_indent) {
                         Ok(ok) => Some(ok),
                         Err((p, fail)) => return Err((p, EType::TInParens(fail, start))),
                     }
                 }
-                b'{' => match record_type(stop_at_surface_has).parse(arena, state, min_indent) {
+                b'{' => match record_type(stop_at_first_impl).parse(arena, state, min_indent) {
                     Ok((p, out, state)) => Some((p, Loc::pos(start, state.pos(), out), state)),
                     Err((p, fail)) => return Err((p, EType::TRecord(fail, start))),
                 },
-                b'[' => match tag_union_type(stop_at_surface_has).parse(arena, state, min_indent) {
+                b'[' => match tag_union_type(stop_at_first_impl).parse(arena, state, min_indent) {
                     Ok((p, out, state)) => Some((p, Loc::pos(start, state.pos(), out), state)),
                     Err((p, fail)) => return Err((p, EType::TTagUnion(fail, start))),
                 },
@@ -133,7 +133,7 @@ fn term<'a>(stop_at_surface_has: bool) -> impl Parser<'a, Loc<TypeAnnotation<'a>
                     let out = match parse_lowercase_ident(state.clone()) {
                         Ok((_, name, state)) => {
                             if name == keyword::WHERE
-                                || (stop_at_surface_has && name == keyword::IMPLEMENTS)
+                                || (stop_at_first_impl && name == keyword::IMPLEMENTS)
                             {
                                 None
                             } else {
@@ -147,15 +147,15 @@ fn term<'a>(stop_at_surface_has: bool) -> impl Parser<'a, Loc<TypeAnnotation<'a>
                     };
 
                     match out {
-                        None => match applied_type(stop_at_surface_has)
-                            .parse(arena, state, min_indent)
-                        {
-                            Ok((p, ann, state)) => {
-                                Some((p, Loc::pos(start, state.pos(), ann), state))
+                        None => {
+                            match applied_type(stop_at_first_impl).parse(arena, state, min_indent) {
+                                Ok((p, ann, state)) => {
+                                    Some((p, Loc::pos(start, state.pos(), ann), state))
+                                }
+                                Err((NoProgress, _)) => None,
+                                Err(err) => return Err(err),
                             }
-                            Err((NoProgress, _)) => None,
-                            Err(err) => return Err(err),
-                        },
+                        }
                         some => some,
                     }
                 }
@@ -192,7 +192,7 @@ fn term<'a>(stop_at_surface_has: bool) -> impl Parser<'a, Loc<TypeAnnotation<'a>
 }
 
 fn loc_applied_arg<'a>(
-    stop_at_surface_has: bool,
+    stop_at_first_impl: bool,
     arena: &'a Bump,
     state: State<'a>,
     min_indent: u32,
@@ -206,15 +206,15 @@ fn loc_applied_arg<'a>(
     let start = state.pos();
     let (type_ann, state) = match state.bytes().first() {
         Some(b) => match b {
-            b'(' => match loc_type_in_parens(stop_at_surface_has).parse(arena, state, min_indent) {
+            b'(' => match loc_type_in_parens(stop_at_first_impl).parse(arena, state, min_indent) {
                 Ok((_, out, state)) => (out, state),
                 Err((p, fail)) => return Err((p, EType::TInParens(fail, start))),
             },
-            b'{' => match record_type(stop_at_surface_has).parse(arena, state, min_indent) {
+            b'{' => match record_type(stop_at_first_impl).parse(arena, state, min_indent) {
                 Ok((_, out, state)) => (Loc::pos(start, state.pos(), out), state),
                 Err((p, fail)) => return Err((p, EType::TRecord(fail, start))),
             },
-            b'[' => match tag_union_type(stop_at_surface_has).parse(arena, state, min_indent) {
+            b'[' => match tag_union_type(stop_at_first_impl).parse(arena, state, min_indent) {
                 Ok((_, out, state)) => (Loc::pos(start, state.pos(), out), state),
                 Err((p, fail)) => return Err((p, EType::TTagUnion(fail, start))),
             },
@@ -235,7 +235,7 @@ fn loc_applied_arg<'a>(
                 let out = match parse_lowercase_ident(state.clone()) {
                     Ok((_, name, state)) => {
                         if name == keyword::WHERE
-                            || (stop_at_surface_has && name == keyword::IMPLEMENTS)
+                            || (stop_at_first_impl && name == keyword::IMPLEMENTS)
                         {
                             None
                         } else {
@@ -266,7 +266,7 @@ fn loc_applied_arg<'a>(
 }
 
 fn loc_type_in_parens<'a>(
-    stop_at_surface_has: bool,
+    stop_at_first_impl: bool,
 ) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, ETypeInParens<'a>> {
     move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
         let start = state.pos();
@@ -283,7 +283,7 @@ fn loc_type_in_parens<'a>(
         .parse(arena, state.clone(), min_indent)?;
 
         let ext_pos = state.pos();
-        let (ext, state) = match term(stop_at_surface_has).parse(arena, state.clone(), min_indent) {
+        let (ext, state) = match term(stop_at_first_impl).parse(arena, state.clone(), min_indent) {
             Ok((_, out, state)) => (Some(&*arena.alloc(out)), state),
             Err((NoProgress, _)) => (None, state),
             Err((_, fail)) => {
@@ -396,7 +396,7 @@ fn record_type_field<'a>() -> impl Parser<'a, AssignedField<'a, TypeAnnotation<'
 
 #[inline(always)]
 fn record_type<'a>(
-    stop_at_surface_has: bool,
+    stop_at_first_impl: bool,
 ) -> impl Parser<'a, TypeAnnotation<'a>, ETypeRecord<'a>> {
     move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
         let (_, fields, state) = collection_trailing_sep_e(
@@ -408,7 +408,7 @@ fn record_type<'a>(
         .parse(arena, state.clone(), min_indent)?;
 
         let ext_pos = state.pos();
-        let (ext, state) = match term(stop_at_surface_has).parse(arena, state.clone(), min_indent) {
+        let (ext, state) = match term(stop_at_first_impl).parse(arena, state.clone(), min_indent) {
             Ok((_, ext, state)) => (Some(&*arena.alloc(ext)), state),
             Err((NoProgress, _)) => (None, state),
             Err((_, fail)) => {
@@ -422,13 +422,13 @@ fn record_type<'a>(
     }
 }
 
-fn applied_type<'a>(stop_at_surface_has: bool) -> impl Parser<'a, TypeAnnotation<'a>, EType<'a>> {
+fn applied_type<'a>(stop_at_first_impl: bool) -> impl Parser<'a, TypeAnnotation<'a>, EType<'a>> {
     map(
         indented_seq(
             specialize_err(EType::TApply, concrete_type()),
             // Optionally parse space-separated arguments for the constructor,
             // e.g. `Str Float` in `Map Str Float`
-            loc_applied_args_e(stop_at_surface_has),
+            loc_applied_args_e(stop_at_first_impl),
         ),
         |(ctor, args): (TypeAnnotation<'a>, Vec<'a, Loc<TypeAnnotation<'a>>>)| {
             match &ctor {
@@ -449,13 +449,13 @@ fn applied_type<'a>(stop_at_surface_has: bool) -> impl Parser<'a, TypeAnnotation
 }
 
 fn loc_applied_args_e<'a>(
-    stop_at_surface_has: bool,
+    stop_at_first_impl: bool,
 ) -> impl Parser<'a, Vec<'a, Loc<TypeAnnotation<'a>>>, EType<'a>> {
     move |arena, mut state: State<'a>, min_indent: u32| {
         let mut buf = Vec::with_capacity_in(1, arena);
         loop {
             let prev_state = state.clone();
-            match loc_applied_arg(stop_at_surface_has, arena, state, min_indent) {
+            match loc_applied_arg(stop_at_first_impl, arena, state, min_indent) {
                 Ok((_, next_elem, next_state)) => {
                     state = next_state;
                     buf.push(next_elem);
@@ -613,7 +613,7 @@ fn ability_impl_field<'a>() -> impl Parser<'a, AssignedField<'a, Expr<'a>>, ERec
 
 pub(crate) fn type_expr<'a>(
     is_trailing_comma_valid: bool,
-    stop_at_surface_has: bool,
+    stop_at_first_impl: bool,
 ) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
     (move |arena, state: State<'a>, min_indent: u32| {
         // todo: @wip in some calls to expression we already checking for space before via the same function. Remove double check!
@@ -622,7 +622,7 @@ pub(crate) fn type_expr<'a>(
             eat_space_check(EType::TIndentStart, arena, state, min_indent, false)?;
 
         let (_, first_type, state) =
-            match term(stop_at_surface_has).parse(arena, state.clone(), min_indent) {
+            match term(stop_at_first_impl).parse(arena, state.clone(), min_indent) {
                 Ok(ok) => ok,
                 Err((p, fail)) => return Err((p.or(sp_p), fail)),
             };
@@ -664,7 +664,7 @@ pub(crate) fn type_expr<'a>(
                 };
 
             let arg_pos = news.pos();
-            let (_, arg, news) = match term(stop_at_surface_has).parse(arena, news, min_indent) {
+            let (_, arg, news) = match term(stop_at_first_impl).parse(arena, news, min_indent) {
                 Ok(ok) => ok,
                 Err((NoProgress, _)) => {
                     break Err((MadeProgress, EType::TFunctionArgument(arg_pos)))
@@ -689,7 +689,7 @@ pub(crate) fn type_expr<'a>(
                     eat_space_check(EType::TIndentStart, arena, state, min_indent, false)?;
 
                 let (_, return_type, state) =
-                    match term(stop_at_surface_has).parse(arena, state, min_indent) {
+                    match term(stop_at_first_impl).parse(arena, state, min_indent) {
                         Ok(ok) => ok,
                         Err((ep, fail)) => return Err((ep.or(p), fail)),
                     };

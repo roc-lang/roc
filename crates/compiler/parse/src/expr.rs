@@ -23,7 +23,7 @@ use crate::parser::{
 };
 use crate::pattern::parse_closure_param;
 use crate::state::State;
-use crate::string_literal::{self, parse_rest_of_str_like, StrLikeLiteral};
+use crate::string_literal::{self, rest_of_str_like, StrLikeLiteral};
 use crate::type_annotation::{self, implements_abilities, type_expr};
 use crate::{header, keyword};
 use bumpalo::collections::Vec;
@@ -89,7 +89,7 @@ impl ExprParseOptions {
     };
 }
 
-fn parse_rest_of_expr_in_parens_etc<'a>(
+fn rest_of_expr_in_parens_etc<'a>(
     start: Position,
     arena: &'a Bump,
     state: State<'a>,
@@ -222,16 +222,16 @@ fn parse_term<'a>(
     let start = state.pos();
     if let Some(b) = state.bytes().first() {
         match b {
-            b'\\' => match parse_rest_of_closure(options, arena, state.inc()) {
+            b'\\' => match rest_of_closure(options, arena, state.inc()) {
                 Ok((p, expr, state)) => Ok((p, Loc::pos(start, state.pos(), expr), state)),
                 Err((p, fail)) => Err((p, EExpr::Closure(fail, start))),
             },
-            b'(' => parse_rest_of_expr_in_parens_etc(start, arena, state.inc(), min_indent),
+            b'(' => rest_of_expr_in_parens_etc(start, arena, state.inc(), min_indent),
             b'{' => parse_record_expr(start, arena, state, min_indent),
-            b'[' => parse_rest_of_list_expr(start, arena, state.inc()),
+            b'[' => rest_of_list_expr(start, arena, state.inc()),
             b'"' | b'\'' => {
                 let column = state.column();
-                match parse_rest_of_str_like(*b == b'\'', column, arena, state.inc(), min_indent) {
+                match rest_of_str_like(*b == b'\'', column, arena, state.inc(), min_indent) {
                     Ok((p, literal, state)) => {
                         let literal_expr = match literal {
                             StrLikeLiteral::Str(s) => Expr::Str(s),
@@ -283,20 +283,20 @@ fn parse_if_when_closure<'a>(
     let start = state.pos();
     // All closures start with a '\' - e.g. (\x -> x + 1)
     if state.bytes().first() == Some(&b'\\') {
-        match parse_rest_of_closure(options, arena, state.inc()) {
+        match rest_of_closure(options, arena, state.inc()) {
             Ok((p, expr, state)) => Ok((p, Loc::pos(start, state.pos(), expr), state)),
             Err((p, fail)) => Err((p, EExpr::Closure(fail, start))),
         }
     } else if at_keyword(keyword::IF, &state) {
         state.advance_mut(keyword::IF.len());
-        match parse_rest_of_if_expr(options, arena, state, min_indent) {
+        match rest_of_if_expr(options, arena, state, min_indent) {
             Ok((p, expr, state)) => Ok((p, Loc::pos(start, state.pos(), expr), state)),
             Err((p, err)) => Err((p, EExpr::If(err, start))),
         }
     } else if at_keyword(keyword::WHEN, &state) {
         state.advance_mut(keyword::WHEN.len());
         let indent = state.line_indent();
-        match when::parse_rest_of_when_expr(options, arena, state, indent) {
+        match when::rest_of_when_expr(options, arena, state, indent) {
             Ok((p, expr, state)) => Ok((p, Loc::pos(start, state.pos(), expr), state)),
             Err((p, err)) => Err((p, EExpr::When(err, start))),
         }
@@ -357,13 +357,13 @@ fn parse_negative_or_term<'a>(
                 let expr = literal_to_expr(literal);
                 Ok((p, Loc::pos(start, state.pos(), expr), state))
             }
-            b'!' => parse_rest_of_logical_not(start, options, arena, state.inc(), min_indent),
-            b'(' => parse_rest_of_expr_in_parens_etc(start, arena, state.inc(), min_indent),
+            b'!' => rest_of_logical_not(start, options, arena, state.inc(), min_indent),
+            b'(' => rest_of_expr_in_parens_etc(start, arena, state.inc(), min_indent),
             b'{' => parse_record_expr(start, arena, state, min_indent),
-            b'[' => parse_rest_of_list_expr(start, arena, state.inc()),
+            b'[' => rest_of_list_expr(start, arena, state.inc()),
             b'"' | b'\'' => {
                 let column = state.column();
-                match parse_rest_of_str_like(*b == b'\'', column, arena, state.inc(), min_indent) {
+                match rest_of_str_like(*b == b'\'', column, arena, state.inc(), min_indent) {
                     Ok((p, literal, state)) => {
                         let literal_expr = match literal {
                             StrLikeLiteral::Str(s) => Expr::Str(s),
@@ -585,16 +585,16 @@ fn parse_stmt_start<'a>(
 
     if at_keyword(keyword::EXPECT, &state) {
         state.advance_mut(keyword::EXPECT.len());
-        parse_rest_of_expect_stmt(false, start, options, preceding_comment, arena, state)
+        rest_of_expect_stmt(false, start, options, preceding_comment, arena, state)
     } else if at_keyword(&keyword::EXPECT_FX, &state) {
         state.advance_mut(keyword::EXPECT_FX.len());
-        parse_rest_of_expect_stmt(true, start, options, preceding_comment, arena, state)
+        rest_of_expect_stmt(true, start, options, preceding_comment, arena, state)
     } else if at_keyword(keyword::DBG, &state) {
         state.advance_mut(keyword::DBG.len());
-        parse_rest_of_dbg_stmt(start, options, preceding_comment, arena, state)
+        rest_of_dbg_stmt(start, options, preceding_comment, arena, state)
     } else if at_keyword(keyword::IMPORT, &state) {
         state.advance_mut(keyword::IMPORT.len());
-        parse_rest_of_import(start, arena, state, min_indent)
+        rest_of_import(start, arena, state, min_indent)
     } else {
         match parse_stmt_operator_chain(options, arena, state, min_indent) {
             Ok((p, stmt, state)) => Ok((p, Loc::pos(start, state.pos(), stmt), state)),
@@ -2126,7 +2126,7 @@ pub fn parse_top_level_defs<'a>(
 const CLOSURE_ARG_BINOP_LEFT: &str = "un";
 
 /// If Ok it always returns MadeProgress
-fn parse_rest_of_closure<'a>(
+fn rest_of_closure<'a>(
     options: ExprParseOptions,
     arena: &'a Bump,
     state: State<'a>,
@@ -2317,7 +2317,7 @@ mod when {
     };
 
     /// If Ok it always returns MadeProgress
-    pub fn parse_rest_of_when_expr<'a>(
+    pub fn rest_of_when_expr<'a>(
         options: ExprParseOptions,
         arena: &'a Bump,
         state: State<'a>,
@@ -2531,7 +2531,7 @@ mod when {
     }
 }
 
-fn parse_rest_of_expect_stmt<'a>(
+fn rest_of_expect_stmt<'a>(
     is_fx: bool,
     start: Position,
     options: ExprParseOptions,
@@ -2539,7 +2539,6 @@ fn parse_rest_of_expect_stmt<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Loc<Stmt<'a>>, EExpr<'a>> {
-    
     match parse_block(
         options,
         arena,
@@ -2567,7 +2566,7 @@ fn parse_rest_of_expect_stmt<'a>(
     }
 }
 
-fn parse_rest_of_dbg_stmt<'a>(
+fn rest_of_dbg_stmt<'a>(
     start: Position,
     options: ExprParseOptions,
     preceding_comment: Region,
@@ -2594,7 +2593,7 @@ fn parse_rest_of_dbg_stmt<'a>(
     }
 }
 
-fn parse_rest_of_import<'a>(
+fn rest_of_import<'a>(
     start: Position,
     arena: &'a Bump,
     state: State<'a>,
@@ -2645,7 +2644,7 @@ fn parse_rest_of_import<'a>(
 }
 
 /// If Ok it always returns MadeProgress
-fn parse_rest_of_if_expr<'a>(
+fn rest_of_if_expr<'a>(
     options: ExprParseOptions,
     arena: &'a Bump,
     state: State<'a>,
@@ -3285,7 +3284,7 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
     }
 }
 
-fn parse_rest_of_list_expr<'a>(
+fn rest_of_list_expr<'a>(
     start: Position,
     arena: &'a Bump,
     state: State<'a>,
@@ -3828,7 +3827,7 @@ fn literal_to_expr(literal: crate::number_literal::NumLiteral<'_>) -> Expr<'_> {
     }
 }
 
-fn parse_rest_of_logical_not<'a>(
+fn rest_of_logical_not<'a>(
     start: Position,
     options: ExprParseOptions,
     arena: &'a Bump,

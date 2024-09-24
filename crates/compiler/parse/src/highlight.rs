@@ -11,7 +11,7 @@ use crate::{
     number_literal::parse_number_base,
     parser::Parser,
     state::State,
-    string_literal::{parse_rest_of_str_like, StrLikeLiteral},
+    string_literal::{rest_of_str_like, StrLikeLiteral},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -117,7 +117,7 @@ fn highlight_inner<'a>(
                     let column = state.column();
                     state.advance_mut(1);
                     if let Ok((_, item, new_state)) =
-                        parse_rest_of_str_like(b == '\'', column, arena, state.clone(), 0)
+                        rest_of_str_like(b == '\'', column, arena, state.clone(), 0)
                     {
                         state = new_state;
                         match item {

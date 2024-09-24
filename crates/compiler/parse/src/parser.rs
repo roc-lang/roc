@@ -1251,10 +1251,12 @@ pub fn collection_trailing_sep_e<
     closing_brace: impl Parser<'a, (), E>,
     space_before: impl Fn(&'a Elem, &'a [crate::ast::CommentOrNewline<'a>]) -> Elem,
 ) -> impl Parser<'a, crate::ast::Collection<'a, Loc<Elem>>, E> {
-    between(
+    skip_first(
         opening_brace,
-        reset_min_indent(collection_inner(elem, space_before)),
-        closing_brace,
+        skip_second(
+            reset_min_indent(collection_inner(elem, space_before)),
+            closing_brace,
+        ),
     )
 }
 
@@ -1817,44 +1819,6 @@ macro_rules! debug {
             dbg!($parser.parse(arena, state, min_indent))
         }
     };
-}
-
-/// Given three parsers, parse them all but ignore the output of the first and last one.
-/// Useful for parsing things between two braces (e.g. parentheses).
-///
-/// If any of the three parsers error, this will error.
-///
-/// # Example
-/// ```
-/// # #![forbid(unused_imports)]
-/// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, word, byte, between};
-/// # use roc_region::all::Position;
-/// # use bumpalo::Bump;
-/// # #[derive(Debug, PartialEq)]
-/// # enum Problem {
-/// #     NotFound(Position),
-/// # }
-/// # let arena = Bump::new();
-/// # fn foo<'a>(arena: &'a Bump) {
-/// let parser = between(
-///     byte(b'(', Problem::NotFound),
-///     word("hello", Problem::NotFound),
-///     byte(b')', Problem::NotFound)
-/// );
-/// let (progress, output, state) = parser.parse(&arena, State::new("(hello), world".as_bytes()), 0).unwrap();
-/// assert_eq!(progress, Progress::MadeProgress);
-/// assert_eq!(output, ());
-/// assert_eq!(state.pos().offset, 7);
-/// # }
-/// # foo(&arena);
-/// ```
-pub fn between<'a, Before, Inner, After, Err: 'a>(
-    opening_brace: impl Parser<'a, Before, Err>,
-    inner: impl Parser<'a, Inner, Err>,
-    closing_brace: impl Parser<'a, After, Err>,
-) -> impl Parser<'a, Inner, Err> {
-    skip_first(opening_brace, skip_second(inner, closing_brace))
 }
 
 /// Maps/transforms the `Ok` result of parsing using the given function.
