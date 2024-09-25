@@ -1431,9 +1431,9 @@ checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 
 [[package]]
 name = "libc"
-version = "0.2.149"
+version = "0.2.158"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a08173bc88b7955d1b3145aa561539096c421ac8debde8cbc3612ec635fee29b"
+checksum = "d8adc4bb1803a324070e64a98ae98f38934d91957a99cfb3a43dcbc01bc56439"
 
 [[package]]
 name = "libloading"
@@ -1568,6 +1568,15 @@ name = "memmap2"
 version = "0.5.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "83faa42c0a078c393f6b29d5db232d8be22776a891f8f56e5284faee4a20b327"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "memmap2"
+version = "0.9.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe751422e4a8caa417e13c3ea66452215d7d63e19e604f4980461212f3ae1322"
 dependencies = [
  "libc",
 ]
@@ -2737,7 +2746,7 @@ dependencies = [
  "indoc",
  "libc",
  "mach_object",
- "memmap2",
+ "memmap2 0.5.10",
  "object",
  "roc_collections",
  "roc_error_macros",
@@ -3164,6 +3173,14 @@ dependencies = [
  "serde",
  "serde_json",
  "static_assertions",
+]
+
+[[package]]
+name = "roc_std_heap"
+version = "0.0.1"
+dependencies = [
+ "memmap2 0.9.4",
+ "roc_std",
 ]
 
 [[package]]

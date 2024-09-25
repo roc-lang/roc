@@ -566,14 +566,18 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
             let (_, (question_spaces, _), state) = eat_space(arena, state, true)?;
 
             let optional_val_pos = state.pos();
-            let (optional_val, state) =
-                match parse_expr_start(ExprParseOptions::NO_BACK_ARROW, arena, state, min_indent) {
-                    Ok((_, out, state)) => (out, state),
-                    Err((_, fail)) => {
-                        let fail = PRecord::Expr(arena.alloc(fail), optional_val_pos);
-                        return Err((MadeProgress, fail));
-                    }
-                };
+            let (optional_val, state) = match parse_expr_start(
+                ExprParseOptions::NO_BACKPASSING,
+                arena,
+                state,
+                min_indent,
+            ) {
+                Ok((_, out, state)) => (out, state),
+                Err((_, fail)) => {
+                    let fail = PRecord::Expr(arena.alloc(fail), optional_val_pos);
+                    return Err((MadeProgress, fail));
+                }
+            };
 
             let optional_val = with_spaces_before(arena, optional_val, question_spaces);
 

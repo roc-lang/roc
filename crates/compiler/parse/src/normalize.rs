@@ -8,9 +8,9 @@ use crate::{
         AbilityImpls, AbilityMember, AssignedField, Collection, Defs, Expr, FullAst, Header,
         Implements, ImplementsAbilities, ImplementsAbility, ImplementsClause, ImportAlias,
         ImportAsKeyword, ImportExposingKeyword, ImportedModuleName, IngestedFileAnnotation,
-        IngestedFileImport, ModuleImport, ModuleImportParams, OldRecordBuilderField, Pattern,
-        PatternAs, Spaced, Spaces, SpacesBefore, StrLiteral, StrSegment, Tag, TypeAnnotation,
-        TypeDef, TypeHeader, ValueDef, WhenBranch,
+        IngestedFileImport, ModuleImport, ModuleImportParams, Pattern, PatternAs, Spaced, Spaces,
+        SpacesBefore, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+        WhenBranch,
     },
     header::{
         AppHeader, ExposedName, ExposesKeyword, HostedHeader, ImportsEntry, ImportsKeyword,
@@ -562,30 +562,6 @@ impl<'a, T: Normalize<'a> + Copy + std::fmt::Debug> Normalize<'a> for AssignedFi
     }
 }
 
-impl<'a> Normalize<'a> for OldRecordBuilderField<'a> {
-    fn normalize(&self, arena: &'a Bump) -> Self {
-        match *self {
-            OldRecordBuilderField::Value(a, _, c) => OldRecordBuilderField::Value(
-                a.normalize(arena),
-                &[],
-                arena.alloc(c.normalize(arena)),
-            ),
-            OldRecordBuilderField::ApplyValue(a, _, _, c) => OldRecordBuilderField::ApplyValue(
-                a.normalize(arena),
-                &[],
-                &[],
-                arena.alloc(c.normalize(arena)),
-            ),
-            OldRecordBuilderField::LabelOnly(a) => {
-                OldRecordBuilderField::LabelOnly(a.normalize(arena))
-            }
-            OldRecordBuilderField::Malformed(a) => OldRecordBuilderField::Malformed(a),
-            OldRecordBuilderField::SpaceBefore(a, _) => a.normalize(arena),
-            OldRecordBuilderField::SpaceAfter(a, _) => a.normalize(arena),
-        }
-    }
-}
-
 impl<'a> Normalize<'a> for StrLiteral<'a> {
     fn normalize(&self, arena: &'a Bump) -> Self {
         match *self {
@@ -738,7 +714,6 @@ impl<'a> Normalize<'a> for Expr<'a> {
                 fields: fields.normalize(arena),
             },
             Expr::Record(a) => Expr::Record(a.normalize(arena)),
-            Expr::OldRecordBuilder(a) => Expr::OldRecordBuilder(a.normalize(arena)),
             Expr::RecordBuilder { mapper, fields } => Expr::RecordBuilder {
                 mapper: arena.alloc(mapper.normalize(arena)),
                 fields: fields.normalize(arena),
@@ -818,12 +793,6 @@ impl<'a> Normalize<'a> for Expr<'a> {
             Expr::SpaceBefore(a, _) => a.normalize(arena),
             Expr::SpaceAfter(a, _) => a.normalize(arena),
             Expr::SingleQuote(a) => Expr::Num(a),
-            Expr::MultipleOldRecordBuilders(a) => {
-                Expr::MultipleOldRecordBuilders(arena.alloc(a.normalize(arena)))
-            }
-            Expr::UnappliedOldRecordBuilder(a) => {
-                Expr::UnappliedOldRecordBuilder(arena.alloc(a.normalize(arena)))
-            }
             Expr::EmptyRecordBuilder(a) => {
                 Expr::EmptyRecordBuilder(arena.alloc(a.normalize(arena)))
             }
@@ -1089,12 +1058,6 @@ impl<'a> Normalize<'a> for EExpr<'a> {
             EExpr::Record(inner_err, _pos) => {
                 EExpr::Record(inner_err.normalize(arena), Position::zero())
             }
-            EExpr::OptionalValueInOldRecordBuilder(_pos) => {
-                EExpr::OptionalValueInOldRecordBuilder(Region::zero())
-            }
-            EExpr::IgnoredValueInOldRecordBuilder(_pos) => {
-                EExpr::OptionalValueInOldRecordBuilder(Region::zero())
-            }
             EExpr::Str(inner_err, _pos) => EExpr::Str(inner_err.normalize(arena), Position::zero()),
             EExpr::Number(inner_err, _pos) => EExpr::Number(inner_err.clone(), Position::zero()),
             EExpr::List(inner_err, _pos) => {
@@ -1323,7 +1286,6 @@ impl<'a> Normalize<'a> for EImportParams<'a> {
                 EImportParams::Record(inner_err.normalize(arena), Position::zero())
             }
             EImportParams::RecordUpdateFound(_) => EImportParams::RecordUpdateFound(Region::zero()),
-            EImportParams::RecordApplyFound(_) => EImportParams::RecordApplyFound(Region::zero()),
             EImportParams::RecordIgnoredFieldFound(_) => {
                 EImportParams::RecordIgnoredFieldFound(Region::zero())
             }

@@ -1269,13 +1269,13 @@ pub struct PlatformHeader<'a> {
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum ImportsEntry<'a> {
-    /// e.g. `Task` or `Task.{ Task, after }`
+    /// e.g. `Hello` or `Hello exposing [hello]` see roc-lang.org/examples/MultipleRocFiles/README.html  
     Module(
         ModuleName<'a>,
         Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
     ),
 
-    /// e.g. `pf.Task` or `pf.Task.{ after }` or `pf.{ Task.{ Task, after } }`
+    /// e.g. `pf.Stdout` or `pf.Stdout exposing [line]`
     Package(
         &'a str,
         ModuleName<'a>,
