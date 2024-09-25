@@ -6,7 +6,7 @@ use crate::blankspace::{
     eat_space_check, parse_space, space0_before_e, space0_e, with_spaces, with_spaces_after,
     with_spaces_before,
 };
-use crate::expr::{parse_record_field, FoundApplyValue};
+use crate::expr::parse_record_field;
 use crate::ident::{
     chomp_concrete_type, chomp_uppercase_part, lowercase_ident_keyword_e, parse_lowercase_ident,
 };
@@ -602,11 +602,10 @@ fn ability_impl_field<'a>() -> impl Parser<'a, AssignedField<'a, Expr<'a>>, ERec
     move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
         let (_, field, state) = parse_record_field(arena, state, min_indent)?;
         match field.to_assigned_field(arena) {
-            Ok(AssignedField::IgnoredValue(_, _, _)) => {
+            AssignedField::IgnoredValue(_, _, _) => {
                 Err((MadeProgress, ERecord::Field(state.pos())))
             }
-            Ok(assigned_field) => Ok((MadeProgress, assigned_field, state)),
-            Err(FoundApplyValue) => Err((MadeProgress, ERecord::Field(state.pos()))),
+            assigned_field => Ok((MadeProgress, assigned_field, state)),
         }
     }
 }

@@ -1807,22 +1807,6 @@ This is a useful technique to use when we don't want to write out a bunch of err
 - If we're using an editor that supports it, hovering over the `_` might display the inferred type that goes there.
 - We can put an obviously wrong type in there (e.g. replace the `{}` with `Str`, which is totally wrong) and look at the compiler error to see what it inferred as the correct type.
 
-We can also use `_` in type aliases, to express that two types are the same without annotating either of them. For example:
-
-```roc
-RunErr : _
-```
-
-```roc
-run : Task {} RunErr
-```
-
-```roc
-handleErr : RunErr -> [Exit I32 Str]
-```
-
-Of course, we could also choose not to use `_` at all and populate the `RunErr` type alias with the full list of errors that could happen in our `run` task. All of these are totally reasonable stylistic choices, depending on how you prefer the code to look. They all compile to exactly the same thing, and have the same runtime characteristics.
-
 ### [The ! suffix](#the-!-suffix) {#the-!-suffix}
 
 The `!` suffix operator is syntax sugar for the `Task.await` function, which has this type:
@@ -2310,8 +2294,6 @@ expect
 ```
 
 If you want to see other examples of using record builders, look at the [Record Builder Example](https://www.roc-lang.org/examples/RecordBuilder/README.html) for a moderately-sized example or the [Arg.Builder](https://github.com/roc-lang/basic-cli/blob/main/platform/Arg/Builder.roc) module in our `basic-cli` platform for a complex example.
-
-_Note: This syntax replaces the old `field: <- value` record builder syntax using applicative functors because it is much simpler to understand and use. The old syntax will be removed soon._
 
 ### [Reserved Keywords](#reserved-keywords) {#reserved-keywords}
 

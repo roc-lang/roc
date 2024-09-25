@@ -914,7 +914,10 @@ pub fn canonicalize_record_destructs<'a>(
                     }
                 };
             }
-            _ => unreachable!("Any other pattern should have given a parse error"),
+            _ => unreachable!(
+                "Any other pattern should have given a parse error: {:?}",
+                loc_pattern.value
+            ),
         }
     }
 

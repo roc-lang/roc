@@ -11,8 +11,8 @@ use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
 use roc_parse::ast::{
-    AssignedField, Collection, Defs, ModuleImportParams, OldRecordBuilderField, Pattern,
-    StrLiteral, StrSegment, TypeAnnotation, ValueDef, WhenBranch,
+    AssignedField, Collection, Defs, ModuleImportParams, Pattern, StrLiteral, StrSegment,
+    TypeAnnotation, ValueDef, WhenBranch,
 };
 use roc_problem::can::Problem;
 use roc_region::all::{Loc, Region};
@@ -321,8 +321,6 @@ pub fn desugar_expr<'a>(
         | MalformedClosure
         | MalformedSuffixed(..)
         | PrecedenceConflict { .. }
-        | MultipleOldRecordBuilders(_)
-        | UnappliedOldRecordBuilder(_)
         | EmptyRecordBuilder(_)
         | SingleFieldRecordBuilder(_)
         | OptionalFieldInRecordBuilder { .. }
@@ -557,10 +555,6 @@ pub fn desugar_expr<'a>(
                 }
             }
         }
-        OldRecordBuilder(_) => env.arena.alloc(Loc {
-            value: UnappliedOldRecordBuilder(loc_expr),
-            region: loc_expr.region,
-        }),
         RecordBuilder { mapper, fields } => {
             // NOTE the `mapper` is always a `Var { .. }`, we only desugar it to get rid of
             // any spaces before/after
@@ -857,25 +851,11 @@ pub fn desugar_expr<'a>(
         }
         Apply(loc_fn, loc_args, called_via) => {
             let mut desugared_args = Vec::with_capacity_in(loc_args.len(), env.arena);
-            let mut builder_apply_exprs = None;
 
             for loc_arg in loc_args.iter() {
                 let mut current = loc_arg.value;
                 let arg = loop {
                     match current {
-                        OldRecordBuilder(fields) => {
-                            if builder_apply_exprs.is_some() {
-                                return env.arena.alloc(Loc {
-                                    value: MultipleOldRecordBuilders(loc_expr),
-                                    region: loc_expr.region,
-                                });
-                            }
-
-                            let builder_arg = old_record_builder_arg(env, loc_arg.region, fields);
-                            builder_apply_exprs = Some(builder_arg.apply_exprs);
-
-                            break builder_arg.closure;
-                        }
                         SpaceBefore(expr, _) | SpaceAfter(expr, _) => {
                             current = *expr;
                         }
@@ -888,33 +868,14 @@ pub fn desugar_expr<'a>(
 
             let desugared_args = desugared_args.into_bump_slice();
 
-            let mut apply: &Loc<Expr> = env.arena.alloc(Loc {
+            env.arena.alloc(Loc {
                 value: Apply(
                     desugar_expr(env, scope, loc_fn),
                     desugared_args,
                     *called_via,
                 ),
                 region: loc_expr.region,
-            });
-
-            match builder_apply_exprs {
-                None => {}
-
-                Some(apply_exprs) => {
-                    for expr in apply_exprs {
-                        let desugared_expr = desugar_expr(env, scope, expr);
-
-                        let args = std::slice::from_ref(env.arena.alloc(apply));
-
-                        apply = env.arena.alloc(Loc {
-                            value: Apply(desugared_expr, args, CalledVia::OldRecordBuilder),
-                            region: loc_expr.region,
-                        });
-                    }
-                }
-            }
-
-            apply
+            })
         }
         When(loc_cond_expr, branches) => {
             let loc_desugared_cond = &*env.arena.alloc(desugar_expr(env, scope, loc_cond_expr));
@@ -1230,17 +1191,7 @@ fn desugar_pattern<'a>(env: &mut Env<'a>, scope: &mut Scope, pattern: Pattern<'a
             Apply(tag, desugared_arg_patterns.into_bump_slice())
         }
         RecordDestructure(field_patterns) => {
-            let mut allocated = Vec::with_capacity_in(field_patterns.len(), env.arena);
-            for field_pattern in field_patterns.iter() {
-                let value = desugar_pattern(env, scope, field_pattern.value);
-                allocated.push(Loc {
-                    value,
-                    region: field_pattern.region,
-                });
-            }
-            let field_patterns = field_patterns.replace_items(allocated.into_bump_slice());
-
-            RecordDestructure(field_patterns)
+            RecordDestructure(desugar_record_destructures(env, scope, field_patterns))
         }
         RequiredField(name, field_pattern) => {
             RequiredField(name, desugar_loc_pattern(env, scope, field_pattern))
@@ -1276,6 +1227,23 @@ fn desugar_pattern<'a>(env: &mut Env<'a>, scope: &mut Scope, pattern: Pattern<'a
         SpaceBefore(sub_pattern, _spaces) => desugar_pattern(env, scope, *sub_pattern),
         SpaceAfter(sub_pattern, _spaces) => desugar_pattern(env, scope, *sub_pattern),
     }
+}
+
+pub fn desugar_record_destructures<'a>(
+    env: &mut Env<'a>,
+    scope: &mut Scope,
+    field_patterns: Collection<'a, Loc<Pattern<'a>>>,
+) -> Collection<'a, Loc<Pattern<'a>>> {
+    let mut allocated = Vec::with_capacity_in(field_patterns.len(), env.arena);
+    for field_pattern in field_patterns.iter() {
+        let value = desugar_pattern(env, scope, field_pattern.value);
+        allocated.push(Loc {
+            value,
+            region: field_pattern.region,
+        });
+    }
+
+    field_patterns.replace_items(allocated.into_bump_slice())
 }
 
 /// Desugars a `dbg expr` expression into a statement block that prints and returns the
@@ -1385,97 +1353,6 @@ fn desugar_dbg_stmt<'a>(
         dbg_str,
         continuation,
     ))
-}
-
-struct OldRecordBuilderArg<'a> {
-    closure: &'a Loc<Expr<'a>>,
-    apply_exprs: Vec<'a, &'a Loc<Expr<'a>>>,
-}
-
-fn old_record_builder_arg<'a>(
-    env: &mut Env<'a>,
-    region: Region,
-    fields: Collection<'a, Loc<OldRecordBuilderField<'a>>>,
-) -> OldRecordBuilderArg<'a> {
-    let mut record_fields = Vec::with_capacity_in(fields.len(), env.arena);
-    let mut apply_exprs = Vec::with_capacity_in(fields.len(), env.arena);
-    let mut apply_field_names = Vec::with_capacity_in(fields.len(), env.arena);
-
-    // Build the record that the closure will return and gather apply expressions
-
-    for field in fields.iter() {
-        let mut current = field.value;
-
-        let new_field = loop {
-            match current {
-                OldRecordBuilderField::Value(label, spaces, expr) => {
-                    break AssignedField::RequiredValue(label, spaces, expr)
-                }
-                OldRecordBuilderField::ApplyValue(label, _, _, expr) => {
-                    apply_field_names.push(label);
-                    apply_exprs.push(expr);
-
-                    let var = env.arena.alloc(Loc {
-                        region: label.region,
-                        value: Expr::Var {
-                            module_name: "",
-                            ident: env.arena.alloc("#".to_owned() + label.value),
-                        },
-                    });
-
-                    break AssignedField::RequiredValue(label, &[], var);
-                }
-                OldRecordBuilderField::LabelOnly(label) => break AssignedField::LabelOnly(label),
-                OldRecordBuilderField::SpaceBefore(sub_field, _) => {
-                    current = *sub_field;
-                }
-                OldRecordBuilderField::SpaceAfter(sub_field, _) => {
-                    current = *sub_field;
-                }
-                OldRecordBuilderField::Malformed(malformed) => {
-                    break AssignedField::Malformed(malformed)
-                }
-            }
-        };
-
-        record_fields.push(Loc {
-            value: new_field,
-            region: field.region,
-        });
-    }
-
-    let record_fields = fields.replace_items(record_fields.into_bump_slice());
-
-    let mut body = env.arena.alloc(Loc {
-        value: Record(record_fields),
-        region,
-    });
-
-    // Construct the builder's closure
-    //
-    // { x: #x, y: #y, z: 3 }
-    // \#y -> { x: #x, y: #y, z: 3 }
-    // \#x -> \#y -> { x: #x, y: #y, z: 3 }
-
-    for label in apply_field_names.iter().rev() {
-        let name = env.arena.alloc("#".to_owned() + label.value);
-        let ident = roc_parse::ast::Pattern::Identifier { ident: name };
-
-        let arg_pattern = env.arena.alloc(Loc {
-            value: ident,
-            region: label.region,
-        });
-
-        body = env.arena.alloc(Loc {
-            value: Closure(std::slice::from_ref(arg_pattern), body, false),
-            region,
-        });
-    }
-
-    OldRecordBuilderArg {
-        closure: body,
-        apply_exprs,
-    }
 }
 
 // TODO move this desugaring to canonicalization, so we can use Symbols instead of strings
