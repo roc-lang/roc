@@ -3,7 +3,7 @@ use crate::ast::{
     Pattern, Spaceable, Spaced, Tag, TypeAnnotation, TypeHeader,
 };
 use crate::blankspace::{
-    eat_space_check, parse_space, space0_before_e, space0_e, with_spaces, with_spaces_after,
+    eat_space_check, parse_space, space0_before_e, with_spaces, with_spaces_after,
     with_spaces_before,
 };
 use crate::expr::parse_record_field;
@@ -12,8 +12,9 @@ use crate::ident::{
 };
 use crate::keyword;
 use crate::parser::{
-    and, collection_inner, collection_trailing_sep_e, increment_min_indent, indented_seq, loc, map,
-    reset_min_indent, skip_first, skip_second, ERecord, ETypeAbilityImpl, ParseResult, Progress,
+    at_keyword, collection_inner, collection_trailing_sep_e, increment_min_indent, indented_seq,
+    loc, map, reset_min_indent, skip_first, skip_second, ERecord, ETypeAbilityImpl, ParseResult,
+    Progress,
 };
 use crate::parser::{
     backtrackable, byte, optional, specialize_err, specialize_err_ref, word, EType, ETypeApply,
@@ -81,24 +82,6 @@ fn check_type_alias<'a>(
         }
         TypeAnnotation::Apply(_, _, _) => Err(ETypeInlineAlias::Qualified(annot.region.start())),
         _ => Err(ETypeInlineAlias::NotAnAlias(annot.region.start())),
-    }
-}
-
-fn parse_type_alias_after_as<'a>() -> impl Parser<'a, TypeHeader<'a>, EType<'a>> {
-    move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
-        let (sp, spaces_before, state) =
-            eat_space_check(EType::TAsIndentStart, arena, state, min_indent, false)?;
-
-        match parse_term(false, arena, state.clone(), min_indent) {
-            Ok((p, ann, state)) => {
-                let ann = with_spaces_before(arena, ann, spaces_before);
-                match check_type_alias(arena, ann) {
-                    Ok(header) => Ok((p, header, state)),
-                    Err(err) => Err((p, EType::TInlineAlias(err, state.pos()))),
-                }
-            }
-            Err((ep, fail)) => Err((ep.or(sp), fail)),
-        }
     }
 }
 
@@ -174,31 +157,44 @@ fn parse_term<'a>(
         _ => None,
     };
 
-    match res {
-        None => Err((NoProgress, EType::TStart(start))),
-        Some((_, type_ann, state)) => {
-            match and(
-                skip_second(
-                    backtrackable(space0_e(EType::TIndentEnd)),
-                    crate::parser::keyword(keyword::AS, EType::TEnd),
-                ),
-                parse_type_alias_after_as(),
-            )
-            .parse(arena, state.clone(), min_indent)
-            {
-                Ok((_, (spaces, as_alias), state)) => {
-                    let mut region = type_ann.region;
-                    if let Some(alias_var) = as_alias.vars.last() {
-                        region = Region::span_across(&region, &alias_var.region);
-                    }
-                    let value = TypeAnnotation::As(arena.alloc(type_ann), spaces, as_alias);
-                    Ok((MadeProgress, Loc { region, value }, state))
-                }
-                Err((NoProgress, _)) => Ok((MadeProgress, type_ann, state)),
-                Err(err) => Err(err),
-            }
-        }
+    let (type_ann, state) = match res {
+        Some((_, out, state)) => (out, state),
+        None => return Err((NoProgress, EType::TStart(start))),
+    };
+
+    let type_ann_state = state.clone();
+    let (spaces_before_as, state) =
+        match eat_space_check(EType::TIndentEnd, arena, state, min_indent, false) {
+            Ok((_, sp, state)) => (sp, state),
+            Err(_) => return Ok((MadeProgress, type_ann, type_ann_state)),
+        };
+
+    if !at_keyword(keyword::AS, &state) {
+        return Ok((MadeProgress, type_ann, type_ann_state));
     }
+    let state = state.advance(keyword::AS.len());
+
+    let (sp, spaces_after_as, state) =
+        eat_space_check(EType::TAsIndentStart, arena, state, min_indent, false)?;
+
+    let (mut alias_ann, state) = match parse_term(false, arena, state, min_indent) {
+        Ok((_, out, state)) => (out, state),
+        Err((ep, fail)) => return Err((ep.or(sp), fail)),
+    };
+
+    alias_ann = with_spaces_before(arena, alias_ann, spaces_after_as);
+
+    let as_alias = match check_type_alias(arena, alias_ann) {
+        Ok(header) => header,
+        Err(err) => return Err((MadeProgress, EType::TInlineAlias(err, state.pos()))),
+    };
+
+    let mut region = type_ann.region;
+    if let Some(alias_var) = as_alias.vars.last() {
+        region = Region::span_across(&region, &alias_var.region);
+    }
+    let value = TypeAnnotation::As(arena.alloc(type_ann), spaces_before_as, as_alias);
+    Ok((MadeProgress, Loc { region, value }, state))
 }
 
 fn loc_applied_arg<'a>(
