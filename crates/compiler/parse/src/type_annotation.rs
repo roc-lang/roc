@@ -13,8 +13,7 @@ use crate::ident::{
 use crate::keyword;
 use crate::parser::{
     at_keyword, collection_inner, collection_trailing_sep_e, increment_min_indent, indented_seq,
-    loc, map, reset_min_indent, skip_first, skip_second, ERecord, ETypeAbilityImpl, ParseResult,
-    Progress,
+    loc, map, skip_first, ERecord, ETypeAbilityImpl, ParseResult, Progress,
 };
 use crate::parser::{
     backtrackable, byte, optional, specialize_err, specialize_err_ref, word, EType, ETypeApply,
@@ -101,7 +100,7 @@ fn parse_term<'a>(
                     Err((p, fail)) => return Err((p, EType::TInParens(fail, start))),
                 }
             }
-            b'{' => match record_type(stop_at_first_impl).parse(arena, state, min_indent) {
+            b'{' => match rest_of_record_type(stop_at_first_impl, arena, state.inc(), min_indent) {
                 Ok((p, out, state)) => Some((p, Loc::pos(start, state.pos(), out), state)),
                 Err((p, fail)) => return Err((p, EType::TRecord(fail, start))),
             },
@@ -219,7 +218,7 @@ fn loc_applied_arg<'a>(
                     Err((p, fail)) => return Err((p, EType::TInParens(fail, start))),
                 }
             }
-            b'{' => match record_type(stop_at_first_impl).parse(arena, state, min_indent) {
+            b'{' => match rest_of_record_type(stop_at_first_impl, arena, state.inc(), min_indent) {
                 Ok((_, out, state)) => (Loc::pos(start, state.pos(), out), state),
                 Err((p, fail)) => return Err((p, EType::TRecord(fail, start))),
             },
@@ -281,14 +280,20 @@ fn rest_of_type_in_parens<'a>(
     state: State<'a>,
     min_indent: u32,
 ) -> ParseResult<'a, Loc<TypeAnnotation<'a>>, ETypeInParens<'a>> {
-    let (_, fields, state) = skip_second(
-        reset_min_indent(collection_inner(
-            specialize_err_ref(ETypeInParens::Type, type_expr(true, false)),
-            TypeAnnotation::SpaceBefore,
-        )),
-        byte(b')', ETypeInParens::End),
+    let (fields, state) = match collection_inner(
+        specialize_err_ref(ETypeInParens::Type, type_expr(true, false)),
+        TypeAnnotation::SpaceBefore,
     )
-    .parse(arena, state.clone(), min_indent)?;
+    .parse(arena, state.clone(), 0)
+    {
+        Ok((_, out, state)) => (out, state),
+        Err((_, fail)) => return Err((MadeProgress, fail)),
+    };
+
+    if state.bytes().first() != Some(&b')') {
+        return Err((MadeProgress, ETypeInParens::End(state.pos())));
+    }
+    let state = state.inc();
 
     let ext_pos = state.pos();
     let (ext, state) = match parse_term(stop_at_first_impl, arena, state.clone(), min_indent) {
@@ -401,32 +406,37 @@ fn record_type_field<'a>() -> impl Parser<'a, AssignedField<'a, TypeAnnotation<'
     .trace("type_annotation:record_type_field")
 }
 
-#[inline(always)]
-fn record_type<'a>(
+fn rest_of_record_type<'a>(
     stop_at_first_impl: bool,
-) -> impl Parser<'a, TypeAnnotation<'a>, ETypeRecord<'a>> {
-    move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
-        let (_, fields, state) = collection_trailing_sep_e(
-            byte(b'{', ETypeRecord::Open),
-            loc(record_type_field()),
-            byte(b'}', ETypeRecord::End),
-            AssignedField::SpaceBefore,
-        )
-        .parse(arena, state.clone(), min_indent)?;
-
-        let ext_pos = state.pos();
-        let (ext, state) = match parse_term(stop_at_first_impl, arena, state.clone(), min_indent) {
-            Ok((_, ext, state)) => (Some(&*arena.alloc(ext)), state),
-            Err((NoProgress, _)) => (None, state),
-            Err((_, fail)) => {
-                let fail = ETypeRecord::Type(arena.alloc(fail), ext_pos);
-                return Err((MadeProgress, fail));
-            }
+    arena: &'a Bump,
+    state: State<'a>,
+    min_indent: u32,
+) -> ParseResult<'a, TypeAnnotation<'a>, ETypeRecord<'a>> {
+    let (fields, state) =
+        match collection_inner(loc(record_type_field()), AssignedField::SpaceBefore)
+            .parse(arena, state, 0)
+        {
+            Ok((_, out, state)) => (out, state),
+            Err((_, fail)) => return Err((MadeProgress, fail)),
         };
 
-        let record = TypeAnnotation::Record { fields, ext };
-        Ok((MadeProgress, record, state))
+    if state.bytes().first() != Some(&b'}') {
+        return Err((MadeProgress, ETypeRecord::End(state.pos())));
     }
+    let state = state.inc();
+
+    let ext_pos = state.pos();
+    let (ext, state) = match parse_term(stop_at_first_impl, arena, state.clone(), min_indent) {
+        Ok((_, ext, state)) => (Some(&*arena.alloc(ext)), state),
+        Err((NoProgress, _)) => (None, state),
+        Err((_, fail)) => {
+            let fail = ETypeRecord::Type(arena.alloc(fail), ext_pos);
+            return Err((MadeProgress, fail));
+        }
+    };
+
+    let record = TypeAnnotation::Record { fields, ext };
+    Ok((MadeProgress, record, state))
 }
 
 fn applied_type<'a>(stop_at_first_impl: bool) -> impl Parser<'a, TypeAnnotation<'a>, EType<'a>> {

@@ -1399,7 +1399,6 @@ impl<'a> Normalize<'a> for ETypeRecord<'a> {
     fn normalize(&self, arena: &'a Bump) -> Self {
         match self {
             ETypeRecord::End(_) => ETypeRecord::End(Position::zero()),
-            ETypeRecord::Open(_) => ETypeRecord::Open(Position::zero()),
             ETypeRecord::Field(_) => ETypeRecord::Field(Position::zero()),
             ETypeRecord::Type(inner_err, _) => {
                 ETypeRecord::Type(arena.alloc(inner_err.normalize(arena)), Position::zero())

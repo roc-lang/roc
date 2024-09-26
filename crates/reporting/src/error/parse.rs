@@ -2606,55 +2606,6 @@ fn to_trecord_report<'a>(
     let severity = Severity::RuntimeError;
 
     match *parse_problem {
-        ETypeRecord::Open(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
-            Next::Keyword(keyword) => {
-                let surroundings = Region::new(start, pos);
-                let region = to_keyword_region(lines.convert_pos(pos), keyword);
-
-                let doc = alloc.stack([
-                    alloc.reflow(r"I just started parsing a record type, but I got stuck on this field name:"),
-                    alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
-                    alloc.concat([
-                        alloc.reflow(r"Looks like you are trying to use "),
-                        alloc.keyword(keyword),
-                        alloc.reflow(" as a field name, but that is a reserved word. Try using a different name!"),
-                    ]),
-                ]);
-
-                Report {
-                    filename,
-                    doc,
-                    title: "UNFINISHED RECORD TYPE".to_string(),
-                    severity,
-                }
-            }
-            _ => {
-                let surroundings = Region::new(start, pos);
-                let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
-
-                let doc = alloc.stack([
-                    alloc.reflow(r"I just started parsing a record type, but I got stuck here:"),
-                    alloc.region_with_subregion(
-                        lines.convert_region(surroundings),
-                        region,
-                        severity,
-                    ),
-                    alloc.concat([
-                        alloc.reflow(r"Record types look like "),
-                        alloc.parser_suggestion("{ name : String, age : Int },"),
-                        alloc.reflow(" so I was expecting to see a field name next."),
-                    ]),
-                ]);
-
-                Report {
-                    filename,
-                    doc,
-                    title: "UNFINISHED RECORD TYPE".to_string(),
-                    severity,
-                }
-            }
-        },
-
         ETypeRecord::End(pos) => {
             let surroundings = Region::new(start, pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));

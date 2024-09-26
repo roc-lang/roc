@@ -629,7 +629,6 @@ pub enum EType<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ETypeRecord<'a> {
     End(Position),
-    Open(Position),
 
     Field(Position),
     Type(&'a EType<'a>, Position),
