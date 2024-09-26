@@ -4339,6 +4339,14 @@ mod test_reporting {
 
     However, I already saw the final expression in that series of
     definitions.
+
+    Tip: An expression like `4`, `"hello"`, or `functionCall MyThing` is
+    like `return 4` in other programming languages. To me, it seems like
+    you did `return 4` followed by more code in the lines after, that code
+    would never be executed!
+    
+    Tip: If you are working with `Task`, this error can happen if you
+    forgot a `!` somewhere.
     "###
     );
 
