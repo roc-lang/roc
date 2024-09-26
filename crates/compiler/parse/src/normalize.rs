@@ -1368,7 +1368,6 @@ impl<'a> Normalize<'a> for ETypeInParens<'a> {
         match self {
             ETypeInParens::Empty(_) => ETypeInParens::Empty(Position::zero()),
             ETypeInParens::End(_) => ETypeInParens::End(Position::zero()),
-            ETypeInParens::Open(_) => ETypeInParens::Open(Position::zero()),
             ETypeInParens::Type(inner_err, _) => {
                 ETypeInParens::Type(arena.alloc(inner_err.normalize(arena)), Position::zero())
             }
