@@ -290,8 +290,21 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
             }
         }
 
+        Expect {
+            condition,
+            preceding_comment,
+        } => match unwrap_suffixed_expression(arena, condition, None) {
+            Ok(new_condition) => ValueDef::Expect {
+                condition: new_condition,
+                preceding_comment,
+            },
+            Err(..) => {
+                internal_error!("Unable to desugar the suffix inside an Expect value def");
+            }
+        },
+
         // TODO support desugaring of Dbg, Expect, and ExpectFx
-        Dbg { .. } | Expect { .. } | ExpectFx { .. } => value_def,
+        Dbg { .. } | ExpectFx { .. } => value_def,
         ModuleImport { .. } | IngestedFileImport(_) => value_def,
 
         Stmt(..) => {
