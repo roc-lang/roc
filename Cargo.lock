@@ -3129,6 +3129,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_specialize_types"
+version = "0.0.1"
+dependencies = [
+ "arrayvec 0.7.4",
+ "bitvec",
+ "bumpalo",
+ "hashbrown",
+ "indoc",
+ "parking_lot",
+ "roc_can",
+ "roc_collections",
+ "roc_debug_flags",
+ "roc_region",
+ "roc_types",
+ "static_assertions",
+]
+
+[[package]]
 name = "roc_std"
 version = "0.0.1"
 dependencies = [
