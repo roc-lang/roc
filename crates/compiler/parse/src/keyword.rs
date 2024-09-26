@@ -24,3 +24,9 @@ pub const PLATFORM: &str = "platform";
 pub const KEYWORDS: [&str; 11] = [
     IF, THEN, ELSE, WHEN, AS, IS, DBG, IMPORT, EXPECT, EXPECT_FX, CRASH,
 ];
+
+// todo: @wip create a fast lookup for the keyword, returning its index (or enum?).
+// Utilize it when checking that identifier is not a keyword and when checking the state against keywords in a sequence, e.g. in `parse_stmt_start`
+// Implement via the fixed matches starting from the first character or from the length of the input string,
+// see http://0x80.pl/notesen/2023-04-30-lookup-in-strings.html
+// and http://0x80.pl/notesen/2022-01-29-http-verb-parse.html

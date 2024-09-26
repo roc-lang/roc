@@ -1,5 +1,6 @@
 use crate::{
-    blankspace::{eat_space, with_spaces},
+    ast::Collection,
+    blankspace::{eat_space, with_spaces, with_spaces_after, with_spaces_before},
     state::State,
 };
 use bumpalo::collections::vec::Vec;
@@ -1160,81 +1161,61 @@ where
 }
 
 pub fn collection_inner<'a, Elem: 'a + crate::ast::Spaceable<'a> + Clone, E: 'a + SpaceProblem>(
-    elem: impl Parser<'a, Loc<Elem>, E> + 'a,
+    elem_p: impl Parser<'a, Loc<Elem>, E> + 'a,
     space_before: impl Fn(&'a Elem, &'a [crate::ast::CommentOrNewline<'a>]) -> Elem,
 ) -> impl Parser<'a, crate::ast::Collection<'a, Loc<Elem>>, E> {
-    let elem_parser = move |arena, state: State<'a>, min_indent| {
-        let (sp_p, (spaces_before, _), state) = eat_space(arena, state, false)?;
-        match elem.parse(arena, state, min_indent) {
-            Ok((_, expr, state)) => {
-                let (spaces_after, state) = match eat_space::<'a, E>(arena, state.clone(), false) {
-                    Ok((_, (sp, _), state)) => (sp, state),
-                    Err(_) => (&[] as &[_], state),
-                };
+    move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
+        let (_, (first_spaces, _), state) = eat_space(arena, state, true)?;
 
-                let expr = with_spaces(arena, spaces_before, expr, spaces_after);
-                Ok((MadeProgress, expr, state))
+        let (mut first_item, state) = match elem_p.parse(arena, state.clone(), min_indent) {
+            Ok((_, out, state)) => (out, state),
+            Err((NoProgress, _)) => {
+                let empty = Collection::with_items_and_comments(arena, &[], first_spaces);
+                return Ok((MadeProgress, empty, state));
             }
-            Err((p, fail)) => Err((sp_p.or(p), fail)),
-        }
-    };
-
-    move |arena, state, min_indent| {
-        let (_, (spaces_before, _), state) = eat_space(arena, state, false)?;
-
-        // Parse zero or more values separated by a delimiter (e.g. a comma)
-        // with an optional trailing delimiter whose values are discarded
-        let prev_state = state.clone();
-
-        let (mut elems, state) = match elem_parser.parse(arena, state, min_indent) {
-            Ok((first_elem_p, first_elem, first_elem_state)) => {
-                // in practice, we want elements to make progress
-                debug_assert_eq!(first_elem_p, MadeProgress);
-
-                let mut elems = Vec::with_capacity_in(1, arena);
-                elems.push(first_elem);
-
-                let mut state = first_elem_state;
-                loop {
-                    if state.bytes().first() != Some(&b',') {
-                        break;
-                    }
-                    state.advance_mut(1);
-                    match elem_parser.parse(arena, state.clone(), min_indent) {
-                        Ok((elem_p, next_output, elem_state)) => {
-                            debug_assert_eq!(elem_p, MadeProgress);
-                            state = elem_state;
-                            elems.push(next_output);
-                        }
-                        Err(_) => {
-                            break;
-                        }
-                    }
-                }
-                (elems, state)
-            }
-            Err((NoProgress, _)) => (Vec::new_in(arena), prev_state),
             Err(err) => return Err(err),
         };
 
-        let (_, (mut final_spaces, _), state) = eat_space(arena, state, true)?;
+        let (_, (spaces_after, _), state) = eat_space(arena, state, true)?;
+        first_item = with_spaces_after(arena, first_item, spaces_after);
 
-        if !spaces_before.is_empty() {
-            if let Some(first) = elems.first_mut() {
-                first.value = space_before(arena.alloc(first.value.clone()), spaces_before);
-            } else {
-                debug_assert!(final_spaces.is_empty());
-                final_spaces = spaces_before;
+        if !first_spaces.is_empty() {
+            let spaced_val = space_before(arena.alloc(first_item.value), first_spaces);
+            first_item = Loc::at(first_item.region, spaced_val);
+        }
+
+        let mut items = Vec::with_capacity_in(1, arena);
+        items.push(first_item);
+
+        let mut state = state;
+        loop {
+            if state.bytes().first() != Some(&b',') {
+                break;
+            }
+
+            state.advance_mut(1);
+            match eat_space::<'a, E>(arena, state.clone(), false) {
+                Ok((_, (spb, _), news)) => {
+                    let (elem, news) = match elem_p.parse(arena, news, min_indent) {
+                        Ok((_, elem, news)) => (elem, news),
+                        Err(_) => break,
+                    };
+                    let (item, news) = match eat_space::<'a, E>(arena, news.clone(), false) {
+                        Ok((_, (spa, _), news)) => (with_spaces(arena, spb, elem, spa), news),
+                        Err(_) => (with_spaces_before(arena, elem, spb), news),
+                    };
+                    items.push(item);
+                    state = news;
+                }
+                Err(_) => break,
             }
         }
 
-        let elems = crate::ast::Collection::with_items_and_comments(
-            arena,
-            elems.into_bump_slice(),
-            final_spaces,
-        );
+        let (_, (final_spaces, _), state) = eat_space(arena, state, true)?;
 
-        Ok((MadeProgress, elems, state))
+        let items =
+            Collection::with_items_and_comments(arena, items.into_bump_slice(), final_spaces);
+        Ok((MadeProgress, items, state))
     }
 }
 
