@@ -3141,6 +3141,7 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_debug_flags",
+ "roc_module",
  "roc_region",
  "roc_types",
  "static_assertions",

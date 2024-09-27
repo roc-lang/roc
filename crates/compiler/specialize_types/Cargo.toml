@@ -13,6 +13,8 @@ roc_region = { path = "../region" }
 roc_types = { path = "../types" }
 roc_collections = { path = "../collections" }
 roc_debug_flags = { path = "../debug_flags" }
+# roc_module is only used for TagName
+roc_module = { path = "../module" }
 
 bitvec.workspace = true
 arrayvec.workspace = true
