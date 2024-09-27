@@ -22,22 +22,7 @@ where
     S: 'a + Spaceable<'a>,
 {
     let (spaces_before, (loc, spaces_after)) = tuples;
-    let out = with_spaces_after(&arena, loc, spaces_after);
-    with_spaces_before(&arena, out, spaces_before)
-}
-
-#[inline(always)]
-pub fn with_spaces<'a, S>(
-    arena: &'a Bump,
-    spaces_before: &'a [CommentOrNewline<'a>],
-    loc: Loc<S>,
-    spaces_after: &'a [CommentOrNewline<'a>],
-) -> Loc<S>
-where
-    S: 'a + Spaceable<'a>,
-{
-    let out = with_spaces_after(&arena, loc, spaces_after);
-    with_spaces_before(&arena, out, spaces_before)
+    loc.spaced_around(&arena, spaces_after, spaces_before)
 }
 
 pub fn space0_before_e<'a, P, S, E>(
@@ -52,39 +37,56 @@ where
     parser::map_with_arena(
         and(space0_e(indent_problem), parser),
         |arena: &'a Bump, (space_list, loc_expr): (&'a [CommentOrNewline<'a>], Loc<S>)| {
-            with_spaces_before(arena, loc_expr, space_list)
+            loc_expr.spaced_before(arena, space_list)
         },
     )
 }
 
-#[inline(always)]
-pub fn with_spaces_before<'a, T: 'a + Spaceable<'a>>(
-    arena: &'a Bump,
-    loc: Loc<T>,
-    spaces: &'a [CommentOrNewline],
-) -> Loc<T> {
-    if spaces.is_empty() {
-        loc
-    } else {
-        Loc {
-            region: loc.region,
-            value: arena.alloc(loc.value).before(spaces),
-        }
+pub trait SpacedBuilder<'a, T: 'a + Spaceable<'a>> {
+    fn spaced_before(self, arena: &'a Bump, spaces: &'a [CommentOrNewline]) -> Self;
+
+    fn spaced_after(self, arena: &'a Bump, spaces: &'a [CommentOrNewline]) -> Self;
+
+    #[inline(always)]
+    fn spaced_around(
+        self,
+        arena: &'a Bump,
+        spaces_before: &'a [CommentOrNewline<'a>],
+        spaces_after: &'a [CommentOrNewline<'a>],
+    ) -> Self
+    where
+        Self: Sized,
+    {
+        self.spaced_after(&arena, spaces_after)
+            .spaced_before(&arena, spaces_before)
     }
 }
 
-#[inline(always)]
-pub fn with_spaces_after<'a, T: 'a + Spaceable<'a>>(
-    arena: &'a Bump,
-    loc: Loc<T>,
-    spaces: &'a [CommentOrNewline],
-) -> Loc<T> {
-    if spaces.is_empty() {
-        loc
-    } else {
-        Loc {
-            region: loc.region,
-            value: arena.alloc(loc.value).after(spaces),
+impl<'a, T> SpacedBuilder<'a, T> for Loc<T>
+where
+    T: 'a + Spaceable<'a>,
+{
+    #[inline(always)]
+    fn spaced_before(self, arena: &'a Bump, spaces: &'a [CommentOrNewline]) -> Self {
+        if spaces.is_empty() {
+            self
+        } else {
+            Loc {
+                region: self.region,
+                value: arena.alloc(self.value).before(spaces),
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn spaced_after(self, arena: &'a Bump, spaces: &'a [CommentOrNewline]) -> Self {
+        if spaces.is_empty() {
+            self
+        } else {
+            Loc {
+                region: self.region,
+                value: arena.alloc(self.value).after(spaces),
+            }
         }
     }
 }

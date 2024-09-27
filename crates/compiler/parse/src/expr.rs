@@ -6,8 +6,7 @@ use crate::ast::{
     ValueDef,
 };
 use crate::blankspace::{
-    eat_space, eat_space_check, eat_space_loc_comments, space0_e, spaces_around_help, with_spaces,
-    with_spaces_after, with_spaces_before,
+    eat_space, eat_space_check, eat_space_loc_comments, space0_e, spaces_around_help, SpacedBuilder,
 };
 use crate::header::module_name_help;
 use crate::ident::{
@@ -59,7 +58,7 @@ pub fn test_parse_expr<'a>(
         };
 
     if state.has_reached_end() {
-        Ok(with_spaces(arena, spaces_before, expr, spaces_after))
+        Ok(expr.spaced_around(arena, spaces_before, spaces_after))
     } else {
         Err(EExpr::BadExprEnd(state.pos()))
     }
@@ -507,7 +506,7 @@ pub(crate) fn parse_expr_start<'a>(
                 prev_state = state.clone();
 
                 if !expr_state.spaces_after.is_empty() {
-                    arg = with_spaces_before(arena, arg, expr_state.spaces_after);
+                    arg = arg.spaced_before(arena, expr_state.spaces_after);
                     expr_state.spaces_after = &[];
                 }
                 expr_state.arguments.push(arena.alloc(arg));
@@ -704,7 +703,7 @@ fn parse_stmt_operator_chain<'a>(
                 prev_state = state.clone();
 
                 if !expr_state.spaces_after.is_empty() {
-                    arg = with_spaces_before(arena, arg, expr_state.spaces_after);
+                    arg = arg.spaced_before(arena, expr_state.spaces_after);
                     expr_state.spaces_after = &[];
                 }
                 expr_state.arguments.push(arena.alloc(arg));
@@ -913,8 +912,7 @@ fn numeric_negate_expression<'a>(
         _ => Expr::UnaryOp(arena.alloc(expr), Loc::at(loc_op, UnaryOp::Negate)),
     };
 
-    let new_loc_expr = Loc::at(region, new_expr);
-    with_spaces_before(arena, new_loc_expr, spaces)
+    Loc::at(region, new_expr).spaced_before(arena, spaces)
 }
 
 fn import_params<'a>() -> impl Parser<'a, ModuleImportParams<'a>, EImportParams<'a>> {
@@ -1162,9 +1160,7 @@ fn parse_stmt_alias_or_opaque<'a>(
                         Ok((_, sp, state)) => {
                             match implements_abilities().parse(arena, state, inc_indent) {
                                 Err(_) => (None, olds),
-                                Ok((_, out, state)) => {
-                                    (Some(with_spaces_before(arena, out, sp)), state)
-                                }
+                                Ok((_, out, state)) => (Some(out.spaced_before(arena, sp)), state),
                             }
                         }
                     };
@@ -1191,7 +1187,7 @@ fn parse_stmt_alias_or_opaque<'a>(
                 match type_expr(false, false).parse(arena, state, inc_indent) {
                     Ok((_, mut type_ann, state)) => {
                         // put the spaces from after the operator in front of the call
-                        type_ann = with_spaces_before(arena, type_ann, spaces_after_operator);
+                        type_ann = type_ann.spaced_before(arena, spaces_after_operator);
                         let value_def = ValueDef::Annotation(Loc::at(expr_region, pat), type_ann);
                         (Stmt::ValueDef(value_def), state)
                     }
@@ -1306,7 +1302,7 @@ mod ability {
 
                                 Ok((_, mut demand, state)) => {
                                     // Tag spaces onto the parsed demand name
-                                    demand.name = with_spaces_before(arena, demand.name, spaces);
+                                    demand.name = demand.name.spaced_before(arena, spaces);
                                     Ok((MadeProgress, (indent_column, demand), state))
                                 }
                             }
@@ -1486,7 +1482,7 @@ fn parse_stmt_operator<'a>(
                             parse_expr_start(options, arena, state, call_min_indent)?;
 
                         // put the spaces from after the operator in front of the call
-                        type_ann = with_spaces_before(&arena, type_ann, spaces_after_op.value);
+                        type_ann = type_ann.spaced_before(&arena, spaces_after_op.value);
                         (Loc::at(expr_region, pat), type_ann, state)
                     }
                     Err(_) => {
@@ -1539,7 +1535,7 @@ fn parse_after_binop<'a>(
     };
 
     // put the spaces from after the operator in front of the new_expr
-    let right_expr = with_spaces_before(&arena, right_expr, spaces_after_operator);
+    let right_expr = right_expr.spaced_before(&arena, spaces_after_operator);
 
     let args = std::mem::replace(&mut expr_state.arguments, Vec::new_in(arena));
     let call = to_call(arena, args, expr_state.expr);
@@ -1671,8 +1667,7 @@ fn parse_stmt_multi_backpassing<'a>(
         Err((pe, fail)) => return Err((ps.or(pe), fail)),
     };
 
-    let loc_body = with_spaces_before(arena, loc_body, spaces_before);
-
+    let loc_body = loc_body.spaced_before(arena, spaces_before);
     let ret = Stmt::Backpassing(patterns.into_bump_slice(), arena.alloc(loc_body));
     Ok((MadeProgress, ret, state))
 }
@@ -1741,7 +1736,7 @@ fn parse_expr_end<'a>(
         Ok((_, mut arg, state)) => {
             // now that we have `function arg1 ... <spaces> argn`, attach the spaces to the `argn`
             if !expr_state.spaces_after.is_empty() {
-                arg = with_spaces_before(arena, arg, expr_state.spaces_after);
+                arg = arg.spaced_before(arena, expr_state.spaces_after);
                 expr_state.spaces_after = &[];
             }
             expr_state.arguments.push(arena.alloc(arg));
@@ -1856,8 +1851,8 @@ fn parse_ability_def<'a>(
     }
 
     // Attach any spaces to the `implements` keyword
-    let implements = Loc::at(implements.region, Implements::Implements);
-    let implements = with_spaces_before(arena, implements, expr_state.spaces_after);
+    let implements = Loc::at(implements.region, Implements::Implements)
+        .spaced_before(arena, expr_state.spaces_after);
 
     let args = arguments.into_bump_slice();
     let (_, (type_def, _), state) =
@@ -1891,7 +1886,7 @@ pub fn loc_expr_block<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr
         let (_, spaces_after, state) =
             eat_space_check(EExpr::IndentEnd, arena, state, min_indent, true)?;
 
-        let expr = with_spaces_after(arena, expr, spaces_after);
+        let expr = expr.spaced_after(arena, spaces_after);
         Ok((MadeProgress, expr, state))
     }
 }
@@ -2227,7 +2222,7 @@ fn rest_of_closure<'a>(
             Err(err) => return Err(err),
         };
 
-    let first_param = with_spaces(arena, spaces_before, param, spaces_after);
+    let first_param = param.spaced_around(arena, spaces_before, spaces_after);
     let mut params = Vec::with_capacity_in(1, arena);
     params.push(first_param);
 
@@ -2267,7 +2262,7 @@ fn rest_of_closure<'a>(
                 Err(err) => return Err(err),
             };
 
-            let next_param = with_spaces(arena, spaces_before, param, spaces_after);
+            let next_param = param.spaced_around(arena, spaces_before, spaces_after);
             params.push(next_param);
             state = next_state;
         } else {
@@ -2312,7 +2307,7 @@ fn rest_of_closure<'a>(
 
         let body = stmts_to_expr(&stmts, arena)
             .map_err(|e| (MadeProgress, EClosure::Body(arena.alloc(e), err_pos)))?;
-        let body = with_spaces_before(arena, body, first_space.value);
+        let body = body.spaced_before(arena, first_space.value);
         (body, state)
     };
 
@@ -2322,10 +2317,7 @@ fn rest_of_closure<'a>(
 
 mod when {
     use super::*;
-    use crate::{
-        ast::WhenBranch,
-        blankspace::{eat_space, with_spaces, with_spaces_before},
-    };
+    use crate::{ast::WhenBranch, blankspace::eat_space};
 
     /// If Ok it always returns MadeProgress
     pub fn rest_of_when_expr<'a>(
@@ -2400,7 +2392,7 @@ mod when {
             }
         }
 
-        let cond = with_spaces(arena, spaces_before, cond, spaces_after);
+        let cond = cond.spaced_around(arena, spaces_before, spaces_after);
         let when = Expr::When(arena.alloc(cond), branches.into_bump_slice());
         Ok((MadeProgress, when, state))
     }
@@ -2457,7 +2449,7 @@ mod when {
         let (_, spaces_after, mut state) =
             eat_space_check(EWhen::IndentPattern, arena, state, pattern_indent, true)?;
 
-        let first_pattern = with_spaces(arena, spaces_before, pattern, spaces_after);
+        let first_pattern = pattern.spaced_around(arena, spaces_before, spaces_after);
         let mut patterns = Vec::with_capacity_in(1, arena);
         patterns.push(first_pattern);
 
@@ -2482,9 +2474,9 @@ mod when {
                     true,
                 )?;
 
-                let pattern = with_spaces(arena, spaces_before, pat, spaces_after);
-                state = next_state;
+                let pattern = pat.spaced_around(arena, spaces_before, spaces_after);
                 patterns.push(pattern);
+                state = next_state;
             } else {
                 state = prev_state;
                 break;
@@ -2493,7 +2485,7 @@ mod when {
 
         // tag spaces onto the first parsed pattern
         if let Some(first) = patterns.get_mut(0) {
-            *first = with_spaces_before(arena, *first, indent_spaces);
+            *first = (*first).spaced_before(arena, indent_spaces);
         }
 
         let column_patterns = (pattern_column, patterns);
@@ -2515,7 +2507,7 @@ mod when {
         let (_, spaces_after, state) =
             eat_space_check(EWhen::IndentArrow, arena, state, min_indent, true)?;
 
-        let guard = with_spaces(arena, spaces_before, guard, spaces_after);
+        let guard = guard.spaced_around(arena, spaces_before, spaces_after);
         Ok((MadeProgress, (column_patterns, Some(guard)), state))
     }
 
@@ -2695,7 +2687,7 @@ fn rest_of_if_expr<'a>(
         }
         state.advance_mut(keyword::THEN.len());
 
-        let cond = with_spaces(arena, spaces_before_cond, cond, spaces_after_cond);
+        let cond = cond.spaced_around(arena, spaces_before_cond, spaces_after_cond);
 
         let (_, then_expr, state) = parse_block(
             ExprParseOptions::ALL,
@@ -2850,7 +2842,7 @@ where
 
         match stmts_to_expr(&stmts, arena) {
             Ok(expr) => {
-                let expr = with_spaces_before(arena, expr, first_space.value);
+                let expr = expr.spaced_before(arena, first_space.value);
                 Ok((MadeProgress, expr, state))
             }
             Err(e) => Err((MadeProgress, wrap_error(arena.alloc(e), last_pos))),
@@ -2859,7 +2851,7 @@ where
         let prev_pos = state.pos();
         match parse_expr_start(options, arena, state, min_indent) {
             Ok((_, expr, state)) => {
-                let expr = with_spaces_before(arena, expr, first_space.value);
+                let expr = expr.spaced_before(arena, first_space.value);
                 Ok((MadeProgress, expr, state))
             }
             Err((_, e)) => Err((MadeProgress, wrap_error(arena.alloc(e), prev_pos))),
@@ -3433,7 +3425,7 @@ pub fn parse_record_field<'a>(
                             return Err((MadeProgress, ERecord::Expr(arena.alloc(fail), val_pos)))
                         }
                     };
-                    let val_expr = with_spaces_before(arena, val_expr, spaces);
+                    let val_expr = val_expr.spaced_before(arena, spaces);
 
                     let out = if *b == b':' {
                         RequiredValue(field_label, label_spaces, arena.alloc(val_expr))
@@ -3486,8 +3478,7 @@ pub fn parse_record_field<'a>(
                         }
                     };
 
-                    let field_val = with_spaces_before(arena, field_val, colon_spaces);
-
+                    let field_val = field_val.spaced_before(arena, colon_spaces);
                     let out = IgnoredValue(opt_field_label, label_spaces, arena.alloc(field_val));
                     Ok((MadeProgress, out, state))
                 }
@@ -3537,7 +3528,7 @@ fn record_help<'a>() -> impl Parser<'a, RecordHelp<'a>, ERecord<'a>> {
                         match eat_space::<'_, ERecord<'_>>(arena, state, false) {
                             Err(_) => (None, before_prefix),
                             Ok((_, (spaces_after, _), state)) => {
-                                let ident = with_spaces(arena, spaces_before, ident, spaces_after);
+                                let ident = ident.spaced_around(arena, spaces_before, spaces_after);
 
                                 if state.bytes().first() == Some(&b'&') {
                                     (Some((ident, RecordHelpPrefix::Update)), state.inc())
@@ -3737,7 +3728,7 @@ fn rest_of_logical_not<'a>(
     return match eat_space_check(EExpr::IndentStart, arena, state, min_indent, true) {
         Ok((_, spaces_before, state)) => match parse_term(options, arena, state, min_indent) {
             Ok((_, loc_expr, state)) => {
-                let loc_expr = with_spaces_before(arena, loc_expr, spaces_before);
+                let loc_expr = loc_expr.spaced_before(arena, spaces_before);
                 let op = Loc::pos(start, after_not, UnaryOp::Not);
                 let op = Expr::UnaryOp(arena.alloc(loc_expr), op);
                 let op = Loc::pos(start, state.pos(), op);

@@ -1,5 +1,5 @@
 use crate::ast::{Collection, Implements, Pattern, PatternAs};
-use crate::blankspace::{eat_space, eat_space_check, with_spaces_after, with_spaces_before};
+use crate::blankspace::{eat_space, eat_space_check, SpacedBuilder};
 use crate::expr::{parse_expr_start, ExprParseOptions};
 use crate::ident::{parse_ident, parse_lowercase_ident, Accessor, Ident};
 use crate::keyword;
@@ -76,7 +76,7 @@ pub fn loc_pattern_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>>
             Ok((_, pattern_as, state)) => {
                 let region = Region::span_across(&pattern.region, &pattern_as.identifier.region);
 
-                let pattern = with_spaces_after(arena, pattern, pattern_spaces);
+                let pattern = pattern.spaced_after(arena, pattern_spaces);
                 let as_pattern = Pattern::As(arena.alloc(pattern), pattern_as);
 
                 Ok((MadeProgress, Loc::at(region, as_pattern), state))
@@ -554,12 +554,11 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
                 }
             };
 
-            let pattern_val = with_spaces_before(arena, pattern_val, colon_spaces);
-
+            let pattern_val = pattern_val.spaced_before(arena, colon_spaces);
             let region = Region::span_across(&label_at, &pattern_val.region);
 
             // TODO spaces are dropped here
-            // arena.alloc(arena.alloc(value).with_spaces_before(spaces, region)),
+            // arena.alloc(arena.alloc(value).spaced_before(spaces, region)),
             let req_field = Pattern::RequiredField(label, arena.alloc(pattern_val));
             return Ok((MadeProgress, Loc::at(region, req_field), state));
         }
@@ -583,12 +582,11 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
                 }
             };
 
-            let optional_val = with_spaces_before(arena, optional_val, question_spaces);
-
+            let optional_val = optional_val.spaced_before(arena, question_spaces);
             let region = Region::span_across(&label_at, &optional_val.region);
 
             // TODO spaces are dropped
-            // arena.alloc(arena.alloc(value).with_spaces_before(spaces, region)),
+            // arena.alloc(arena.alloc(value).spaced_before(spaces, region)),
             let opt_field = Pattern::OptionalField(label, arena.alloc(optional_val));
             return Ok((MadeProgress, Loc::at(region, opt_field), state));
         }

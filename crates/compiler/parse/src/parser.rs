@@ -1,6 +1,6 @@
 use crate::{
     ast::Collection,
-    blankspace::{eat_space, with_spaces, with_spaces_after, with_spaces_before},
+    blankspace::{eat_space, SpacedBuilder},
     state::State,
 };
 use bumpalo::collections::vec::Vec;
@@ -1176,7 +1176,7 @@ pub fn collection_inner<'a, Elem: 'a + crate::ast::Spaceable<'a> + Clone, E: 'a 
         };
 
         let (_, (spaces_after, _), state) = eat_space(arena, state, true)?;
-        first_item = with_spaces_after(arena, first_item, spaces_after);
+        first_item = first_item.spaced_after(arena, spaces_after);
 
         if !first_spaces.is_empty() {
             let spaced_val = space_before(arena.alloc(first_item.value), first_spaces);
@@ -1191,7 +1191,6 @@ pub fn collection_inner<'a, Elem: 'a + crate::ast::Spaceable<'a> + Clone, E: 'a 
             if state.bytes().first() != Some(&b',') {
                 break;
             }
-
             state.advance_mut(1);
             match eat_space::<'a, E>(arena, state.clone(), false) {
                 Ok((_, (spb, _), news)) => {
@@ -1200,8 +1199,8 @@ pub fn collection_inner<'a, Elem: 'a + crate::ast::Spaceable<'a> + Clone, E: 'a 
                         Err(_) => break,
                     };
                     let (item, news) = match eat_space::<'a, E>(arena, news.clone(), false) {
-                        Ok((_, (spa, _), news)) => (with_spaces(arena, spb, elem, spa), news),
-                        Err(_) => (with_spaces_before(arena, elem, spb), news),
+                        Ok((_, (spa, _), news)) => (elem.spaced_around(arena, spb, spa), news),
+                        Err(_) => (elem.spaced_before(arena, spb), news),
                     };
                     items.push(item);
                     state = news;

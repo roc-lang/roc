@@ -1,5 +1,5 @@
 use crate::ast::{EscapedChar, SingleQuoteLiteral, StrLiteral, StrSegment};
-use crate::blankspace::{eat_space_check, with_spaces_before};
+use crate::blankspace::{eat_space_check, SpacedBuilder};
 use crate::expr::{parse_expr_start, ExprParseOptions};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
@@ -383,7 +383,7 @@ pub fn rest_of_str_like<'a>(
                                 }
                             };
 
-                        let expr = with_spaces_before(arena, expr, spaces_before);
+                        let expr = expr.spaced_before(arena, spaces_before);
                         let expr = &*arena.alloc(expr.value);
                         let expr = Loc::pos(expr_pos, news.pos(), expr);
 
@@ -508,7 +508,7 @@ pub fn rest_of_str_like<'a>(
                         }
                     };
 
-                let expr = with_spaces_before(arena, expr, spaces_before);
+                let expr = expr.spaced_before(arena, spaces_before);
                 let expr = &*arena.alloc(expr.value);
                 let expr = Loc::pos(expr_pos, news.pos(), expr);
 

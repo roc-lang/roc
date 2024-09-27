@@ -4,7 +4,7 @@ use crate::ast::{
     Collection, CommentOrNewline, Defs, Header, Malformed, Pattern, Spaced, Spaces, SpacesBefore,
     StrLiteral, TypeAnnotation,
 };
-use crate::blankspace::{eat_space_check, space0_e, spaces_around_help, with_spaces_before};
+use crate::blankspace::{eat_space_check, space0_e, spaces_around_help, SpacedBuilder};
 use crate::expr::merge_spaces;
 use crate::ident::{
     self, lowercase_ident, parse_lowercase_ident, unqualified_ident, UppercaseIdent,
@@ -826,7 +826,7 @@ pub fn typed_ident<'a>() -> impl Parser<'a, Spaced<'a, TypedIdent<'a>>, ETypedId
                 let typed_ident = Spaced::Item(TypedIdent {
                     ident,
                     spaces_before_colon,
-                    ann: with_spaces_before(arena, ann, spaces_after_colon),
+                    ann: ann.spaced_before(arena, spaces_after_colon),
                 });
                 Ok((MadeProgress, typed_ident, state))
             }

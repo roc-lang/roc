@@ -2,9 +2,7 @@ use crate::ast::{
     AbilityImpls, AssignedField, Expr, ImplementsAbilities, ImplementsAbility, ImplementsClause,
     Pattern, Spaceable, Spaced, Tag, TypeAnnotation, TypeHeader,
 };
-use crate::blankspace::{
-    eat_space_check, space0_before_e, with_spaces, with_spaces_after, with_spaces_before,
-};
+use crate::blankspace::{eat_space_check, space0_before_e, SpacedBuilder};
 use crate::expr::parse_record_field;
 use crate::ident::{
     chomp_concrete_type, chomp_lowercase_part, chomp_uppercase_part, parse_lowercase_ident,
@@ -180,7 +178,7 @@ fn parse_term<'a>(
         Err((ep, fail)) => return Err((ep.or(sp), fail)),
     };
 
-    alias_ann = with_spaces_before(arena, alias_ann, spaces_after_as);
+    alias_ann = alias_ann.spaced_before(arena, spaces_after_as);
 
     let as_alias = match check_type_alias(arena, alias_ann) {
         Ok(header) => header,
@@ -268,7 +266,7 @@ fn loc_applied_arg<'a>(
         _ => return Err((NoProgress, EType::TStart(start))),
     };
 
-    let type_ann = with_spaces_before(arena, type_ann, spaces);
+    let type_ann = type_ann.spaced_before(arena, spaces);
     Ok((MadeProgress, type_ann, state))
 }
 
@@ -505,7 +503,7 @@ fn implements_clause<'a>() -> impl Parser<'a, Loc<ImplementsClause<'a>>, EType<'
         let (_, spaces_after, state) =
             eat_space_check(EType::TIndentEnd, arena, state, min_indent, true)?;
 
-        let ident = with_spaces(arena, spaces_before, ident, spaces_after);
+        let ident = ident.spaced_around(arena, spaces_before, spaces_after);
 
         if !state.bytes().starts_with(keyword::IMPLEMENTS.as_bytes()) {
             return Err((MadeProgress, EType::TImplementsClause(state.pos())));
@@ -532,7 +530,7 @@ fn implements_clause<'a>() -> impl Parser<'a, Loc<ImplementsClause<'a>>, EType<'
                 Err(_) => (&[] as &[_], state),
             };
 
-        first_ability = with_spaces(arena, spaces_before, first_ability, spaces_after);
+        first_ability = first_ability.spaced_around(arena, spaces_before, spaces_after);
 
         let mut abilities = Vec::with_capacity_in(1, arena);
         abilities.push(first_ability);
@@ -562,7 +560,7 @@ fn implements_clause<'a>() -> impl Parser<'a, Loc<ImplementsClause<'a>>, EType<'
                     Err(_) => (&[] as &[_], news),
                 };
 
-            ability = with_spaces(arena, spaces_before, ability, spaces_after);
+            ability = ability.spaced_around(arena, spaces_before, spaces_after);
             abilities.push(ability);
             state = news;
         }
@@ -646,7 +644,7 @@ pub(crate) fn type_expr<'a>(
             Err((p, fail)) => return Err((p.or(sp_p), fail)),
         };
 
-        let first_type = with_spaces_before(arena, first_type, spaces_before);
+        let first_type = first_type.spaced_before(arena, spaces_before);
 
         let first_state = state.clone();
         let mut state = state;
@@ -697,7 +695,7 @@ pub(crate) fn type_expr<'a>(
                     Err(err) => break Err(err),
                 };
 
-            let arg = with_spaces(arena, spaces_before, arg, spaces_after);
+            let arg = arg.spaced_around(arena, spaces_before, spaces_after);
             more_args.push(arg);
             state = news;
         };
@@ -713,7 +711,7 @@ pub(crate) fn type_expr<'a>(
                         Err((ep, fail)) => return Err((ep.or(p), fail)),
                     };
 
-                let return_type = with_spaces_before(arena, return_type, spaces_before_ret);
+                let return_type = return_type.spaced_before(arena, spaces_before_ret);
                 let region = Region::span_across(&first_type.region, &return_type.region);
 
                 // prepare arguments
@@ -805,7 +803,7 @@ pub(crate) fn type_expr<'a>(
 
         // We're transforming the spaces_before the 'where'
         // into spaces_after the thing before the 'where'
-        let types = with_spaces_after(arena, types, spaces_before);
+        let types = types.spaced_after(arena, spaces_before);
         let types = &*arena.alloc(types);
 
         let types_where = TypeAnnotation::Where(types, implements);
