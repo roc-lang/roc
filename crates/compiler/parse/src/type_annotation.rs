@@ -3,12 +3,11 @@ use crate::ast::{
     Pattern, Spaceable, Spaced, Tag, TypeAnnotation, TypeHeader,
 };
 use crate::blankspace::{
-    eat_space_check, parse_space, space0_before_e, with_spaces, with_spaces_after,
-    with_spaces_before,
+    eat_space_check, space0_before_e, with_spaces, with_spaces_after, with_spaces_before,
 };
 use crate::expr::parse_record_field;
 use crate::ident::{
-    chomp_concrete_type, chomp_uppercase_part, lowercase_ident_keyword_e, parse_lowercase_ident,
+    chomp_concrete_type, chomp_lowercase_part, chomp_uppercase_part, parse_lowercase_ident,
 };
 use crate::keyword;
 use crate::parser::{
@@ -357,19 +356,24 @@ fn tag_type<'a>() -> impl Parser<'a, Loc<Tag<'a>>, ETypeTagUnion<'a>> {
 fn record_type_field<'a>() -> impl Parser<'a, AssignedField<'a, TypeAnnotation<'a>>, ETypeRecord<'a>>
 {
     use AssignedField::*;
-
-    (move |arena, state: State<'a>, min_indent: u32| {
+    move |arena, state: State<'a>, min_indent: u32| {
         // You must have a field name, e.g. "email"
         // using the initial pos is important for error reporting
-        let pos = state.pos();
-        let (progress, loc_label, state) = loc(specialize_err(
-            move |_, _| ETypeRecord::Field(pos),
-            lowercase_ident_keyword_e(),
-        ))
-        .parse(arena, state, min_indent)?;
-        debug_assert_eq!(progress, MadeProgress);
+        let start = state.pos();
+        let (label, state) = match chomp_lowercase_part(state.bytes()) {
+            Err(p) => return Err((p, ETypeRecord::Field(start))),
+            Ok(ident) => {
+                if crate::keyword::KEYWORDS.iter().any(|kw| &ident == kw) {
+                    return Err((MadeProgress, ETypeRecord::Field(start)));
+                }
+                (ident, state.advance(ident.len()))
+            }
+        };
 
-        let (_, spaces, state) = parse_space(ETypeRecord::IndentEnd, arena, state, min_indent)?;
+        let loc_label = Loc::pos(start, state.pos(), label);
+
+        let (_, spaces, state) =
+            eat_space_check(ETypeRecord::IndentEnd, arena, state, min_indent, false)?;
 
         // Having a value is optional; both `{ email }` and `{ email: blah }` work.
         // (This is true in both literals and types.)
@@ -402,8 +406,7 @@ fn record_type_field<'a>() -> impl Parser<'a, AssignedField<'a, TypeAnnotation<'
 
             Ok((MadeProgress, value, state))
         }
-    })
-    .trace("type_annotation:record_type_field")
+    }
 }
 
 fn rest_of_record_type<'a>(

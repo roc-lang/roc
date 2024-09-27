@@ -86,23 +86,6 @@ pub fn integer_ident<'a>() -> impl Parser<'a, &'a str, ()> {
     }
 }
 
-// todo: @wip inline me
-/// Like `lowercase_ident`, but returns an error with MadeProgress if the
-/// identifier is a keyword.
-pub fn lowercase_ident_keyword_e<'a>() -> impl Parser<'a, &'a str, ()> {
-    move |_, state: State<'a>, _min_indent: u32| match chomp_lowercase_part(state.bytes()) {
-        Err(progress) => Err((progress, ())),
-        Ok(ident) => {
-            if crate::keyword::KEYWORDS.iter().any(|kw| &ident == kw) {
-                Err((MadeProgress, ()))
-            } else {
-                let width = ident.len();
-                Ok((MadeProgress, ident, state.advance(width)))
-            }
-        }
-    }
-}
-
 /// This could be:
 ///
 /// * A module name
@@ -254,7 +237,7 @@ fn is_alnum(ch: char) -> bool {
     ch.is_alphabetic() || ch.is_ascii_digit()
 }
 
-fn chomp_lowercase_part(buffer: &[u8]) -> Result<&str, Progress> {
+pub(crate) fn chomp_lowercase_part(buffer: &[u8]) -> Result<&str, Progress> {
     chomp_part(char::is_lowercase, is_alnum, buffer)
 }
 

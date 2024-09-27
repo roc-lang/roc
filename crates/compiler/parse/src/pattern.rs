@@ -1,5 +1,5 @@
 use crate::ast::{Collection, Implements, Pattern, PatternAs};
-use crate::blankspace::{eat_space, parse_space, with_spaces_after, with_spaces_before};
+use crate::blankspace::{eat_space, eat_space_check, with_spaces_after, with_spaces_before};
 use crate::expr::{parse_expr_start, ExprParseOptions};
 use crate::ident::{parse_ident, parse_lowercase_ident, Accessor, Ident};
 use crate::keyword;
@@ -65,9 +65,9 @@ pub fn loc_pattern_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>>
 
         let pattern_state = state.clone();
         let (pattern_spaces, state) =
-            match parse_space(EPattern::AsKeyword, arena, state, min_indent) {
-                Err(_) => return Ok((MadeProgress, pattern, pattern_state)),
+            match eat_space_check(EPattern::AsKeyword, arena, state, min_indent, false) {
                 Ok((_, pattern_spaces, state)) => (pattern_spaces, state),
+                Err(_) => return Ok((MadeProgress, pattern, pattern_state)),
             };
 
         match parse_pattern_as(arena, state, min_indent) {
@@ -149,7 +149,8 @@ fn parse_pattern_as<'a>(
     }
     let state = state.advance(keyword::AS.len());
 
-    let (_, spaces_before, state) = parse_space(EPattern::AsIdentifier, arena, state, min_indent)?;
+    let (_, spaces_before, state) =
+        eat_space_check(EPattern::AsIdentifier, arena, state, min_indent, false)?;
 
     let pos = state.pos();
     match parse_lowercase_ident(state) {
@@ -174,16 +175,18 @@ fn loc_type_def_tag_pattern_args_help<'a>(
     zero_or_more(loc_tag_pattern_arg(true))
 }
 
+// Don't parse operators, because they have a higher precedence than function application.
+// If we encounter one, we're done parsing function args!
 fn loc_tag_pattern_arg<'a>(
     stop_on_has_kw: bool,
 ) -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
-    // Don't parse operators, because they have a higher precedence than function application.
-    // If we encounter one, we're done parsing function args!
     move |arena, state: State<'a>, min_indent| {
         let start = state.pos();
-        let (_, spaces, state) =
-            parse_space(EPattern::IndentStart, arena, state.clone(), min_indent)
-                .map_err(|(_, fail)| (NoProgress, fail))?;
+        let (spaces, state) =
+            match eat_space_check(EPattern::IndentStart, arena, state, min_indent, false) {
+                Ok((_, sp, state)) => (sp, state),
+                Err((_, fail)) => return Err((NoProgress, fail)),
+            };
 
         // Cannot have arguments here, pass `false` to make sure `Foo Bar 1` is parsed as `Foo (Bar) 1`, and not `Foo (Bar 1)`
         let (_, loc_pat, state) = parse_loc_pattern_etc(false, arena, state, min_indent)?;
@@ -346,10 +349,11 @@ fn parse_list_rest_pattern<'a>(
     let no_as = Loc::at(dots_at, Pattern::ListRest(None));
 
     let pattern_state = state.clone();
-    let (pattern_spaces, state) = match parse_space(EPattern::AsKeyword, arena, state, min_indent) {
-        Ok((_, pattern_spaces, state)) => (pattern_spaces, state),
-        Err(_) => return Ok((MadeProgress, no_as, pattern_state)),
-    };
+    let (pattern_spaces, state) =
+        match eat_space_check(EPattern::AsKeyword, arena, state, min_indent, false) {
+            Ok((_, pattern_spaces, state)) => (pattern_spaces, state),
+            Err(_) => return Ok((MadeProgress, no_as, pattern_state)),
+        };
 
     let position = state.pos();
     match parse_pattern_as(arena, state, min_indent) {

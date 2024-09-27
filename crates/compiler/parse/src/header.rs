@@ -4,9 +4,7 @@ use crate::ast::{
     Collection, CommentOrNewline, Defs, Header, Malformed, Pattern, Spaced, Spaces, SpacesBefore,
     StrLiteral, TypeAnnotation,
 };
-use crate::blankspace::{
-    eat_space_check, parse_space, space0_around_ee, space0_e, with_spaces_before,
-};
+use crate::blankspace::{eat_space_check, space0_e, spaces_around_help, with_spaces_before};
 use crate::expr::merge_spaces;
 use crate::ident::{
     self, lowercase_ident, parse_lowercase_ident, unqualified_ident, UppercaseIdent,
@@ -128,14 +126,16 @@ fn module_params<'a>() -> impl Parser<'a, ModuleParams<'a>, EParams<'a>> {
             }
         };
 
-        let (_, before_arrow, state) = parse_space(EParams::BeforeArrow, arena, state, min_indent)?;
+        let (_, before_arrow, state) =
+            eat_space_check(EParams::BeforeArrow, arena, state, min_indent, false)?;
 
         if !state.bytes().starts_with(b"->") {
             return Err((MadeProgress, EParams::Arrow(state.pos())));
         }
         let state = state.advance(2);
 
-        let (_, after_arrow, state) = parse_space(EParams::AfterArrow, arena, state, min_indent)?;
+        let (_, after_arrow, state) =
+            eat_space_check(EParams::AfterArrow, arena, state, min_indent, false)?;
 
         Ok((
             MadeProgress,
@@ -624,10 +624,15 @@ fn requires_typed_ident<'a>() -> impl Parser<'a, Loc<Spaced<'a, TypedIdent<'a>>>
     skip_first(
         byte(b'{', ERequires::ListStart),
         skip_second(
-            reset_min_indent(space0_around_ee(
-                specialize_err(ERequires::TypedIdent, loc(typed_ident())),
-                ERequires::ListStart,
-                ERequires::ListEnd,
+            reset_min_indent(map_with_arena(
+                and(
+                    space0_e(ERequires::ListStart),
+                    and(
+                        specialize_err(ERequires::TypedIdent, loc(typed_ident())),
+                        space0_e(ERequires::ListEnd),
+                    ),
+                ),
+                spaces_around_help,
             )),
             byte(b'}', ERequires::ListStart),
         ),

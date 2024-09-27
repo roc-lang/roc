@@ -1,9 +1,10 @@
 use crate::ast::{EscapedChar, SingleQuoteLiteral, StrLiteral, StrSegment};
-use crate::blankspace::{parse_space, with_spaces_before};
+use crate::blankspace::{eat_space_check, with_spaces_before};
 use crate::expr::{parse_expr_start, ExprParseOptions};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    byte, loc, skip_first, skip_second, BadInputError, EExpr, ESingleQuote, EString, ParseResult, Parser
+    byte, loc, skip_first, skip_second, BadInputError, EExpr, ESingleQuote, EString, ParseResult,
+    Parser,
 };
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
@@ -366,7 +367,8 @@ pub fn rest_of_str_like<'a>(
                         // is not allowed inside a string interpolation.
                         let expr_pos = state.pos();
                         let (spaces_before, news) =
-                            match parse_space(EExpr::IndentEnd, arena, state.clone(), 0) {
+                            match eat_space_check(EExpr::IndentEnd, arena, state.clone(), 0, false)
+                            {
                                 Ok((_, out, state)) => (out, state),
                                 Err((p, fail)) => {
                                     return Err((p, EString::Format(arena.alloc(fail), expr_pos)));
@@ -491,7 +493,7 @@ pub fn rest_of_str_like<'a>(
                 // Parse an arbitrary expression, followed by ')'
                 let expr_pos = state.pos();
                 let (spaces_before, news) =
-                    match parse_space(EExpr::IndentEnd, arena, state.clone(), 0) {
+                    match eat_space_check(EExpr::IndentEnd, arena, state.clone(), 0, false) {
                         Ok((_, out, state)) => (out, state),
                         Err((p, fail)) => {
                             return Err((p, EString::Format(arena.alloc(fail), expr_pos)));

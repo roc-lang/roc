@@ -1,60 +1,15 @@
 use crate::ast::CommentOrNewline;
 use crate::ast::Spaceable;
-use crate::parser::succeed;
 use crate::parser::ParseResult;
 use crate::parser::Progress;
 use crate::parser::SpaceProblem;
-use crate::parser::{self, and, backtrackable, BadInputError, Parser, Progress::*};
+use crate::parser::{self, and, BadInputError, Parser, Progress::*};
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_region::all::Loc;
 use roc_region::all::Position;
 use roc_region::all::Region;
-
-pub fn space0_around_ee<'a, P, S, E>(
-    parser: P,
-    indent_before_problem: fn(Position) -> E,
-    indent_after_problem: fn(Position) -> E,
-) -> impl Parser<'a, Loc<S>, E>
-where
-    S: 'a + Spaceable<'a>,
-    P: 'a + Parser<'a, Loc<S>, E>,
-    E: 'a + SpaceProblem,
-{
-    parser::map_with_arena(
-        and(
-            space0_e(indent_before_problem),
-            and(parser, space0_e(indent_after_problem)),
-        ),
-        spaces_around_help,
-    )
-}
-
-pub fn space0_before_optional_after<'a, P, S, E>(
-    parser: P,
-    indent_before_problem: fn(Position) -> E,
-    indent_after_problem: fn(Position) -> E,
-) -> impl Parser<'a, Loc<S>, E>
-where
-    S: 'a + Spaceable<'a>,
-    P: 'a + Parser<'a, Loc<S>, E>,
-    E: 'a + SpaceProblem,
-{
-    parser::map_with_arena(
-        and(
-            space0_e(indent_before_problem),
-            and(
-                parser,
-                one_of![
-                    backtrackable(space0_e(indent_after_problem)),
-                    succeed(&[] as &[_]),
-                ],
-            ),
-        ),
-        spaces_around_help,
-    )
-}
 
 pub fn spaces_around_help<'a, S>(
     arena: &'a Bump,
@@ -246,24 +201,6 @@ pub fn fast_eat_until_control_character(bytes: &[u8]) -> usize {
     simple_eat_until_control_character(&bytes[i..]) + i
 }
 
-pub fn parse_space<'a, E>(
-    indent_problem: fn(Position) -> E,
-    arena: &'a Bump,
-    state: State<'a>,
-    min_indent: u32,
-) -> ParseResult<'a, &'a [CommentOrNewline<'a>], E>
-where
-    E: 'a + SpaceProblem,
-{
-    let start = state.pos();
-    let (p, (sp, _), state) = eat_space(arena, state, false)?;
-    if !sp.is_empty() && state.column() < min_indent {
-        Err((p, indent_problem(start)))
-    } else {
-        Ok((p, sp, state))
-    }
-}
-
 pub fn eat_space_check<'a, E>(
     indent_problem: fn(Position) -> E,
     arena: &'a Bump,
@@ -289,7 +226,7 @@ where
     E: 'a + SpaceProblem,
 {
     move |arena, state: State<'a>, min_indent: u32| {
-        parse_space(indent_problem, arena, state, min_indent)
+        eat_space_check(indent_problem, arena, state, min_indent, false)
     }
 }
 
