@@ -1,139 +1,171 @@
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::rc::Rc;
-
+use roc_collections::MutMap;
+use roc_module::ident::{Lowercase, TagName};
 use roc_types::{
-    subs::{Content, FlatType, RecordFields, Subs, TagExt, UnionTags, Variable},
+    subs::{
+        Content, FlatType, RecordFields, Subs, TagExt, TupleElems, UnionTags, Variable,
+        VariableSubsSlice,
+    },
     types::RecordField,
 };
 
-#[derive(Clone, Debug)]
-pub enum TyContent {
-    TFn(Rc<Ty>, Rc<Ty>),
-    TTag(Vec<(String, Vec<Rc<Ty>>)>),
-    TRecord(Vec<(String, Rc<Ty>)>),
-    TPrim(Primitive),
+pub type MonoCache = MutMap<Variable, Content>;
+
+fn ty_unfilled() -> Content {
+    Content::Structure(FlatType::TagUnion(
+        UnionTags::default(),
+        TagExt::Any(Variable::EMPTY_TAG_UNION),
+    ))
 }
 
-#[derive(Clone, Debug)]
-pub enum Primitive {
-    Str,
-    Int,
-    Erased,
+pub fn monomorphize_var(cache: &mut MonoCache, subs: &Subs, var: Variable) -> Variable {
+    let root_var = subs.get_root_key_without_compacting(var);
+    if cache.contains_key(&root_var) {
+        return root_var;
+    }
+    cache.insert(root_var, ty_unfilled());
+    let content = lower_content(cache, subs, subs.get_content_without_compacting(root_var));
+    cache.insert(root_var, content);
+    root_var
 }
 
-#[derive(Clone, Debug)]
-pub struct Ty(RefCell<TyContent>);
-
-type MonoCache = RefCell<HashMap<Variable, Rc<Ty>>>;
-
-pub fn fresh_mono_cache() -> MonoCache {
-    RefCell::new(HashMap::new())
-}
-
-fn unlink_tvar(subs: &Subs, mut var: Variable) -> Variable {
-    loop {
-        match subs.get_content_without_compacting(var) {
-            Content::Alias(_, _, real, _) => var = *real,
-            _ => break var,
+fn lower_content(cache: &mut MonoCache, subs: &Subs, content: &Content) -> Content {
+    match content {
+        Content::Structure(flat_type) => match flat_type {
+            FlatType::Apply(symbol, args) => {
+                let new_args = args
+                    .into_iter()
+                    .map(|var_index| monomorphize_var(cache, subs, subs[var_index]))
+                    .collect::<Vec<_>>();
+                Content::Structure(FlatType::Apply(
+                    *symbol,
+                    VariableSubsSlice::new(new_args.as_ptr() as u32, new_args.len() as u16),
+                ))
+            }
+            FlatType::Func(args, closure, ret) => {
+                let new_args = args
+                    .into_iter()
+                    .map(|var_index| monomorphize_var(cache, subs, subs[var_index]))
+                    .collect::<Vec<_>>();
+                let new_closure = monomorphize_var(cache, subs, *closure);
+                let new_ret = monomorphize_var(cache, subs, *ret);
+                Content::Structure(FlatType::Func(
+                    VariableSubsSlice::new(new_args.as_ptr() as u32, new_args.len() as u16),
+                    new_closure,
+                    new_ret,
+                ))
+            }
+            FlatType::Record(fields, ext) => {
+                let (fields, ext) = chase_fields(subs, *fields, *ext);
+                let new_fields = fields
+                    .into_iter()
+                    .map(|(field, var)| {
+                        (
+                            Lowercase::from(field),
+                            RecordField::Required(monomorphize_var(cache, subs, var)),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let new_ext = monomorphize_var(cache, subs, ext);
+                Content::Structure(FlatType::Record(
+                    RecordFields::insert_into_subs(&mut Subs::new(), new_fields.into_iter()),
+                    new_ext,
+                ))
+            }
+            FlatType::Tuple(elems, ext) => {
+                let new_elems = elems
+                    .iter_all()
+                    .map(|(idx, var_index)| {
+                        (
+                            idx.index as usize,
+                            monomorphize_var(cache, subs, subs[var_index]),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let new_ext = monomorphize_var(cache, subs, *ext);
+                Content::Structure(FlatType::Tuple(
+                    TupleElems::insert_into_subs(&mut Subs::new(), new_elems.into_iter()),
+                    new_ext,
+                ))
+            }
+            FlatType::TagUnion(tags, ext) => {
+                let (tags, ext) = chase_tags(subs, *tags, *ext);
+                let new_tags = tags
+                    .into_iter()
+                    .map(|(tag, vars)| {
+                        (
+                            tag,
+                            vars.into_iter()
+                                .map(|var| monomorphize_var(cache, subs, var))
+                                .collect::<Vec<Variable>>(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let new_ext = TagExt::Any(monomorphize_var(cache, subs, ext));
+                Content::Structure(FlatType::TagUnion(
+                    UnionTags::insert_into_subs(&mut Subs::new(), new_tags.into_iter()),
+                    new_ext,
+                ))
+            }
+            FlatType::FunctionOrTagUnion(tag_names, symbols, ext) => {
+                let new_ext = TagExt::Any(monomorphize_var(cache, subs, ext.var()));
+                Content::Structure(FlatType::FunctionOrTagUnion(*tag_names, *symbols, new_ext))
+            }
+            FlatType::RecursiveTagUnion(rec, tags, ext) => {
+                let new_rec = monomorphize_var(cache, subs, *rec);
+                let (tags, ext_var) = chase_tags(subs, *tags, *ext);
+                let new_tags = tags
+                    .into_iter()
+                    .map(|(tag, vars)| {
+                        (
+                            tag,
+                            vars.into_iter()
+                                .map(|var| monomorphize_var(cache, subs, var))
+                                .collect::<Vec<Variable>>(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let new_ext = TagExt::Any(monomorphize_var(cache, subs, ext_var));
+                Content::Structure(FlatType::RecursiveTagUnion(
+                    new_rec,
+                    UnionTags::insert_into_subs(&mut Subs::new(), new_tags.into_iter()),
+                    new_ext,
+                ))
+            }
+            FlatType::EmptyRecord => Content::Structure(FlatType::EmptyRecord),
+            FlatType::EmptyTuple => Content::Structure(FlatType::EmptyTuple),
+            FlatType::EmptyTagUnion => Content::Structure(FlatType::EmptyTagUnion),
+        },
+        Content::FlexVar(opt_name) => Content::FlexVar(*opt_name),
+        Content::RigidVar(name) => Content::RigidVar(*name),
+        Content::FlexAbleVar(opt_name, abilities) => Content::FlexAbleVar(*opt_name, *abilities),
+        Content::RigidAbleVar(name, abilities) => Content::RigidAbleVar(*name, *abilities),
+        Content::RecursionVar {
+            structure,
+            opt_name,
+        } => Content::RecursionVar {
+            structure: monomorphize_var(cache, subs, *structure),
+            opt_name: *opt_name,
+        },
+        Content::LambdaSet(lambda_set) => Content::LambdaSet(lambda_set.clone()),
+        Content::ErasedLambda => Content::ErasedLambda,
+        Content::Alias(symbol, args, real, kind) => {
+            let new_real = monomorphize_var(cache, subs, *real);
+            Content::Alias(*symbol, args.clone(), new_real, *kind)
         }
+        Content::RangedNumber(range) => Content::RangedNumber(*range),
+        Content::Error => Content::Error,
     }
-}
-
-fn ty_unfilled() -> TyContent {
-    TyContent::TTag(vec![("__unfilled".to_string(), vec![])])
-}
-
-pub fn lower_type(cache: &MonoCache, subs: &Subs, var: Variable) -> Rc<Ty> {
-    fn fail(s: &str, var: Variable) -> ! {
-        panic!("lower_type: {}: {:?}", s, var)
-    }
-
-    fn go_content(cache: &MonoCache, subs: &Subs, content: &Content) -> TyContent {
-        match content {
-            Content::Structure(flat_type) => match flat_type {
-                FlatType::Apply(_, _) => unimplemented!("FlatType::Apply"),
-                FlatType::Func(args, closure, ret) => {
-                    let in_ty = go(cache, subs, subs.variables[args.start as usize]);
-                    let out_ty = go(cache, subs, *ret);
-                    TyContent::TFn(in_ty, out_ty)
-                }
-                FlatType::Record(fields, ext) => {
-                    let (fields, ext) = chase_fields(subs, *fields, *ext);
-                    let fields = fields
-                        .into_iter()
-                        .map(|(field, var)| (field, go(cache, subs, var)))
-                        .collect::<Vec<_>>();
-                    assert!(
-                        matches!(*go(cache, subs, ext).0.borrow(), TyContent::TTag(ref tags) if tags.is_empty())
-                            || matches!(*go(cache, subs, ext).0.borrow(), TyContent::TRecord(ref fields) if fields.is_empty())
-                    );
-                    TyContent::TRecord(fields)
-                }
-                FlatType::Tuple(_, _) => unimplemented!("FlatType::Tuple"),
-                FlatType::TagUnion(tags, ext) => {
-                    let (tags, ext) = chase_tags(subs, *tags, *ext);
-                    let tags = tags
-                        .into_iter()
-                        .map(|(tag, vars)| {
-                            (
-                                tag,
-                                vars.into_iter().map(|var| go(cache, subs, var)).collect(),
-                            )
-                        })
-                        .collect::<Vec<_>>();
-                    assert!(
-                        matches!(*go(cache, subs, ext).0.borrow(), TyContent::TTag(ref t) if t.is_empty())
-                    );
-                    TyContent::TTag(tags)
-                }
-                FlatType::FunctionOrTagUnion(_, _, _) => {
-                    unimplemented!("FlatType::FunctionOrTagUnion")
-                }
-                FlatType::RecursiveTagUnion(_, _, _) => {
-                    unimplemented!("FlatType::RecursiveTagUnion")
-                }
-                FlatType::EmptyRecord => TyContent::TRecord(vec![]),
-                FlatType::EmptyTuple => unimplemented!("FlatType::EmptyTuple"),
-                FlatType::EmptyTagUnion => TyContent::TTag(vec![]),
-            },
-            Content::FlexVar(_) => TyContent::TTag(vec![]),
-            Content::RigidVar(_) => fail("unexpected rigid var", Variable::NULL),
-            Content::FlexAbleVar(_, _) => TyContent::TTag(vec![]),
-            Content::RigidAbleVar(_, _) => fail("unexpected rigid able var", Variable::NULL),
-            Content::RecursionVar { .. } => fail("unexpected recursion var", Variable::NULL),
-            Content::LambdaSet(_) => fail("unexpected lambda set", Variable::NULL),
-            Content::ErasedLambda => TyContent::TPrim(Primitive::Erased),
-            Content::Alias(_, _, _, _) => fail("unexpected alias", Variable::NULL),
-            Content::RangedNumber(_) => unimplemented!("Content::RangedNumber"),
-            Content::Error => fail("error type", Variable::NULL),
-        }
-    }
-
-    fn go(cache: &MonoCache, subs: &Subs, var: Variable) -> Rc<Ty> {
-        let var = unlink_tvar(subs, var);
-        if let Some(ty) = cache.borrow().get(&var) {
-            return ty.clone();
-        }
-        let ty = Rc::new(Ty(RefCell::new(ty_unfilled())));
-        cache.borrow_mut().insert(var, ty.clone());
-        let content = go_content(cache, subs, subs.get_content_without_compacting(var));
-        *ty.0.borrow_mut() = content;
-        ty
-    }
-
-    go(cache, subs, var)
 }
 
 fn chase_tags(
     subs: &Subs,
     mut tags: UnionTags,
     mut ext: TagExt,
-) -> (Vec<(String, Vec<Variable>)>, Variable) {
+) -> (Vec<(TagName, Vec<Variable>)>, Variable) {
     let mut all_tags = Vec::new();
     loop {
         for (tag, vars) in tags.iter_from_subs(subs) {
-            all_tags.push((tag.0.to_string(), vars.to_vec()));
+            all_tags.push((tag.clone(), vars.to_vec()));
         }
         match subs.get_content_without_compacting(ext.var()) {
             Content::Structure(FlatType::TagUnion(new_tags, new_ext)) => {
