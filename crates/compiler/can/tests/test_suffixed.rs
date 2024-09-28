@@ -606,6 +606,32 @@ mod suffixed_tests {
             "##
         );
     }
+
+    #[test]
+    fn issue_7081() {
+        run_test!(
+            r##"
+            inc = \i ->
+                if i > 2 then
+                    Err MaxReached
+                else
+                    Ok (i + 1)
+
+            expect
+                run = \i ->
+                    newi =
+                        i
+                        |> inc?
+                        |> inc?
+                    Ok newi
+                result = run 0
+                result == Ok 2
+
+            main =
+                Stdout.line! "Hello world"
+            "##
+        );
+    }
 }
 
 #[cfg(test)]
