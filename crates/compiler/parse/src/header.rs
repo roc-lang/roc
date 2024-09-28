@@ -20,7 +20,7 @@ use crate::parser::{
 use crate::pattern::parse_record_pattern_fields;
 use crate::state::State;
 use crate::string_literal::{self, parse_str_literal};
-use crate::type_annotation::type_expr;
+use crate::type_annotation::{type_expr, SKIP_PARSING_SPACES_BEFORE, TRAILING_COMMA_VALID};
 use roc_module::symbol::ModuleId;
 use roc_region::all::{Loc, Position, Region};
 
@@ -797,10 +797,8 @@ fn imports<'a>() -> impl Parser<
     .trace("imports")
 }
 
+/// e.g. printLine : Str -> Effect {}
 pub fn typed_ident<'a>() -> impl Parser<'a, Spaced<'a, TypedIdent<'a>>, ETypedIdent<'a>> {
-    // e.g.
-    //
-    // printLine : Str -> Effect {}
     move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
         let start = state.pos();
 
@@ -821,7 +819,7 @@ pub fn typed_ident<'a>() -> impl Parser<'a, Spaced<'a, TypedIdent<'a>>, ETypedId
             eat_space_check(ETypedIdent::IndentType, arena, state, min_indent, true)?;
 
         let ann_pos = state.pos();
-        match type_expr(true, false).parse(arena, state, 0) {
+        match type_expr(TRAILING_COMMA_VALID | SKIP_PARSING_SPACES_BEFORE).parse(arena, state, 0) {
             Ok((_, ann, state)) => {
                 let typed_ident = Spaced::Item(TypedIdent {
                     ident,

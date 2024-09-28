@@ -23,7 +23,9 @@ use crate::parser::{
 use crate::pattern::parse_closure_param;
 use crate::state::State;
 use crate::string_literal::{self, rest_of_str_like, StrLikeLiteral};
-use crate::type_annotation::{self, implements_abilities, type_expr};
+use crate::type_annotation::{
+    self, parse_implements_abilities, type_expr, NO_FLAGS, STOP_AT_FIRST_IMPL, TRAILING_COMMA_VALID,
+};
 use crate::{header, keyword};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -64,6 +66,7 @@ pub fn test_parse_expr<'a>(
     }
 }
 
+// todo: @wip convert to bit flags similar to TypeExprFlags
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExprParseOptions {
     /// Check for and accept multi-backpassing syntax
@@ -1057,10 +1060,7 @@ fn import_ingested_file_annotation<'a>() -> impl Parser<'a, IngestedFileAnnotati
             backtrackable(space0_e(EImport::IndentColon)),
             byte(b':', EImport::Colon)
         ),
-        annotation: specialize_err(
-            EImport::Annotation,
-            type_annotation::type_expr(false, false)
-        )
+        annotation: specialize_err(EImport::Annotation, type_annotation::type_expr(NO_FLAGS))
     })
 }
 
@@ -1131,7 +1131,7 @@ fn parse_stmt_alias_or_opaque<'a>(
             AliasOrOpaque::Alias => {
                 // TODO @check later that here we skip `spaces_after_operator`
                 let ann_pos = state.pos();
-                let (ann, state) = match type_expr(false, false).parse(arena, state, inc_indent) {
+                let (ann, state) = match type_expr(NO_FLAGS).parse(arena, state, inc_indent) {
                     Ok((_, ann, state)) => (ann, state),
                     Err((p, fail)) => return Err((p, EExpr::Type(fail, ann_pos))),
                 };
@@ -1148,7 +1148,9 @@ fn parse_stmt_alias_or_opaque<'a>(
             AliasOrOpaque::Opaque => {
                 // TODO @check later that here we skip `spaces_after_operator`
                 let ann_pos = state.pos();
-                let (ann, state) = match type_expr(true, true).parse(arena, state, inc_indent) {
+                let (ann, state) = match type_expr(TRAILING_COMMA_VALID | STOP_AT_FIRST_IMPL)
+                    .parse(arena, state, inc_indent)
+                {
                     Ok((_, out, state)) => (out, state),
                     Err((p, fail)) => return Err((p, EExpr::Type(fail, ann_pos))),
                 };
@@ -1158,7 +1160,7 @@ fn parse_stmt_alias_or_opaque<'a>(
                     match eat_space_check(EType::TIndentStart, arena, state, inc_indent, false) {
                         Err(_) => (None, olds),
                         Ok((_, sp, state)) => {
-                            match implements_abilities().parse(arena, state, inc_indent) {
+                            match parse_implements_abilities(arena, state, inc_indent) {
                                 Err(_) => (None, olds),
                                 Ok((_, out, state)) => (Some(out.spaced_before(arena, sp)), state),
                             }
@@ -1184,7 +1186,7 @@ fn parse_stmt_alias_or_opaque<'a>(
         match expr_to_pattern_help(arena, &call.value) {
             Ok(pat) => {
                 let ann_pos = state.pos();
-                match type_expr(false, false).parse(arena, state, inc_indent) {
+                match type_expr(NO_FLAGS).parse(arena, state, inc_indent) {
                     Ok((_, mut type_ann, state)) => {
                         // put the spaces from after the operator in front of the call
                         type_ann = type_ann.spaced_before(arena, spaces_after_operator);
@@ -1221,6 +1223,7 @@ mod ability {
     /// Parses a single ability demand line; see `parse_demand`.
     fn parse_demand_help<'a>() -> impl Parser<'a, AbilityMember<'a>, EAbility<'a>> {
         map(
+            // todo: @wip inline me
             // Require the type to be more indented than the name
             absolute_indented_seq(
                 specialize_err(|_, pos| EAbility::DemandName(pos), loc(lowercase_ident())),
@@ -1230,7 +1233,10 @@ mod ability {
                         space0_e(EAbility::DemandName),
                         byte(b':', EAbility::DemandColon),
                     ),
-                    specialize_err(EAbility::Type, type_annotation::type_expr(true, false)),
+                    specialize_err(
+                        EAbility::Type,
+                        type_annotation::type_expr(TRAILING_COMMA_VALID),
+                    ),
                 ),
             ),
             |(name, typ): (Loc<&'a str>, Loc<TypeAnnotation<'a>>)| AbilityMember {

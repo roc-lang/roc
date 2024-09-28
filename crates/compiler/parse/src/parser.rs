@@ -837,55 +837,6 @@ where
     }
 }
 
-/// Apply transform function to turn output of given parser into another parser.
-/// Can be used to chain two parsers.
-///
-/// # Examples
-///
-/// ```
-/// # #![forbid(unused_imports)]
-/// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, and_then, word};
-/// # use roc_region::all::Position;
-/// # use bumpalo::Bump;
-/// # #[derive(Debug, PartialEq)]
-/// # enum Problem {
-/// #     NotFound(Position),
-/// # }
-/// # let arena = Bump::new();
-/// let parser1 = word("hello", Problem::NotFound);
-/// let parser = and_then(parser1, move |p,b| word(", ", Problem::NotFound));
-///
-/// // Success case
-/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
-/// assert_eq!(progress, Progress::MadeProgress);
-/// assert_eq!(output, ());
-/// assert_eq!(state.pos(), Position::new(7));
-///
-/// // Error case
-/// let (progress, problem) = parser.parse(&arena, State::new("hello!! world".as_bytes()), 0).unwrap_err();
-/// assert_eq!(progress, Progress::NoProgress);
-/// assert_eq!(problem, Problem::NotFound(Position::new(5)));
-/// ```
-pub fn and_then<'a, P1, P2, F, Before, After, Error>(
-    parser: P1,
-    transform: F,
-) -> impl Parser<'a, After, Error>
-where
-    P1: Parser<'a, Before, Error>,
-    P2: Parser<'a, After, Error>,
-    F: Fn(Progress, Before) -> P2,
-    Error: 'a,
-{
-    move |arena, state, min_indent| {
-        parser
-            .parse(arena, state, min_indent)
-            .and_then(|(progress, output, next_state)| {
-                transform(progress, output).parse(arena, next_state, min_indent)
-            })
-    }
-}
-
 /// Creates a new parser that can change its output based on a function.
 ///
 /// # Examples
