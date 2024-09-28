@@ -10,7 +10,7 @@ use roc_types::{
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Problem {
-    /// Compiler bug; this should never happen!
+    // Compiler bugs; these should never happen!
     TagUnionExtWasNotTagUnion,
     RecordExtWasNotRecord,
     TupleExtWasNotTuple,
@@ -84,13 +84,12 @@ fn lower_content(
     problems: &mut Vec<Problem>,
     content: &Content,
 ) -> Content {
-    match dbg!(content) {
+    match content {
         Content::Structure(flat_type) => match flat_type {
             FlatType::Apply(symbol, args) => {
                 let new_args = args
                     .into_iter()
                     .map(|var_index| lower_var(cache, subs, problems, subs[var_index]))
-                    // TODO there might be a way to remove this heap allocation
                     .collect::<Vec<Variable>>();
 
                 Content::Structure(FlatType::Apply(
@@ -112,7 +111,7 @@ fn lower_content(
                 ))
             }
             FlatType::Record(fields, ext) => {
-                let mut fields = flatten_fields(subs, problems, *fields, *ext);
+                let mut fields = resolve_record_ext(subs, problems, *fields, *ext);
 
                 // Now lower all the fields we gathered. Do this in a separate pass to avoid borrow errors on Subs.
                 for (_, field) in fields.iter_mut() {
@@ -130,7 +129,7 @@ fn lower_content(
                 ))
             }
             FlatType::Tuple(elems, ext) => {
-                let mut elems = flatten_tuple(subs, problems, *elems, *ext);
+                let mut elems = resolve_tuple_ext(subs, problems, *elems, *ext);
 
                 // Now lower all the elems we gathered. Do this in a separate pass to avoid borrow errors on Subs.
                 for (_, var) in elems.iter_mut() {
@@ -143,7 +142,7 @@ fn lower_content(
                 ))
             }
             FlatType::TagUnion(tags, ext) => {
-                let mut tags = flatten_tags(subs, problems, *tags, *ext);
+                let mut tags = resolve_tag_ext(subs, problems, *tags, *ext);
 
                 // Now lower all the tags we gathered. Do this in a separate pass to avoid borrow errors on Subs.
                 for (_, vars) in tags.iter_mut() {
@@ -157,15 +156,35 @@ fn lower_content(
                     TagExt::Any(Variable::EMPTY_TAG_UNION),
                 ))
             }
-            FlatType::FunctionOrTagUnion(tag_names, symbols, ext) => {
-                let new_ext = TagExt::Any(lower_var(cache, subs, problems, ext.var()));
-                Content::Structure(FlatType::FunctionOrTagUnion(*tag_names, *symbols, new_ext))
+            FlatType::FunctionOrTagUnion(tag_names, _symbols, ext) => {
+                // If this is still a FunctionOrTagUnion, turn it into a TagUnion.
+
+                // First, resolve the ext var.
+                let mut tags = resolve_tag_ext(subs, problems, UnionTags::default(), *ext);
+
+                // Now lower all the tags we gathered from the ext var.
+                // Do this in a separate pass to avoid borrow errors on Subs.
+                for (_, vars) in tags.iter_mut() {
+                    for var in vars.iter_mut() {
+                        *var = lower_var(cache, subs, problems, *var);
+                    }
+                }
+
+                // Then, add the tag names with no payloads. (There's nothing to lower here.)
+                for index in tag_names.into_iter() {
+                    tags.push(((&subs[index]).clone(), Vec::new()));
+                }
+
+                Content::Structure(FlatType::TagUnion(
+                    UnionTags::insert_into_subs(subs, tags.into_iter()),
+                    TagExt::Any(Variable::EMPTY_TAG_UNION),
+                ))
             }
             FlatType::RecursiveTagUnion(rec, tags, ext) => {
-                let mut new_tags = flatten_tags(subs, problems, *tags, *ext);
+                let mut tags = resolve_tag_ext(subs, problems, *tags, *ext);
 
                 // Now lower all the tags we gathered. Do this in a separate pass to avoid borrow errors on Subs.
-                for (_, vars) in new_tags.iter_mut() {
+                for (_, vars) in tags.iter_mut() {
                     for var in vars.iter_mut() {
                         *var = lower_var(cache, subs, problems, *var);
                     }
@@ -173,7 +192,7 @@ fn lower_content(
 
                 Content::Structure(FlatType::RecursiveTagUnion(
                     lower_var(cache, subs, problems, *rec),
-                    UnionTags::insert_into_subs(subs, new_tags.into_iter()),
+                    UnionTags::insert_into_subs(subs, tags.into_iter()),
                     TagExt::Any(Variable::EMPTY_TAG_UNION),
                 ))
             }
@@ -197,7 +216,7 @@ fn lower_content(
     }
 }
 
-fn flatten_tags(
+fn resolve_tag_ext(
     subs: &mut Subs,
     problems: &mut Vec<Problem>,
     mut tags: UnionTags,
@@ -205,7 +224,7 @@ fn flatten_tags(
 ) -> Vec<(TagName, Vec<Variable>)> {
     let mut all_tags = Vec::new();
 
-    // First, collapse (recursively) all the tags in ext_var into a flat list of tags.
+    // Collapse (recursively) all the tags in ext_var into a flat list of tags.
     loop {
         for (tag, vars) in tags.iter_from_subs(subs) {
             all_tags.push((tag.clone(), vars.to_vec()));
@@ -215,6 +234,12 @@ fn flatten_tags(
             Content::Structure(FlatType::TagUnion(new_tags, new_ext)) => {
                 // Update tags and ext and loop back again to process them.
                 tags = *new_tags;
+                ext = *new_ext;
+            }
+            Content::Structure(FlatType::FunctionOrTagUnion(tag_names, _symbols, new_ext)) => {
+                for index in tag_names.into_iter() {
+                    all_tags.push((subs[index].clone(), Vec::new()));
+                }
                 ext = *new_ext;
             }
             Content::Structure(FlatType::EmptyTagUnion) => break,
@@ -235,13 +260,10 @@ fn flatten_tags(
         }
     }
 
-    // ext should have ended up being empty
-    debug_assert_eq!(ext.var(), Variable::EMPTY_TAG_UNION);
-
     all_tags
 }
 
-fn flatten_fields(
+fn resolve_record_ext(
     subs: &mut Subs,
     problems: &mut Vec<Problem>,
     mut fields: RecordFields,
@@ -249,7 +271,7 @@ fn flatten_fields(
 ) -> Vec<(Lowercase, RecordField<Variable>)> {
     let mut all_fields = Vec::new();
 
-    // First, collapse (recursively) all the fields in ext into a flat list of fields.
+    // Collapse (recursively) all the fields in ext into a flat list of fields.
     loop {
         for (label, field) in fields.sorted_iterator(subs, ext) {
             all_fields.push((label.clone(), field.clone()));
@@ -285,7 +307,7 @@ fn flatten_fields(
     all_fields
 }
 
-fn flatten_tuple(
+fn resolve_tuple_ext(
     subs: &mut Subs,
     problems: &mut Vec<Problem>,
     mut elems: TupleElems,
@@ -293,7 +315,7 @@ fn flatten_tuple(
 ) -> Vec<(usize, Variable)> {
     let mut all_elems = Vec::new();
 
-    // First, collapse (recursively) all the elements in ext into a flat list of elements.
+    // Collapse (recursively) all the elements in ext into a flat list of elements.
     loop {
         for (idx, var_index) in elems.iter_all() {
             all_elems.push((idx.index as usize, subs[var_index]));
