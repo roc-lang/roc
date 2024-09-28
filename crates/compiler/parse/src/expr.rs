@@ -541,12 +541,11 @@ pub fn parse_repl_defs_and_optional_expr<'a>(
     state: State<'a>,
 ) -> ParseResult<'a, (Defs<'a>, Option<Loc<Expr<'a>>>), EExpr<'a>> {
     let start = state.pos();
-    let (spaces_before, state) =
-        match eat_space_check(EExpr::IndentEnd, arena, state.clone(), 0, false) {
-            Err((NoProgress, _)) => return Ok((NoProgress, (Defs::default(), None), state)),
-            Err(err) => return Err(err),
-            Ok((_, sp, state)) => (Loc::pos(start, state.pos(), sp), state),
-        };
+    let (spaces_before, state) = match eat_space(arena, state.clone(), false) {
+        Err((NoProgress, _)) => return Ok((NoProgress, (Defs::default(), None), state)),
+        Err(err) => return Err(err),
+        Ok((_, (sp, _), state)) => (Loc::pos(start, state.pos(), sp), state),
+    };
 
     let (_, stmts, state) = parse_stmt_seq(
         arena,
@@ -558,7 +557,7 @@ pub fn parse_repl_defs_and_optional_expr<'a>(
         EExpr::IndentEnd,
     )?;
 
-    let state = match eat_space_check(EExpr::IndentEnd, arena, state.clone(), 0, false) {
+    let state = match eat_space(arena, state.clone(), false) {
         Err((NoProgress, _)) => state,
         Err(err) => return Err(err),
         Ok((_, _, state)) => state,
@@ -1259,9 +1258,9 @@ mod ability {
     ) -> impl Parser<'a, (u32, AbilityMember<'a>), EAbility<'a>> {
         move |arena, state: State<'a>, min_indent: u32| {
             // Put no restrictions on the indent after the spaces; we'll check it manually.
-            match eat_space_check(EAbility::DemandName, arena, state, 0, false) {
+            match eat_space(arena, state, false) {
                 Err((_, fail)) => Err((NoProgress, fail)),
-                Ok((_, spaces, state)) => {
+                Ok((_, (spaces, _), state)) => {
                     match indent {
                         IndentLevel::PendingMin(min_indent) if state.column() < min_indent => {
                             let indent_difference = state.column() as i32 - min_indent as i32;
@@ -2099,7 +2098,7 @@ pub fn parse_top_level_defs<'a>(
         EExpr::IndentEnd,
     )?;
 
-    let (_, last_space, state) = eat_space_check(EExpr::IndentStart, arena, state, 0, false)?;
+    let (_, (last_space, _), state) = eat_space(arena, state, false)?;
 
     let existing_len = output.tags.len();
 
@@ -2417,8 +2416,7 @@ mod when {
         };
 
         // put no restrictions on the indent after the spaces; we'll check it manually
-        let (_, indent_spaces, state) =
-            eat_space_check(EWhen::IndentPattern, arena, state, 0, false)?;
+        let (_, (indent_spaces, _), state) = eat_space(arena, state, false)?;
 
         // the region is not reliable for the indent column in the case of
         // parentheses around patterns

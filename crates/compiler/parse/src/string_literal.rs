@@ -1,10 +1,9 @@
 use crate::ast::{EscapedChar, SingleQuoteLiteral, StrLiteral, StrSegment};
-use crate::blankspace::{eat_space_check, SpacedBuilder};
+use crate::blankspace::{eat_space, SpacedBuilder};
 use crate::expr::{parse_expr_start, ExprParseOptions};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    byte, loc, skip_first, skip_second, BadInputError, EExpr, ESingleQuote, EString, ParseResult,
-    Parser,
+    byte, loc, skip_first, skip_second, BadInputError, ESingleQuote, EString, ParseResult, Parser,
 };
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
@@ -366,9 +365,8 @@ pub fn rest_of_str_like<'a>(
                         // canonicalization error if that expression variant
                         // is not allowed inside a string interpolation.
                         let expr_pos = state.pos();
-                        let (spaces_before, news) =
-                            match eat_space_check(EExpr::IndentEnd, arena, state.clone(), 0, false)
-                            {
+                        let ((spaces_before, _), news) =
+                            match eat_space(arena, state.clone(), false) {
                                 Ok((_, out, state)) => (out, state),
                                 Err((p, fail)) => {
                                     return Err((p, EString::Format(arena.alloc(fail), expr_pos)));
@@ -492,13 +490,12 @@ pub fn rest_of_str_like<'a>(
 
                 // Parse an arbitrary expression, followed by ')'
                 let expr_pos = state.pos();
-                let (spaces_before, news) =
-                    match eat_space_check(EExpr::IndentEnd, arena, state.clone(), 0, false) {
-                        Ok((_, out, state)) => (out, state),
-                        Err((p, fail)) => {
-                            return Err((p, EString::Format(arena.alloc(fail), expr_pos)));
-                        }
-                    };
+                let ((spaces_before, _), news) = match eat_space(arena, state, false) {
+                    Ok((_, out, state)) => (out, state),
+                    Err((p, fail)) => {
+                        return Err((p, EString::Format(arena.alloc(fail), expr_pos)));
+                    }
+                };
 
                 let (expr, mut news) =
                     match parse_expr_start(ExprParseOptions::ALL, arena, news.clone(), 0) {
