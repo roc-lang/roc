@@ -51,7 +51,9 @@ ChatGPT and Claude are good at writing those scripts as well.
 
 ## Code Coverage
 
-When investigating a bug, it can be nice to instantly see if a line of rust code was executed during for example `roc build yourFile.roc`. We can use [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) for this, it comes pre-installed with our flake.nix. To generate the code coverage file:
+When investigating a bug, it can be nice to instantly see if a line of rust code was executed during for example `roc build yourFile.roc`. We can use [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) for this, on linux, it comes pre-installed with our flake.nix. On macos you'll need to install it with `cargo +stable install cargo-llvm-cov --locked`.
+
+To generate the code coverage file:
 
 ```shell
 $ cd roc

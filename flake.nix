@@ -58,6 +58,7 @@
             xorg.libXrandr
             xorg.libXi
             xorg.libxcb
+            cargo-llvm-cov # to visualize code coverage
           ];
 
         # DevInputs are not necessary to build roc as a user
@@ -98,7 +99,6 @@
           jq # used in several bash scripts
           cargo-nextest # used to give more info for segfaults for gen tests
           zls # zig language server
-          cargo-llvm-cov # to visualize code coverage
           # cargo-udeps # to find unused dependencies
         ]);
 
