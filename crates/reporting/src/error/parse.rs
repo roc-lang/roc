@@ -653,9 +653,19 @@ fn to_expr_report<'a>(
                     r"and this line is indented as if it's intended to be part of that expression:",
                 ),
                 alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
-                alloc.concat([alloc.reflow(
-                    "However, I already saw the final expression in that series of definitions.",
-                )]),
+                alloc.reflow(
+                    "However, I already saw the final expression in that series of definitions."
+                ),
+                alloc.tip().append(
+                    alloc.reflow(
+                        "An expression like `4`, `\"hello\"`, or `functionCall MyThing` is like `return 4` in other programming languages. To me, it seems like you did `return 4` followed by more code in the lines after, that code would never be executed!"
+                    )
+                ),
+                alloc.tip().append(
+                    alloc.reflow(
+                        "If you are working with `Task`, this error can happen if you forgot a `!` somewhere."
+                    )
+                )
             ]);
 
             Report {
