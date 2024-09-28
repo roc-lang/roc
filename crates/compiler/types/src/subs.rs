@@ -2699,6 +2699,12 @@ impl VariableSubsSlice {
     }
 }
 
+impl From<Variable> for VariableSubsSlice {
+    fn from(var: Variable) -> Self {
+        Self::new(var.0, 1)
+    }
+}
+
 pub trait Label: Sized + Clone {
     fn index_subs(subs: &Subs, idx: SubsIndex<Self>) -> &Self;
     fn get_subs_slice(subs: &Subs, slice: SubsSlice<Self>) -> &[Self];

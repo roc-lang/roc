@@ -12,8 +12,6 @@ roc_can = { path = "../can" }
 roc_region = { path = "../region" }
 roc_types = { path = "../types" }
 roc_collections = { path = "../collections" }
-roc_debug_flags = { path = "../debug_flags" }
-# roc_module is only used for TagName
 roc_module = { path = "../module" }
 
 bitvec.workspace = true
@@ -23,3 +21,16 @@ hashbrown.workspace = true
 parking_lot.workspace = true
 static_assertions.workspace = true
 indoc.workspace = true
+
+[dev-dependencies]
+roc_builtins = { path = "../builtins" }
+roc_derive = { path = "../derive", features = ["debug-derived-symbols"] }
+roc_load = { path = "../load" }
+roc_parse = { path = "../parse" }
+roc_problem = { path = "../problem" }
+roc_reporting = { path = "../../reporting" }
+roc_target = { path = "../roc_target" }
+roc_solve = { path = "../solve" }
+test_solve_helpers = { path = "../test_solve_helpers" }
+
+pretty_assertions.workspace = true
