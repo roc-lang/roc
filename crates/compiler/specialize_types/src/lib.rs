@@ -132,9 +132,7 @@ fn lower_content(
                 let mut elems = resolve_tuple_ext(subs, problems, *elems, *ext);
 
                 // Now lower all the elems we gathered. Do this in a separate pass to avoid borrow errors on Subs.
-                for (_, var) in elems.iter_mut() {
-                    *var = lower_var(cache, subs, problems, *var);
-                }
+                lower_vars(elems.iter_mut().map(|(_, var)| var), cache, subs, problems);
 
                 Content::Structure(FlatType::Tuple(
                     TupleElems::insert_into_subs(subs, elems.into_iter()),
@@ -145,11 +143,7 @@ fn lower_content(
                 let mut tags = resolve_tag_ext(subs, problems, *tags, *ext);
 
                 // Now lower all the tags we gathered. Do this in a separate pass to avoid borrow errors on Subs.
-                for (_, vars) in tags.iter_mut() {
-                    for var in vars.iter_mut() {
-                        *var = lower_var(cache, subs, problems, *var);
-                    }
-                }
+                lower_vars(tags.iter_mut().flat_map(|(_, vars)| vars.iter_mut()), cache, subs, problems);
 
                 Content::Structure(FlatType::TagUnion(
                     UnionTags::insert_into_subs(subs, tags.into_iter()),
@@ -164,11 +158,7 @@ fn lower_content(
 
                 // Now lower all the tags we gathered from the ext var.
                 // Do this in a separate pass to avoid borrow errors on Subs.
-                for (_, vars) in tags.iter_mut() {
-                    for var in vars.iter_mut() {
-                        *var = lower_var(cache, subs, problems, *var);
-                    }
-                }
+                lower_vars(tags.iter_mut().flat_map(|(_, vars)| vars.iter_mut()), cache, subs, problems);
 
                 // Then, add the tag names with no payloads. (There's nothing to lower here.)
                 for index in tag_names.into_iter() {
@@ -184,11 +174,7 @@ fn lower_content(
                 let mut tags = resolve_tag_ext(subs, problems, *tags, *ext);
 
                 // Now lower all the tags we gathered. Do this in a separate pass to avoid borrow errors on Subs.
-                for (_, vars) in tags.iter_mut() {
-                    for var in vars.iter_mut() {
-                        *var = lower_var(cache, subs, problems, *var);
-                    }
-                }
+                lower_vars(tags.iter_mut().flat_map(|(_, vars)| vars.iter_mut()), cache, subs, problems);
 
                 Content::Structure(FlatType::RecursiveTagUnion(
                     lower_var(cache, subs, problems, *rec),
@@ -349,4 +335,16 @@ fn resolve_tuple_ext(
     debug_assert_eq!(ext, Variable::EMPTY_TUPLE);
 
     all_elems
+}
+
+/// Lower the given vars in-place.
+fn lower_vars<'a>(
+    vars: impl Iterator<Item = &'a mut Variable>,
+    cache: &mut MonoCache,
+    subs: &mut Subs,
+    problems: &mut Vec<Problem>,
+) {
+    for var in vars {
+        *var = lower_var(cache, subs, problems, *var);
+    }
 }
