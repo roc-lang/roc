@@ -1,11 +1,15 @@
 use log::{debug, info};
+use roc_can::{
+    def::Def,
+    traverse::{DeclarationInfo, FoundDeclaration},
+};
 use std::collections::HashMap;
 
 use bumpalo::Bump;
 
 use roc_module::symbol::{ModuleId, Symbol};
 
-use roc_region::all::LineInfo;
+use roc_region::all::{LineColumn, LineInfo};
 
 use tower_lsp::lsp_types::{
     CompletionItem, Diagnostic, GotoDefinitionResponse, Hover, HoverContents, LanguageString,
@@ -14,7 +18,7 @@ use tower_lsp::lsp_types::{
 
 use crate::{
     analysis::completion::{field_completion, get_completion_items, get_module_completion_items},
-    convert::{ToRange, ToRocPosition},
+    convert::{ToRange, ToRegion, ToRocPosition},
 };
 
 use super::{
@@ -307,5 +311,54 @@ impl AnalyzedDocument {
                 Some(completions)
             }
         }
+    }
+
+    pub fn decl_signature(&self, range: Range, latest_doc: &DocInfo) -> Option<TextEdit> {
+        let line_info = self.line_info();
+        let region = range.to_region(line_info);
+
+        let AnalyzedModule {
+            subs,
+            declarations,
+            module_id,
+            interns,
+            ..
+        } = self.module()?;
+
+        let found_decl = roc_can::traverse::find_declaration_at(region, declarations)?;
+
+        let signature = format_var_type(found_decl.var(), &mut subs.clone(), module_id, interns);
+
+        let symbol_range = match found_decl {
+            FoundDeclaration::Decl(DeclarationInfo::Value { loc_symbol, .. }) => {
+                loc_symbol.byte_range()
+            }
+            FoundDeclaration::Decl(DeclarationInfo::Function { loc_symbol, .. }) => {
+                loc_symbol.byte_range()
+            }
+            FoundDeclaration::Def(Def { loc_pattern, .. }) => loc_pattern.byte_range(),
+            _ => return None,
+        };
+
+        let symbol_str = latest_doc.source[symbol_range].to_owned();
+
+        let LineColumn { line, column } = line_info.convert_region(found_decl.region()).start();
+        let lsp_position = tower_lsp::lsp_types::Position {
+            line,
+            character: column,
+        };
+        let range = Range {
+            start: lsp_position,
+            end: lsp_position,
+        };
+
+        let edit = TextEdit {
+            range,
+            new_text: format!(
+                "{symbol_str} : {signature}\n{}",
+                " ".repeat(column as usize)
+            ),
+        };
+        Some(edit)
     }
 }

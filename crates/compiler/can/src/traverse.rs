@@ -966,3 +966,10 @@ pub fn find_declaration(symbol: Symbol, decls: &'_ Declarations) -> Option<Found
         }
     }
 }
+
+pub fn find_declaration_at<'a>(
+    region: Region,
+    decls: &'a Declarations,
+) -> Option<FoundDeclaration<'a>> {
+    todo!()
+}
