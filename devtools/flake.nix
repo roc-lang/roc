@@ -32,7 +32,7 @@
               vscodeWithExtensions = pkgs.vscode-with-extensions.override {
                 vscodeExtensions = with pkgs.vscode-extensions;
                   [
-                    matklad.rust-analyzer
+                    rust-lang.rust-analyzer
                     # eamodio.gitlens
                     bbenoist.nix
                     tamasfe.even-better-toml
