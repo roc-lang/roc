@@ -78,17 +78,17 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1727392912,
-        "narHash": "sha256-gN2IrFENZYdeE895bgb3Z8ekPOR9r5iqPrSnTD/X/B0=",
+        "lastModified": 1712163089,
+        "narHash": "sha256-Um+8kTIrC19vD4/lUCN9/cU9kcOsD1O1m+axJqQPyMM=",
         "owner": "nixos",
         "repo": "nixpkgs",
-        "rev": "5f7659f9e899d92a60f7ddab6d3442c0ca958ecc",
+        "rev": "fd281bd6b7d3e32ddfa399853946f782553163b5",
         "type": "github"
       },
       "original": {
         "owner": "nixos",
         "repo": "nixpkgs",
-        "rev": "5f7659f9e899d92a60f7ddab6d3442c0ca958ecc",
+        "rev": "fd281bd6b7d3e32ddfa399853946f782553163b5",
         "type": "github"
       }
     },
@@ -101,13 +101,13 @@
         "rust-overlay": "rust-overlay"
       },
       "locked": {
-        "lastModified": 1727537010,
-        "narHash": "sha256-IqpdNfwy8X/JQsPMjExuv+KzX/foxUIe+RxpmO1TQ80=",
-        "path": "/home/username/gitrepos/roc-with-nix/roc",
+        "lastModified": 1727455099,
+        "narHash": "sha256-/tqXI2VIsx+OmXxYAUqOnzfQ2JqWBJJ32IjwzGMxg0A=",
+        "path": "/home/username/gitrepos/roc",
         "type": "path"
       },
       "original": {
-        "path": "/home/username/gitrepos/roc-with-nix/roc",
+        "path": "/home/username/gitrepos/roc",
         "type": "path"
       }
     },
