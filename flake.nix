@@ -98,6 +98,7 @@
           jq # used in several bash scripts
           cargo-nextest # used to give more info for segfaults for gen tests
           zls # zig language server
+          cargo-llvm-cov # to visualize code coverage
           # cargo-udeps # to find unused dependencies
         ]);
 
