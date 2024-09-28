@@ -1,6 +1,6 @@
 use crate::ast::{EscapedChar, SingleQuoteLiteral, StrLiteral, StrSegment};
 use crate::blankspace::{eat_space, SpacedBuilder};
-use crate::expr::{parse_expr_start, ExprParseOptions};
+use crate::expr::{parse_expr_start, ACCEPT_MULTI_BACKPASSING, CHECK_FOR_ARROW};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
     byte, loc, skip_first, skip_second, BadInputError, ESingleQuote, EString, ParseResult, Parser,
@@ -373,13 +373,17 @@ pub fn rest_of_str_like<'a>(
                                 }
                             };
 
-                        let (expr, mut news) =
-                            match parse_expr_start(ExprParseOptions::ALL, arena, news.clone(), 0) {
-                                Ok((_, expr, state)) => (expr, state),
-                                Err((p, fail)) => {
-                                    return Err((p, EString::Format(arena.alloc(fail), expr_pos)));
-                                }
-                            };
+                        let (expr, mut news) = match parse_expr_start(
+                            CHECK_FOR_ARROW | ACCEPT_MULTI_BACKPASSING,
+                            arena,
+                            news,
+                            0,
+                        ) {
+                            Ok((_, expr, state)) => (expr, state),
+                            Err((p, fail)) => {
+                                return Err((p, EString::Format(arena.alloc(fail), expr_pos)));
+                            }
+                        };
 
                         let expr = expr.spaced_before(arena, spaces_before);
                         let expr = &*arena.alloc(expr.value);
@@ -497,13 +501,17 @@ pub fn rest_of_str_like<'a>(
                     }
                 };
 
-                let (expr, mut news) =
-                    match parse_expr_start(ExprParseOptions::ALL, arena, news.clone(), 0) {
-                        Ok((_, expr, state)) => (expr, state),
-                        Err((p, fail)) => {
-                            return Err((p, EString::Format(arena.alloc(fail), expr_pos)));
-                        }
-                    };
+                let (expr, mut news) = match parse_expr_start(
+                    CHECK_FOR_ARROW | ACCEPT_MULTI_BACKPASSING,
+                    arena,
+                    news,
+                    0,
+                ) {
+                    Ok((_, expr, state)) => (expr, state),
+                    Err((p, fail)) => {
+                        return Err((p, EString::Format(arena.alloc(fail), expr_pos)));
+                    }
+                };
 
                 let expr = expr.spaced_before(arena, spaces_before);
                 let expr = &*arena.alloc(expr.value);

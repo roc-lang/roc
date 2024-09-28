@@ -665,7 +665,7 @@ fn ability_impl_field<'a>() -> impl Parser<'a, AssignedField<'a, Expr<'a>>, ERec
 
 pub struct TypeExprFlags(u8);
 
-pub const NO_FLAGS: TypeExprFlags = TypeExprFlags(0);
+pub const NO_TYPE_EXPR_FLAGS: TypeExprFlags = TypeExprFlags(0);
 pub const TRAILING_COMMA_VALID: TypeExprFlags = TypeExprFlags(1);
 pub const STOP_AT_FIRST_IMPL: TypeExprFlags = TypeExprFlags(1 << 1);
 pub const SKIP_PARSING_SPACES_BEFORE: TypeExprFlags = TypeExprFlags(1 << 2);
