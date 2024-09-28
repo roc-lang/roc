@@ -90,7 +90,7 @@ pub const FLAG_PP_HOST: &str = "host";
 pub const FLAG_PP_PLATFORM: &str = "platform";
 pub const FLAG_PP_DYLIB: &str = "lib";
 
-const VERSION: &str = include_str!("../../../version.txt");
+pub const VERSION: &str = env!("ROC_VERSION");
 const DEFAULT_GENERATED_DOCS_DIR: &str = "generated-docs";
 
 pub fn build_app() -> Command {
@@ -182,7 +182,7 @@ pub fn build_app() -> Command {
         PossibleValuesParser::new(Target::iter().map(Into::<&'static str>::into));
 
     Command::new("roc")
-        .version(concatcp!(VERSION, "\n"))
+        .version(VERSION)
         .about("Run the given .roc file, if there are no compilation errors.\nYou can use one of the SUBCOMMANDS below to do something else!")
         .args_conflicts_with_subcommands(true)
         .subcommand(Command::new(CMD_BUILD)
