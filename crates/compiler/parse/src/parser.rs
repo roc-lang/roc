@@ -83,8 +83,6 @@ impl_space_problem! {
     EExpect<'a>,
     EExposes,
     EExpr<'a>,
-    EGenerates,
-    EGeneratesWith,
     EHeader<'a>,
     EIf<'a>,
     EImport<'a>,
@@ -122,8 +120,6 @@ pub enum EHeader<'a> {
     Imports(EImports, Position),
     Requires(ERequires<'a>, Position),
     Packages(EPackages<'a>, Position),
-    Generates(EGenerates, Position),
-    GeneratesWith(EGeneratesWith, Position),
 
     Space(BadInputError, Position),
     Start(Position),
@@ -252,30 +248,6 @@ pub enum EImports {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EGenerates {
-    Open(Position),
-    Generates(Position),
-    IndentGenerates(Position),
-    Identifier(Position),
-    Space(BadInputError, Position),
-    IndentTypeStart(Position),
-    IndentTypeEnd(Position),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EGeneratesWith {
-    Open(Position),
-    With(Position),
-    IndentWith(Position),
-    IndentListStart(Position),
-    IndentListEnd(Position),
-    ListStart(Position),
-    ListEnd(Position),
-    Identifier(Position),
-    Space(BadInputError, Position),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BadInputError {
     HasTab,
     HasMisplacedCarriageReturn,
@@ -372,8 +344,6 @@ pub enum EExpr<'a> {
 
     InParens(EInParens<'a>, Position),
     Record(ERecord<'a>, Position),
-    OptionalValueInOldRecordBuilder(Region),
-    IgnoredValueInOldRecordBuilder(Region),
     RecordUpdateOldBuilderField(Region),
     RecordUpdateIgnoredField(Region),
     RecordBuilderOldBuilderField(Region),
@@ -579,7 +549,6 @@ pub enum EImportParams<'a> {
     Record(ERecord<'a>, Position),
     RecordUpdateFound(Region),
     RecordBuilderFound(Region),
-    RecordApplyFound(Region),
     RecordIgnoredFieldFound(Region),
     Space(BadInputError, Position),
 }
@@ -856,8 +825,7 @@ where
         }
 
         // This should be enough for anyone. Right? RIGHT?
-        let indent_text =
-            "| ; : ! | ; : ! | ; : ! | ; : ! | ; : ! | ; : ! | ; : ! | ; : ! | ; : ! ";
+        let indent_text = "| ; : ! ".repeat(20);
 
         let cur_indent = INDENT.with(|i| *i.borrow());
 

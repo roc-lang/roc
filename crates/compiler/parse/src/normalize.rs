@@ -8,24 +8,23 @@ use crate::{
         AbilityImpls, AbilityMember, AssignedField, Collection, Defs, Expr, FullAst, Header,
         Implements, ImplementsAbilities, ImplementsAbility, ImplementsClause, ImportAlias,
         ImportAsKeyword, ImportExposingKeyword, ImportedModuleName, IngestedFileAnnotation,
-        IngestedFileImport, ModuleImport, ModuleImportParams, OldRecordBuilderField, Pattern,
-        PatternAs, Spaced, Spaces, SpacesBefore, StrLiteral, StrSegment, Tag, TypeAnnotation,
-        TypeDef, TypeHeader, ValueDef, WhenBranch,
+        IngestedFileImport, ModuleImport, ModuleImportParams, Pattern, PatternAs, Spaced, Spaces,
+        SpacesBefore, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+        WhenBranch,
     },
     header::{
-        AppHeader, ExposedName, ExposesKeyword, GeneratesKeyword, HostedHeader, ImportsEntry,
-        ImportsKeyword, KeywordItem, ModuleHeader, ModuleName, ModuleParams, PackageEntry,
-        PackageHeader, PackageKeyword, PackageName, PackagesKeyword, PlatformHeader,
-        PlatformKeyword, PlatformRequires, ProvidesKeyword, ProvidesTo, RequiresKeyword, To,
-        ToKeyword, TypedIdent, WithKeyword,
+        AppHeader, ExposedName, ExposesKeyword, HostedHeader, ImportsEntry, ImportsKeyword,
+        KeywordItem, ModuleHeader, ModuleName, ModuleParams, PackageEntry, PackageHeader,
+        PackageKeyword, PackageName, PackagesKeyword, PlatformHeader, PlatformKeyword,
+        PlatformRequires, ProvidesKeyword, ProvidesTo, RequiresKeyword, To, ToKeyword, TypedIdent,
     },
     ident::{BadIdent, UppercaseIdent},
     parser::{
-        EAbility, EClosure, EExpect, EExposes, EExpr, EGenerates, EGeneratesWith, EHeader, EIf,
-        EImport, EImportParams, EImports, EInParens, EList, EPackageEntry, EPackageName, EPackages,
-        EParams, EPattern, EProvides, ERecord, ERequires, EString, EType, ETypeAbilityImpl,
-        ETypeApply, ETypeInParens, ETypeInlineAlias, ETypeRecord, ETypeTagUnion, ETypedIdent,
-        EWhen, PInParens, PList, PRecord, SyntaxError,
+        EAbility, EClosure, EExpect, EExposes, EExpr, EHeader, EIf, EImport, EImportParams,
+        EImports, EInParens, EList, EPackageEntry, EPackageName, EPackages, EParams, EPattern,
+        EProvides, ERecord, ERequires, EString, EType, ETypeAbilityImpl, ETypeApply, ETypeInParens,
+        ETypeInlineAlias, ETypeRecord, ETypeTagUnion, ETypedIdent, EWhen, PInParens, PList,
+        PRecord, SyntaxError,
     },
 };
 
@@ -59,8 +58,6 @@ macro_rules! keywords {
 keywords! {
     ExposesKeyword,
     ImportsKeyword,
-    WithKeyword,
-    GeneratesKeyword,
     PackageKeyword,
     PackagesKeyword,
     RequiresKeyword,
@@ -179,8 +176,6 @@ impl<'a> Normalize<'a> for Header<'a> {
                 name: header.name.normalize(arena),
                 exposes: header.exposes.normalize(arena),
                 imports: header.imports.normalize(arena),
-                generates: header.generates.normalize(arena),
-                generates_with: header.generates_with.normalize(arena),
             }),
         }
     }
@@ -567,30 +562,6 @@ impl<'a, T: Normalize<'a> + Copy + std::fmt::Debug> Normalize<'a> for AssignedFi
     }
 }
 
-impl<'a> Normalize<'a> for OldRecordBuilderField<'a> {
-    fn normalize(&self, arena: &'a Bump) -> Self {
-        match *self {
-            OldRecordBuilderField::Value(a, _, c) => OldRecordBuilderField::Value(
-                a.normalize(arena),
-                &[],
-                arena.alloc(c.normalize(arena)),
-            ),
-            OldRecordBuilderField::ApplyValue(a, _, _, c) => OldRecordBuilderField::ApplyValue(
-                a.normalize(arena),
-                &[],
-                &[],
-                arena.alloc(c.normalize(arena)),
-            ),
-            OldRecordBuilderField::LabelOnly(a) => {
-                OldRecordBuilderField::LabelOnly(a.normalize(arena))
-            }
-            OldRecordBuilderField::Malformed(a) => OldRecordBuilderField::Malformed(a),
-            OldRecordBuilderField::SpaceBefore(a, _) => a.normalize(arena),
-            OldRecordBuilderField::SpaceAfter(a, _) => a.normalize(arena),
-        }
-    }
-}
-
 impl<'a> Normalize<'a> for StrLiteral<'a> {
     fn normalize(&self, arena: &'a Bump) -> Self {
         match *self {
@@ -624,7 +595,7 @@ impl<'a> Normalize<'a> for StrLiteral<'a> {
                     new_segments.push(StrSegment::Plaintext(last_text.into_bump_str()));
                 }
 
-                StrLiteral::Line(new_segments.into_bump_slice())
+                normalize_str_line(new_segments)
             }
             StrLiteral::Block(t) => {
                 let mut new_segments = Vec::new_in(arena);
@@ -636,10 +607,20 @@ impl<'a> Normalize<'a> for StrLiteral<'a> {
                     new_segments.push(StrSegment::Plaintext(last_text.into_bump_str()));
                 }
 
-                StrLiteral::Line(new_segments.into_bump_slice())
+                normalize_str_line(new_segments)
             }
         }
     }
+}
+
+fn normalize_str_line<'a>(new_segments: Vec<'a, StrSegment<'a>>) -> StrLiteral<'a> {
+    if new_segments.len() == 1 {
+        if let StrSegment::Plaintext(t) = new_segments[0] {
+            return StrLiteral::PlainLine(t);
+        }
+    }
+
+    StrLiteral::Line(new_segments.into_bump_slice())
 }
 
 fn normalize_str_segments<'a>(
@@ -733,7 +714,6 @@ impl<'a> Normalize<'a> for Expr<'a> {
                 fields: fields.normalize(arena),
             },
             Expr::Record(a) => Expr::Record(a.normalize(arena)),
-            Expr::OldRecordBuilder(a) => Expr::OldRecordBuilder(a.normalize(arena)),
             Expr::RecordBuilder { mapper, fields } => Expr::RecordBuilder {
                 mapper: arena.alloc(mapper.normalize(arena)),
                 fields: fields.normalize(arena),
@@ -774,7 +754,8 @@ impl<'a> Normalize<'a> for Expr<'a> {
                 arena.alloc(a.normalize(arena)),
                 arena.alloc(b.normalize(arena)),
             ),
-            Expr::Dbg(a, b) => Expr::Dbg(
+            Expr::Dbg => Expr::Dbg,
+            Expr::DbgStmt(a, b) => Expr::DbgStmt(
                 arena.alloc(a.normalize(arena)),
                 arena.alloc(b.normalize(arena)),
             ),
@@ -790,7 +771,15 @@ impl<'a> Normalize<'a> for Expr<'a> {
             Expr::UnaryOp(a, b) => {
                 Expr::UnaryOp(arena.alloc(a.normalize(arena)), b.normalize(arena))
             }
-            Expr::If(a, b) => Expr::If(a.normalize(arena), arena.alloc(b.normalize(arena))),
+            Expr::If {
+                if_thens,
+                final_else,
+                indented_else,
+            } => Expr::If {
+                if_thens: if_thens.normalize(arena),
+                final_else: arena.alloc(final_else.normalize(arena)),
+                indented_else,
+            },
             Expr::When(a, b) => Expr::When(arena.alloc(a.normalize(arena)), b.normalize(arena)),
             Expr::ParensAround(a) => {
                 // The formatter can remove redundant parentheses, so also remove these when normalizing for comparison.
@@ -803,12 +792,6 @@ impl<'a> Normalize<'a> for Expr<'a> {
             Expr::SpaceBefore(a, _) => a.normalize(arena),
             Expr::SpaceAfter(a, _) => a.normalize(arena),
             Expr::SingleQuote(a) => Expr::Num(a),
-            Expr::MultipleOldRecordBuilders(a) => {
-                Expr::MultipleOldRecordBuilders(arena.alloc(a.normalize(arena)))
-            }
-            Expr::UnappliedOldRecordBuilder(a) => {
-                Expr::UnappliedOldRecordBuilder(arena.alloc(a.normalize(arena)))
-            }
             Expr::EmptyRecordBuilder(a) => {
                 Expr::EmptyRecordBuilder(arena.alloc(a.normalize(arena)))
             }
@@ -1078,12 +1061,6 @@ impl<'a> Normalize<'a> for EExpr<'a> {
             EExpr::Record(inner_err, _pos) => {
                 EExpr::Record(inner_err.normalize(arena), Position::zero())
             }
-            EExpr::OptionalValueInOldRecordBuilder(_pos) => {
-                EExpr::OptionalValueInOldRecordBuilder(Region::zero())
-            }
-            EExpr::IgnoredValueInOldRecordBuilder(_pos) => {
-                EExpr::OptionalValueInOldRecordBuilder(Region::zero())
-            }
             EExpr::Str(inner_err, _pos) => EExpr::Str(inner_err.normalize(arena), Position::zero()),
             EExpr::Number(inner_err, _pos) => EExpr::Number(inner_err.clone(), Position::zero()),
             EExpr::List(inner_err, _pos) => {
@@ -1317,7 +1294,6 @@ impl<'a> Normalize<'a> for EImportParams<'a> {
                 EImportParams::Record(inner_err.normalize(arena), Position::zero())
             }
             EImportParams::RecordUpdateFound(_) => EImportParams::RecordUpdateFound(Region::zero()),
-            EImportParams::RecordApplyFound(_) => EImportParams::RecordApplyFound(Region::zero()),
             EImportParams::RecordIgnoredFieldFound(_) => {
                 EImportParams::RecordIgnoredFieldFound(Region::zero())
             }
@@ -1577,38 +1553,6 @@ impl<'a> Normalize<'a> for EAbility<'a> {
     }
 }
 
-impl<'a> Normalize<'a> for EGeneratesWith {
-    fn normalize(&self, _arena: &'a Bump) -> Self {
-        match self {
-            EGeneratesWith::Open(_) => EGeneratesWith::Open(Position::zero()),
-            EGeneratesWith::With(_) => EGeneratesWith::With(Position::zero()),
-            EGeneratesWith::IndentWith(_) => EGeneratesWith::IndentWith(Position::zero()),
-            EGeneratesWith::IndentListStart(_) => EGeneratesWith::IndentListStart(Position::zero()),
-            EGeneratesWith::IndentListEnd(_) => EGeneratesWith::IndentListEnd(Position::zero()),
-            EGeneratesWith::ListStart(_) => EGeneratesWith::ListStart(Position::zero()),
-            EGeneratesWith::ListEnd(_) => EGeneratesWith::ListEnd(Position::zero()),
-            EGeneratesWith::Identifier(_) => EGeneratesWith::Identifier(Position::zero()),
-            EGeneratesWith::Space(inner_err, _) => {
-                EGeneratesWith::Space(*inner_err, Position::zero())
-            }
-        }
-    }
-}
-
-impl<'a> Normalize<'a> for EGenerates {
-    fn normalize(&self, _arena: &'a Bump) -> Self {
-        match self {
-            EGenerates::Open(_) => EGenerates::Open(Position::zero()),
-            EGenerates::Generates(_) => EGenerates::Generates(Position::zero()),
-            EGenerates::IndentGenerates(_) => EGenerates::IndentGenerates(Position::zero()),
-            EGenerates::Identifier(_) => EGenerates::Identifier(Position::zero()),
-            EGenerates::Space(inner_err, _) => EGenerates::Space(*inner_err, Position::zero()),
-            EGenerates::IndentTypeStart(_) => EGenerates::IndentTypeStart(Position::zero()),
-            EGenerates::IndentTypeEnd(_) => EGenerates::IndentTypeEnd(Position::zero()),
-        }
-    }
-}
-
 impl<'a> Normalize<'a> for EPackages<'a> {
     fn normalize(&self, arena: &'a Bump) -> Self {
         match self {
@@ -1647,12 +1591,6 @@ impl<'a> Normalize<'a> for EHeader<'a> {
             }
             EHeader::Packages(inner_err, _) => {
                 EHeader::Packages(inner_err.normalize(arena), Position::zero())
-            }
-            EHeader::Generates(inner_err, _) => {
-                EHeader::Generates(inner_err.normalize(arena), Position::zero())
-            }
-            EHeader::GeneratesWith(inner_err, _) => {
-                EHeader::GeneratesWith(inner_err.normalize(arena), Position::zero())
             }
             EHeader::Space(inner_err, _) => EHeader::Space(*inner_err, Position::zero()),
             EHeader::Start(_) => EHeader::Start(Position::zero()),

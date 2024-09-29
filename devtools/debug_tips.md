@@ -12,6 +12,59 @@
 
 - In general we recommend using linux to investigate, it has better tools for this. 
 - If your segfault also happens when using `--linker=legacy`, use it to improve valgrind output. For example: `roc build myApp.roc --linker=legacy` followed by `valgrind ./myApp`.
-- Use gdb to step through the code, [this gdb script](https://roc.zulipchat.com/#narrow/stream/395097-compiler-development/topic/gdb.20script/near/424422545) can be helpful.
-- Use objdump to look at the assembly of the code, for example `objdump -d -M intel ./examples/Arithmetic/main`. Replace `-M intel` with the appropriate flag for your CPU.
-- Inspect the generated LLVM IR (`roc build myApp.roc --emit-llvm-ir`) between Roc code that encounters the segfault and code that doesn't.
+
+### Assembly debuggers
+
+Stepping through the executed assembly is super useful to find out what is going wrong.
+Use a debugger (see below) and find the last executed instruction, look that instruction up and check its requirements. An instruction can for example require 16 bit alignment and passing it 8 byte aligned data can cause a segfault.
+If you have a commit that works and one that doesn't, step through both executables at the same time to check where they differ.
+It can also be useful to keep the llvm IR .ll files open on the side (`roc build myApp.roc --emit-llvm-ir`) to understand how that assembly was generated.
+I like using both [IDA free](https://hex-rays.com/ida-free/) and gdb.
+IDA free is easier to use and has nicer visualizations compared to gdb, but it does sometimes have difficulty with binaries created by surgical linking.
+I've also [not been able to view output (stdout) of a program in IDA free](https://stackoverflow.com/questions/78888834/how-to-view-stdout-in-ida-debugger).
+
+objdump can also be used to look at the full assembly of the executable, for example `objdump -d -M intel ./examples/Arithmetic/main`. Replace `-M intel` with the appropriate flag for your CPU.
+Note that the addresses shown in objdump may use a different offset compared to those in IDA or gdb.
+
+#### IDA free
+
+1. [Download here](https://hex-rays.com/ida-free/)
+2. Build your roc app with the legacy linker if it does not error only with the surgical linker: `roc build myApp.roc --linker=legacy`
+3. Open the produced executable with IDA free, don't change any of the suggested settings.
+4. You probably want to go to the function you saw in valgrind like `List_walkTryHelp_...` [here](https://github.com/roc-lang/examples/pull/192#issuecomment-2269571439). You can use Ctrl+F in the Function s window in IDA free.
+5. Right click and choose `Add Breakpoint` at the first instruction of the function you clicked on the previous step.
+6. Run the debugger by pressing F9
+7. Use step into (F7) and step over (F8) to see what's going on. Keep an eye on the `General Registers` and `Stack view` windows while you're stepping.
+
+
+#### gdb
+
+1. Set up [this handy gdb layout](https://github.com/cyrus-and/gdb-dashboard).
+2. Start with `gdb ./your-roc-app-executable`, or if your executable takes command line arguments; `gdb --args ./your-roc-app-executable arg1 arg2`
+3. Get the complete function name of the function you want to analyze: `info functions yourInterestingFunction`
+4. Use that complete function name to set a breakpoint `break fullFunctionName` or set a breakpoint at a specific address `break*0x00000000012345`
+5. Execute `run` to start debugging.
+6. Step to the next assembly instruction with `si`, or use `ni` if you don't want to step into calls.
+
+gdb scripting is very useful, [for example](https://roc.zulipchat.com/#narrow/stream/395097-compiler-development/topic/gdb.20script/near/424422545).
+ChatGPT and Claude are good at writing those scripts as well.
+
+## Code Coverage
+
+When investigating a bug, it can be nice to instantly see if a line of rust code was executed during for example `roc build yourFile.roc`. We can use [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) for this, on linux, it comes pre-installed with our flake.nix. On macos you'll need to install it with `cargo +stable install cargo-llvm-cov --locked`.
+
+To generate the code coverage file:
+
+```shell
+$ cd roc
+$ source <(cargo llvm-cov show-env --export-prefix)
+$ cargo llvm-cov clean --workspace
+$ cargo build --bin roc
+# Replace with the command you want to generate coverage for:
+$ ./target/debug/roc build ./examples/platform-switching/rocLovesRust.roc
+# To view in editor
+$ cargo llvm-cov report --lcov  --output-path lcov.info
+# To view in browser
+$ cargo llvm-cov report --html
+```
+Viewing lcov.info will depend on your editor. For vscode, you can use the [coverage gutters](https://marketplace.visualstudio.com/items?itemName=ryanluker.vscode-coverage-gutters) extension. After installing, click `Watch` in the bottom bar and go to a file for which you want to see the coverage, for example `crates/compiler/build/src/link.rs`. `Watch` in the bottom bar will now be replaced with `x% Coverage`.

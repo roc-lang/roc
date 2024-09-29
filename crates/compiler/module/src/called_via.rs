@@ -75,10 +75,6 @@ pub enum CalledVia {
     /// e.g. "$(first) $(last)" is transformed into Str.concat (Str.concat first " ") last.
     StringInterpolation,
 
-    /// This call is the result of desugaring an old style Record Builder field.
-    /// e.g. succeed { a <- get "a" } is transformed into (get "a") (succeed \a -> { a })
-    OldRecordBuilder,
-
     /// This call is the result of desugaring a map2-based Record Builder field. e.g.
     /// ```roc
     /// { Task.parallel <-
@@ -99,6 +95,9 @@ pub enum CalledVia {
     /// This call is the result of desugaring a Result.try from `?` syntax
     /// e.g. Dict.get? items "key" becomes Result.try (Dict.get items "key") \item -> ...
     QuestionSuffix,
+
+    /// This call is a result of lowering a reference to a module-params-extended def
+    NakedParamsVar,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,6 +113,23 @@ impl std::fmt::Display for UnaryOp {
         match self {
             UnaryOp::Negate => write!(f, "-"),
             UnaryOp::Not => write!(f, "!"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Suffix {
+    /// (!), e.g. (Stdin.line!)
+    Bang,
+    /// (?), e.g. (parseData? data)
+    Question,
+}
+
+impl std::fmt::Display for Suffix {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Suffix::Bang => write!(f, "!"),
+            Suffix::Question => write!(f, "?"),
         }
     }
 }

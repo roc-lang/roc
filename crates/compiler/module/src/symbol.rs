@@ -123,6 +123,10 @@ impl Symbol {
                 .any(|(_, (s, _))| *s == self)
     }
 
+    pub fn is_generated(self, interns: &Interns) -> bool {
+        self.ident_ids(interns).is_generated_id(self.ident_id())
+    }
+
     pub fn module_string<'a>(&self, interns: &'a Interns) -> &'a ModuleName {
         interns
             .module_ids
@@ -137,24 +141,15 @@ impl Symbol {
     }
 
     pub fn as_str(self, interns: &Interns) -> &str {
-        let ident_ids = interns
-            .all_ident_ids
-            .get(&self.module_id())
+        self.ident_ids(interns)
+            .get_name(self.ident_id())
             .unwrap_or_else(|| {
                 internal_error!(
-                    "ident_string could not find IdentIds for module {:?} in {:?}",
-                    self.module_id(),
-                    interns
+                    "ident_string's IdentIds did not contain an entry for {} in module {:?}",
+                    self.ident_id().0,
+                    self.module_id()
                 )
-            });
-
-        ident_ids.get_name(self.ident_id()).unwrap_or_else(|| {
-            internal_error!(
-                "ident_string's IdentIds did not contain an entry for {} in module {:?}",
-                self.ident_id().0,
-                self.module_id()
-            )
-        })
+            })
     }
 
     pub const fn as_u64(self) -> u64 {
@@ -185,6 +180,19 @@ impl Symbol {
     #[cfg(debug_assertions)]
     pub fn contains(self, needle: &str) -> bool {
         format!("{self:?}").contains(needle)
+    }
+
+    fn ident_ids(self, interns: &Interns) -> &IdentIds {
+        interns
+            .all_ident_ids
+            .get(&self.module_id())
+            .unwrap_or_else(|| {
+                internal_error!(
+                    "ident_string could not find IdentIds for module {:?} in {:?}",
+                    self.module_id(),
+                    interns
+                )
+            })
     }
 }
 
@@ -437,13 +445,6 @@ impl fmt::Debug for ModuleId {
         self.0.fmt(f)
     }
 }
-
-/// pf.Task
-/// 1. build mapping from short name to package
-/// 2. when adding new modules from package we need to register them in some other map (this module id goes with short name) (shortname, module-name) -> moduleId
-/// 3. pass this around to other modules getting headers parsed. when parsing interfaces we need to use this map to reference shortnames
-/// 4. throw away short names. stash the module id in the can env under the resolved module name
-/// 5. test:
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PackageQualified<'a, T> {
@@ -705,6 +706,12 @@ impl IdentIds {
     /// to generate a unique symbol to refer to that closure.
     pub fn gen_unique(&mut self) -> IdentId {
         IdentId(self.interner.insert_index_str() as u32)
+    }
+
+    pub fn is_generated_id(&self, id: IdentId) -> bool {
+        self.interner
+            .try_get(id.0 as usize)
+            .map_or(false, |str| str.starts_with(|c: char| c.is_ascii_digit()))
     }
 
     #[inline(always)]
@@ -1668,6 +1675,23 @@ define_builtins! {
         32 INSPECT_TO_INSPECTOR: "toInspector"
         33 INSPECT_TO_STR: "toStr"
     }
+    15 TASK: "Task" => {
+        0 TASK_TASK: "Task" exposed_type=true // the Task.Task opaque type
+        1 TASK_FOREVER: "forever"
+        2 TASK_LOOP: "loop"
+        3 TASK_OK: "ok"
+        4 TASK_ERR: "err"
+        5 TASK_ATTEMPT: "attempt"
+        6 TASK_AWAIT: "await"
+        7 TASK_ON_ERR: "onErr"
+        8 TASK_MAP: "map"
+        9 TASK_MAP_ERR: "mapErr"
+        10 TASK_FROM_RESULT: "fromResult"
+        11 TASK_BATCH: "batch"
+        12 TASK_SEQUENCE: "sequence"
+        13 TASK_FOR_EACH: "forEach"
+        14 TASK_RESULT: "result"
+    }
 
-    num_modules: 15 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
+    num_modules: 16 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
 }

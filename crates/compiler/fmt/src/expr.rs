@@ -10,7 +10,7 @@ use crate::Buf;
 use roc_module::called_via::{self, BinOp};
 use roc_parse::ast::{
     is_expr_suffixed, AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces,
-    OldRecordBuilderField, Pattern, TryTarget, WhenBranch,
+    Pattern, TryTarget, WhenBranch,
 };
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_parse::ident::Accessor;
@@ -46,7 +46,8 @@ impl<'a> Formattable for Expr<'a> {
             | MalformedClosure
             | Tag(_)
             | OpaqueRef(_)
-            | Crash => false,
+            | Crash
+            | Dbg => false,
 
             RecordAccess(inner, _) | TupleAccess(inner, _) | TrySuffix { expr: inner, .. } => {
                 inner.is_multiline()
@@ -65,12 +66,16 @@ impl<'a> Formattable for Expr<'a> {
             Expect(condition, continuation) => {
                 condition.is_multiline() || continuation.is_multiline()
             }
-            Dbg(condition, _) => condition.is_multiline(),
+            DbgStmt(condition, _) => condition.is_multiline(),
             LowLevelDbg(_, _, _) => unreachable!(
                 "LowLevelDbg should only exist after desugaring, not during formatting"
             ),
 
-            If(branches, final_else) => {
+            If {
+                if_thens: branches,
+                final_else,
+                ..
+            } => {
                 final_else.is_multiline()
                     || branches
                         .iter()
@@ -86,8 +91,6 @@ impl<'a> Formattable for Expr<'a> {
             | PrecedenceConflict(roc_parse::ast::PrecedenceConflict {
                 expr: loc_subexpr, ..
             })
-            | MultipleOldRecordBuilders(loc_subexpr)
-            | UnappliedOldRecordBuilder(loc_subexpr)
             | EmptyRecordBuilder(loc_subexpr)
             | SingleFieldRecordBuilder(loc_subexpr)
             | OptionalFieldInRecordBuilder(_, loc_subexpr) => loc_subexpr.is_multiline(),
@@ -113,7 +116,6 @@ impl<'a> Formattable for Expr<'a> {
             Record(fields) => is_collection_multiline(fields),
             Tuple(fields) => is_collection_multiline(fields),
             RecordUpdate { fields, .. } => is_collection_multiline(fields),
-            OldRecordBuilder(fields) => is_collection_multiline(fields),
             RecordBuilder { fields, .. } => is_collection_multiline(fields),
         }
     }
@@ -239,10 +241,7 @@ impl<'a> Formattable for Expr<'a> {
                             a.extract_spaces().item.is_multiline()
                                 && matches!(
                                     a.value.extract_spaces().item,
-                                    Expr::Tuple(_)
-                                        | Expr::List(_)
-                                        | Expr::Record(_)
-                                        | Expr::OldRecordBuilder(_)
+                                    Expr::Tuple(_) | Expr::List(_) | Expr::Record(_)
                                 )
                                 && a.extract_spaces().before == [CommentOrNewline::Newline]
                         })
@@ -387,16 +386,6 @@ impl<'a> Formattable for Expr<'a> {
                     assigned_field_to_space_before,
                 );
             }
-            OldRecordBuilder(fields) => {
-                fmt_record_like(
-                    buf,
-                    None,
-                    *fields,
-                    indent,
-                    format_record_builder_field_multiline,
-                    record_builder_field_to_space_before,
-                );
-            }
             Closure(loc_patterns, loc_ret) => {
                 fmt_closure(buf, loc_patterns, loc_ret, indent);
             }
@@ -453,14 +442,29 @@ impl<'a> Formattable for Expr<'a> {
             Expect(condition, continuation) => {
                 fmt_expect(buf, condition, continuation, self.is_multiline(), indent);
             }
-            Dbg(condition, continuation) => {
-                fmt_dbg(buf, condition, continuation, self.is_multiline(), indent);
+            Dbg => {
+                buf.indent(indent);
+                buf.push_str("dbg");
+            }
+            DbgStmt(condition, continuation) => {
+                fmt_dbg_stmt(buf, condition, continuation, self.is_multiline(), indent);
             }
             LowLevelDbg(_, _, _) => unreachable!(
                 "LowLevelDbg should only exist after desugaring, not during formatting"
             ),
-            If(branches, final_else) => {
-                fmt_if(buf, branches, final_else, self.is_multiline(), indent);
+            If {
+                if_thens: branches,
+                final_else,
+                indented_else,
+            } => {
+                fmt_if(
+                    buf,
+                    branches,
+                    final_else,
+                    self.is_multiline(),
+                    *indented_else,
+                    indent,
+                );
             }
             When(loc_condition, branches) => fmt_when(buf, loc_condition, branches, indent),
             Tuple(items) => fmt_collection(buf, indent, Braces::Round, *items, Newlines::No),
@@ -543,8 +547,6 @@ impl<'a> Formattable for Expr<'a> {
             }
             MalformedClosure => {}
             PrecedenceConflict { .. } => {}
-            MultipleOldRecordBuilders { .. } => {}
-            UnappliedOldRecordBuilder { .. } => {}
             EmptyRecordBuilder { .. } => {}
             SingleFieldRecordBuilder { .. } => {}
             OptionalFieldInRecordBuilder(_, _) => {}
@@ -605,11 +607,7 @@ pub(crate) fn format_sq_literal(buf: &mut Buf, s: &str) {
 fn is_outdentable(expr: &Expr) -> bool {
     matches!(
         expr.extract_spaces().item,
-        Expr::Tuple(_)
-            | Expr::List(_)
-            | Expr::Record(_)
-            | Expr::OldRecordBuilder(_)
-            | Expr::Closure(..)
+        Expr::Tuple(_) | Expr::List(_) | Expr::Record(_) | Expr::Closure(..)
     )
 }
 
@@ -624,6 +622,22 @@ fn starts_with_newline(expr: &Expr) -> bool {
     }
 }
 
+fn fmt_str_body(body: &str, buf: &mut Buf) {
+    for c in body.chars() {
+        match c {
+            // Format blank characters as unicode escapes
+            '\u{200a}' => buf.push_str("\\u(200a)"),
+            '\u{200b}' => buf.push_str("\\u(200b)"),
+            '\u{200c}' => buf.push_str("\\u(200c)"),
+            '\u{feff}' => buf.push_str("\\u(feff)"),
+            // Don't change anything else in the string
+            ' ' => buf.push_str_allow_spaces(" "),
+            '\n' => buf.push_str_allow_spaces("\n"),
+            _ => buf.push(c),
+        }
+    }
+}
+
 fn format_str_segment(seg: &StrSegment, buf: &mut Buf, indent: u16) {
     use StrSegment::*;
 
@@ -633,10 +647,10 @@ fn format_str_segment(seg: &StrSegment, buf: &mut Buf, indent: u16) {
             // a line break in the input string
             match string.strip_suffix('\n') {
                 Some(string_without_newline) => {
-                    buf.push_str_allow_spaces(string_without_newline);
+                    fmt_str_body(string_without_newline, buf);
                     buf.newline();
                 }
-                None => buf.push_str_allow_spaces(string),
+                None => fmt_str_body(string, buf),
             }
         }
         Unicode(loc_str) => {
@@ -696,7 +710,7 @@ pub fn fmt_str_literal(buf: &mut Buf, literal: StrLiteral, indent: u16) {
                 buf.push_newline_literal();
                 for line in string.split('\n') {
                     buf.indent(indent);
-                    buf.push_str_allow_spaces(line);
+                    fmt_str_body(line, buf);
                     buf.push_newline_literal();
                 }
                 buf.indent(indent);
@@ -704,7 +718,7 @@ pub fn fmt_str_literal(buf: &mut Buf, literal: StrLiteral, indent: u16) {
             } else {
                 buf.indent(indent);
                 buf.push('"');
-                buf.push_str_allow_spaces(string);
+                fmt_str_body(string, buf);
                 buf.push('"');
             };
         }
@@ -1002,7 +1016,7 @@ fn fmt_when<'a>(
     }
 }
 
-fn fmt_dbg<'a>(
+fn fmt_dbg_stmt<'a>(
     buf: &mut Buf,
     condition: &'a Loc<Expr<'a>>,
     continuation: &'a Loc<Expr<'a>>,
@@ -1055,6 +1069,7 @@ fn fmt_if<'a>(
     branches: &'a [(Loc<Expr<'a>>, Loc<Expr<'a>>)],
     final_else: &'a Loc<Expr<'a>>,
     is_multiline: bool,
+    indented_else: bool,
     indent: u16,
 ) {
     //    let is_multiline_then = loc_then.is_multiline();
@@ -1187,16 +1202,22 @@ fn fmt_if<'a>(
         }
     }
 
-    buf.indent(indent);
-    if is_multiline {
+    if indented_else {
+        buf.indent(indent + INDENT);
+        buf.push_str("else");
+        buf.newline();
+        buf.newline();
+    } else if is_multiline {
+        buf.indent(indent);
         buf.push_str("else");
         buf.newline();
     } else {
+        buf.indent(indent);
         buf.push_str(" else");
         buf.spaces(1);
     }
-
-    final_else.format(buf, return_indent);
+    let indent = if indented_else { indent } else { return_indent };
+    final_else.format(buf, indent);
 }
 
 fn fmt_closure<'a>(
@@ -1224,7 +1245,7 @@ fn fmt_closure<'a>(
     let mut it = loc_patterns.iter().peekable();
 
     while let Some(loc_pattern) = it.next() {
-        loc_pattern.format(buf, indent);
+        loc_pattern.format_with_options(buf, Parens::InAsPattern, Newlines::No, indent);
 
         if it.peek().is_some() {
             buf.indent(indent);
@@ -1601,113 +1622,6 @@ fn assigned_field_to_space_before<'a, T>(
     }
 }
 
-fn format_record_builder_field_multiline(
-    buf: &mut Buf,
-    field: &OldRecordBuilderField,
-    indent: u16,
-    separator_prefix: &str,
-) {
-    use self::OldRecordBuilderField::*;
-    match field {
-        Value(name, spaces, ann) => {
-            buf.newline();
-            buf.indent(indent);
-            buf.push_str(name.value);
-
-            if !spaces.is_empty() {
-                fmt_spaces(buf, spaces.iter(), indent);
-                buf.indent(indent);
-            }
-
-            buf.push_str(separator_prefix);
-            buf.push_str(":");
-
-            if ann.value.is_multiline() {
-                buf.newline();
-                ann.value.format(buf, indent + INDENT);
-            } else {
-                buf.spaces(1);
-                ann.value.format(buf, indent);
-            }
-
-            buf.push(',');
-        }
-        ApplyValue(name, colon_spaces, arrow_spaces, ann) => {
-            buf.newline();
-            buf.indent(indent);
-            buf.push_str(name.value);
-
-            if !colon_spaces.is_empty() {
-                fmt_spaces(buf, colon_spaces.iter(), indent);
-                buf.indent(indent);
-            }
-
-            buf.push_str(separator_prefix);
-            buf.push(':');
-            buf.spaces(1);
-
-            if !arrow_spaces.is_empty() {
-                fmt_spaces(buf, arrow_spaces.iter(), indent);
-                buf.indent(indent + INDENT);
-            }
-
-            buf.push_str("<-");
-
-            if ann.value.is_multiline() {
-                buf.newline();
-                ann.value.format(buf, indent + INDENT);
-            } else {
-                buf.spaces(1);
-                ann.value.format(buf, indent);
-            }
-            buf.push(',');
-        }
-        LabelOnly(name) => {
-            buf.newline();
-            buf.indent(indent);
-            buf.push_str(name.value);
-            buf.push(',');
-        }
-        SpaceBefore(sub_field, _spaces) => {
-            // We have something like that:
-            // ```
-            // # comment
-            // field,
-            // ```
-            // we'd like to preserve this
-
-            format_record_builder_field_multiline(buf, sub_field, indent, separator_prefix);
-        }
-        SpaceAfter(sub_field, spaces) => {
-            // We have something like that:
-            // ```
-            // field # comment
-            // , otherfield
-            // ```
-            // we'd like to transform it into:
-            // ```
-            // field,
-            // # comment
-            // otherfield
-            // ```
-            format_record_builder_field_multiline(buf, sub_field, indent, separator_prefix);
-            fmt_comments_only(buf, spaces.iter(), NewlineAt::Top, indent);
-        }
-        Malformed(raw) => {
-            buf.push_str(raw);
-        }
-    }
-}
-
-fn record_builder_field_to_space_before<'a>(
-    field: &'a OldRecordBuilderField<'a>,
-) -> Option<(&OldRecordBuilderField<'a>, &'a [CommentOrNewline<'a>])> {
-    match field {
-        OldRecordBuilderField::SpaceBefore(sub_field, spaces) => Some((sub_field, spaces)),
-        _ => None,
-    }
-}
-
 fn sub_expr_requests_parens(expr: &Expr<'_>) -> bool {
     match expr {
         Expr::BinOps(left_side, _) => {
@@ -1732,7 +1646,7 @@ fn sub_expr_requests_parens(expr: &Expr<'_>) -> bool {
                     | BinOp::Pizza => true,
                 })
         }
-        Expr::If(_, _) => true,
+        Expr::If { .. } => true,
         Expr::SpaceBefore(e, _) => sub_expr_requests_parens(e),
         Expr::SpaceAfter(e, _) => sub_expr_requests_parens(e),
         _ => false,

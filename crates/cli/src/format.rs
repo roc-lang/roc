@@ -263,23 +263,26 @@ mod tests {
     use std::io::Write;
     use tempfile::{tempdir, TempDir};
 
-    const FORMATTED_ROC: &str = r#"app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.12.0/Lb8EgiejTUzbggO2HVVuPJFkwvvsfW6LojkLR20kTVE.tar.br" }
+    const FORMATTED_ROC: &str = r#"app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.15.0/SlwdbJ-3GR7uBWQo6zlmYWNYOxnvo8r6YABXD-45UOw.tar.br" }
 
 import pf.Stdout
-import pf.Task
+import pf.Stdin
 
 main =
-    Stdout.line! "I'm a Roc application!""#;
+    Stdout.line! "What's your name?"
+    name = Stdin.line!
+    Stdout.line! "Hi $(name)!""#;
 
-    const UNFORMATTED_ROC: &str = r#"app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.12.0/Lb8EgiejTUzbggO2HVVuPJFkwvvsfW6LojkLR20kTVE.tar.br" }
+    const UNFORMATTED_ROC: &str = r#"app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.15.0/SlwdbJ-3GR7uBWQo6zlmYWNYOxnvo8r6YABXD-45UOw.tar.br" }
 
 
 import pf.Stdout
-
-import pf.Task
+import pf.Stdin
 
 main =
-    Stdout.line! "I'm a Roc application!"
+        Stdout.line! "What's your name?"
+        name = Stdin.line!
+        Stdout.line! "Hi $(name)!"
 "#;
 
     fn setup_test_file(dir: &Path, file_name: &str, contents: &str) -> PathBuf {

@@ -4,7 +4,7 @@ use crate::{aliases::Aliases, solve};
 use roc_can::abilities::{AbilitiesStore, ResolvedImpl};
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::expr::PendingDerives;
-use roc_can::module::{ExposedByModule, ResolvedImplementations, RigidVariables};
+use roc_can::module::{ExposedByModule, ModuleParams, ResolvedImplementations, RigidVariables};
 use roc_collections::all::MutMap;
 use roc_collections::VecMap;
 use roc_derive::SharedDerivedModule;
@@ -82,7 +82,7 @@ pub struct SolveConfig<'a> {
     pub checkmate: Option<roc_checkmate::Collector>,
 
     /// Module params
-    pub params_pattern: Option<roc_can::pattern::Pattern>,
+    pub module_params: Option<ModuleParams>,
     pub module_params_vars: VecMap<ModuleId, Variable>,
 }
 

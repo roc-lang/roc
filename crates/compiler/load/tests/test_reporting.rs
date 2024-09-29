@@ -3793,9 +3793,9 @@ mod test_reporting {
     of these?
 
         Set
+        Task
         List
         Dict
-        Hash
 
     ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
@@ -3804,7 +3804,7 @@ mod test_reporting {
     10│      y = { Test.example & age: 3 }
                    ^^^^^^^^^^^^
 
-    Only variables can be updated with record update syntax.
+    Only variables can be updated with record update syntax. 
     "
     );
 
@@ -4339,6 +4339,14 @@ mod test_reporting {
 
     However, I already saw the final expression in that series of
     definitions.
+
+    Tip: An expression like `4`, `"hello"`, or `functionCall MyThing` is
+    like `return 4` in other programming languages. To me, it seems like
+    you did `return 4` followed by more code in the lines after, that code
+    would never be executed!
+    
+    Tip: If you are working with `Task`, this error can happen if you
+    forgot a `!` somewhere.
     "###
     );
 
@@ -4816,7 +4824,7 @@ mod test_reporting {
         expression_indentation_end,
         indoc!(
             r"
-            f <- Foo.foo
+            f = Foo.foo
             "
         ),
         @r#"
@@ -4827,8 +4835,8 @@ mod test_reporting {
     1│  app "test" provides [main] to "./platform"
     2│
     3│  main =
-    4│      f <- Foo.foo
-                        ^
+    4│      f = Foo.foo
+                       ^
 
     Looks like the indentation ends prematurely here. Did you mean to have
     another expression after this line?
@@ -4969,30 +4977,6 @@ mod test_reporting {
                         ^
 
     TODO provide more context.
-    "###
-    );
-
-    test_report!(
-        record_builder_in_module_params,
-        indoc!(
-            r"
-            import Menu {
-                echo,
-                name: <- applyName
-            }
-            "
-        ),@r###"
-    ── OLD-STYLE RECORD BUILDER IN MODULE PARAMS in ...r_in_module_params/Test.roc ─
-
-    I was partway through parsing module params, but I got stuck here:
-
-    4│      import Menu {
-    5│          echo,
-    6│          name: <- applyName
-                ^^^^^^^^^^^^^^^^^^
-
-    This looks like an old-style record builder field, but those are not
-    allowed in module params.
     "###
     );
 
@@ -5761,28 +5745,6 @@ mod test_reporting {
     );
 
     test_report!(
-        dbg_without_final_expression,
-        indoc!(
-            r"
-            dbg 42
-            "
-        ),
-        @r#"
-    ── INDENT ENDS AFTER EXPRESSION in tmp/dbg_without_final_expression/Test.roc ───
-
-    I am partway through parsing a dbg statement, but I got stuck here:
-
-    4│      dbg 42
-                  ^
-
-    I was expecting a final expression, like so
-
-        dbg 42
-        "done"
-    "#
-    );
-
-    test_report!(
         expect_without_final_expression,
         indoc!(
             r"
@@ -6318,16 +6280,17 @@ All branches in an `if` must have the same type!
         )
     }
 
+    // TODO: this test seems out of date (what is the `effects` clause?) and as such should be removed
     #[test]
     fn platform_requires_rigids() {
         report_header_problem_as(
             indoc!(
                 r#"
                 platform "folkertdev/foo"
-                    requires { main : Effect {} }
+                    requires { main : Task {} [] }
                     exposes []
                     packages {}
-                    imports [Task]
+                    imports []
                     provides [mainForHost]
                     effects fx.Effect
                          {
@@ -6344,13 +6307,13 @@ All branches in an `if` must have the same type!
                 I am partway through parsing a header, but I got stuck here:
 
                 1│  platform "folkertdev/foo"
-                2│      requires { main : Effect {} }
+                2│      requires { main : Task {} [] }
                                    ^
 
                 I am expecting a list of type names like `{}` or `{ Model }` next. A full
                 `requires` definition looks like
 
-                    requires { Model, Msg } {main : Effect {}}
+                    requires { Model, Msg } {main : Task {} []}
             "#
             ),
         )
@@ -6615,34 +6578,6 @@ All branches in an `if` must have the same type!
     I was expecting to see a closing parenthesis before this, so try
     adding a ) and see if that helps?
     "
-    );
-
-    test_report!(
-        backpassing_type_error,
-        indoc!(
-            r#"
-            x <- List.map ["a", "b"]
-
-            x + 1
-            "#
-        ),
-        @r#"
-    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
-
-    This 2nd argument to `map` has an unexpected type:
-
-    4│>      x <- List.map ["a", "b"]
-    5│>
-    6│>      x + 1
-
-    The argument is an anonymous function of type:
-
-        Num * -> Num *
-
-    But `map` needs its 2nd argument to be:
-
-        Str -> Num *
-    "#
     );
 
     test_report!(
@@ -8144,7 +8079,7 @@ All branches in an `if` must have the same type!
         unimported_modules_reported,
         indoc!(
             r#"
-            alt : Task.Task {} []
+            alt : Unimported.CustomType
             alt = "whatever man you don't even know my type"
             alt
             "#
@@ -8152,18 +8087,18 @@ All branches in an `if` must have the same type!
         @r"
     ── MODULE NOT IMPORTED in /code/proj/Main.roc ──────────────────────────────────
 
-    The `Task` module is not imported:
+    The `Unimported` module is not imported:
 
-    4│      alt : Task.Task {} []
-                  ^^^^^^^^^^^^^^^
+    4│      alt : Unimported.CustomType
+                  ^^^^^^^^^^^^^^^^^^^^^
 
     Is there an import missing? Perhaps there is a typo. Did you mean one
     of these?
 
-        Hash
+        Encode
+        Inspect
+        Dict
         List
-        Num
-        Box
     "
     );
 
@@ -10198,9 +10133,9 @@ All branches in an `if` must have the same type!
 
             withOpen : (Handle -> Result {} *) -> Result {} *
             withOpen = \callback ->
-                handle <- await (open {})
-                {} <- await (callback handle)
-                close handle
+                await (open {}) \handle ->
+                    await (callback handle) \_ ->
+                        close handle
 
             withOpen
             "
@@ -10212,9 +10147,9 @@ All branches in an `if` must have the same type!
 
         10│       withOpen : (Handle -> Result {} *) -> Result {} *
         11│       withOpen = \callback ->
-        12│>          handle <- await (open {})
-        13│>          {} <- await (callback handle)
-        14│>          close handle
+        12│>          await (open {}) \handle ->
+        13│>              await (callback handle) \_ ->
+        14│>                  close handle
 
         The type annotation on `withOpen` says this `await` call should have the
         type:
@@ -10227,6 +10162,7 @@ All branches in an `if` must have the same type!
         Tip: Any connection between types must use a named type variable, not
         a `*`! Maybe the annotation  on `withOpen` should have a named type
         variable in place of the `*`?
+
         "
     );
 
@@ -10710,163 +10646,6 @@ All branches in an `if` must have the same type!
     // Record Builders
 
     test_report!(
-        optional_field_in_old_record_builder,
-        indoc!(
-            r#"
-            {
-                a: <- apply "a",
-                b,
-                c ? "optional"
-            }
-            "#
-        ),
-        @r#"
-    ── BAD OLD-STYLE RECORD BUILDER in ...nal_field_in_old_record_builder/Test.roc ─
-
-    I am partway through parsing a record builder, and I found an optional
-    field:
-
-    1│  app "test" provides [main] to "./platform"
-    2│
-    3│  main =
-    4│      {
-    5│          a: <- apply "a",
-    6│          b,
-    7│          c ? "optional"
-                ^^^^^^^^^^^^^^
-
-    Optional fields can only appear when you destructure a record.
-    "#
-    );
-
-    test_report!(
-        record_update_old_builder,
-        indoc!(
-            r#"
-            { rec &
-                a: <- apply "a",
-                b: 3
-            }
-            "#
-        ),
-        @r#"
-    ── BAD RECORD UPDATE in tmp/record_update_old_builder/Test.roc ─────────────────
-
-    I am partway through parsing a record update, and I found an old-style
-    record builder field:
-
-    1│  app "test" provides [main] to "./platform"
-    2│
-    3│  main =
-    4│      { rec &
-    5│          a: <- apply "a",
-                ^^^^^^^^^^^^^^^
-
-    Old-style record builders cannot be updated like records.
-    "#
-    );
-
-    test_report!(
-        multiple_old_record_builders,
-        indoc!(
-            r#"
-            succeed
-                { a: <- apply "a" }
-                { b: <- apply "b" }
-            "#
-        ),
-        @r#"
-    ── MULTIPLE OLD-STYLE RECORD BUILDERS in /code/proj/Main.roc ───────────────────
-
-    This function is applied to multiple old-style record builders:
-
-    4│>      succeed
-    5│>          { a: <- apply "a" }
-    6│>          { b: <- apply "b" }
-
-    Note: Functions can only take at most one old-style record builder!
-
-    Tip: You can combine them or apply them separately.
-    "#
-    );
-
-    test_report!(
-        unapplied_old_record_builder,
-        indoc!(
-            r#"
-            { a: <- apply "a" }
-            "#
-        ),
-        @r#"
-    ── UNAPPLIED OLD-STYLE RECORD BUILDER in /code/proj/Main.roc ───────────────────
-
-    This old-style record builder was not applied to a function:
-
-    4│      { a: <- apply "a" }
-            ^^^^^^^^^^^^^^^^^^^
-
-    However, we need a function to construct the record.
-
-    Note: Functions must be applied directly. The pipe operator (|>) cannot be used.
-    "#
-    );
-
-    test_report!(
-        old_record_builder_apply_non_function,
-        indoc!(
-            r#"
-            succeed = \_ -> crash ""
-
-            succeed {
-                a: <- "a",
-            }
-            "#
-        ),
-        @r#"
-    ── TOO MANY ARGS in /code/proj/Main.roc ────────────────────────────────────────
-
-    This value is not a function, but it was given 1 argument:
-
-    7│          a: <- "a",
-                      ^^^
-
-    Tip: Remove `<-` to assign the field directly.
-    "#
-    );
-
-    // Skipping test because opaque types defined in the same module
-    // do not fail with the special opaque type error
-    //
-    // test_report!(
-    //     record_builder_apply_opaque,
-    //     indoc!(
-    //         r#"
-    //         succeed = \_ -> crash ""
-
-    //         Decode := {}
-
-    //         get : Str -> Decode
-    //         get = \_ -> @Decode {}
-
-    //         succeed {
-    //             a: <- get "a",
-    //             # missing |> apply ^
-    //         }
-    //         "#
-    //     ),
-    //     @r#"
-    // ── TOO MANY ARGS in /code/proj/Main.roc ────────────────────────────────────────
-
-    // This value is an opaque type, so it cannot be called with an argument:
-
-    // 12│          a: <- get "a",
-    //                    ^^^^^^^
-
-    // Hint: Did you mean to apply it to a function first?
-    //     "#
-    // );
-
-    test_report!(
         empty_record_builder,
         indoc!(
             r#"
@@ -10962,7 +10741,7 @@ All branches in an `if` must have the same type!
     6│      { xyz <-
               ^^^
 
-    Note: Record builders need a mapper function before the `<-` to combine
+    Note: Record builders need a mapper function before the <- to combine
     fields together with.
     "#
     );
@@ -11844,6 +11623,32 @@ All branches in an `if` must have the same type!
     @r"
     "
     );
+
+    test_report!(
+        deprecated_backpassing,
+        indoc!(
+            r#"
+            foo = \bar ->
+                baz <- Result.try bar
+
+                Ok (baz * 3)
+
+            foo (Ok 123)
+            "#
+        ),
+        @r###"
+    ── BACKPASSING DEPRECATED in /code/proj/Main.roc ───────────────────────────────
+
+    Backpassing (<-) like this will soon be deprecated:
+
+    5│          baz <- Result.try bar
+                ^^^^^^^^^^^^^^^^^^^^^
+
+    You should use a ! for awaiting tasks or a ? for trying results, and
+    functions everywhere else.
+    "###
+    );
+
     test_report!(
         unknown_shorthand_no_deps,
         indoc!(
@@ -13881,7 +13686,7 @@ All branches in an `if` must have the same type!
             "#
         ),
     @r#"
-    ── DEFINITIONs ONLY USED IN RECURSION in /code/proj/Main.roc ───────────────────
+    ── DEFINITIONS ONLY USED IN RECURSION in /code/proj/Main.roc ───────────────────
 
     These 2 definitions are only used in mutual recursion with themselves:
 
@@ -13890,6 +13695,7 @@ All branches in an `if` must have the same type!
 
     If you don't intend to use or export any of them, they should all be
     removed!
+
     "#
     );
 
@@ -13953,7 +13759,7 @@ All branches in an `if` must have the same type!
             "#
         ),
     @r#"
-    ── DEFINITIONs ONLY USED IN RECURSION in /code/proj/Main.roc ───────────────────
+    ── DEFINITIONS ONLY USED IN RECURSION in /code/proj/Main.roc ───────────────────
 
     These 2 definitions are only used in mutual recursion with themselves:
 
@@ -13962,6 +13768,7 @@ All branches in an `if` must have the same type!
 
     If you don't intend to use or export any of them, they should all be
     removed!
+
     "#
     );
 
@@ -14513,6 +14320,76 @@ All branches in an `if` must have the same type!
     Roc does not allow functions to be partially applied. Use a closure to
     make partial application explicit.
     "
+    );
+
+    test_report!(
+        dbg_unapplied,
+        indoc!(
+            r"
+            1 + dbg + 2
+            "
+        ),
+    @r"
+    ── UNAPPLIED DBG in /code/proj/Main.roc ────────────────────────────────────────
+
+    This `dbg` doesn't have a value given to it:
+
+    4│      1 + dbg + 2
+                ^^^
+
+    `dbg` must be passed a value to print at the exact place it's used. `dbg`
+    can't be used as a value that's passed around, like functions can be -
+    it must be applied immediately!
+
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+
+    This 2nd argument to + has an unexpected type:
+
+    4│      1 + dbg + 2
+                ^^^
+
+    This value is a:
+
+        {}
+
+    But + needs its 2nd argument to be:
+
+        Num *
+    "
+    );
+
+    test_report!(
+        dbg_overapplied,
+        indoc!(
+            r#"
+            1 + dbg "" "" + 2
+            "#
+        ),
+    @r#"
+    ── OVERAPPLIED DBG in /code/proj/Main.roc ──────────────────────────────────────
+
+    This `dbg` has too many values given to it:
+
+    4│      1 + dbg "" "" + 2
+                    ^^^^^
+
+    `dbg` must be given exactly one value to print.
+
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+
+    This 2nd argument to + has an unexpected type:
+
+    4│      1 + dbg "" "" + 2
+                ^^^^^^^^^
+
+    This value is a:
+
+        {}
+
+    But + needs its 2nd argument to be:
+
+        Num *
+    "#
     );
 
     // TODO: add the following tests after built-in Tasks are added

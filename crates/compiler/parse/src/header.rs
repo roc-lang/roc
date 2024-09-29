@@ -6,20 +6,20 @@ use crate::ast::{
 };
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::expr::merge_spaces;
-use crate::ident::{self, lowercase_ident, unqualified_ident, uppercase, UppercaseIdent};
+use crate::ident::{self, lowercase_ident, unqualified_ident, UppercaseIdent};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
     and, backtrackable, byte, collection_trailing_sep_e, increment_min_indent, loc, map,
     map_with_arena, optional, reset_min_indent, skip_first, skip_second, specialize_err, succeed,
-    then, two_bytes, zero_or_more, EExposes, EGenerates, EGeneratesWith, EHeader, EImports,
-    EPackageEntry, EPackageName, EPackages, EParams, EProvides, ERequires, ETypedIdent, Parser,
-    SourceError, SpaceProblem, SyntaxError,
+    then, two_bytes, zero_or_more, EExposes, EHeader, EImports, EPackageEntry, EPackageName,
+    EPackages, EParams, EProvides, ERequires, ETypedIdent, Parser, SourceError, SpaceProblem,
+    SyntaxError,
 };
 use crate::pattern::record_pattern_fields;
 use crate::state::State;
 use crate::string_literal::{self, parse_str_literal};
 use crate::type_annotation;
-use roc_module::symbol::{ModuleId, Symbol};
+use roc_module::symbol::ModuleId;
 use roc_region::all::{Loc, Position, Region};
 
 fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
@@ -188,8 +188,6 @@ fn hosted_header<'a>() -> impl Parser<'a, HostedHeader<'a>, EHeader<'a>> {
         name: loc(module_name_help(EHeader::ModuleName)),
         exposes: specialize_err(EHeader::Exposes, exposes_values_kw()),
         imports: specialize_err(EHeader::Imports, imports()),
-        generates: specialize_err(EHeader::Generates, generates()),
-        generates_with: specialize_err(EHeader::GeneratesWith, generates_with()),
     })
     .trace("hosted_header")
 }
@@ -762,43 +760,6 @@ fn packages_collection<'a>(
 }
 
 #[inline(always)]
-fn generates<'a>(
-) -> impl Parser<'a, KeywordItem<'a, GeneratesKeyword, UppercaseIdent<'a>>, EGenerates> {
-    record!(KeywordItem {
-        keyword: spaces_around_keyword(
-            GeneratesKeyword,
-            EGenerates::Generates,
-            EGenerates::IndentGenerates,
-            EGenerates::IndentTypeStart
-        ),
-        item: specialize_err(|(), pos| EGenerates::Identifier(pos), uppercase())
-    })
-}
-
-#[inline(always)]
-fn generates_with<'a>() -> impl Parser<
-    'a,
-    KeywordItem<'a, WithKeyword, Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>>,
-    EGeneratesWith,
-> {
-    record!(KeywordItem {
-        keyword: spaces_around_keyword(
-            WithKeyword,
-            EGeneratesWith::With,
-            EGeneratesWith::IndentWith,
-            EGeneratesWith::IndentListStart
-        ),
-        item: collection_trailing_sep_e(
-            byte(b'[', EGeneratesWith::ListStart),
-            exposes_entry(EGeneratesWith::Identifier),
-            byte(b',', EGeneratesWith::ListEnd),
-            byte(b']', EGeneratesWith::ListEnd),
-            Spaced::SpaceBefore
-        )
-    })
-}
-
-#[inline(always)]
 fn imports<'a>() -> impl Parser<
     'a,
     KeywordItem<'a, ImportsKeyword, Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>>,
@@ -977,14 +938,11 @@ pub enum HeaderType<'a> {
     Hosted {
         name: ModuleName<'a>,
         exposes: &'a [Loc<ExposedName<'a>>],
-        generates: UppercaseIdent<'a>,
-        generates_with: &'a [Loc<ExposedName<'a>>],
     },
     /// Only created during canonicalization, never actually parsed from source
     Builtin {
         name: ModuleName<'a>,
         exposes: &'a [Loc<ExposedName<'a>>],
-        generates_with: &'a [Symbol],
         opt_params: Option<ModuleParams<'a>>,
     },
     Package {
@@ -1045,7 +1003,6 @@ impl<'a> HeaderType<'a> {
                 opt_params,
                 name: _,
                 exposes: _,
-                generates_with: _,
             } => opt_params,
             Self::App {
                 provides: _,
@@ -1059,8 +1016,6 @@ impl<'a> HeaderType<'a> {
             | Self::Hosted {
                 name: _,
                 exposes: _,
-                generates: _,
-                generates_with: _,
             }
             | Self::Platform {
                 opt_app_module_id: _,
@@ -1083,7 +1038,6 @@ impl<'a> HeaderType<'a> {
             } if module_id.is_builtin() => HeaderType::Builtin {
                 name,
                 exposes,
-                generates_with: &[],
                 opt_params,
             },
             _ => self,
@@ -1202,8 +1156,6 @@ macro_rules! keywords {
 
 keywords! {
     ExposesKeyword => "exposes",
-    WithKeyword => "with",
-    GeneratesKeyword => "generates",
     PackageKeyword => "package",
     PackagesKeyword => "packages",
     RequiresKeyword => "requires",
@@ -1247,10 +1199,6 @@ pub struct HostedHeader<'a> {
     pub exposes: KeywordItem<'a, ExposesKeyword, Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>>,
 
     pub imports: KeywordItem<'a, ImportsKeyword, Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>>,
-
-    pub generates: KeywordItem<'a, GeneratesKeyword, UppercaseIdent<'a>>,
-    pub generates_with:
-        KeywordItem<'a, WithKeyword, Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -1310,13 +1258,13 @@ pub struct PlatformHeader<'a> {
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum ImportsEntry<'a> {
-    /// e.g. `Task` or `Task.{ Task, after }`
+    /// e.g. `Hello` or `Hello exposing [hello]` see roc-lang.org/examples/MultipleRocFiles/README.html  
     Module(
         ModuleName<'a>,
         Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
     ),
 
-    /// e.g. `pf.Task` or `pf.Task.{ after }` or `pf.{ Task.{ Task, after } }`
+    /// e.g. `pf.Stdout` or `pf.Stdout exposing [line]`
     Package(
         &'a str,
         ModuleName<'a>,
@@ -1329,7 +1277,7 @@ pub enum ImportsEntry<'a> {
 
 /// e.g.
 ///
-/// printLine : Str -> Effect {}
+/// printLine : Str -> Result {} *
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct TypedIdent<'a> {
     pub ident: Loc<&'a str>,

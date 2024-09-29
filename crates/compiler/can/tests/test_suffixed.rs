@@ -6,13 +6,38 @@ mod suffixed_tests {
     use bumpalo::Bump;
     use insta::assert_snapshot;
     use roc_can::desugar::desugar_defs_node_values;
+    use roc_can::env::Env;
+    use roc_can::scope::Scope;
+    use roc_module::symbol::{IdentIds, ModuleIds, PackageModuleIds};
     use roc_parse::test_helpers::parse_defs_with;
+    use std::path::Path;
 
     macro_rules! run_test {
         ($src:expr) => {{
             let arena = &Bump::new();
+            let home = ModuleIds::default().get_or_insert(&"Test".into());
+
+            let mut scope = Scope::new(
+                home,
+                "TestPath".into(),
+                IdentIds::default(),
+                Default::default(),
+            );
+
+            let dep_idents = IdentIds::exposed_builtins(0);
+            let qualified_module_ids = PackageModuleIds::default();
+            let mut env = Env::new(
+                arena,
+                $src,
+                home,
+                Path::new("test.roc"),
+                &dep_idents,
+                &qualified_module_ids,
+                None,
+            );
+
             let mut defs = parse_defs_with(arena, indoc!($src)).unwrap();
-            desugar_defs_node_values(arena, &mut defs, $src, &mut None, "test.roc", true);
+            desugar_defs_node_values(&mut env, &mut scope, &mut defs, true);
 
             let snapshot = format!("{:#?}", &defs);
             println!("{}", snapshot);
@@ -434,6 +459,29 @@ mod suffixed_tests {
     }
 
     #[test]
+    fn dbg_expr() {
+        run_test!(
+            r#"
+            main =
+                dbg (dbg 1 + 1)
+            "#
+        );
+    }
+
+    #[test]
+    fn pizza_dbg() {
+        run_test!(
+            r#"
+            main =
+                1
+                |> dbg
+                |> Num.add 2
+                |> dbg
+            "#
+        )
+    }
+
+    #[test]
     fn apply_argument_single() {
         run_test!(
             r#"
@@ -555,6 +603,32 @@ mod suffixed_tests {
                 r : A
                 r = x!
                 Task.ok r
+            "##
+        );
+    }
+
+    #[test]
+    fn issue_7081() {
+        run_test!(
+            r##"
+            inc = \i ->
+                if i > 2 then
+                    Err MaxReached
+                else
+                    Ok (i + 1)
+
+            expect
+                run = \i ->
+                    newi =
+                        i
+                        |> inc?
+                        |> inc?
+                    Ok newi
+                result = run 0
+                result == Ok 2
+
+            main =
+                Stdout.line! "Hello world"
             "##
         );
     }

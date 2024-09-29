@@ -76,7 +76,7 @@ procedure List.8 (#Attr.2, #Attr.3):
     let List.649 : List U8 = lowlevel ListConcat #Attr.2 #Attr.3;
     ret List.649;
 
-procedure List.95 (#Derived_gen.10, #Derived_gen.11, #Derived_gen.12, #Derived_gen.13, #Derived_gen.14):
+procedure List.95 (#Derived_gen.13, #Derived_gen.14, #Derived_gen.15, #Derived_gen.16, #Derived_gen.17):
     joinpoint List.628 List.169 List.170 List.171 List.172 List.173:
         let List.630 : Int1 = CallByName Num.22 List.172 List.173;
         if List.630 then
@@ -90,8 +90,8 @@ procedure List.95 (#Derived_gen.10, #Derived_gen.11, #Derived_gen.12, #Derived_g
             dec List.169;
             ret List.170;
     in
-    inc #Derived_gen.10;
-    jump List.628 #Derived_gen.10 #Derived_gen.11 #Derived_gen.12 #Derived_gen.13 #Derived_gen.14;
+    inc #Derived_gen.13;
+    jump List.628 #Derived_gen.13 #Derived_gen.14 #Derived_gen.15 #Derived_gen.16 #Derived_gen.17;
 
 procedure Num.127 (#Attr.2):
     let Num.282 : U8 = lowlevel NumIntCast #Attr.2;

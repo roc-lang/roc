@@ -154,10 +154,9 @@ Let's move out of the REPL and create our first Roc application!
 Make a file named `main.roc` and put this in it:
 
 ```roc
-app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.12.0/Lb8EgiejTUzbggO2HVVuPJFkwvvsfW6LojkLR20kTVE.tar.br" }
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.15.0/SlwdbJ-3GR7uBWQo6zlmYWNYOxnvo8r6YABXD-45UOw.tar.br" }
 
 import pf.Stdout
-import pf.Task
 
 main =
     Stdout.line! "I'm a Roc application!"
@@ -441,6 +440,12 @@ You can give `dbg` any expression you like, for example:
 dbg Str.concat singular plural
 ```
 
+You can also use `dbg` as a function inside an expression, which will print the function argument to stderr and then return the argument to the caller. For example:
+
+```roc
+inc = \n -> 1 + dbg n
+```
+
 ### [Tuples](#tuples) {#tuples}
 
 One way to have `dbg` print multiple values at a time is to wrap them in a record:
@@ -476,6 +481,7 @@ third = tuple.2 # ["list"]
 # tuple destructuring
 (first, second, third) = ("hello", 42, ["list"])
 ```
+
 <details>
     <summary>Pronouncing Tuple</summary>
     By the way, there are two common ways to pronounce "tuple"—one sounds like "two-pull" and the other rhymes with "supple"—and although no clear consensus has emerged in the programming world, people seem generally accepting when others pronounce it differently than they do.
@@ -805,7 +811,8 @@ when List.get ["a", "b", "c"] index is
 
 There's also `List.first`, which always gets the first element, and `List.last` which always gets the last. They return `Err ListWasEmpty` instead of `Err OutOfBounds`, because the only way they can fail is if you pass them an empty list!
 
-These functions demonstrate a common pattern in Roc: operations that can fail returning either an `Ok` tag with the answer (if successful), or an `Err` tag with another tag describing what went wrong (if unsuccessful). In fact, it's such a common pattern that there's a whole module called `Result` which deals with these two tags. Here are some examples of `Result` functions:
+### [Error Handling](#error-handling) {#error-handling}
+The `List` functions such as `List.get`, `List.first`, and `List.last` demonstrate a common pattern in Roc: operations that can fail returning either an `Ok` tag with the answer (if successful), or an `Err` tag with another tag describing what went wrong (if unsuccessful). In fact, it's such a common pattern that there's a whole module called `Result` which deals with these two tags. Here are some examples of `Result` functions:
 
 ```roc
 Result.withDefault (List.get ["a", "b", "c"] 100) ""
@@ -837,11 +844,25 @@ listGet = \index ->
 
 `Result.try` is often used to chain two functions that return `Result` (as in the example above). This prevents you from needing to add error handling code at every intermediate step.
 
-<details>
-  <summary>Upcoming feature</summary>
-  
-  We plan to introduce syntax sugar to make `Result.try` nicer to use, follow [this issue](https://github.com/roc-lang/roc/issues/6828) for more.
-</details>
+Roc also has a special "try" operator `?`, which is convenient syntax sugar for `Result.try`. For example, consider the following `getLetter` function:
+
+```roc
+getLetter : Str -> Result Str [OutOfBounds, InvalidNumStr]
+getLetter = \indexStr ->
+    index = Str.toU64? indexStr
+    List.get ["a", "b", "c", "d"] index
+```
+
+Notice that we appended `?` to the function name `Str.toU64`. Here's what this does:
+* If the `Str.toU64` function returns an `Ok` value, then its payload is unwrapped.
+    - For example, if we call `getLetter "2"`, then `Str.toU64` returns `Ok 2`, and the `?` operator unwraps the integer 2, so `index` is set to 2 (not `Ok 2`). Then the `List.get` function is called and returns `Ok "c"`.
+* If the `Str.toU64` function returns an `Err` value, then the `?` operator immediately interrupts the `getLetter` function and makes it return this error.
+    - For example, if we call `getLetter "abc"`, then the call to `Str.toU64` returns `Err InvalidNumStr`, and the `?` operator ensures that the `getLetter` function returns this error immediately, without executing the rest of the function.
+
+Thanks to the `?` operator, your code can focus on the "happy path" (where nothing fails) and simply bubble up to the caller any error that might occur. Your error handling code can be neatly separated, and you can rest assured that you won't forget to handle any errors, since the compiler will let you know. See this [code example](https://github.com/roc-lang/examples/blob/main/examples/Results/main.roc) for more details on error handling.
+
+Now let's get back to lists!
+
 
 ### [Walking the elements in a list](#walking-the-elements-in-a-list) {#walking-the-elements-in-a-list}
 
@@ -1458,13 +1479,19 @@ Each `.roc` file is a separate module and contains Roc code for different purpos
 
 There are several modules that are built into the Roc compiler, which are imported automatically into every Roc module. They are:
 
-1.  `Bool`
-2.  `Str`
-3.  `Num`
-4.  `List`
-5.  `Result`
-6.  `Dict`
-7.  `Set`
+1.  [Str](https://www.roc-lang.org/builtins/Str)
+2.  [Num](https://www.roc-lang.org/builtins/Num)
+3.  [Bool](https://www.roc-lang.org/builtins/Bool)
+4.  [Result](https://www.roc-lang.org/builtins/Result)
+5.  [List](https://www.roc-lang.org/builtins/List)
+6.  [Dict](https://www.roc-lang.org/builtins/Dict)
+7.  [Set](https://www.roc-lang.org/builtins/Set)
+8.  [Decode](https://www.roc-lang.org/builtins/Decode)
+9.  [Encode](https://www.roc-lang.org/builtins/Encode)
+10. [Hash](https://www.roc-lang.org/builtins/Hash)
+11. [Box](https://www.roc-lang.org/builtins/Box)
+12. [Inspect](https://www.roc-lang.org/builtins/Inspect)
+13. [Task](https://www.roc-lang.org/builtins/Task)
 
 You may have noticed that we already used the first five. For example, when we wrote `Str.concat` and `Num.isEven`, we were referencing functions stored in the `Str` and `Num` modules.
 
@@ -1480,7 +1507,7 @@ Besides being built into the compiler, the builtin modules are different from ot
 Let's take a closer look at the part of `main.roc` above the `main` def:
 
 ```roc
-app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.12.0/Lb8EgiejTUzbggO2HVVuPJFkwvvsfW6LojkLR20kTVE.tar.br" }
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.15.0/SlwdbJ-3GR7uBWQo6zlmYWNYOxnvo8r6YABXD-45UOw.tar.br" }
 
 import pf.Stdout
 ```
@@ -1584,7 +1611,7 @@ See the [Ingest Files Example](https://www.roc-lang.org/examples/IngestFiles/REA
 
 ## [Tasks](#tasks) {#tasks}
 
-Tasks are not currently part of the Roc builtins—for now, each platform exposes their own `Task` implementation, but the plan is to standardize them into a builtin `Task` like module like the builtin modules we already have for `List`, `Str`, and so on—but they're an important part of building Roc applications, so let's continue using the [basic-cli](https://github.com/roc-lang/basic-cli) platform we've been using up to this point as an example!
+Tasks are provided in a builtin `Task` module like the `List`, `Str` modules. They're an important part of building Roc applications, so let's continue using the [basic-cli](https://github.com/roc-lang/basic-cli) platform we've been using up to this point as an example!
 
 In the `basic-cli` platform, here are four operations we can do:
 
@@ -1598,7 +1625,7 @@ We'll use these four operations to learn about tasks.
 Let's start with a basic "Hello World" program.
 
 ```roc
-app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.12.0/Lb8EgiejTUzbggO2HVVuPJFkwvvsfW6LojkLR20kTVE.tar.br" }
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.15.0/SlwdbJ-3GR7uBWQo6zlmYWNYOxnvo8r6YABXD-45UOw.tar.br" }
 
 import pf.Stdout
 
@@ -1606,13 +1633,15 @@ main =
     Stdout.line! "Hello, World!"
 ```
 
-The `Stdout.line` function takes a `Str` and writes it to [standard output](<https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)>), we'll [discuss the `!` part later](https://www.roc-lang.org/tutorial#the-!-suffix). `Stdout.line` has this type:
+This code prints "Hello, World!" to the [standard output](<https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)>). `Stdout.line` has this type:
 
 ```roc
 Stdout.line : Str -> Task {} *
 ```
 
 A `Task` represents an _effect_; an interaction with state outside your Roc program, such as the terminal's standard output, or a file.
+
+ Did you notice the `!` suffix after `Stdout.line`? This operator is similar to the [`?` try operator](https://www.roc-lang.org/tutorial#error-handling), but it is used on functions that return a `Task` instead of a `Result` (we'll discuss [the `!` operator in more depth](https://www.roc-lang.org/tutorial#the-!-suffix) later in this tutorial).
 
 When we set `main` to be a `Task`, the task will get run when we run our program. Here, we've set `main` to be a task that writes `"Hello, World!"` to `stdout` when it gets run, so that's what our program does!
 
@@ -1626,22 +1655,20 @@ Stdin.line : Task [Input Str, End] *
 
 Once this task runs, we'll end up with the [tag union](https://www.roc-lang.org/tutorial#tags-with-payloads) `[Input Str, End]`. Then we can check whether we got an `End` or some actual `Input`, and print out a message accordingly.
 
-### [Reading values from tasks](#inspect) {#task-input}
+### [Reading values from tasks](#task-input) {#task-input}
 
 Let's change `main` to read a line from `stdin`, and then print what we got:
 
 ```roc
-app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.12.0/Lb8EgiejTUzbggO2HVVuPJFkwvvsfW6LojkLR20kTVE.tar.br" }
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.15.0/SlwdbJ-3GR7uBWQo6zlmYWNYOxnvo8r6YABXD-45UOw.tar.br" }
 
 import pf.Stdout
 import pf.Stdin
-import pf.Task
 
 main =
     Stdout.line! "Type in something and press Enter:"
     input = Stdin.line!
     Stdout.line! "Your input was: $(input)"
-
 ```
 
 If you run this program, it will print "Type in something and press Enter:" and then pause.
@@ -1672,7 +1699,7 @@ Let's break down what this type is saying:
 
 - `Task` tells us this is a `Task` type. Its two type parameters are just like the ones we saw in `Result` earlier: the first type tells us what this task will produce if it succeeds, and the other one tells us what it will produce if it fails.
 - `{}` tells us that this task always produces an empty record when it succeeds. (That is, it doesn't produce anything useful. Empty records don't have any information in them!) This is because the last task in `main` comes from `Stdout.line`, which doesn't produce anything. (In contrast, the `Stdin` task's first type parameter is a `Str`, because it produces a `Str` if it succeeds.)
-- `[Exit I32, StdoutErr Stdout.Err, StdinErr Stdin.Err]` tells us the different ways this task can fail. The `StdoutErr` and `StdinErr` tags are there becase we used `Stdout.line` and `Stdin.line`. We'll talk about `Exit I32` more in a moment.
+- `[Exit I32, StdoutErr Stdout.Err, StdinErr Stdin.Err]` tells us the different ways this task can fail. The `StdoutErr` and `StdinErr` tags are there because we used `Stdout.line` and `Stdin.line`. We'll talk about `Exit I32` more in a moment.
 
 To understand what the `Exit I32 Str` error means, let's try temporarily commenting out our current `main` and replacing
 it with this one:
@@ -1779,22 +1806,6 @@ This is a useful technique to use when we don't want to write out a bunch of err
 - Look at the branches of our `when err is`, since they cover all the errors (and we'd get a compile error if we left any out)
 - If we're using an editor that supports it, hovering over the `_` might display the inferred type that goes there.
 - We can put an obviously wrong type in there (e.g. replace the `{}` with `Str`, which is totally wrong) and look at the compiler error to see what it inferred as the correct type.
-
-We can also use `_` in type aliases, to express that two types are the same without annotating either of them. For example:
-
-```roc
-RunErr : _
-```
-
-```roc
-run : Task {} RunErr
-```
-
-```roc
-handleErr : RunErr -> [Exit I32 Str]
-```
-
-Of course, we could also choose not to use `_` at all and populate the `RunErr` type alias with the full list of errors that could happen in our `run` task. All of these are totally reasonable stylistic choices, depending on how you prefer the code to look. They all compile to exactly the same thing, and have the same runtime characteristics.
 
 ### [The ! suffix](#the-!-suffix) {#the-!-suffix}
 
@@ -2283,8 +2294,6 @@ expect
 ```
 
 If you want to see other examples of using record builders, look at the [Record Builder Example](https://www.roc-lang.org/examples/RecordBuilder/README.html) for a moderately-sized example or the [Arg.Builder](https://github.com/roc-lang/basic-cli/blob/main/platform/Arg/Builder.roc) module in our `basic-cli` platform for a complex example.
-
-_Note: This syntax replaces the old `field: <- value` record builder syntax using applicative functors because it is much simpler to understand and use. The old syntax will be removed soon._
 
 ### [Reserved Keywords](#reserved-keywords) {#reserved-keywords}
 

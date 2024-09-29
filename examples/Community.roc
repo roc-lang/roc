@@ -55,27 +55,28 @@ addFriend = \@Community { people, friends }, from, to ->
 walkFriendNames : Community, state, (state, Str, Set Str -> state) -> state
 walkFriendNames = \@Community { people, friends }, s0, nextFn ->
     (out, _) =
-        (s1, id), friendSet <- List.walk friends (s0, 0)
-        (@Person person) =
-            when List.get people id is
-                Ok v -> v
-                Err _ -> crash "Unknown Person"
-        personName =
-            person.firstName
-            |> Str.concat " "
-            |> Str.concat person.lastName
-
-        friendNames =
-            friendsSet, friendId <- Set.walk friendSet (Set.empty {})
-            (@Person friend) =
-                when List.get people friendId is
+        List.walk friends (s0, 0) \(s1, id), friendSet ->
+            (@Person person) =
+                when List.get people id is
                     Ok v -> v
                     Err _ -> crash "Unknown Person"
-            friendName =
-                friend.firstName
+            personName =
+                person.firstName
                 |> Str.concat " "
-                |> Str.concat friend.lastName
-            Set.insert friendsSet friendName
+                |> Str.concat person.lastName
 
-        (nextFn s1 personName friendNames, id + 1)
+            friendNames =
+                Set.walk friendSet (Set.empty {}) \friendsSet, friendId ->
+                    (@Person friend) =
+                        when List.get people friendId is
+                            Ok v -> v
+                            Err _ -> crash "Unknown Person"
+                    friendName =
+                        friend.firstName
+                        |> Str.concat " "
+                        |> Str.concat friend.lastName
+                    Set.insert friendsSet friendName
+
+            (nextFn s1 personName friendNames, id + 1)
+
     out

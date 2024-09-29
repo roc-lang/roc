@@ -5,7 +5,7 @@ use crate::{
 };
 use roc_parse::ast::{
     AbilityImpls, AssignedField, Collection, Expr, ExtractSpaces, ImplementsAbilities,
-    ImplementsAbility, ImplementsClause, OldRecordBuilderField, Tag, TypeAnnotation, TypeHeader,
+    ImplementsAbility, ImplementsClause, Tag, TypeAnnotation, TypeHeader,
 };
 use roc_parse::ident::UppercaseIdent;
 use roc_region::all::Loc;
@@ -38,6 +38,7 @@ pub enum Parens {
     InFunctionType,
     InApply,
     InOperator,
+    InAsPattern,
 }
 
 /// In an AST node, do we show newlines around it
@@ -515,101 +516,6 @@ fn format_assigned_field_help<T>(
         }
         AssignedField::SpaceAfter(sub_field, spaces) => {
             format_assigned_field_help(sub_field, buf, indent, separator_spaces, is_multiline);
-            fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
-        }
-        Malformed(raw) => {
-            buf.push_str(raw);
-        }
-    }
-}
-
-impl<'a> Formattable for OldRecordBuilderField<'a> {
-    fn is_multiline(&self) -> bool {
-        is_multiline_record_builder_field_help(self)
-    }
-
-    fn format_with_options(&self, buf: &mut Buf, _parens: Parens, newlines: Newlines, indent: u16) {
-        // we abuse the `Newlines` type to decide between multiline or single-line layout
-        format_record_builder_field_help(self, buf, indent, newlines == Newlines::Yes);
-    }
-}
-
-fn is_multiline_record_builder_field_help(afield: &OldRecordBuilderField<'_>) -> bool {
-    use self::OldRecordBuilderField::*;
-
-    match afield {
-        Value(_, spaces, ann) => !spaces.is_empty() || ann.value.is_multiline(),
-        ApplyValue(_, colon_spaces, arrow_spaces, ann) => {
-            !colon_spaces.is_empty() || !arrow_spaces.is_empty() || ann.value.is_multiline()
-        }
-        LabelOnly(_) => false,
-        SpaceBefore(_, _) | SpaceAfter(_, _) => true,
-        Malformed(text) => text.chars().any(|c| c == '\n'),
-    }
-}
-
-fn format_record_builder_field_help(
-    zelf: &OldRecordBuilderField,
-    buf: &mut Buf,
-    indent: u16,
-    is_multiline: bool,
-) {
-    use self::OldRecordBuilderField::*;
-
-    match zelf {
-        Value(name, spaces, ann) => {
-            if is_multiline {
-                buf.newline();
-            }
-
-            buf.indent(indent);
-            buf.push_str(name.value);
-
-            if !spaces.is_empty() {
-                fmt_spaces(buf, spaces.iter(), indent);
-            }
-
-            buf.push(':');
-            buf.spaces(1);
-            ann.value.format(buf, indent);
-        }
-        ApplyValue(name, colon_spaces, arrow_spaces, ann) => {
-            if is_multiline {
-                buf.newline();
-                buf.indent(indent);
-            }
-
-            buf.push_str(name.value);
-
-            if !colon_spaces.is_empty() {
-                fmt_spaces(buf, colon_spaces.iter(), indent);
-            }
-
-            buf.push(':');
-            buf.spaces(1);
-
-            if !arrow_spaces.is_empty() {
-                fmt_spaces(buf, arrow_spaces.iter(), indent);
-            }
-
-            buf.push_str("<-");
-            buf.spaces(1);
-            ann.value.format(buf, indent);
-        }
-        LabelOnly(name) => {
-            if is_multiline {
-                buf.newline();
-                buf.indent(indent);
-            }
-
-            buf.push_str(name.value);
-        }
-        SpaceBefore(sub_field, spaces) => {
-            fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
-            format_record_builder_field_help(sub_field, buf, indent, is_multiline);
-        }
-        SpaceAfter(sub_field, spaces) => {
-            format_record_builder_field_help(sub_field, buf, indent, is_multiline);
             fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
         }
         Malformed(raw) => {

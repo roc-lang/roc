@@ -1,19 +1,18 @@
-app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.12.0/Lb8EgiejTUzbggO2HVVuPJFkwvvsfW6LojkLR20kTVE.tar.br" }
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.15.0/SlwdbJ-3GR7uBWQo6zlmYWNYOxnvo8r6YABXD-45UOw.tar.br" }
 
 import pf.Stdin
 import pf.Stdout
-import pf.Task exposing [await, loop]
 
 main =
-    _ <- await (Stdout.line "\nLet's count down from 3 together - all you have to do is press <ENTER>.")
-    _ <- await Stdin.line
-    loop 3 tick
+    Stdout.line! "\nLet's count down from 3 together - all you have to do is press <ENTER>."
+    _ = Stdin.line!
+    Task.loop 3 tick
 
 tick = \n ->
     if n == 0 then
-        _ <- await (Stdout.line "🎉 SURPRISE! Happy Birthday! 🎂")
+        Stdout.line! "🎉 SURPRISE! Happy Birthday! 🎂"
         Task.ok (Done {})
     else
-        _ <- await (n |> Num.toStr |> \s -> "$(s)..." |> Stdout.line)
-        _ <- await Stdin.line
+        Stdout.line! (n |> Num.toStr |> \s -> "$(s)...")
+        _ = Stdin.line!
         Task.ok (Step (n - 1))

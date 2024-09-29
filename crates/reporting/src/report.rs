@@ -255,9 +255,42 @@ const fn default_palette_from_style_codes(codes: StyleCodes) -> Palette {
     }
 }
 
+/// Set colorless styles for printing with no color,
+/// given a set of StyleCodes for an environment (web or terminal).
+const fn no_color_palette_from_style_codes(codes: StyleCodes) -> Palette {
+    Palette {
+        primary: codes.no_color,
+        code_block: codes.no_color,
+        keyword: codes.no_color,
+        ellipsis: codes.no_color,
+        variable: codes.no_color,
+        type_variable: codes.no_color,
+        structure: codes.no_color,
+        alias: codes.no_color,
+        opaque: codes.no_color,
+        error: codes.no_color,
+        line_number: codes.no_color,
+        header: codes.no_color,
+        gutter_bar: codes.no_color,
+        module_name: codes.no_color,
+        binop: codes.no_color,
+        typo: codes.no_color,
+        typo_suggestion: codes.no_color,
+        parser_suggestion: codes.no_color,
+        bold: codes.no_color,
+        underline: codes.no_color,
+        reset: codes.no_color,
+        warning: codes.no_color,
+    }
+}
+
 pub const DEFAULT_PALETTE: Palette = default_palette_from_style_codes(ANSI_STYLE_CODES);
 
 pub const DEFAULT_PALETTE_HTML: Palette = default_palette_from_style_codes(HTML_STYLE_CODES);
+
+pub const NO_COLOR_PALETTE: Palette = no_color_palette_from_style_codes(ANSI_STYLE_CODES);
+
+pub const NO_COLOR_PALETTE_HTML: Palette = no_color_palette_from_style_codes(HTML_STYLE_CODES);
 
 /// A machine-readable format for text styles (colors and other styles)
 #[derive(Debug, PartialEq)]
@@ -270,6 +303,7 @@ pub struct StyleCodes {
     pub bold: &'static str,
     pub underline: &'static str,
     pub reset: &'static str,
+    pub no_color: &'static str,
 }
 
 pub const ANSI_STYLE_CODES: StyleCodes = StyleCodes {
@@ -281,6 +315,7 @@ pub const ANSI_STYLE_CODES: StyleCodes = StyleCodes {
     bold: "\u{001b}[1m",
     underline: "\u{001b}[4m",
     reset: "\u{001b}[0m",
+    no_color: "",
 };
 
 macro_rules! html_color {
@@ -298,6 +333,7 @@ pub const HTML_STYLE_CODES: StyleCodes = StyleCodes {
     bold: "<span class='bold'>",
     underline: "<span class='underline'>",
     reset: "</span>",
+    no_color: "",
 };
 
 // useful for tests
@@ -509,6 +545,10 @@ impl<'a> RocDocAllocator<'a> {
         self.text(name).annotate(Annotation::Shorthand)
     }
 
+    pub fn backpassing_arrow(&'a self) -> DocBuilder<'a, Self, Annotation> {
+        self.text("<-").annotate(Annotation::BinOp)
+    }
+
     pub fn binop(
         &'a self,
         content: roc_module::called_via::BinOp,
@@ -519,6 +559,13 @@ impl<'a> RocDocAllocator<'a> {
     pub fn unop(
         &'a self,
         content: roc_module::called_via::UnaryOp,
+    ) -> DocBuilder<'a, Self, Annotation> {
+        self.text(content.to_string()).annotate(Annotation::UnaryOp)
+    }
+
+    pub fn suffix(
+        &'a self,
+        content: roc_module::called_via::Suffix,
     ) -> DocBuilder<'a, Self, Annotation> {
         self.text(content.to_string()).annotate(Annotation::UnaryOp)
     }
@@ -1641,7 +1688,11 @@ pub fn to_https_problem_report<'b>(
     }
 }
 
-pub fn to_file_problem_report_string(filename: PathBuf, error: io::ErrorKind) -> String {
+pub fn to_file_problem_report_string(
+    filename: PathBuf,
+    error: io::ErrorKind,
+    has_color: bool,
+) -> String {
     let src_lines: Vec<&str> = Vec::new();
     let mut module_ids = ModuleIds::default();
     let module_id = module_ids.get_or_insert(&"find module name somehow?".into());
@@ -1651,7 +1702,11 @@ pub fn to_file_problem_report_string(filename: PathBuf, error: io::ErrorKind) ->
     let alloc = RocDocAllocator::new(&src_lines, module_id, &interns);
 
     let mut buf = String::new();
-    let palette = DEFAULT_PALETTE;
+    let palette = if has_color {
+        DEFAULT_PALETTE
+    } else {
+        NO_COLOR_PALETTE
+    };
     let report = to_file_problem_report(&alloc, filename, error);
     report.render_color_terminal(&mut buf, &alloc, &palette);
 

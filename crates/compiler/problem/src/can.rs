@@ -39,7 +39,6 @@ pub enum Problem {
     UnusedImport(Symbol, Region),
     UnusedModuleImport(ModuleId, Region),
     ExposedButNotDefined(Symbol),
-    UnknownGeneratesWith(Loc<Ident>),
     ImportNameConflict {
         name: ModuleName,
         is_alias: bool,
@@ -54,6 +53,7 @@ pub enum Problem {
         new_symbol: Symbol,
         existing_symbol_region: Region,
     },
+    DeprecatedBackpassing(Region),
     /// First symbol is the name of the closure with that argument
     /// Bool is whether the closure is anonymous
     /// Second symbol is the name of the argument that is unused
@@ -220,6 +220,12 @@ pub enum Problem {
     OverAppliedCrash {
         region: Region,
     },
+    UnappliedDbg {
+        region: Region,
+    },
+    OverAppliedDbg {
+        region: Region,
+    },
     FileProblem {
         filename: PathBuf,
         error: io::ErrorKind,
@@ -257,8 +263,8 @@ impl Problem {
             Problem::ExplicitBuiltinImport(_, _) => Warning,
             Problem::ExplicitBuiltinTypeImport(_, _) => Warning,
             Problem::ImportShadowsSymbol { .. } => RuntimeError,
+            Problem::DeprecatedBackpassing(_) => Warning,
             Problem::ExposedButNotDefined(_) => RuntimeError,
-            Problem::UnknownGeneratesWith(_) => RuntimeError,
             Problem::UnusedArgument(_, _, _, _) => Warning,
             Problem::UnusedBranchDef(_, _) => Warning,
             Problem::PrecedenceProblem(_) => RuntimeError,
@@ -313,6 +319,8 @@ impl Problem {
             // injecting a crash message
             Problem::UnappliedCrash { .. } => RuntimeError,
             Problem::OverAppliedCrash { .. } => RuntimeError,
+            Problem::UnappliedDbg { .. } => RuntimeError,
+            Problem::OverAppliedDbg { .. } => RuntimeError,
             Problem::DefsOnlyUsedInRecursion(_, _) => Warning,
             Problem::FileProblem { .. } => Fatal,
         }
@@ -340,7 +348,7 @@ impl Problem {
             | Problem::ExplicitBuiltinImport(_, region)
             | Problem::ExplicitBuiltinTypeImport(_, region)
             | Problem::ImportShadowsSymbol { region, .. }
-            | Problem::UnknownGeneratesWith(Loc { region, .. })
+            | Problem::DeprecatedBackpassing(region)
             | Problem::UnusedArgument(_, _, _, region)
             | Problem::UnusedBranchDef(_, region)
             | Problem::PrecedenceProblem(PrecedenceProblem::BothNonAssociative(region, _, _))
@@ -419,8 +427,6 @@ impl Problem {
             | Problem::RuntimeError(RuntimeError::EmptySingleQuote(region))
             | Problem::RuntimeError(RuntimeError::MultipleCharsInSingleQuote(region))
             | Problem::RuntimeError(RuntimeError::DegenerateBranch(region))
-            | Problem::RuntimeError(RuntimeError::MultipleOldRecordBuilders(region))
-            | Problem::RuntimeError(RuntimeError::UnappliedOldRecordBuilder(region))
             | Problem::RuntimeError(RuntimeError::EmptyRecordBuilder(region))
             | Problem::RuntimeError(RuntimeError::SingleFieldRecordBuilder(region))
             | Problem::RuntimeError(RuntimeError::OptionalFieldInRecordBuilder {
@@ -477,6 +483,8 @@ impl Problem {
             | Problem::UnnecessaryOutputWildcard { region }
             | Problem::OverAppliedCrash { region }
             | Problem::UnappliedCrash { region }
+            | Problem::OverAppliedDbg { region }
+            | Problem::UnappliedDbg { region }
             | Problem::DefsOnlyUsedInRecursion(_, region) => Some(*region),
             Problem::RuntimeError(RuntimeError::CircularDef(cycle_entries))
             | Problem::BadRecursion(cycle_entries) => {
@@ -676,9 +684,6 @@ pub enum RuntimeError {
 
     DegenerateBranch(Region),
 
-    MultipleOldRecordBuilders(Region),
-    UnappliedOldRecordBuilder(Region),
-
     EmptyRecordBuilder(Region),
     SingleFieldRecordBuilder(Region),
     OptionalFieldInRecordBuilder {
@@ -729,8 +734,6 @@ impl RuntimeError {
             | RuntimeError::DegenerateBranch(region)
             | RuntimeError::InvalidInterpolation(region)
             | RuntimeError::InvalidHexadecimal(region)
-            | RuntimeError::MultipleOldRecordBuilders(region)
-            | RuntimeError::UnappliedOldRecordBuilder(region)
             | RuntimeError::EmptyRecordBuilder(region)
             | RuntimeError::SingleFieldRecordBuilder(region)
             | RuntimeError::OptionalFieldInRecordBuilder {

@@ -1238,14 +1238,7 @@ fn to_expr_report<'b>(
                                 ),
                             ]),
                             alloc.region(lines.convert_region(expr_region), severity),
-                            match called_via {
-                                CalledVia::OldRecordBuilder => {
-                                    alloc.hint("Did you mean to apply it to a function first?")
-                                },
-                                _ => {
-                                    alloc.reflow("I can't call an opaque type because I don't know what it is! Maybe you meant to unwrap it first?")
-                                }
-                            }
+                            alloc.reflow("I can't call an opaque type because I don't know what it is! Maybe you meant to unwrap it first?"),
                         ]),
                         Other => alloc.stack([
                             alloc.concat([
@@ -1261,19 +1254,11 @@ fn to_expr_report<'b>(
                             ]),
                             alloc.region(lines.convert_region(expr_region), severity),
                             match called_via {
-                                CalledVia::OldRecordBuilder => {
-                                    alloc.concat([
-                                        alloc.tip(),
-                                        alloc.reflow("Remove "),
-                                        alloc.keyword("<-"),
-                                        alloc.reflow(" to assign the field directly.")
-                                    ])
-                                }
                                 CalledVia::RecordBuilder => {
                                     alloc.concat([
                                         alloc.note(""),
                                         alloc.reflow("Record builders need a mapper function before the "),
-                                        alloc.keyword("<-"),
+                                        alloc.backpassing_arrow(),
                                         alloc.reflow(" to combine fields together with.")
                                     ])
                                 }
@@ -1796,6 +1781,9 @@ fn format_category<'b>(
     let t = if capitalize_start { "T" } else { "t" };
 
     match category {
+        Lookup(name) if name.is_generated(alloc.interns) => {
+            (text!(alloc, "{}his value", t), alloc.text(" is a:"))
+        }
         Lookup(name) => (
             alloc.concat([
                 text!(alloc, "{}his ", t),
@@ -1804,7 +1792,6 @@ fn format_category<'b>(
             ]),
             alloc.text(" is a:"),
         ),
-
         If => (
             alloc.concat([
                 text!(alloc, "{}his ", t),

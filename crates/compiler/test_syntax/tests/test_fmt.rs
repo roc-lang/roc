@@ -1986,7 +1986,7 @@ mod test_fmt {
     }
 
     #[test]
-    fn new_record_builder() {
+    fn record_builder() {
         expr_formats_same(indoc!(
             r"
             { shoes <- leftShoe: nothing }
@@ -2073,170 +2073,6 @@ mod test_fmt {
                     leftShoe: bareFoot,
                 }
                 "
-            ),
-        );
-    }
-
-    #[test]
-    fn old_record_builder() {
-        expr_formats_same(indoc!(
-            r#"
-            { a: 1, b: <- get "b" |> batch, c: <- get "c" |> batch, d }
-            "#
-        ));
-
-        expr_formats_to(
-            indoc!(
-                r#"
-                {   a: 1, b:   <-  get "b" |> batch,   c:<- get "c" |> batch }
-                "#
-            ),
-            indoc!(
-                r#"
-                { a: 1, b: <- get "b" |> batch, c: <- get "c" |> batch }
-                "#
-            ),
-        );
-
-        expr_formats_same(indoc!(
-            r#"
-            {
-                a: 1,
-                b: <- get "b" |> batch,
-                c: <- get "c" |> batch,
-                d,
-            }
-            "#
-        ));
-
-        expr_formats_to(
-            indoc!(
-                r#"
-                {   a: 1, b:  <-  get "b" |> batch,
-                c: <- get "c" |> batch, d }
-                "#
-            ),
-            indoc!(
-                r#"
-                {
-                    a: 1,
-                    b: <- get "b" |> batch,
-                    c: <- get "c" |> batch,
-                    d,
-                }
-                "#
-            ),
-        );
-    }
-
-    #[test]
-    fn multiline_record_builder_field() {
-        expr_formats_to(
-            indoc!(
-                r#"
-                succeed {
-                    a: <- get "a" |> map (\x -> x * 2)
-                        |> batch,
-                    b: <- get "b" |> batch,
-                    c: items
-                        |> List.map \x -> x * 2
-                }
-                "#
-            ),
-            indoc!(
-                r#"
-                succeed {
-                    a: <-
-                        get "a"
-                        |> map (\x -> x * 2)
-                        |> batch,
-                    b: <- get "b" |> batch,
-                    c:
-                        items
-                        |> List.map \x -> x * 2,
-                }
-                "#
-            ),
-        );
-
-        expr_formats_same(indoc!(
-            r#"
-                succeed {
-                    a: # I like to comment in weird places
-                        <- get "a" |> batch,
-                    b: <- get "b" |> batch,
-                }
-                "#
-        ));
-
-        expr_formats_same(indoc!(
-            r#"
-                succeed {
-                    a:
-                    # I like to comment in weird places
-                        <- get "a" |> batch,
-                    b: <- get "b" |> batch,
-                }
-                "#
-        ));
-    }
-
-    #[test]
-    fn outdentable_record_builders() {
-        expr_formats_to(
-            indoc!(
-                r#"
-                succeed {  a: <- get "a" |> batch,
-                    b: <- get "b" |> batch,
-                }
-                "#
-            ),
-            indoc!(
-                r#"
-                succeed {
-                    a: <- get "a" |> batch,
-                    b: <- get "b" |> batch,
-                }
-                "#
-            ),
-        );
-
-        expr_formats_to(
-            indoc!(
-                r#"
-                succeed
-                    {
-                        a: <- get "a" |> batch,
-                        b: <- get "b" |> batch,
-                    }
-                "#
-            ),
-            indoc!(
-                r#"
-                succeed {
-                    a: <- get "a" |> batch,
-                    b: <- get "b" |> batch,
-                }
-                "#
-            ),
-        );
-    }
-
-    #[test]
-    fn can_format_multiple_record_builders() {
-        expr_formats_to(
-            indoc!(
-                r#"
-                succeed { a: <- get "a" }
-                    { b: <- get "b" }
-                "#
-            ),
-            indoc!(
-                r#"
-                succeed
-                    { a: <- get "a" }
-                    { b: <- get "b" }
-                "#
             ),
         );
     }
@@ -3626,6 +3462,60 @@ mod test_fmt {
                 d e f
             "
         ));
+    }
+
+    #[test]
+    fn early_return_else() {
+        expr_formats_same(indoc!(
+            r"
+            if foo then
+                bar
+                else
+
+            baz
+            "
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r"
+                if thing then
+                    whatever
+                    else
+                too close
+                "
+            ),
+            indoc!(
+                r"
+                if thing then
+                    whatever
+                    else
+
+                too close
+                "
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r"
+                if isGrowing plant then
+                    LetBe
+                    else
+
+                    Water
+                "
+            ),
+            indoc!(
+                r"
+                if isGrowing plant then
+                    LetBe
+                    else
+
+                Water
+                "
+            ),
+        );
     }
 
     #[test]
@@ -5030,10 +4920,10 @@ mod test_fmt {
     fn single_line_platform() {
         module_formats_same(
             "platform \"folkertdev/foo\" \
-            requires { Model, Msg } { main : Effect {} } \
+            requires { Model, Msg } { main : Task {} [] } \
             exposes [] \
             packages {} \
-            imports [Task.{ Task }] \
+            imports [] \
             provides [mainForHost]",
         );
     }
@@ -5102,7 +4992,7 @@ mod test_fmt {
     fn single_line_hosted() {
         module_formats_same(indoc!(
             r"
-                hosted Foo exposes [] imports [] generates Bar with []"
+                hosted Foo exposes [] imports []"
         ));
     }
 
@@ -5119,11 +5009,6 @@ mod test_fmt {
                     imports [
                         Blah,
                         Baz.{ stuff, things },
-                    ]
-                    generates Bar with [
-                        map,
-                        after,
-                        loop,
                     ]"
         ));
     }
@@ -6331,6 +6216,83 @@ mod test_fmt {
             "
             ),
         );
+    }
+
+    #[test]
+    fn keep_explicit_blank_chars() {
+        expr_formats_same(indoc!(
+            r#"
+                x = "a\u(200a)b\u(200b)c\u(200c)d\u(feff)e"
+                x
+            "#
+        ));
+    }
+
+    #[test]
+    fn make_blank_chars_explicit() {
+        expr_formats_to(
+            indoc!(
+                "
+                    x = \"a\u{200A}b\u{200B}c\u{200C}d\u{FEFF}e\"
+                    x
+                "
+            ),
+            indoc!(
+                r#"
+                    x = "a\u(200a)b\u(200b)c\u(200c)d\u(feff)e"
+                    x
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn make_blank_chars_explicit_when_interpolating() {
+        expr_formats_to(
+            indoc!(
+                "
+                    x = \"foo:\u{200B} $(bar).\"
+                    x
+                "
+            ),
+            indoc!(
+                r#"
+                    x = "foo:\u(200b) $(bar)."
+                    x
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn make_blank_chars_explicit_in_multiline_string() {
+        expr_formats_to(
+            indoc!(
+                "
+                    x =
+                        \"\"\"
+                        foo:\u{200B} $(bar).
+                        \"\"\"
+                    x
+                "
+            ),
+            indoc!(
+                r#"
+                    x =
+                        """
+                        foo:\u(200b) $(bar).
+                        """
+                    x
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn preserve_multiline_string_trailing_whitespace() {
+        expr_formats_same(indoc!(
+            "x =\n    \"\"\"\n    foo\n    bar                \n    baz\n    \"\"\"\nx"
+        ));
     }
 
     // this is a parse error atm

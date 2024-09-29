@@ -6,8 +6,9 @@ use roc_cli::{
     build_app, format_files, format_src, test, BuildConfig, FormatMode, CMD_BUILD, CMD_CHECK,
     CMD_DEV, CMD_DOCS, CMD_FORMAT, CMD_GEN_STUB_LIB, CMD_GLUE, CMD_PREPROCESS_HOST, CMD_REPL,
     CMD_RUN, CMD_TEST, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_LIB, FLAG_MAIN,
-    FLAG_NO_LINK, FLAG_OUTPUT, FLAG_PP_DYLIB, FLAG_PP_HOST, FLAG_PP_PLATFORM, FLAG_STDIN,
-    FLAG_STDOUT, FLAG_TARGET, FLAG_TIME, GLUE_DIR, GLUE_SPEC, ROC_FILE,
+    FLAG_NO_COLOR, FLAG_NO_HEADER, FLAG_NO_LINK, FLAG_OUTPUT, FLAG_PP_DYLIB, FLAG_PP_HOST,
+    FLAG_PP_PLATFORM, FLAG_STDIN, FLAG_STDOUT, FLAG_TARGET, FLAG_TIME, GLUE_DIR, GLUE_SPEC,
+    ROC_FILE, VERSION,
 };
 use roc_docs::generate_docs_html;
 use roc_error_macros::user_error;
@@ -21,9 +22,6 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use target_lexicon::Triple;
-
-#[macro_use]
-extern crate const_format;
 
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -242,7 +240,12 @@ fn main() -> io::Result<()> {
                 }
             }
         }
-        Some((CMD_REPL, _)) => Ok(roc_repl_cli::main()),
+        Some((CMD_REPL, matches)) => {
+            let has_color = !matches.get_one::<bool>(FLAG_NO_COLOR).unwrap();
+            let has_header = !matches.get_one::<bool>(FLAG_NO_HEADER).unwrap();
+
+            Ok(roc_repl_cli::main(has_color, has_header))
+        }
         Some((CMD_DOCS, matches)) => {
             let root_path = matches.get_one::<PathBuf>(ROC_FILE).unwrap();
             let out_dir = matches.get_one::<OsString>(FLAG_OUTPUT).unwrap();
@@ -358,11 +361,7 @@ fn main() -> io::Result<()> {
             Ok(format_exit_code)
         }
         Some((CMD_VERSION, _)) => {
-            print!(
-                "{}",
-                concatcp!("roc ", include_str!("../../../version.txt"))
-            );
-
+            println!("roc {}", VERSION);
             Ok(0)
         }
         _ => unreachable!(),

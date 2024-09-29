@@ -1,5 +1,7 @@
 on:
   workflow_dispatch:
+#  pull_request:
+# TODO remove pull_request trigger
 
 name: Docker images tests
 
@@ -15,10 +17,10 @@ jobs:
         run: cp docker/nightly-ubuntu-latest/docker-compose.example.yml docker/nightly-ubuntu-latest/docker-compose.yml
 
       - name: Build image
-        run: docker-compose -f docker/nightly-ubuntu-latest/docker-compose.yml build
+        run: docker compose -f docker/nightly-ubuntu-latest/docker-compose.yml build
 
       - name: Run hello world test
-        run: docker-compose -f docker/nightly-ubuntu-latest/docker-compose.yml run roc examples/helloWorld.roc
+        run: docker compose -f docker/nightly-ubuntu-latest/docker-compose.yml run roc examples/helloWorld.roc
 
 
   nightly-ubuntu-2204:
@@ -32,10 +34,10 @@ jobs:
         run: cp docker/nightly-ubuntu-2204/docker-compose.example.yml docker/nightly-ubuntu-2204/docker-compose.yml
 
       - name: Build image
-        run: docker-compose -f docker/nightly-ubuntu-2204/docker-compose.yml build
+        run: docker compose -f docker/nightly-ubuntu-2204/docker-compose.yml build
 
       - name: Run hello world test
-        run: docker-compose -f docker/nightly-ubuntu-2204/docker-compose.yml run roc examples/helloWorld.roc
+        run: docker compose -f docker/nightly-ubuntu-2204/docker-compose.yml run roc examples/helloWorld.roc
 
   nightly-ubuntu-2004:
     name: nightly-ubuntu-2004
@@ -48,10 +50,10 @@ jobs:
         run: cp docker/nightly-ubuntu-2004/docker-compose.example.yml docker/nightly-ubuntu-2004/docker-compose.yml
 
       - name: Build image
-        run: docker-compose -f docker/nightly-ubuntu-2004/docker-compose.yml build
+        run: docker compose -f docker/nightly-ubuntu-2004/docker-compose.yml build
 
       - name: Run hello world test
-        run: docker-compose -f docker/nightly-ubuntu-2004/docker-compose.yml run roc examples/helloWorld.roc
+        run: docker compose -f docker/nightly-ubuntu-2004/docker-compose.yml run roc examples/helloWorld.roc
 
   nightly-debian-latest:
     name: nightly-debian-latest
@@ -64,10 +66,10 @@ jobs:
         run: cp docker/nightly-debian-latest/docker-compose.example.yml docker/nightly-debian-latest/docker-compose.yml
 
       - name: Build image
-        run: docker-compose -f docker/nightly-debian-latest/docker-compose.yml build
+        run: docker compose -f docker/nightly-debian-latest/docker-compose.yml build
 
       - name: Run hello world test
-        run: docker-compose -f docker/nightly-debian-latest/docker-compose.yml run roc examples/helloWorld.roc
+        run: docker compose -f docker/nightly-debian-latest/docker-compose.yml run roc examples/helloWorld.roc
 
   nightly-debian-bookworm:
     name: nightly-debian-bookworm
@@ -80,10 +82,10 @@ jobs:
         run: cp docker/nightly-debian-bookworm/docker-compose.example.yml docker/nightly-debian-bookworm/docker-compose.yml
 
       - name: Build image
-        run: docker-compose -f docker/nightly-debian-bookworm/docker-compose.yml build
+        run: docker compose -f docker/nightly-debian-bookworm/docker-compose.yml build
 
       - name: Run hello world test
-        run: docker-compose -f docker/nightly-debian-bookworm/docker-compose.yml run roc examples/helloWorld.roc
+        run: docker compose -f docker/nightly-debian-bookworm/docker-compose.yml run roc examples/helloWorld.roc
 
   nightly-debian-buster:
     name: nightly-debian-buster
@@ -96,7 +98,7 @@ jobs:
         run: cp docker/nightly-debian-buster/docker-compose.example.yml docker/nightly-debian-buster/docker-compose.yml
 
       - name: Build image
-        run: docker-compose -f docker/nightly-debian-buster/docker-compose.yml build
+        run: docker compose -f docker/nightly-debian-buster/docker-compose.yml build
 
       - name: Run hello world test
-        run: docker-compose -f docker/nightly-debian-buster/docker-compose.yml run roc examples/helloWorld.roc
+        run: docker compose -f docker/nightly-debian-buster/docker-compose.yml run roc examples/helloWorld.roc
