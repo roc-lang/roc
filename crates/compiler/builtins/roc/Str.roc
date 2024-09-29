@@ -754,7 +754,6 @@ countUtf8Bytes : Str -> U64
 
 ## string slice that does not do bounds checking or utf-8 verification
 substringUnsafe : Str, U64, U64 -> Str
-#               = RocStr, start, len -> RocStr
 
 ## Returns the given [Str] with each occurrence of a substring replaced.
 ## If the substring is not found, returns the original string.
