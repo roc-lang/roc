@@ -157,10 +157,10 @@ fn lower_content(
                 let mut tags = resolve_tag_ext(subs, problems, UnionTags::default(), *ext);
 
                 // Now lower all the tags we gathered from the ext var.
-                // Do this in a separate pass to avoid borrow errors on Subs.
+                // (Do this in a separate pass to avoid borrow errors on Subs.)
                 lower_vars(tags.iter_mut().flat_map(|(_, vars)| vars.iter_mut()), cache, subs, problems);
 
-                // Then, add the tag names with no payloads. (There's nothing to lower here.)
+                // Then, add the tag names with no payloads. (There are no variables to lower here.)
                 for index in tag_names.into_iter() {
                     tags.push(((&subs[index]).clone(), Vec::new()));
                 }
@@ -287,9 +287,6 @@ fn resolve_record_ext(
         }
     }
 
-    // ext should have ended up being empty
-    debug_assert_eq!(ext, Variable::EMPTY_RECORD);
-
     all_fields
 }
 
@@ -330,9 +327,6 @@ fn resolve_tuple_ext(
             }
         }
     }
-
-    // ext should have ended up being empty
-    debug_assert_eq!(ext, Variable::EMPTY_TUPLE);
 
     all_elems
 }

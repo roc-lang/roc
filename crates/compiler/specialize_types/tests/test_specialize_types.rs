@@ -149,134 +149,57 @@ mod specialize_types {
 
     #[test]
     fn empty_list() {
-        specializes_to(
-            indoc!(
-                r"
-                    []
-                "
-            ),
-            "List *",
-        );
+        specializes_to("[]", "List []");
     }
 
     #[test]
     fn list_of_lists() {
-        specializes_to(
-            indoc!(
-                r"
-                    [[]]
-                "
-            ),
-            "List (List *)",
-        );
+        specializes_to("[[]]", "List (List [])");
     }
 
     #[test]
     fn triple_nested_list() {
-        specializes_to(
-            indoc!(
-                r"
-                    [[[]]]
-                "
-            ),
-            "List (List (List *))",
-        );
+        specializes_to("[[[]]]", "List (List (List []))");
     }
 
     #[test]
     fn nested_empty_list() {
-        specializes_to(
-            indoc!(
-                r"
-                    [[], [[]]]
-                "
-            ),
-            "List (List (List *))",
-        );
+        specializes_to("[[], [[]]]", "List (List (List []))");
     }
 
     #[test]
     fn list_of_one_int() {
-        specializes_to(
-            indoc!(
-                r"
-                    [42]
-                "
-            ),
-            "List (Num *)",
-        );
+        specializes_to("[42]", "List (Num [])");
     }
 
     #[test]
     fn triple_nested_int_list() {
-        specializes_to(
-            indoc!(
-                r"
-                    [[[5]]]
-                "
-            ),
-            "List (List (List (Num *)))",
-        );
+        specializes_to("[[[5]]]", "List (List (List (Num [])))");
     }
 
     #[test]
     fn list_of_ints() {
-        specializes_to(
-            indoc!(
-                r"
-                    [1, 2, 3]
-                "
-            ),
-            "List (Num *)",
-        );
+        specializes_to("[1, 2, 3]", "List (Num [])");
     }
 
     #[test]
     fn nested_list_of_ints() {
-        specializes_to(
-            indoc!(
-                r"
-                    [[1], [2, 3]]
-                "
-            ),
-            "List (List (Num *))",
-        );
+        specializes_to("[[1], [2, 3]]", "List (List (Num []))");
     }
 
     #[test]
     fn list_of_one_string() {
-        specializes_to(
-            indoc!(
-                r#"
-                    ["cowabunga"]
-                "#
-            ),
-            "List Str",
-        );
+        specializes_to(r#"["cowabunga"]"#, "List Str");
     }
 
     #[test]
     fn triple_nested_string_list() {
-        specializes_to(
-            indoc!(
-                r#"
-                    [[["foo"]]]
-                "#
-            ),
-            "List (List (List Str))",
-        );
+        specializes_to(r#"[[["foo"]]]"#, "List (List (List Str))");
     }
 
     #[test]
     fn list_of_strings() {
-        specializes_to(
-            indoc!(
-                r#"
-                    ["foo", "bar"]
-                "#
-            ),
-            "List Str",
-        );
+        specializes_to(r#"["foo", "bar"]"#, "List Str");
     }
 
     // INTERPOLATED STRING
@@ -300,12 +223,12 @@ mod specialize_types {
         specializes_to(
             indoc!(
                 r#"
-                whatItIs = "great"
+                    whatItIs = "great"
 
-                str = "type inference is $(whatItIs)!"
+                    str = "type inference is $(whatItIs)!"
 
-                whatItIs
-            "#
+                    whatItIs
+                "#
             ),
             "Str",
         );
@@ -316,12 +239,12 @@ mod specialize_types {
         specializes_to(
             indoc!(
                 r#"
-                rec = { whatItIs: "great" }
+                    rec = { whatItIs: "great" }
 
-                str = "type inference is $(rec.whatItIs)!"
+                    str = "type inference is $(rec.whatItIs)!"
 
-                rec
-            "#
+                    rec
+                "#
             ),
             "{ whatItIs : Str }",
         );
@@ -375,7 +298,7 @@ mod specialize_types {
                     \_ -> {}
                 "
             ),
-            "* -> {}",
+            "[] -> {}",
         );
     }
 
@@ -387,7 +310,7 @@ mod specialize_types {
                     \_, _ -> 42
                 "
             ),
-            "*, * -> Num *",
+            "[], [] -> Num []",
         );
     }
 
@@ -399,7 +322,7 @@ mod specialize_types {
                     \_, _, _ -> "test!"
                 "#
             ),
-            "*, *, * -> Str",
+            "[], [], [] -> Str",
         );
     }
 
@@ -443,7 +366,7 @@ mod specialize_types {
                     fn
                 "
             ),
-            "* -> {}",
+            "[] -> {}",
         );
     }
 
@@ -496,7 +419,7 @@ mod specialize_types {
                 [\x -> Bar x, Foo]
                 "
             ),
-            "List (a -> [Bar a, Foo a])",
+            "List ([] -> [Bar [], Foo []])",
         )
     }
 
@@ -509,7 +432,7 @@ mod specialize_types {
                 [Foo, \x -> Bar x]
                 "
             ),
-            "List (a -> [Bar a, Foo a])",
+            "List ([] -> [Bar [], Foo []])",
         )
     }
 
@@ -530,7 +453,7 @@ mod specialize_types {
                 }
                 "
             ),
-            "{ x : List [Foo], y : List (a -> [Foo a]), z : List (b, c -> [Foo b c]) }",
+            "{ x : List [Foo], y : List ([] -> [Foo []]), z : List ([], [] -> [Foo [] []]) }",
         )
     }
 
@@ -560,7 +483,7 @@ mod specialize_types {
                     func
                 "
             ),
-            "*, * -> Num *",
+            "[], [] -> Num []",
         );
     }
 
@@ -574,7 +497,7 @@ mod specialize_types {
                     f
                 "#
             ),
-            "*, *, * -> Str",
+            "[], [], [] -> Str",
         );
     }
 
@@ -590,7 +513,7 @@ mod specialize_types {
                     b
                 "#
             ),
-            "*, *, * -> Str",
+            "[], [], [] -> Str",
         );
     }
 
@@ -624,7 +547,7 @@ mod specialize_types {
                     c
                 "
             ),
-            "Num *",
+            "Num []",
         );
     }
 
@@ -643,7 +566,7 @@ mod specialize_types {
                     )
                 "
             ),
-            "a -> a",
+            "[] -> []",
         );
     }
 
@@ -659,7 +582,7 @@ mod specialize_types {
                     alwaysFive "stuff"
                 "#
             ),
-            "Num *",
+            "Num []",
         );
     }
 
@@ -689,7 +612,7 @@ mod specialize_types {
                     identity
                 "
             ),
-            "a -> a",
+            "[] -> []",
         );
     }
 
@@ -706,7 +629,7 @@ mod specialize_types {
                     x
                 "#
             ),
-            "Num *",
+            "Num []",
         );
     }
 
@@ -720,7 +643,7 @@ mod specialize_types {
                     enlist 5
                 "
             ),
-            "List (Num *)",
+            "List (Num [])",
         );
     }
 
@@ -747,7 +670,7 @@ mod specialize_types {
                     1 |> (\a -> a)
                 "
             ),
-            "Num *",
+            "Num []",
         );
     }
 
@@ -761,7 +684,7 @@ mod specialize_types {
                 1 |> always2 "foo"
                 "#
             ),
-            "Num *",
+            "Num []",
         );
     }
 
@@ -773,7 +696,7 @@ mod specialize_types {
                     (\a -> a) 3.14
                 "
             ),
-            "Frac *",
+            "Frac []",
         );
     }
 
@@ -785,7 +708,7 @@ mod specialize_types {
                     (\val -> val) (\val -> val)
                 "
             ),
-            "a -> a",
+            "[] -> []",
         );
     }
 
@@ -799,7 +722,7 @@ mod specialize_types {
                     identity identity
                 "
             ),
-            "a -> a",
+            "[] -> []",
         );
     }
 
@@ -811,7 +734,7 @@ mod specialize_types {
                     \val -> val
                 "
             ),
-            "a -> a",
+            "[] -> []",
         );
     }
 
@@ -826,7 +749,7 @@ mod specialize_types {
                 apply identity 5
                 "
             ),
-            "Num *",
+            "Num []",
         );
     }
 
@@ -838,7 +761,7 @@ mod specialize_types {
                     \f, x -> f x
                 "
             ),
-            "(a -> b), a -> b",
+            "([] -> []), [] -> []",
         );
     }
 
@@ -855,7 +778,7 @@ mod specialize_types {
     //                 flip neverendingInt
     //             "
     //         ),
-    //         "(Num *, (a -> a)) -> Num *",
+    //         "(Num [], (a -> a)) -> Num []",
     //     );
     // }
 
@@ -867,7 +790,7 @@ mod specialize_types {
                     \f -> (\a, b -> f b a)
                 "
             ),
-            "(a, b -> c) -> (b, a -> c)",
+            "([], [] -> []) -> ([], [] -> [])",
         );
     }
 
@@ -879,7 +802,7 @@ mod specialize_types {
                     \val -> \_ -> val
                 "
             ),
-            "a -> (* -> a)",
+            "[] -> ([] -> [])",
         );
     }
 
@@ -891,7 +814,7 @@ mod specialize_types {
                     \f -> f {}
                 "
             ),
-            "({} -> a) -> a",
+            "({} -> []) -> []",
         );
     }
 
@@ -929,7 +852,7 @@ mod specialize_types {
     //                 1 // 2
     //             "
     //             ),
-    //             "Num *",
+    //             "Num []",
     //         );
     //     }
 
@@ -941,7 +864,7 @@ mod specialize_types {
     //                 1 + 2
     //             "
     //             ),
-    //             "Num *",
+    //             "Num []",
     //         );
     //     }
 
@@ -990,7 +913,7 @@ mod specialize_types {
                     [alwaysFive "foo", alwaysFive []]
                 "#
             ),
-            "List (Num *)",
+            "List (Num [])",
         );
     }
 
@@ -1005,7 +928,7 @@ mod specialize_types {
                         24
                 "
             ),
-            "Num *",
+            "Num []",
         );
     }
 
@@ -1019,7 +942,7 @@ mod specialize_types {
                     3 -> 4
                 "
             ),
-            "Num *",
+            "Num []",
         );
     }
 
@@ -1032,45 +955,45 @@ mod specialize_types {
 
     #[test]
     fn one_field_record() {
-        specializes_to("{ x: 5 }", "{ x : Num * }");
+        specializes_to("{ x: 5 }", "{ x : Num [] }");
     }
 
     #[test]
     fn two_field_record() {
-        specializes_to("{ x: 5, y : 3.14 }", "{ x : Num *, y : Frac * }");
+        specializes_to("{ x: 5, y : 3.14 }", "{ x : Num [], y : Frac [] }");
     }
 
     #[test]
     fn record_literal_accessor() {
-        specializes_to("{ x: 5, y : 3.14 }.x", "Num *");
+        specializes_to("{ x: 5, y : 3.14 }.x", "Num []");
     }
 
     #[test]
     fn record_literal_accessor_function() {
-        specializes_to(".x { x: 5, y : 3.14 }", "Num *");
+        specializes_to(".x { x: 5, y : 3.14 }", "Num []");
     }
 
     #[test]
     fn tuple_literal_accessor() {
-        specializes_to("(5, 3.14 ).0", "Num *");
+        specializes_to("(5, 3.14 ).0", "Num []");
     }
 
     #[test]
     fn tuple_literal_accessor_function() {
-        specializes_to(".0 (5, 3.14 )", "Num *");
+        specializes_to(".0 (5, 3.14 )", "Num []");
     }
 
     #[test]
     fn tuple_literal_ty() {
-        specializes_to("(5, 3.14 )", "( Num *, Frac * )*");
+        specializes_to("(5, 3.14 )", "( Num [], Frac [] )");
     }
 
     #[test]
     fn tuple_literal_accessor_ty() {
-        specializes_to(".0", "( a )* -> a");
-        specializes_to(".4", "( _, _, _, _, a )* -> a");
-        specializes_to(".5", "( ... 5 omitted, a )* -> a");
-        specializes_to(".200", "( ... 200 omitted, a )* -> a");
+        specializes_to(".0", "( [] ) -> []");
+        specializes_to(".4", "( _, _, _, _, [] ) -> []");
+        specializes_to(".5", "( ... 5 omitted, [] ) -> []");
+        specializes_to(".200", "( ... 200 omitted, [] ) -> []");
     }
 
     #[test]
@@ -1083,13 +1006,13 @@ mod specialize_types {
                     { a: get0 (1, 2), b: get0 ("a", "b", "c") }
                 "#
             ),
-            "{ a : Num *, b : Str }",
+            "{ a : Num [], b : Str }",
         );
     }
 
     #[test]
     fn record_arg() {
-        specializes_to("\\rec -> rec.x", "{ x : a }* -> a");
+        specializes_to("\\rec -> rec.x", "{ x : [] } -> []");
     }
 
     #[test]
@@ -1105,7 +1028,7 @@ mod specialize_types {
                     fn
                 "
             ),
-            "{ x : a }b -> { x : a }b",
+            "{ x : [] } -> { x : [] }",
         );
     }
 
@@ -1120,7 +1043,7 @@ mod specialize_types {
                     bar
                 "
             ),
-            "custom -> custom",
+            "[] -> []",
         );
     }
 
@@ -1148,13 +1071,13 @@ mod specialize_types {
                     foo 2
                 "
             ),
-            "custom",
+            "[]",
         );
     }
 
     #[test]
     fn accessor_function() {
-        specializes_to(".foo", "{ foo : a }* -> a");
+        specializes_to(".foo", "{ foo : [] } -> []");
     }
 
     #[test]
@@ -1167,7 +1090,7 @@ mod specialize_types {
                     x
                 "
             ),
-            "{} -> custom",
+            "{} -> []",
         );
     }
 
@@ -1201,7 +1124,7 @@ mod specialize_types {
                 foo
             "
             ),
-            "{ x : custom } -> custom",
+            "{ x : [] } -> []",
         );
     }
 
@@ -1239,7 +1162,7 @@ mod specialize_types {
                     \Foo -> 42
                 "
             ),
-            "[Foo] -> Num *",
+            "[Foo] -> Num []",
         );
     }
 
@@ -1254,7 +1177,7 @@ mod specialize_types {
                             False -> 0
                 "
             ),
-            "[False, True] -> Num *",
+            "[False, True] -> Num []",
         );
     }
 
@@ -1266,7 +1189,7 @@ mod specialize_types {
                     Foo "happy" 12
                 "#
             ),
-            "[Foo Str (Num *)]",
+            "[Foo Str (Num [])]",
         );
     }
 
@@ -1282,7 +1205,7 @@ mod specialize_types {
                     f
                 "
             ),
-            "{ a : a, b : * }* -> a",
+            "{ a : [], b : [] } -> []",
         );
     }
 
@@ -1295,7 +1218,7 @@ mod specialize_types {
                         { x: 4 } -> 4
                 "
             ),
-            "Num *",
+            "Num []",
         );
     }
 
@@ -1307,7 +1230,7 @@ mod specialize_types {
                     \Foo x -> Foo x
                 "
             ),
-            "[Foo a] -> [Foo a]",
+            "[Foo []] -> [Foo []]",
         );
     }
 
@@ -1319,7 +1242,7 @@ mod specialize_types {
                     \Foo x _ -> Foo x "y"
                 "#
             ),
-            "[Foo a *] -> [Foo a Str]",
+            "[Foo [] []] -> [Foo [] Str]",
         );
     }
 
@@ -2119,7 +2042,7 @@ mod specialize_types {
                     ok
                 "
             ),
-            "Res I64 *",
+            "Res I64 []",
         );
     }
 
@@ -2136,7 +2059,7 @@ mod specialize_types {
                     err
                 "#
             ),
-            "Res * Str",
+            "Res [] Str",
         );
     }
 
@@ -2151,7 +2074,7 @@ mod specialize_types {
                     ok
                 "
             ),
-            "Result I64 *",
+            "Result I64 []",
         );
     }
 
@@ -2166,7 +2089,7 @@ mod specialize_types {
                     err
                 "#
             ),
-            "Result * Str",
+            "Result [] Str",
         );
     }
 
@@ -2222,7 +2145,7 @@ mod specialize_types {
                     { numIdentity, x : numIdentity 42, y }
                 "
             ),
-            "{ numIdentity : Num a -> Num a, x : Num *, y : Frac * }",
+            "{ numIdentity : Num [] -> Num [], x : Num [], y : Frac [] }",
         );
     }
 
@@ -2258,7 +2181,7 @@ mod specialize_types {
                     f
                 "
             ),
-            "Num * -> Num *",
+            "Num [] -> Num []",
         );
     }
 
@@ -2274,7 +2197,7 @@ mod specialize_types {
                     map
                 "
             ),
-            "(a -> b), [Identity a] -> [Identity b]",
+            "([] -> []), [Identity []] -> [Identity []]",
         );
     }
 
@@ -2291,7 +2214,7 @@ mod specialize_types {
                    toBit
                 "
             ),
-            "[False, True] -> Num *",
+            "[False, True] -> Num []",
         );
     }
 
@@ -2310,7 +2233,7 @@ mod specialize_types {
                     foo
                 "#
             ),
-            "{ x : *, y : * }* -> Str",
+            "{ x : [], y : [] } -> Str",
         );
     }
 
@@ -2327,7 +2250,7 @@ mod specialize_types {
                    fromBit
                 "
             ),
-            "Num * -> [False, True]",
+            "Num [] -> [False, True]",
         );
     }
 
@@ -2345,7 +2268,7 @@ mod specialize_types {
                     map
                 "
             ),
-            "(a -> b), [Err e, Ok a] -> [Err e, Ok b]",
+            "([] -> []), [Err [], Ok []] -> [Err [], Ok []]",
         );
     }
 
@@ -2365,7 +2288,7 @@ mod specialize_types {
                     map
                        "
             ),
-            "(a -> b), Res e a -> Res e b",
+            "([] -> []), Res [] [] -> Res [] []",
         );
     }
 
@@ -2379,7 +2302,7 @@ mod specialize_types {
                     foo { x: 5 }
                 "
             ),
-            "Num *",
+            "Num []",
         );
     }
 
@@ -2399,7 +2322,7 @@ mod specialize_types {
                     threePointZero
                 "
             ),
-            "Frac *",
+            "Frac []",
         );
     }
 
@@ -2465,7 +2388,7 @@ mod specialize_types {
                 id
                 "
             ),
-            "Foo a -> Foo a",
+            "Foo [] -> Foo []",
         );
     }
 
@@ -2480,7 +2403,7 @@ mod specialize_types {
                     empty
                        "
             ),
-            "ConsList a",
+            "ConsList []",
         );
     }
 
@@ -2495,7 +2418,7 @@ mod specialize_types {
                     singleton
                        "
             ),
-            "a -> ConsList a",
+            "[] -> ConsList []",
         );
     }
 
@@ -2554,7 +2477,7 @@ mod specialize_types {
                     map
                        "
             ),
-            "(a -> b), [Cons a c, Nil] as c -> [Cons b d, Nil] as d",
+            "([] -> []), [Cons [] c, Nil] as c -> [Cons [] d, Nil] as d",
         );
     }
 
@@ -2575,7 +2498,7 @@ mod specialize_types {
                     map
                        "
             ),
-            "(a -> b), ConsList a -> ConsList b",
+            "([] -> []), ConsList [] -> ConsList []",
         );
     }
 
@@ -2715,7 +2638,7 @@ mod specialize_types {
                     toEmpty
                 "
             ),
-            "ConsList a -> ConsList a",
+            "ConsList [] -> ConsList []",
         );
     }
 
@@ -2736,7 +2659,7 @@ mod specialize_types {
                     toEmpty
                 "
             ),
-            "ConsList a -> ConsList a",
+            "ConsList [] -> ConsList []",
         );
     }
 
@@ -2760,7 +2683,7 @@ mod specialize_types {
                     toEmpty
                 "#
             ),
-            "ConsList a -> ConsList a",
+            "ConsList [] -> ConsList []",
         );
     }
 
@@ -2886,7 +2809,7 @@ mod specialize_types {
                     map
                 "
             ),
-            "(a -> b), ConsList a -> ConsList b",
+            "([] -> []), ConsList [] -> ConsList []",
         );
     }
 
@@ -2904,7 +2827,7 @@ mod specialize_types {
                     map
                 "
             ),
-            "(a -> b), [Cons { x : a, xs : c }*, Nil] as c -> [Cons { x : b, xs : d }, Nil] as d",
+            "(a -> b), [Cons { x : a, xs : c }, Nil] as c -> [Cons { x : b, xs : d }, Nil] as d",
         );
     }
 
@@ -2931,7 +2854,7 @@ mod specialize_types {
                     toAs
                 "
             ),
-            "(b -> a), ListA a b -> ConsList a",
+            "([] -> []), ListA [] [] -> ConsList []",
         );
     }
 
@@ -3004,7 +2927,7 @@ mod specialize_types {
                 partition
                             "
             ),
-            "U64, U64, List (Int a) -> [Pair U64 (List (Int a))]",
+            "U64, U64, List (Int []) -> [Pair U64 (List (Int []))]",
         );
     }
 
@@ -3052,7 +2975,7 @@ mod specialize_types {
             partition
         "
             ),
-            "U64, U64, List (Int a) -> [Pair U64 (List (Int a))]",
+            "U64, U64, List (Int []) -> [Pair U64 (List (Int []))]",
         );
     }
 
@@ -3083,7 +3006,7 @@ mod specialize_types {
                     List.get [10, 9, 8, 7] 1
                 "
             ),
-            "Result (Num *) [OutOfBounds]",
+            "Result (Num []) [OutOfBounds]",
         );
 
         infer_eq_without_problem(
@@ -3092,7 +3015,7 @@ mod specialize_types {
                     List.get
                 "
             ),
-            "List a, U64 -> Result a [OutOfBounds]",
+            "List [], U64 -> Result [] [OutOfBounds]",
         );
     }
 
@@ -3110,272 +3033,130 @@ mod specialize_types {
                 { id1, id2 }
                 "
             ),
-            "{ id1 : q -> q, id2 : q1 -> q1 }",
+            "{ id1 : [] -> [], id2 : [] -> [] }",
         );
     }
 
     #[test]
     fn map_insert() {
         infer_eq_without_problem(
-            indoc!(
-                r"
-                Dict.insert
-                "
-            ),
+            "Dict.insert",
             "Dict k v, k, v -> Dict k v where k implements Hash & Eq",
         );
     }
 
     #[test]
     fn num_to_frac() {
-        infer_eq_without_problem(
-            indoc!(
-                r"
-                Num.toFrac
-                "
-            ),
-            "Num * -> Frac a",
-        );
+        infer_eq_without_problem("Num.toFrac", "Num [] -> Frac []");
     }
 
     #[test]
     fn pow() {
-        infer_eq_without_problem(
-            indoc!(
-                r"
-                Num.pow
-                "
-            ),
-            "Frac a, Frac a -> Frac a",
-        );
+        infer_eq_without_problem("Num.pow", "Frac [], Frac [] -> Frac []");
     }
 
     #[test]
     fn ceiling() {
-        infer_eq_without_problem(
-            indoc!(
-                r"
-                Num.ceiling
-                "
-            ),
-            "Frac * -> Int a",
-        );
+        infer_eq_without_problem("Num.ceiling", "Frac [] -> Int []");
     }
 
     #[test]
     fn floor() {
-        infer_eq_without_problem(
-            indoc!(
-                r"
-                Num.floor
-                "
-            ),
-            "Frac * -> Int a",
-        );
+        infer_eq_without_problem("Num.floor", "Frac [] -> Int []");
     }
 
     #[test]
     fn div() {
-        infer_eq_without_problem(
-            indoc!(
-                r"
-                Num.div
-                "
-            ),
-            "Frac a, Frac a -> Frac a",
-        )
+        infer_eq_without_problem("Num.div", "Frac [], Frac [] -> Frac []")
     }
 
     #[test]
     fn div_checked() {
         infer_eq_without_problem(
-            indoc!(
-                r"
-                Num.divChecked
-                "
-            ),
-            "Frac a, Frac a -> Result (Frac a) [DivByZero]",
+            "Num.divChecked",
+            "Frac [], Frac [] -> Result (Frac []) [DivByZero]",
         )
     }
 
     #[test]
     fn div_ceil() {
-        infer_eq_without_problem(
-            indoc!(
-                r"
-                Num.divCeil
-                "
-            ),
-            "Int a, Int a -> Int a",
-        );
+        infer_eq_without_problem("Num.divCeil", "Int [], Int [] -> Int []");
     }
 
     #[test]
     fn div_ceil_checked() {
         infer_eq_without_problem(
-            indoc!(
-                r"
-                Num.divCeilChecked
-                "
-            ),
-            "Int a, Int a -> Result (Int a) [DivByZero]",
+            "Num.divCeilChecked",
+            "Int [], Int [] -> Result (Int []) [DivByZero]",
         );
     }
 
     #[test]
     fn div_trunc() {
-        infer_eq_without_problem(
-            indoc!(
-                r"
-                Num.divTrunc
-                "
-            ),
-            "Int a, Int a -> Int a",
-        );
+        infer_eq_without_problem("Num.divTrunc", "Int [], Int [] -> Int []");
     }
 
     #[test]
     fn div_trunc_checked() {
         infer_eq_without_problem(
-            indoc!(
-                r"
-                Num.divTruncChecked
-                "
-            ),
-            "Int a, Int a -> Result (Int a) [DivByZero]",
+            "Num.divTruncChecked",
+            "Int [], Int [] -> Result (Int []) [DivByZero]",
         );
     }
 
     #[test]
     fn atan() {
-        infer_eq_without_problem(
-            indoc!(
-                r"
-                Num.atan
-                "
-            ),
-            "Frac a -> Frac a",
-        );
+        infer_eq_without_problem("Num.atan", "Frac [] -> Frac []");
     }
 
     #[test]
     fn min_i128() {
-        infer_eq_without_problem(
-            indoc!(
-                r"
-                Num.minI128
-                "
-            ),
-            "I128",
-        );
+        infer_eq_without_problem("Num.minI128", "I128");
     }
 
     #[test]
     fn max_i128() {
-        infer_eq_without_problem(
-            indoc!(
-                r"
-                Num.maxI128
-                "
-            ),
-            "I128",
-        );
+        infer_eq_without_problem("Num.maxI128", "I128");
     }
 
     #[test]
     fn min_i64() {
-        infer_eq_without_problem(
-            indoc!(
-                r"
-                Num.minI64
-                "
-            ),
-            "I64",
-        );
+        infer_eq_without_problem("Num.minI64", "I64");
     }
 
     #[test]
     fn max_i64() {
-        infer_eq_without_problem(
-            indoc!(
-                r"
-                Num.maxI64
-                "
-            ),
-            "I64",
-        );
+        infer_eq_without_problem("Num.maxI64", "I64");
     }
 
     #[test]
     fn min_u64() {
-        infer_eq_without_problem(
-            indoc!(
-                r"
-                Num.minU64
-                "
-            ),
-            "U64",
-        );
+        infer_eq_without_problem("Num.minU64", "U64");
     }
 
     #[test]
     fn max_u64() {
-        infer_eq_without_problem(
-            indoc!(
-                r"
-                Num.maxU64
-                "
-            ),
-            "U64",
-        );
+        infer_eq_without_problem("Num.maxU64", "U64");
     }
 
     #[test]
     fn min_i32() {
-        infer_eq_without_problem(
-            indoc!(
-                r"
-                Num.minI32
-                "
-            ),
-            "I32",
-        );
+        infer_eq_without_problem("Num.minI32", "I32");
     }
 
     #[test]
     fn max_i32() {
-        infer_eq_without_problem(
-            indoc!(
-                r"
-                Num.maxI32
-                "
-            ),
-            "I32",
-        );
+        infer_eq_without_problem("Num.maxI32", "I32");
     }
 
     #[test]
     fn min_u32() {
-        infer_eq_without_problem(
-            indoc!(
-                r"
-                Num.minU32
-                "
-            ),
-            "U32",
-        );
+        infer_eq_without_problem("Num.minU32", "U32");
     }
 
     #[test]
     fn max_u32() {
-        infer_eq_without_problem(
-            indoc!(
-                r"
-                Num.maxU32
-                "
-            ),
-            "U32",
-        );
+        infer_eq_without_problem("Num.maxU32", "U32");
     }
 
     #[test]
@@ -3414,7 +3195,7 @@ mod specialize_types {
                 f
                 "
             ),
-            "{ p : *, q : * }* -> Num *",
+            "{ p : [], q : [] } -> Num []",
         );
     }
 
@@ -3469,7 +3250,7 @@ mod specialize_types {
                         _ -> 3
                 "
             ),
-            "Num * -> Num *",
+            "Num [] -> Num []",
         );
     }
 
@@ -3516,7 +3297,7 @@ mod specialize_types {
                 { x: sortWith, y: sort, z: sortBy }
                 "
             ),
-            "{ x : (foobar, foobar -> Order), ConsList foobar -> ConsList foobar, y : ConsList cm -> ConsList cm, z : (x -> cmpl), ConsList x -> ConsList x }"
+            "{ x : ([], [] -> Order), ConsList [] -> ConsList [], y : ConsList [] -> ConsList [], z : ([] -> []), ConsList [] -> ConsList [] }"
         );
     }
 
@@ -3569,7 +3350,7 @@ mod specialize_types {
                 f
                 "
             ),
-            "List a -> List a",
+            "List [] -> List []",
         );
     }
 
@@ -3608,7 +3389,7 @@ mod specialize_types {
                     negatePoint { x: 1, y: 2 }
                 "
             ),
-            "{ x : I64, y : I64, z : Num c }",
+            "{ x : I64, y : I64, z : Num [] }",
         );
     }
 
@@ -3625,7 +3406,7 @@ mod specialize_types {
                     { a, b }
                 "#
             ),
-            "{ a : { x : I64, y : I64, z : Num c }, b : { blah : Str, x : I64, y : I64, z : Num c1 } }",
+            "{ a : { x : I64, y : I64, z : Num [] }, b : { blah : Str, x : I64, y : I64, z : Num [] } }",
         );
     }
 
@@ -3639,7 +3420,7 @@ mod specialize_types {
                     negatePoint { x: 1, y: 2.1, z: 0x3 }
                 "
             ),
-            "{ x : Num *, y : Frac *, z : Int * }",
+            "{ x : Num [], y : Frac [], z : Int [] }",
         );
     }
 
@@ -3656,7 +3437,7 @@ mod specialize_types {
                     { a, b }
                 "#
             ),
-            "{ a : { x : Num *, y : Frac *, z : c }, b : { blah : Str, x : Num *, y : Frac *, z : c1 } }",
+            "{ a : { x : Num [], y : Frac [], z : c }, b : { blah : Str, x : Num [], y : Frac [], z : c1 } }",
         );
     }
 
@@ -3668,7 +3449,7 @@ mod specialize_types {
                 \{ x, y ? 0 } -> x + y
                 "
             ),
-            "{ x : Num a, y ? Num a }* -> Num a",
+            "{ x : Num [], y ? Num [] } -> Num []",
         );
     }
 
@@ -3682,7 +3463,7 @@ mod specialize_types {
                 x + y
                 "
             ),
-            "Num *",
+            "Num []",
         );
     }
 
@@ -3696,7 +3477,7 @@ mod specialize_types {
                         { x, y ? 0 } -> x + y
                 "
             ),
-            "{ x : Num a, y ? Num a }* -> Num a",
+            "{ x : Num a, y ? Num a } -> Num a",
         );
     }
 
@@ -3712,7 +3493,7 @@ mod specialize_types {
                     { x, y }
                 "
             ),
-            "{ x : I64, y ? Bool }* -> { x : I64, y : Bool }",
+            "{ x : I64, y ? Bool }-> { x : I64, y : Bool }",
         );
     }
 
@@ -3724,7 +3505,7 @@ mod specialize_types {
                 List.walkBackwards
                 "
             ),
-            "List elem, state, (state, elem -> state) -> state",
+            "List [], [], ([], [] -> []) -> []",
         );
     }
 
@@ -3748,7 +3529,7 @@ mod specialize_types {
     fn list_walk_with_index_until() {
         infer_eq_without_problem(
             indoc!(r"List.walkWithIndexUntil"),
-            "List elem, state, (state, elem, U64 -> [Break state, Continue state]) -> state",
+            "List [], [], ([], [], U64 -> [Break [], Continue []]) -> []",
         );
     }
 
@@ -3760,7 +3541,7 @@ mod specialize_types {
                 List.dropAt
                 "
             ),
-            "List elem, U64 -> List elem",
+            "List [], U64 -> List []",
         );
     }
 
@@ -3796,7 +3577,7 @@ mod specialize_types {
                 List.takeFirst
                 "
             ),
-            "List elem, U64 -> List elem",
+            "List [], U64 -> List []",
         );
     }
 
@@ -3808,7 +3589,7 @@ mod specialize_types {
                 List.takeLast
                 "
             ),
-            "List elem, U64 -> List elem",
+            "List [], U64 -> List []",
         );
     }
 
@@ -3820,7 +3601,7 @@ mod specialize_types {
                 List.sublist
                 "
             ),
-            "List elem, { len : U64, start : U64 } -> List elem",
+            "List [], { len : U64, start : U64 } -> List []",
         );
     }
 
@@ -3828,7 +3609,7 @@ mod specialize_types {
     fn list_split() {
         infer_eq_without_problem(
             indoc!("List.split"),
-            "List elem, U64 -> { before : List elem, others : List elem }",
+            "List [], U64 -> { before : List [], others : List [] }",
         );
     }
 
@@ -3840,7 +3621,7 @@ mod specialize_types {
                 List.dropLast
                 "
             ),
-            "List elem, U64 -> List elem",
+            "List [], U64 -> List []",
         );
     }
 
@@ -3852,7 +3633,7 @@ mod specialize_types {
                 List.intersperse
                 "
             ),
-            "List elem, elem -> List elem",
+            "List [], [] -> List []",
         );
     }
     #[test]
@@ -3869,7 +3650,7 @@ mod specialize_types {
                 g
                 "
             ),
-            "Num a -> Num a",
+            "Num [] -> Num []",
         );
     }
 
@@ -3889,7 +3670,7 @@ mod specialize_types {
                     empty
                 "#
             ),
-            "List x",
+            "List []",
         );
     }
 
@@ -3908,10 +3689,10 @@ mod specialize_types {
                         Foo Bar 1
                 "#
             ),
-            "[Foo [Bar] (Num *)]",
+            "[Foo [Bar] (Num [])]",
         );
 
-        infer_eq_without_problem("Foo Bar 1", "[Foo [Bar] (Num *)]");
+        infer_eq_without_problem("Foo Bar 1", "[Foo [Bar] (Num [])]");
     }
 
     #[test]
@@ -4403,7 +4184,7 @@ mod specialize_types {
                         Pair i list
                 "#
             ),
-            "U64, U64, List (Num a), U64, Num a -> [Pair U64 (List (Num a))]",
+            "U64, U64, List (Num []), U64, Num [] -> [Pair U64 (List (Num []))]",
         );
     }
 
@@ -4577,7 +4358,7 @@ mod specialize_types {
                     x
                 "#
             ),
-            "Num *",
+            "Num []",
         );
     }
 
@@ -4620,7 +4401,7 @@ mod specialize_types {
                 id
                 "
             ),
-            "a -> a",
+            "[] -> []",
         )
     }
 
@@ -4653,7 +4434,7 @@ mod specialize_types {
                 swapRcd
                 "
             ),
-            "{ x : a, y : b } -> { x : b, y : a }",
+            "{ x : [], y : [] } -> { x : [], y : [] }",
         )
     }
 
@@ -4667,7 +4448,7 @@ mod specialize_types {
                 swapRcd
                 "
             ),
-            "{ x : tx, y : ty } -> { x : ty, y : tx }",
+            "{ x : [], y : [] } -> { x : [], y : [] }",
         )
     }
 
@@ -4704,7 +4485,7 @@ mod specialize_types {
                 pastelize
                 "
             ),
-            "[Blue, Lavender, Orange, Peach]a -> [Blue, Lavender, Orange, Peach]a",
+            "[Blue, Lavender, Orange, Peach] -> [Blue, Lavender, Orange, Peach]",
         )
     }
 
@@ -4719,7 +4500,7 @@ mod specialize_types {
                 setRocEmail
                 "#
             ),
-            "{ email : Str, name : Str }a -> { email : Str, name : Str }a",
+            "{ email : Str, name : Str } -> { email : Str, name : Str }",
         )
     }
 
@@ -4736,7 +4517,7 @@ mod specialize_types {
                 fromList
                 "
             ),
-            "List elem -> LinkedList elem",
+            "List [] -> LinkedList []",
         )
     }
 
@@ -4751,7 +4532,7 @@ mod specialize_types {
                 fromList
                 "
             ),
-            "List elem -> LinkedList elem",
+            "List [] -> LinkedList []",
         )
     }
 
@@ -4782,7 +4563,7 @@ mod specialize_types {
                        _ -> Z
                  "
             ),
-            "[A, B]* -> [X, Y, Z]",
+            "[A, B] -> [X, Y, Z]",
         )
     }
 
@@ -4813,7 +4594,7 @@ mod specialize_types {
                        A _ -> Z
                  "
             ),
-            "[A [M, N]*] -> [X, Y, Z]",
+            "[A [M, N]] -> [X, Y, Z]",
         )
     }
 
@@ -4859,7 +4640,7 @@ mod specialize_types {
                          t -> t
                  "
             ),
-            "[A, X]a -> [A, X]a",
+            "[A, X] -> [A, X]",
         )
     }
 
@@ -4875,7 +4656,7 @@ mod specialize_types {
                          None -> 0
                  "
             ),
-            "[None, Some { tag : [A, B] }*] -> Num *",
+            "[None, Some { tag : [A, B] }] -> Num []",
         )
     }
 
@@ -4908,7 +4689,7 @@ mod specialize_types {
                          { x: Red, y ? 5 } -> y
                  "
             ),
-            "{ x : [Blue, Red], y ? Num a }* -> Num a",
+            "{ x : [Blue, Red], y ? Num [] } -> Num []",
         )
     }
 
@@ -4921,7 +4702,7 @@ mod specialize_types {
                  \UserId id -> id + 1
                  "
             ),
-            "[UserId (Num a)] -> Num a",
+            "[UserId (Num [])] -> Num []",
         )
     }
 
