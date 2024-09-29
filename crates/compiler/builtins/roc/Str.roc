@@ -1066,7 +1066,7 @@ dropPrefix : Str, Str -> Str
 dropPrefix = \haystack, prefix ->
     if Str.startsWith haystack prefix then
         start = Str.countUtf8Bytes prefix
-        len = Num.subSaturated (Str.countUtf8Bytes haystack) start
+        len = Num.subWrap (Str.countUtf8Bytes haystack) start
 
         substringUnsafe haystack start len
     else
@@ -1083,7 +1083,7 @@ dropSuffix : Str, Str -> Str
 dropSuffix = \haystack, suffix ->
     if Str.endsWith haystack suffix then
         start = 0
-        len = Num.subSaturated (Str.countUtf8Bytes haystack) (Str.countUtf8Bytes suffix)
+        len = Num.subWrap (Str.countUtf8Bytes haystack) (Str.countUtf8Bytes suffix)
 
         substringUnsafe haystack start len
     else
