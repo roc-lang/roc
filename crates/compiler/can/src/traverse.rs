@@ -971,5 +971,50 @@ pub fn find_declaration_at<'a>(
     region: Region,
     decls: &'a Declarations,
 ) -> Option<FoundDeclaration<'a>> {
-    todo!()
+    let mut visitor = Finder {
+        region,
+        found: None,
+    };
+
+    visitor.visit_decls(decls);
+    return visitor.found;
+
+    struct Finder<'b> {
+        region: Region,
+        found: Option<FoundDeclaration<'b>>,
+    }
+
+    impl Visitor for Finder<'_> {
+        fn should_visit(&mut self, region: Region) -> bool {
+            region.contains(&self.region)
+        }
+
+        fn visit_decl(&mut self, decl: DeclarationInfo<'_>) {
+            if self.should_visit(decl.region()) {
+                match decl {
+                    DeclarationInfo::Value { .. } | DeclarationInfo::Function { .. } => {
+                        self.found = Some(FoundDeclaration::Decl(unsafe {
+                            // Safety: Extends the lifetime to that of `Finder` which will not
+                            // outlive `decls`. The declaration can't escape the passed in `decls`,
+                            // and the visitor does not synthesize any.
+                            std::mem::transmute(decl.clone())
+                        }));
+                        walk_decl(self, decl);
+                    }
+                    _ => {
+                        walk_decl(self, decl);
+                    }
+                }
+            }
+        }
+
+        fn visit_def(&mut self, def: &Def) {
+            if self.should_visit(def.region()) {
+                // Safety: Extends the lifetime to that of `Finder` which will not outlive `decls`.
+                // The def can't escape the passed in `decls`, and the visitor does not synthesize defs.
+                self.found = Some(FoundDeclaration::Def(unsafe { std::mem::transmute(def) }));
+                walk_def(self, def)
+            }
+        }
+    }
 }
