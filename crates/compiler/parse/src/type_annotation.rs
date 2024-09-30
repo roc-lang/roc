@@ -21,32 +21,36 @@ use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_region::all::{Loc, Position, Region};
 
-fn tag_union_type<'a>(
+fn rest_of_tag_union_type<'a>(
     stop_at_first_impl: bool,
-) -> impl Parser<'a, TypeAnnotation<'a>, ETypeTagUnion<'a>> {
-    move |arena, state, min_indent| {
-        let (_, tags, state) = collection_trailing_sep_e(
-            byte(b'[', ETypeTagUnion::Open),
-            tag_type(),
-            byte(b']', ETypeTagUnion::End),
-            Tag::SpaceBefore,
-        )
-        .parse(arena, state, min_indent)?;
+    arena: &'a Bump,
+    state: State<'a>,
+    min_indent: u32,
+) -> ParseResult<'a, TypeAnnotation<'a>, ETypeTagUnion<'a>> {
+    let (tags, state) = match collection_inner(tag_type(), Tag::SpaceBefore).parse(arena, state, 0)
+    {
+        Ok((_, out, state)) => (out, state),
+        Err((_, fail)) => return Err((MadeProgress, fail)),
+    };
 
-        // This could be an open tag union, e.g. `[Foo, Bar]a`
-        let ext_pos = state.pos();
-        let (ext, state) = match parse_term(stop_at_first_impl, arena, state.clone(), min_indent) {
-            Ok((_, out, state)) => (Some(&*arena.alloc(out)), state),
-            Err((NoProgress, _)) => (None, state),
-            Err((_, fail)) => {
-                let fail = ETypeTagUnion::Type(arena.alloc(fail), ext_pos);
-                return Err((MadeProgress, fail));
-            }
-        };
-
-        let result = TypeAnnotation::TagUnion { tags, ext };
-        Ok((MadeProgress, result, state))
+    if state.bytes().first() != Some(&b']') {
+        return Err((MadeProgress, ETypeTagUnion::End(state.pos())));
     }
+    let state = state.inc();
+
+    // This could be an open tag union, e.g. `[Foo, Bar]a`
+    let ext_pos = state.pos();
+    let (ext, state) = match parse_term(stop_at_first_impl, arena, state.clone(), min_indent) {
+        Ok((_, out, state)) => (Some(&*arena.alloc(out)), state),
+        Err((NoProgress, _)) => (None, state),
+        Err((_, fail)) => {
+            let fail = ETypeTagUnion::Type(arena.alloc(fail), ext_pos);
+            return Err((MadeProgress, fail));
+        }
+    };
+
+    let out = TypeAnnotation::TagUnion { tags, ext };
+    Ok((MadeProgress, out, state))
 }
 
 fn check_type_alias<'a>(
@@ -101,10 +105,12 @@ fn parse_term<'a>(
                 Ok((p, out, state)) => Some((p, Loc::pos(start, state.pos(), out), state)),
                 Err((p, fail)) => return Err((p, EType::TRecord(fail, start))),
             },
-            b'[' => match tag_union_type(stop_at_first_impl).parse(arena, state, min_indent) {
-                Ok((p, out, state)) => Some((p, Loc::pos(start, state.pos(), out), state)),
-                Err((p, fail)) => return Err((p, EType::TTagUnion(fail, start))),
-            },
+            b'[' => {
+                match rest_of_tag_union_type(stop_at_first_impl, arena, state.inc(), min_indent) {
+                    Ok((p, out, state)) => Some((p, Loc::pos(start, state.pos(), out), state)),
+                    Err((p, fail)) => return Err((p, EType::TTagUnion(fail, start))),
+                }
+            }
             b'*' => {
                 // The `*` type variable, e.g. in (List *)
                 let out = Loc::pos(start, start.next(), TypeAnnotation::Wildcard);
@@ -219,10 +225,12 @@ fn loc_applied_arg<'a>(
                 Ok((_, out, state)) => (Loc::pos(start, state.pos(), out), state),
                 Err((p, fail)) => return Err((p, EType::TRecord(fail, start))),
             },
-            b'[' => match tag_union_type(stop_at_first_impl).parse(arena, state, min_indent) {
-                Ok((_, out, state)) => (Loc::pos(start, state.pos(), out), state),
-                Err((p, fail)) => return Err((p, EType::TTagUnion(fail, start))),
-            },
+            b'[' => {
+                match rest_of_tag_union_type(stop_at_first_impl, arena, state.inc(), min_indent) {
+                    Ok((_, out, state)) => (Loc::pos(start, state.pos(), out), state),
+                    Err((p, fail)) => return Err((p, EType::TTagUnion(fail, start))),
+                }
+            }
             b'*' => {
                 // The `*` type variable, e.g. in (List *)
                 let out = Loc::pos(start, start.next(), TypeAnnotation::Wildcard);
@@ -466,6 +474,7 @@ fn rest_of_record_type<'a>(
 
 fn applied_type<'a>(stop_at_first_impl: bool) -> impl Parser<'a, TypeAnnotation<'a>, EType<'a>> {
     map(
+        // todo: @wip inline
         indented_seq(
             specialize_err(EType::TApply, concrete_type()),
             // Optionally parse space-separated arguments for the constructor,

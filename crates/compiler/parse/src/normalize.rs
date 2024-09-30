@@ -1384,7 +1384,6 @@ impl<'a> Normalize<'a> for ETypeTagUnion<'a> {
     fn normalize(&self, arena: &'a Bump) -> Self {
         match self {
             ETypeTagUnion::End(_) => ETypeTagUnion::End(Position::zero()),
-            ETypeTagUnion::Open(_) => ETypeTagUnion::Open(Position::zero()),
             ETypeTagUnion::Type(inner_err, _) => {
                 ETypeTagUnion::Type(arena.alloc(inner_err.normalize(arena)), Position::zero())
             }

@@ -644,7 +644,6 @@ pub enum ETypeRecord<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ETypeTagUnion<'a> {
     End(Position),
-    Open(Position),
 
     Type(&'a EType<'a>, Position),
 
