@@ -2326,6 +2326,8 @@ Here are various Roc expressions involving operators, and what they desugar to.
 | `!a`                         | `Bool.not a`       |
 | <code>a \|> f</code>         | `f a`              |
 | <code>f a b \|> g x y</code> | `g (f a b) x y`    |
+| `f!`                         | `Task.await f`     |
+| `f?`                         | `Result.try f`     |
 
 </section>
 <script type="text/javascript" src="/builtins/search.js" defer></script>
