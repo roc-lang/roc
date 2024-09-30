@@ -548,6 +548,23 @@ tau = 2 * pi
 ## [F64] or [F32] value, the returned string will be `"NaN"`, `"∞"`, or `"-∞"`.
 ##
 toStr : Num * -> Str
+
+## Convert an [Int] to a new [Int] of the expected type:
+##
+## ```roc
+## # Casts a U8 to a U16
+## x : U16
+## x = Num.intCast 255u8
+## ```
+##
+## In the case of downsizing, information is lost:
+##
+## ```roc
+## # returns 0, as the bits were truncated.
+## x : U8
+## x = Num.intCast 256u16
+## ```
+##
 intCast : Int a -> Int b
 
 compare : Num a, Num a -> [LT, EQ, GT]
