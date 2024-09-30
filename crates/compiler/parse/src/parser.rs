@@ -1305,28 +1305,6 @@ pub fn indented_seq<'a, Output1, Output2, E: 'a>(
     }
 }
 
-/// Similar to [`and`], but we modify the `min_indent` of the second parser to be
-/// 1 greater than the `column()` at the start of the first parser.
-pub fn absolute_indented_seq<'a, Output1, Output2, E: 'a>(
-    p1: impl Parser<'a, Output1, E>,
-    p2: impl Parser<'a, Output2, E>,
-) -> impl Parser<'a, (Output1, Output2), E> {
-    move |arena: &'a bumpalo::Bump, state: crate::state::State<'a>, _min_indent: u32| {
-        let start_indent = state.column();
-
-        let p1_indent = start_indent;
-        let p2_indent = p1_indent + 1;
-
-        match p1.parse(arena, state, p1_indent) {
-            Ok((p1, out1, state)) => match p2.parse(arena, state, p2_indent) {
-                Ok((p2, out2, state)) => Ok((p1.or(p2), (out1, out2), state)),
-                Err((p2, fail)) => Err((p1.or(p2), fail)),
-            },
-            Err((progress, fail)) => Err((progress, fail)),
-        }
-    }
-}
-
 /// Returns the result of the first parser that makes progress, even if it failed.
 /// If no parsers make progress, the last parser's result is returned.
 ///
