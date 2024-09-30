@@ -4299,8 +4299,9 @@ mod test_reporting {
     4│      f :: I64
               ^^
 
-    I have no specific suggestion for this operator, see TODO for the full
-    list of operators in Roc.
+    I have no specific suggestion for this operator, see
+    https://www.roc-lang.org/tutorial#operator-desugaring-table for the
+    full list of operators in Roc.
     "#
     );
 
@@ -6052,8 +6053,9 @@ All branches in an `if` must have the same type!
     5│          5 ** 3
                   ^^
 
-    I have no specific suggestion for this operator, see TODO for the full
-    list of operators in Roc.
+    I have no specific suggestion for this operator, see
+    https://www.roc-lang.org/tutorial#operator-desugaring-table for the
+    full list of operators in Roc.
     "#
     );
 

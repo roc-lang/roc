@@ -309,8 +309,11 @@ fn to_expr_report<'a>(
                     alloc.reflow(" instead."),
                 ],
                 _ => vec![
-                    alloc.reflow("I have no specific suggestion for this operator, "),
-                    alloc.reflow("see TODO for the full list of operators in Roc."),
+                    alloc.reflow("I have no specific suggestion for this operator, see "),
+                    alloc.parser_suggestion(
+                        "https://www.roc-lang.org/tutorial#operator-desugaring-table ",
+                    ),
+                    alloc.reflow("for the full list of operators in Roc."),
                 ],
             };
 
