@@ -292,7 +292,7 @@ fn rest_of_type_in_parens<'a>(
         ),
         TypeAnnotation::SpaceBefore,
     )
-    .parse(arena, state.clone(), 0)
+    .parse(arena, state, 0)
     {
         Ok((_, out, state)) => (out, state),
         Err((_, fail)) => return Err((MadeProgress, fail)),

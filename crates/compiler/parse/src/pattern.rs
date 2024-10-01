@@ -511,9 +511,9 @@ pub fn parse_record_pattern_fields<'a>(
     }
     let state = state.inc();
 
-    let inner = collection_inner(record_pattern_field(), Pattern::SpaceBefore);
-
-    let (out, state) = match inner.parse(arena, state, 0) {
+    let (out, state) = match collection_inner(record_pattern_field(), Pattern::SpaceBefore)
+        .parse(arena, state, 0)
+    {
         Ok((_, out, state)) => (out, state),
         Err((_, fail)) => return Err((MadeProgress, fail)),
     };
