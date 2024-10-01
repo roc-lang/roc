@@ -92,29 +92,29 @@ fn parse_term<'a>(
     min_indent: u32,
 ) -> ParseResult<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
     let start = state.pos();
-    let res = match state.bytes().first() {
+    let (type_ann, state) = match state.bytes().first() {
         Some(b) => match b {
             b'(' => {
                 let state = state.inc();
                 match rest_of_type_in_parens(start, stop_at_first_impl, arena, state, min_indent) {
-                    Ok(ok) => Some(ok),
+                    Ok((_, out, state)) => (out, state),
                     Err((p, fail)) => return Err((p, EType::TInParens(fail, start))),
                 }
             }
             b'{' => match rest_of_record_type(stop_at_first_impl, arena, state.inc(), min_indent) {
-                Ok((p, out, state)) => Some((p, Loc::pos(start, state.pos(), out), state)),
+                Ok((_, out, state)) => (Loc::pos(start, state.pos(), out), state),
                 Err((p, fail)) => return Err((p, EType::TRecord(fail, start))),
             },
             b'[' => {
                 match rest_of_tag_union_type(stop_at_first_impl, arena, state.inc(), min_indent) {
-                    Ok((p, out, state)) => Some((p, Loc::pos(start, state.pos(), out), state)),
+                    Ok((_, out, state)) => (Loc::pos(start, state.pos(), out), state),
                     Err((p, fail)) => return Err((p, EType::TTagUnion(fail, start))),
                 }
             }
             b'*' => {
                 // The `*` type variable, e.g. in (List *)
                 let out = Loc::pos(start, start.next(), TypeAnnotation::Wildcard);
-                Some((MadeProgress, out, state.inc()))
+                (out, state.inc())
             }
             b'_' if !matches!(
                 state.bytes().get(1),
@@ -123,10 +123,10 @@ fn parse_term<'a>(
             {
                 // The `_` indicating an inferred type, e.g. in (List _)
                 let out = Loc::pos(start, start.next(), TypeAnnotation::Inferred);
-                Some((MadeProgress, out, state.inc()))
+                (out, state.inc())
             }
             _ => {
-                let type_ann_res = match parse_lowercase_ident(state.clone()) {
+                let ident_res = match parse_lowercase_ident(state.clone()) {
                     Ok((_, name, state)) => {
                         if name == keyword::WHERE
                             || (stop_at_first_impl && name == keyword::IMPLEMENTS)
@@ -135,29 +135,26 @@ fn parse_term<'a>(
                         } else {
                             let type_ann = TypeAnnotation::BoundVariable(name);
                             let type_ann = Loc::pos(start, state.pos(), type_ann);
-                            Some((MadeProgress, type_ann, state))
+                            Some((type_ann, state))
                         }
                     }
-                    Err((NoProgress, _)) => None,
-                    Err(_) => return Err((MadeProgress, EType::TBadTypeVariable(start))),
+                    Err((MadeProgress, _)) => {
+                        return Err((MadeProgress, EType::TBadTypeVariable(start)))
+                    }
+                    Err(_) => None,
                 };
 
-                match type_ann_res {
+                match ident_res {
+                    Some(ok) => ok,
                     None => match parse_applied_type(stop_at_first_impl, arena, state) {
-                        Ok((p, ann, state)) => Some((p, Loc::pos(start, state.pos(), ann), state)),
-                        Err((NoProgress, _)) => None,
+                        Ok((_, ann, state)) => (Loc::pos(start, state.pos(), ann), state),
+                        Err((NoProgress, _)) => return Err((NoProgress, EType::TStart(start))),
                         Err(err) => return Err(err),
                     },
-                    some => some,
                 }
             }
         },
-        _ => None,
-    };
-
-    let (type_ann, state) = match res {
-        Some((_, out, state)) => (out, state),
-        None => return Err((NoProgress, EType::TStart(start))),
+        _ => return Err((NoProgress, EType::TStart(start))),
     };
 
     let type_ann_state = state.clone();
@@ -195,7 +192,7 @@ fn parse_term<'a>(
     Ok((MadeProgress, Loc { region, value }, state))
 }
 
-fn loc_applied_arg<'a>(
+fn parse_applied_arg<'a>(
     stop_at_first_impl: bool,
     arena: &'a Bump,
     state: State<'a>,
@@ -241,7 +238,7 @@ fn loc_applied_arg<'a>(
                 (out, state.inc())
             }
             _ => {
-                let out = match parse_lowercase_ident(state.clone()) {
+                let ident_res = match parse_lowercase_ident(state.clone()) {
                     Ok((_, name, state)) => {
                         if name == keyword::WHERE
                             || (stop_at_first_impl && name == keyword::IMPLEMENTS)
@@ -253,11 +250,13 @@ fn loc_applied_arg<'a>(
                             Some((type_ann, state))
                         }
                     }
-                    Err((NoProgress, _)) => None,
-                    Err(_) => return Err((MadeProgress, EType::TBadTypeVariable(start))),
+                    Err((MadeProgress, _)) => {
+                        return Err((MadeProgress, EType::TBadTypeVariable(start)))
+                    }
+                    Err(_) => None,
                 };
 
-                match out {
+                match ident_res {
                     Some(ok) => ok,
                     None => match concrete_type().parse(arena, state, min_indent) {
                         Ok((_, out, state)) => (Loc::pos(start, state.pos(), out), state),
@@ -336,7 +335,7 @@ fn tag_type<'a>() -> impl Parser<'a, Loc<Tag<'a>>, ETypeTagUnion<'a>> {
         let mut args = Vec::with_capacity_in(1, arena);
         loop {
             let prev_state = state.clone();
-            match loc_applied_arg(false, arena, state, min_indent) {
+            match parse_applied_arg(false, arena, state, min_indent) {
                 Ok((_, arg, next_state)) => {
                     state = next_state;
                     args.push(arg);
@@ -487,7 +486,7 @@ fn parse_applied_type<'a>(
     let mut args = Vec::with_capacity_in(1, arena);
     loop {
         let prev_state = state.clone();
-        match loc_applied_arg(stop_at_first_impl, arena, state, inc_indent) {
+        match parse_applied_arg(stop_at_first_impl, arena, state, inc_indent) {
             Ok((_, next_arg, next_state)) => {
                 state = next_state;
                 args.push(next_arg);
