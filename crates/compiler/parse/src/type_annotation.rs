@@ -9,8 +9,8 @@ use crate::ident::{
 };
 use crate::keyword;
 use crate::parser::{
-    at_keyword, collection_inner, collection_trailing_sep_e, increment_min_indent, indented_seq,
-    loc, map, ERecord, ETypeAbilityImpl, ParseResult, Progress,
+    at_keyword, collection_inner, collection_trailing_sep_e, increment_min_indent, loc, map,
+    ERecord, ETypeAbilityImpl, ParseResult,
 };
 use crate::parser::{
     backtrackable, byte, optional, specialize_err, specialize_err_ref, EType, ETypeApply,
@@ -126,7 +126,7 @@ fn parse_term<'a>(
                 Some((MadeProgress, out, state.inc()))
             }
             _ => {
-                let out = match parse_lowercase_ident(state.clone()) {
+                let type_ann_res = match parse_lowercase_ident(state.clone()) {
                     Ok((_, name, state)) => {
                         if name == keyword::WHERE
                             || (stop_at_first_impl && name == keyword::IMPLEMENTS)
@@ -142,16 +142,12 @@ fn parse_term<'a>(
                     Err(_) => return Err((MadeProgress, EType::TBadTypeVariable(start))),
                 };
 
-                match out {
-                    None => {
-                        match applied_type(stop_at_first_impl).parse(arena, state, min_indent) {
-                            Ok((p, ann, state)) => {
-                                Some((p, Loc::pos(start, state.pos(), ann), state))
-                            }
-                            Err((NoProgress, _)) => None,
-                            Err(err) => return Err(err),
-                        }
-                    }
+                match type_ann_res {
+                    None => match parse_applied_type(stop_at_first_impl, arena, state) {
+                        Ok((p, ann, state)) => Some((p, Loc::pos(start, state.pos(), ann), state)),
+                        Err((NoProgress, _)) => None,
+                        Err(err) => return Err(err),
+                    },
                     some => some,
                 }
             }
@@ -472,52 +468,51 @@ fn rest_of_record_type<'a>(
     Ok((MadeProgress, record, state))
 }
 
-fn applied_type<'a>(stop_at_first_impl: bool) -> impl Parser<'a, TypeAnnotation<'a>, EType<'a>> {
-    map(
-        // todo: @wip inline
-        indented_seq(
-            specialize_err(EType::TApply, concrete_type()),
-            // Optionally parse space-separated arguments for the constructor,
-            // e.g. `Str Float` in `Map Str Float`
-            loc_applied_args_e(stop_at_first_impl),
-        ),
-        |(ctor, args): (TypeAnnotation<'a>, Vec<'a, Loc<TypeAnnotation<'a>>>)| {
-            match &ctor {
-                TypeAnnotation::Apply(module_name, name, _) => {
-                    if args.is_empty() {
-                        // ctor is already an Apply with no args, so return it directly.
-                        ctor
-                    } else {
-                        TypeAnnotation::Apply(module_name, name, args.into_bump_slice())
-                    }
-                }
-                TypeAnnotation::Malformed(_) => ctor,
-                _ => unreachable!(),
-            }
-        },
-    )
-    .trace("type_annotation:applied_type")
-}
-
-fn loc_applied_args_e<'a>(
+fn parse_applied_type<'a>(
     stop_at_first_impl: bool,
-) -> impl Parser<'a, Vec<'a, Loc<TypeAnnotation<'a>>>, EType<'a>> {
-    move |arena, mut state: State<'a>, min_indent: u32| {
-        let mut buf = Vec::with_capacity_in(1, arena);
-        loop {
-            let prev_state = state.clone();
-            match loc_applied_arg(stop_at_first_impl, arena, state, min_indent) {
-                Ok((_, next_elem, next_state)) => {
-                    state = next_state;
-                    buf.push(next_elem);
-                }
-                Err((NoProgress, _)) => {
-                    break Ok((Progress::when(buf.len() != 0), buf, prev_state))
-                }
-                Err(err) => break Err(err),
+    arena: &'a Bump,
+    state: State<'a>,
+) -> ParseResult<'a, TypeAnnotation<'a>, EType<'a>> {
+    let start_indent = state.line_indent();
+    let start = state.pos();
+    let (ctor, state) = match concrete_type().parse(arena, state, start_indent) {
+        Ok((_, out, state)) => (out, state),
+        Err((p, fail)) => return Err((p, EType::TApply(fail, start))),
+    };
+
+    // Optionally parse space-separated arguments for the constructor,
+    // e.g. `Str Float` in `Map Str Float`
+    let inc_indent = start_indent + 1;
+    let mut state = state;
+    let mut args = Vec::with_capacity_in(1, arena);
+    loop {
+        let prev_state = state.clone();
+        match loc_applied_arg(stop_at_first_impl, arena, state, inc_indent) {
+            Ok((_, next_arg, next_state)) => {
+                state = next_state;
+                args.push(next_arg);
             }
+            Err((NoProgress, _)) => {
+                state = prev_state;
+                break;
+            }
+            Err((_, fail)) => return Err((MadeProgress, fail)),
         }
     }
+
+    let type_ann = match &ctor {
+        TypeAnnotation::Apply(module_name, name, _) => {
+            if args.is_empty() {
+                // ctor is already an Apply with no args, so return it directly.
+                ctor
+            } else {
+                TypeAnnotation::Apply(module_name, name, args.into_bump_slice())
+            }
+        }
+        TypeAnnotation::Malformed(_) => ctor,
+        _ => unreachable!(),
+    };
+    Ok((MadeProgress, type_ann, state))
 }
 
 fn parse_implements_clause<'a>(
