@@ -2,19 +2,15 @@ use crate::ast::{
     AbilityImpls, AssignedField, Expr, ImplementsAbilities, ImplementsAbility, ImplementsClause,
     Pattern, Spaceable, Spaced, Tag, TypeAnnotation, TypeHeader,
 };
-use crate::blankspace::{eat_space_check, space0_before_e, SpacedBuilder};
+use crate::blankspace::{eat_space_check, SpacedBuilder};
 use crate::expr::parse_record_field;
 use crate::ident::{
     chomp_concrete_type, chomp_lowercase_part, chomp_uppercase_part, parse_lowercase_ident,
 };
 use crate::keyword;
 use crate::parser::{
-    at_keyword, collection_inner, collection_trailing_sep_e, increment_min_indent, loc, map,
-    ERecord, ETypeAbilityImpl, ParseResult,
-};
-use crate::parser::{
-    backtrackable, byte, optional, specialize_err, specialize_err_ref, EType, ETypeApply,
-    ETypeInParens, ETypeInlineAlias, ETypeRecord, ETypeTagUnion, Parser, Progress::*,
+    at_keyword, collection_inner, loc, specialize_err_ref, ERecord, EType, ETypeApply,
+    ETypeInParens, ETypeInlineAlias, ETypeRecord, ETypeTagUnion, ParseResult, Parser, Progress::*,
 };
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
@@ -59,7 +55,7 @@ fn check_type_alias<'a>(
 ) -> Result<TypeHeader<'a>, ETypeInlineAlias> {
     match annot.value {
         TypeAnnotation::Apply("", tag_name, vars) => {
-            let mut var_names = Vec::new_in(arena);
+            let mut var_names: Vec<'_, Loc<Pattern<'_>>> = Vec::new_in(arena);
             var_names.reserve(vars.len());
             for var in vars {
                 if let TypeAnnotation::BoundVariable(v) = var.value {
@@ -192,17 +188,18 @@ fn parse_term<'a>(
     Ok((MadeProgress, Loc { region, value }, state))
 }
 
+// todo: @wip @dup unify the same code with `parse_term`
 fn parse_applied_arg<'a>(
     stop_at_first_impl: bool,
     arena: &'a Bump,
     state: State<'a>,
     min_indent: u32,
 ) -> ParseResult<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
-    let (spaces, state) = match eat_space_check(EType::TIndentStart, arena, state, min_indent, true)
-    {
-        Ok((_, sp, state)) => (sp, state),
-        Err((_, fail)) => return Err((NoProgress, fail)),
-    };
+    let (spaces_before, state) =
+        match eat_space_check(EType::TIndentStart, arena, state, min_indent, false) {
+            Ok((_, sp, state)) => (sp, state),
+            Err((_, fail)) => return Err((NoProgress, fail)),
+        };
 
     let start = state.pos();
     let (type_ann, state) = match state.bytes().first() {
@@ -258,7 +255,7 @@ fn parse_applied_arg<'a>(
 
                 match ident_res {
                     Some(ok) => ok,
-                    None => match concrete_type().parse(arena, state, min_indent) {
+                    None => match parse_concrete_type(state) {
                         Ok((_, out, state)) => (Loc::pos(start, state.pos(), out), state),
                         Err((NoProgress, _)) => return Err((NoProgress, EType::TStart(start))),
                         Err((_, fail)) => return Err((MadeProgress, EType::TApply(fail, start))),
@@ -269,7 +266,7 @@ fn parse_applied_arg<'a>(
         _ => return Err((NoProgress, EType::TStart(start))),
     };
 
-    let type_ann = type_ann.spaced_before(arena, spaces);
+    let type_ann = type_ann.spaced_before(arena, spaces_before);
     Ok((MadeProgress, type_ann, state))
 }
 
@@ -474,7 +471,7 @@ fn parse_applied_type<'a>(
 ) -> ParseResult<'a, TypeAnnotation<'a>, EType<'a>> {
     let start_indent = state.line_indent();
     let start = state.pos();
-    let (ctor, state) = match concrete_type().parse(arena, state, start_indent) {
+    let (ctor, state) = match parse_concrete_type(state) {
         Ok((_, out, state)) => (out, state),
         Err((p, fail)) => return Err((p, EType::TApply(fail, start))),
     };
@@ -546,7 +543,7 @@ fn parse_implements_clause<'a>(
         eat_space_check(EType::TIndentStart, arena, state, min_indent, true)?;
 
     let first_pos = state.pos();
-    let (first_ability, state) = match concrete_type().parse(arena, state, min_indent) {
+    let (first_ability, state) = match parse_concrete_type(state) {
         Ok((_, out, state)) => (out, state),
         Err((_, fail)) => return Err((MadeProgress, EType::TApply(fail, first_pos))),
     };
@@ -576,7 +573,7 @@ fn parse_implements_clause<'a>(
             eat_space_check(EType::TIndentStart, arena, news, min_indent, true)?;
 
         let ability_pos = news.pos();
-        let (ability, news) = match concrete_type().parse(arena, news, min_indent) {
+        let (ability, news) = match parse_concrete_type(news) {
             Ok((_, out, state)) => (out, state),
             Err((_, fail)) => return Err((MadeProgress, EType::TApply(fail, ability_pos))),
         };
@@ -614,54 +611,94 @@ pub fn parse_implements_abilities<'a>(
     }
     let state = state.advance(keyword::IMPLEMENTS.len());
 
-    match space0_before_e(
-        loc(map(
-            collection_trailing_sep_e(
-                byte(b'[', EType::TStart),
-                loc(parse_implements_ability()),
-                byte(b']', EType::TEnd),
-                ImplementsAbility::SpaceBefore,
-            ),
-            ImplementsAbilities::Implements,
-        )),
-        EType::TIndentEnd,
-    )
-    .parse(arena, state, min_indent + 1)
-    {
-        Ok(ok) => Ok(ok),
-        Err((_, fail)) => Err((MadeProgress, fail)),
+    let inc_indent = min_indent + 1;
+    let (_, spaces_after_impl, state) =
+        eat_space_check(EType::TIndentEnd, arena, state, inc_indent, true)?;
+
+    let ab_pos = state.pos();
+    if state.bytes().first() != Some(&b'[') {
+        return Err((MadeProgress, EType::TStart(ab_pos)));
     }
+    let state = state.inc();
+
+    let (abilities, state) = match collection_inner(
+        loc(parse_implements_ability()),
+        ImplementsAbility::SpaceBefore,
+    )
+    .parse(arena, state, 0)
+    {
+        Ok((_, out, state)) => (out, state),
+        Err((_, fail)) => return Err((MadeProgress, fail)),
+    };
+
+    if state.bytes().first() != Some(&b']') {
+        return Err((MadeProgress, EType::TEnd(state.pos())));
+    }
+    let state = state.inc();
+
+    let abilities = ImplementsAbilities::Implements(abilities);
+    let abilities = Loc::pos(ab_pos, state.pos(), abilities);
+    let abilities = abilities.spaced_before(arena, spaces_after_impl);
+    Ok((MadeProgress, abilities, state))
 }
 
 fn parse_implements_ability<'a>() -> impl Parser<'a, ImplementsAbility<'a>, EType<'a>> {
-    increment_min_indent(record!(ImplementsAbility::ImplementsAbility {
-        ability: loc(specialize_err(EType::TApply, concrete_type())),
-        impls: optional(backtrackable(space0_before_e(
-            loc(map(
-                specialize_err(
-                    EType::TAbilityImpl,
-                    collection_trailing_sep_e(
-                        byte(b'{', ETypeAbilityImpl::Open),
-                        specialize_err(|e: ERecord<'_>, _| e.into(), loc(ability_impl_field())),
-                        byte(b'}', ETypeAbilityImpl::End),
-                        AssignedField::SpaceBefore
-                    )
-                ),
-                AbilityImpls::AbilityImpls
-            )),
-            EType::TIndentEnd
-        )))
-    }))
+    move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
+        let start = state.pos();
+        let inc_indent = min_indent + 1;
+        let (type_ann, state) = match parse_concrete_type(state) {
+            Ok((_, out, state)) => (out, state),
+            Err((p, fail)) => return Err((p, EType::TApply(fail, start))),
+        };
+
+        let ability = Loc::pos(start, state.pos(), type_ann);
+
+        let olds = state.clone();
+        let (impls, state) =
+            match eat_space_check(EType::TIndentEnd, arena, state, inc_indent, false) {
+                Err(_) => (None, olds),
+                Ok((_, spaces_before, state)) => {
+                    let impls_pos = state.pos();
+                    if state.bytes().first() != Some(&b'{') {
+                        (None, olds)
+                    } else {
+                        let state = state.inc();
+                        match collection_inner(ability_impl_field(), AssignedField::SpaceBefore)
+                            .parse(arena, state, 0)
+                        {
+                            Err(_) => (None, olds),
+                            Ok((_, impls, state)) => {
+                                if state.bytes().first() != Some(&b'}') {
+                                    (None, olds)
+                                } else {
+                                    let state = state.inc();
+                                    let impls = AbilityImpls::AbilityImpls(impls);
+                                    let impls = Loc::pos(impls_pos, state.pos(), impls);
+                                    (Some(impls.spaced_before(arena, spaces_before)), state)
+                                }
+                            }
+                        }
+                    }
+                }
+            };
+
+        let out = ImplementsAbility::ImplementsAbility { ability, impls };
+        Ok((MadeProgress, out, state))
+    }
 }
 
-fn ability_impl_field<'a>() -> impl Parser<'a, AssignedField<'a, Expr<'a>>, ERecord<'a>> {
+fn ability_impl_field<'a>() -> impl Parser<'a, Loc<AssignedField<'a, Expr<'a>>>, ERecord<'a>> {
     move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
+        let start = state.pos();
         let (_, field, state) = parse_record_field(arena, state, min_indent)?;
         match field.to_assigned_field(arena) {
             AssignedField::IgnoredValue(_, _, _) => {
                 Err((MadeProgress, ERecord::Field(state.pos())))
             }
-            assigned_field => Ok((MadeProgress, assigned_field, state)),
+            assigned_field => {
+                let assigned_field = Loc::pos(start, state.pos(), assigned_field);
+                Ok((MadeProgress, assigned_field, state))
+            }
         }
     }
 }
@@ -887,28 +924,26 @@ pub(crate) fn type_expr<'a>(
 // /// A bound type variable, e.g. `a` in `(a -> a)`
 // BoundVariable(&'a str),
 
-fn concrete_type<'a>() -> impl Parser<'a, TypeAnnotation<'a>, ETypeApply> {
-    move |_: &'a Bump, state: State<'a>, _: u32| {
-        let initial_bytes = state.bytes();
+fn parse_concrete_type<'a>(state: State<'a>) -> ParseResult<'a, TypeAnnotation<'a>, ETypeApply> {
+    let initial_bytes = state.bytes();
 
-        match chomp_concrete_type(state.bytes()) {
-            Ok((module_name, type_name, width)) => {
-                let answer = TypeAnnotation::Apply(module_name, type_name, &[]);
-                Ok((MadeProgress, answer, state.advance(width)))
-            }
-            Err(NoProgress) => Err((NoProgress, ETypeApply::End(state.pos()))),
-            Err(_) => {
-                let mut state = state.clone();
-                // we made some progress, but ultimately failed.
-                // that means a malformed type name
-                let chomped = crate::ident::chomp_malformed(state.bytes());
-                let delta = initial_bytes.len() - state.bytes().len();
-                let parsed_str =
-                    unsafe { std::str::from_utf8_unchecked(&initial_bytes[..chomped + delta]) };
+    match chomp_concrete_type(state.bytes()) {
+        Ok((module_name, type_name, width)) => {
+            let answer = TypeAnnotation::Apply(module_name, type_name, &[]);
+            Ok((MadeProgress, answer, state.advance(width)))
+        }
+        Err(NoProgress) => Err((NoProgress, ETypeApply::End(state.pos()))),
+        Err(_) => {
+            let mut state = state.clone();
+            // we made some progress, but ultimately failed.
+            // that means a malformed type name
+            let chomped = crate::ident::chomp_malformed(state.bytes());
+            let delta = initial_bytes.len() - state.bytes().len();
+            let parsed_str =
+                unsafe { std::str::from_utf8_unchecked(&initial_bytes[..chomped + delta]) };
 
-                state = state.advance(chomped);
-                Ok((MadeProgress, TypeAnnotation::Malformed(parsed_str), state))
-            }
+            state = state.advance(chomped);
+            Ok((MadeProgress, TypeAnnotation::Malformed(parsed_str), state))
         }
     }
 }

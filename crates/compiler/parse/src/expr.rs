@@ -924,6 +924,7 @@ fn numeric_negate_expression<'a>(
     Loc::at(region, new_expr).spaced_before(arena, spaces)
 }
 
+// todo: @wip
 fn import_params<'a>() -> impl Parser<'a, ModuleImportParams<'a>, EImportParams<'a>> {
     then(
         and(
@@ -1172,7 +1173,9 @@ fn parse_stmt_alias_or_opaque<'a>(
                         Ok((_, sp, state)) => {
                             match parse_implements_abilities(arena, state, inc_indent) {
                                 Err(_) => (None, olds),
-                                Ok((_, out, state)) => (Some(out.spaced_before(arena, sp)), state),
+                                Ok((_, abilities, state)) => {
+                                    (Some(abilities.spaced_before(arena, sp)), state)
+                                }
                             }
                         }
                     };
@@ -3501,8 +3504,6 @@ struct RecordHelp<'a> {
 }
 
 fn record_help<'a>() -> impl Parser<'a, RecordHelp<'a>, ERecord<'a>> {
-    let fields_parser = collection_inner(loc(parse_record_field), RecordField::SpaceBefore);
-
     move |arena: &'a Bump, state: State<'a>, _: u32| {
         let start = state.pos();
         if state.bytes().first() != Some(&b'{') {
@@ -3545,10 +3546,13 @@ fn record_help<'a>() -> impl Parser<'a, RecordHelp<'a>, ERecord<'a>> {
             }
         };
 
-        let (fields, state) = match fields_parser.parse(arena, state, 0) {
-            Ok((_, f, state)) => (f, state),
-            Err((_, fail)) => return Err((MadeProgress, fail)),
-        };
+        let (fields, state) =
+            match collection_inner(loc(parse_record_field), RecordField::SpaceBefore)
+                .parse(arena, state, 0)
+            {
+                Ok((_, f, state)) => (f, state),
+                Err((_, fail)) => return Err((MadeProgress, fail)),
+            };
 
         if state.bytes().first() != Some(&b'}') {
             return Err((MadeProgress, ERecord::End(state.pos())));

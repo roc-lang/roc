@@ -1265,9 +1265,6 @@ impl<'a> Normalize<'a> for EType<'a> {
             EType::TEnd(_) => EType::TEnd(Position::zero()),
             EType::TFunctionArgument(_) => EType::TFunctionArgument(Position::zero()),
             EType::TImplementsClause(_) => EType::TImplementsClause(Position::zero()),
-            EType::TAbilityImpl(inner_err, _) => {
-                EType::TAbilityImpl(inner_err.normalize(arena), Position::zero())
-            }
             EType::TIndentStart(_) => EType::TIndentStart(Position::zero()),
             EType::TIndentEnd(_) => EType::TIndentEnd(Position::zero()),
             EType::TAsIndentStart(_) => EType::TAsIndentStart(Position::zero()),
