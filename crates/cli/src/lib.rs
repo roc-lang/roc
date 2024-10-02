@@ -52,6 +52,7 @@ pub const CMD_DOCS: &str = "docs";
 pub const CMD_CHECK: &str = "check";
 pub const CMD_VERSION: &str = "version";
 pub const CMD_FORMAT: &str = "format";
+pub const CMD_FORMAT_ANNOTATE: &str = "annotate";
 pub const CMD_TEST: &str = "test";
 pub const CMD_GLUE: &str = "glue";
 pub const CMD_GEN_STUB_LIB: &str = "gen-stub-lib";
@@ -325,7 +326,9 @@ pub fn build_app() -> Command {
                     .index(1)
                     .num_args(0..)
                     .required(false)
-                    .value_parser(value_parser!(OsString)))
+                    .value_parser(value_parser!(OsString))
+                    .global(true),
+            )
             .arg(
                 Arg::new(FLAG_CHECK)
                     .long(FLAG_CHECK)
@@ -348,6 +351,24 @@ pub fn build_app() -> Command {
                     .required(false),
             )
             .after_help("If DIRECTORY_OR_FILES is omitted, the .roc files in the current working\ndirectory are formatted.")
+            .subcommand(Command::new(CMD_FORMAT_ANNOTATE)
+                .about("Annotate all top level definitions from a .roc file or the .roc files contained\nin a directory")
+                .arg(
+                    Arg::new(FLAG_STDIN)
+                        .long(FLAG_STDIN)
+                        .help("Read file to annotate from stdin")
+                        .action(ArgAction::SetTrue)
+                        .required(false),
+                )
+                .arg(
+                    Arg::new(FLAG_STDOUT)
+                        .long(FLAG_STDOUT)
+                        .help("Print annotated file to stdout")
+                        .action(ArgAction::SetTrue)
+                        .required(false),
+                )
+                .after_help("If DIRECTORY_OR_FILES is omitted, the .roc files in the current working\ndirectory are annotated.")
+            )
         )
         .subcommand(Command::new(CMD_VERSION)
             .about(concatcp!("Print the Roc compiler’s version, which is currently ", VERSION)))
