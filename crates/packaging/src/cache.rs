@@ -207,7 +207,7 @@ const ROC_CACHE_DIR_NAME: &str = "roc";
 
 /// This looks up environment variables, so it should ideally be called once and then cached!
 ///
-/// Returns a path of the form cache_dir_path.join(ROC_CACHE_DIR_NAME).join("packages")
+/// Returns a path of the form cache_dir_path.join(ROC_CACHE_DIR_NAME)
 /// where cache_dir_path is:
 /// - The XDG_CACHE_HOME environment varaible, if it's set.
 /// - Otherwise, ~/.cache on UNIX and %APPDATA% on Windows.
@@ -222,14 +222,11 @@ const ROC_CACHE_DIR_NAME: &str = "roc";
 pub fn roc_cache_dir() -> PathBuf {
     use std::{env, process};
 
-    const PACKAGES_DIR_NAME: &str = "packages";
-
     // Respect XDG, if the system appears to be using it.
     // https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
     match env::var_os("XDG_CACHE_HOME") {
         Some(xdg_cache_home) => Path::new(&xdg_cache_home)
             .join(ROC_CACHE_DIR_NAME)
-            .join(PACKAGES_DIR_NAME),
         None => {
             #[cfg(windows)]
             {
@@ -241,7 +238,6 @@ pub fn roc_cache_dir() -> PathBuf {
                 {
                     Path::new(&appdata)
                         .join(ROC_CACHE_DIR_NAME)
-                        .join(PACKAGES_DIR_NAME)
                 } else {
                     eprintln!("roc needs either the %APPDATA% or else the %XDG_CACHE_HOME% environment variables set. Please set one of these environment variables and re-run roc!");
                     process::exit(1);
@@ -255,7 +251,6 @@ pub fn roc_cache_dir() -> PathBuf {
                     Path::new(&home)
                         .join(".cache")
                         .join(ROC_CACHE_DIR_NAME)
-                        .join(PACKAGES_DIR_NAME)
                 } else {
                     eprintln!("roc needs either the $HOME or else the $XDG_CACHE_HOME environment variables set. Please set one of these environment variables and re-run roc!");
                     process::exit(1);
@@ -265,9 +260,26 @@ pub fn roc_cache_dir() -> PathBuf {
     }
 }
 
+/// Returns a path of the form roc_cache_dir().join("packages")
+#[cfg(not(target_family = "wasm"))]
+pub fn roc_cache_packages_dir() -> PathBuf {
+    const PACKAGES_DIR_NAME: &str = "packages";
+    roc_cache_dir().join(PACKAGES_DIR_NAME)
+}
+
 /// WASI doesn't have a home directory, so just make the cache dir in the current directory
 /// https://github.com/WebAssembly/wasi-filesystem/issues/59
 #[cfg(target_family = "wasm")]
 pub fn roc_cache_dir() -> PathBuf {
     PathBuf::from(".cache").join(ROC_CACHE_DIR_NAME)
+}
+
+/// WASI doesn't have a home directory, so just make the cache dir in the current directory
+/// https://github.com/WebAssembly/wasi-filesystem/issues/59
+#[cfg(target_family = "wasm")]
+pub fn roc_cache_packages_dir() -> PathBuf {
+    const PACKAGES_DIR_NAME: &str = "packages";
+    PathBuf::from(".cache")
+        .join(ROC_CACHE_DIR_NAME)
+        .join(PACKAGES_DIR_NAME)
 }
