@@ -225,8 +225,7 @@ pub fn roc_cache_dir() -> PathBuf {
     // Respect XDG, if the system appears to be using it.
     // https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
     match env::var_os("XDG_CACHE_HOME") {
-        Some(xdg_cache_home) => Path::new(&xdg_cache_home)
-            .join(ROC_CACHE_DIR_NAME)
+        Some(xdg_cache_home) => Path::new(&xdg_cache_home).join(ROC_CACHE_DIR_NAME),
         None => {
             #[cfg(windows)]
             {
@@ -236,8 +235,7 @@ pub fn roc_cache_dir() -> PathBuf {
                     // https://learn.microsoft.com/en-us/windows/deployment/usmt/usmt-recognized-environment-variables
                     env::var_os("APPDATA").or_else(|| env::var_os("CSIDL_APPDATA"))
                 {
-                    Path::new(&appdata)
-                        .join(ROC_CACHE_DIR_NAME)
+                    Path::new(&appdata).join(ROC_CACHE_DIR_NAME)
                 } else {
                     eprintln!("roc needs either the %APPDATA% or else the %XDG_CACHE_HOME% environment variables set. Please set one of these environment variables and re-run roc!");
                     process::exit(1);
@@ -248,9 +246,7 @@ pub fn roc_cache_dir() -> PathBuf {
             {
                 // e.g. $HOME/.cache/roc
                 if let Some(home) = env::var_os("HOME") {
-                    Path::new(&home)
-                        .join(".cache")
-                        .join(ROC_CACHE_DIR_NAME)
+                    Path::new(&home).join(".cache").join(ROC_CACHE_DIR_NAME)
                 } else {
                     eprintln!("roc needs either the $HOME or else the $XDG_CACHE_HOME environment variables set. Please set one of these environment variables and re-run roc!");
                     process::exit(1);
