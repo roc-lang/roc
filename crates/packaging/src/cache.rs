@@ -260,13 +260,6 @@ pub fn roc_cache_dir() -> PathBuf {
     }
 }
 
-/// Returns a path of the form roc_cache_dir().join("packages")
-#[cfg(not(target_family = "wasm"))]
-pub fn roc_cache_packages_dir() -> PathBuf {
-    const PACKAGES_DIR_NAME: &str = "packages";
-    roc_cache_dir().join(PACKAGES_DIR_NAME)
-}
-
 /// WASI doesn't have a home directory, so just make the cache dir in the current directory
 /// https://github.com/WebAssembly/wasi-filesystem/issues/59
 #[cfg(target_family = "wasm")]
@@ -274,12 +267,8 @@ pub fn roc_cache_dir() -> PathBuf {
     PathBuf::from(".cache").join(ROC_CACHE_DIR_NAME)
 }
 
-/// WASI doesn't have a home directory, so just make the cache dir in the current directory
-/// https://github.com/WebAssembly/wasi-filesystem/issues/59
-#[cfg(target_family = "wasm")]
+/// Returns a path of the form roc_cache_dir().join("packages")
 pub fn roc_cache_packages_dir() -> PathBuf {
     const PACKAGES_DIR_NAME: &str = "packages";
-    PathBuf::from(".cache")
-        .join(ROC_CACHE_DIR_NAME)
-        .join(PACKAGES_DIR_NAME)
+    roc_cache_dir().join(PACKAGES_DIR_NAME)
 }
