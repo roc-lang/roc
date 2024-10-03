@@ -263,10 +263,10 @@ pub fn eat_space<'a, E>(
 where
     E: 'a + SpaceProblem,
 {
-    let mut sp = Vec::new_in(arena);
+    let mut nl_and_comments = Vec::new_in(arena);
     let mut progress = NoProgress;
     let mut found_newline = state.is_at_start_of_file();
-    let mut comment_at = None;
+    let mut comments_at = None;
     loop {
         let whitespace = fast_eat_whitespace(state.bytes());
         if whitespace > 0 {
@@ -301,10 +301,10 @@ where
                     CommentOrNewline::LineComment(text)
                 };
                 state.advance_mut(len);
-                sp.push(comment);
+                nl_and_comments.push(comment);
                 found_newline = true;
 
-                comment_at = match comment_at {
+                comments_at = match comments_at {
                     None => Some(Region::new(start, state.pos())),
                     Some(r) => Some(Region::new(r.start(), state.pos())),
                 };
@@ -329,13 +329,13 @@ where
                     ));
                 }
                 state = state.advance_newline(2);
-                sp.push(CommentOrNewline::Newline);
+                nl_and_comments.push(CommentOrNewline::Newline);
                 found_newline = true;
                 progress = MadeProgress;
             }
             Some(b'\n') => {
                 state = state.advance_newline(1);
-                sp.push(CommentOrNewline::Newline);
+                nl_and_comments.push(CommentOrNewline::Newline);
                 found_newline = true;
                 progress = MadeProgress;
             }
@@ -368,8 +368,9 @@ where
         }
     }
 
-    let comment_at = comment_at.unwrap_or(Region::at(state.pos()));
-    Ok((progress, (sp.into_bump_slice(), comment_at), state))
+    let comments_at = comments_at.unwrap_or(Region::at(state.pos()));
+    let nl_and_comments = nl_and_comments.into_bump_slice();
+    Ok((progress, (nl_and_comments, comments_at), state))
 }
 
 // note: @dup similar to `eat_space` but without errors and progress
@@ -377,7 +378,7 @@ pub fn eat_space_locs<'a>(
     arena: &'a Bump,
     mut state: State<'a>,
 ) -> Option<(&'a [Loc<CommentOrNewline<'a>>], State<'a>)> {
-    let mut sp = Vec::new_in(arena);
+    let mut nl_and_comments = Vec::new_in(arena);
     let mut found_newline = state.is_at_start_of_file();
     loop {
         let whitespace = fast_eat_whitespace(state.bytes());
@@ -412,7 +413,7 @@ pub fn eat_space_locs<'a>(
                     CommentOrNewline::LineComment(text)
                 };
                 state.advance_mut(len);
-                sp.push(Loc::pos(start, state.pos(), comment));
+                nl_and_comments.push(Loc::pos(start, state.pos(), comment));
                 found_newline = true;
 
                 if begins_with_crlf(state.bytes()) {
@@ -426,12 +427,12 @@ pub fn eat_space_locs<'a>(
                     return None;
                 }
                 state = state.advance_newline(2);
-                sp.push(Loc::pos(start, state.pos(), CommentOrNewline::Newline));
+                nl_and_comments.push(Loc::pos(start, state.pos(), CommentOrNewline::Newline));
                 found_newline = true;
             }
             Some(b'\n') => {
                 state = state.advance_newline(1);
-                sp.push(Loc::pos(start, state.pos(), CommentOrNewline::Newline));
+                nl_and_comments.push(Loc::pos(start, state.pos(), CommentOrNewline::Newline));
                 found_newline = true;
             }
             Some(b'\t') => {
@@ -449,7 +450,7 @@ pub fn eat_space_locs<'a>(
         }
     }
 
-    Some((sp.into_bump_slice(), state))
+    Some((nl_and_comments.into_bump_slice(), state))
 }
 
 #[cfg(test)]

@@ -189,8 +189,8 @@ fn parse_record_field_access_chain<'a>(
             _ => return Ok((Progress::when(fields.len() != 0), fields, prev_state)),
         };
 
-        state = next_state;
         fields.push(next_field);
+        state = next_state;
     }
 }
 
@@ -268,7 +268,7 @@ fn parse_term<'a>(
                     return Ok((MadeProgress, dbg_expr, state));
                 }
 
-                let (_, ident, state) = parse_ident(arena, state, min_indent)?;
+                let (_, ident, state) = parse_ident(arena, state)?;
                 let ident_end = state.pos();
 
                 match parse_record_field_access_chain(arena, state) {
@@ -395,11 +395,12 @@ fn parse_negative_or_term<'a>(
 
                 if at_keyword(keyword::DBG, &state) {
                     let state = state.advance(keyword::DBG.len());
-                    let dbg_expr = Loc::pos(start, state.pos(), Expr::Dbg);
-                    return Ok((MadeProgress, dbg_expr, state));
+                    let expr = Loc::pos(start, state.pos(), Expr::Dbg);
+                    return Ok((MadeProgress, expr, state));
                 }
 
-                let (_, ident, state) = parse_ident(arena, state, min_indent)?;
+                // todo: @wip here the 4 keywords where already checked, if, when, dbg, crash
+                let (_, ident, state) = parse_ident(arena, state)?;
                 let ident_end = state.pos();
 
                 let (suffixes, state) = match parse_record_field_access_chain(arena, state) {
@@ -2129,7 +2130,7 @@ pub fn parse_top_level_defs<'a>(
 }
 
 // todo: @wip is it possible to create a special unique name, like use some symbol at end, that normally rejected by ident names?
-const CLOSURE_ARG_BINOP_LEFT: &str = "un";
+const CLOSURE_SHORTCUT_ARG: &str = "un";
 
 /// If Ok it always returns MadeProgress
 fn rest_of_closure<'a>(
@@ -2145,16 +2146,54 @@ fn rest_of_closure<'a>(
 
     // note: @feat closure+binop shortcut
     // todo: @wip Fun feature for expanding:
-    // - [X] `\|> f` into the `\p -> p |> f`,
-    // - [X] the rest of BinOp's, e.g. `\+ 1` into `\p -> p + 1`,
-    // - [@wip] `\.foo.bar + 1` into `\p -> p.foo.bar + 1`, see ident_to_expr how-to compose record access
     // - [ ] `\?> Ok _ -> 1, Err _ -> 0` into ???
+
+    // - todo: @wip `\.foo.bar + 1` into `\p -> p.foo.bar + 1`, see the ident_to_expr how-to compose record access
     let after_slash = state.pos();
+    // if state.bytes().first() == Some(&b'.') {
+    //     let mut parts = Vec::with_capacity_in(4, arena);
+
+    //     parts.push(Accessor::RecordField(&CLOSURE_SHORTCUT_ARG));
+
+    //     let buffer = state.bytes();
+    //     let pos = state.pos();
+    //     let start = pos.offset as u32;
+    //     let (ident, state) = match parse_access_chain(buffer, start, parts, false, pos, "") {
+    //         Ok((width, ident)) => (ident, state.advance(width as usize)),
+    //         Err((0, _)) => return Err((NoProgress, EClosure::Start(state.pos()))),
+    //         Err((width, fail)) => return match fail {
+    //             BadIdent::Start(pos) => Err((NoProgress, EClosure::Start(pos))),
+    //             BadIdent::Space(e, pos) => Err((NoProgress, EExpr::Space(e, pos))),
+    //             _ => malformed_identifier(
+    //                 initial.bytes(),
+    //                 fail,
+    //                 advance_state!(state, width as usize)?,
+    //             ),
+    //         },
+    //     };
+
+    // // todo: @wip wrap errors in
+    // return Err((MadeProgress, EClosure::Body(arena.alloc(fail), err_pos)))
+
+    //     let ident_end = state.pos();
+    //     let (suffixes, state) = match parse_record_field_access_chain(arena, state) {
+    //         Ok((_, out, state)) => (out, state),
+    //         Err((_, fail)) => return Err((MadeProgress, fail)),
+    //     };
+
+    //     let ident = ident_to_expr(arena, ident);
+    //     let expr = apply_expr_access_chain(arena, ident, suffixes);
+    //     let expr = Loc::pos(start, ident_end, expr);
+
+    // }
+
+    // Either pipe shortcut `\|> f` into the `\p -> p |> f`,
+    // or the rest of BinOp's, e.g. `\+ 1` into `\p -> p + 1`,
     if let Ok((_, binop, state)) = parse_bin_op(MadeProgress, state.clone()) {
         let after_binop = state.pos();
 
         let param = Pattern::Identifier {
-            ident: &CLOSURE_ARG_BINOP_LEFT,
+            ident: &CLOSURE_SHORTCUT_ARG,
         };
         let loc_param = Loc::pos(after_slash, after_binop, param);
         let mut params = Vec::with_capacity_in(1, arena);
@@ -2163,7 +2202,7 @@ fn rest_of_closure<'a>(
         // the closure parameter is the left value of binary operator
         let term = Expr::Var {
             module_name: "",
-            ident: CLOSURE_ARG_BINOP_LEFT,
+            ident: CLOSURE_SHORTCUT_ARG,
         };
         let loc_term = Loc::pos(after_slash, after_binop, term);
 
@@ -2275,10 +2314,10 @@ fn rest_of_closure<'a>(
     state.advance_mut(2);
 
     let body_indent = state.line_indent() + 1;
-    let (_, first_space, state) =
+    let (_, first_nl, state) =
         eat_space_loc_comments(EClosure::IndentBody, arena, state, body_indent, true)?;
 
-    let (body, state) = if first_space.value.is_empty() {
+    let (body, state) = if first_nl.value.is_empty() {
         let err_pos = state.pos();
         match parse_expr_start(flags, arena, state, inc_indent) {
             Ok((_, out, state)) => (out, state),
@@ -2293,7 +2332,7 @@ fn rest_of_closure<'a>(
             EClosure::Body,
             flags,
             inc_indent,
-            Loc::at(first_space.region, &[]),
+            Loc::at(first_nl.region, &[]),
             EClosure::IndentBody,
         )?;
 
@@ -2304,7 +2343,7 @@ fn rest_of_closure<'a>(
         }
 
         match stmts_to_expr(&stmts, arena) {
-            Ok(out) => (out.spaced_before(arena, first_space.value), state),
+            Ok(out) => (out.spaced_before(arena, first_nl.value), state),
             Err(fail) => return Err((MadeProgress, EClosure::Body(arena.alloc(fail), err_pos))),
         }
     };
@@ -3516,7 +3555,7 @@ fn record_help<'a>() -> impl Parser<'a, RecordHelp<'a>, ERecord<'a>> {
             Err(_) => (None, before_prefix),
             Ok((_, (spaces_before, _), state)) => {
                 let ident_at = state.pos();
-                match parse_ident.parse(arena, state, 0) {
+                match parse_ident(arena, state) {
                     Err(_) => (None, before_prefix),
                     Ok((_, ident, state)) => {
                         let ident = Loc::pos(ident_at, state.pos(), ident_to_expr(arena, ident));

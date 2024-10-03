@@ -127,13 +127,8 @@ macro_rules! advance_state {
 /// 3. The beginning of a definition (e.g. `foo =`)
 /// 4. The beginning of a type annotation (e.g. `foo :`)
 /// 5. A reserved keyword (e.g. `if ` or `when `), meaning we should do something else.
-pub fn parse_ident<'a>(
-    arena: &'a Bump,
-    state: State<'a>,
-    _min_indent: u32,
-) -> ParseResult<'a, Ident<'a>, EExpr<'a>> {
+pub fn parse_ident<'a>(arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Ident<'a>, EExpr<'a>> {
     let initial = state.clone();
-
     match chomp_identifier_chain(arena, state.bytes(), state.pos()) {
         Ok((width, ident)) => {
             let state = advance_state!(state, width as usize)?;
@@ -166,7 +161,7 @@ pub fn parse_ident<'a>(
     }
 }
 
-fn malformed_identifier<'a>(
+pub(crate) fn malformed_identifier<'a>(
     initial_bytes: &'a [u8],
     problem: BadIdent,
     mut state: State<'a>,
@@ -475,37 +470,8 @@ fn chomp_identifier_chain<'a>(
             parts.push(Accessor::RecordField(first_part));
         }
 
-        match chomp_access_chain(&buffer[chomped..], &mut parts) {
-            Ok(width) => {
-                if matches!(parts[0], Accessor::TupleIndex(_)) && first_is_uppercase {
-                    return Err((
-                        chomped as u32,
-                        BadIdent::QualifiedTupleAccessor(pos.bump_column(chomped as u32)),
-                    ));
-                }
-
-                chomped += width as usize;
-
-                let ident = Ident::Access {
-                    module_name,
-                    parts: parts.into_bump_slice(),
-                };
-
-                Ok((chomped as u32, ident))
-            }
-            Err(0) if !module_name.is_empty() => Err((
-                chomped as u32,
-                BadIdent::QualifiedTag(pos.bump_column(chomped as u32)),
-            )),
-            Err(1) if parts.is_empty() => Err((
-                chomped as u32 + 1,
-                BadIdent::WeirdDotQualified(pos.bump_column(chomped as u32 + 1)),
-            )),
-            Err(width) => Err((
-                chomped as u32 + width,
-                BadIdent::WeirdDotAccess(pos.bump_column(chomped as u32 + width)),
-            )),
-        }
+        let start = chomped as u32;
+        parse_access_chain(buffer, start, parts, first_is_uppercase, pos, module_name)
     } else if let Ok(('_', _)) = char::from_utf8_slice_start(&buffer[chomped..]) {
         // we don't allow underscores in the middle of an identifier
         // but still parse them (and generate a malformed identifier)
@@ -529,6 +495,105 @@ fn chomp_identifier_chain<'a>(
         };
 
         Ok((chomped as u32, ident))
+    }
+}
+
+pub(crate) fn parse_access_chain<'a>(
+    buffer: &'a [u8],
+    mut start: u32,
+    mut parts: Vec<'a, Accessor<'a>>,
+    first_is_uppercase: bool,
+    pos: Position,
+    module_name: &'a str,
+) -> Result<(u32, Ident<'a>), (u32, BadIdent)> {
+    match chomp_access_chain(&buffer[start as usize..], &mut parts) {
+        Ok(width) => {
+            if first_is_uppercase && matches!(parts[0], Accessor::TupleIndex(_)) {
+                return Err((
+                    start,
+                    BadIdent::QualifiedTupleAccessor(pos.bump_column(start)),
+                ));
+            }
+
+            start += width;
+            let parts = parts.into_bump_slice();
+            let ident = Ident::Access { module_name, parts };
+            Ok((start, ident))
+        }
+        Err(0) if !module_name.is_empty() => {
+            Err((start, BadIdent::QualifiedTag(pos.bump_column(start))))
+        }
+        Err(1) if parts.is_empty() => Err((
+            start + 1,
+            BadIdent::WeirdDotQualified(pos.bump_column(start + 1)),
+        )),
+        Err(width) => Err((
+            start + width,
+            BadIdent::WeirdDotAccess(pos.bump_column(start + width)),
+        )),
+    }
+}
+
+pub fn parse_closure_shortcut_access_ident<'a>(
+    arena: &'a Bump,
+    state: State<'a>,
+    _min_indent: u32,
+) -> ParseResult<'a, Ident<'a>, EExpr<'a>> {
+    let initial = state.clone();
+
+    match chomp_identifier_chain(arena, state.bytes(), state.pos()) {
+        Ok((width, ident)) => {
+            let state = advance_state!(state, width as usize)?;
+
+            if let Ident::Access { module_name, parts } = ident {
+                if module_name.is_empty() {
+                    // todo: @wip the call site may already check the keywords first, so should we always recheck?
+                    if let Some(first) = parts.first() {
+                        for keyword in crate::keyword::KEYWORDS.iter() {
+                            if first == &Accessor::RecordField(keyword) {
+                                return Err((NoProgress, EExpr::Start(initial.pos())));
+                            }
+                        }
+                    }
+                }
+            }
+
+            Ok((MadeProgress, ident, state))
+        }
+        Err((0, _)) => Err((NoProgress, EExpr::Start(state.pos()))),
+        Err((width, fail)) => match fail {
+            BadIdent::Start(pos) => Err((NoProgress, EExpr::Start(pos))),
+            BadIdent::Space(e, pos) => Err((NoProgress, EExpr::Space(e, pos))),
+            _ => malformed_identifier(
+                initial.bytes(),
+                fail,
+                advance_state!(state, width as usize)?,
+            ),
+        },
+    }
+}
+
+pub(crate) fn parse_closure_shortcut_arg_access_chain<'a>(
+    buffer: &'a [u8],
+    mut start: u32,
+    mut parts: Vec<'a, Accessor<'a>>,
+    pos: Position,
+) -> Result<(u32, Ident<'a>), (u32, BadIdent)> {
+    // should contain the closure arg as the first part
+    debug_assert_eq!(parts.len(), 1);
+
+    match chomp_access_chain(&buffer[start as usize..], &mut parts) {
+        Ok(width) => {
+            start += width;
+            let module_name = "";
+            let parts = parts.into_bump_slice();
+            let ident = Ident::Access { module_name, parts };
+            Ok((start, ident))
+        }
+        Err(width) => Err((
+            start + width,
+            BadIdent::WeirdDotAccess(pos.bump_column(start + width)),
+        )),
     }
 }
 
@@ -592,35 +657,28 @@ pub(crate) fn chomp_concrete_type(buffer: &[u8]) -> Result<(&str, &str, usize), 
 
 fn chomp_access_chain<'a>(buffer: &'a [u8], parts: &mut Vec<'a, Accessor<'a>>) -> Result<u32, u32> {
     let mut chomped = 0;
-
     while let Some(b'.') = buffer.get(chomped) {
-        match &buffer.get(chomped + 1..) {
+        let next = chomped + 1;
+        match &buffer.get(next..) {
             Some(slice) => match chomp_lowercase_part(slice) {
                 Ok(name) => {
-                    let value = unsafe {
-                        std::str::from_utf8_unchecked(
-                            &buffer[chomped + 1..chomped + 1 + name.len()],
-                        )
-                    };
+                    let value =
+                        unsafe { std::str::from_utf8_unchecked(&buffer[next..next + name.len()]) };
                     parts.push(Accessor::RecordField(value));
-
-                    chomped += name.len() + 1;
+                    chomped = next + name.len();
                 }
                 Err(_) => match chomp_integer_part(slice) {
                     Ok(name) => {
                         let value = unsafe {
-                            std::str::from_utf8_unchecked(
-                                &buffer[chomped + 1..chomped + 1 + name.len()],
-                            )
+                            std::str::from_utf8_unchecked(&buffer[next..next + name.len()])
                         };
                         parts.push(Accessor::TupleIndex(value));
-
-                        chomped += name.len() + 1;
+                        chomped = next + name.len();
                     }
-                    Err(_) => return Err(chomped as u32 + 1),
+                    Err(_) => return Err(next as u32),
                 },
             },
-            None => return Err(chomped as u32 + 1),
+            None => return Err(next as u32),
         }
     }
 

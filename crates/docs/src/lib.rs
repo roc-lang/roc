@@ -1017,7 +1017,7 @@ fn markdown_to_html(
                 // more memory as we iterate through these.
                 arena.reset();
 
-                match parse_ident(&arena, state, 0) {
+                match parse_ident(&arena, state) {
                     Ok((
                         _,
                         Ident::Access {

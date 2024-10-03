@@ -4824,6 +4824,15 @@ mod test_fmt {
         ));
     }
 
+    #[test]
+    fn simple_closure_field_access_chain() {
+        expr_formats_same(indoc!(
+            r"
+            \u -> u.foo.bar.buz
+            "
+        ));
+    }
+
     // todo: @wip
     // #[test]
     fn _simple_closure_field_shortcut() {

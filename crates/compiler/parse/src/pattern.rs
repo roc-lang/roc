@@ -50,7 +50,7 @@ pub fn parse_closure_param<'a>(
                 // e.g. \(User.UserId userId) -> ...
                 rest_of_pattern_in_parens(start, arena, state.inc())
             }
-            // b'[' => parse_list_pattern(arena, state.clone()),
+            // b'[' => parse_list_pattern(arena, state.clone()), // todo: @wip why not?
             _ => parse_ident_pattern(start, true, arena, state, min_indent),
         }
     } else {
@@ -375,7 +375,7 @@ fn parse_ident_pattern<'a>(
     state: State<'a>,
     min_indent: u32,
 ) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
-    let (ident, state) = match parse_ident(arena, state, min_indent) {
+    let (ident, state) = match parse_ident(arena, state) {
         Ok((_, out, state)) => (out, state),
         Err((p, _)) => return Err((p, EPattern::Start(start))),
     };
