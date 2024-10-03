@@ -160,7 +160,7 @@ pub(crate) mod diag {
                 LoadingProblem::CouldNotFindCacheDir => {
                     format!(
                         "Could not find Roc cache directory {}",
-                        roc_packaging::cache::roc_cache_dir().display()
+                        roc_packaging::cache::roc_cache_packages_dir().display()
                     )
                 }
                 LoadingProblem::UnrecognizedPackageShorthand { shorthand, .. } => {
