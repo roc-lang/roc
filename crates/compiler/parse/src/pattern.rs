@@ -375,8 +375,10 @@ fn parse_ident_pattern<'a>(
     state: State<'a>,
     min_indent: u32,
 ) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
-    let (_, ident, state) =
-        parse_ident(arena, state, min_indent).map_err(|(p, _)| (p, EPattern::Start(start)))?;
+    let (ident, state) = match parse_ident(arena, state, min_indent) {
+        Ok((_, out, state)) => (out, state),
+        Err((p, _)) => return Err((p, EPattern::Start(start))),
+    };
 
     let ident_loc = Region::new(start, state.pos());
     match ident {

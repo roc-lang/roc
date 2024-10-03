@@ -237,12 +237,13 @@ pub fn eat_space_loc_comments<'a, E>(
     arena: &'a Bump,
     state: State<'a>,
     min_indent: u32,
+    err_made_progress: bool,
 ) -> ParseResult<'a, Loc<&'a [CommentOrNewline<'a>]>, E>
 where
     E: 'a + SpaceProblem,
 {
     let start = state.pos();
-    let (p, (sp, comments_at), state) = eat_space(arena, state, false)?;
+    let (p, (sp, comments_at), state) = eat_space(arena, state, err_made_progress)?;
     if !sp.is_empty() && state.column() < min_indent {
         return Err((p, indent_problem(start)));
     }

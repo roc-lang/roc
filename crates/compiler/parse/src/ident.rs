@@ -74,18 +74,6 @@ pub fn parse_lowercase_ident<'a>(state: State<'a>) -> ParseResult<'a, &'a str, (
     }
 }
 
-// todo: @wip inline me
-/// This is a tuple accessor, e.g. "1" in `.1`
-pub fn integer_ident<'a>() -> impl Parser<'a, &'a str, ()> {
-    move |_, state: State<'a>, _min_indent: u32| match chomp_integer_part(state.bytes()) {
-        Err(progress) => Err((progress, ())),
-        Ok(ident) => {
-            let width = ident.len();
-            Ok((MadeProgress, ident, state.advance(width)))
-        }
-    }
-}
-
 /// This could be:
 ///
 /// * A module name
@@ -249,7 +237,7 @@ fn chomp_anycase_part(buffer: &[u8]) -> Result<&str, Progress> {
     chomp_part(char::is_alphabetic, is_alnum, buffer)
 }
 
-fn chomp_integer_part(buffer: &[u8]) -> Result<&str, Progress> {
+pub(crate) fn chomp_integer_part(buffer: &[u8]) -> Result<&str, Progress> {
     chomp_part(
         |ch| char::is_ascii_digit(&ch),
         |ch| char::is_ascii_digit(&ch),

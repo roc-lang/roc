@@ -4819,8 +4819,7 @@ mod test_fmt {
     fn simple_closure_field_access() {
         expr_formats_same(indoc!(
             r"
-            f = \u -> u.foo
-            f
+            \u -> u.foo
             "
         ));
     }
@@ -4830,8 +4829,7 @@ mod test_fmt {
     fn _simple_closure_field_shortcut() {
         expr_formats_same(indoc!(
             r"
-            f = \.foo
-            f
+            \.foo
             "
         ));
     }
