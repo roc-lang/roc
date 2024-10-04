@@ -564,7 +564,7 @@ pub fn test(matches: &ArgMatches, target: Target) -> io::Result<i32> {
         arena,
         path.to_path_buf(),
         opt_main_path.cloned(),
-        RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+        RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
         load_config,
     );
 
