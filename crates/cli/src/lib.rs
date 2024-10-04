@@ -326,9 +326,7 @@ pub fn build_app() -> Command {
                     .index(1)
                     .num_args(0..)
                     .required(false)
-                    .value_parser(value_parser!(OsString))
-                    .global(true),
-            )
+                    .value_parser(value_parser!(OsString)))
             .arg(
                 Arg::new(FLAG_CHECK)
                     .long(FLAG_CHECK)
@@ -352,22 +350,14 @@ pub fn build_app() -> Command {
             )
             .after_help("If DIRECTORY_OR_FILES is omitted, the .roc files in the current working\ndirectory are formatted.")
             .subcommand(Command::new(CMD_FORMAT_ANNOTATE)
-                .about("Annotate all top level definitions from a .roc file or the .roc files contained\nin a directory")
+                .about("Annotate all top level definitions from a .roc file")
                 .arg(
-                    Arg::new(FLAG_STDIN)
-                        .long(FLAG_STDIN)
-                        .help("Read file to annotate from stdin")
-                        .action(ArgAction::SetTrue)
-                        .required(false),
+                    Arg::new(ROC_FILE)
+                        .help("The .roc file ot annotate")
+                        .value_parser(value_parser!(PathBuf))
+                        .required(false)
+                        .default_value(DEFAULT_ROC_FILENAME),
                 )
-                .arg(
-                    Arg::new(FLAG_STDOUT)
-                        .long(FLAG_STDOUT)
-                        .help("Print annotated file to stdout")
-                        .action(ArgAction::SetTrue)
-                        .required(false),
-                )
-                .after_help("If DIRECTORY_OR_FILES is omitted, the .roc files in the current working\ndirectory are annotated.")
             )
         )
         .subcommand(Command::new(CMD_VERSION)
