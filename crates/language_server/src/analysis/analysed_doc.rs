@@ -342,7 +342,7 @@ impl AnalyzedDocument {
 
         let symbol_str = latest_doc.source[symbol_range].to_owned();
 
-        let LineColumn { line, column } = line_info.convert_region(found_decl.region()).start();
+        let LineColumn { line, column } = line_info.convert_pos(found_decl.region().start());
         let lsp_position = tower_lsp::lsp_types::Position {
             line,
             character: column,
