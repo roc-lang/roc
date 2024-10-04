@@ -2354,7 +2354,7 @@ fn canonicalize_pending_value_def<'a>(
                         function_type: var_store.fresh(),
                         closure_type: var_store.fresh(),
                         return_type: var_store.fresh(),
-                        effect_type: var_store.fresh(),
+                        fx_type: var_store.fresh(),
                         name: symbol,
                         captured_symbols: Vec::new(),
                         recursive: Recursive::NotRecursive,

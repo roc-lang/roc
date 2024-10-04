@@ -542,7 +542,7 @@ fn build_outer_derived_closure(
         function_type: fn_var,
         closure_type: fn_clos_var,
         return_type: body_var,
-        effect_type: Variable::PURE,
+        fx_type: Variable::PURE,
         name: fn_name,
         captured_symbols: vec![],
         recursive: Recursive::NotRecursive,
