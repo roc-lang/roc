@@ -301,6 +301,9 @@ fn annotate<'a>(
 
     // TODO: check assumption that this is always in order
     for (index, _) in checked.decls.iter_bottom_up() {
+        if checked.decls.annotations[index].is_some() {
+            continue;
+        }
         let var = checked.decls.variables[index];
         let symbol = checked.decls.symbols[index];
 
