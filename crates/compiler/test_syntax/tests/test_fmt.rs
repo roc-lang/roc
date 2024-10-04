@@ -4819,7 +4819,7 @@ mod test_fmt {
     fn simple_closure_field_access() {
         expr_formats_same(indoc!(
             r"
-            \u -> u.foo
+            \un -> un.foo
             "
         ));
     }
@@ -4828,7 +4828,7 @@ mod test_fmt {
     fn simple_closure_field_access_chain() {
         expr_formats_same(indoc!(
             r"
-            \u -> u.foo.bar.buz
+            \un -> un.foo.bar.buz
             "
         ));
     }

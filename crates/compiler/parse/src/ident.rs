@@ -135,7 +135,7 @@ pub fn parse_ident<'a>(arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Ide
 
             if let Ident::Access { module_name, parts } = ident {
                 if module_name.is_empty() {
-                    // todo: @wip the call site may already check the keywords first, so should we always recheck?
+                    // todo: @perf the call site may already check the keywords first, so should we always recheck?
                     if let Some(first) = parts.first() {
                         for keyword in crate::keyword::KEYWORDS.iter() {
                             if first == &Accessor::RecordField(keyword) {
@@ -545,6 +545,7 @@ pub(crate) fn parse_closure_shortcut_access_ident<'a>(
         Err(width) => {
             let new_offset = offset + width;
             let fail = BadIdent::WeirdDotAccess(pos.bump_column(new_offset));
+            // todo: @wip check if relying on the malformed identifier at the end to then check for the suffixes?
             malformed_identifier(initial.bytes(), fail, state.advance(new_offset as usize))
         }
     }

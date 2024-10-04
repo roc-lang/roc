@@ -132,7 +132,7 @@ fn parse_loc_pattern_etc<'a>(
                     Err((NoProgress, EPattern::Start(start)))
                 }
             },
-            _ => parse_ident_pattern(start, can_have_arguments, arena, state.clone(), min_indent),
+            _ => parse_ident_pattern(start, can_have_arguments, arena, state, min_indent),
         }
     } else {
         Err((NoProgress, EPattern::Start(state.pos())))

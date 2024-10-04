@@ -85,6 +85,9 @@ pub const ACCEPT_MULTI_BACKPASSING: ExprParseFlags = ExprParseFlags(1);
 /// > Just foo if foo == 2 -> ...
 pub const CHECK_FOR_ARROW: ExprParseFlags = ExprParseFlags(1 << 1);
 
+/// note: @feat closure-shortcut
+pub const SKIP_INITIAL_IDENT_IN_CLOSURE_SHORTCUT: ExprParseFlags = ExprParseFlags(1 << 2);
+
 impl ExprParseFlags {
     pub const fn is_set(&self, flag: Self) -> bool {
         (self.0 & flag.0) != 0
@@ -155,6 +158,7 @@ fn rest_of_expr_in_parens_etc<'a>(
     Ok((MadeProgress, loc_elems, state))
 }
 
+// todo: @perf when the method called after `parse_ident` it duplicates the field access chain already consumed by `parse_ident`
 fn parse_field_task_result_suffixes<'a>(
     arena: &'a Bump,
     mut state: State<'a>,
@@ -273,14 +277,14 @@ fn parse_term<'a>(
                 let (_, ident, state) = parse_ident(arena, state)?;
                 let ident_end = state.pos();
 
-                match parse_field_task_result_suffixes(arena, state) {
-                    Ok((_, suffixes, state)) => {
-                        let ident = ident_to_expr(arena, ident);
-                        let expr = apply_expr_access_chain(arena, ident, suffixes);
-                        Ok((MadeProgress, Loc::pos(start, ident_end, expr), state))
-                    }
-                    Err((_, e)) => Err((MadeProgress, e)),
-                }
+                let (suffixes, state) = match parse_field_task_result_suffixes(arena, state) {
+                    Ok((_, out, state)) => (out, state),
+                    Err((_, fail)) => return Err((MadeProgress, fail)),
+                };
+
+                let ident = ident_to_expr(arena, ident);
+                let expr = apply_expr_access_chain(arena, ident, suffixes);
+                Ok((MadeProgress, Loc::pos(start, ident_end, expr), state))
             }
         }
     } else {
@@ -401,7 +405,7 @@ fn parse_negative_or_term<'a>(
                     return Ok((MadeProgress, expr, state));
                 }
 
-                // todo: @wip here the 4 keywords where already checked, if, when, dbg, crash
+                // todo: @perf here the 4 keywords where already checked, if, when, dbg, crash
                 let (_, ident, state) = parse_ident(arena, state)?;
                 let ident_end = state.pos();
 
@@ -2146,31 +2150,42 @@ fn rest_of_closure<'a>(
         return Err((NoProgress, EClosure::Start(state.pos())));
     }
 
-    // note: @feat closure+binop shortcut
     // todo: @wip Fun feature for expanding:
     // - [ ] `\?> Ok _ -> 1, Err _ -> 0` into ???
 
     let after_slash = state.pos();
 
-    // - todo: @wip `\.foo.bar + 1` into `\p -> p.foo.bar + 1`, see the ident_to_expr how-to compose record access
+    // note: @feat closure-shortcut
+    // Parses `\.foo.bar + 1` into `\p -> p.foo.bar + 1`
     // if state.bytes().first() == Some(&b'.') {
-    //     let (ident, state) =
-    //         match parse_closure_shortcut_access_ident(CLOSURE_SHORTCUT_ARG, arena, state) {
-    //             Ok((_, out, state)) => (out, state),
-    //             Err((_, fail)) => {
-    //                 return Err((MadeProgress, EClosure::Body(arena.alloc(fail), after_slash)))
-    //             }
-    //         };
+    //     let ident = CLOSURE_SHORTCUT_ARG;
+    //     let param = Loc::pos(after_slash, after_slash, Pattern::Identifier { ident });
+    //     let mut params = Vec::with_capacity_in(1, arena);
+    //     params.push(param);
+
+    //     let (ident, state) = match parse_closure_shortcut_access_ident(ident, arena, state) {
+    //         Ok((_, out, state)) => (out, state),
+    //         Err((_, fail)) => {
+    //             return Err((MadeProgress, EClosure::Body(arena.alloc(fail), after_slash)))
+    //         }
+    //     };
 
     //     let ident_end = state.pos();
-    //     let (suffixes, state) = match parse_record_field_task_result_suffixes(arena, state) {
+    //     let (suffixes, state) = match parse_field_task_result_suffixes(arena, state) {
     //         Ok((_, out, state)) => (out, state),
-    //         Err((_, fail)) => return Err((MadeProgress, fail)),
+    //         Err((_, fail)) => {
+    //             return Err((MadeProgress, EClosure::Body(arena.alloc(fail), ident_end)))
+    //         }
     //     };
 
     //     let ident = ident_to_expr(arena, ident);
     //     let expr = apply_expr_access_chain(arena, ident, suffixes);
-    //     let expr = Loc::pos(start, ident_end, expr);
+    //     let expr = Loc::pos(after_slash, ident_end, expr);
+
+    //     // todo: @wip parse the body
+
+    //     let short_closure = Expr::Closure(params.into_bump_slice(), arena.alloc(expr), true);
+    //     return Ok((MadeProgress, short_closure, state));
     // }
 
     // Either pipe shortcut `\|> f` into the `\p -> p |> f`,
@@ -2178,18 +2193,14 @@ fn rest_of_closure<'a>(
     if let Ok((_, binop, state)) = parse_bin_op(MadeProgress, state.clone()) {
         let after_binop = state.pos();
 
-        let param = Pattern::Identifier {
-            ident: &CLOSURE_SHORTCUT_ARG,
-        };
-        let loc_param = Loc::pos(after_slash, after_binop, param);
+        let ident = CLOSURE_SHORTCUT_ARG;
+        let param = Loc::pos(after_slash, after_binop, Pattern::Identifier { ident });
         let mut params = Vec::with_capacity_in(1, arena);
-        params.push(loc_param);
+        params.push(param);
 
         // the closure parameter is the left value of binary operator
-        let term = Expr::Var {
-            module_name: "",
-            ident: CLOSURE_SHORTCUT_ARG,
-        };
+        let module_name = "";
+        let term = Expr::Var { module_name, ident };
         let loc_term = Loc::pos(after_slash, after_binop, term);
 
         let expr_state = ExprState {
@@ -3630,11 +3641,8 @@ fn parse_record_expr<'a>(
             let expr = apply_expr_access_chain(arena, expr, accessors);
             Ok((MadeProgress, Loc::pos(start, state.pos(), expr), state))
         }
-        Err(err) => Err((MadeProgress, err)),
+        Err(fail) => Err((MadeProgress, fail)),
     }
-    //     },
-    // )
-    // .parse(arena, state, min_indent)
 }
 
 // todo: @wip: inline me
