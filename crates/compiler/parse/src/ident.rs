@@ -171,7 +171,6 @@ pub(crate) fn malformed_identifier<'a>(
     let parsed_str = unsafe { std::str::from_utf8_unchecked(&initial_bytes[..chomped + delta]) };
 
     state = state.advance(chomped);
-
     Ok((MadeProgress, Ident::Malformed(parsed_str, problem), state))
 }
 
@@ -470,8 +469,32 @@ fn chomp_identifier_chain<'a>(
             parts.push(Accessor::RecordField(first_part));
         }
 
-        let start = chomped as u32;
-        parse_access_chain(buffer, start, parts, first_is_uppercase, pos, module_name)
+        let offset = chomped as u32;
+        match chomp_access_chain(&buffer[offset as usize..], &mut parts) {
+            Ok(width) => {
+                if first_is_uppercase && matches!(parts[0], Accessor::TupleIndex(_)) {
+                    return Err((
+                        offset,
+                        BadIdent::QualifiedTupleAccessor(pos.bump_column(offset)),
+                    ));
+                }
+
+                let parts = parts.into_bump_slice();
+                let ident = Ident::Access { module_name, parts };
+                Ok((offset + width, ident))
+            }
+            Err(0) if !module_name.is_empty() => {
+                Err((offset, BadIdent::QualifiedTag(pos.bump_column(offset))))
+            }
+            Err(1) if parts.is_empty() => Err((
+                offset + 1,
+                BadIdent::WeirdDotQualified(pos.bump_column(offset + 1)),
+            )),
+            Err(width) => Err((
+                offset + width,
+                BadIdent::WeirdDotAccess(pos.bump_column(offset + width)),
+            )),
+        }
     } else if let Ok(('_', _)) = char::from_utf8_slice_start(&buffer[chomped..]) {
         // we don't allow underscores in the middle of an identifier
         // but still parse them (and generate a malformed identifier)
@@ -498,102 +521,32 @@ fn chomp_identifier_chain<'a>(
     }
 }
 
-pub(crate) fn parse_access_chain<'a>(
-    buffer: &'a [u8],
-    mut start: u32,
-    mut parts: Vec<'a, Accessor<'a>>,
-    first_is_uppercase: bool,
-    pos: Position,
-    module_name: &'a str,
-) -> Result<(u32, Ident<'a>), (u32, BadIdent)> {
-    match chomp_access_chain(&buffer[start as usize..], &mut parts) {
-        Ok(width) => {
-            if first_is_uppercase && matches!(parts[0], Accessor::TupleIndex(_)) {
-                return Err((
-                    start,
-                    BadIdent::QualifiedTupleAccessor(pos.bump_column(start)),
-                ));
-            }
-
-            start += width;
-            let parts = parts.into_bump_slice();
-            let ident = Ident::Access { module_name, parts };
-            Ok((start, ident))
-        }
-        Err(0) if !module_name.is_empty() => {
-            Err((start, BadIdent::QualifiedTag(pos.bump_column(start))))
-        }
-        Err(1) if parts.is_empty() => Err((
-            start + 1,
-            BadIdent::WeirdDotQualified(pos.bump_column(start + 1)),
-        )),
-        Err(width) => Err((
-            start + width,
-            BadIdent::WeirdDotAccess(pos.bump_column(start + width)),
-        )),
-    }
-}
-
-pub fn parse_closure_shortcut_access_ident<'a>(
+pub(crate) fn parse_closure_shortcut_access_ident<'a>(
+    arg_name: &'a str,
     arena: &'a Bump,
     state: State<'a>,
-    _min_indent: u32,
 ) -> ParseResult<'a, Ident<'a>, EExpr<'a>> {
+    let mut parts = Vec::with_capacity_in(4, arena);
+    parts.push(Accessor::RecordField(arg_name));
+
     let initial = state.clone();
-
-    match chomp_identifier_chain(arena, state.bytes(), state.pos()) {
-        Ok((width, ident)) => {
-            let state = advance_state!(state, width as usize)?;
-
-            if let Ident::Access { module_name, parts } = ident {
-                if module_name.is_empty() {
-                    // todo: @wip the call site may already check the keywords first, so should we always recheck?
-                    if let Some(first) = parts.first() {
-                        for keyword in crate::keyword::KEYWORDS.iter() {
-                            if first == &Accessor::RecordField(keyword) {
-                                return Err((NoProgress, EExpr::Start(initial.pos())));
-                            }
-                        }
-                    }
-                }
-            }
-
-            Ok((MadeProgress, ident, state))
-        }
-        Err((0, _)) => Err((NoProgress, EExpr::Start(state.pos()))),
-        Err((width, fail)) => match fail {
-            BadIdent::Start(pos) => Err((NoProgress, EExpr::Start(pos))),
-            BadIdent::Space(e, pos) => Err((NoProgress, EExpr::Space(e, pos))),
-            _ => malformed_identifier(
-                initial.bytes(),
-                fail,
-                advance_state!(state, width as usize)?,
-            ),
-        },
-    }
-}
-
-pub(crate) fn parse_closure_shortcut_arg_access_chain<'a>(
-    buffer: &'a [u8],
-    mut start: u32,
-    mut parts: Vec<'a, Accessor<'a>>,
-    pos: Position,
-) -> Result<(u32, Ident<'a>), (u32, BadIdent)> {
-    // should contain the closure arg as the first part
-    debug_assert_eq!(parts.len(), 1);
-
-    match chomp_access_chain(&buffer[start as usize..], &mut parts) {
+    let buffer = state.bytes();
+    let pos = state.pos();
+    let offset = pos.offset;
+    match chomp_access_chain(&buffer[offset as usize..], &mut parts) {
         Ok(width) => {
-            start += width;
             let module_name = "";
             let parts = parts.into_bump_slice();
             let ident = Ident::Access { module_name, parts };
-            Ok((start, ident))
+            let new_offset = offset + width;
+            let state = state.advance(new_offset as usize);
+            Ok((MadeProgress, ident, state))
         }
-        Err(width) => Err((
-            start + width,
-            BadIdent::WeirdDotAccess(pos.bump_column(start + width)),
-        )),
+        Err(width) => {
+            let new_offset = offset + width;
+            let fail = BadIdent::WeirdDotAccess(pos.bump_column(new_offset));
+            malformed_identifier(initial.bytes(), fail, state.advance(new_offset as usize))
+        }
     }
 }
 

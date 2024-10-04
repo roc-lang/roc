@@ -10,8 +10,8 @@ use crate::blankspace::{
 };
 use crate::header::module_name_help;
 use crate::ident::{
-    chomp_integer_part, lowercase_ident, parse_ident, parse_lowercase_ident, unqualified_ident,
-    Accessor, Ident, Suffix,
+    chomp_integer_part, lowercase_ident, parse_closure_shortcut_access_ident, parse_ident,
+    parse_lowercase_ident, unqualified_ident, Accessor, Ident, Suffix,
 };
 use crate::number_literal::parse_number_base;
 use crate::parser::{
@@ -140,7 +140,7 @@ fn rest_of_expr_in_parens_etc<'a>(
         )
     };
 
-    let (field_accesses, state) = match parse_record_field_access_chain(arena, state) {
+    let (field_accesses, state) = match parse_field_task_result_suffixes(arena, state) {
         Ok((_, out, state)) => (out, state),
         Err((_, e)) => return Err((MadeProgress, e)),
     };
@@ -155,7 +155,7 @@ fn rest_of_expr_in_parens_etc<'a>(
     Ok((MadeProgress, loc_elems, state))
 }
 
-fn parse_record_field_access_chain<'a>(
+fn parse_field_task_result_suffixes<'a>(
     arena: &'a Bump,
     mut state: State<'a>,
 ) -> ParseResult<'a, Vec<'a, Suffix<'a>>, EExpr<'a>> {
@@ -166,9 +166,11 @@ fn parse_record_field_access_chain<'a>(
             Some(b) => match b {
                 b'.' => {
                     let state = state.inc();
-                    let before_ident = state.pos();
+                    let ident_pos = state.pos();
                     match parse_lowercase_ident(state.clone()) {
-                        Ok((_, x, state)) => (Suffix::Accessor(Accessor::RecordField(x)), state),
+                        Ok((_, name, state)) => {
+                            (Suffix::Accessor(Accessor::RecordField(name)), state)
+                        }
                         Err((NoProgress, _)) => {
                             // This is a tuple accessor, e.g. "1" in `.1`
                             match chomp_integer_part(state.bytes()) {
@@ -176,10 +178,10 @@ fn parse_record_field_access_chain<'a>(
                                     Suffix::Accessor(Accessor::TupleIndex(name)),
                                     state.advance(name.len()),
                                 ),
-                                Err(_) => return Err((MadeProgress, EExpr::Access(before_ident))),
+                                Err(_) => return Err((MadeProgress, EExpr::Access(ident_pos))),
                             }
                         }
-                        Err(_) => return Err((MadeProgress, EExpr::Access(before_ident))),
+                        Err(_) => return Err((MadeProgress, EExpr::Access(ident_pos))),
                     }
                 }
                 b'!' => (Suffix::TrySuffix(TryTarget::Task), state.inc()),
@@ -271,7 +273,7 @@ fn parse_term<'a>(
                 let (_, ident, state) = parse_ident(arena, state)?;
                 let ident_end = state.pos();
 
-                match parse_record_field_access_chain(arena, state) {
+                match parse_field_task_result_suffixes(arena, state) {
                     Ok((_, suffixes, state)) => {
                         let ident = ident_to_expr(arena, ident);
                         let expr = apply_expr_access_chain(arena, ident, suffixes);
@@ -403,7 +405,7 @@ fn parse_negative_or_term<'a>(
                 let (_, ident, state) = parse_ident(arena, state)?;
                 let ident_end = state.pos();
 
-                let (suffixes, state) = match parse_record_field_access_chain(arena, state) {
+                let (suffixes, state) = match parse_field_task_result_suffixes(arena, state) {
                     Ok((_, out, state)) => (out, state),
                     Err((_, fail)) => return Err((MadeProgress, fail)),
                 };
@@ -2148,35 +2150,20 @@ fn rest_of_closure<'a>(
     // todo: @wip Fun feature for expanding:
     // - [ ] `\?> Ok _ -> 1, Err _ -> 0` into ???
 
-    // - todo: @wip `\.foo.bar + 1` into `\p -> p.foo.bar + 1`, see the ident_to_expr how-to compose record access
     let after_slash = state.pos();
+
+    // - todo: @wip `\.foo.bar + 1` into `\p -> p.foo.bar + 1`, see the ident_to_expr how-to compose record access
     // if state.bytes().first() == Some(&b'.') {
-    //     let mut parts = Vec::with_capacity_in(4, arena);
-
-    //     parts.push(Accessor::RecordField(&CLOSURE_SHORTCUT_ARG));
-
-    //     let buffer = state.bytes();
-    //     let pos = state.pos();
-    //     let start = pos.offset as u32;
-    //     let (ident, state) = match parse_access_chain(buffer, start, parts, false, pos, "") {
-    //         Ok((width, ident)) => (ident, state.advance(width as usize)),
-    //         Err((0, _)) => return Err((NoProgress, EClosure::Start(state.pos()))),
-    //         Err((width, fail)) => return match fail {
-    //             BadIdent::Start(pos) => Err((NoProgress, EClosure::Start(pos))),
-    //             BadIdent::Space(e, pos) => Err((NoProgress, EExpr::Space(e, pos))),
-    //             _ => malformed_identifier(
-    //                 initial.bytes(),
-    //                 fail,
-    //                 advance_state!(state, width as usize)?,
-    //             ),
-    //         },
-    //     };
-
-    // // todo: @wip wrap errors in
-    // return Err((MadeProgress, EClosure::Body(arena.alloc(fail), err_pos)))
+    //     let (ident, state) =
+    //         match parse_closure_shortcut_access_ident(CLOSURE_SHORTCUT_ARG, arena, state) {
+    //             Ok((_, out, state)) => (out, state),
+    //             Err((_, fail)) => {
+    //                 return Err((MadeProgress, EClosure::Body(arena.alloc(fail), after_slash)))
+    //             }
+    //         };
 
     //     let ident_end = state.pos();
-    //     let (suffixes, state) = match parse_record_field_access_chain(arena, state) {
+    //     let (suffixes, state) = match parse_record_field_task_result_suffixes(arena, state) {
     //         Ok((_, out, state)) => (out, state),
     //         Err((_, fail)) => return Err((MadeProgress, fail)),
     //     };
@@ -2184,7 +2171,6 @@ fn rest_of_closure<'a>(
     //     let ident = ident_to_expr(arena, ident);
     //     let expr = apply_expr_access_chain(arena, ident, suffixes);
     //     let expr = Loc::pos(start, ident_end, expr);
-
     // }
 
     // Either pipe shortcut `\|> f` into the `\p -> p |> f`,
@@ -3608,7 +3594,7 @@ fn parse_record_expr<'a>(
     };
 
     // there can be field access, e.g. `{ x : 4 }.x`
-    let (accessors, state) = match parse_record_field_access_chain(arena, state) {
+    let (accessors, state) = match parse_field_task_result_suffixes(arena, state) {
         Ok((_, accessors, state)) => (accessors, state),
         Err((_, fail)) => return Err((MadeProgress, fail)),
     };
