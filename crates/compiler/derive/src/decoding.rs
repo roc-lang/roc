@@ -147,7 +147,7 @@ fn wrap_in_decode_custom_decode_with(
             function_type: fn_var,
             closure_type: fn_clos_var,
             return_type: decode_with_result_var,
-            effect_type: Variable::PURE,
+            fx_type: Variable::PURE,
             early_returns: vec![],
             name: fn_name,
             captured_symbols: sorted_inner_decoder_captures,

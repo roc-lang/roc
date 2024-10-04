@@ -446,7 +446,7 @@ fn defn_help(
         function_type: var_store.fresh(),
         closure_type: var_store.fresh(),
         return_type: ret_var,
-        effect_type: Variable::PURE,
+        fx_type: Variable::PURE,
         early_returns: vec![],
         name: fn_name,
         captured_symbols: Vec::new(),
