@@ -1171,6 +1171,10 @@ define_const_var! {
 
     /// The erased lambda type.
     :pub ERASED_LAMBDA,
+
+    /// Kind of function
+    :pub PURE,
+    :pub EFFECTFUL,
 }
 
 impl Variable {

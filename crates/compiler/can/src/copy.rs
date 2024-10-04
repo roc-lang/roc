@@ -456,6 +456,7 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             function_type,
             closure_type,
             return_type,
+            effect_type,
             early_returns,
             name,
             captured_symbols,
@@ -466,6 +467,7 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             function_type: sub!(*function_type),
             closure_type: sub!(*closure_type),
             return_type: sub!(*return_type),
+            effect_type: sub!(*effect_type),
             early_returns: early_returns
                 .iter()
                 .map(|(var, region)| (sub!(*var), *region))
