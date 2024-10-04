@@ -42,7 +42,7 @@ use strum::IntoEnumIterator;
 use tempfile::TempDir;
 
 mod format;
-pub use format::{format_files, format_src, FormatMode};
+pub use format::{annotate_file, format_files, format_src, FormatMode};
 
 pub const CMD_BUILD: &str = "build";
 pub const CMD_RUN: &str = "run";

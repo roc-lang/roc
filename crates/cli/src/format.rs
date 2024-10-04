@@ -7,10 +7,14 @@ use roc_error_macros::{internal_error, user_error};
 use roc_fmt::def::fmt_defs;
 use roc_fmt::header::fmt_header;
 use roc_fmt::Buf;
+use roc_load::{ExecutionMode, FunctionKind, LoadConfig, LoadedModule, Threading};
+use roc_packaging::cache::{self, RocCacheDir};
 use roc_parse::ast::{FullAst, SpacesBefore};
 use roc_parse::header::parse_module_defs;
 use roc_parse::normalize::Normalize;
 use roc_parse::{header, parser::SyntaxError, state::State};
+use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
+use roc_target::Target;
 
 #[derive(Copy, Clone, Debug)]
 pub enum FormatMode {
@@ -254,6 +258,76 @@ fn fmt_all<'a>(buf: &mut Buf<'a>, ast: &'a FullAst) {
     fmt_defs(buf, &ast.defs, 0);
 
     buf.fmt_end_of_file();
+}
+
+pub fn annotate_file(arena: &Bump, file: &PathBuf) -> Result<(), String> {
+    // TODO: do this proper
+    let target = Target::LinuxX64;
+
+    let load_config = LoadConfig {
+        target,
+        function_kind: FunctionKind::from_env(),
+        // TODO: expose this from CLI?
+        render: RenderTarget::ColorTerminal,
+        palette: DEFAULT_PALETTE,
+        threading: Threading::AllAvailable,
+        exec_mode: ExecutionMode::Check,
+    };
+
+    let mut loaded = roc_load::load_and_typecheck(
+        arena,
+        file.clone(),
+        None,
+        RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+        load_config,
+    )
+    .map_err(|e| format!("{:?}", e))?;
+
+    let buf = annotate(&arena, &mut loaded)?;
+
+    std::fs::write(&file, buf.as_str()).unwrap();
+    Ok(())
+}
+
+fn annotate<'a>(
+    arena: &'a Bump,
+    loaded: &'a mut LoadedModule,
+) -> Result<bumpalo::collections::String<'a>, String> {
+    let checked = loaded.typechecked.get_mut(&loaded.module_id).unwrap();
+    let src = &loaded.sources.get(&loaded.module_id).ok_or("no src")?.1;
+
+    let mut buffer = bumpalo::collections::String::new_in(arena);
+    let mut file_progress = 0;
+
+    // TODO: check assumption that this is always in order
+    for (index, _) in checked.decls.iter_bottom_up() {
+        let var = checked.decls.variables[index];
+        let symbol = checked.decls.symbols[index];
+
+        let subs = checked.solved_subs.inner_mut();
+
+        let snapshot = subs.snapshot();
+        let signature = roc_types::pretty_print::name_and_print_var(
+            var,
+            subs,
+            loaded.module_id,
+            &loaded.interns,
+            roc_types::pretty_print::DebugPrint::NOTHING,
+        );
+        subs.rollback_to(snapshot);
+
+        let symbol_str = &src[symbol.byte_range()];
+
+        let position = symbol.region.start().byte_offset();
+
+        buffer.push_str(&src[file_progress..position]);
+        buffer.push_str(&format!("{symbol_str} : {signature}\n"));
+
+        file_progress = position;
+    }
+    buffer.push_str(&src[file_progress..]);
+
+    Ok(buffer)
 }
 
 #[cfg(test)]
