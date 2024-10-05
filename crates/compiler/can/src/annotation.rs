@@ -4,7 +4,9 @@ use crate::scope::{PendingAbilitiesInScope, Scope, SymbolLookup};
 use roc_collections::{ImMap, MutSet, SendMap, VecMap, VecSet};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
-use roc_parse::ast::{AssignedField, ExtractSpaces, Pattern, Tag, TypeAnnotation, TypeHeader};
+use roc_parse::ast::{
+    AssignedField, ExtractSpaces, FunctionArrow, Pattern, Tag, TypeAnnotation, TypeHeader,
+};
 use roc_problem::can::ShadowKind;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
@@ -554,8 +556,7 @@ fn can_annotation_help(
     use roc_parse::ast::TypeAnnotation::*;
 
     match annotation {
-        Function(argument_types, _arrow, return_type) => {
-            // [purity-inference] TODO: arrow
+        Function(argument_types, arrow, return_type) => {
             let mut args = Vec::new();
 
             for arg in *argument_types {
@@ -590,7 +591,13 @@ fn can_annotation_help(
             introduced_variables.insert_lambda_set(lambda_set);
             let closure = Type::Variable(lambda_set);
 
-            Type::Function(args, Box::new(closure), Box::new(ret))
+            let fx_var = match arrow {
+                FunctionArrow::Pure => Variable::PURE,
+                FunctionArrow::Effectful => Variable::EFFECTFUL,
+            };
+            let fx_type = Type::Variable(fx_var);
+
+            Type::Function(args, Box::new(closure), Box::new(ret), Box::new(fx_type))
         }
         Apply(module_name, ident, type_arguments) => {
             let symbol = match make_apply_symbol(env, region, scope, module_name, ident, references)
