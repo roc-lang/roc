@@ -402,7 +402,7 @@ pub(crate) fn type_to_var_help(
                 env.register_with_known_var(destination, rank, content)
             }
             // This case is important for the rank of boolean variables
-            Function(closure_type, ret_type) => {
+            Function(closure_type, ret_type, fx_type) => {
                 let arguments = types.get_type_arguments(typ_index);
                 let new_arguments = env.subs.reserve_into_vars(arguments.len());
                 for (target_index, var_index) in
@@ -413,8 +413,10 @@ pub(crate) fn type_to_var_help(
                 }
 
                 let ret_var = helper!(ret_type);
+                let fx_var = helper!(fx_type);
                 let closure_var =
                     helper!(closure_type, AmbientFunctionPolicy::Function(destination));
+                // [purity-inference] TODO: add fx_type to FlatType::Func
                 let content =
                     Content::Structure(FlatType::Func(new_arguments, closure_var, ret_var));
 

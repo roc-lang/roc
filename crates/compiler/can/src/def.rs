@@ -127,6 +127,7 @@ impl Annotation {
             arg_types,
             Box::new(Type::Variable(var_store.fresh())),
             Box::new(self.signature.clone()),
+            Box::new(Type::Variable(var_store.fresh())),
         );
     }
 }

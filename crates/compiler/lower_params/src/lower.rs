@@ -92,7 +92,7 @@ impl<'a> LowerParams<'a> {
                             .retain(|(sym, _)| !home_param_symbols.contains(sym));
 
                         if let Some(ann) = &mut decls.annotations[index] {
-                            if let Type::Function(args, _, _) = &mut ann.signature {
+                            if let Type::Function(args, _, _, _) = &mut ann.signature {
                                 args.push(Type::Variable(var));
                             }
                         }

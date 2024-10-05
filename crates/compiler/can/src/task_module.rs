@@ -33,7 +33,7 @@ pub fn build_host_exposed_def(
 
     let def_body = {
         match typ.shallow_structural_dealias() {
-            Type::Function(args, _, _) => {
+            Type::Function(args, _, _, _) => {
                 for i in 0..args.len() {
                     let name = format!("closure_arg_{ident}_{i}");
 
@@ -181,11 +181,13 @@ fn build_fresh_opaque_variables(
     let ok_var = var_store.fresh();
     let err_var = var_store.fresh();
     let result_var = var_store.fresh();
+    let fx_var = var_store.fresh();
 
     let actual = Type::Function(
         vec![Type::EmptyRec],
         Box::new(Type::Variable(closure_var)),
         Box::new(Type::Variable(result_var)),
+        Box::new(Type::Variable(fx_var)),
     );
 
     let type_arguments = vec![
