@@ -3,6 +3,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use bumpalo::Bump;
+use roc_can::expr::Expr;
 use roc_error_macros::{internal_error, user_error};
 use roc_fmt::def::fmt_defs;
 use roc_fmt::header::fmt_header;
@@ -302,6 +303,12 @@ fn annotate<'a>(
     // TODO: check assumption that this is always in order
     for (index, _) in checked.decls.iter_bottom_up() {
         if checked.decls.annotations[index].is_some() {
+            continue;
+        }
+        if matches!(
+            checked.decls.expressions[index].value,
+            Expr::ImportParams(..)
+        ) {
             continue;
         }
         let var = checked.decls.variables[index];
