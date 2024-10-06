@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use bumpalo::Bump;
-use roc_can::expr::Expr;
+use roc_can::expr::{Declarations, Expr};
 use roc_error_macros::{internal_error, user_error};
 use roc_fmt::def::fmt_defs;
 use roc_fmt::header::fmt_header;
@@ -16,6 +16,7 @@ use roc_parse::normalize::Normalize;
 use roc_parse::{header, parser::SyntaxError, state::State};
 use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
 use roc_target::Target;
+use roc_types::subs::Subs;
 
 #[derive(Copy, Clone, Debug)]
 pub enum FormatMode {
@@ -294,27 +295,38 @@ fn annotate<'a>(
     arena: &'a Bump,
     loaded: &'a mut LoadedModule,
 ) -> Result<bumpalo::collections::String<'a>, String> {
-    let checked = loaded.typechecked.get_mut(&loaded.module_id).unwrap();
+    let (decls, subs, abilities) =
+        if let Some(decls) = loaded.declarations_by_id.get(&loaded.module_id) {
+            let subs = loaded.solved.inner_mut();
+            let abilities = &loaded.abilities_store;
+
+            (decls, subs, abilities)
+        } else if let Some(checked) = loaded.typechecked.get_mut(&loaded.module_id) {
+            let decls = &checked.decls;
+            let subs = checked.solved_subs.inner_mut();
+            let abilities = &checked.abilities_store;
+
+            (decls, subs, abilities)
+        } else {
+            return Err("no module?".to_owned());
+        };
+
     let src = &loaded.sources.get(&loaded.module_id).ok_or("no src")?.1;
 
     let mut buffer = bumpalo::collections::String::new_in(arena);
     let mut file_progress = 0;
 
     // TODO: check assumption that this is always in order
-    for (index, _) in checked.decls.iter_bottom_up() {
-        if checked.decls.annotations[index].is_some() {
-            continue;
-        }
-        if matches!(
-            checked.decls.expressions[index].value,
-            Expr::ImportParams(..)
-        ) {
-            continue;
-        }
-        let var = checked.decls.variables[index];
-        let symbol = checked.decls.symbols[index];
+    for (index, _) in decls.iter_bottom_up() {
+        let var = decls.variables[index];
+        let symbol = decls.symbols[index];
 
-        let subs = checked.solved_subs.inner_mut();
+        if decls.annotations[index].is_some()
+            | matches!(decls.expressions[index].value, Expr::ImportParams(..))
+            | abilities.is_specialization_name(symbol.value)
+        {
+            continue;
+        }
 
         let snapshot = subs.snapshot();
         let signature = roc_types::pretty_print::name_and_print_var(
