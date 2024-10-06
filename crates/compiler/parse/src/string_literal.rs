@@ -375,6 +375,7 @@ pub fn rest_of_str_like<'a>(
 
                         let (expr, mut news) = match parse_expr_start(
                             CHECK_FOR_ARROW | ACCEPT_MULTI_BACKPASSING,
+                            None, 
                             arena,
                             news,
                             0,
@@ -503,6 +504,7 @@ pub fn rest_of_str_like<'a>(
 
                 let (expr, mut news) = match parse_expr_start(
                     CHECK_FOR_ARROW | ACCEPT_MULTI_BACKPASSING,
+                    None,
                     arena,
                     news,
                     0,

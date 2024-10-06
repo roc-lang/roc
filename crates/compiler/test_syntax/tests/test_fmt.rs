@@ -4844,6 +4844,22 @@ mod test_fmt {
     }
 
     #[test]
+    fn simple_closure_field_shortcut_space_format() {
+        expr_formats_to(
+            indoc!(
+                r"
+                \ .foo
+                "
+            ),
+            indoc!(
+                r"
+                \un -> un.foo
+                "
+            ),
+        );
+    }
+
+    #[test]
     fn pipeline_op_with_apply() {
         expr_formats_same(indoc!(
             r"
@@ -4866,6 +4882,7 @@ mod test_fmt {
         ));
     }
 
+    // todo: @wip pipline looks interesting :)
     #[test]
     fn pipline_apply_lambda_1() {
         expr_formats_same(indoc!(

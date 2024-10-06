@@ -530,23 +530,18 @@ pub(crate) fn parse_closure_shortcut_access_ident<'a>(
     parts.push(Accessor::RecordField(arg_name));
 
     let initial = state.clone();
-    let buffer = state.bytes();
     let pos = state.pos();
-    let offset = pos.offset;
-    match chomp_access_chain(&buffer[offset as usize..], &mut parts) {
+    match chomp_access_chain(&state.bytes(), &mut parts) {
         Ok(width) => {
             let module_name = "";
             let parts = parts.into_bump_slice();
             let ident = Ident::Access { module_name, parts };
-            let new_offset = offset + width;
-            let state = state.advance(new_offset as usize);
-            Ok((MadeProgress, ident, state))
+            Ok((MadeProgress, ident, state.advance(width as usize)))
         }
         Err(width) => {
-            let new_offset = offset + width;
-            let fail = BadIdent::WeirdDotAccess(pos.bump_column(new_offset));
             // todo: @wip check if relying on the malformed identifier at the end to then check for the suffixes?
-            malformed_identifier(initial.bytes(), fail, state.advance(new_offset as usize))
+            let fail = BadIdent::WeirdDotAccess(pos.bump_column(width));
+            malformed_identifier(initial.bytes(), fail, state.advance(width as usize))
         }
     }
 }

@@ -572,7 +572,7 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
 
             let optional_val_pos = state.pos();
             let (optional_val, state) =
-                match parse_expr_start(CHECK_FOR_ARROW, arena, state, min_indent) {
+                match parse_expr_start(CHECK_FOR_ARROW, None, arena, state, min_indent) {
                     Ok((_, out, state)) => (out, state),
                     Err((_, fail)) => {
                         let fail = PRecord::Expr(arena.alloc(fail), optional_val_pos);
