@@ -444,7 +444,6 @@ fn contains_unexposed_type(
         Malformed(_) | Inferred | Wildcard | BoundVariable(_) => false,
 
         Function(loc_args, _arrow, loc_ret) => {
-            // [purity-inference] TODO: arrow
             let loc_args_contains_unexposed_type = loc_args.iter().any(|loc_arg| {
                 contains_unexposed_type(&loc_arg.value, exposed_module_ids, module_ids)
             });
