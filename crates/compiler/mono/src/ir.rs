@@ -5455,7 +5455,7 @@ pub fn with_hole<'a>(
         }
 
         Call(boxed, loc_args, _) => {
-            let (fn_var, loc_expr, _lambda_set_var, _ret_var) = *boxed;
+            let (fn_var, loc_expr, _lambda_set_var, _ret_var, _fx_var) = *boxed;
 
             // even if a call looks like it's by name, it may in fact be by-pointer.
             // E.g. in `(\f, x -> f x)` the call is in fact by pointer.

@@ -155,7 +155,7 @@ pub enum Expr {
     /// This is *only* for calling functions, not for tag application.
     /// The Tag variant contains any applied values inside it.
     Call(
-        Box<(Variable, Loc<Expr>, Variable, Variable)>,
+        Box<(Variable, Loc<Expr>, Variable, Variable, Variable)>,
         Vec<(Variable, Loc<Expr>)>,
         CalledVia,
     ),
@@ -930,6 +930,7 @@ pub fn canonicalize_expr<'a>(
                                 fn_expr,
                                 var_store.fresh(),
                                 var_store.fresh(),
+                                var_store.fresh(),
                             )),
                             args,
                             *application_style,
@@ -967,6 +968,7 @@ pub fn canonicalize_expr<'a>(
                             Box::new((
                                 var_store.fresh(),
                                 fn_expr,
+                                var_store.fresh(),
                                 var_store.fresh(),
                                 var_store.fresh(),
                             )),
@@ -2448,10 +2450,11 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
         }
 
         Call(boxed_tuple, args, called_via) => {
-            let (fn_var, loc_expr, closure_var, expr_var) = *boxed_tuple;
+            let (fn_var, loc_expr, closure_var, expr_var, fx_var) = *boxed_tuple;
 
             match loc_expr.value {
                 Var(symbol, _) if symbol.is_builtin() => {
+                    // NOTE: This assumes builtins are not effectful!
                     match builtin_defs_map(symbol, var_store) {
                         Some(Def {
                             loc_expr:
@@ -2519,7 +2522,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
                 _ => {
                     // For now, we only inline calls to builtins. Leave this alone!
                     Call(
-                        Box::new((fn_var, loc_expr, closure_var, expr_var)),
+                        Box::new((fn_var, loc_expr, closure_var, expr_var, fx_var)),
                         args,
                         called_via,
                     )
@@ -2787,6 +2790,7 @@ fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> 
                         fn_expr,
                         var_store.fresh(),
                         var_store.fresh(),
+                        var_store.fresh(),
                     )),
                     vec![
                         (var_store.fresh(), empty_string),
@@ -2821,6 +2825,7 @@ fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> 
             Box::new((
                 var_store.fresh(),
                 fn_expr,
+                var_store.fresh(),
                 var_store.fresh(),
                 var_store.fresh(),
             )),

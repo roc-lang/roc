@@ -413,13 +413,14 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
         }
 
         Call(f, args, called_via) => {
-            let (fn_var, fn_expr, clos_var, ret_var) = &**f;
+            let (fn_var, fn_expr, clos_var, ret_var, fx_var) = &**f;
             Call(
                 Box::new((
                     sub!(*fn_var),
                     fn_expr.map(|e| go_help!(e)),
                     sub!(*clos_var),
                     sub!(*ret_var),
+                    sub!(*fx_var),
                 )),
                 args.iter()
                     .map(|(var, expr)| (sub!(*var), expr.map(|e| go_help!(e))))

@@ -489,6 +489,7 @@ fn call_hash_ability_member(
         Loc::at_zero(hash_fn_head),
         this_hash_clos_var,
         this_out_hasher_var,
+        Variable::PURE,
     ));
 
     let hash_arguments = vec![

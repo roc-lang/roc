@@ -520,6 +520,7 @@ impl<'a> LowerParams<'a> {
                 Loc::at_zero(Var(symbol, var)),
                 self.var_store.fresh(),
                 self.var_store.fresh(),
+                self.var_store.fresh(),
             ));
 
             let body = Call(
@@ -563,6 +564,7 @@ impl<'a> LowerParams<'a> {
         let call_fn = Box::new((
             self.var_store.fresh(),
             Loc::at_zero(Var(symbol, var)),
+            self.var_store.fresh(),
             self.var_store.fresh(),
             self.var_store.fresh(),
         ));

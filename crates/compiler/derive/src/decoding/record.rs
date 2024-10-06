@@ -130,6 +130,7 @@ pub(crate) fn decoder(
             )),
             decode_record_lambda_set,
             record_decoder_var,
+            Variable::PURE,
         )),
         vec![
             (initial_state_var, Loc::at_zero(initial_state)),
@@ -422,6 +423,7 @@ fn custom_decoder(env: &mut Env<'_>, args: DecodingFieldArgs) -> (Variable, Expr
                 Loc::at_zero(Expr::Var(Symbol::DECODE_CUSTOM, this_decode_custom_var)),
                 decode_custom_closure_var,
                 decode_custom_ret_var,
+                Variable::PURE,
             )),
             vec![(this_custom_callback_var, Loc::at_zero(custom_callback))],
             CalledVia::Space,
@@ -1328,6 +1330,7 @@ pub(super) fn decode_with(
             Loc::at_zero(Expr::Var(Symbol::DECODE_DECODE_WITH, this_decode_with_var)),
             lambda_set_var,
             rec_var,
+            Variable::PURE,
         )),
         vec![
             (Variable::LIST_U8, Loc::at_zero(bytes_arg_expr)),

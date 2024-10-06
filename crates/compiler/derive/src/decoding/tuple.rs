@@ -120,6 +120,7 @@ pub(crate) fn decoder(env: &mut Env, _def_symbol: Symbol, arity: u32) -> (Expr, 
             )),
             decode_record_lambda_set,
             tuple_decoder_var,
+            Variable::PURE,
         )),
         vec![
             (state_var, Loc::at_zero(initial_state)),
@@ -490,6 +491,7 @@ fn step_elem(
                         Loc::at_zero(Expr::Var(Symbol::DECODE_DECODE_WITH, this_decode_with_var)),
                         lambda_set_var,
                         rec_var,
+                        Variable::PURE,
                     )),
                     vec![
                         (
@@ -598,6 +600,7 @@ fn step_elem(
                     Loc::at_zero(Expr::Var(Symbol::DECODE_CUSTOM, this_decode_custom_var)),
                     decode_custom_closure_var,
                     decode_custom_ret_var,
+                    Variable::PURE,
                 )),
                 vec![(this_custom_callback_var, Loc::at_zero(custom_callback))],
                 CalledVia::Space,

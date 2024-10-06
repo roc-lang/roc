@@ -481,7 +481,7 @@ pub fn constrain_expr(
             }
         }
         Call(boxed, loc_args, called_via) => {
-            let (fn_var, loc_fn, closure_var, ret_var) = &**boxed;
+            let (fn_var, loc_fn, closure_var, ret_var, fx_var) = &**boxed;
             // The expression that evaluates to the function being called, e.g. `foo` in
             // (foo) bar baz
             let opt_symbol = if let Var(symbol, _) | AbilityMember(symbol, _, _) = loc_fn.value {
@@ -512,6 +512,9 @@ pub fn constrain_expr(
             // The function's return type
             let ret_type = Variable(*ret_var);
 
+            // The function's effect type
+            let fx_type = Variable(*fx_var);
+
             // type of values captured in the closure
             let closure_type = Variable(*closure_var);
 
@@ -521,6 +524,7 @@ pub fn constrain_expr(
             vars.push(*fn_var);
             vars.push(*ret_var);
             vars.push(*closure_var);
+            vars.push(*fx_var);
 
             let mut arg_types = Vec::with_capacity(loc_args.len());
             let mut arg_cons = Vec::with_capacity(loc_args.len());
@@ -555,8 +559,7 @@ pub fn constrain_expr(
                 let arguments = types.from_old_type_slice(arg_types.iter());
                 let lambda_set = types.from_old_type(&closure_type);
                 let ret = types.from_old_type(&ret_type);
-                // [purity-inference] TODO: Add fx var to call
-                let fx = types.from_old_type(&Type::Variable(Variable::PURE));
+                let fx = types.from_old_type(&fx_type);
                 let typ = types.function(arguments, lambda_set, ret, fx);
                 constraints.push_type(types, typ)
             };
@@ -572,6 +575,7 @@ pub fn constrain_expr(
                 constraints.equal_types_var(*fn_var, expected_fn_type, category.clone(), fn_region),
                 constraints.and_constraint(arg_cons),
                 constraints.equal_types_var(*ret_var, expected_final_type, category, region),
+                // [purity-inference] TODO: union with current function's fx var
             ];
 
             let and_constraint = constraints.and_constraint(and_cons);
