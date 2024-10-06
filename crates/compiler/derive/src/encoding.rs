@@ -146,6 +146,7 @@ fn to_encoder_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
         Loc::at_zero(to_encoder_var),
         to_encoder_clos_var,
         elem_encoder_var,
+        Variable::PURE,
     ));
 
     // toEncoder elem
@@ -230,6 +231,7 @@ fn to_encoder_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
         Loc::at_zero(encode_list),
         this_encode_list_clos_var,
         this_list_encoder_var,
+        Variable::PURE,
     ));
 
     // Encode.list lst to_elem_encoder
@@ -368,6 +370,7 @@ fn to_encoder_record(
                 Loc::at_zero(to_encoder_var),
                 to_encoder_clos_var,
                 encoder_var,
+                Variable::PURE,
             ));
 
             // toEncoder rcd.a
@@ -449,6 +452,7 @@ fn to_encoder_record(
         Loc::at_zero(encode_record_var),
         encode_record_clos_var,
         encoder_var,
+        Variable::PURE,
     ));
 
     // Encode.record [ { key: .., value: .. }, .. ]
@@ -571,6 +575,7 @@ fn to_encoder_tuple(
                 Loc::at_zero(to_encoder_var),
                 to_encoder_clos_var,
                 encoder_var,
+                Variable::PURE,
             ));
 
             // toEncoder tup.0
@@ -632,6 +637,7 @@ fn to_encoder_tuple(
         Loc::at_zero(encode_tuple_var),
         encode_tuple_clos_var,
         encoder_var,
+        Variable::PURE,
     ));
 
     // Encode.tuple [ { key: .., value: .. }, .. ]
@@ -772,6 +778,7 @@ fn to_encoder_tag_union(
                         Loc::at_zero(to_encoder_var),
                         to_encoder_clos_var,
                         encoder_var,
+                        Variable::PURE,
                     ));
 
                     // toEncoder rcd.a
@@ -831,6 +838,7 @@ fn to_encoder_tag_union(
                 Loc::at_zero(encode_tag_var),
                 this_encode_tag_clos_var,
                 this_encoder_var,
+                Variable::PURE,
             ));
 
             // Encode.tag "A" [ Encode.toEncoder v1, Encode.toEncoder v2 ]
@@ -986,6 +994,7 @@ fn wrap_in_encode_custom(
         Loc::at_zero(Var(Symbol::ENCODE_APPEND_WITH, this_append_with_fn_var)),
         this_append_with_clos_var,
         Variable::LIST_U8,
+        Variable::PURE,
     ));
 
     // Encode.appendWith bytes encoder fmt
@@ -1078,6 +1087,7 @@ fn wrap_in_encode_custom(
         Loc::at_zero(Var(Symbol::ENCODE_CUSTOM, this_custom_fn_var)),
         this_custom_clos_var,    // -[clos]->
         this_custom_encoder_var, // t' ~ Encoder fmt
+        Variable::PURE,
     ));
 
     // Encode.custom \bytes, fmt -> Encode.appendWith bytes encoder fmt

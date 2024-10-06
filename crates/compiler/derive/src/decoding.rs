@@ -91,6 +91,7 @@ fn wrap_in_decode_custom_decode_with(
             Loc::at_zero(decode_with_var),
             this_decode_with_clos_var,
             this_decode_with_ret_var,
+            Variable::PURE,
         ));
         let decode_with_call = Call(
             decode_with_fn,
@@ -197,6 +198,7 @@ fn wrap_in_decode_custom_decode_with(
             Loc::at_zero(decode_custom_var),
             this_decode_custom_clos_var,
             this_decode_custom_ret_var,
+            Variable::PURE,
         ));
         let decode_custom_call = Call(
             decode_custom_fn,

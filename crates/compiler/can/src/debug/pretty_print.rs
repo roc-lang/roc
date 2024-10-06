@@ -267,7 +267,7 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
             .append(expr(c, Free, f, &body.value))
             .group(),
         Call(fun, args, _) => {
-            let (_, fun, _, _) = &**fun;
+            let (_, fun, _, _, _) = &**fun;
             maybe_paren!(
                 Free,
                 p,
