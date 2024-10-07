@@ -217,28 +217,27 @@ fn main() -> io::Result<()> {
 
             let opt_main_path = matches.get_one::<PathBuf>(FLAG_MAIN);
 
-            match check_file(
-                &arena,
-                roc_file_path.to_owned(),
-                opt_main_path.cloned(),
-                emit_timings,
-                RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
-                threading,
-            ) {
-                Ok((problems, total_time)) => {
-                    problems.print_error_warning_count(total_time);
-                    Ok(problems.exit_code())
-                }
+            let roc_blocks = extract_roc_blocks(roc_file_path);
 
-                Err(LoadingProblem::FormattedReport(report)) => {
-                    print!("{report}");
+            for (index, block) in roc_blocks.iter().enumerate() {
+                let temp_roc_file_path = format!("/tmp/temp_roc_block_{}.roc", index);
+                std::fs::write(&temp_roc_file_path, block)
+                    .expect("Unable to write temp ROC file");
 
-                    Ok(1)
-                }
-                Err(other) => {
-                    panic!("build_file failed with error:\n{other:?}");
+                match check_file(
+                    &arena,
+                    PathBuf::from(&temp_roc_file_path),
+                    opt_main_path.cloned(),
+                    emit_timings,
+                    RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+                    threading,
+                ) {
+                    Ok((problems, total_time)) => problems.print_error_warning_count(total_time),
+                    Err(LoadingProblem::FormattedReport(report)) => print!("{report}"),
+                    Err(other) => panic!("build_file failed with error:\n{other:?}"),
                 }
             }
+            Ok(0)
         }
         Some((CMD_REPL, matches)) => {
             let has_color = !matches.get_one::<bool>(FLAG_NO_COLOR).unwrap();
@@ -406,4 +405,23 @@ fn roc_files_recursive<P: AsRef<Path>>(
     }
 
     Ok(())
+}
+
+fn extract_roc_blocks(path: &PathBuf) -> Vec<String> {
+    let content = std::fs::read_to_string(path)
+        .unwrap_or_else(|_| panic!("Could not read file: {}", path.display()));
+
+    if path.extension() == Some(OsStr::new("md")) {
+        content
+            .split("```roc")
+            .skip(1)
+            .filter_map(|block| {
+                block
+                    .split_once("```")
+                    .map(|(code, _)| code.trim().to_string())
+            })
+            .collect()
+    } else {
+        vec![content]
+    }
 }
