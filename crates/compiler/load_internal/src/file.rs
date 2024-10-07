@@ -4987,15 +4987,19 @@ fn build_platform_header<'a>(
     comments: &'a [CommentOrNewline<'a>],
     module_timing: ModuleTiming,
 ) -> Result<(ModuleId, PQModuleName<'a>, ModuleHeader<'a>), LoadingProblem<'a>> {
-    let requires = arena.alloc([Loc::at(
-        header.requires.item.signature.region,
-        header.requires.item.signature.extract_spaces().item,
-    )]);
+    let requires = header
+        .requires
+        .item
+        .signatures
+        .map_items(arena, |item| {
+            Loc::at(item.region, item.extract_spaces().item)
+        })
+        .items;
     let provides = bumpalo::collections::Vec::from_iter_in(
         unspace(arena, header.provides.item.items)
             .iter()
             .copied()
-            .zip(requires.iter().copied()),
+            .zip(dbg!(&requires).iter().copied()),
         arena,
     );
     let packages = unspace(arena, header.packages.item.items);
