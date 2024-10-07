@@ -139,8 +139,7 @@ pub struct SingleEntryPoint<'a> {
 
 #[derive(Debug, Clone, Copy)]
 pub enum EntryPoint<'a> {
-    Single(SingleEntryPoint<'a>),
-    Multiple(&'a [SingleEntryPoint<'a>]),
+    Program(&'a [SingleEntryPoint<'a>]),
     Expects { symbols: &'a [Symbol] },
 }
 

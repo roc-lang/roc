@@ -237,7 +237,7 @@ fn gen_from_mono_module_llvm<'a>(
                 })
                 .collect_in(arena);
 
-            roc_mono::ir::EntryPoint::Multiple(entry_points.into_bump_slice())
+            roc_mono::ir::EntryPoint::Program(entry_points.into_bump_slice())
         }
         EntryPoint::Test => roc_mono::ir::EntryPoint::Expects { symbols: &[] },
     };
