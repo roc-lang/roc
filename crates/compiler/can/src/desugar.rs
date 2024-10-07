@@ -373,7 +373,7 @@ pub fn desugar_expr<'a>(
             }
         },
 
-        TupleAccess(sub_expr, paths) => {
+        TupleAccess(sub_expr, paths, shortcut) => {
             let region = loc_expr.region;
             let loc_sub_expr = Loc {
                 region,
@@ -382,6 +382,7 @@ pub fn desugar_expr<'a>(
             let value = TupleAccess(
                 &desugar_expr(env, scope, env.arena.alloc(loc_sub_expr)).value,
                 paths,
+                *shortcut,
             );
 
             env.arena.alloc(Loc { region, value })
@@ -404,7 +405,7 @@ pub fn desugar_expr<'a>(
                 },
             ))
         }
-        RecordAccess(sub_expr, paths) => {
+        RecordAccess(sub_expr, paths, shortcut) => {
             let region = loc_expr.region;
             let loc_sub_expr = Loc {
                 region,
@@ -413,6 +414,7 @@ pub fn desugar_expr<'a>(
             let value = RecordAccess(
                 &desugar_expr(env, scope, env.arena.alloc(loc_sub_expr)).value,
                 paths,
+                *shortcut,
             );
 
             env.arena.alloc(Loc { region, value })

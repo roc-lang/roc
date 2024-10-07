@@ -4718,9 +4718,8 @@ mod test_fmt {
         ));
     }
 
-    // todo: @wip
-    // #[test]
-    fn _func_call_trailing_lambda_field_shortcut() {
+    #[test]
+    fn func_call_trailing_closure_shortcut_field_access() {
         expr_formats_same(indoc!(
             r"
                 list = List.map [{ foo: 1 }] \.foo
@@ -4754,7 +4753,7 @@ mod test_fmt {
     }
 
     #[test]
-    fn simple_closure_pizza() {
+    fn simple_closure_shortcut_pizza_pipe() {
         expr_formats_same(indoc!(
             r"
             \|> Num.add 1
@@ -4763,13 +4762,32 @@ mod test_fmt {
     }
 
     #[test]
-    fn simple_closure_pizza_with_right_on_the_newline() {
+    fn simple_closure_shortcut_pizza_pipe_right_on_the_newline() {
         expr_formats_same(indoc!(
             r"
             \|>
                 Num.add 1
             "
         ));
+    }
+
+    #[test]
+    fn simple_closure_with_pizza_pipe_right_on_the_newline() {
+        expr_formats_to(
+            indoc!(
+                r"
+            \un -> un |>
+                Num.add 1
+            "
+            ),
+            indoc!(
+                r"
+            \un -> un
+                |>
+                Num.add 1
+            "
+            ),
+        );
     }
 
     #[test]
@@ -4833,9 +4851,8 @@ mod test_fmt {
         ));
     }
 
-    // todo: @wip
-    // #[test]
-    fn _simple_closure_field_shortcut() {
+    #[test]
+    fn simple_closure_field_shortcut() {
         expr_formats_same(indoc!(
             r"
             \.foo
@@ -4843,8 +4860,26 @@ mod test_fmt {
         ));
     }
 
-    // #[test]
-    fn _simple_closure_field_as_part_of_bin_op() {
+    #[test]
+    fn simple_closure_tuple_index_shortcut() {
+        expr_formats_same(indoc!(
+            r"
+            \.0
+            "
+        ));
+    }
+
+    #[test]
+    fn simple_closure_field_tuple_index_shortcut() {
+        expr_formats_same(indoc!(
+            r"
+            \.bru.0
+            "
+        ));
+    }
+
+    #[test]
+    fn simple_closure_field_as_part_of_bin_op() {
         expr_formats_same(indoc!(
             r"
             \.foo + 1
@@ -4891,7 +4926,7 @@ mod test_fmt {
         ));
     }
 
-    // todo: @wip pipline looks interesting :)
+    // note: word 'pipline' looks interesting :)
     #[test]
     fn pipline_apply_lambda_1() {
         expr_formats_same(indoc!(

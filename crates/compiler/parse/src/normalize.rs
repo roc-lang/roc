@@ -700,10 +700,12 @@ impl<'a> Normalize<'a> for Expr<'a> {
                 is_negative,
             },
             Expr::Str(a) => Expr::Str(a.normalize(arena)),
-            Expr::RecordAccess(a, b) => Expr::RecordAccess(arena.alloc(a.normalize(arena)), b),
+            Expr::RecordAccess(a, b, s) => {
+                Expr::RecordAccess(arena.alloc(a.normalize(arena)), b, s)
+            }
             Expr::AccessorFunction(a) => Expr::AccessorFunction(a),
             Expr::RecordUpdater(a) => Expr::RecordUpdater(a),
-            Expr::TupleAccess(a, b) => Expr::TupleAccess(arena.alloc(a.normalize(arena)), b),
+            Expr::TupleAccess(a, b, s) => Expr::TupleAccess(arena.alloc(a.normalize(arena)), b, s),
             Expr::TrySuffix { expr: a, target } => Expr::TrySuffix {
                 expr: arena.alloc(a.normalize(arena)),
                 target,

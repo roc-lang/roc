@@ -1,8 +1,8 @@
 use crate::ast::{
-    is_expr_suffixed, AssignedField, ClosureShortcut, Collection, CommentOrNewline, Defs, Expr,
-    ExtractSpaces, Implements, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
-    ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport,
-    ModuleImportParams, Pattern, Spaceable, Spaced, Spaces, SpacesBefore, TryTarget,
+    is_expr_suffixed, AssignedField, ClosureShortcut, ClosureShortcutForAccess, Collection,
+    CommentOrNewline, Defs, Expr, ExtractSpaces, Implements, ImportAlias, ImportAsKeyword,
+    ImportExposingKeyword, ImportedModuleName, IngestedFileAnnotation, IngestedFileImport,
+    ModuleImport, ModuleImportParams, Pattern, Spaceable, Spaced, Spaces, SpacesBefore, TryTarget,
     TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use crate::blankspace::{
@@ -279,7 +279,7 @@ fn parse_term<'a>(
                     Err((_, fail)) => return Err((MadeProgress, fail)),
                 };
 
-                let ident = ident_to_expr(arena, ident);
+                let ident = ident_to_expr(arena, ident, false);
                 let expr = apply_expr_access_chain(arena, ident, suffixes);
                 Ok((MadeProgress, Loc::pos(start, ident_end, expr), state))
             }
@@ -411,7 +411,7 @@ fn parse_negative_or_term<'a>(
                     Err((_, fail)) => return Err((MadeProgress, fail)),
                 };
 
-                let ident = ident_to_expr(arena, ident);
+                let ident = ident_to_expr(arena, ident, false);
                 let expr = apply_expr_access_chain(arena, ident, suffixes);
                 Ok((MadeProgress, Loc::pos(start, ident_end, expr), state))
             }
@@ -1999,8 +1999,8 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         },
         // These would not have parsed as patterns
         Expr::AccessorFunction(_)
-        | Expr::RecordAccess(_, _)
-        | Expr::TupleAccess(_, _)
+        | Expr::RecordAccess(_, _, _)
+        | Expr::TupleAccess(_, _, _)
         | Expr::List { .. }
         | Expr::Closure(_, _, _)
         | Expr::Backpassing(_, _, _)
@@ -2185,7 +2185,7 @@ fn rest_of_closure<'a>(
             }
         };
 
-        let ident = ident_to_expr(arena, ident);
+        let ident = ident_to_expr(arena, ident, keep_shortcut_on_format);
         let ident = apply_expr_access_chain(arena, ident, suffixes);
         let ident = Loc::pos(after_slash, ident_end, ident);
 
@@ -2200,7 +2200,7 @@ fn rest_of_closure<'a>(
             };
 
         let closure_shortcut = if keep_shortcut_on_format {
-            Some(ClosureShortcut::FieldAccess)
+            Some(ClosureShortcut::FieldOrTupleAccess)
         } else {
             None
         };
@@ -3322,7 +3322,7 @@ where
     }
 }
 
-fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
+fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>, is_closure_shortcut: bool) -> Expr<'a> {
     match src {
         Ident::Tag(string) => Expr::Tag(string),
         Ident::OpaqueRef(string) => Expr::OpaqueRef(string),
@@ -3346,16 +3346,23 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
 
             // The remaining items in the iterator are record field accesses,
             // e.g. `bar` in `foo.bar.baz`, followed by `baz`
+            let mut first = true;
             for field in iter {
+                let shortcut = if is_closure_shortcut && first {
+                    Some(ClosureShortcutForAccess::Yes)
+                } else {
+                    None
+                };
+                first = false;
                 // Wrap the previous answer in the new one, so we end up
                 // with a nested Expr. That way, `foo.bar.baz` gets represented
                 // in the AST as if it had been written (foo.bar).baz all along.
                 match field {
                     Accessor::RecordField(field) => {
-                        answer = Expr::RecordAccess(arena.alloc(answer), field);
+                        answer = Expr::RecordAccess(arena.alloc(answer), field, shortcut);
                     }
                     Accessor::TupleIndex(index) => {
-                        answer = Expr::TupleAccess(arena.alloc(answer), index);
+                        answer = Expr::TupleAccess(arena.alloc(answer), index, shortcut);
                     }
                 }
             }
@@ -3589,7 +3596,8 @@ fn record_help<'a>() -> impl Parser<'a, RecordHelp<'a>, ERecord<'a>> {
                 match parse_ident(arena, state) {
                     Err(_) => (None, before_prefix),
                     Ok((_, ident, state)) => {
-                        let ident = Loc::pos(ident_at, state.pos(), ident_to_expr(arena, ident));
+                        let ident =
+                            Loc::pos(ident_at, state.pos(), ident_to_expr(arena, ident, false));
                         match eat_space::<'_, ERecord<'_>>(arena, state, false) {
                             Err(_) => (None, before_prefix),
                             Ok((_, (spaces_after, _), state)) => {
@@ -3732,10 +3740,10 @@ fn apply_expr_access_chain<'a>(
         .into_iter()
         .fold(value, |value, accessor| match accessor {
             Suffix::Accessor(Accessor::RecordField(field)) => {
-                Expr::RecordAccess(arena.alloc(value), field)
+                Expr::RecordAccess(arena.alloc(value), field, None)
             }
             Suffix::Accessor(Accessor::TupleIndex(field)) => {
-                Expr::TupleAccess(arena.alloc(value), field)
+                Expr::TupleAccess(arena.alloc(value), field, None)
             }
             Suffix::TrySuffix(target) => Expr::TrySuffix {
                 target,

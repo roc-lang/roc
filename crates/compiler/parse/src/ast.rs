@@ -405,7 +405,12 @@ pub enum TryTarget {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ClosureShortcut {
     BinOp,
-    FieldAccess,
+    FieldOrTupleAccess,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum ClosureShortcutForAccess {
+    Yes,
 }
 
 /// A parsed expression. This uses lifetimes extensively for two reasons:
@@ -435,7 +440,11 @@ pub enum Expr<'a> {
     SingleQuote(&'a str),
 
     /// Look up exactly one field on a record, e.g. `x.foo`.
-    RecordAccess(&'a Expr<'a>, &'a str),
+    RecordAccess(
+        &'a Expr<'a>,
+        &'a str,
+        #[educe(Debug(ignore))] Option<ClosureShortcutForAccess>,
+    ),
 
     /// e.g. `.foo` or `.0`
     AccessorFunction(Accessor<'a>),
@@ -444,7 +453,11 @@ pub enum Expr<'a> {
     RecordUpdater(&'a str),
 
     /// Look up exactly one field on a tuple, e.g. `(x, y).1`.
-    TupleAccess(&'a Expr<'a>, &'a str),
+    TupleAccess(
+        &'a Expr<'a>,
+        &'a str,
+        #[educe(Debug(ignore))] Option<ClosureShortcutForAccess>,
+    ),
 
     /// Early return on failures - e.g. the ! in `File.readUtf8! path`
     TrySuffix {
@@ -652,10 +665,10 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::NonBase10Int { .. } => false,
         Expr::Str(_) => false,
         Expr::SingleQuote(_) => false,
-        Expr::RecordAccess(a, _) => is_expr_suffixed(a),
+        Expr::RecordAccess(a, _, _) => is_expr_suffixed(a),
         Expr::AccessorFunction(_) => false,
         Expr::RecordUpdater(_) => false,
-        Expr::TupleAccess(a, _) => is_expr_suffixed(a),
+        Expr::TupleAccess(a, _, _) => is_expr_suffixed(a),
         Expr::List(items) => items.iter().any(|x| is_expr_suffixed(&x.value)),
         Expr::RecordUpdate { update, fields } => {
             is_expr_suffixed(&update.value)
@@ -1000,8 +1013,8 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                         }
                     }
                 }
-                RecordAccess(expr, _)
-                | TupleAccess(expr, _)
+                RecordAccess(expr, _, _)
+                | TupleAccess(expr, _, _)
                 | TrySuffix { expr, .. }
                 | SpaceBefore(expr, _)
                 | SpaceAfter(expr, _)
@@ -2437,8 +2450,8 @@ impl<'a> Malformed for Expr<'a> {
 
             Str(inner) => inner.is_malformed(),
 
-            RecordAccess(inner, _) |
-            TupleAccess(inner, _) |
+            RecordAccess(inner, _, _) |
+            TupleAccess(inner, _, _) |
             TrySuffix { expr: inner, .. } => inner.is_malformed(),
 
             List(items) => items.is_malformed(),

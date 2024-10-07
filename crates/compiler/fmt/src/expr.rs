@@ -49,7 +49,7 @@ impl<'a> Formattable for Expr<'a> {
             | Crash
             | Dbg => false,
 
-            RecordAccess(inner, _) | TupleAccess(inner, _) | TrySuffix { expr: inner, .. } => {
+            RecordAccess(inner, ..) | TupleAccess(inner, ..) | TrySuffix { expr: inner, .. } => {
                 inner.is_multiline()
             }
 
@@ -386,8 +386,8 @@ impl<'a> Formattable for Expr<'a> {
                     assigned_field_to_space_before,
                 );
             }
-            Closure(loc_patterns, loc_body, is_short) => {
-                fmt_closure(buf, loc_patterns, loc_body, *is_short, indent);
+            Closure(loc_patterns, loc_body, shortcut) => {
+                fmt_closure(buf, loc_patterns, loc_body, *shortcut, indent);
             }
             Backpassing(loc_patterns, loc_body, loc_ret) => {
                 fmt_backpassing(buf, loc_patterns, loc_body, loc_ret, indent);
@@ -520,13 +520,17 @@ impl<'a> Formattable for Expr<'a> {
                 buf.push('&');
                 buf.push_str(key);
             }
-            RecordAccess(expr, key) => {
-                expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
+            RecordAccess(expr, key, shortcut) => {
+                if *shortcut == None {
+                    expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
+                }
                 buf.push('.');
                 buf.push_str(key);
             }
-            TupleAccess(expr, key) => {
-                expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
+            TupleAccess(expr, key, shortcut) => {
+                if *shortcut == None {
+                    expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
+                }
                 buf.push('.');
                 buf.push_str(key);
             }
@@ -1231,8 +1235,8 @@ fn fmt_closure<'a>(
     buf.indent(indent);
     buf.push('\\');
 
-    if let Some(shortcut) = shortcut {
-        match shortcut {
+    match shortcut {
+        Some(sh) => match sh {
             ClosureShortcut::BinOp => {
                 if let BinOps([(_, binop)], loc_right) = loc_ret.value {
                     push_op(buf, binop.value);
@@ -1261,48 +1265,62 @@ fn fmt_closure<'a>(
                     return;
                 }
             }
-            ClosureShortcut::FieldAccess => {
-                // todo: @wip
+            ClosureShortcut::FieldOrTupleAccess => {
+                // do nothing , it will be handled by the Expr::RecordAccess or Expr::TupleAccess
             }
-        }
-    }
+        },
+        None => {
+            let arguments_are_multiline = loc_patterns
+                .iter()
+                .any(|loc_pattern| loc_pattern.is_multiline());
 
-    let arguments_are_multiline = loc_patterns
-        .iter()
-        .any(|loc_pattern| loc_pattern.is_multiline());
-
-    // If the arguments are multiline, go down a line and indent.
-    let indent = if arguments_are_multiline {
-        indent + INDENT
-    } else {
-        indent
-    };
-
-    let mut it = loc_patterns.iter().peekable();
-
-    while let Some(loc_pattern) = it.next() {
-        loc_pattern.format_with_options(buf, Parens::InAsPattern, Newlines::No, indent);
-
-        if it.peek().is_some() {
-            buf.indent(indent);
-            if arguments_are_multiline {
-                buf.push(',');
-                buf.newline();
+            // If the arguments are multiline, go down a line and indent.
+            let indent = if arguments_are_multiline {
+                indent + INDENT
             } else {
-                buf.push_str(",");
+                indent
+            };
+
+            let mut it = loc_patterns.iter().peekable();
+
+            while let Some(loc_pattern) = it.next() {
+                loc_pattern.format_with_options(buf, Parens::InAsPattern, Newlines::No, indent);
+
+                if it.peek().is_some() {
+                    buf.indent(indent);
+                    if arguments_are_multiline {
+                        buf.push(',');
+                        buf.newline();
+                    } else {
+                        buf.push_str(",");
+                        buf.spaces(1);
+                    }
+                }
+            }
+
+            if arguments_are_multiline {
+                buf.newline();
+                buf.indent(indent);
+            } else {
                 buf.spaces(1);
             }
+
+            buf.push_str("->");
+
+            // the body of the Closure can be on the same line, or
+            // on a new line. If it's on the same line, insert a space.
+            match &loc_ret.value {
+                SpaceBefore(_, _) => {
+                    // the body starts with (first comment and then) a newline
+                    // do nothing
+                }
+                _ => {
+                    // add a space after the `->`
+                    buf.spaces(1);
+                }
+            };
         }
     }
-
-    if arguments_are_multiline {
-        buf.newline();
-        buf.indent(indent);
-    } else {
-        buf.spaces(1);
-    }
-
-    buf.push_str("->");
 
     let is_multiline = loc_ret.value.is_multiline();
 
@@ -1311,20 +1329,6 @@ fn fmt_closure<'a>(
         indent + INDENT
     } else {
         indent
-    };
-
-    // the body of the Closure can be on the same line, or
-    // on a new line. If it's on the same line, insert a space.
-
-    match &loc_ret.value {
-        SpaceBefore(_, _) => {
-            // the body starts with (first comment and then) a newline
-            // do nothing
-        }
-        _ => {
-            // add a space after the `->`
-            buf.spaces(1);
-        }
     };
 
     if is_multiline {
