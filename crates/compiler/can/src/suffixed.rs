@@ -325,7 +325,14 @@ pub fn unwrap_suffixed_expression_apply_help<'a>(
 
                 let new_apply = arena.alloc(Loc::at(loc_expr.region, Expr::Apply(unwrapped_function, local_args, called_via)));
 
-                return init_unwrapped_err(arena, new_apply, maybe_def_pat, target);
+                match maybe_def_pat {
+                    Some(..) => {
+                        return Err(EUnwrapped::UnwrappedDefExpr { loc_expr: new_apply, target });
+                    }
+                    None => {
+                        return init_unwrapped_err(arena, new_apply, maybe_def_pat, target);
+                    }
+                }
             }
 
             // function is another expression

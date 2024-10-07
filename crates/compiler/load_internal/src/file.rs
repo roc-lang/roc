@@ -784,7 +784,7 @@ impl<'a> State<'a> {
         number_of_workers: usize,
         exec_mode: ExecutionMode,
     ) -> Self {
-        let cache_dir = roc_packaging::cache::roc_cache_dir();
+        let cache_dir = roc_packaging::cache::roc_cache_packages_dir();
         let dependencies = Dependencies::new(exec_mode.goal_phase());
 
         Self {
