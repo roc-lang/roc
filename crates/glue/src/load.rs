@@ -88,7 +88,7 @@ pub fn generate(
                     linking_strategy,
                     true,
                     None,
-                    RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+                    RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
                     load_config,
                     Some(dylib_dir.path()),
                 ),
@@ -414,7 +414,7 @@ pub fn load_types(
         arena,
         full_file_path,
         None,
-        RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+        RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
         LoadConfig {
             target,
             function_kind,

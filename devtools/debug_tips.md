@@ -48,3 +48,23 @@ Note that the addresses shown in objdump may use a different offset compared to 
 
 gdb scripting is very useful, [for example](https://roc.zulipchat.com/#narrow/stream/395097-compiler-development/topic/gdb.20script/near/424422545).
 ChatGPT and Claude are good at writing those scripts as well.
+
+## Code Coverage
+
+When investigating a bug, it can be nice to instantly see if a line of rust code was executed during for example `roc build yourFile.roc`. We can use [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) for this, on linux, it comes pre-installed with our flake.nix. On macos you'll need to install it with `cargo +stable install cargo-llvm-cov --locked`.
+
+To generate the code coverage file:
+
+```shell
+$ cd roc
+$ source <(cargo llvm-cov show-env --export-prefix)
+$ cargo llvm-cov clean --workspace
+$ cargo build --bin roc
+# Replace with the command you want to generate coverage for:
+$ ./target/debug/roc build ./examples/platform-switching/rocLovesRust.roc
+# To view in editor
+$ cargo llvm-cov report --lcov  --output-path lcov.info
+# To view in browser
+$ cargo llvm-cov report --html
+```
+Viewing lcov.info will depend on your editor. For vscode, you can use the [coverage gutters](https://marketplace.visualstudio.com/items?itemName=ryanluker.vscode-coverage-gutters) extension. After installing, click `Watch` in the bottom bar and go to a file for which you want to see the coverage, for example `crates/compiler/build/src/link.rs`. `Watch` in the bottom bar will now be replaced with `x% Coverage`.
