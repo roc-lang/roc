@@ -1,6 +1,7 @@
 use log::{debug, info};
 use roc_can::{
     def::Def,
+    expr::Expr,
     traverse::{DeclarationInfo, FoundDeclaration},
 };
 use std::collections::HashMap;
@@ -329,16 +330,31 @@ impl AnalyzedDocument {
 
         let signature = format_var_type(found_decl.var(), &mut subs.clone(), module_id, interns);
 
+        use DeclarationInfo as DI;
         let symbol_range = match found_decl {
-            FoundDeclaration::Decl(DeclarationInfo::Value { loc_symbol, .. }) => {
-                loc_symbol.byte_range()
-            }
-            FoundDeclaration::Decl(DeclarationInfo::Function { loc_symbol, .. }) => {
-                loc_symbol.byte_range()
-            }
+            FoundDeclaration::Decl(DI::Value { loc_symbol, .. }) => loc_symbol.byte_range(),
+            FoundDeclaration::Decl(DI::Function { loc_symbol, .. }) => loc_symbol.byte_range(),
             FoundDeclaration::Def(Def { loc_pattern, .. }) => loc_pattern.byte_range(),
             _ => return None,
         };
+
+        let expr = match found_decl {
+            FoundDeclaration::Decl(DI::Value { loc_expr, .. }) => &loc_expr.value,
+            FoundDeclaration::Decl(DI::Function { loc_body, .. }) => &loc_body.value,
+            FoundDeclaration::Def(Def { loc_expr, .. }) => &loc_expr.value,
+            _ => return None,
+        };
+
+        let annotation = match found_decl {
+            FoundDeclaration::Decl(DI::Value { annotation, .. }) => annotation,
+            FoundDeclaration::Decl(DI::Function { annotation, .. }) => annotation,
+            FoundDeclaration::Def(Def { annotation, .. }) => annotation.as_ref(),
+            _ => return None,
+        };
+
+        if annotation.is_some() | matches!(expr, Expr::ImportParams(..)) {
+            return None;
+        }
 
         let symbol_str = latest_doc.source[symbol_range].to_owned();
 
