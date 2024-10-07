@@ -1,3 +1,8 @@
+/// Given a Subs that's been populated from type inference, and a Variable,
+/// ensure that Variable is monomorphic by going through and creating
+/// specializations of that type wherever necessary.
+///
+/// This only operates at the type level. It does not create new function implementations (for example).
 use bitvec::vec::BitVec;
 use roc_module::ident::{Lowercase, TagName};
 use roc_types::{

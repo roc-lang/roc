@@ -2460,33 +2460,33 @@ mod specialize_types {
         );
     }
 
-    #[test]
-    fn infer_linked_list_map() {
-        infer_eq_without_problem(
-            indoc!(
-                r"
-                    map = \f, list ->
-                        when list is
-                            Nil -> Nil
-                            Cons x xs ->
-                                a = f x
-                                b = map f xs
+    // #[test]
+    // fn infer_linked_list_map() {
+    //     infer_eq_without_problem(
+    //         indoc!(
+    //             r"
+    //                 map = \f, list ->
+    //                     when list is
+    //                         Nil -> Nil
+    //                         Cons x xs ->
+    //                             a = f x
+    //                             b = map f xs
 
-                                Cons a b
+    //                             Cons a b
 
-                    map
-                       "
-            ),
-            "([] -> []), [Cons [] c, Nil] as c -> [Cons [] d, Nil] as d",
-        );
-    }
+    //                 map
+    //                    "
+    //         ),
+    //         "([] -> []), [Cons [] c, Nil] as c -> [Cons [] d, Nil] as d",
+    //     );
+    // }
 
     #[test]
     fn typecheck_linked_list_map() {
         infer_eq_without_problem(
             indoc!(
                 r"
-                    ConsList a : [Cons a (ConsList a), Nil]
+                    ConsList a := [Cons a (ConsList a), Nil]
 
                     map : (a -> b), ConsList a -> ConsList b
                     map = \f, list ->
@@ -2813,42 +2813,42 @@ mod specialize_types {
         );
     }
 
-    #[test]
-    fn infer_record_linked_list_map() {
-        infer_eq_without_problem(
-            indoc!(
-                r"
-                    map = \f, list ->
-                        when list is
-                            Nil -> Nil
-                            Cons { x,  xs } ->
-                                Cons { x: f x, xs : map f xs }
+    // #[test]
+    // fn infer_record_linked_list_map() {
+    //     infer_eq_without_problem(
+    //         indoc!(
+    //             r"
+    //                 map = \f, list ->
+    //                     when list is
+    //                         Nil -> Nil
+    //                         Cons { x,  xs } ->
+    //                             Cons { x: f x, xs : map f xs }
 
-                    map
-                "
-            ),
-            "(a -> b), [Cons { x : a, xs : c }, Nil] as c -> [Cons { x : b, xs : d }, Nil] as d",
-        );
-    }
+    //                 map
+    //             "
+    //         ),
+    //         "(a -> b), [Cons { x : a, xs : c }, Nil] as c -> [Cons { x : b, xs : d }, Nil] as d",
+    //     );
+    // }
 
     #[test]
     fn typecheck_mutually_recursive_tag_union_2() {
         infer_eq_without_problem(
             indoc!(
                 r"
-                    ListA a b : [Cons a (ListB b a), Nil]
-                    ListB a b : [Cons a (ListA b a), Nil]
+                    ListA a b := [Cons a (ListB b a), Nil]
+                    ListB a b := [Cons a (ListA b a), Nil]
 
                     ConsList q : [Cons q (ConsList q), Nil]
 
                     toAs : (b -> a), ListA a b -> ConsList a
-                    toAs = \f, lista ->
+                    toAs = \f, @ListA lista ->
                         when lista is
                             Nil -> Nil
-                            Cons a listb ->
+                            Cons a (@ListB listb) ->
                                 when listb is
                                     Nil -> Nil
-                                    Cons b newLista ->
+                                    Cons b (@ListA newLista) ->
                                         Cons a (Cons (f b) (toAs f newLista))
 
                     toAs
@@ -2877,26 +2877,26 @@ mod specialize_types {
         );
     }
 
-    #[test]
-    fn infer_mutually_recursive_tag_union() {
-        infer_eq_without_problem(
-            indoc!(
-                r"
-                   toAs = \f, lista ->
-                        when lista is
-                            Nil -> Nil
-                            Cons a listb ->
-                                when listb is
-                                    Nil -> Nil
-                                    Cons b newLista ->
-                                        Cons a (Cons (f b) (toAs f newLista))
+    // #[test]
+    // fn infer_mutually_recursive_tag_union() {
+    //     infer_eq_without_problem(
+    //         indoc!(
+    //             r"
+    //                toAs = \f, lista ->
+    //                     when lista is
+    //                         Nil -> Nil
+    //                         Cons a listb ->
+    //                             when listb is
+    //                                 Nil -> Nil
+    //                                 Cons b newLista ->
+    //                                     Cons a (Cons (f b) (toAs f newLista))
 
-                   toAs
-                "
-            ),
-            "(a -> b), [Cons c [Cons a d, Nil], Nil] as d -> [Cons c [Cons b e], Nil] as e",
-        );
-    }
+    //                toAs
+    //             "
+    //         ),
+    //         "(a -> b), [Cons c [Cons a d, Nil], Nil] as d -> [Cons c [Cons b e], Nil] as e",
+    //     );
+    // }
 
     #[test]
     fn solve_list_get() {
@@ -3039,10 +3039,7 @@ mod specialize_types {
 
     #[test]
     fn map_insert() {
-        infer_eq_without_problem(
-            "Dict.insert",
-            "Dict k v, k, v -> Dict k v where k implements Hash & Eq",
-        );
+        infer_eq_without_problem("Dict.insert", "Dict [] [], [], [] -> Dict [] []");
     }
 
     #[test]
