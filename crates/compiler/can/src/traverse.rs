@@ -1000,7 +1000,9 @@ pub fn find_declaration_at<'a>(
         fn visit_decl(&mut self, decl: DeclarationInfo<'_>) {
             if self.should_visit(decl.region()) {
                 match decl {
-                    DeclarationInfo::Value { .. } | DeclarationInfo::Function { .. } => {
+                    DeclarationInfo::Value { .. }
+                    | DeclarationInfo::Function { .. }
+                    | DeclarationInfo::Destructure { .. } => {
                         self.found = Some(FoundDeclaration::Decl(unsafe {
                             // Safety: Extends the lifetime to that of `Finder` which will not
                             // outlive `decls`. The declaration can't escape the passed in `decls`,
