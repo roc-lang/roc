@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use bumpalo::Bump;
-use roc_can::expr::{Declarations, Expr};
+use roc_can::expr::{DeclarationTag, Declarations, Expr};
 use roc_error_macros::{internal_error, user_error};
 use roc_fmt::def::fmt_defs;
 use roc_fmt::header::fmt_header;
@@ -317,7 +317,7 @@ fn annotate<'a>(
     let mut file_progress = 0;
 
     // TODO: check assumption that this is always in order
-    for (index, _) in decls.iter_bottom_up() {
+    for (index, tag) in decls.iter_bottom_up() {
         let var = decls.variables[index];
         let symbol = decls.symbols[index];
 
@@ -338,10 +338,16 @@ fn annotate<'a>(
         );
         subs.rollback_to(snapshot);
 
-        let symbol_str = &src[symbol.byte_range()];
+        let byte_range = match tag {
+            DeclarationTag::Destructure(i) => {
+                let region = decls.destructs[i.index()].loc_pattern.region;
+                region.start().byte_offset()..region.end().byte_offset()
+            }
+            _ => symbol.byte_range(),
+        };
+        let symbol_str = &src[byte_range.clone()];
 
-        let position = symbol.region.start().byte_offset();
-
+        let position = byte_range.start;
         buffer.push_str(&src[file_progress..position]);
         buffer.push_str(&format!("{symbol_str} : {signature}\n"));
 
