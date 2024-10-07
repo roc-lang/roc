@@ -334,6 +334,7 @@ impl AnalyzedDocument {
         let symbol_range = match found_decl {
             FoundDeclaration::Decl(DI::Value { loc_symbol, .. }) => loc_symbol.byte_range(),
             FoundDeclaration::Decl(DI::Function { loc_symbol, .. }) => loc_symbol.byte_range(),
+            FoundDeclaration::Decl(DI::Destructure { loc_pattern, .. }) => loc_pattern.byte_range(),
             FoundDeclaration::Def(Def { loc_pattern, .. }) => loc_pattern.byte_range(),
             _ => return None,
         };
@@ -341,6 +342,7 @@ impl AnalyzedDocument {
         let expr = match found_decl {
             FoundDeclaration::Decl(DI::Value { loc_expr, .. }) => &loc_expr.value,
             FoundDeclaration::Decl(DI::Function { loc_body, .. }) => &loc_body.value,
+            FoundDeclaration::Decl(DI::Destructure { loc_expr, .. }) => &loc_expr.value,
             FoundDeclaration::Def(Def { loc_expr, .. }) => &loc_expr.value,
             _ => return None,
         };
@@ -348,6 +350,7 @@ impl AnalyzedDocument {
         let annotation = match found_decl {
             FoundDeclaration::Decl(DI::Value { annotation, .. }) => annotation,
             FoundDeclaration::Decl(DI::Function { annotation, .. }) => annotation,
+            FoundDeclaration::Decl(DI::Destructure { annotation, .. }) => annotation,
             FoundDeclaration::Def(Def { annotation, .. }) => annotation.as_ref(),
             _ => return None,
         };
