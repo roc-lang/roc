@@ -51,6 +51,8 @@ ChatGPT and Claude are good at writing those scripts as well.
 
 ## Code Coverage
 
+Usefullnes: minor
+
 When investigating a bug, it can be nice to instantly see if a line of rust code was executed during for example `roc build yourFile.roc`. We can use [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) for this, on linux, it comes pre-installed with our flake.nix. On macos you'll need to install it with `cargo +stable install cargo-llvm-cov --locked`.
 
 To generate the code coverage file:
@@ -68,3 +70,31 @@ $ cargo llvm-cov report --lcov  --output-path lcov.info
 $ cargo llvm-cov report --html
 ```
 Viewing lcov.info will depend on your editor. For vscode, you can use the [coverage gutters](https://marketplace.visualstudio.com/items?itemName=ryanluker.vscode-coverage-gutters) extension. After installing, click `Watch` in the bottom bar and go to a file for which you want to see the coverage, for example `crates/compiler/build/src/link.rs`. `Watch` in the bottom bar will now be replaced with `x% Coverage`.
+
+## Trace all Function Calls
+
+[uftrace](https://github.com/namhyung/uftrace) allows you to trace all functions that where called (in the compiler) in order. You can use it with for example `./target/debug/roc build examples/platform-switching/rocLovesRust.roc`. The output looks like this:
+```
+roc::main() {
+  roc_tracing::setup_tracing();
+  roc_cli::build_app();
+  roc_packaging::cache::roc_cache_dir();
+  roc_cli::build() {
+    roc_cli::opt_level_from_flags();
+    roc_linker::supported();
+    roc_target::Target::architecture();
+    roc_build::program::standard_load_config() {
+...
+```
+It can be valuable if you want to compare two compiler versions/commits and see how their function calls differ. It also gives you a nice overview compared to stepping with the debugger.
+
+### Getting started with uftrace
+
+1. [Install uftrace](https://github.com/namhyung/uftrace?tab=readme-ov-file#how-to-build-and-install-uftrace)
+2. In the roc repo in rust-toolchain.toml, switch to the commented out nightly channel
+3. `export RUSTFLAGS="-Awarnings -Z instrument-mcount -C passes=ee-instrument<post-inline>"`
+4. `cargo build --bin roc`
+5. Example usage: `uftrace record --filter 'roc_*' ./target/debug/roc build examples/platform-switching/rocLovesRust.roc`
+6. Show the trace and drop all functions that do not start with `roc`: `uftrace replay -f none --notrace '^[^r]|^r[^o]|^ro[^c]' -D 5`. `-D 5` sets the function call depth, feel free to modify it to best suit your purpose.
+
+uftrace also allows you to log function arguments but I have not played with that yet. Our arguments can contain much data so that may not be so practical.
