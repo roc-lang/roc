@@ -954,7 +954,7 @@ pub enum HeaderType<'a> {
         opt_app_module_id: Option<ModuleId>,
         /// the name and type scheme of the main function (required by the platform)
         /// (type scheme is currently unused)
-        provides: &'a [(Loc<ExposedName<'a>>, Loc<TypedIdent<'a>>)],
+        provides: &'a [Loc<ExposedName<'a>>],
         requires: &'a [Loc<TypedIdent<'a>>],
         requires_types: &'a [Loc<UppercaseIdent<'a>>],
         exposes: &'a [Loc<ModuleName<'a>>],

@@ -51,7 +51,7 @@ use roc_parse::ast::{self, CommentOrNewline, ExtractSpaces, Spaced, ValueDef};
 use roc_parse::header::parse_module_defs;
 use roc_parse::header::{
     self, AppHeader, ExposedName, HeaderType, ImportsKeywordItem, PackageEntry, PackageHeader,
-    PlatformHeader, To, TypedIdent,
+    PlatformHeader, To,
 };
 use roc_parse::parser::{FileError, SourceError, SyntaxError};
 use roc_problem::Severity;
@@ -667,7 +667,7 @@ enum PlatformPath<'a> {
 #[derive(Debug)]
 struct PlatformData<'a> {
     module_id: ModuleId,
-    provides: &'a [(Loc<ExposedName<'a>>, Loc<TypedIdent<'a>>)],
+    provides: &'a [Loc<ExposedName<'a>>],
     is_prebuilt: bool,
 }
 
@@ -3185,7 +3185,7 @@ fn finish_specialization<'a>(
                         let mut buf =
                             bumpalo::collections::Vec::with_capacity_in(provides.len(), arena);
 
-                        for (loc_name, _loc_typed_ident) in provides {
+                        for loc_name in provides {
                             let ident_id = ident_ids.get_or_insert(loc_name.value.as_str());
                             let symbol = Symbol::new(module_id, ident_id);
                             let proc_layout =
@@ -4996,10 +4996,7 @@ fn build_platform_header<'a>(
         })
         .items;
     let provides = bumpalo::collections::Vec::from_iter_in(
-        unspace(arena, header.provides.item.items)
-            .iter()
-            .copied()
-            .zip(dbg!(&requires).iter().copied()),
+        unspace(arena, header.provides.item.items).iter().copied(),
         arena,
     );
     let packages = unspace(arena, header.packages.item.items);
@@ -5451,7 +5448,7 @@ fn parse<'a>(
         if let HeaderType::Platform { provides, .. } = header.header_type {
             exposed.reserve(provides.len());
 
-            for (loc_name, _loc_typed_ident) in provides.iter() {
+            for loc_name in provides.iter() {
                 // Use get_or_insert here because the ident_ids may already
                 // created an IdentId for this, when it was imported exposed
                 // in a dependent module.
