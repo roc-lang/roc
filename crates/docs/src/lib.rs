@@ -483,7 +483,7 @@ pub fn load_module_for_docs(filename: PathBuf) -> LoadedModule {
         &arena,
         filename,
         None,
-        RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+        RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
         load_config,
     ) {
         Ok(loaded) => loaded,

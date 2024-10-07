@@ -248,8 +248,7 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
             body_pattern,
             body_expr,
         } => {
-            // note called_from_def is passed as `false` as this is a top_level_def
-            match unwrap_suffixed_expression(arena, body_expr, None) {
+            match unwrap_suffixed_expression(arena, body_expr, Some(ann_pattern)) {
                 Ok(new_expr) => AnnotatedBody {
                     ann_pattern,
                     ann_type,
@@ -278,6 +277,19 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
                             Some((ann_pattern, ann_type)),
                             target,
                         ),
+                    },
+                ),
+                // When the last expression is suffixed, it will try to unwrap the def, but because we
+                // have an annotated def we can simply ignore the try and return it as is without
+                // creating an intermediate identifier
+                Err(EUnwrapped::UnwrappedDefExpr { loc_expr, .. }) => desugar_value_def_suffixed(
+                    arena,
+                    AnnotatedBody {
+                        ann_pattern,
+                        ann_type,
+                        lines_between,
+                        body_pattern,
+                        body_expr: loc_expr,
                     },
                 ),
                 Err(..) => AnnotatedBody {

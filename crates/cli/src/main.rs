@@ -49,7 +49,7 @@ fn main() -> io::Result<()> {
                     BuildConfig::BuildAndRunIfNoErrors,
                     Triple::host().into(),
                     None,
-                    RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+                    RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
                     LinkType::Executable,
                 )
             } else {
@@ -64,7 +64,7 @@ fn main() -> io::Result<()> {
                     BuildConfig::BuildAndRun,
                     Triple::host().into(),
                     None,
-                    RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+                    RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
                     LinkType::Executable,
                 )
             } else {
@@ -90,7 +90,7 @@ fn main() -> io::Result<()> {
                     BuildConfig::BuildAndRunIfNoErrors,
                     Triple::host().into(),
                     None,
-                    RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+                    RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
                     LinkType::Executable,
                 )
             } else {
@@ -127,7 +127,7 @@ fn main() -> io::Result<()> {
             let function_kind = FunctionKind::from_env();
             roc_linker::generate_stub_lib(
                 input_path,
-                RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+                RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
                 target,
                 function_kind,
             );
@@ -199,7 +199,7 @@ fn main() -> io::Result<()> {
                 BuildConfig::BuildOnly,
                 target,
                 out_path,
-                RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+                RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
                 link_type,
             )?)
         }
@@ -222,7 +222,7 @@ fn main() -> io::Result<()> {
                 roc_file_path.to_owned(),
                 opt_main_path.cloned(),
                 emit_timings,
-                RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+                RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
                 threading,
             ) {
                 Ok((problems, total_time)) => {
