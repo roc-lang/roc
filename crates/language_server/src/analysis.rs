@@ -114,7 +114,7 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
         roc_target::Target::LinuxX64,
         roc_load::FunctionKind::LambdaSet,
         roc_reporting::report::RenderTarget::LanguageServer,
-        RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+        RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
         roc_reporting::report::DEFAULT_PALETTE,
     );
 
