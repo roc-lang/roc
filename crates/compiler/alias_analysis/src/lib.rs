@@ -28,7 +28,7 @@ pub const MOD_APP: ModName = ModName(b"UserApp");
 pub const STATIC_STR_NAME: ConstName = ConstName(&Symbol::STR_ALIAS_ANALYSIS_STATIC.to_ne_bytes());
 pub const STATIC_LIST_NAME: ConstName = ConstName(b"THIS IS A STATIC LIST");
 
-const ENTRY_POINT_NAME: &[u8] = b"mainForHost";
+const DEFAULT_ENTRY_POINT_NAME: &[u8] = b"mainForHost";
 
 pub fn func_name_bytes(proc: &Proc) -> [u8; SIZE] {
     let bytes = func_name_bytes_help(
@@ -149,6 +149,7 @@ where
     I1: Iterator<Item = &'r Proc<'a>>,
     I2: Iterator<Item = &'r HostExposedLambdaSet<'a>>,
 {
+    let mut entry_point_names = bumpalo::vec![in arena;];
     let main_module = {
         let mut m = ModDefBuilder::new();
 
@@ -264,6 +265,7 @@ where
 
                 type_definitions.extend(env.type_names);
 
+                entry_point_names.push(entry_point_name.as_bytes());
                 let entry_point_name = FuncName(entry_point_name.as_bytes());
                 m.add_func(entry_point_name, entry_point_function)?;
             }
@@ -295,6 +297,7 @@ where
 
                     type_definitions.extend(env.type_names);
 
+                    entry_point_names.push(entry_point_name.as_bytes());
                     let entry_point_name = FuncName(entry_point_name.as_bytes());
                     m.add_func(entry_point_name, entry_point_function)?;
                 }
@@ -329,7 +332,8 @@ where
 
                 type_definitions.extend(env.type_names);
 
-                let entry_point_name = FuncName(ENTRY_POINT_NAME);
+                entry_point_names.push(DEFAULT_ENTRY_POINT_NAME);
+                let entry_point_name = FuncName(DEFAULT_ENTRY_POINT_NAME);
                 m.add_func(entry_point_name, entry_point_function)?;
             }
         }
@@ -368,11 +372,13 @@ where
         let mut p = ProgramBuilder::new();
         p.add_mod(MOD_APP, main_module)?;
 
-        p.add_entry_point(
-            EntryPointName(ENTRY_POINT_NAME),
-            MOD_APP,
-            FuncName(ENTRY_POINT_NAME),
-        )?;
+        for entry_point_name in entry_point_names {
+            p.add_entry_point(
+                EntryPointName(entry_point_name),
+                MOD_APP,
+                FuncName(entry_point_name),
+            )?;
+        }
 
         p.build()?
     };

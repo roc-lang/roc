@@ -1,4 +1,4 @@
-app [main, main2] { pf: platform "fibonacci-platform/main.roc" }
+app [main] { pf: platform "fibonacci-platform/main.roc" }
 
 main = \n -> fib n 0 1
 
