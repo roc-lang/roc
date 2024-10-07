@@ -230,9 +230,13 @@ fn mono_module_to_dylib_llvm<'a>(
         } => {
             // TODO support multiple of these!
             debug_assert_eq!(exposed_to_host.len(), 1);
-            let (symbol, layout) = exposed_to_host[0];
+            let (name, symbol, layout) = exposed_to_host[0];
 
-            roc_mono::ir::SingleEntryPoint { symbol, layout }
+            roc_mono::ir::SingleEntryPoint {
+                name,
+                symbol,
+                layout,
+            }
         }
         EntryPoint::Test => {
             unreachable!()

@@ -132,6 +132,7 @@ pub enum OptLevel {
 
 #[derive(Debug, Clone, Copy)]
 pub struct SingleEntryPoint<'a> {
+    pub name: &'a str,
     pub symbol: Symbol,
     pub layout: ProcLayout<'a>,
 }
@@ -139,6 +140,7 @@ pub struct SingleEntryPoint<'a> {
 #[derive(Debug, Clone, Copy)]
 pub enum EntryPoint<'a> {
     Single(SingleEntryPoint<'a>),
+    Multiple(&'a [SingleEntryPoint<'a>]),
     Expects { symbols: &'a [Symbol] },
 }
 

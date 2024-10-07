@@ -238,6 +238,7 @@ where
 
         match entry_point {
             EntryPoint::Single(SingleEntryPoint {
+                name: entry_point_name,
                 symbol: entry_point_symbol,
                 layout: entry_point_layout,
             }) => {
@@ -263,8 +264,40 @@ where
 
                 type_definitions.extend(env.type_names);
 
-                let entry_point_name = FuncName(ENTRY_POINT_NAME);
+                let entry_point_name = FuncName(entry_point_name.as_bytes());
                 m.add_func(entry_point_name, entry_point_function)?;
+            }
+            EntryPoint::Multiple(entry_points) => {
+                for SingleEntryPoint {
+                    name: entry_point_name,
+                    symbol: entry_point_symbol,
+                    layout: entry_point_layout,
+                } in entry_points
+                {
+                    let roc_main_bytes = func_name_bytes_help(
+                        *entry_point_symbol,
+                        entry_point_layout.arguments.iter().copied(),
+                        Niche::NONE,
+                        entry_point_layout.result,
+                    );
+                    let roc_main = FuncName(&roc_main_bytes);
+
+                    let mut env = Env::new();
+
+                    let entry_point_function = build_entry_point(
+                        &mut env,
+                        interner,
+                        *entry_point_layout,
+                        Some(roc_main),
+                        &host_exposed_functions,
+                        &erased_functions,
+                    )?;
+
+                    type_definitions.extend(env.type_names);
+
+                    let entry_point_name = FuncName(entry_point_name.as_bytes());
+                    m.add_func(entry_point_name, entry_point_function)?;
+                }
             }
             EntryPoint::Expects { symbols } => {
                 // construct a big pattern match picking one of the expects at random

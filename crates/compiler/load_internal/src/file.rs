@@ -3171,7 +3171,7 @@ fn finish_specialization<'a>(
                             let proc_layout =
                                 proc_layout_for(state.procedures.keys().copied(), symbol);
 
-                            buf.push((symbol, proc_layout));
+                            buf.push(("", symbol, proc_layout));
                         }
 
                         buf.into_bump_slice()
@@ -3186,12 +3186,13 @@ fn finish_specialization<'a>(
                             bumpalo::collections::Vec::with_capacity_in(provides.len(), arena);
 
                         for loc_name in provides {
-                            let ident_id = ident_ids.get_or_insert(loc_name.value.as_str());
+                            let fn_name = loc_name.value.as_str();
+                            let ident_id = ident_ids.get_or_insert(fn_name);
                             let symbol = Symbol::new(module_id, ident_id);
                             let proc_layout =
                                 proc_layout_for(state.procedures.keys().copied(), symbol);
 
-                            buf.push((symbol, proc_layout));
+                            buf.push((fn_name, symbol, proc_layout));
                         }
 
                         buf.into_bump_slice()
