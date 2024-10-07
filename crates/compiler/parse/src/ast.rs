@@ -402,6 +402,12 @@ pub enum TryTarget {
     Result,
 }
 
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum ClosureShortcut {
+    BinOp,
+    FieldAccess,
+}
+
 /// A parsed expression. This uses lifetimes extensively for two reasons:
 ///
 /// 1. It uses Bump::alloc for all allocations, which returns a reference.
@@ -489,7 +495,7 @@ pub enum Expr<'a> {
     Closure(
         &'a [Loc<Pattern<'a>>],
         &'a Loc<Expr<'a>>,
-        #[educe(Debug(ignore))] bool,
+        #[educe(Debug(ignore))] Option<ClosureShortcut>,
     ),
 
     /// Multiple defs in a row
@@ -585,7 +591,7 @@ pub fn is_top_level_suffixed(expr: &Expr) -> bool {
     }
 }
 
-/// Check if the bang suffix is applied recursevely in expression
+/// Check if the bang suffix is applied recursively in expression
 pub fn is_expr_suffixed(expr: &Expr) -> bool {
     match expr {
         // expression without arguments, `read!`

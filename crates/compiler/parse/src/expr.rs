@@ -1,9 +1,9 @@
 use crate::ast::{
-    is_expr_suffixed, AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces,
-    Implements, ImportAlias, ImportAsKeyword, ImportExposingKeyword, ImportedModuleName,
-    IngestedFileAnnotation, IngestedFileImport, ModuleImport, ModuleImportParams, Pattern,
-    Spaceable, Spaced, Spaces, SpacesBefore, TryTarget, TypeAnnotation, TypeDef, TypeHeader,
-    ValueDef,
+    is_expr_suffixed, AssignedField, ClosureShortcut, Collection, CommentOrNewline, Defs, Expr,
+    ExtractSpaces, Implements, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
+    ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport,
+    ModuleImportParams, Pattern, Spaceable, Spaced, Spaces, SpacesBefore, TryTarget,
+    TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use crate::blankspace::{
     eat_space, eat_space_check, eat_space_loc_comments, space0_e, spaces_around_help, SpacedBuilder,
@@ -2199,10 +2199,15 @@ fn rest_of_closure<'a>(
                 }
             };
 
+        let closure_shortcut = if keep_shortcut_on_format {
+            Some(ClosureShortcut::FieldAccess)
+        } else {
+            None
+        };
         let short_closure = Expr::Closure(
             params.into_bump_slice(),
             arena.alloc(body),
-            keep_shortcut_on_format,
+            closure_shortcut,
         );
         return Ok((MadeProgress, short_closure, state));
     }
@@ -2256,10 +2261,15 @@ fn rest_of_closure<'a>(
 
         let loc_body = Loc::pos(after_binop, state.pos(), body);
 
+        let closure_shortcut = if keep_shortcut_on_format {
+            Some(ClosureShortcut::BinOp)
+        } else {
+            None
+        };
         let short_closure = Expr::Closure(
             params.into_bump_slice(),
             arena.alloc(loc_body),
-            keep_shortcut_on_format,
+            closure_shortcut,
         );
         return Ok((MadeProgress, short_closure, state));
     }
@@ -2368,7 +2378,7 @@ fn rest_of_closure<'a>(
         }
     };
 
-    let closure = Expr::Closure(params.into_bump_slice(), arena.alloc(body), false);
+    let closure = Expr::Closure(params.into_bump_slice(), arena.alloc(body), None);
     Ok((MadeProgress, closure, state))
 }
 

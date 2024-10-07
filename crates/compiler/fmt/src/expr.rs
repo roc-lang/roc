@@ -9,8 +9,8 @@ use crate::spaces::{
 use crate::Buf;
 use roc_module::called_via::{self, BinOp};
 use roc_parse::ast::{
-    is_expr_suffixed, AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces,
-    Pattern, TryTarget, WhenBranch,
+    is_expr_suffixed, AssignedField, Base, ClosureShortcut, Collection, CommentOrNewline, Expr,
+    ExtractSpaces, Pattern, TryTarget, WhenBranch,
 };
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_parse::ident::Accessor;
@@ -1223,7 +1223,7 @@ fn fmt_closure<'a>(
     buf: &mut Buf,
     loc_patterns: &'a [Loc<Pattern<'a>>],
     loc_ret: &'a Loc<Expr<'a>>,
-    is_short: bool,
+    shortcut: Option<ClosureShortcut>,
     indent: u16,
 ) {
     use self::Expr::*;
@@ -1231,27 +1231,39 @@ fn fmt_closure<'a>(
     buf.indent(indent);
     buf.push('\\');
 
-    if is_short {
-        if let BinOps([(_, binop)], loc_right) = loc_ret.value {
-            push_op(buf, binop.value);
-            buf.spaces(1);
+    if let Some(shortcut) = shortcut {
+        match shortcut {
+            ClosureShortcut::BinOp => {
+                if let BinOps([(_, binop)], loc_right) = loc_ret.value {
+                    push_op(buf, binop.value);
+                    buf.spaces(1);
 
-            // If the body is multiline, go down a line and indent.
-            let body_indent = if loc_ret.value.is_multiline() {
-                indent + INDENT
-            } else {
-                indent
-            };
+                    // If the body is multiline, go down a line and indent.
+                    let body_indent = if loc_ret.value.is_multiline() {
+                        indent + INDENT
+                    } else {
+                        indent
+                    };
 
-            // we only want to indent the remaining lines if this is a suffixed expression.
-            let right_indent = if is_expr_suffixed(&loc_right.value) {
-                body_indent + INDENT
-            } else {
-                body_indent
-            };
+                    // we only want to indent the remaining lines if this is a suffixed expression.
+                    let right_indent = if is_expr_suffixed(&loc_right.value) {
+                        body_indent + INDENT
+                    } else {
+                        body_indent
+                    };
 
-            loc_right.format_with_options(buf, Parens::InOperator, Newlines::Yes, right_indent);
-            return;
+                    loc_right.format_with_options(
+                        buf,
+                        Parens::InOperator,
+                        Newlines::Yes,
+                        right_indent,
+                    );
+                    return;
+                }
+            }
+            ClosureShortcut::FieldAccess => {
+                // todo: @wip
+            }
         }
     }
 

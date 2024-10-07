@@ -4843,6 +4843,15 @@ mod test_fmt {
         ));
     }
 
+    // #[test]
+    fn _simple_closure_field_as_part_of_bin_op() {
+        expr_formats_same(indoc!(
+            r"
+            \.foo + 1
+            "
+        ));
+    }
+
     #[test]
     fn simple_closure_field_shortcut_space_format() {
         expr_formats_to(

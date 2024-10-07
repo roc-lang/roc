@@ -524,7 +524,7 @@ pub fn desugar_expr<'a>(
                         ),
                     ]),
                     env.arena.alloc(Loc::at(region, closure_body)),
-                    false,
+                    None,
                 ),
             })
         }
@@ -552,7 +552,7 @@ pub fn desugar_expr<'a>(
 
             let desugared_ret = desugar_expr(env, scope, loc_ret);
             let desugared_loc_patterns = desugar_loc_patterns(env, scope, loc_patterns);
-            let closure = Expr::Closure(desugared_loc_patterns, desugared_ret, false);
+            let closure = Expr::Closure(desugared_loc_patterns, desugared_ret, None);
             let loc_closure = Loc::at(loc_expr.region, closure);
 
             match &desugared_body.value {
@@ -700,7 +700,7 @@ pub fn desugar_expr<'a>(
                             ),
                         ]),
                         env.arena.alloc(Loc::at(region, closure_body)),
-                        false,
+                        None,
                     ),
                 ))
             };
@@ -772,7 +772,7 @@ pub fn desugar_expr<'a>(
                 value: Closure(
                     closure_args,
                     env.arena.alloc(Loc::at(loc_expr.region, record_val)),
-                    false,
+                    None,
                 ),
             });
 
