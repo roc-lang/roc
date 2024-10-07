@@ -632,6 +632,18 @@ mod suffixed_tests {
             "##
         );
     }
+
+    #[test]
+    fn issue_7103() {
+        run_test!(
+            r##"
+            run : Task {} _
+            run = line! "foo"
+
+            main = run
+            "##
+        );
+    }
 }
 
 #[cfg(test)]
