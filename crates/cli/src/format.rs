@@ -1,5 +1,6 @@
 use std::ffi::OsStr;
 use std::io::Write;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use bumpalo::Bump;
@@ -9,6 +10,7 @@ use roc_fmt::def::fmt_defs;
 use roc_fmt::header::fmt_header;
 use roc_fmt::Buf;
 use roc_load::{ExecutionMode, FunctionKind, LoadConfig, LoadedModule, Threading};
+use roc_module::symbol::{Interns, ModuleId};
 use roc_packaging::cache::{self, RocCacheDir};
 use roc_parse::ast::{FullAst, SpacesBefore};
 use roc_parse::header::parse_module_defs;
@@ -16,7 +18,7 @@ use roc_parse::normalize::Normalize;
 use roc_parse::{header, parser::SyntaxError, state::State};
 use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
 use roc_target::Target;
-use roc_types::subs::Subs;
+use roc_types::subs::{Subs, Variable};
 
 #[derive(Copy, Clone, Debug)]
 pub enum FormatMode {
@@ -328,16 +330,6 @@ fn annotate<'a>(
             continue;
         }
 
-        let snapshot = subs.snapshot();
-        let signature = roc_types::pretty_print::name_and_print_var(
-            var,
-            subs,
-            loaded.module_id,
-            &loaded.interns,
-            roc_types::pretty_print::DebugPrint::NOTHING,
-        );
-        subs.rollback_to(snapshot);
-
         let byte_range = match tag {
             DeclarationTag::Destructure(i) => {
                 let region = decls.destructs[i.index()].loc_pattern.region;
@@ -345,17 +337,55 @@ fn annotate<'a>(
             }
             _ => symbol.byte_range(),
         };
-        let symbol_str = &src[byte_range.clone()];
 
-        let position = byte_range.start;
+        let (position, edit) = annotate_edit(
+            src,
+            subs,
+            &loaded.interns,
+            loaded.module_id,
+            var,
+            byte_range,
+        );
+
         buffer.push_str(&src[file_progress..position]);
-        buffer.push_str(&format!("{symbol_str} : {signature}\n"));
+        buffer.push_str(&edit);
 
         file_progress = position;
     }
     buffer.push_str(&src[file_progress..]);
 
     Ok(buffer)
+}
+
+fn annotate_edit(
+    src: &str,
+    subs: &mut Subs,
+    interns: &Interns,
+    module_id: ModuleId,
+    var: Variable,
+    symbol_range: Range<usize>,
+) -> (usize, String) {
+    let snapshot = subs.snapshot();
+    let signature = roc_types::pretty_print::name_and_print_var(
+        var,
+        subs,
+        module_id,
+        interns,
+        roc_types::pretty_print::DebugPrint::NOTHING,
+    );
+    subs.rollback_to(snapshot);
+
+    let line_start = src[..symbol_range.start]
+        .rfind("\n")
+        .map_or(symbol_range.start, |pos| pos + 1);
+    let indent = src[line_start..]
+        .split_once(|c: char| !c.is_ascii_whitespace())
+        .map_or("", |pair| pair.0);
+
+    let symbol_str = &src[symbol_range.clone()];
+    let edit = format!("{indent}{symbol_str} : {signature}\n");
+
+    (line_start, edit)
 }
 
 #[cfg(test)]
