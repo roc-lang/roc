@@ -70,7 +70,7 @@ fn lower_var(
     let root_var = subs.get_root_key_without_compacting(var);
 
     if !cache.is_known_monomorphic(root_var) {
-        let content = subs.get_content_without_compacting(root_var).clone();
+        let content = *subs.get_content_without_compacting(root_var);
         let content = lower_content(cache, subs, problems, &content);
 
         // Update Subs so when we look up this var in the future, it's the monomorphized Content.
@@ -129,7 +129,7 @@ fn lower_content(
                 }
 
                 Content::Structure(FlatType::Record(
-                    RecordFields::insert_into_subs(subs, fields.into_iter()),
+                    RecordFields::insert_into_subs(subs, fields),
                     Variable::EMPTY_RECORD,
                 ))
             }
@@ -140,7 +140,7 @@ fn lower_content(
                 lower_vars(elems.iter_mut().map(|(_, var)| var), cache, subs, problems);
 
                 Content::Structure(FlatType::Tuple(
-                    TupleElems::insert_into_subs(subs, elems.into_iter()),
+                    TupleElems::insert_into_subs(subs, elems),
                     Variable::EMPTY_TUPLE,
                 ))
             }
@@ -151,7 +151,7 @@ fn lower_content(
                 lower_vars(tags.iter_mut().flat_map(|(_, vars)| vars.iter_mut()), cache, subs, problems);
 
                 Content::Structure(FlatType::TagUnion(
-                    UnionTags::insert_into_subs(subs, tags.into_iter()),
+                    UnionTags::insert_into_subs(subs, tags),
                     TagExt::Any(Variable::EMPTY_TAG_UNION),
                 ))
             }
@@ -167,11 +167,11 @@ fn lower_content(
 
                 // Then, add the tag names with no payloads. (There are no variables to lower here.)
                 for index in tag_names.into_iter() {
-                    tags.push(((&subs[index]).clone(), Vec::new()));
+                    tags.push(((subs[index]).clone(), Vec::new()));
                 }
 
                 Content::Structure(FlatType::TagUnion(
-                    UnionTags::insert_into_subs(subs, tags.into_iter()),
+                    UnionTags::insert_into_subs(subs, tags),
                     TagExt::Any(Variable::EMPTY_TAG_UNION),
                 ))
             }
@@ -183,7 +183,7 @@ fn lower_content(
 
                 Content::Structure(FlatType::RecursiveTagUnion(
                     lower_var(cache, subs, problems, *rec),
-                    UnionTags::insert_into_subs(subs, tags.into_iter()),
+                    UnionTags::insert_into_subs(subs, tags),
                     TagExt::Any(Variable::EMPTY_TAG_UNION),
                 ))
             }
@@ -197,11 +197,11 @@ fn lower_content(
         | Content::FlexAbleVar(_, _)
         | Content::RigidAbleVar(_, _)
         | Content::RecursionVar { .. } => Content::Structure(FlatType::EmptyTagUnion),
-        Content::LambdaSet(lambda_set) => Content::LambdaSet(lambda_set.clone()),
+        Content::LambdaSet(lambda_set) => Content::LambdaSet(*lambda_set),
         Content::ErasedLambda => Content::ErasedLambda,
         Content::Alias(symbol, args, real, kind) => {
             let new_real = lower_var(cache, subs, problems, *real);
-            Content::Alias(*symbol, args.clone(), new_real, *kind)
+            Content::Alias(*symbol, *args, new_real, *kind)
         }
         Content::Error => Content::Error,
     }
@@ -265,7 +265,7 @@ fn resolve_record_ext(
     // Collapse (recursively) all the fields in ext into a flat list of fields.
     loop {
         for (label, field) in fields.sorted_iterator(subs, ext) {
-            all_fields.push((label.clone(), field.clone()));
+            all_fields.push((label.clone(), field));
         }
 
         match subs.get_content_without_compacting(ext) {
