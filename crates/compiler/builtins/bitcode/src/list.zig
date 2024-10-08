@@ -618,6 +618,16 @@ pub fn listDropAt(
 ) callconv(.C) RocList {
     const size = list.len();
     const size_u64 = @as(u64, @intCast(size));
+
+    // NOTE
+    // we need to return an empty list explicitly,
+    // because we rely on the pointer field being null if the list is empty
+    // which also requires duplicating the utils.decref call to spend the RC token
+    if (size <= 1) {
+        list.decref(alignment, element_width, elements_refcounted, dec);
+        return RocList.empty();
+    }
+
     // If droping the first or last element, return a seamless slice.
     // For simplicity, do this by calling listSublist.
     // In the future, we can test if it is faster to manually inline the important parts here.
@@ -638,25 +648,16 @@ pub fn listDropAt(
         // were >= than `size`, and we know `size` fits in usize.
         const drop_index: usize = @intCast(drop_index_u64);
 
-        if (elements_refcounted) {
-            const element = source_ptr + drop_index * element_width;
-            dec(element);
-        }
-
-        // NOTE
-        // we need to return an empty list explicitly,
-        // because we rely on the pointer field being null if the list is empty
-        // which also requires duplicating the utils.decref call to spend the RC token
-        if (size < 2) {
-            list.decref(alignment, element_width, elements_refcounted, dec);
-            return RocList.empty();
-        }
-
         if (list.isUnique()) {
-            const i = drop_index;
-            const copy_target = source_ptr;
+            if (elements_refcounted) {
+                const element = source_ptr + drop_index * element_width;
+                dec(element);
+            }
+
+            const copy_target = source_ptr + (drop_index * element_width);
             const copy_source = copy_target + element_width;
-            std.mem.copyForwards(u8, copy_target[i..size], copy_source[i..size]);
+            const copy_size = (size - drop_index - 1) * element_width;
+            std.mem.copyForwards(u8, copy_target[0..copy_size], copy_source[0..copy_size]);
 
             var new_list = list;
 

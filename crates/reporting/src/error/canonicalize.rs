@@ -2488,32 +2488,6 @@ fn pretty_runtime_error<'b>(
 
             title = "DEGENERATE BRANCH";
         }
-        RuntimeError::MultipleOldRecordBuilders(region) => {
-            let tip = alloc
-                .tip()
-                .append(alloc.reflow("You can combine them or apply them separately."));
-
-            doc = alloc.stack([
-                alloc.reflow("This function is applied to multiple old-style record builders:"),
-                alloc.region(lines.convert_region(region), severity),
-                alloc.note("Functions can only take at most one old-style record builder!"),
-                tip,
-            ]);
-
-            title = "MULTIPLE OLD-STYLE RECORD BUILDERS";
-        }
-        RuntimeError::UnappliedOldRecordBuilder(region) => {
-            doc = alloc.stack([
-                alloc.reflow("This old-style record builder was not applied to a function:"),
-                alloc.region(lines.convert_region(region), severity),
-                alloc.reflow("However, we need a function to construct the record."),
-                alloc.note(
-                    "Functions must be applied directly. The pipe operator (|>) cannot be used.",
-                ),
-            ]);
-
-            title = "UNAPPLIED OLD-STYLE RECORD BUILDER";
-        }
         RuntimeError::EmptyRecordBuilder(region) => {
             doc = alloc.stack([
                 alloc.reflow("This record builder has no fields:"),

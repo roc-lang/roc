@@ -63,8 +63,8 @@ Defs {
                                     ),
                                 ],
                             },
-                            @66-130 If(
-                                [
+                            @66-130 If {
+                                if_thens: [
                                     (
                                         @69-70 Var {
                                             module_name: "",
@@ -76,11 +76,12 @@ Defs {
                                         },
                                     ),
                                 ],
-                                @128-130 Var {
+                                final_else: @128-130 Var {
                                     module_name: "",
                                     ident: "c",
                                 },
-                            ),
+                                indented_else: false,
+                            },
                         ),
                         guard: None,
                     },

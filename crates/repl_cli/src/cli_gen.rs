@@ -66,7 +66,7 @@ pub fn eval_llvm(
     ))]
     let (lib, main_fn_name, subs, layout_interner) =
         mono_module_to_dylib_asm(&arena, target, loaded, opt_level)
-            .expect("we produce a valid Dylib");
+            .expect("We failed to produce a valid Dylib.\nTIP: if you're on macos, try this:\n\t<https://github.com/roc-lang/roc/issues/5797#issuecomment-1786105269>");
 
     let mut app = CliApp { lib };
 

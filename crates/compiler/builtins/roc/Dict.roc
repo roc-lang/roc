@@ -509,33 +509,33 @@ removeHelper = \buckets, bucketIndex, distAndFingerprint, data, key ->
 ## is missing. This is more efficient than doing both a `Dict.get` and then a
 ## `Dict.insert` call, and supports being piped.
 ## ```roc
-## alterValue : [Present Bool, Missing] -> [Present Bool, Missing]
+## alterValue : Result Bool [Missing] -> Result Bool [Missing]
 ## alterValue = \possibleValue ->
 ##     when possibleValue is
-##         Missing -> Present Bool.false
-##         Present value -> if value then Missing else Present Bool.true
+##         Err -> Ok Bool.false
+##         Ok value -> if value then Err Missing else Ok Bool.true
 ##
 ## expect Dict.update (Dict.empty {}) "a" alterValue == Dict.single "a" Bool.false
 ## expect Dict.update (Dict.single "a" Bool.false) "a" alterValue == Dict.single "a" Bool.true
 ## expect Dict.update (Dict.single "a" Bool.true) "a" alterValue == Dict.empty {}
 ## ```
-update : Dict k v, k, ([Present v, Missing] -> [Present v, Missing]) -> Dict k v
+update : Dict k v, k, (Result v [Missing] -> Result v [Missing]) -> Dict k v
 update = \@Dict { buckets, data, maxBucketCapacity, maxLoadFactor, shifts }, key, alter ->
     { bucketIndex, result } = find (@Dict { buckets, data, maxBucketCapacity, maxLoadFactor, shifts }) key
     when result is
         Ok value ->
-            when alter (Present value) is
-                Present newValue ->
+            when alter (Ok value) is
+                Ok newValue ->
                     bucket = listGetUnsafe buckets bucketIndex
                     newData = List.set data (Num.toU64 bucket.dataIndex) (key, newValue)
                     @Dict { buckets, data: newData, maxBucketCapacity, maxLoadFactor, shifts }
 
-                Missing ->
+                Err Missing ->
                     removeBucket (@Dict { buckets, data, maxBucketCapacity, maxLoadFactor, shifts }) bucketIndex
 
         Err KeyNotFound ->
-            when alter Missing is
-                Present newValue ->
+            when alter (Err Missing) is
+                Ok newValue ->
                     if List.len data >= maxBucketCapacity then
                         # Need to reallocate let regular insert handle that.
                         insert (@Dict { buckets, data, maxBucketCapacity, maxLoadFactor, shifts }) key newValue
@@ -556,7 +556,7 @@ update = \@Dict { buckets, data, maxBucketCapacity, maxLoadFactor, shifts }, key
                             distAndFingerprint = incrementDistN baseDistAndFingerprint (Num.toU32 dist)
                             insertHelper buckets data bucketIndex distAndFingerprint key newValue maxBucketCapacity maxLoadFactor shifts
 
-                Missing ->
+                Err Missing ->
                     @Dict { buckets, data, maxBucketCapacity, maxLoadFactor, shifts }
 
 circularDist = \start, end, size ->
@@ -1216,8 +1216,8 @@ expect
         List.walk badKeys (Dict.empty {}) \acc, k ->
             Dict.update acc k \val ->
                 when val is
-                    Present p -> Present (p |> Num.addWrap 1)
-                    Missing -> Present 0
+                    Ok p -> Ok (p |> Num.addWrap 1)
+                    Err Missing -> Ok 0
 
     allInsertedCorrectly =
         List.walk badKeys Bool.true \acc, k ->

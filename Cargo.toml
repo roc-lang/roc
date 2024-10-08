@@ -30,6 +30,7 @@ members = [
     "crates/wasm_interp",
     "crates/language_server",
     "crates/copy_zig_glue",
+    "crates/roc_std_heap",
 ]
 
 exclude = [
