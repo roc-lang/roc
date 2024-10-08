@@ -667,6 +667,8 @@ fn make_specialization_decision<P: Phase>(
         | RigidVar(..)
         | LambdaSet(..)
         | ErasedLambda
+        | Pure
+        | Effectful
         | RangedNumber(..) => {
             internal_error!("unexpected")
         }

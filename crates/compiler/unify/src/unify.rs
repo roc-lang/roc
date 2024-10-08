@@ -510,6 +510,8 @@ fn unify_context<M: MetaCollector>(env: &mut Env, pool: &mut Pool, ctx: Context)
         }
         LambdaSet(lset) => unify_lambda_set(env, pool, &ctx, *lset, &ctx.second_desc.content),
         ErasedLambda => unify_erased_lambda(env, pool, &ctx, &ctx.second_desc.content),
+        Pure => unify_pure(env, &ctx, &ctx.second_desc.content),
+        Effectful => unify_effectful(env, &ctx, &ctx.second_desc.content),
         &RangedNumber(range_vars) => unify_ranged_number(env, pool, &ctx, range_vars),
         Error => {
             // Error propagates. Whatever we're comparing it to doesn't matter!
@@ -580,6 +582,7 @@ fn unify_ranged_number<M: MetaCollector>(
             None => not_in_range_mismatch(),
         },
         LambdaSet(..) | ErasedLambda => mismatch!(),
+        Pure | Effectful => mismatch!("Cannot unify RangedNumber with fx var"),
         Error => merge(env, ctx, Error),
     }
 }
@@ -901,6 +904,7 @@ fn unify_alias<M: MetaCollector>(
         }
         LambdaSet(..) => mismatch!("cannot unify alias {:?} with lambda set {:?}: lambda sets should never be directly behind an alias!", ctx.first, other_content),
         ErasedLambda => mismatch!("cannot unify alias {:?} with an erased lambda!", ctx.first),
+        Pure|Effectful => mismatch!("cannot unify alias {:?} with an fx var!", ctx.first),
         Error => merge(env, ctx, Error),
     }
 }
@@ -1100,6 +1104,7 @@ fn unify_structure<M: MetaCollector>(
             )
         }
         ErasedLambda => mismatch!(),
+        Pure | Effectful => mismatch!("Cannot unify structure {:?} with fx vars", &flat_type),
         RangedNumber(other_range_vars) => {
             check_and_merge_valid_range(env, pool, ctx, ctx.second, *other_range_vars, ctx.first)
         }
@@ -1135,6 +1140,50 @@ fn unify_erased_lambda<M: MetaCollector>(
         Structure(..) => mismatch!("Lambda set cannot unify with non-lambda set structure"),
         RangedNumber(..) => mismatch!("Lambda sets are never numbers"),
         Alias(..) => mismatch!("Lambda set can never be directly under an alias!"),
+        Pure | Effectful => mismatch!("Lambda set cannot unify with fx vars"),
+        Error => merge(env, ctx, Error),
+    }
+}
+
+#[inline(always)]
+#[must_use]
+fn unify_pure<M: MetaCollector>(env: &mut Env, ctx: &Context, other: &Content) -> Outcome<M> {
+    match other {
+        Pure => merge(env, ctx, Pure),
+        Effectful => merge(env, ctx, Effectful),
+        FlexVar(_) => merge(env, ctx, Pure),
+        RigidVar(_)
+        | FlexAbleVar(_, _)
+        | RigidAbleVar(_, _)
+        | RecursionVar { .. }
+        | Content::LambdaSet(_)
+        | ErasedLambda
+        | Structure(_)
+        | Alias(_, _, _, _)
+        | RangedNumber(_) => {
+            mismatch!("Cannot unify pure with {:?}", other)
+        }
+        Error => merge(env, ctx, Error),
+    }
+}
+
+#[inline(always)]
+#[must_use]
+fn unify_effectful<M: MetaCollector>(env: &mut Env, ctx: &Context, other: &Content) -> Outcome<M> {
+    match other {
+        Pure | Effectful => merge(env, ctx, Effectful),
+        FlexVar(_) => merge(env, ctx, Effectful),
+        RigidVar(_)
+        | FlexAbleVar(_, _)
+        | RigidAbleVar(_, _)
+        | RecursionVar { .. }
+        | Content::LambdaSet(_)
+        | ErasedLambda
+        | Structure(_)
+        | Alias(_, _, _, _)
+        | RangedNumber(_) => {
+            mismatch!("Cannot unify effectful with {:?}", other)
+        }
         Error => merge(env, ctx, Error),
     }
 }
@@ -1190,6 +1239,7 @@ fn unify_lambda_set<M: MetaCollector>(
         Structure(..) => mismatch!("Lambda set cannot unify with non-lambda set structure"),
         RangedNumber(..) => mismatch!("Lambda sets are never numbers"),
         Alias(..) => mismatch!("Lambda set can never be directly under an alias!"),
+        Pure | Effectful => mismatch!("Lambda sets never unify with fx vars"),
         Error => merge(env, ctx, Error),
     }
 }
@@ -3435,7 +3485,9 @@ fn unify_rigid<M: MetaCollector>(
         | Structure(_)
         | Alias(..)
         | LambdaSet(..)
-        | ErasedLambda => {
+        | ErasedLambda
+        | Pure
+        | Effectful => {
             // Type mismatch! Rigid can only unify with flex, even if the
             // rigid names are the same.
             mismatch!("Rigid {:?} with {:?}", ctx.first, &other)
@@ -3496,7 +3548,9 @@ fn unify_rigid_able<M: MetaCollector>(
         | Alias(..)
         | RangedNumber(..)
         | LambdaSet(..)
-        | ErasedLambda => {
+        | ErasedLambda
+        | Pure
+        | Effectful => {
             // Type mismatch! Rigid can only unify with flex, even if the
             // rigid names are the same.
             mismatch!("Rigid {:?} with {:?}", ctx.first, &other)
@@ -3537,7 +3591,9 @@ fn unify_flex<M: MetaCollector>(
         | Alias(_, _, _, _)
         | RangedNumber(..)
         | LambdaSet(..)
-        | ErasedLambda => {
+        | ErasedLambda
+        | Pure
+        | Effectful => {
             // TODO special-case boolean here
             // In all other cases, if left is flex, defer to right.
             merge(env, ctx, *other)
@@ -3633,6 +3689,7 @@ fn unify_flex_able<M: MetaCollector>(
 
         RigidVar(_) => mismatch!("FlexAble can never unify with non-able Rigid"),
         LambdaSet(..) | ErasedLambda => mismatch!("FlexAble with LambdaSet"),
+        Pure | Effectful => mismatch!("FlexAble with fx var"),
 
         Alias(name, _args, _real_var, AliasKind::Opaque) => {
             // Opaque type wins
@@ -3800,6 +3857,8 @@ fn unify_recursion<M: MetaCollector>(
         }
 
         ErasedLambda => mismatch!(),
+
+        Pure | Effectful => mismatch!("RecursionVar with fx var"),
 
         Error => merge(env, ctx, Error),
     };

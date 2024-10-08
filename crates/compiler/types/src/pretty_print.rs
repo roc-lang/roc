@@ -406,6 +406,8 @@ fn find_names_needed(
         | Structure(EmptyRecord)
         | Structure(EmptyTuple)
         | Structure(EmptyTagUnion)
+        | Pure
+        | Effectful
         | ErasedLambda => {
             // Errors and empty records don't need names.
         }
@@ -875,6 +877,12 @@ fn write_content<'a>(
 
             // Easy mode 🤠
             buf.push('?');
+        }
+        Pure => {
+            buf.push_str("->");
+        }
+        Effectful => {
+            buf.push_str("=>");
         }
         RangedNumber(range) => {
             buf.push_str("Range(");

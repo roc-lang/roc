@@ -141,7 +141,9 @@ fn index_var(
             | Content::RigidAbleVar(_, _)
             | Content::LambdaSet(_)
             | Content::ErasedLambda
-            | Content::RangedNumber(..) => return Err(TypeError),
+            | Content::RangedNumber(..)
+            | Content::Pure
+            | Content::Effectful => return Err(TypeError),
             Content::Error => return Err(TypeError),
             Content::RecursionVar {
                 structure,

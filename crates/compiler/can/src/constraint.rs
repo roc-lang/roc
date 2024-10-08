@@ -604,7 +604,8 @@ impl Constraints {
             | Constraint::Resolve(..)
             | Constraint::IngestedFile(..)
             | Constraint::CheckCycle(..)
-            | Constraint::ImportParams(..) => false,
+            | Constraint::ImportParams(..)
+            | Constraint::CallFx(_, _) => false,
         }
     }
 
@@ -696,6 +697,10 @@ impl Constraints {
     ) -> Constraint {
         Constraint::ImportParams(opt_type_index, module_id, region)
     }
+
+    pub fn call_fx(&mut self, env_fx_var: Variable, call_fx_var: Variable) -> Constraint {
+        Constraint::CallFx(env_fx_var, call_fx_var)
+    }
 }
 
 roc_error_macros::assert_sizeof_default!(Constraint, 3 * 8);
@@ -768,6 +773,8 @@ pub enum Constraint {
         Index<PatternCategory>,
         Region,
     ),
+    /// Unify the current function fx var with a call fx var
+    CallFx(Variable, Variable),
     /// Used for things that always unify, e.g. blanks and runtime errors
     True,
     SaveTheEnvironment,
@@ -855,6 +862,9 @@ impl std::fmt::Debug for Constraint {
             }
             Self::Pattern(arg0, arg1, arg2, arg3) => {
                 write!(f, "Pattern({arg0:?}, {arg1:?}, {arg2:?}, {arg3:?})")
+            }
+            Self::CallFx(arg0, arg1) => {
+                write!(f, "CallFx({arg0:?}, {arg1:?})")
             }
             Self::True => write!(f, "True"),
             Self::SaveTheEnvironment => write!(f, "SaveTheEnvironment"),

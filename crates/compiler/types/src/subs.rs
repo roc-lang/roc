@@ -711,6 +711,8 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
             write!(f, ", ^<{ambient_function_var:?}>)")
         }
         Content::ErasedLambda => write!(f, "ErasedLambda"),
+        Content::Pure => write!(f, "PureFunction"),
+        Content::Effectful => write!(f, "EffectfulFunction"),
         Content::RangedNumber(range) => {
             write!(f, "RangedNumber( {range:?})")
         }
@@ -1636,6 +1638,8 @@ impl Subs {
         );
 
         subs.set_content(Variable::ERASED_LAMBDA, Content::ErasedLambda);
+        subs.set_content(Variable::PURE, Content::Pure);
+        subs.set_content(Variable::EFFECTFUL, Content::Effectful);
 
         subs
     }
@@ -2152,6 +2156,7 @@ impl Subs {
                 | Content::RangedNumber(_)
                 | Content::Error => return false,
                 Content::LambdaSet(_) | Content::ErasedLambda => return false,
+                Content::Pure | Content::Effectful => return false,
                 Content::Structure(FlatType::Func(..)) => return true,
                 Content::Structure(_) => return false,
                 Content::Alias(_, _, real_var, _) => {
@@ -2323,6 +2328,9 @@ pub enum Content {
     Alias(Symbol, AliasVariables, Variable, AliasKind),
     RangedNumber(crate::num::NumericRange),
     Error,
+    /// The fx type variable for a given function
+    Pure,
+    Effectful,
 }
 
 /// Stores the lambdas an arrow might pass through; for example
@@ -3509,6 +3517,7 @@ fn occurs(
                 occurs_union(subs, root_var, ctx, safe!(UnionLabels<Symbol>, solved))
             }
             ErasedLambda => Ok(()),
+            Pure | Effectful => Ok(()),
             RangedNumber(_range_vars) => Ok(()),
         })();
 
@@ -3595,7 +3604,9 @@ fn explicit_substitute(
             | RigidAbleVar(_, _)
             | RecursionVar { .. }
             | Error
-            | ErasedLambda => in_var,
+            | ErasedLambda
+            | Pure
+            | Effectful => in_var,
 
             Structure(flat_type) => {
                 match flat_type {
@@ -3776,7 +3787,9 @@ fn get_var_names(
         subs.set_mark(var, Mark::GET_VAR_NAMES);
 
         match desc.content {
-            Error | FlexVar(None) | FlexAbleVar(None, _) | ErasedLambda => taken_names,
+            Error | FlexVar(None) | FlexAbleVar(None, _) | ErasedLambda | Pure | Effectful => {
+                taken_names
+            }
 
             FlexVar(Some(name_index)) | FlexAbleVar(Some(name_index), _) => add_name(
                 subs,
@@ -4094,6 +4107,11 @@ fn content_to_err_type(
 
         LambdaSet(..) | ErasedLambda => {
             // Don't print lambda sets since we don't expect them to be exposed to the user
+            ErrorType::Error
+        }
+
+        Pure | Effectful => {
+            // Not exposed directly
             ErrorType::Error
         }
 
@@ -4701,6 +4719,8 @@ impl StorageSubs {
                 ambient_function: Self::offset_variable(offsets, *ambient_function_var),
             }),
             ErasedLambda => ErasedLambda,
+            Pure => Pure,
+            Effectful => Effectful,
             RangedNumber(range) => RangedNumber(*range),
             Error => Content::Error,
         }
@@ -5064,7 +5084,7 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
             copy
         }
 
-        FlexVar(None) | ErasedLambda | Error => copy,
+        FlexVar(None) | ErasedLambda | Error | Pure | Effectful => copy,
 
         RecursionVar {
             opt_name,
@@ -5299,6 +5319,7 @@ fn is_registered(content: &Content) -> bool {
         | Content::RigidAbleVar(..) => false,
         Content::Structure(FlatType::EmptyRecord | FlatType::EmptyTagUnion) => false,
         Content::ErasedLambda => false,
+        Content::Pure | Content::Effectful => todo!("[purity-inference]"),
 
         Content::Structure(_)
         | Content::RecursionVar { .. }
@@ -5696,6 +5717,16 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
             copy
         }
 
+        Pure => {
+            env.target.set(copy, make_descriptor(Pure));
+            copy
+        }
+
+        Effectful => {
+            env.target.set(copy, make_descriptor(Effectful));
+            copy
+        }
+
         RangedNumber(range) => {
             let new_content = RangedNumber(range);
 
@@ -5770,7 +5801,7 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
                     }
                 })
             }
-            FlexVar(_) | FlexAbleVar(_, _) | ErasedLambda | Error => (),
+            FlexVar(_) | FlexAbleVar(_, _) | ErasedLambda | Error | Pure | Effectful => (),
 
             RecursionVar { structure, .. } => {
                 stack.push(*structure);
@@ -5958,7 +5989,9 @@ pub fn get_member_lambda_sets_at_region(subs: &Subs, var: Variable, target_regio
                 structure: _,
                 opt_name: _,
             }
-            | Content::ErasedLambda => {}
+            | Content::ErasedLambda
+            | Content::Pure
+            | Content::Effectful => {}
         }
     }
 
@@ -5984,6 +6017,7 @@ fn is_inhabited(subs: &Subs, var: Variable) -> bool {
             //     cannot have a tag union without a non-recursive variant.
             | Content::RecursionVar { .. } => {}
             Content::LambdaSet(_) | Content::ErasedLambda => {}
+            Content::Pure | Content::Effectful => {}
             Content::Structure(structure) => match structure {
                 FlatType::Apply(_, args) => stack.extend(subs.get_subs_slice(*args)),
                 FlatType::Func(args, _, ret) => {

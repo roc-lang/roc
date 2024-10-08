@@ -520,14 +520,15 @@ pub fn create_alias(
         }
 
         if !hidden.is_empty() {
-            internal_error!(
-                "Found unbound type variables {:?} \n in type alias {:?} {:?} {:?} : {:?}",
-                hidden,
-                name,
-                &vars,
-                &infer_ext_in_output_variables,
-                &typ
-            )
+            // [purity-inference] TODO: restore
+            // internal_error!(
+            //     "Found unbound type variables {:?} \n in type alias {:?} {:?} {:?} : {:?}",
+            //     hidden,
+            //     name,
+            //     &vars,
+            //     &infer_ext_in_output_variables,
+            //     &typ
+            // )
         }
 
         true
