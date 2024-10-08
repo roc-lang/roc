@@ -1,0 +1,5 @@
+---
+source: crates/cli/tests/cli_run.rs
+expression: "test_benchmark(\"testAStar.roc\", vec![], UseValgrind::No)"
+---
+True

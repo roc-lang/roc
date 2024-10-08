@@ -6,7 +6,6 @@ extern crate tempfile;
 
 use regex::Regex;
 use roc_command_utils::{cargo, pretty_command_string, root_dir};
-use roc_reporting::report::ANSI_STYLE_CODES;
 use serde::Deserialize;
 use serde_xml_rs::from_str;
 use std::env;
@@ -113,30 +112,6 @@ impl Out {
             .replace_all(&without_error_summary, run_command_line_replacement);
 
         normalized_output.trim().to_string()
-    }
-
-    /// Assert that the stdout ends with the expected string
-    /// This normalises the output for comparison in tests such as replacing timings
-    /// with a placeholder, or stripping ANSI colors
-    pub fn assert_stdout_and_stderr_ends_with(&self, expected: &str) {
-        let normalised_output = format!(
-            "{}{}",
-            Out::normalize_for_tests(&self.stdout),
-            Out::normalize_for_tests(&self.stderr)
-        );
-
-        assert!(
-            normalised_output.ends_with(expected),
-            "\n{}EXPECTED stdout and stderr after normalizing:\n----------------\n{}{}\n{}ACTUAL stdout and stderr after normalizing:\n----------------\n{}{}{}\n----------------\n{}",
-            ANSI_STYLE_CODES.cyan,
-            ANSI_STYLE_CODES.reset,
-            expected,
-            ANSI_STYLE_CODES.cyan,
-            ANSI_STYLE_CODES.reset,
-            normalised_output,
-            ANSI_STYLE_CODES.cyan,
-            ANSI_STYLE_CODES.reset,
-        );
     }
 
     pub fn normalize_stdout_and_stderr(&self) -> String {

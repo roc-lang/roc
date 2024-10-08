@@ -110,17 +110,9 @@ comptime {
 pub export fn main() u8 {
     const stdout = std.io.getStdOut().writer();
 
-    var timer = std.time.Timer.start() catch unreachable;
-
     const result = roc__mainForHost_1_exposed(10);
 
-    const nanos = timer.read();
-    const seconds = (@as(f64, @floatFromInt(nanos)) / 1_000_000_000.0);
-
     stdout.print("{d}\n", .{result}) catch unreachable;
-
-    const stderr = std.io.getStdErr().writer();
-    stderr.print("runtime: {d:.3}ms\n", .{seconds * 1000}) catch unreachable;
 
     return 0;
 }

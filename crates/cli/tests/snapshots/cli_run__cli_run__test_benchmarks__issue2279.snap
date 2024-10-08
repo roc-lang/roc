@@ -1,0 +1,5 @@
+---
+source: crates/cli/tests/cli_run.rs
+expression: "test_benchmark(\"issue2279.roc\", vec![], UseValgrind::Yes)"
+---
+Hello, world!

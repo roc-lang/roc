@@ -10,7 +10,6 @@ extern crate roc_module;
 mod cli_run {
     use cli_utils::helpers::{dir_from_root, file_from_root, Run};
     use const_format::concatcp;
-    use indoc::indoc;
     use roc_cli::{CMD_BUILD, CMD_CHECK, CMD_FORMAT, CMD_RUN, CMD_TEST};
 
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -51,7 +50,6 @@ mod cli_run {
     #[test]
     #[cfg_attr(windows, ignore)]
     fn platform_switching_rust() {
-        let expected_ending = "Roc <3 Rust!\n🔨 Building host ...\n";
         let runner = Run::new_roc()
             .arg(CMD_RUN)
             .arg(BUILD_HOST_FLAG)
@@ -62,13 +60,12 @@ mod cli_run {
 
         let out = runner.run();
         out.assert_clean_success();
-        out.assert_stdout_and_stderr_ends_with(expected_ending);
+        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
     }
 
     #[test]
     #[cfg_attr(windows, ignore)]
     fn platform_switching_zig() {
-        let expected_ending = "Roc <3 Zig!\n🔨 Building host ...\n";
         let runner = Run::new_roc()
             .arg(CMD_RUN)
             .arg(BUILD_HOST_FLAG)
@@ -79,7 +76,7 @@ mod cli_run {
 
         let out = runner.run();
         out.assert_clean_success();
-        out.assert_stdout_and_stderr_ends_with(expected_ending);
+        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
     }
 
     #[test]
@@ -97,11 +94,6 @@ mod cli_run {
     #[test]
     #[cfg_attr(windows, ignore)]
     fn test_module_imports_pkg_w_flag() {
-        let expected_ending = indoc!(
-            r#"
-            0 failed and 1 passed in <ignored for test> ms.
-            "#
-        );
         let runner = Run::new_roc()
             .arg(CMD_TEST)
             .with_valgrind(ALLOW_VALGRIND)
@@ -109,61 +101,24 @@ mod cli_run {
             .arg(file_from_root("crates/cli/tests/module_imports_pkg", "Module.roc").as_path());
 
         let out = runner.run();
-        out.assert_stdout_and_stderr_ends_with(expected_ending);
+        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
     }
 
     #[test]
     #[cfg_attr(windows, ignore)]
     fn test_module_imports_pkg_no_flag() {
-        let expected_ending = indoc!(
-            r#"
-            ── UNRECOGNIZED PACKAGE in tests/module_imports_pkg/Module.roc ─────────────────
-
-            This module is trying to import from `pkg`:
-
-            3│  import pkg.Foo
-                       ^^^^^^^
-
-            A lowercase name indicates a package shorthand, but I don't know which
-            packages are available.
-
-            When checking a module directly, I look for a `main.roc` app or
-            package to resolve shorthands from.
-
-            You can create it, or specify an existing one with the --main flag."#
-        );
         let runner = Run::new_roc()
             .arg(CMD_TEST)
             .with_valgrind(ALLOW_VALGRIND)
             .arg(file_from_root("crates/cli/tests/module_imports_pkg", "Module.roc").as_path());
 
         let out = runner.run();
-        out.assert_stdout_and_stderr_ends_with(expected_ending);
+        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
     }
 
     #[test]
     #[cfg_attr(windows, ignore)]
     fn test_module_imports_unknown_pkg() {
-        let expected_ending = indoc!(
-            r#"
-            ── UNRECOGNIZED PACKAGE in tests/module_imports_pkg/ImportsUnknownPkg.roc ──────
-
-            This module is trying to import from `cli`:
-
-            3│  import cli.Foo
-                       ^^^^^^^
-
-            A lowercase name indicates a package shorthand, but I don't recognize
-            this one. Did you mean one of these?
-
-                pkg
-
-            Note: I'm using the following module to resolve package shorthands:
-
-                tests/module_imports_pkg/app.roc
-
-            You can specify a different one with the --main flag."#
-        );
         let runner = Run::new_roc()
             .arg(CMD_TEST)
             .with_valgrind(ALLOW_VALGRIND)
@@ -177,14 +132,13 @@ mod cli_run {
             );
 
         let out = runner.run();
-        out.assert_stdout_and_stderr_ends_with(expected_ending);
+        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
     }
 
     #[test]
     #[cfg_attr(windows, ignore)]
     /// this tests that a platform can correctly import a package
     fn platform_requires_pkg() {
-        let expected_ending = "from app from package🔨 Building host ...\n";
         let runner = Run::new_roc()
             .arg(CMD_RUN)
             .arg(BUILD_HOST_FLAG)
@@ -194,40 +148,24 @@ mod cli_run {
 
         let out = runner.run();
         out.assert_clean_success();
-        out.assert_stdout_and_stderr_ends_with(expected_ending);
+        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
     }
 
     #[test]
     #[cfg_attr(windows, ignore)]
     fn transitive_expects() {
-        let expected_ending = indoc!(
-            r#"
-            0 failed and 3 passed in <ignored for test> ms.
-            "#
-        );
         let runner = Run::new_roc()
             .arg(CMD_TEST)
             .with_valgrind(ALLOW_VALGRIND)
             .arg(file_from_root("crates/cli/tests/expects_transitive", "main.roc").as_path());
 
         let out = runner.run();
-        out.assert_stdout_and_stderr_ends_with(expected_ending);
+        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
     }
 
     #[test]
     #[cfg_attr(windows, ignore)]
     fn transitive_expects_verbose() {
-        let expected_ending = indoc!(
-            r#"
-            Compiled in <ignored for test> ms.
-
-            Direct.roc:
-                0 failed and 2 passed in <ignored for test> ms.
-
-            Transitive.roc:
-                0 failed and 1 passed in <ignored for test> ms.
-            "#
-        );
         let runner = Run::new_roc()
             .arg(CMD_TEST)
             .with_valgrind(ALLOW_VALGRIND)
@@ -235,7 +173,7 @@ mod cli_run {
             .arg(file_from_root("crates/cli/tests/expects_transitive", "main.roc").as_path());
 
         let out = runner.run();
-        out.assert_stdout_and_stderr_ends_with(expected_ending);
+        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
     }
 
     #[test]
@@ -244,7 +182,6 @@ mod cli_run {
         ignore = "Flaky failure: Roc command failed with status ExitStatus(ExitStatus(3221225477))"
     )]
     fn fibonacci() {
-        let expected_ending = "";
         let runner = Run::new_roc()
             .arg(CMD_RUN)
             .arg(BUILD_HOST_FLAG)
@@ -255,14 +192,12 @@ mod cli_run {
 
         let out = runner.run();
         out.assert_clean_success();
-        out.assert_stdout_and_stderr_ends_with(expected_ending);
+        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
     }
 
     #[test]
     #[cfg_attr(windows, ignore)]
     fn quicksort() {
-        let expected_ending =
-            "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n🔨 Building host ...\n";
         let runner = Run::new_roc()
             .arg(CMD_RUN)
             .arg(BUILD_HOST_FLAG)
@@ -273,7 +208,7 @@ mod cli_run {
 
         let out = runner.run();
         out.assert_clean_success();
-        out.assert_stdout_and_stderr_ends_with(expected_ending);
+        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
     }
 
     // TODO: write a new test once mono bugs are resolved in investigation
@@ -310,7 +245,6 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     // tea = The Elm Architecture
     fn terminal_ui_tea() {
-        let expected_ending = "Hello Worldfoo!\n🔨 Building host ...\n";
         let runner = Run::new_roc()
             .arg(CMD_RUN)
             .arg(BUILD_HOST_FLAG)
@@ -322,7 +256,7 @@ mod cli_run {
 
         let out = runner.run();
         out.assert_clean_success();
-        out.assert_stdout_and_stderr_ends_with(expected_ending);
+        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
     }
 
     #[test]
@@ -356,11 +290,9 @@ mod cli_run {
                     .unwrap(),
             ]);
 
-        let expected_ending = "1414";
-
         let out = runner.run();
         out.assert_clean_success();
-        out.assert_stdout_and_stderr_ends_with(expected_ending);
+        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
     }
 
     mod test_platform_effects_zig {
@@ -393,7 +325,6 @@ mod cli_run {
         fn interactive_effects() {
             build_platform_host();
 
-            let expected_ending = "hi there!\nIt is known\n";
             let runner = Run::new_roc()
                 .arg(CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
@@ -403,15 +334,13 @@ mod cli_run {
 
             let out = runner.run();
             out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
+            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn combine_tasks_with_record_builder() {
             build_platform_host();
-
-            let expected_ending = "For multiple tasks: {a: 123, b: \"abc\", c: [123]}\n";
 
             let runner = Run::new_roc()
                 .arg(CMD_RUN)
@@ -420,7 +349,7 @@ mod cli_run {
 
             let out = runner.run();
             out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
+            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
         }
 
         #[test]
@@ -428,7 +357,6 @@ mod cli_run {
         fn inspect_logging() {
             build_platform_host();
 
-            let expected_ending = "(@Community {friends: [{2}, {2}, {0, 1}], people: [(@Person {age: 27, favoriteColor: Blue, firstName: \"John\", hasBeard: Bool.true, lastName: \"Smith\"}), (@Person {age: 47, favoriteColor: Green, firstName: \"Debby\", hasBeard: Bool.false, lastName: \"Johnson\"}), (@Person {age: 33, favoriteColor: (RGB (255, 255, 0)), firstName: \"Jane\", hasBeard: Bool.false, lastName: \"Doe\"})]})\n";
             let runner = Run::new_roc()
                 .arg(CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
@@ -437,7 +365,7 @@ mod cli_run {
 
             let out = runner.run();
             out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
+            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
         }
 
         #[test]
@@ -453,14 +381,14 @@ mod cli_run {
 
             let out = runner.run();
             out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with("Hi, Agus!\n");
+
+            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
         }
     }
 
     mod test_platform_simple_zig {
         use super::*;
         use cli_utils::helpers::{file_from_root, Run};
-        use indoc::indoc;
         use roc_cli::{CMD_BUILD, CMD_DEV, CMD_RUN, CMD_TEST};
 
         static BUILD_PLATFORM_HOST: std::sync::Once = std::sync::Once::new();
@@ -488,7 +416,6 @@ mod cli_run {
         fn run_multi_dep_str_unoptimized() {
             build_platform_host();
 
-            let expected_ending = "I am Dep2.str2\n";
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(roc_cli::CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
@@ -499,7 +426,8 @@ mod cli_run {
 
             let out = runner.run();
             out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
+
+            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
         }
 
         #[test]
@@ -507,7 +435,6 @@ mod cli_run {
         fn run_multi_dep_str_optimized() {
             build_platform_host();
 
-            let expected_ending = "I am Dep2.str2\n";
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(CMD_RUN)
                 .arg(OPTIMIZE_FLAG)
@@ -519,7 +446,8 @@ mod cli_run {
 
             let out = runner.run();
             out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
+
+            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
         }
 
         #[test]
@@ -527,7 +455,6 @@ mod cli_run {
         fn run_multi_dep_thunk_unoptimized() {
             build_platform_host();
 
-            let expected_ending = "I am Dep2.value2\n";
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
@@ -539,7 +466,8 @@ mod cli_run {
 
             let out = runner.run();
             out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
+
+            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
         }
 
         #[test]
@@ -550,7 +478,6 @@ mod cli_run {
         fn run_multi_dep_thunk_optimized() {
             build_platform_host();
 
-            let expected_ending = "I am Dep2.value2\n";
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(CMD_RUN)
                 .arg(OPTIMIZE_FLAG)
@@ -563,7 +490,8 @@ mod cli_run {
 
             let out = runner.run();
             out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
+
+            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
         }
 
         #[test]
@@ -571,8 +499,6 @@ mod cli_run {
         fn run_packages_unoptimized() {
             build_platform_host();
 
-            let expected_ending =
-                "Hello, World! This text came from a package! This text came from a CSV package!\n";
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
@@ -581,7 +507,8 @@ mod cli_run {
 
             let out = runner.run();
             out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
+
+            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
         }
 
         #[test]
@@ -589,8 +516,6 @@ mod cli_run {
         fn run_packages_optimized() {
             build_platform_host();
 
-            let expected_ending =
-                "Hello, World! This text came from a package! This text came from a CSV package!\n";
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(CMD_RUN)
                 .arg(OPTIMIZE_FLAG)
@@ -600,7 +525,8 @@ mod cli_run {
 
             let out = runner.run();
             out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
+
+            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
         }
 
         #[test]
@@ -613,7 +539,6 @@ mod cli_run {
                 "direct-one.roc",
             );
 
-            let expected_ending = "[One imports Two: From two]\n";
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
@@ -622,7 +547,8 @@ mod cli_run {
 
             let out = runner.run();
             out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
+
+            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
         }
 
         #[test]
@@ -635,7 +561,6 @@ mod cli_run {
                 "direct-one-and-two.roc",
             );
 
-            let expected_ending = "[One imports Two: From two] | From two\n";
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
@@ -644,7 +569,8 @@ mod cli_run {
 
             let out = runner.run();
             out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
+
+            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
         }
 
         #[test]
@@ -657,7 +583,6 @@ mod cli_run {
                 "direct-zero.roc",
             );
 
-            let expected_ending = "[Zero imports One: [One imports Two: From two]]\n";
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
@@ -666,37 +591,14 @@ mod cli_run {
 
             let out = runner.run();
             out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
+
+            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
         }
 
         #[test]
         fn expects_dev() {
             build_platform_host();
 
-            let expected_ending = indoc!(
-                r#"
-                ── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
-
-                This expectation failed:
-
-                25│      expect words == []
-                                ^^^^^^^^^^^
-
-                When it failed, these variables had these values:
-
-                words : List Str
-                words = ["this", "will", "for", "sure", "be", "a", "large", "string", "so", "when", "we", "split", "it", "it", "will", "use", "seamless", "slices", "which", "affect", "printing"]
-
-                Program finished!
-
-                [<ignored for tests>:28] x = 42
-                [<ignored for tests>:30] "Fjoer en ferdjer frieten oan dyn geve lea" = "Fjoer en ferdjer frieten oan dyn geve lea"
-                [<ignored for tests>:32] "this is line 24" = "this is line 24"
-                [<ignored for tests>:18] x = "abc"
-                [<ignored for tests>:18] x = 10
-                [<ignored for tests>:18] x = (A (B C))
-                "#
-            );
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(CMD_DEV)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
@@ -704,68 +606,22 @@ mod cli_run {
                 .arg(file_from_root("crates/cli/tests/expects", "expects.roc").as_path());
 
             let out = runner.run();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
+
+            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
         }
 
         #[test]
         fn expects_test() {
             build_platform_host();
 
-            let expected_ending = indoc!(
-                r#"
-                ── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
-
-                This expectation failed:
-
-                6│      expect a == 2
-                               ^^^^^^
-
-                When it failed, these variables had these values:
-
-                a : Num *
-                a = 1
-
-                ── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
-
-                This expectation failed:
-
-                7│      expect a == 3
-                               ^^^^^^
-
-                When it failed, these variables had these values:
-
-                a : Num *
-                a = 1
-
-                ── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
-
-                This expectation failed:
-
-                11│>  expect
-                12│>      a = makeA
-                13│>      b = 2i64
-                14│>
-                15│>      a == b
-
-                When it failed, these variables had these values:
-
-                a : Int Signed64
-                a = 1
-
-                b : I64
-                b = 2
-
-
-                1 failed and 0 passed in <ignored for test> ms.
-                "#
-            );
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(CMD_TEST)
                 .with_valgrind(ALLOW_VALGRIND)
                 .arg(file_from_root("crates/cli/tests/expects", "expects.roc").as_path());
 
             let out = runner.run();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
+
+            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
         }
 
         #[test]
@@ -773,45 +629,13 @@ mod cli_run {
         fn module_params() {
             build_platform_host();
 
-            let expected_ending = indoc!(
-                r#"
-            App1.baseUrl: https://api.example.com/one
-            App2.baseUrl: http://api.example.com/two
-            App3.baseUrl: https://api.example.com/three
-            App1.getUser 1: https://api.example.com/one/users/1
-            App2.getUser 2: http://api.example.com/two/users/2
-            App3.getUser 3: https://api.example.com/three/users/3
-            App1.getPost 1: https://api.example.com/one/posts/1
-            App2.getPost 2: http://api.example.com/two/posts/2
-            App3.getPost 3: https://api.example.com/three/posts/3
-            App1.getPosts [1, 2]: ["https://api.example.com/one/posts/1", "https://api.example.com/one/posts/2"]
-            App2.getPosts [3, 4]: ["http://api.example.com/two/posts/3", "http://api.example.com/two/posts/4"]
-            App2.getPosts [5, 6]: ["http://api.example.com/two/posts/5", "http://api.example.com/two/posts/6"]
-            App1.getPostComments 1: https://api.example.com/one/posts/1/comments
-            App2.getPostComments 2: http://api.example.com/two/posts/2/comments
-            App2.getPostComments 3: http://api.example.com/two/posts/3/comments
-            App1.getCompanies [1, 2]: ["https://api.example.com/one/companies/1", "https://api.example.com/one/companies/2"]
-            App2.getCompanies [3, 4]: ["http://api.example.com/two/companies/3", "http://api.example.com/two/companies/4"]
-            App2.getCompanies [5, 6]: ["http://api.example.com/two/companies/5", "http://api.example.com/two/companies/6"]
-            App1.getPostAliased 1: https://api.example.com/one/posts/1
-            App2.getPostAliased 2: http://api.example.com/two/posts/2
-            App3.getPostAliased 3: https://api.example.com/three/posts/3
-            App1.baseUrlAliased: https://api.example.com/one
-            App2.baseUrlAliased: http://api.example.com/two
-            App3.baseUrlAliased: https://api.example.com/three
-            App1.getUserSafe 1: https://api.example.com/one/users/1
-            Prod.getUserSafe 2: http://api.example.com/prod_1/users/2?safe=true
-            usersApp1: ["https://api.example.com/one/users/1", "https://api.example.com/one/users/2", "https://api.example.com/one/users/3"]
-            getUserApp3Nested 3: https://api.example.com/three/users/3
-            usersApp3Passed: ["https://api.example.com/three/users/1", "https://api.example.com/three/users/2", "https://api.example.com/three/users/3"]
-            "#
-            );
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(CMD_RUN)
                 .arg(file_from_root("crates/cli/tests/module_params", "app.roc").as_path());
 
             let out = runner.run();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
+
+            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
         }
 
         #[test]
@@ -864,9 +688,8 @@ mod cli_run {
         fn test_benchmark(
             roc_filename: &str,
             stdin: Vec<&'static str>,
-            expected_ending: &str,
             use_valgrind: UseValgrind,
-        ) {
+        ) -> String {
             let dir_name = "crates/cli/tests/benchmarks";
             let file_path = file_from_root(dir_name, roc_filename);
 
@@ -883,31 +706,27 @@ mod cli_run {
 
                 let out = runner.run();
                 out.assert_clean_success();
-                out.assert_stdout_and_stderr_ends_with(expected_ending);
+
+                out.normalize_stdout_and_stderr()
             }
 
             #[cfg(feature = "wasm32-cli-run")]
-            check_output_wasm(file_path.as_path(), stdin, expected_ending);
+            check_output_wasm(file_path.as_path(), stdin);
 
             #[cfg(feature = "i386-cli-run")]
-            check_output_i386(file_path.as_path(), stdin, expected_ending);
+            check_output_i386(file_path.as_path(), stdin);
         }
 
         #[cfg(feature = "wasm32-cli-run")]
-        fn check_output_wasm(file_name: &std::path::Path, stdin: Vec<&str>, expected_ending: &str) {
+        fn check_output_wasm(file_name: &std::path::Path, stdin: Vec<&str>) {
             // Check with and without optimizations
-            check_wasm_output_with_stdin(file_name, stdin.clone(), &[], expected_ending);
+            check_wasm_output_with_stdin(file_name, stdin.clone(), &[]);
 
-            check_wasm_output_with_stdin(file_name, stdin, &[OPTIMIZE_FLAG], expected_ending);
+            check_wasm_output_with_stdin(file_name, stdin, &[OPTIMIZE_FLAG]);
         }
 
         #[cfg(feature = "wasm32-cli-run")]
-        fn check_wasm_output_with_stdin(
-            file: &std::path::Path,
-            stdin: Vec<&str>,
-            flags: &[&str],
-            expected_ending: &str,
-        ) {
+        fn check_wasm_output_with_stdin(file: &std::path::Path, stdin: Vec<&str>, flags: &[&str]) {
             use super::{concatcp, TARGET_FLAG};
 
             let mut flags = flags.to_vec();
@@ -924,20 +743,11 @@ mod cli_run {
 
             let stdout = crate::run_wasm(&file.with_extension("wasm"), stdin);
 
-            if !stdout.ends_with(expected_ending) {
-                panic!(
-                    "expected output to end with {:?} but instead got {:#?}",
-                    expected_ending, stdout
-                );
-            }
+            insta::assert_snapshot!(stdout);
         }
 
         #[cfg(feature = "i386-cli-run")]
-        fn check_output_i386(
-            file_path: &std::path::Path,
-            stdin: Vec<&'static str>,
-            expected_ending: &str,
-        ) {
+        fn check_output_i386(file_path: &std::path::Path, stdin: Vec<&'static str>) {
             use super::{concatcp, TARGET_FLAG};
 
             let i386_target_arg = concatcp!(TARGET_FLAG, "=x86_32");
@@ -951,7 +761,7 @@ mod cli_run {
 
             let out = runner.run();
             out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
+            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
 
             let run_optimized = Run::new_roc()
                 .arg(CMD_RUN)
@@ -963,47 +773,41 @@ mod cli_run {
 
             let out_optimized = run_optimized.run();
             out_optimized.assert_clean_success();
-            out_optimized.assert_stdout_and_stderr_ends_with(expected_ending);
+            insta::assert_snapshot!(out_optimized.normalize_stdout_and_stderr());
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn nqueens() {
-            test_benchmark("nQueens.roc", vec!["6"], "4\n", UseValgrind::Yes)
+            insta::assert_snapshot!(test_benchmark("nQueens.roc", vec!["6"], UseValgrind::Yes));
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn cfold() {
-            test_benchmark("cFold.roc", vec!["3"], "11 & 11\n", UseValgrind::Yes)
+            insta::assert_snapshot!(test_benchmark("cFold.roc", vec!["3"], UseValgrind::Yes))
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn deriv() {
-            test_benchmark(
-                "deriv.roc",
-                vec!["2"],
-                "1 count: 6\n2 count: 22\n",
-                UseValgrind::Yes,
-            )
+            insta::assert_snapshot!(test_benchmark("deriv.roc", vec!["2"], UseValgrind::Yes))
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn rbtree_ck() {
-            test_benchmark("rBTreeCk.roc", vec!["100"], "10\n", UseValgrind::Yes)
+            insta::assert_snapshot!(test_benchmark(
+                "rBTreeCk.roc",
+                vec!["100"],
+                UseValgrind::Yes
+            ))
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn rbtree_insert() {
-            test_benchmark(
-                "rBTreeInsert.roc",
-                vec![],
-                "Node Black 0 {} Empty Empty\n",
-                UseValgrind::Yes,
-            )
+            insta::assert_snapshot!(test_benchmark("rBTreeInsert.roc", vec![], UseValgrind::Yes))
         }
 
         /*
@@ -1025,31 +829,26 @@ mod cli_run {
             if cfg!(feature = "wasm32-cli-run") {
                 eprintln!("WARNING: skipping testing benchmark testAStar.roc because it currently does not work on wasm32 due to dictionaries.");
             } else {
-                test_benchmark("testAStar.roc", vec![], "True\n", UseValgrind::No)
+                insta::assert_snapshot!(test_benchmark("testAStar.roc", vec![], UseValgrind::No))
             }
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn base64() {
-            test_benchmark(
-                "testBase64.roc",
-                vec![],
-                "encoded: SGVsbG8gV29ybGQ=\ndecoded: Hello World\n",
-                UseValgrind::Yes,
-            )
+            insta::assert_snapshot!(test_benchmark("testBase64.roc", vec![], UseValgrind::Yes))
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn closure() {
-            test_benchmark("closure.roc", vec![], "", UseValgrind::No)
+            insta::assert_snapshot!(test_benchmark("closure.roc", vec![], UseValgrind::No))
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn issue2279() {
-            test_benchmark("issue2279.roc", vec![], "Hello, world!\n", UseValgrind::Yes)
+            insta::assert_snapshot!(test_benchmark("issue2279.roc", vec![], UseValgrind::Yes))
         }
 
         #[test]
@@ -1066,131 +865,51 @@ mod cli_run {
 
     #[test]
     fn known_type_error() {
-        let expected_ending = indoc!(
-            r#"
-
-            ── TYPE MISMATCH in tests/known_bad/TypeError.roc ──────────────────────────────
-
-            Something is off with the body of the main definition:
-
-            3│  main : Str -> Task {} []
-            4│  main = \_ ->
-            5│      "this is a string, not a Task {} [] function like the platform expects."
-                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-            The body is a string of type:
-
-                Str
-
-            But the type annotation on main says it should be:
-
-                Task {} []
-
-            Tip: Add type annotations to functions or values to help you figure
-            this out.
-
-            ────────────────────────────────────────────────────────────────────────────────
-
-            1 error and 0 warning found in <ignored for test> ms
-            "#
-        );
-
-        Run::new_roc()
+        let out = Run::new_roc()
             .arg(CMD_CHECK)
             .arg(file_from_root(
                 "crates/cli/tests/known_bad",
                 "TypeError.roc",
             ))
-            .run()
-            .assert_stdout_and_stderr_ends_with(expected_ending);
+            .run();
+
+        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
     }
 
     #[test]
     fn known_type_error_with_long_path() {
-        let expected_ending = indoc!(
-            r#"
-
-            ── UNUSED IMPORT in ...nown_bad/UnusedImportButWithALongFileNameForTesting.roc ─
-
-            Symbol is imported but not used.
-
-            3│  import Symbol exposing [Ident]
-                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-            Since Symbol isn't used, you don't need to import it.
-
-            ────────────────────────────────────────────────────────────────────────────────
-
-            0 error and 1 warning found in <ignored for test> ms
-            "#
-        );
-
-        Run::new_roc()
+        let out = Run::new_roc()
             .arg(CMD_CHECK)
             .arg(file_from_root(
                 "crates/cli/tests/known_bad",
                 "UnusedImportButWithALongFileNameForTesting.roc",
             ))
-            .run()
-            .assert_stdout_and_stderr_ends_with(expected_ending);
+            .run();
+        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
     }
 
     #[test]
     fn exposed_not_defined() {
-        let expected_ending = indoc!(
-            r#"
-
-            ── MISSING DEFINITION in tests/known_bad/ExposedNotDefined.roc ─────────────────
-
-            bar is listed as exposed, but it isn't defined in this module.
-
-            You can fix this by adding a definition for bar, or by removing it
-            from exposes.
-
-            ────────────────────────────────────────────────────────────────────────────────
-
-            1 error and 0 warning found in <ignored for test> ms
-            "#
-        );
-
-        Run::new_roc()
+        let out = Run::new_roc()
             .arg(CMD_CHECK)
             .arg(file_from_root(
                 "crates/cli/tests/known_bad",
                 "ExposedNotDefined.roc",
             ))
-            .run()
-            .assert_stdout_and_stderr_ends_with(expected_ending);
+            .run();
+        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
     }
 
     #[test]
     fn unused_import() {
-        let expected_ending = indoc!(
-            r#"
-
-            ── UNUSED IMPORT in tests/known_bad/UnusedImport.roc ───────────────────────────
-
-            Symbol is imported but not used.
-
-            3│  import Symbol exposing [Ident]
-                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-            Since Symbol isn't used, you don't need to import it.
-
-            ────────────────────────────────────────────────────────────────────────────────
-
-            0 error and 1 warning found in <ignored for test> ms
-            "#
-        );
-
-        Run::new_roc()
+        let out = Run::new_roc()
             .arg(CMD_CHECK)
             .arg(file_from_root(
                 "crates/cli/tests/known_bad",
                 "UnusedImport.roc",
             ))
-            .run()
-            .assert_stdout_and_stderr_ends_with(expected_ending);
+            .run();
+        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
     }
 
     #[test]

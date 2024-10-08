@@ -1,0 +1,6 @@
+---
+source: crates/cli/tests/cli_run.rs
+expression: "test_benchmark(\"nQueens.roc\", vec![\"6\"], UseValgrind::Yes)"
+---
+Please enter an integer
+4

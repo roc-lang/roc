@@ -1,0 +1,5 @@
+---
+source: crates/cli/tests/cli_run.rs
+expression: out.normalize_stdout_and_stderr()
+---
+0 failed and 1 passed in <ignored for test> ms.
