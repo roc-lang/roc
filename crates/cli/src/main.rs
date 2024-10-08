@@ -11,7 +11,7 @@ use roc_cli::{
     GLUE_DIR, GLUE_SPEC, ROC_FILE, VERSION,
 };
 use roc_docs::generate_docs_html;
-use roc_error_macros::user_error;
+use roc_error_macros::{internal_error, user_error};
 use roc_gen_dev::AssemblyBackendMode;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_load::{FunctionKind, LoadingProblem, Threading};
@@ -254,130 +254,129 @@ fn main() -> io::Result<()> {
 
             Ok(0)
         }
-        Some((CMD_FORMAT, matches)) => {
-            if let Some((CMD_FORMAT_ANNOTATE, matches)) = matches.subcommand() {
-                let arena = Bump::new();
-                let roc_file_path = matches.get_one::<PathBuf>(ROC_FILE).unwrap();
+        Some((CMD_FORMAT, fmatches)) if Some(CMD_FORMAT_ANNOTATE) == fmatches.subcommand_name() => {
+            let matches = fmatches
+                .subcommand_matches(CMD_FORMAT_ANNOTATE)
+                .unwrap_or_else(|| internal_error!("No annotate subcommand present"));
 
-                let annotate_exit_code = match annotate_file(&arena, roc_file_path) {
+            let arena = Bump::new();
+            let roc_file_path = matches.get_one::<PathBuf>(ROC_FILE).unwrap();
+
+            let annotate_exit_code = match annotate_file(&arena, roc_file_path) {
+                Ok(()) => 0,
+                Err(message) => {
+                    eprintln!("{message}");
+                    1
+                }
+            };
+
+            Ok(annotate_exit_code)
+        }
+        Some((CMD_FORMAT, matches)) => {
+            let from_stdin = matches.get_flag(FLAG_STDIN);
+            let to_stdout = matches.get_flag(FLAG_STDOUT);
+            let format_mode = if to_stdout {
+                FormatMode::WriteToStdout
+            } else {
+                match matches.get_flag(FLAG_CHECK) {
+                    true => FormatMode::CheckOnly,
+                    false => FormatMode::WriteToFile,
+                }
+            };
+
+            if from_stdin && matches!(format_mode, FormatMode::WriteToFile) {
+                eprintln!("When using the --stdin flag, either the --check or the --stdout flag must also be specified. (Otherwise, it's unclear what filename to write to!)");
+                std::process::exit(1);
+            }
+
+            let roc_files = {
+                let mut roc_files = Vec::new();
+
+                let mut values: Vec<OsString> = Vec::new();
+
+                match matches.get_many::<OsString>(DIRECTORY_OR_FILES) {
+                    Some(os_values) => {
+                        for os_string in os_values {
+                            values.push(os_string.to_owned());
+                        }
+                    }
+                    None if from_stdin || to_stdout => {}
+                    None => {
+                        let mut os_string_values: Vec<OsString> = Vec::new();
+
+                        read_all_roc_files(
+                            &std::env::current_dir()?.as_os_str().to_os_string(),
+                            &mut os_string_values,
+                        )?;
+
+                        for os_string in os_string_values {
+                            values.push(os_string);
+                        }
+                    }
+                }
+
+                // Populate roc_files
+                for os_str in values {
+                    let metadata = fs::metadata(os_str.clone())?;
+                    roc_files_recursive(os_str.as_os_str(), metadata.file_type(), &mut roc_files)?;
+                }
+
+                roc_files
+            };
+
+            let format_exit_code = if from_stdin {
+                let mut buf = Vec::new();
+                let arena = Bump::new();
+
+                io::stdin().read_to_end(&mut buf)?;
+
+                let src = std::str::from_utf8(&buf).unwrap_or_else(|err| {
+                    eprintln!("Stdin contained invalid UTF-8 bytes: {err:?}");
+                    std::process::exit(1);
+                });
+
+                match format_src(&arena, src) {
+                    Ok(formatted_src) => {
+                        match format_mode {
+                            FormatMode::CheckOnly => {
+                                if src == formatted_src {
+                                    eprintln!("One or more files need to be reformatted.");
+                                    1
+                                } else {
+                                    0
+                                }
+                            }
+                            FormatMode::WriteToStdout => {
+                                std::io::stdout()
+                                    .lock()
+                                    .write_all(formatted_src.as_bytes())
+                                    .unwrap();
+
+                                0
+                            }
+                            FormatMode::WriteToFile => {
+                                // We would have errored out already if you specified --stdin
+                                // without either --stdout or --check specified as well.
+                                unreachable!()
+                            }
+                        }
+                    }
+                    Err(problem) => {
+                        eprintln!("`roc format` failed: {problem:?}");
+                        1
+                    }
+                }
+            } else {
+                match format_files(roc_files, format_mode) {
                     Ok(()) => 0,
                     Err(message) => {
                         eprintln!("{message}");
                         1
                     }
-                };
-
-                Ok(annotate_exit_code)
-            } else {
-                let from_stdin = matches.get_flag(FLAG_STDIN);
-                let to_stdout = matches.get_flag(FLAG_STDOUT);
-                let format_mode = if to_stdout {
-                    FormatMode::WriteToStdout
-                } else {
-                    match matches.get_flag(FLAG_CHECK) {
-                        true => FormatMode::CheckOnly,
-                        false => FormatMode::WriteToFile,
-                    }
-                };
-
-                if from_stdin && matches!(format_mode, FormatMode::WriteToFile) {
-                    eprintln!("When using the --stdin flag, either the --check or the --stdout flag must also be specified. (Otherwise, it's unclear what filename to write to!)");
-                    std::process::exit(1);
                 }
+            };
 
-                let roc_files = {
-                    let mut roc_files = Vec::new();
-
-                    let mut values: Vec<OsString> = Vec::new();
-
-                    match matches.get_many::<OsString>(DIRECTORY_OR_FILES) {
-                        Some(os_values) => {
-                            for os_string in os_values {
-                                values.push(os_string.to_owned());
-                            }
-                        }
-                        None if from_stdin || to_stdout => {}
-                        None => {
-                            let mut os_string_values: Vec<OsString> = Vec::new();
-
-                            read_all_roc_files(
-                                &std::env::current_dir()?.as_os_str().to_os_string(),
-                                &mut os_string_values,
-                            )?;
-
-                            for os_string in os_string_values {
-                                values.push(os_string);
-                            }
-                        }
-                    }
-
-                    // Populate roc_files
-                    for os_str in values {
-                        let metadata = fs::metadata(os_str.clone())?;
-                        roc_files_recursive(
-                            os_str.as_os_str(),
-                            metadata.file_type(),
-                            &mut roc_files,
-                        )?;
-                    }
-
-                    roc_files
-                };
-
-                let format_exit_code = if from_stdin {
-                    let mut buf = Vec::new();
-                    let arena = Bump::new();
-
-                    io::stdin().read_to_end(&mut buf)?;
-
-                    let src = std::str::from_utf8(&buf).unwrap_or_else(|err| {
-                        eprintln!("Stdin contained invalid UTF-8 bytes: {err:?}");
-                        std::process::exit(1);
-                    });
-
-                    match format_src(&arena, src) {
-                        Ok(formatted_src) => {
-                            match format_mode {
-                                FormatMode::CheckOnly => {
-                                    if src == formatted_src {
-                                        eprintln!("One or more files need to be reformatted.");
-                                        1
-                                    } else {
-                                        0
-                                    }
-                                }
-                                FormatMode::WriteToStdout => {
-                                    std::io::stdout()
-                                        .lock()
-                                        .write_all(formatted_src.as_bytes())
-                                        .unwrap();
-
-                                    0
-                                }
-                                FormatMode::WriteToFile => {
-                                    // We would have errored out already if you specified --stdin
-                                    // without either --stdout or --check specified as well.
-                                    unreachable!()
-                                }
-                            }
-                        }
-                        Err(problem) => {
-                            eprintln!("`roc format` failed: {problem:?}");
-                            1
-                        }
-                    }
-                } else {
-                    match format_files(roc_files, format_mode) {
-                        Ok(()) => 0,
-                        Err(message) => {
-                            eprintln!("{message}");
-                            1
-                        }
-                    }
-                };
-
-                Ok(format_exit_code)
-            }
+            Ok(format_exit_code)
         }
         Some((CMD_VERSION, _)) => {
             println!("roc {}", VERSION);
