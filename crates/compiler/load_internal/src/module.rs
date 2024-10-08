@@ -213,7 +213,7 @@ pub struct ParsedModule<'a> {
 #[derive(Debug)]
 pub enum EntryPoint<'a> {
     Executable {
-        exposed_to_host: &'a [(Symbol, ProcLayout<'a>)],
+        exposed_to_host: &'a [(&'a str, Symbol, ProcLayout<'a>)],
         platform_path: PathBuf,
     },
     Test,

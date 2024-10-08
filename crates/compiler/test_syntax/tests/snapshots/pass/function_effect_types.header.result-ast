@@ -16,24 +16,26 @@ SpacesBefore {
                 },
                 item: PlatformRequires {
                     rigids: [],
-                    signature: @32-49 TypedIdent {
-                        ident: @32-36 "main",
-                        spaces_before_colon: [],
-                        ann: @39-49 Apply(
-                            "",
-                            "Task",
-                            [
-                                @44-46 Record {
-                                    fields: [],
-                                    ext: None,
-                                },
-                                @47-49 TagUnion {
-                                    ext: None,
-                                    tags: [],
-                                },
-                            ],
-                        ),
-                    },
+                    signatures: [
+                        @32-49 TypedIdent {
+                            ident: @32-36 "main",
+                            spaces_before_colon: [],
+                            ann: @39-49 Apply(
+                                "",
+                                "Task",
+                                [
+                                    @44-46 Record {
+                                        fields: [],
+                                        ext: None,
+                                    },
+                                    @47-49 TagUnion {
+                                        ext: None,
+                                        tags: [],
+                                    },
+                                ],
+                            ),
+                        },
+                    ],
                 },
             },
             exposes: KeywordItem {

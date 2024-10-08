@@ -211,6 +211,23 @@ mod cli_run {
         insta::assert_snapshot!(out.normalize_stdout_and_stderr());
     }
 
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn multiple_exposed() {
+        let runner = Run::new_roc()
+            .arg(CMD_RUN)
+            .arg(BUILD_HOST_FLAG)
+            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
+            .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
+            .with_valgrind(ALLOW_VALGRIND)
+            .arg(file_from_root("crates/cli/tests/multiple_exposed", "main.roc").as_path())
+            .with_stdin_vals(vec!["foo\n"]);
+
+        let out = runner.run();
+        out.assert_clean_success();
+        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+    }
+
     // TODO: write a new test once mono bugs are resolved in investigation
     #[test]
     #[cfg(not(debug_assertions))] // https://github.com/roc-lang/roc/issues/4806
