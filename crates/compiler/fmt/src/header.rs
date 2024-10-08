@@ -260,6 +260,7 @@ pub fn fmt_platform_header<'a>(buf: &mut Buf, header: &'a PlatformHeader<'a>) {
 fn fmt_requires(buf: &mut Buf, requires: &PlatformRequires, indent: u16) {
     fmt_collection(buf, indent, Braces::Curly, requires.rigids, Newlines::No);
 
+    buf.spaces(1);
     fmt_collection(
         buf,
         indent,

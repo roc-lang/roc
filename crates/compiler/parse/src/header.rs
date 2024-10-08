@@ -609,15 +609,13 @@ fn requires_rigids<'a>(
 #[inline(always)]
 fn requires_typed_ident<'a>(
 ) -> impl Parser<'a, Collection<'a, Loc<Spaced<'a, TypedIdent<'a>>>>, ERequires<'a>> {
-    reset_min_indent(
-        collection_trailing_sep_e(
-            byte(b'{', ERequires::ListStart),
-            specialize_err(ERequires::TypedIdent, loc(typed_ident())),
-            byte(b',', ERequires::ListEnd),
-            byte(b'}', ERequires::ListEnd),
-            Spaced::SpaceBefore,
-        ),
-    )
+    reset_min_indent(collection_trailing_sep_e(
+        byte(b'{', ERequires::ListStart),
+        specialize_err(ERequires::TypedIdent, loc(typed_ident())),
+        byte(b',', ERequires::ListEnd),
+        byte(b'}', ERequires::ListEnd),
+        Spaced::SpaceBefore,
+    ))
 }
 
 #[inline(always)]

@@ -1,5 +1,5 @@
-platform "fibonacci"
-    requires {}{ exposed1 : I64 -> I64, exposed2 : I64 -> I64, add1 : I64 -> I64, sub1 : I64 -> I64 }
+platform "multiple_exposed"
+    requires {} { exposed1 : I64 -> I64, exposed2 : I64 -> I64, add1 : I64 -> I64, sub1 : I64 -> I64 }
     exposes []
     packages {}
     imports []
