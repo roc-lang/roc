@@ -4772,7 +4772,7 @@ mod test_fmt {
     }
 
     #[test]
-    fn simple_closure_with_pizza_pipe_right_on_the_newline() {
+    fn simple_closure_pizza_pipe_right_on_the_newline() {
         expr_formats_to(
             indoc!(
                 r"
@@ -4852,7 +4852,7 @@ mod test_fmt {
     }
 
     #[test]
-    fn simple_closure_field_shortcut() {
+    fn simple_closure_shortcut_for_field_access() {
         expr_formats_same(indoc!(
             r"
             \.foo
@@ -4861,7 +4861,7 @@ mod test_fmt {
     }
 
     #[test]
-    fn simple_closure_tuple_index_shortcut() {
+    fn simple_closure_shortcut_for_tuple_index_access() {
         expr_formats_same(indoc!(
             r"
             \.0
@@ -4870,7 +4870,7 @@ mod test_fmt {
     }
 
     #[test]
-    fn simple_closure_field_tuple_index_shortcut() {
+    fn simple_closure_shortcut_for_field_tuple_index_access() {
         expr_formats_same(indoc!(
             r"
             \.bru.0
@@ -4879,7 +4879,7 @@ mod test_fmt {
     }
 
     #[test]
-    fn simple_closure_field_as_part_of_bin_op() {
+    fn simple_closure_shortcut_for_field_as_part_of_bin_op() {
         expr_formats_same(indoc!(
             r"
             \.foo + 1
@@ -4888,7 +4888,7 @@ mod test_fmt {
     }
 
     #[test]
-    fn simple_closure_field_shortcut_space_format() {
+    fn simple_closure_shortcut_for_field_space_format() {
         expr_formats_to(
             indoc!(
                 r"
@@ -4901,6 +4901,15 @@ mod test_fmt {
                 "
             ),
         );
+    }
+
+    #[test]
+    fn simple_closure_shortcut_for_identity_function() {
+        expr_formats_same(indoc!(
+            r"
+            \.foo
+            "
+        ));
     }
 
     #[test]
@@ -4922,6 +4931,17 @@ mod test_fmt {
                 xs
                 (\i ->
                     i + length)
+            "
+        ));
+    }
+
+    #[test]
+    fn apply_lambda_shortcut() {
+        expr_formats_same(indoc!(
+            r"
+            List.map
+                xs
+                (\+ length)
             "
         ));
     }
@@ -4967,6 +4987,7 @@ mod test_fmt {
         ))
     }
 
+    // todo: @wip apply shortcut here, seems like a nice place
     #[test]
     fn pipeline_apply_lambda_multiline() {
         expr_formats_same(indoc!(
@@ -6032,6 +6053,17 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r#"
             when foo is
+                "abc" -> ""
+            "#
+        ));
+    }
+
+    // todo: @wip
+    // #[test]
+    fn _single_line_string_literal_in_pattern_binop_shortcut() {
+        expr_formats_same(indoc!(
+            r#"
+            foo ~
                 "abc" -> ""
             "#
         ));
