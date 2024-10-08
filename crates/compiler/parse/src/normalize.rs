@@ -785,6 +785,7 @@ impl<'a> Normalize<'a> for Expr<'a> {
                 // The formatter can remove redundant parentheses, so also remove these when normalizing for comparison.
                 a.normalize(arena)
             }
+            Expr::EmptyBlock(parent) => Expr::EmptyBlock(parent),
             Expr::MalformedIdent(a, b) => Expr::MalformedIdent(a, remove_spaces_bad_ident(b)),
             Expr::MalformedClosure => Expr::MalformedClosure,
             Expr::MalformedSuffixed(a) => Expr::MalformedSuffixed(a),

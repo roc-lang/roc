@@ -521,6 +521,8 @@ pub enum Expr<'a> {
         &'a [&'a WhenBranch<'a>],
     ),
 
+    EmptyBlock(EmptyBlockParent),
+
     // Blank Space (e.g. comments, spaces, newlines) before or after an expression.
     // We preserve this for the formatter; canonicalization ignores it.
     SpaceBefore(&'a Expr<'a>, &'a [CommentOrNewline<'a>]),
@@ -537,6 +539,15 @@ pub enum Expr<'a> {
     EmptyRecordBuilder(&'a Loc<Expr<'a>>),
     SingleFieldRecordBuilder(&'a Loc<Expr<'a>>),
     OptionalFieldInRecordBuilder(&'a Loc<&'a str>, &'a Loc<Expr<'a>>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EmptyBlockParent {
+    IfBranch,
+    ElseBranch,
+    WhenBranch,
+    Closure,
+    Definition,
 }
 
 impl Expr<'_> {
@@ -672,6 +683,7 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         }
         Expr::SpaceBefore(a, _) => is_expr_suffixed(a),
         Expr::SpaceAfter(a, _) => is_expr_suffixed(a),
+        Expr::EmptyBlock { .. } => false,
         Expr::MalformedIdent(_, _) => false,
         Expr::MalformedClosure => false,
         Expr::MalformedSuffixed(_) => false,
@@ -1011,6 +1023,7 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                 | Dbg
                 | Tag(_)
                 | OpaqueRef(_)
+                | EmptyBlock { .. }
                 | MalformedIdent(_, _)
                 | MalformedClosure
                 | PrecedenceConflict(_)
@@ -2475,6 +2488,7 @@ impl<'a> Malformed for Expr<'a> {
             SpaceAfter(expr, _) |
             ParensAround(expr) => expr.is_malformed(),
 
+            EmptyBlock { .. } |
             MalformedIdent(_, _) |
             MalformedClosure |
             MalformedSuffixed(..) |

@@ -1337,6 +1337,14 @@ pub fn canonicalize_expr<'a>(
                 Output::default(),
             )
         }
+        ast::Expr::EmptyBlock(parent) => {
+            use roc_problem::can::RuntimeError::*;
+
+            let problem = EmptyBlock(*parent, region);
+            env.problem(Problem::RuntimeError(problem.clone()));
+
+            (RuntimeError(problem), Output::default())
+        }
         ast::Expr::MalformedClosure => {
             use roc_problem::can::RuntimeError::*;
             (RuntimeError(MalformedClosure(region)), Output::default())
@@ -2490,7 +2498,8 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         | ast::Expr::MalformedIdent(_, _)
         | ast::Expr::Tag(_)
         | ast::Expr::OpaqueRef(_)
-        | ast::Expr::MalformedClosure => true,
+        | ast::Expr::MalformedClosure
+        | ast::Expr::EmptyBlock(_) => true,
         // Newlines are disallowed inside interpolation, and these all require newlines
         ast::Expr::DbgStmt(_, _)
         | ast::Expr::LowLevelDbg(_, _, _)

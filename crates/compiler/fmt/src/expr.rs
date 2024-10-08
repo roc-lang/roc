@@ -42,6 +42,7 @@ impl<'a> Formattable for Expr<'a> {
             | RecordUpdater(_)
             | Var { .. }
             | Underscore { .. }
+            | EmptyBlock(_)
             | MalformedIdent(_, _)
             | MalformedClosure
             | Tag(_)
@@ -545,6 +546,7 @@ impl<'a> Formattable for Expr<'a> {
                 buf.indent(indent);
                 loc_expr.format_with_options(buf, parens, newlines, indent);
             }
+            EmptyBlock(_) => {}
             MalformedClosure => {}
             PrecedenceConflict { .. } => {}
             EmptyRecordBuilder { .. } => {}
