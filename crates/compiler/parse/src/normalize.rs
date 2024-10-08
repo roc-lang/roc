@@ -254,7 +254,7 @@ impl<'a> Normalize<'a> for PlatformRequires<'a> {
     fn normalize(&self, arena: &'a Bump) -> Self {
         PlatformRequires {
             rigids: self.rigids.normalize(arena),
-            signature: self.signature.normalize(arena),
+            signatures: self.signatures.map_items(arena, |x| x.normalize(arena)),
         }
     }
 }
