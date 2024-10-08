@@ -364,36 +364,6 @@ pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EStri
                     // This is the start of a new escape. Look at the next byte
                     // to figure out what type of escape it is.
                     match bytes.next() {
-                        Some(b'(') => {
-                            // Advance past the `\(` before using the expr parser
-                            state.advance_mut(2);
-
-                            let original_byte_count = state.bytes().len();
-
-                            // This is an interpolated variable.
-                            // Parse an arbitrary expression, then give a
-                            // canonicalization error if that expression variant
-                            // is not allowed inside a string interpolation.
-                            let (_progress, loc_expr, new_state) = skip_second(
-                                specialize_err_ref(
-                                    EString::Format,
-                                    loc(allocated(reset_min_indent(expr::expr_help()))),
-                                ),
-                                byte(b')', EString::FormatEnd),
-                            )
-                            .parse(arena, state, min_indent)?;
-
-                            // Advance the iterator past the expr we just parsed.
-                            for _ in 0..(original_byte_count - new_state.bytes().len()) {
-                                bytes.next();
-                            }
-
-                            segments.push(StrSegment::DeprecatedInterpolated(loc_expr));
-
-                            // Reset the segment
-                            segment_parsed_bytes = 0;
-                            state = new_state;
-                        }
                         Some(b'u') => {
                             // Advance past the `\u` before using the expr parser
                             state.advance_mut(2);
@@ -444,8 +414,8 @@ pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EStri
                         }
                         _ => {
                             // Invalid escape! A backslash must be followed
-                            // by either an open paren or else one of the
-                            // escapable characters (\n, \t, \", \\, etc)
+                            // by one of these escapable characters:
+                            // (\n, \t, \", \\, etc)
                             return Err((MadeProgress, EString::UnknownEscape(state.pos())));
                         }
                     }
