@@ -86,7 +86,7 @@ Surgical linker that links platforms to Roc applications. We created our own lin
 
 ## `repl_cli/` - `roc_repl_cli`
 
-Command Line Interface(CLI) functionality for the Read-Evaluate-Print-Loop (REPL).
+Command Line Interface (CLI) functionality for the Read-Evaluate-Print-Loop (REPL).
 
 ## `repl_eval/` - `roc_repl_eval`
 

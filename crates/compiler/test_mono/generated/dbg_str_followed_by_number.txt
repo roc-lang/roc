@@ -40,8 +40,8 @@ procedure Inspect.64 (Inspect.302):
     ret Inspect.302;
 
 procedure Str.3 (#Attr.2, #Attr.3):
-    let Str.236 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
-    ret Str.236;
+    let Str.246 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.246;
 
 procedure Test.0 ():
     let Test.3 : Str = "";

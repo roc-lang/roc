@@ -14,7 +14,9 @@ let
     inherit rustPlatform;
     compile-deps = callPackage ./compile-deps.nix { };
     rust-shell =
-      (rustVersion.override { extensions = [ "rust-src" "rust-analyzer" ]; });
+      # llvm-tools-preview for code coverage with cargo-llvm-cov
+      (rustVersion.override { extensions = [ "rust-src" "rust-analyzer" "llvm-tools-preview"]; });
+
 
     # contains all rust crates in workspace.members of Cargo.toml
     roc-full = (callPackage ./builder.nix { }).roc-release;

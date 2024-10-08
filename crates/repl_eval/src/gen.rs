@@ -61,7 +61,7 @@ pub fn compile_to_mono<'a, 'i, I: Iterator<Item = &'i str>>(
         module_src,
         src_dir,
         None,
-        RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+        RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
         LoadConfig {
             target,
             function_kind: FunctionKind::LambdaSet,

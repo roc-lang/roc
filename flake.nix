@@ -58,6 +58,7 @@
             xorg.libXrandr
             xorg.libXi
             xorg.libxcb
+            cargo-llvm-cov # to visualize code coverage
           ];
 
         # DevInputs are not necessary to build roc as a user

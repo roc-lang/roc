@@ -131,7 +131,7 @@ pub fn unwrap_suffixed_expression<'a>(
 
             Expr::When(..) => unwrap_suffixed_expression_when_help(arena, loc_expr, maybe_def_pat),
 
-            Expr::If(..) => {
+            Expr::If { .. } => {
                 unwrap_suffixed_expression_if_then_else_help(arena, loc_expr, maybe_def_pat)
             }
 
@@ -325,7 +325,14 @@ pub fn unwrap_suffixed_expression_apply_help<'a>(
 
                 let new_apply = arena.alloc(Loc::at(loc_expr.region, Expr::Apply(unwrapped_function, local_args, called_via)));
 
-                return init_unwrapped_err(arena, new_apply, maybe_def_pat, target);
+                match maybe_def_pat {
+                    Some(..) => {
+                        return Err(EUnwrapped::UnwrappedDefExpr { loc_expr: new_apply, target });
+                    }
+                    None => {
+                        return init_unwrapped_err(arena, new_apply, maybe_def_pat, target);
+                    }
+                }
             }
 
             // function is another expression
@@ -357,7 +364,11 @@ pub fn unwrap_suffixed_expression_if_then_else_help<'a>(
     maybe_def_pat: Option<&'a Loc<Pattern<'a>>>,
 ) -> Result<&'a Loc<Expr<'a>>, EUnwrapped<'a>> {
     match loc_expr.value {
-        Expr::If(if_thens, final_else_branch) => {
+        Expr::If {
+            if_thens,
+            final_else: final_else_branch,
+            indented_else,
+        } => {
             for (index, if_then) in if_thens.iter().enumerate() {
                 let (current_if_then_statement, current_if_then_expression) = if_then;
 
@@ -376,10 +387,11 @@ pub fn unwrap_suffixed_expression_if_then_else_help<'a>(
 
                             let new_if = arena.alloc(Loc::at(
                                 loc_expr.region,
-                                Expr::If(
-                                    arena.alloc_slice_copy(new_if_thens.as_slice()),
-                                    final_else_branch,
-                                ),
+                                Expr::If {
+                                    if_thens: arena.alloc_slice_copy(new_if_thens.as_slice()),
+                                    final_else: final_else_branch,
+                                    indented_else,
+                                },
                             ));
 
                             return unwrap_suffixed_expression(arena, new_if, maybe_def_pat);
@@ -411,10 +423,11 @@ pub fn unwrap_suffixed_expression_if_then_else_help<'a>(
 
                             let new_if = arena.alloc(Loc::at(
                                 loc_expr.region,
-                                Expr::If(
-                                    arena.alloc_slice_copy(new_if_thens.as_slice()),
-                                    final_else_branch,
-                                ),
+                                Expr::If {
+                                    if_thens: arena.alloc_slice_copy(new_if_thens.as_slice()),
+                                    final_else: final_else_branch,
+                                    indented_else,
+                                },
                             ));
 
                             return unwrap_suffixed_expression(arena, new_if, maybe_def_pat);
@@ -439,10 +452,11 @@ pub fn unwrap_suffixed_expression_if_then_else_help<'a>(
 
                             let new_if = arena.alloc(Loc::at(
                                 loc_expr.region,
-                                Expr::If(
-                                    arena.alloc_slice_copy(new_if_thens.as_slice()),
-                                    final_else_branch,
-                                ),
+                                Expr::If {
+                                    if_thens: arena.alloc_slice_copy(new_if_thens.as_slice()),
+                                    final_else: final_else_branch,
+                                    indented_else,
+                                },
                             ));
 
                             return unwrap_suffixed_expression(arena, new_if, maybe_def_pat);
@@ -465,10 +479,11 @@ pub fn unwrap_suffixed_expression_if_then_else_help<'a>(
 
                                 let new_if = arena.alloc(Loc::at(
                                     loc_expr.region,
-                                    Expr::If(
-                                        arena.alloc_slice_copy(new_if_thens.as_slice()),
-                                        final_else_branch,
-                                    ),
+                                    Expr::If {
+                                        if_thens: arena.alloc_slice_copy(new_if_thens.as_slice()),
+                                        final_else: final_else_branch,
+                                        indented_else,
+                                    },
                                 ));
 
                                 let unwrapped_if_then = apply_try_function(
@@ -494,10 +509,11 @@ pub fn unwrap_suffixed_expression_if_then_else_help<'a>(
 
                                 let after_if = arena.alloc(Loc::at(
                                     loc_expr.region,
-                                    Expr::If(
-                                        arena.alloc_slice_copy(after_if_thens.as_slice()),
-                                        final_else_branch,
-                                    ),
+                                    Expr::If {
+                                        if_thens: arena.alloc_slice_copy(after_if_thens.as_slice()),
+                                        final_else: final_else_branch,
+                                        indented_else,
+                                    },
                                 ));
 
                                 let after_if_then = apply_try_function(
@@ -512,7 +528,11 @@ pub fn unwrap_suffixed_expression_if_then_else_help<'a>(
 
                                 let before_if_then = arena.alloc(Loc::at(
                                     loc_expr.region,
-                                    Expr::If(before, after_if_then),
+                                    Expr::If {
+                                        if_thens: before,
+                                        final_else: after_if_then,
+                                        indented_else: false,
+                                    },
                                 ));
 
                                 return unwrap_suffixed_expression(
@@ -532,7 +552,11 @@ pub fn unwrap_suffixed_expression_if_then_else_help<'a>(
                 Ok(unwrapped_final_else) => {
                     return Ok(arena.alloc(Loc::at(
                         loc_expr.region,
-                        Expr::If(if_thens, unwrapped_final_else),
+                        Expr::If {
+                            if_thens,
+                            final_else: unwrapped_final_else,
+                            indented_else,
+                        },
                     )));
                 }
                 Err(EUnwrapped::UnwrappedDefExpr { .. }) => {
@@ -556,7 +580,11 @@ pub fn unwrap_suffixed_expression_if_then_else_help<'a>(
 
                     let new_if = arena.alloc(Loc::at(
                         loc_expr.region,
-                        Expr::If(if_thens, unwrapped_final_else),
+                        Expr::If {
+                            if_thens,
+                            final_else: unwrapped_final_else,
+                            indented_else,
+                        },
                     ));
 
                     return unwrap_suffixed_expression(arena, new_if, maybe_def_pat);

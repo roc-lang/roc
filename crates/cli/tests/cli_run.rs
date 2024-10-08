@@ -767,6 +767,66 @@ mod cli_run {
             let out = runner.run();
             out.assert_stdout_and_stderr_ends_with(expected_ending);
         }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        fn module_params() {
+            build_platform_host();
+
+            let expected_ending = indoc!(
+                r#"
+            App1.baseUrl: https://api.example.com/one
+            App2.baseUrl: http://api.example.com/two
+            App3.baseUrl: https://api.example.com/three
+            App1.getUser 1: https://api.example.com/one/users/1
+            App2.getUser 2: http://api.example.com/two/users/2
+            App3.getUser 3: https://api.example.com/three/users/3
+            App1.getPost 1: https://api.example.com/one/posts/1
+            App2.getPost 2: http://api.example.com/two/posts/2
+            App3.getPost 3: https://api.example.com/three/posts/3
+            App1.getPosts [1, 2]: ["https://api.example.com/one/posts/1", "https://api.example.com/one/posts/2"]
+            App2.getPosts [3, 4]: ["http://api.example.com/two/posts/3", "http://api.example.com/two/posts/4"]
+            App2.getPosts [5, 6]: ["http://api.example.com/two/posts/5", "http://api.example.com/two/posts/6"]
+            App1.getPostComments 1: https://api.example.com/one/posts/1/comments
+            App2.getPostComments 2: http://api.example.com/two/posts/2/comments
+            App2.getPostComments 3: http://api.example.com/two/posts/3/comments
+            App1.getCompanies [1, 2]: ["https://api.example.com/one/companies/1", "https://api.example.com/one/companies/2"]
+            App2.getCompanies [3, 4]: ["http://api.example.com/two/companies/3", "http://api.example.com/two/companies/4"]
+            App2.getCompanies [5, 6]: ["http://api.example.com/two/companies/5", "http://api.example.com/two/companies/6"]
+            App1.getPostAliased 1: https://api.example.com/one/posts/1
+            App2.getPostAliased 2: http://api.example.com/two/posts/2
+            App3.getPostAliased 3: https://api.example.com/three/posts/3
+            App1.baseUrlAliased: https://api.example.com/one
+            App2.baseUrlAliased: http://api.example.com/two
+            App3.baseUrlAliased: https://api.example.com/three
+            App1.getUserSafe 1: https://api.example.com/one/users/1
+            Prod.getUserSafe 2: http://api.example.com/prod_1/users/2?safe=true
+            usersApp1: ["https://api.example.com/one/users/1", "https://api.example.com/one/users/2", "https://api.example.com/one/users/3"]
+            getUserApp3Nested 3: https://api.example.com/three/users/3
+            usersApp3Passed: ["https://api.example.com/three/users/1", "https://api.example.com/three/users/2", "https://api.example.com/three/users/3"]
+            "#
+            );
+            let runner = cli_utils::helpers::Run::new_roc()
+                .arg(CMD_RUN)
+                .arg(file_from_root("crates/cli/tests/module_params", "app.roc").as_path());
+
+            let out = runner.run();
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
+        }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        fn module_params_arity_mismatch() {
+            build_platform_host();
+
+            let runner = cli_utils::helpers::Run::new_roc().arg(CMD_DEV).arg(
+                file_from_root("crates/cli/tests/module_params", "arity_mismatch.roc").as_path(),
+            );
+
+            let out = runner.run();
+
+            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+        }
     }
 
     // TODO not sure if this cfg should still be here: #[cfg(not(debug_assertions))]

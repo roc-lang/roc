@@ -4299,8 +4299,9 @@ mod test_reporting {
     4│      f :: I64
               ^^
 
-    I have no specific suggestion for this operator, see TODO for the full
-    list of operators in Roc.
+    I have no specific suggestion for this operator, see
+    https://www.roc-lang.org/tutorial#operator-desugaring-table for the
+    full list of operators in Roc.
     "#
     );
 
@@ -4339,6 +4340,14 @@ mod test_reporting {
 
     However, I already saw the final expression in that series of
     definitions.
+
+    Tip: An expression like `4`, `"hello"`, or `functionCall MyThing` is
+    like `return 4` in other programming languages. To me, it seems like
+    you did `return 4` followed by more code in the lines after, that code
+    would never be executed!
+    
+    Tip: If you are working with `Task`, this error can happen if you
+    forgot a `!` somewhere.
     "###
     );
 
@@ -4969,30 +4978,6 @@ mod test_reporting {
                         ^
 
     TODO provide more context.
-    "###
-    );
-
-    test_report!(
-        record_builder_in_module_params,
-        indoc!(
-            r"
-            import Menu {
-                echo,
-                name: <- applyName
-            }
-            "
-        ),@r###"
-    ── OLD-STYLE RECORD BUILDER IN MODULE PARAMS in ...r_in_module_params/Test.roc ─
-
-    I was partway through parsing module params, but I got stuck here:
-
-    4│      import Menu {
-    5│          echo,
-    6│          name: <- applyName
-                ^^^^^^^^^^^^^^^^^^
-
-    This looks like an old-style record builder field, but those are not
-    allowed in module params.
     "###
     );
 
@@ -6068,8 +6053,9 @@ All branches in an `if` must have the same type!
     5│          5 ** 3
                   ^^
 
-    I have no specific suggestion for this operator, see TODO for the full
-    list of operators in Roc.
+    I have no specific suggestion for this operator, see
+    https://www.roc-lang.org/tutorial#operator-desugaring-table for the
+    full list of operators in Roc.
     "#
     );
 
@@ -10662,163 +10648,6 @@ All branches in an `if` must have the same type!
     // Record Builders
 
     test_report!(
-        optional_field_in_old_record_builder,
-        indoc!(
-            r#"
-            {
-                a: <- apply "a",
-                b,
-                c ? "optional"
-            }
-            "#
-        ),
-        @r#"
-    ── BAD OLD-STYLE RECORD BUILDER in ...nal_field_in_old_record_builder/Test.roc ─
-
-    I am partway through parsing a record builder, and I found an optional
-    field:
-
-    1│  app "test" provides [main] to "./platform"
-    2│
-    3│  main =
-    4│      {
-    5│          a: <- apply "a",
-    6│          b,
-    7│          c ? "optional"
-                ^^^^^^^^^^^^^^
-
-    Optional fields can only appear when you destructure a record.
-    "#
-    );
-
-    test_report!(
-        record_update_old_builder,
-        indoc!(
-            r#"
-            { rec &
-                a: <- apply "a",
-                b: 3
-            }
-            "#
-        ),
-        @r#"
-    ── BAD RECORD UPDATE in tmp/record_update_old_builder/Test.roc ─────────────────
-
-    I am partway through parsing a record update, and I found an old-style
-    record builder field:
-
-    1│  app "test" provides [main] to "./platform"
-    2│
-    3│  main =
-    4│      { rec &
-    5│          a: <- apply "a",
-                ^^^^^^^^^^^^^^^
-
-    Old-style record builders cannot be updated like records.
-    "#
-    );
-
-    test_report!(
-        multiple_old_record_builders,
-        indoc!(
-            r#"
-            succeed
-                { a: <- apply "a" }
-                { b: <- apply "b" }
-            "#
-        ),
-        @r#"
-    ── MULTIPLE OLD-STYLE RECORD BUILDERS in /code/proj/Main.roc ───────────────────
-
-    This function is applied to multiple old-style record builders:
-
-    4│>      succeed
-    5│>          { a: <- apply "a" }
-    6│>          { b: <- apply "b" }
-
-    Note: Functions can only take at most one old-style record builder!
-
-    Tip: You can combine them or apply them separately.
-    "#
-    );
-
-    test_report!(
-        unapplied_old_record_builder,
-        indoc!(
-            r#"
-            { a: <- apply "a" }
-            "#
-        ),
-        @r#"
-    ── UNAPPLIED OLD-STYLE RECORD BUILDER in /code/proj/Main.roc ───────────────────
-
-    This old-style record builder was not applied to a function:
-
-    4│      { a: <- apply "a" }
-            ^^^^^^^^^^^^^^^^^^^
-
-    However, we need a function to construct the record.
-
-    Note: Functions must be applied directly. The pipe operator (|>) cannot be used.
-    "#
-    );
-
-    test_report!(
-        old_record_builder_apply_non_function,
-        indoc!(
-            r#"
-            succeed = \_ -> crash ""
-
-            succeed {
-                a: <- "a",
-            }
-            "#
-        ),
-        @r#"
-    ── TOO MANY ARGS in /code/proj/Main.roc ────────────────────────────────────────
-
-    This value is not a function, but it was given 1 argument:
-
-    7│          a: <- "a",
-                      ^^^
-
-    Tip: Remove <- to assign the field directly.
-    "#
-    );
-
-    // Skipping test because opaque types defined in the same module
-    // do not fail with the special opaque type error
-    //
-    // test_report!(
-    //     record_builder_apply_opaque,
-    //     indoc!(
-    //         r#"
-    //         succeed = \_ -> crash ""
-
-    //         Decode := {}
-
-    //         get : Str -> Decode
-    //         get = \_ -> @Decode {}
-
-    //         succeed {
-    //             a: <- get "a",
-    //             # missing |> apply ^
-    //         }
-    //         "#
-    //     ),
-    //     @r#"
-    // ── TOO MANY ARGS in /code/proj/Main.roc ────────────────────────────────────────
-
-    // This value is an opaque type, so it cannot be called with an argument:
-
-    // 12│          a: <- get "a",
-    //                    ^^^^^^^
-
-    // Hint: Did you mean to apply it to a function first?
-    //     "#
-    // );
-
-    test_report!(
         empty_record_builder,
         indoc!(
             r#"
@@ -14521,7 +14350,7 @@ All branches in an `if` must have the same type!
     4│      1 + dbg + 2
                 ^^^
 
-    This `63` value is a:
+    This value is a:
 
         {}
 
@@ -14555,7 +14384,7 @@ All branches in an `if` must have the same type!
     4│      1 + dbg "" "" + 2
                 ^^^^^^^^^
 
-    This `63` value is a:
+    This value is a:
 
         {}
 

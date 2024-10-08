@@ -202,6 +202,7 @@ mod test_snapshots {
         fail/expression_indentation_end.expr,
         fail/if_guard_without_condition.expr,
         fail/if_missing_else.expr,
+        fail/if_outdented_else_branch.expr,
         fail/if_outdented_then.expr,
         fail/import_with_lowercase_alias.moduledefs,
         fail/imports_missing_comma.header,
@@ -442,6 +443,7 @@ mod test_snapshots {
         pass/pattern_as_spaces.expr,
         pass/pattern_with_space_in_parens.expr, // https://github.com/roc-lang/roc/issues/929
         pass/pizza_bang.moduledefs,
+        pass/pizza_dbg.expr,
         pass/plus_if.expr,
         pass/plus_when.expr,
         pass/pos_inf_float.expr,

@@ -101,9 +101,18 @@ impl Out {
             Regex::new(r"(\d+) error(?:s)? and (\d+) warning(?:s)? found in \d+ ms")
                 .expect("Invalid error summary regex pattern");
         let error_summary_replacement = "$1 error and $2 warning found in <ignored for test> ms";
-        error_summary_regex
+        let without_error_summary = error_summary_regex
             .replace_all(&without_filepaths, error_summary_replacement)
-            .to_string()
+            .to_string();
+
+        // replace the entire line with the placeholder
+        let run_command_line_regex = Regex::new(r"(?m)^You can run the program anyway .*$")
+            .expect("Invalid run command line regex pattern");
+        let run_command_line_replacement = "You can run the program anyway <ignored for tests>";
+        let normalized_output = run_command_line_regex
+            .replace_all(&without_error_summary, run_command_line_replacement);
+
+        normalized_output.trim().to_string()
     }
 
     /// Assert that the stdout ends with the expected string
@@ -128,6 +137,14 @@ impl Out {
             ANSI_STYLE_CODES.cyan,
             ANSI_STYLE_CODES.reset,
         );
+    }
+
+    pub fn normalize_stdout_and_stderr(&self) -> String {
+        format!(
+            "{}{}",
+            Out::normalize_for_tests(&self.stdout),
+            Out::normalize_for_tests(&self.stderr)
+        )
     }
 }
 

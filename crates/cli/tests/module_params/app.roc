@@ -1,5 +1,5 @@
 app [main] {
-    pf: platform "../fixtures/multi-dep-str/platform/main.roc",
+    pf: platform "../test-platform-simple-zig/main.roc",
 }
 
 import Api { appId: "one", protocol: https } as App1

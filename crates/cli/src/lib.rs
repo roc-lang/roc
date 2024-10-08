@@ -68,6 +68,8 @@ pub const FLAG_NO_LINK: &str = "no-link";
 pub const FLAG_TARGET: &str = "target";
 pub const FLAG_TIME: &str = "time";
 pub const FLAG_VERBOSE: &str = "verbose";
+pub const FLAG_NO_COLOR: &str = "no-color";
+pub const FLAG_NO_HEADER: &str = "no-header";
 pub const FLAG_LINKER: &str = "linker";
 pub const FLAG_BUILD_HOST: &str = "build-host";
 pub const FLAG_SUPPRESS_BUILD_HOST_WARNING: &str = "suppress-build-host-warning";
@@ -88,7 +90,7 @@ pub const FLAG_PP_HOST: &str = "host";
 pub const FLAG_PP_PLATFORM: &str = "platform";
 pub const FLAG_PP_DYLIB: &str = "lib";
 
-const VERSION: &str = include_str!("../../../version.txt");
+pub const VERSION: &str = env!("ROC_VERSION");
 const DEFAULT_GENERATED_DOCS_DIR: &str = "generated-docs";
 
 pub fn build_app() -> Command {
@@ -186,7 +188,7 @@ pub fn build_app() -> Command {
         PossibleValuesParser::new(Target::iter().map(Into::<&'static str>::into));
 
     Command::new("roc")
-        .version(concatcp!(VERSION, "\n"))
+        .version(VERSION)
         .about("Run the given .roc file, if there are no compilation errors.\nYou can use one of the SUBCOMMANDS below to do something else!")
         .args_conflicts_with_subcommands(true)
         .subcommand(Command::new(CMD_BUILD)
@@ -279,6 +281,20 @@ pub fn build_app() -> Command {
         )
         .subcommand(Command::new(CMD_REPL)
             .about("Launch the interactive Read Eval Print Loop (REPL)")
+            .arg(
+                Arg::new(FLAG_NO_COLOR)
+                    .long(FLAG_NO_COLOR)
+                    .help("Do not use any ANSI color codes in the repl output")
+                    .action(ArgAction::SetTrue)
+                    .required(false)
+            )
+            .arg(
+                Arg::new(FLAG_NO_HEADER)
+                    .long(FLAG_NO_HEADER)
+                    .help("Do not print the repl header")
+                    .action(ArgAction::SetTrue)
+                    .required(false)
+            )
         )
         .subcommand(Command::new(CMD_RUN)
             .about("Run a .roc file even if it has build errors")
@@ -542,7 +558,7 @@ pub fn test(matches: &ArgMatches, target: Target) -> io::Result<i32> {
         arena,
         path.to_path_buf(),
         opt_main_path.cloned(),
-        RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+        RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
         load_config,
     );
 
@@ -1266,8 +1282,8 @@ fn roc_dev_native(
                         break if libc::WIFEXITED(status) {
                             libc::WEXITSTATUS(status)
                         } else {
-                            // we don't have an exit code, so we probably shouldn't make one up
-                            0
+                            // we don't have an exit code, but something went wrong if we're in this else
+                            1
                         };
                     }
                     ChildProcessMsg::Expect => {
