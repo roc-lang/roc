@@ -117,16 +117,17 @@ echo "BEGIN Roc Exercism Exercises" > prompt.md
 
 for dir in exercism/exercises/practice/*/; do
     if [ -d "$dir" ]; then
-        echo "# $(basename "$dir")" >> prompt.md
-        echo "## Problem Description" >> prompt.md
+        echo "> Exercise: $(basename "$dir")" >> prompt.md
+        echo "> problem description:" >> prompt.md
         cat "$dir.docs/instructions.md" >> prompt.md
-        echo "## Solution" >> prompt.md
+        echo "> solution:" >> prompt.md
+        echo '```' >> prompt.md
         cat "$dir.meta/Example.roc" >> prompt.md
-        echo "" >> prompt.md
+        echo '```' >> prompt.md
     fi
 done
 
-echo "Roc exercism LICENSE" >> prompt.md
+echo "Roc exercism LICENSE:" >> prompt.md
 
 cat exercism/LICENSE >> prompt.md
 
