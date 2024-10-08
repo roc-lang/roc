@@ -78,6 +78,7 @@ fn wrap_in_decode_custom_decode_with(
                 this_decode_with_var_slice,
                 this_decode_with_clos_var,
                 this_decode_with_ret_var,
+                Variable::PURE,
             )),
         );
 
@@ -140,6 +141,7 @@ fn wrap_in_decode_custom_decode_with(
                 args_slice,
                 fn_clos_var,
                 decode_with_result_var,
+                Variable::PURE,
             )),
         );
 
@@ -185,6 +187,7 @@ fn wrap_in_decode_custom_decode_with(
                 this_decode_custom_args,
                 this_decode_custom_clos_var,
                 this_decode_custom_ret_var,
+                Variable::PURE,
             )),
         );
 

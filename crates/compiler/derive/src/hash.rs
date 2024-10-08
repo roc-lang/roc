@@ -475,6 +475,7 @@ fn call_hash_ability_member(
             this_arguments_slice,
             this_hash_clos_var,
             this_out_hasher_var,
+            Variable::PURE,
         )),
     );
 
@@ -533,7 +534,12 @@ fn build_outer_derived_closure(
         let args_slice = env.subs.insert_into_vars([hasher_var, val_var]);
         env.subs.set_content(
             fn_var,
-            Content::Structure(FlatType::Func(args_slice, fn_clos_var, body_var)),
+            Content::Structure(FlatType::Func(
+                args_slice,
+                fn_clos_var,
+                body_var,
+                Variable::PURE,
+            )),
         );
 
         (fn_var, fn_clos_var)

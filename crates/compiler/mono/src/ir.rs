@@ -4491,7 +4491,7 @@ pub fn with_hole<'a>(
 
             debug_assert!(!matches!(
                 env.subs.get_content_without_compacting(variant_var),
-                Content::Structure(FlatType::Func(_, _, _))
+                Content::Structure(FlatType::Func(_, _, _, _))
             ));
             convert_tag_union(
                 env,
@@ -4516,14 +4516,16 @@ pub fn with_hole<'a>(
 
             let content = env.subs.get_content_without_compacting(variable);
 
-            if let Content::Structure(FlatType::Func(arg_vars, _, ret_var)) = content {
+            if let Content::Structure(FlatType::Func(arg_vars, _, ret_var, fx_var)) = content {
                 let ret_var = *ret_var;
+                let fx_var = *fx_var;
                 let arg_vars = *arg_vars;
 
                 tag_union_to_function(
                     env,
                     arg_vars,
                     ret_var,
+                    fx_var,
                     tag_name,
                     closure_name,
                     ext_var,
@@ -6138,7 +6140,7 @@ fn late_resolve_ability_specialization(
     if let Some(spec_symbol) = opt_resolved {
         // Fast path: specialization is monomorphic, was found during solving.
         spec_symbol
-    } else if let Content::Structure(FlatType::Func(_, lambda_set, _)) =
+    } else if let Content::Structure(FlatType::Func(_, lambda_set, _, fx_var)) =
         env.subs.get_content_without_compacting(specialization_var)
     {
         // Fast path: the member is a function, so the lambda set will tell us the
@@ -6661,6 +6663,7 @@ fn tag_union_to_function<'a>(
     env: &mut Env<'a, '_>,
     argument_variables: VariableSubsSlice,
     return_variable: Variable,
+    fx_variable: Variable,
     tag_name: TagName,
     proc_symbol: Symbol,
     ext_var: Variable,
@@ -6670,6 +6673,8 @@ fn tag_union_to_function<'a>(
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
+    // [purity-inference] TODO: Do we need fx_variable for anything?
+
     let mut loc_pattern_args = vec![];
     let mut loc_expr_args = vec![];
 
@@ -6863,7 +6868,7 @@ fn register_capturing_closure<'a>(
         let is_self_recursive = !matches!(recursive, roc_can::expr::Recursive::NotRecursive);
 
         let captured_symbols = match *env.subs.get_content_without_compacting(function_type) {
-            Content::Structure(FlatType::Func(args, closure_var, ret)) => {
+            Content::Structure(FlatType::Func(args, closure_var, ret, fx_var)) => {
                 let lambda_set_layout = {
                     LambdaSet::from_var_pub(
                         layout_cache,
@@ -10067,7 +10072,7 @@ pub fn find_lambda_sets(
 
     // ignore the lambda set of top-level functions
     match subs.get_without_compacting(initial).content {
-        Content::Structure(FlatType::Func(arguments, _, result)) => {
+        Content::Structure(FlatType::Func(arguments, _, result, _fx)) => {
             let arguments = &subs.variables[arguments.indices()];
 
             stack.extend(arguments.iter().copied());
@@ -10104,7 +10109,7 @@ fn find_lambda_sets_help(
                 FlatType::Apply(_, arguments) => {
                     stack.extend(subs.get_subs_slice(*arguments).iter().rev());
                 }
-                FlatType::Func(arguments, lambda_set_var, ret_var) => {
+                FlatType::Func(arguments, lambda_set_var, ret_var, fx_var) => {
                     use std::collections::hash_map::Entry;
                     // Only insert a lambda_set_var if we didn't already have a value for this key.
                     if let Entry::Vacant(entry) = result.entry(*lambda_set_var) {
