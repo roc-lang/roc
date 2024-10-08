@@ -802,6 +802,7 @@ fn build_and_preprocess_host(
                 platform_main_roc.to_owned(),
                 dll_stub_symbols,
                 preprocessed_path,
+                preprocessed_host_path.to_owned(),
                 metadata_path,
             )
         }
@@ -1262,6 +1263,7 @@ fn spawn_surgical_host_build_thread(
     platform_main_roc: PathBuf,
     dll_stub_symbols: Vec<String>,
     preprocessed_path: PathBuf,
+    output_exe_path: PathBuf,
     metadata_path: PathBuf,
 ) -> std::thread::JoinHandle<(u128, PrebuiltHost)> {
     std::thread::spawn(move || {
@@ -1299,7 +1301,7 @@ fn spawn_surgical_host_build_thread(
 
         // Copy preprocessed host to executable location.
         // The surgical linker will modify that copy in-place.
-        //std::fs::copy(&preprocessed_path, &output_exe_path).unwrap();
+        std::fs::copy(&preprocessed_path, &output_exe_path).unwrap();
 
         (
             start.elapsed().as_millis(),
