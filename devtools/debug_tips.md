@@ -73,7 +73,7 @@ Viewing lcov.info will depend on your editor. For vscode, you can use the [cover
 
 ## Trace all Function Calls
 
-[uftrace](https://github.com/namhyung/uftrace) allows you to trace all functions that where called (in the compiler) in order. You can use it with for example `./target/debug/roc build examples/platform-switching/rocLovesRust.roc`. The output looks like this:
+[uftrace](https://github.com/namhyung/uftrace) allows you to trace all functions that were called in the compiler in order. For example, you can use it with `./target/debug/roc build examples/platform-switching/rocLovesRust.roc`. The output looks like this:
 ```
 roc::main() {
   roc_tracing::setup_tracing();
