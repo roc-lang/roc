@@ -108,6 +108,35 @@ add_github_link_to_examples www/build/examples
 # cleanup
 rm -rf roc_nightly roc_releases.json
 
+# LLM prompt building
+
+# > all exercism exercises
+rm -rf exercism
+git clone --depth 1 https://github.com/exercism/roc.git exercism
+echo "BEGIN Roc Exercism Exercises" > prompt.md
+
+for dir in exercism/exercises/practice/*/; do
+    if [ -d "$dir" ]; then
+        echo "# $(basename "$dir")" >> prompt.md
+        echo "## Problem Description" >> prompt.md
+        cat "$dir.docs/instructions.md" >> prompt.md
+        echo "## Solution" >> prompt.md
+        cat "$dir.meta/Example.roc" >> prompt.md
+        echo "" >> prompt.md
+    fi
+done
+
+echo "Roc exercism LICENSE" >> prompt.md
+
+cat exercism/LICENSE >> prompt.md
+
+echo "END Roc Exercism Exercises" >> prompt.md
+
+rm -rf exercism
+
+mv prompt.md www/build/
+
+
 echo 'Generating CLI example platform docs...'
 # Change ROC_DOCS_ROOT_DIR=builtins so that links will be generated relative to
 # "/packages/basic-cli/" rather than "/builtins/"
