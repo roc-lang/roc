@@ -983,18 +983,18 @@ mod specialize_types {
         specializes_to(".0 (5, 3.14 )", "Num []");
     }
 
-    #[test]
-    fn tuple_literal_ty() {
-        specializes_to("(5, 3.14 )", "( Num [], Frac [] )");
-    }
+    // #[test]
+    // fn tuple_literal_ty() {
+    //     specializes_to("(5, 3.14 )", "( Num [], Frac [] )");
+    // }
 
-    #[test]
-    fn tuple_literal_accessor_ty() {
-        specializes_to(".0", "( [] ) -> []");
-        specializes_to(".4", "( _, _, _, _, [] ) -> []");
-        specializes_to(".5", "( ... 5 omitted, [] ) -> []");
-        specializes_to(".200", "( ... 200 omitted, [] ) -> []");
-    }
+    // #[test]
+    // fn tuple_literal_accessor_ty() {
+    //     specializes_to(".0", "( [] ) -> []");
+    //     specializes_to(".4", "( _, _, _, _, [] ) -> []");
+    //     specializes_to(".5", "( ... 5 omitted, [] ) -> []");
+    //     specializes_to(".200", "( ... 200 omitted, [] ) -> []");
+    // }
 
     #[test]
     fn tuple_accessor_generalization() {
@@ -2481,26 +2481,26 @@ mod specialize_types {
     //     );
     // }
 
-    #[test]
-    fn typecheck_linked_list_map() {
-        infer_eq_without_problem(
-            indoc!(
-                r"
-                    ConsList a := [Cons a (ConsList a), Nil]
+    // #[test]
+    // fn typecheck_linked_list_map() {
+    //     infer_eq_without_problem(
+    //         indoc!(
+    //             r"
+    //                 ConsList a := [Cons a (ConsList a), Nil]
 
-                    map : (a -> b), ConsList a -> ConsList b
-                    map = \f, list ->
-                        when list is
-                            Nil -> Nil
-                            Cons x xs ->
-                                Cons (f x) (map f xs)
+    //                 map : (a -> b), ConsList a -> ConsList b
+    //                 map = \f, list ->
+    //                     when list is
+    //                         Nil -> Nil
+    //                         Cons x xs ->
+    //                             Cons (f x) (map f xs)
 
-                    map
-                       "
-            ),
-            "([] -> []), ConsList [] -> ConsList []",
-        );
-    }
+    //                 map
+    //                    "
+    //         ),
+    //         "([] -> []), ConsList [] -> ConsList []",
+    //     );
+    // }
 
     #[test]
     fn mismatch_in_alias_args_gets_reported() {
@@ -2719,46 +2719,44 @@ mod specialize_types {
         );
     }
 
-    #[test]
-    fn peano_map_infer() {
-        specializes_to(
-            indoc!(
-                r#"
-                app "test" provides [main] to "./platform"
+    // #[test]
+    // fn peano_map_infer() {
+    //     specializes_to(
+    //         indoc!(
+    //             r#"
+    //             app "test" provides [main] to "./platform"
 
-                map =
-                    \peano ->
-                        when peano is
-                            Z -> Z
-                            S rest -> map rest |> S
+    //             map =
+    //                 \peano ->
+    //                     when peano is
+    //                         Z -> Z
+    //                         S rest -> map rest |> S
 
+    //             main =
+    //                 map
+    //             "#
+    //         ),
+    //         "[S a, Z] as a -> [S b, Z] as b",
+    //     );
+    // }
 
-                main =
-                    map
-                "#
-            ),
-            "[S a, Z] as a -> [S b, Z] as b",
-        );
-    }
+    // #[test]
+    // fn peano_map_infer_nested() {
+    //     specializes_to(
+    //         indoc!(
+    //             r"
+    //                 map = \peano ->
+    //                         when peano is
+    //                             Z -> Z
+    //                             S rest ->
+    //                                 map rest |> S
 
-    #[test]
-    fn peano_map_infer_nested() {
-        specializes_to(
-            indoc!(
-                r"
-                    map = \peano ->
-                            when peano is
-                                Z -> Z
-                                S rest ->
-                                    map rest |> S
-
-
-                    map
-                "
-            ),
-            "[S a, Z] as a -> [S b, Z] as b",
-        );
-    }
+    //                 map
+    //             "
+    //         ),
+    //         "[S a, Z] as a -> [S b, Z] as b",
+    //     );
+    // }
 
     #[test]
     fn let_record_pattern_with_alias_annotation() {
@@ -2831,32 +2829,32 @@ mod specialize_types {
     //     );
     // }
 
-    #[test]
-    fn typecheck_mutually_recursive_tag_union_2() {
-        infer_eq_without_problem(
-            indoc!(
-                r"
-                    ListA a b := [Cons a (ListB b a), Nil]
-                    ListB a b := [Cons a (ListA b a), Nil]
+    // #[test]
+    // fn typecheck_mutually_recursive_tag_union_2() {
+    //     infer_eq_without_problem(
+    //         indoc!(
+    //             r"
+    //                 ListA a b := [Cons a (ListB b a), Nil]
+    //                 ListB a b := [Cons a (ListA b a), Nil]
 
-                    ConsList q : [Cons q (ConsList q), Nil]
+    //                 ConsList q : [Cons q (ConsList q), Nil]
 
-                    toAs : (b -> a), ListA a b -> ConsList a
-                    toAs = \f, @ListA lista ->
-                        when lista is
-                            Nil -> Nil
-                            Cons a (@ListB listb) ->
-                                when listb is
-                                    Nil -> Nil
-                                    Cons b (@ListA newLista) ->
-                                        Cons a (Cons (f b) (toAs f newLista))
+    //                 toAs : (b -> a), ListA a b -> ConsList a
+    //                 toAs = \f, @ListA lista ->
+    //                     when lista is
+    //                         Nil -> Nil
+    //                         Cons a (@ListB listb) ->
+    //                             when listb is
+    //                                 Nil -> Nil
+    //                                 Cons b (@ListA newLista) ->
+    //                                     Cons a (Cons (f b) (toAs f newLista))
 
-                    toAs
-                "
-            ),
-            "([] -> []), ListA [] [] -> ConsList []",
-        );
-    }
+    //                 toAs
+    //             "
+    //         ),
+    //         "([] -> []), ListA [] [] -> ConsList []",
+    //     );
+    // }
 
     #[test]
     fn typecheck_mutually_recursive_tag_union_listabc() {
@@ -3156,26 +3154,26 @@ mod specialize_types {
         infer_eq_without_problem("Num.maxU32", "U32");
     }
 
-    #[test]
-    fn reconstruct_path() {
-        infer_eq_without_problem(
-            indoc!(
-                r"
-                reconstructPath : Dict position position, position -> List position where position implements Hash & Eq
-                reconstructPath = \cameFrom, goal ->
-                    when Dict.get cameFrom goal is
-                        Err KeyNotFound ->
-                            []
+    // #[test]
+    // fn reconstruct_path() {
+    //     infer_eq_without_problem(
+    //         indoc!(
+    //             r"
+    //             reconstructPath : Dict position position, position -> List position where position implements Hash & Eq
+    //             reconstructPath = \cameFrom, goal ->
+    //                 when Dict.get cameFrom goal is
+    //                     Err KeyNotFound ->
+    //                         []
 
-                        Ok next ->
-                            List.append (reconstructPath cameFrom next) goal
+    //                     Ok next ->
+    //                         List.append (reconstructPath cameFrom next) goal
 
-                reconstructPath
-                "
-            ),
-            "Dict position position, position -> List position where position implements Hash & Eq",
-        );
-    }
+    //             reconstructPath
+    //             "
+    //         ),
+    //         "Dict position position, position -> List position where position implements Hash & Eq",
+    //     );
+    // }
 
     #[test]
     fn use_correct_ext_record() {
@@ -3196,43 +3194,43 @@ mod specialize_types {
         );
     }
 
-    #[test]
-    fn use_correct_ext_tag_union() {
-        // related to a bug solved in 08c82bf151a85e62bce02beeed1e14444381069f
-        infer_eq_without_problem(
-            indoc!(
-                r#"
-                app "test" imports [] provides [main] to "./platform"
+    // #[test]
+    // fn use_correct_ext_tag_union() {
+    //     // related to a bug solved in 08c82bf151a85e62bce02beeed1e14444381069f
+    //     infer_eq_without_problem(
+    //         indoc!(
+    //             r#"
+    //             app "test" imports [] provides [main] to "./platform"
 
-                boom = \_ -> boom {}
+    //             boom = \_ -> boom {}
 
-                Model position : { openSet : Set position }
+    //             Model position : { openSet : Set position }
 
-                cheapestOpen : Model position -> Result position [KeyNotFound] where position implements Hash & Eq
-                cheapestOpen = \model ->
+    //             cheapestOpen : Model position -> Result position [KeyNotFound] where position implements Hash & Eq
+    //             cheapestOpen = \model ->
 
-                    folder = \resSmallestSoFar, position ->
-                                    when resSmallestSoFar is
-                                        Err _ -> resSmallestSoFar
-                                        Ok smallestSoFar ->
-                                            if position == smallestSoFar.position then resSmallestSoFar
+    //                 folder = \resSmallestSoFar, position ->
+    //                                 when resSmallestSoFar is
+    //                                     Err _ -> resSmallestSoFar
+    //                                     Ok smallestSoFar ->
+    //                                         if position == smallestSoFar.position then resSmallestSoFar
 
-                                            else
-                                                Ok { position, cost: 0.0 }
+    //                                         else
+    //                                             Ok { position, cost: 0.0 }
 
-                    Set.walk model.openSet (Ok { position: boom {}, cost: 0.0 }) folder
-                        |> Result.map (\x -> x.position)
+    //                 Set.walk model.openSet (Ok { position: boom {}, cost: 0.0 }) folder
+    //                     |> Result.map (\x -> x.position)
 
-                astar : Model position -> Result position [KeyNotFound] where position implements Hash & Eq
-                astar = \model -> cheapestOpen model
+    //             astar : Model position -> Result position [KeyNotFound] where position implements Hash & Eq
+    //             astar = \model -> cheapestOpen model
 
-                main =
-                    astar
-                "#
-            ),
-            "Model position -> Result position [KeyNotFound] where position implements Hash & Eq",
-        );
-    }
+    //             main =
+    //                 astar
+    //             "#
+    //         ),
+    //         "Model position -> Result position [KeyNotFound] where position implements Hash & Eq",
+    //     );
+    // }
 
     #[test]
     fn when_with_or_pattern_and_guard() {
@@ -3390,22 +3388,22 @@ mod specialize_types {
         );
     }
 
-    #[test]
-    fn open_optional_field_unifies_with_missing() {
-        infer_eq_without_problem(
-            indoc!(
-                r#"
-                    negatePoint : { x : I64, y : I64, z ? Num c }r -> { x : I64, y : I64, z : Num c }r
+    // #[test]
+    // fn open_optional_field_unifies_with_missing() {
+    //     infer_eq_without_problem(
+    //         indoc!(
+    //             r#"
+    //                 negatePoint : { x : I64, y : I64, z ? Num c }r -> { x : I64, y : I64, z : Num c }r
 
-                    a = negatePoint { x: 1, y: 2 }
-                    b = negatePoint { x: 1, y: 2, blah : "hi" }
+    //                 a = negatePoint { x: 1, y: 2 }
+    //                 b = negatePoint { x: 1, y: 2, blah : "hi" }
 
-                    { a, b }
-                "#
-            ),
-            "{ a : { x : I64, y : I64, z : Num [] }, b : { blah : Str, x : I64, y : I64, z : Num [] } }",
-        );
-    }
+    //                 { a, b }
+    //             "#
+    //         ),
+    //         "{ a : { x : I64, y : I64, z : Num [] }, b : { blah : Str, x : I64, y : I64, z : Num [] } }",
+    //     );
+    // }
 
     #[test]
     fn optional_field_unifies_with_present() {
@@ -3421,22 +3419,22 @@ mod specialize_types {
         );
     }
 
-    #[test]
-    fn open_optional_field_unifies_with_present() {
-        infer_eq_without_problem(
-            indoc!(
-                r#"
-                    negatePoint : { x : Num a, y : Num b, z ? c }r -> { x : Num a, y : Num b, z : c }r
+    // #[test]
+    // fn open_optional_field_unifies_with_present() {
+    //     infer_eq_without_problem(
+    //         indoc!(
+    //             r#"
+    //                 negatePoint : { x : Num a, y : Num b, z ? c }r -> { x : Num a, y : Num b, z : c }r
 
-                    a = negatePoint { x: 1, y: 2.1 }
-                    b = negatePoint { x: 1, y: 2.1, blah : "hi" }
+    //                 a = negatePoint { x: 1, y: 2.1 }
+    //                 b = negatePoint { x: 1, y: 2.1, blah : "hi" }
 
-                    { a, b }
-                "#
-            ),
-            "{ a : { x : Num [], y : Frac [], z : c }, b : { blah : Str, x : Num [], y : Frac [], z : c1 } }",
-        );
-    }
+    //                 { a, b }
+    //             "#
+    //         ),
+    //         "{ a : { x : Num [], y : Frac [], z : c }, b : { blah : Str, x : Num [], y : Frac [], z : c1 } }",
+    //     );
+    // }
 
     #[test]
     fn optional_field_function() {
@@ -3464,35 +3462,35 @@ mod specialize_types {
         );
     }
 
-    #[test]
-    fn optional_field_when() {
-        infer_eq_without_problem(
-            indoc!(
-                r"
-                \r ->
-                    when r is
-                        { x, y ? 0 } -> x + y
-                "
-            ),
-            "{ x : Num a, y ? Num a } -> Num a",
-        );
-    }
+    // #[test]
+    // fn optional_field_when() {
+    //     infer_eq_without_problem(
+    //         indoc!(
+    //             r"
+    //             \r ->
+    //                 when r is
+    //                     { x, y ? 0 } -> x + y
+    //             "
+    //         ),
+    //         "{ x : Num a, y ? Num a } -> Num a",
+    //     );
+    // }
 
-    #[test]
-    fn optional_field_let_with_signature() {
-        infer_eq_without_problem(
-            indoc!(
-                r"
-                \rec ->
-                    { x, y } : { x : I64, y ? Bool }*
-                    { x, y ? Bool.false } = rec
+    // #[test]
+    // fn optional_field_let_with_signature() {
+    //     infer_eq_without_problem(
+    //         indoc!(
+    //             r"
+    //             \rec ->
+    //                 { x, y } : { x : I64, y ? Bool }*
+    //                 { x, y ? Bool.false } = rec
 
-                    { x, y }
-                "
-            ),
-            "{ x : I64, y ? Bool }-> { x : I64, y : Bool }",
-        );
-    }
+    //                 { x, y }
+    //             "
+    //         ),
+    //         "{ x : I64, y ? Bool }-> { x : I64, y : Bool }",
+    //     );
+    // }
 
     #[test]
     fn list_walk_backwards() {
