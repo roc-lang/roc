@@ -658,9 +658,9 @@ mod test_reporting {
 
     Did you mean one of these?
 
-        Str
         Frac
         Num
+        Str
         U8
     "###
     );
@@ -8160,7 +8160,7 @@ All branches in an `if` must have the same type!
         Encode
         Inspect
         Dict
-        List
+        Crypt
     "
     );
 
