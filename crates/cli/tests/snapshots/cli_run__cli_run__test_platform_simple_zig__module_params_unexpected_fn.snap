@@ -1,0 +1,25 @@
+---
+source: crates/cli/tests/cli_run.rs
+expression: out.normalize_stdout_and_stderr()
+---
+── TYPE MISMATCH in tests/module_params/unexpected_fn.roc ──────────────────────
+
+This argument to this string interpolation has an unexpected type:
+
+11│      $(Api.getPost)
+           ^^^^^^^^^^^
+
+The argument is an anonymous function of type:
+
+    U32 -> Str
+
+But this string interpolation needs its argument to be:
+
+    Str
+
+────────────────────────────────────────────────────────────────────────────────
+
+1 error and 0 warning found in <ignored for test> ms
+.
+
+You can run the program anyway <ignored for tests>

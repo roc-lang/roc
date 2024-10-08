@@ -651,6 +651,48 @@ mod cli_run {
 
             insta::assert_snapshot!(out.normalize_stdout_and_stderr());
         }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        fn module_params_bad_ann() {
+            build_platform_host();
+
+            let runner = cli_utils::helpers::Run::new_roc()
+                .arg(CMD_DEV)
+                .arg(file_from_root("crates/cli/tests/module_params", "bad_ann.roc").as_path());
+
+            let out = runner.run();
+
+            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+        }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        fn module_params_multiline_pattern() {
+            build_platform_host();
+
+            let runner = cli_utils::helpers::Run::new_roc().arg(CMD_DEV).arg(
+                file_from_root("crates/cli/tests/module_params", "multiline_params.roc").as_path(),
+            );
+
+            let out = runner.run();
+
+            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+        }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        fn module_params_unexpected_fn() {
+            build_platform_host();
+
+            let runner = cli_utils::helpers::Run::new_roc().arg(CMD_DEV).arg(
+                file_from_root("crates/cli/tests/module_params", "unexpected_fn.roc").as_path(),
+            );
+
+            let out = runner.run();
+
+            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+        }
     }
 
     // TODO not sure if this cfg should still be here: #[cfg(not(debug_assertions))]
