@@ -1,4 +1,4 @@
-app [exposed1, exposed2] { pf: platform "platform/main.roc" }
+app [exposed1, exposed2, add1, sub1] { pf: platform "platform/main.roc" }
 
 exposed1 = \n -> fib n 0 1
 
@@ -15,3 +15,6 @@ fact = \n, x ->
         x
     else
         fact (n - 1) (n * x)
+
+add1 = \n -> n + 1
+sub1 = \n -> n - 1
