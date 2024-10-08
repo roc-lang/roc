@@ -146,6 +146,7 @@ impl FlatHash {
             | Content::FlexAbleVar(_, _)
             | Content::RigidAbleVar(_, _) => Err(UnboundVar),
             Content::LambdaSet(_) | Content::ErasedLambda => Err(Underivable),
+            Content::Pure | Content::Effectful => Err(Underivable),
         }
     }
 

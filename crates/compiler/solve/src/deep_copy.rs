@@ -263,7 +263,7 @@ fn deep_copy_var_help(
                 subs.set_content_unchecked(copy, Structure(new_flat_type));
             }
 
-            FlexVar(_) | FlexAbleVar(_, _) | Error | ErasedLambda => {
+            FlexVar(_) | FlexAbleVar(_, _) | Error | ErasedLambda | Pure | Effectful => {
                 subs.set_content_unchecked(copy, content);
             }
 

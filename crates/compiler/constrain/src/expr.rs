@@ -58,6 +58,25 @@ pub struct Env {
     pub rigids: MutMap<Lowercase, Variable>,
     pub resolutions_to_make: Vec<OpportunisticResolve>,
     pub home: ModuleId,
+    /// The enclosing function's fx var to be unified with inner calls
+    pub fn_fx_var: Option<Variable>,
+}
+
+impl Env {
+    pub fn with_fx<F, T>(&mut self, fx_var: Variable, f: F) -> T
+    where
+        F: FnOnce(&mut Env) -> T,
+    {
+        let prev_fx_var = self.fn_fx_var;
+
+        self.fn_fx_var = Some(fx_var);
+
+        let result = f(self);
+
+        self.fn_fx_var = prev_fx_var;
+
+        result
+    }
 }
 
 fn constrain_untyped_args(
@@ -149,15 +168,16 @@ fn constrain_untyped_closure(
         loc_body_expr.region,
     ));
 
-    // [purity-inference] TODO: constrain calls in body with fx_var
-    let ret_constraint = constrain_expr(
-        types,
-        constraints,
-        env,
-        loc_body_expr.region,
-        &loc_body_expr.value,
-        body_type,
-    );
+    let ret_constraint = env.with_fx(fx_var, |env| {
+        constrain_expr(
+            types,
+            constraints,
+            env,
+            loc_body_expr.region,
+            &loc_body_expr.value,
+            body_type,
+        )
+    });
 
     let mut early_return_constraints = Vec::with_capacity(early_returns.len());
     for (early_return_variable, early_return_region) in early_returns {
@@ -575,7 +595,7 @@ pub fn constrain_expr(
                 constraints.equal_types_var(*fn_var, expected_fn_type, category.clone(), fn_region),
                 constraints.and_constraint(arg_cons),
                 constraints.equal_types_var(*ret_var, expected_final_type, category, region),
-                // [purity-inference] TODO: union with current function's fx var
+                constraints.call_fx(env.fn_fx_var.unwrap_or(Variable::PURE), *fx_var),
             ];
 
             let and_constraint = constraints.and_constraint(and_cons);
@@ -1970,6 +1990,7 @@ fn constrain_function_def(
                 home: env.home,
                 rigids: ftv,
                 resolutions_to_make: vec![],
+                fn_fx_var: Some(function_def.fx_type),
             };
 
             let region = loc_function_def.region;
@@ -2221,6 +2242,7 @@ fn constrain_destructure_def(
                 home: env.home,
                 rigids: ftv,
                 resolutions_to_make: vec![],
+                fn_fx_var: env.fn_fx_var,
             };
 
             let signature_index = constraints.push_type(types, signature);
@@ -2323,6 +2345,7 @@ fn constrain_value_def(
                 home: env.home,
                 rigids: ftv,
                 resolutions_to_make: vec![],
+                fn_fx_var: env.fn_fx_var,
             };
 
             let loc_pattern = Loc::at(loc_symbol.region, Pattern::Identifier(loc_symbol.value));
@@ -2610,6 +2633,7 @@ pub fn constrain_decls(
         home,
         rigids: MutMap::default(),
         resolutions_to_make: vec![],
+        fn_fx_var: None,
     };
 
     debug_assert_eq!(declarations.declarations.len(), declarations.symbols.len());
@@ -2841,6 +2865,7 @@ fn constrain_typed_def(
         home: env.home,
         resolutions_to_make: vec![],
         rigids: ftv,
+        fn_fx_var: env.fn_fx_var,
     };
 
     let signature_index = constraints.push_type(types, signature);
@@ -3865,8 +3890,7 @@ fn constraint_recursive_function(
                 constraints.push_type(types, typ)
             };
 
-            let expr_con = {
-                // [purity-inference] TODO: constrain calls in body
+            let expr_con = env.with_fx(fx_var, |env| {
                 let expected = constraints.push_expected_type(NoExpectation(ret_type_index));
                 constrain_expr(
                     types,
@@ -3876,7 +3900,7 @@ fn constraint_recursive_function(
                     &loc_body_expr.value,
                     expected,
                 )
-            };
+            });
             let expr_con = attach_resolution_constraints(constraints, env, expr_con);
 
             vars.push(expr_var);
@@ -4415,10 +4439,9 @@ fn rec_defs_help(
                             let typ = types.function(pattern_types, lambda_set, ret_type, fx_type);
                             constraints.push_type(types, typ)
                         };
-                        let expr_con = {
+                        let expr_con = env.with_fx(fx_var, |env| {
                             let body_type =
                                 constraints.push_expected_type(NoExpectation(ret_type_index));
-                            // [purity-inference] TODO: unify calls in body with the fx_type
 
                             constrain_expr(
                                 types,
@@ -4428,7 +4451,7 @@ fn rec_defs_help(
                                 &loc_body_expr.value,
                                 body_type,
                             )
-                        };
+                        });
                         let expr_con = attach_resolution_constraints(constraints, env, expr_con);
 
                         vars.push(*fn_var);

@@ -77,6 +77,8 @@ impl AsSchema<Content> for subs::Content {
             } => B::Recursive(opt_name.as_schema(subs), structure.as_schema(subs)),
             A::LambdaSet(lambda_set) => lambda_set.as_schema(subs),
             A::ErasedLambda => B::ErasedLambda(),
+            A::Pure => todo!("[purity-inference] checkmate"),
+            A::Effectful => todo!("[purity-inference] checkmate"),
             A::Structure(flat_type) => flat_type.as_schema(subs),
             A::Alias(name, type_vars, real_var, kind) => B::Alias(
                 name.as_schema(subs),

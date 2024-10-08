@@ -178,7 +178,9 @@ impl FlatInspectable {
             | Content::FlexAbleVar(_, _)
             | Content::RigidAbleVar(_, _)
             | Content::LambdaSet(_)
-            | Content::ErasedLambda => {
+            | Content::ErasedLambda
+            | Content::Pure
+            | Content::Effectful => {
                 unreachable!("There must have been a bug in the solver, because we're trying to derive Inspect on a non-concrete type.");
             }
         }

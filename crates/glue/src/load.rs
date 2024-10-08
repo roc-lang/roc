@@ -297,7 +297,13 @@ fn number_lambda_sets(subs: &Subs, initial: Variable) -> Vec<Variable> {
         use roc_types::types::Uls;
 
         match subs.get_content_without_compacting(var) {
-            RigidVar(_) | RigidAbleVar(_, _) | FlexVar(_) | FlexAbleVar(_, _) | Error => (),
+            RigidVar(_)
+            | RigidAbleVar(_, _)
+            | FlexVar(_)
+            | FlexAbleVar(_, _)
+            | Pure
+            | Effectful
+            | Error => (),
 
             RecursionVar { .. } => {
                 // we got here, so we've treated this type already

@@ -1183,6 +1183,8 @@ fn deep_copy_type_vars<C: CopyEnv>(
                 })
             }
             ErasedLambda => ErasedLambda,
+            Pure => Pure,
+            Effectful => Effectful,
 
             RangedNumber(range) => {
                 perform_clone!(RangedNumber(range))

@@ -8,7 +8,7 @@ use roc_builtins::bitcode::{
     IntWidth::{self, *},
 };
 use roc_collections::{MutMap, VecMap};
-use roc_error_macros::todo_lambda_erasure;
+use roc_error_macros::{internal_error, todo_lambda_erasure};
 use roc_module::{
     ident::TagName,
     symbol::{Interns, Symbol},
@@ -1595,6 +1595,7 @@ fn add_type_help<'a>(
             type_id
         }
         Content::ErasedLambda => todo_lambda_erasure!(),
+        Content::Pure | Content::Effectful => internal_error!("fx vars should not appear here"),
         Content::LambdaSet(lambda_set) => {
             let tags = lambda_set.solved;
 
