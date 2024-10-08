@@ -2194,7 +2194,7 @@ fn adjust_rank_content(
                     rank
                 }
 
-                Func(arg_vars, closure_var, ret_var) => {
+                Func(arg_vars, closure_var, ret_var, _fx_var) => {
                     let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ret_var);
 
                     // TODO investigate further.

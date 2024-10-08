@@ -265,8 +265,8 @@ fn find_chain(subs: &Subs, left: Variable, right: Variable) -> impl Iterator<Ite
                     Ok(chain)
                 }
                 (
-                    Func(left_args, _left_clos, left_ret),
-                    Func(right_args, _right_clos, right_ret),
+                    Func(left_args, _left_clos, left_ret, left_fx),
+                    Func(right_args, _right_clos, right_ret, right_fx),
                 ) => {
                     // lambda sets are ignored; see the comment in the LambdaSet case above.
                     let check_args = |_| {
@@ -278,7 +278,9 @@ fn find_chain(subs: &Subs, left: Variable, right: Variable) -> impl Iterator<Ite
                         )
                     };
                     let mut chain =
-                        help(subs, needle, *left_ret, *right_ret).or_else(check_args)?;
+                        help(subs, needle, *left_ret, *right_ret)
+                            .or_else(|_| help(subs, needle, *left_fx, *right_fx))
+                            .or_else(check_args)?;
                     chain.push((left, right));
                     Ok(chain)
                 }

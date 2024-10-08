@@ -314,7 +314,7 @@ fn number_lambda_sets(subs: &Subs, initial: Variable) -> Vec<Variable> {
                     stack.extend(var_slice!(*args));
                 }
 
-                Func(arg_vars, closure_var, ret_var) => {
+                Func(arg_vars, closure_var, ret_var, _fx_var) => {
                     lambda_sets.push(subs.get_root_key_without_compacting(*closure_var));
 
                     stack.push(*ret_var);

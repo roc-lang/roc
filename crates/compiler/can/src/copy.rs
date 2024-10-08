@@ -986,15 +986,21 @@ fn deep_copy_type_vars<C: CopyEnv>(
                         Structure(Apply(symbol, new_arguments))
                     })
                 }
-                Func(arguments, closure_var, ret_var) => {
+                Func(arguments, closure_var, ret_var, fx_var) => {
                     descend_slice!(arguments);
 
                     let new_closure_var = descend_var!(closure_var);
                     let new_ret_var = descend_var!(ret_var);
+                    let new_fx_var = descend_var!(fx_var);
 
                     perform_clone!({
                         let new_arguments = clone_var_slice!(arguments);
-                        Structure(Func(new_arguments, new_closure_var, new_ret_var))
+                        Structure(Func(
+                            new_arguments,
+                            new_closure_var,
+                            new_ret_var,
+                            new_fx_var,
+                        ))
                     })
                 }
                 Record(fields, ext_var) => {

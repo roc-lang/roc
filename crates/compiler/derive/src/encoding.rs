@@ -132,6 +132,7 @@ fn to_encoder_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
             elem_var_slice,
             to_encoder_clos_var,
             elem_encoder_var,
+            Variable::PURE,
         )),
     );
 
@@ -181,6 +182,7 @@ fn to_encoder_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
             elem_var_slice,
             to_elem_encoder_lset,
             elem_encoder_var,
+            Variable::PURE,
         )),
     );
 
@@ -218,6 +220,7 @@ fn to_encoder_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
             this_encode_list_args_slice,
             this_encode_list_clos_var,
             this_list_encoder_var,
+            Variable::PURE,
         )),
     );
 
@@ -277,6 +280,7 @@ fn to_encoder_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
             list_var_slice,
             fn_clos_var,
             this_encoder_var,
+            Variable::PURE,
         )),
     );
 
@@ -358,6 +362,7 @@ fn to_encoder_record(
                     field_var_slice,
                     to_encoder_clos_var,
                     encoder_var,
+                    Variable::PURE,
                 )),
             );
 
@@ -440,6 +445,7 @@ fn to_encoder_record(
             fields_list_var_slice,
             encode_record_clos_var,
             encoder_var,
+            Variable::PURE,
         )),
     );
 
@@ -490,6 +496,7 @@ fn to_encoder_record(
             record_var_slice,
             fn_clos_var,
             this_encoder_var,
+            Variable::PURE,
         )),
     );
 
@@ -564,6 +571,7 @@ fn to_encoder_tuple(
                     elem_var_slice,
                     to_encoder_clos_var,
                     encoder_var,
+                    Variable::PURE,
                 )),
             );
 
@@ -626,6 +634,7 @@ fn to_encoder_tuple(
             elem_encoders_list_var_slice,
             encode_tuple_clos_var,
             encoder_var,
+            Variable::PURE,
         )),
     );
 
@@ -676,6 +685,7 @@ fn to_encoder_tuple(
             tuple_var_slice,
             fn_clos_var,
             this_encoder_var,
+            Variable::PURE,
         )),
     );
 
@@ -767,6 +777,7 @@ fn to_encoder_tag_union(
                             var_slice_of_sym_var,
                             to_encoder_clos_var,
                             encoder_var,
+                            Variable::PURE,
                         )),
                     );
 
@@ -828,6 +839,7 @@ fn to_encoder_tag_union(
                     this_encode_tag_args_var_slice,
                     this_encode_tag_clos_var,
                     this_encoder_var,
+                    Variable::PURE,
                 )),
             );
 
@@ -917,6 +929,7 @@ fn to_encoder_tag_union(
             tag_union_var_slice,
             fn_clos_var,
             this_encoder_var,
+            Variable::PURE,
         )),
     );
 
@@ -986,6 +999,7 @@ fn wrap_in_encode_custom(
             this_append_with_args_var_slice,
             this_append_with_clos_var,
             Variable::LIST_U8,
+            Variable::PURE,
         )),
     );
 
@@ -1036,7 +1050,12 @@ fn wrap_in_encode_custom(
     let args_slice = env.subs.insert_into_vars(vec![bytes_var, fmt_var]);
     env.subs.set_content(
         fn_var,
-        Content::Structure(FlatType::Func(args_slice, fn_clos_var, Variable::LIST_U8)),
+        Content::Structure(FlatType::Func(
+            args_slice,
+            fn_clos_var,
+            Variable::LIST_U8,
+            Variable::PURE,
+        )),
     );
 
     // \bytes, fmt -[[fn_name captured_var]]-> Encode.appendWith bytes encoder fmt
@@ -1080,6 +1099,7 @@ fn wrap_in_encode_custom(
             this_custom_args_var_slice,
             this_custom_clos_var,
             this_custom_encoder_var,
+            Variable::PURE,
         )),
     );
 

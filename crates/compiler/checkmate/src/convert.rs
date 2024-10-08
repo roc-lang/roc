@@ -98,10 +98,11 @@ impl AsSchema<Content> for subs::FlatType {
             subs::FlatType::Apply(symbol, variables) => {
                 Content::Apply(symbol.as_schema(subs), variables.as_schema(subs))
             }
-            subs::FlatType::Func(arguments, closure, ret) => Content::Function(
+            subs::FlatType::Func(arguments, closure, ret, _fx) => Content::Function(
                 arguments.as_schema(subs),
                 closure.as_schema(subs),
                 ret.as_schema(subs),
+                // [purity-inference] TODO: checkmate
             ),
             subs::FlatType::Record(fields, ext) => {
                 Content::Record(fields.as_schema(subs), ext.as_schema(subs))

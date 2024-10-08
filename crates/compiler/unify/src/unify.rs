@@ -3309,17 +3309,19 @@ fn unify_flat_type<M: MetaCollector>(
 
             outcome
         }
-        (Func(l_args, l_closure, l_ret), Func(r_args, r_closure, r_ret))
+        (Func(l_args, l_closure, l_ret, l_fx), Func(r_args, r_closure, r_ret, r_fx))
             if l_args.len() == r_args.len() =>
         {
             let arg_outcome = unify_zip_slices(env, pool, *l_args, *r_args, ctx.mode);
             let ret_outcome = unify_pool(env, pool, *l_ret, *r_ret, ctx.mode);
             let closure_outcome = unify_pool(env, pool, *l_closure, *r_closure, ctx.mode);
+            let fx_outcome = unify_pool(env, pool, *l_fx, *r_fx, ctx.mode);
 
             let mut outcome = ret_outcome;
 
             outcome.union(closure_outcome);
             outcome.union(arg_outcome);
+            outcome.union(fx_outcome);
 
             if outcome.mismatches.is_empty() {
                 let merged_closure_var = choose_merged_var(env, *l_closure, *r_closure);
@@ -3327,13 +3329,13 @@ fn unify_flat_type<M: MetaCollector>(
                 outcome.union(merge(
                     env,
                     ctx,
-                    Structure(Func(*r_args, merged_closure_var, *r_ret)),
+                    Structure(Func(*r_args, merged_closure_var, *r_ret, *r_fx)),
                 ));
             }
 
             outcome
         }
-        (FunctionOrTagUnion(tag_names, tag_symbols, ext), Func(args, closure, ret)) => {
+        (FunctionOrTagUnion(tag_names, tag_symbols, ext), Func(args, closure, ret, fx)) => {
             unify_function_or_tag_union_and_func(
                 env,
                 pool,
@@ -3344,10 +3346,11 @@ fn unify_flat_type<M: MetaCollector>(
                 *args,
                 *ret,
                 *closure,
+                *fx,
                 true,
             )
         }
-        (Func(args, closure, ret), FunctionOrTagUnion(tag_names, tag_symbols, ext)) => {
+        (Func(args, closure, ret, fx), FunctionOrTagUnion(tag_names, tag_symbols, ext)) => {
             unify_function_or_tag_union_and_func(
                 env,
                 pool,
@@ -3358,6 +3361,7 @@ fn unify_flat_type<M: MetaCollector>(
                 *args,
                 *ret,
                 *closure,
+                *fx,
                 false,
             )
         }
@@ -3928,6 +3932,7 @@ fn unify_function_or_tag_union_and_func<M: MetaCollector>(
     function_arguments: VariableSubsSlice,
     function_return: Variable,
     function_lambda_set: Variable,
+    function_fx: Variable,
     left: bool,
 ) -> Outcome<M> {
     let tag_names = env.get_subs_slice(tag_names_slice).to_vec();
@@ -3945,6 +3950,12 @@ fn unify_function_or_tag_union_and_func<M: MetaCollector>(
     } else {
         unify_pool(env, pool, function_return, new_tag_union_var, ctx.mode)
     };
+
+    outcome.union(if left {
+        unify_pool(env, pool, Variable::PURE, function_fx, ctx.mode)
+    } else {
+        unify_pool(env, pool, function_fx, Variable::PURE, ctx.mode)
+    });
 
     {
         let lambda_names = env.get_subs_slice(tag_fn_lambdas).to_vec();

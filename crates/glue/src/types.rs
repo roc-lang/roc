@@ -1236,7 +1236,8 @@ impl<'a> Env<'a> {
             .expect("Something weird ended up in the content");
 
         match self.subs.get_content_without_compacting(var) {
-            Content::Structure(FlatType::Func(args, closure_var, ret_var)) => {
+            Content::Structure(FlatType::Func(args, closure_var, ret_var, fx_var)) => {
+                // [purity-inference] TODO: fx var
                 // this is a toplevel type, so the closure must be empty
                 let is_toplevel = true;
                 add_function_type(
@@ -1405,7 +1406,8 @@ fn add_type_help<'a>(
                 }
             }
         },
-        Content::Structure(FlatType::Func(args, closure_var, ret_var)) => {
+        Content::Structure(FlatType::Func(args, closure_var, ret_var, _fx_var)) => {
+            // [purity-inference] TODO: fx var
             let is_toplevel = false; // or in any case, we cannot assume that we are
 
             add_function_type(

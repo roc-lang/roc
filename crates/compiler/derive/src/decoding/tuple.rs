@@ -102,6 +102,7 @@ pub(crate) fn decoder(env: &mut Env, _def_symbol: Symbol, arity: u32) -> (Expr, 
                 .insert_into_vars([state_var, step_var, finalizer_var]),
             decode_record_lambda_set,
             tuple_decoder_var,
+            Variable::PURE,
         );
 
         synth_var(env.subs, Content::Structure(flat_type))
@@ -277,7 +278,12 @@ fn step_elem(
                         .insert_into_vars([bytes_arg_var, decoder_var, fmt_arg_var]);
                 let this_decode_with_var = synth_var(
                     env.subs,
-                    Content::Structure(FlatType::Func(subs_slice, lambda_set_var, rec_var)),
+                    Content::Structure(FlatType::Func(
+                        subs_slice,
+                        lambda_set_var,
+                        rec_var,
+                        Variable::PURE,
+                    )),
                 );
 
                 env.unify(decode_with_var, this_decode_with_var);
@@ -547,6 +553,7 @@ fn step_elem(
                         subs_slice,
                         custom_callback_lambda_set_var,
                         custom_callback_ret_var,
+                        Variable::PURE,
                     )),
                 );
 
@@ -585,8 +592,12 @@ fn step_elem(
             let decode_custom_closure_var = env.subs.fresh_unnamed_flex_var();
             let this_decode_custom_var = {
                 let subs_slice = env.subs.insert_into_vars([this_custom_callback_var]);
-                let flat_type =
-                    FlatType::Func(subs_slice, decode_custom_closure_var, decode_custom_ret_var);
+                let flat_type = FlatType::Func(
+                    subs_slice,
+                    decode_custom_closure_var,
+                    decode_custom_ret_var,
+                    Variable::PURE,
+                );
 
                 synth_var(env.subs, Content::Structure(flat_type))
             };
@@ -707,7 +718,12 @@ fn step_elem(
 
         env.subs.set_content(
             function_type,
-            Content::Structure(FlatType::Func(args_slice, closure_type, keep_or_skip_var)),
+            Content::Structure(FlatType::Func(
+                args_slice,
+                closure_type,
+                keep_or_skip_var,
+                Variable::PURE,
+            )),
         )
     };
 
@@ -893,6 +909,7 @@ fn finalizer(
         env.subs.insert_into_vars([state_record_var]),
         closure_type,
         return_type_var,
+        Variable::PURE,
     );
 
     // Fix up function_var so it's not Content::Error anymore

@@ -65,6 +65,7 @@ pub(crate) fn decoder(env: &mut Env<'_>, _def_symbol: Symbol) -> (Expr, Variable
                 elem_decoder_var_slice,
                 this_decode_list_clos_var,
                 this_decode_list_ret_var,
+                Variable::PURE,
             )),
         );
 

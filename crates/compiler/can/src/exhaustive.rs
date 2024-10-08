@@ -152,7 +152,7 @@ fn index_var(
                 var = *structure;
             }
             Content::Structure(structure) => match structure {
-                FlatType::Func(_, _, _) => return Err(TypeError),
+                FlatType::Func(_, _, _, _) => return Err(TypeError),
                 FlatType::Apply(Symbol::LIST_LIST, args) => {
                     match (subs.get_subs_slice(*args), ctor) {
                         ([elem_var], IndexCtor::List) => {
