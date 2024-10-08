@@ -1,6 +1,5 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const Monotonic = std.builtin.AtomicOrder.Monotonic;
 
 const DEBUG_INCDEC = false;
 const DEBUG_TESTING_ALLOC = false;
@@ -56,20 +55,20 @@ fn testing_roc_dbg(loc: *anyopaque, message: *anyopaque, src: *anyopaque) callco
 comptime {
     // During tests, use the testing allocators to satisfy these functions.
     if (builtin.is_test) {
-        @export(testing_roc_alloc, .{ .name = "roc_alloc", .linkage = .Strong });
-        @export(testing_roc_realloc, .{ .name = "roc_realloc", .linkage = .Strong });
-        @export(testing_roc_dealloc, .{ .name = "roc_dealloc", .linkage = .Strong });
-        @export(testing_roc_panic, .{ .name = "roc_panic", .linkage = .Strong });
-        @export(testing_roc_dbg, .{ .name = "roc_dbg", .linkage = .Strong });
+        @export(testing_roc_alloc, .{ .name = "roc_alloc", .linkage = .strong });
+        @export(testing_roc_realloc, .{ .name = "roc_realloc", .linkage = .strong });
+        @export(testing_roc_dealloc, .{ .name = "roc_dealloc", .linkage = .strong });
+        @export(testing_roc_panic, .{ .name = "roc_panic", .linkage = .strong });
+        @export(testing_roc_dbg, .{ .name = "roc_dbg", .linkage = .strong });
 
         if (builtin.os.tag == .macos or builtin.os.tag == .linux) {
-            @export(testing_roc_getppid, .{ .name = "roc_getppid", .linkage = .Strong });
-            @export(testing_roc_mmap, .{ .name = "roc_mmap", .linkage = .Strong });
-            @export(testing_roc_shm_open, .{ .name = "roc_shm_open", .linkage = .Strong });
+            @export(testing_roc_getppid, .{ .name = "roc_getppid", .linkage = .strong });
+            @export(testing_roc_mmap, .{ .name = "roc_mmap", .linkage = .strong });
+            @export(testing_roc_shm_open, .{ .name = "roc_shm_open", .linkage = .strong });
         }
 
         if (builtin.os.tag == .windows) {
-            @export(roc_getppid_windows_stub, .{ .name = "roc_getppid", .linkage = .Strong });
+            @export(roc_getppid_windows_stub, .{ .name = "roc_getppid", .linkage = .strong });
         }
     }
 }
@@ -181,10 +180,10 @@ const Refcount = enum {
     atomic,
 };
 
-const RC_TYPE = Refcount.normal;
+const RC_TYPE: Refcount = .normal;
 
 pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
-    if (RC_TYPE == Refcount.none) return;
+    if (RC_TYPE == .none) return;
 
     if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
         std.debug.print("| increment {*}: ", .{ptr_to_refcount});
@@ -195,7 +194,7 @@ pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
         // Note: we assume that a refcount will never overflow.
         // As such, we do not need to cap incrementing.
         switch (RC_TYPE) {
-            Refcount.normal => {
+            .normal => {
                 if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
                     const old = @as(usize, @bitCast(ptr_to_refcount.*));
                     const new = old + @as(usize, @intCast(amount));
@@ -208,10 +207,10 @@ pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
 
                 ptr_to_refcount.* += amount;
             },
-            Refcount.atomic => {
-                _ = @atomicRmw(isize, ptr_to_refcount, std.builtin.AtomicRmwOp.Add, amount, Monotonic);
+            .atomic => {
+                _ = @atomicRmw(isize, ptr_to_refcount, .Add, amount, .monotonic);
             },
-            Refcount.none => unreachable,
+            .none => unreachable,
         }
     }
 }
@@ -225,7 +224,7 @@ pub fn decrefRcPtrC(
     // (NOT the start of the data, or the start of the allocation)
 
     // this is of course unsafe, but we trust what we get from the llvm side
-    var bytes = @as([*]isize, @ptrCast(bytes_or_null));
+    const bytes = @as([*]isize, @ptrCast(bytes_or_null));
 
     return @call(.always_inline, decref_ptr_to_refcount, .{ bytes, alignment, elements_refcounted });
 }
@@ -246,7 +245,7 @@ pub fn decrefDataPtrC(
     alignment: u32,
     elements_refcounted: bool,
 ) callconv(.C) void {
-    var bytes = bytes_or_null orelse return;
+    const bytes = bytes_or_null orelse return;
 
     const data_ptr = @intFromPtr(bytes);
     const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
@@ -262,7 +261,7 @@ pub fn increfDataPtrC(
     bytes_or_null: ?[*]u8,
     inc_amount: isize,
 ) callconv(.C) void {
-    var bytes = bytes_or_null orelse return;
+    const bytes = bytes_or_null orelse return;
 
     const ptr = @intFromPtr(bytes);
     const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
@@ -278,7 +277,7 @@ pub fn freeDataPtrC(
     alignment: u32,
     elements_refcounted: bool,
 ) callconv(.C) void {
-    var bytes = bytes_or_null orelse return;
+    const bytes = bytes_or_null orelse return;
 
     const ptr = @intFromPtr(bytes);
     const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
@@ -295,7 +294,7 @@ pub fn freeRcPtrC(
     alignment: u32,
     elements_refcounted: bool,
 ) callconv(.C) void {
-    var bytes = bytes_or_null orelse return;
+    const bytes = bytes_or_null orelse return;
     return free_ptr_to_refcount(bytes, alignment, elements_refcounted);
 }
 
@@ -309,7 +308,7 @@ pub fn decref(
         return;
     }
 
-    var bytes = bytes_or_null orelse return;
+    const bytes = bytes_or_null orelse return;
 
     const isizes: [*]isize = @as([*]isize, @ptrCast(@alignCast(bytes)));
 
@@ -321,7 +320,7 @@ inline fn free_ptr_to_refcount(
     alignment: u32,
     elements_refcounted: bool,
 ) void {
-    if (RC_TYPE == Refcount.none) return;
+    if (RC_TYPE == .none) return;
     const ptr_width = @sizeOf(usize);
     const required_space: usize = if (elements_refcounted) (2 * ptr_width) else ptr_width;
     const extra_bytes = @max(required_space, alignment);
@@ -340,7 +339,7 @@ inline fn decref_ptr_to_refcount(
     element_alignment: u32,
     elements_refcounted: bool,
 ) void {
-    if (RC_TYPE == Refcount.none) return;
+    if (RC_TYPE == .none) return;
 
     if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
         std.debug.print("| decrement {*}: ", .{refcount_ptr});
@@ -354,7 +353,7 @@ inline fn decref_ptr_to_refcount(
     const refcount: isize = refcount_ptr[0];
     if (refcount != REFCOUNT_MAX_ISIZE) {
         switch (RC_TYPE) {
-            Refcount.normal => {
+            .normal => {
                 const old = @as(usize, @bitCast(refcount));
                 refcount_ptr[0] = refcount -% 1;
                 const new = @as(usize, @bitCast(refcount -% 1));
@@ -370,13 +369,13 @@ inline fn decref_ptr_to_refcount(
                     free_ptr_to_refcount(refcount_ptr, alignment, elements_refcounted);
                 }
             },
-            Refcount.atomic => {
-                var last = @atomicRmw(isize, &refcount_ptr[0], std.builtin.AtomicRmwOp.Sub, 1, Monotonic);
+            .atomic => {
+                const last = @atomicRmw(isize, &refcount_ptr[0], .Sub, 1, .monotonic);
                 if (last == REFCOUNT_ONE_ISIZE) {
                     free_ptr_to_refcount(refcount_ptr, alignment, elements_refcounted);
                 }
             },
-            Refcount.none => unreachable,
+            .none => unreachable,
         }
     }
 }
@@ -384,7 +383,7 @@ inline fn decref_ptr_to_refcount(
 pub fn isUnique(
     bytes_or_null: ?[*]u8,
 ) callconv(.C) bool {
-    var bytes = bytes_or_null orelse return true;
+    const bytes = bytes_or_null orelse return true;
 
     const ptr = @intFromPtr(bytes);
     const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
@@ -470,7 +469,7 @@ pub fn allocateWithRefcount(
     const extra_bytes = @max(required_space, element_alignment);
     const length = extra_bytes + data_bytes;
 
-    var new_bytes: [*]u8 = alloc(length, alignment) orelse unreachable;
+    const new_bytes: [*]u8 = alloc(length, alignment) orelse unreachable;
 
     if (DEBUG_ALLOC and builtin.target.cpu.arch != .wasm32) {
         std.debug.print("+ allocated {*} ({} bytes with alignment {})\n", .{ new_bytes, data_bytes, alignment });
@@ -478,7 +477,7 @@ pub fn allocateWithRefcount(
 
     const data_ptr = new_bytes + extra_bytes;
     const refcount_ptr = @as([*]usize, @ptrCast(@as([*]align(ptr_width) u8, @alignCast(data_ptr)) - ptr_width));
-    refcount_ptr[0] = if (RC_TYPE == Refcount.none) REFCOUNT_MAX_ISIZE else REFCOUNT_ONE;
+    refcount_ptr[0] = if (RC_TYPE == .none) REFCOUNT_MAX_ISIZE else REFCOUNT_ONE;
 
     return data_ptr;
 }
@@ -529,14 +528,14 @@ pub const UpdateMode = enum(u8) {
 
 test "increfC, refcounted data" {
     var mock_rc: isize = REFCOUNT_ONE_ISIZE + 17;
-    var ptr_to_refcount: *isize = &mock_rc;
+    const ptr_to_refcount: *isize = &mock_rc;
     increfRcPtrC(ptr_to_refcount, 2);
     try std.testing.expectEqual(mock_rc, REFCOUNT_ONE_ISIZE + 19);
 }
 
 test "increfC, static data" {
     var mock_rc: isize = REFCOUNT_MAX_ISIZE;
-    var ptr_to_refcount: *isize = &mock_rc;
+    const ptr_to_refcount: *isize = &mock_rc;
     increfRcPtrC(ptr_to_refcount, 2);
     try std.testing.expectEqual(mock_rc, REFCOUNT_MAX_ISIZE);
 }
