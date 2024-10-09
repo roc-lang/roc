@@ -1074,6 +1074,16 @@ mod cli_run {
     #[test]
     #[cfg_attr(windows, ignore)]
     #[serial(cli_platform)]
+    fn cli_form_markdown_check() {
+        let path = file_path_from_root("crates/cli/tests/cli", "form.md");
+        let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
+        dbg!(out.stdout, out.stderr);
+        assert_valid_roc_check_status(out.status);
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    #[serial(cli_platform)]
     fn cli_http_get_check() {
         let path = file_path_from_root("crates/cli/tests/cli", "http-get.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
