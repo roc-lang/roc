@@ -591,11 +591,10 @@ fn can_annotation_help(
             introduced_variables.insert_lambda_set(lambda_set);
             let closure = Type::Variable(lambda_set);
 
-            let fx_var = match arrow {
-                FunctionArrow::Pure => Variable::PURE,
-                FunctionArrow::Effectful => Variable::EFFECTFUL,
+            let fx_type = match arrow {
+                FunctionArrow::Pure => Type::Pure,
+                FunctionArrow::Effectful => Type::Effectful,
             };
-            let fx_type = Type::Variable(fx_var);
 
             Type::Function(args, Box::new(closure), Box::new(ret), Box::new(fx_type))
         }
