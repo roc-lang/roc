@@ -1,5 +1,5 @@
 ---
-source: crates/cli/tests/cli_run.rs
+source: crates/cli/tests/cli_tests.rs
 expression: out.normalize_stdout_and_stderr()
 ---
 ── TYPE MISMATCH in tests/module_params/unexpected_fn.roc ──────────────────────

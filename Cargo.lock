@@ -463,14 +463,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd7cc57abe963c6d3b9d8be5b06ba7c8957a930305ca90304f24ef040aa6f961"
 
 [[package]]
-name = "cli_utils"
+name = "cli_test_utils"
 version = "0.0.1"
 dependencies = [
  "bumpalo",
+ "const_format",
  "criterion",
  "lazy_static",
  "regex",
  "rlimit",
+ "roc_cli",
  "roc_collections",
  "roc_command_utils",
  "roc_load",
@@ -2383,7 +2385,7 @@ dependencies = [
  "bumpalo",
  "chrono",
  "clap 4.4.6",
- "cli_utils",
+ "cli_test_utils",
  "const_format",
  "criterion",
  "distance",
@@ -2623,7 +2625,7 @@ name = "roc_glue"
 version = "0.0.1"
 dependencies = [
  "bumpalo",
- "cli_utils",
+ "cli_test_utils",
  "dircpy",
  "fnv",
  "indexmap",
@@ -4352,7 +4354,7 @@ name = "valgrind"
 version = "0.0.1"
 dependencies = [
  "bumpalo",
- "cli_utils",
+ "cli_test_utils",
  "indoc",
  "roc_build",
  "roc_command_utils",

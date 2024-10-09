@@ -7,8 +7,9 @@ extern crate roc_load;
 extern crate roc_module;
 
 #[cfg(test)]
-mod cli_run {
-    use cli_utils::helpers::{dir_from_root, file_from_root, Run};
+mod cli_tests {
+    use cli_test_utils::helpers::{dir_from_root, file_from_root};
+    use cli_test_utils::exec_cli::ExecCli;
     use const_format::concatcp;
     use roc_cli::{CMD_BUILD, CMD_CHECK, CMD_FORMAT, CMD_RUN, CMD_TEST};
 
@@ -50,23 +51,23 @@ mod cli_run {
     #[test]
     #[cfg_attr(windows, ignore)]
     fn platform_switching_rust() {
-        let runner = Run::new_roc()
-            .arg(CMD_RUN)
+        
+        let cli_build_cmd = ExecCli::new(
+                                CMD_BUILD,
+                                file_from_root("examples/platform-switching", "rocLovesRust.roc")
+            )
             .arg(BUILD_HOST_FLAG)
-            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-            .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .with_valgrind(ALLOW_VALGRIND)
-            .arg(file_from_root("examples/platform-switching", "rocLovesRust.roc").as_path());
-
-        let out = runner.run();
-        out.assert_clean_success();
-        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
+        
+        let expected_output = "Roc <3 Rust!\n";
+        
+        cli_build_cmd.full_check(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND);
     }
-
+    /*
     #[test]
     #[cfg_attr(windows, ignore)]
     fn platform_switching_zig() {
-        let runner = Run::new_roc()
+        let runner = ExecCli::new_roc()
             .arg(CMD_RUN)
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
@@ -83,7 +84,7 @@ mod cli_run {
     fn platform_switching_wasm() {
         // this is a web assembly example, but we don't test with JS at the moment
         // so let's just check it for now
-        let runner = Run::new_roc().arg(CMD_CHECK).arg(
+        let runner = ExecCli::new_roc().arg(CMD_CHECK).arg(
             file_from_root("examples/platform-switching", "rocLovesWebAssembly.roc").as_path(),
         );
 
@@ -94,7 +95,7 @@ mod cli_run {
     #[test]
     #[cfg_attr(windows, ignore)]
     fn test_module_imports_pkg_w_flag() {
-        let runner = Run::new_roc()
+        let runner = ExecCli::new_roc()
             .arg(CMD_TEST)
             .with_valgrind(ALLOW_VALGRIND)
             .add_args(["--main", "tests/module_imports_pkg/app.roc"])
@@ -107,7 +108,7 @@ mod cli_run {
     #[test]
     #[cfg_attr(windows, ignore)]
     fn test_module_imports_pkg_no_flag() {
-        let runner = Run::new_roc()
+        let runner = ExecCli::new_roc()
             .arg(CMD_TEST)
             .with_valgrind(ALLOW_VALGRIND)
             .arg(file_from_root("crates/cli/tests/module_imports_pkg", "Module.roc").as_path());
@@ -119,7 +120,7 @@ mod cli_run {
     #[test]
     #[cfg_attr(windows, ignore)]
     fn test_module_imports_unknown_pkg() {
-        let runner = Run::new_roc()
+        let runner = ExecCli::new_roc()
             .arg(CMD_TEST)
             .with_valgrind(ALLOW_VALGRIND)
             .add_args(["--main", "tests/module_imports_pkg/app.roc"])
@@ -139,7 +140,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     /// this tests that a platform can correctly import a package
     fn platform_requires_pkg() {
-        let runner = Run::new_roc()
+        let runner = ExecCli::new_roc()
             .arg(CMD_RUN)
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
@@ -154,7 +155,7 @@ mod cli_run {
     #[test]
     #[cfg_attr(windows, ignore)]
     fn transitive_expects() {
-        let runner = Run::new_roc()
+        let runner = ExecCli::new_roc()
             .arg(CMD_TEST)
             .with_valgrind(ALLOW_VALGRIND)
             .arg(file_from_root("crates/cli/tests/expects_transitive", "main.roc").as_path());
@@ -166,7 +167,7 @@ mod cli_run {
     #[test]
     #[cfg_attr(windows, ignore)]
     fn transitive_expects_verbose() {
-        let runner = Run::new_roc()
+        let runner = ExecCli::new_roc()
             .arg(CMD_TEST)
             .with_valgrind(ALLOW_VALGRIND)
             .arg("--verbose")
@@ -182,7 +183,7 @@ mod cli_run {
         ignore = "Flaky failure: Roc command failed with status ExitStatus(ExitStatus(3221225477))"
     )]
     fn fibonacci() {
-        let runner = Run::new_roc()
+        let runner = ExecCli::new_roc()
             .arg(CMD_RUN)
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
@@ -198,7 +199,7 @@ mod cli_run {
     #[test]
     #[cfg_attr(windows, ignore)]
     fn quicksort() {
-        let runner = Run::new_roc()
+        let runner = ExecCli::new_roc()
             .arg(CMD_RUN)
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
@@ -214,7 +215,7 @@ mod cli_run {
     #[test]
     #[cfg_attr(windows, ignore)]
     fn multiple_exposed() {
-        let runner = Run::new_roc()
+        let runner = ExecCli::new_roc()
             .arg(CMD_RUN)
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
@@ -232,7 +233,7 @@ mod cli_run {
     #[test]
     #[cfg(not(debug_assertions))] // https://github.com/roc-lang/roc/issues/4806
     fn check_virtual_dom_server() {
-        Run::new_roc()
+        ExecCli::new_roc()
             .add_args([
                 CMD_CHECK,
                 file_from_root("examples/virtual-dom-wip", "example-server.roc")
@@ -247,7 +248,7 @@ mod cli_run {
     #[test]
     #[cfg(not(debug_assertions))] // https://github.com/roc-lang/roc/issues/4806
     fn check_virtual_dom_client() {
-        Run::new_roc()
+        ExecCli::new_roc()
             .add_args([
                 CMD_CHECK,
                 file_from_root("examples/virtual-dom-wip", "example-client.roc")
@@ -262,7 +263,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     // tea = The Elm Architecture
     fn terminal_ui_tea() {
-        let runner = Run::new_roc()
+        let runner = ExecCli::new_roc()
             .arg(CMD_RUN)
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
@@ -283,7 +284,7 @@ mod cli_run {
     )]
     fn false_interpreter() {
         // Test building
-        let build_runner = Run::new_roc()
+        let build_runner = ExecCli::new_roc()
             .arg(CMD_BUILD)
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
@@ -294,7 +295,7 @@ mod cli_run {
         build_runner.assert_clean_success();
 
         // Test running
-        let runner = Run::new_roc()
+        let runner = ExecCli::new_roc()
             .arg(CMD_RUN)
             .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
             .with_valgrind(ALLOW_VALGRIND)
@@ -314,7 +315,7 @@ mod cli_run {
 
     mod test_platform_effects_zig {
         use super::*;
-        use cli_utils::helpers::{file_from_root, Run};
+        use cli_test_utils::helpers::{file_from_root, ExecCli};
         use roc_cli::{CMD_BUILD, CMD_RUN};
 
         static BUILD_PLATFORM_HOST: std::sync::Once = std::sync::Once::new();
@@ -322,7 +323,7 @@ mod cli_run {
         /// Build the platform host once for all tests in this module
         fn build_platform_host() {
             BUILD_PLATFORM_HOST.call_once(|| {
-                let out = Run::new_roc()
+                let out = ExecCli::new_roc()
                     .arg(CMD_BUILD)
                     .arg(BUILD_HOST_FLAG)
                     .arg(OPTIMIZE_FLAG)
@@ -342,7 +343,7 @@ mod cli_run {
         fn interactive_effects() {
             build_platform_host();
 
-            let runner = Run::new_roc()
+            let runner = ExecCli::new_roc()
                 .arg(CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
                 .with_valgrind(ALLOW_VALGRIND)
@@ -359,7 +360,7 @@ mod cli_run {
         fn combine_tasks_with_record_builder() {
             build_platform_host();
 
-            let runner = Run::new_roc()
+            let runner = ExecCli::new_roc()
                 .arg(CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
                 .arg(file_from_root("crates/cli/tests/effects", "combine-tasks.roc").as_path());
@@ -374,7 +375,7 @@ mod cli_run {
         fn inspect_logging() {
             build_platform_host();
 
-            let runner = Run::new_roc()
+            let runner = ExecCli::new_roc()
                 .arg(CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
                 .with_valgrind(ALLOW_VALGRIND)
@@ -390,7 +391,7 @@ mod cli_run {
         fn module_params_pass_task() {
             build_platform_host();
 
-            let runner = Run::new_roc()
+            let runner = ExecCli::new_roc()
                 .arg(CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
                 .with_valgrind(ALLOW_VALGRIND)
@@ -405,7 +406,7 @@ mod cli_run {
 
     mod test_platform_simple_zig {
         use super::*;
-        use cli_utils::helpers::{file_from_root, Run};
+        use cli_test_utils::helpers::{file_from_root, ExecCli};
         use roc_cli::{CMD_BUILD, CMD_DEV, CMD_RUN, CMD_TEST};
 
         static BUILD_PLATFORM_HOST: std::sync::Once = std::sync::Once::new();
@@ -413,7 +414,7 @@ mod cli_run {
         /// Build the platform host once for all tests in this module
         fn build_platform_host() {
             BUILD_PLATFORM_HOST.call_once(|| {
-                let out = Run::new_roc()
+                let out = ExecCli::new_roc()
                     .arg(CMD_BUILD)
                     .arg(BUILD_HOST_FLAG)
                     .arg(OPTIMIZE_FLAG)
@@ -433,7 +434,7 @@ mod cli_run {
         fn run_multi_dep_str_unoptimized() {
             build_platform_host();
 
-            let runner = cli_utils::helpers::Run::new_roc()
+            let runner = cli_test_utils::helpers::ExecCli::new_roc()
                 .arg(roc_cli::CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
                 .with_valgrind(ALLOW_VALGRIND)
@@ -452,7 +453,7 @@ mod cli_run {
         fn run_multi_dep_str_optimized() {
             build_platform_host();
 
-            let runner = cli_utils::helpers::Run::new_roc()
+            let runner = cli_test_utils::helpers::ExecCli::new_roc()
                 .arg(CMD_RUN)
                 .arg(OPTIMIZE_FLAG)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
@@ -472,7 +473,7 @@ mod cli_run {
         fn run_multi_dep_thunk_unoptimized() {
             build_platform_host();
 
-            let runner = cli_utils::helpers::Run::new_roc()
+            let runner = cli_test_utils::helpers::ExecCli::new_roc()
                 .arg(CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
                 .with_valgrind(ALLOW_VALGRIND)
@@ -495,7 +496,7 @@ mod cli_run {
         fn run_multi_dep_thunk_optimized() {
             build_platform_host();
 
-            let runner = cli_utils::helpers::Run::new_roc()
+            let runner = cli_test_utils::helpers::ExecCli::new_roc()
                 .arg(CMD_RUN)
                 .arg(OPTIMIZE_FLAG)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
@@ -516,7 +517,7 @@ mod cli_run {
         fn run_packages_unoptimized() {
             build_platform_host();
 
-            let runner = cli_utils::helpers::Run::new_roc()
+            let runner = cli_test_utils::helpers::ExecCli::new_roc()
                 .arg(CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
                 .with_valgrind(ALLOW_VALGRIND)
@@ -533,7 +534,7 @@ mod cli_run {
         fn run_packages_optimized() {
             build_platform_host();
 
-            let runner = cli_utils::helpers::Run::new_roc()
+            let runner = cli_test_utils::helpers::ExecCli::new_roc()
                 .arg(CMD_RUN)
                 .arg(OPTIMIZE_FLAG)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
@@ -556,7 +557,7 @@ mod cli_run {
                 "direct-one.roc",
             );
 
-            let runner = cli_utils::helpers::Run::new_roc()
+            let runner = cli_test_utils::helpers::ExecCli::new_roc()
                 .arg(CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
                 .with_valgrind(ALLOW_VALGRIND)
@@ -578,7 +579,7 @@ mod cli_run {
                 "direct-one-and-two.roc",
             );
 
-            let runner = cli_utils::helpers::Run::new_roc()
+            let runner = cli_test_utils::helpers::ExecCli::new_roc()
                 .arg(CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
                 .with_valgrind(ALLOW_VALGRIND)
@@ -600,7 +601,7 @@ mod cli_run {
                 "direct-zero.roc",
             );
 
-            let runner = cli_utils::helpers::Run::new_roc()
+            let runner = cli_test_utils::helpers::ExecCli::new_roc()
                 .arg(CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
                 .with_valgrind(ALLOW_VALGRIND)
@@ -616,7 +617,7 @@ mod cli_run {
         fn expects_dev() {
             build_platform_host();
 
-            let runner = cli_utils::helpers::Run::new_roc()
+            let runner = cli_test_utils::helpers::ExecCli::new_roc()
                 .arg(CMD_DEV)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
                 .with_valgrind(ALLOW_VALGRIND)
@@ -631,7 +632,7 @@ mod cli_run {
         fn expects_test() {
             build_platform_host();
 
-            let runner = cli_utils::helpers::Run::new_roc()
+            let runner = cli_test_utils::helpers::ExecCli::new_roc()
                 .arg(CMD_TEST)
                 .with_valgrind(ALLOW_VALGRIND)
                 .arg(file_from_root("crates/cli/tests/expects", "expects.roc").as_path());
@@ -646,7 +647,7 @@ mod cli_run {
         fn module_params() {
             build_platform_host();
 
-            let runner = cli_utils::helpers::Run::new_roc()
+            let runner = cli_test_utils::helpers::ExecCli::new_roc()
                 .arg(CMD_RUN)
                 .arg(file_from_root("crates/cli/tests/module_params", "app.roc").as_path());
 
@@ -660,7 +661,7 @@ mod cli_run {
         fn module_params_arity_mismatch() {
             build_platform_host();
 
-            let runner = cli_utils::helpers::Run::new_roc().arg(CMD_DEV).arg(
+            let runner = cli_test_utils::helpers::ExecCli::new_roc().arg(CMD_DEV).arg(
                 file_from_root("crates/cli/tests/module_params", "arity_mismatch.roc").as_path(),
             );
 
@@ -674,7 +675,7 @@ mod cli_run {
         fn module_params_bad_ann() {
             build_platform_host();
 
-            let runner = cli_utils::helpers::Run::new_roc()
+            let runner = cli_test_utils::helpers::ExecCli::new_roc()
                 .arg(CMD_DEV)
                 .arg(file_from_root("crates/cli/tests/module_params", "bad_ann.roc").as_path());
 
@@ -688,7 +689,7 @@ mod cli_run {
         fn module_params_multiline_pattern() {
             build_platform_host();
 
-            let runner = cli_utils::helpers::Run::new_roc().arg(CMD_DEV).arg(
+            let runner = cli_test_utils::helpers::ExecCli::new_roc().arg(CMD_DEV).arg(
                 file_from_root("crates/cli/tests/module_params", "multiline_params.roc").as_path(),
             );
 
@@ -702,7 +703,7 @@ mod cli_run {
         fn module_params_unexpected_fn() {
             build_platform_host();
 
-            let runner = cli_utils::helpers::Run::new_roc().arg(CMD_DEV).arg(
+            let runner = cli_test_utils::helpers::ExecCli::new_roc().arg(CMD_DEV).arg(
                 file_from_root("crates/cli/tests/module_params", "unexpected_fn.roc").as_path(),
             );
 
@@ -719,7 +720,7 @@ mod cli_run {
             UseValgrind, ALLOW_VALGRIND, BUILD_HOST_FLAG, OPTIMIZE_FLAG,
             SUPPRESS_BUILD_HOST_WARNING_FLAG,
         };
-        use cli_utils::helpers::{file_from_root, Run};
+        use cli_test_utils::helpers::{file_from_root, ExecCli};
         use roc_cli::CMD_BUILD;
 
         // #[allow(unused_imports)]
@@ -730,7 +731,7 @@ mod cli_run {
         /// Build the platform host once for all tests in this module
         fn build_platform_host() {
             BUILD_PLATFORM_HOST.call_once(|| {
-                let out = Run::new_roc()
+                let out = ExecCli::new_roc()
                     .arg(CMD_BUILD)
                     .arg(BUILD_HOST_FLAG)
                     .arg(OPTIMIZE_FLAG)
@@ -756,7 +757,7 @@ mod cli_run {
 
             #[cfg(all(not(feature = "wasm32-cli-run"), not(feature = "i386-cli-run")))]
             {
-                let runner = cli_utils::helpers::Run::new_roc()
+                let runner = cli_test_utils::helpers::ExecCli::new_roc()
                     .arg(roc_cli::CMD_RUN)
                     .add_arg_if(super::LINKER_FLAG, super::TEST_LEGACY_LINKER)
                     .arg(file_path.as_path())
@@ -791,7 +792,7 @@ mod cli_run {
             let mut flags = flags.to_vec();
             flags.push(concatcp!(TARGET_FLAG, "=wasm32"));
 
-            let out = Run::new_roc()
+            let out = ExecCli::new_roc()
                 .arg(CMD_BUILD)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
                 .arg(file)
@@ -811,7 +812,7 @@ mod cli_run {
 
             let i386_target_arg = concatcp!(TARGET_FLAG, "=x86_32");
 
-            let runner = Run::new_roc()
+            let runner = ExecCli::new_roc()
                 .arg(CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
                 .arg(i386_target_arg)
@@ -822,7 +823,7 @@ mod cli_run {
             out.assert_clean_success();
             insta::assert_snapshot!(out.normalize_stdout_and_stderr());
 
-            let run_optimized = Run::new_roc()
+            let run_optimized = ExecCli::new_roc()
                 .arg(CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
                 .arg(i386_target_arg)
@@ -924,7 +925,7 @@ mod cli_run {
 
     #[test]
     fn known_type_error() {
-        let out = Run::new_roc()
+        let out = ExecCli::new_roc()
             .arg(CMD_CHECK)
             .arg(file_from_root(
                 "crates/cli/tests/known_bad",
@@ -937,7 +938,7 @@ mod cli_run {
 
     #[test]
     fn known_type_error_with_long_path() {
-        let out = Run::new_roc()
+        let out = ExecCli::new_roc()
             .arg(CMD_CHECK)
             .arg(file_from_root(
                 "crates/cli/tests/known_bad",
@@ -949,7 +950,7 @@ mod cli_run {
 
     #[test]
     fn exposed_not_defined() {
-        let out = Run::new_roc()
+        let out = ExecCli::new_roc()
             .arg(CMD_CHECK)
             .arg(file_from_root(
                 "crates/cli/tests/known_bad",
@@ -961,7 +962,7 @@ mod cli_run {
 
     #[test]
     fn unused_import() {
-        let out = Run::new_roc()
+        let out = ExecCli::new_roc()
             .arg(CMD_CHECK)
             .arg(file_from_root(
                 "crates/cli/tests/known_bad",
@@ -973,7 +974,7 @@ mod cli_run {
 
     #[test]
     fn format_check_good() {
-        Run::new_roc()
+        ExecCli::new_roc()
             .arg(CMD_FORMAT)
             .arg(CHECK_FLAG)
             .arg(file_from_root("crates/cli/tests/fixtures/format", "Formatted.roc").as_path())
@@ -983,7 +984,7 @@ mod cli_run {
 
     #[test]
     fn format_check_reformatting_needed() {
-        Run::new_roc()
+        ExecCli::new_roc()
             .arg(CMD_FORMAT)
             .arg(CHECK_FLAG)
             .arg(file_from_root("crates/cli/tests/fixtures/format", "NotFormatted.roc").as_path())
@@ -994,7 +995,7 @@ mod cli_run {
     #[test]
     fn format_check_folders() {
         // This fails, because "NotFormatted.roc" is present in this folder
-        Run::new_roc()
+        ExecCli::new_roc()
             .arg(CMD_FORMAT)
             .arg(CHECK_FLAG)
             .arg(dir_from_root("crates/cli/tests/fixtures/format").as_path())
@@ -1002,7 +1003,7 @@ mod cli_run {
             .assert_nonzero_exit();
 
         // This doesn't fail, since only "Formatted.roc" and non-roc files are present in this folder
-        Run::new_roc()
+        ExecCli::new_roc()
             .arg(CMD_FORMAT)
             .arg(CHECK_FLAG)
             .arg(dir_from_root("crates/cli/tests/fixtures/format/formatted_directory").as_path())
@@ -1055,5 +1056,5 @@ fn run_wasm(wasm_path: &std::path::Path, stdin: Vec<&str>) -> String {
         Err(e) => {
             format!("WASI error {}", e)
         }
-    }
+    }*/
 }

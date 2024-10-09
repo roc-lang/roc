@@ -1,5 +1,5 @@
 ---
-source: crates/cli/tests/cli_run.rs
+source: crates/cli/tests/cli_tests.rs
 expression: "test_benchmark(\"rBTreeCk.roc\", vec![\"100\"], UseValgrind::Yes)"
 ---
 Please enter an integer

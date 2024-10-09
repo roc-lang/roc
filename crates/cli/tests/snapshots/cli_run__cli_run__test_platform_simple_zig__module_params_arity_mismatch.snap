@@ -1,5 +1,5 @@
 ---
-source: crates/cli/tests/cli_run.rs
+source: crates/cli/tests/cli_tests.rs
 expression: out.normalize_stdout_and_stderr()
 ---
 ── TOO MANY ARGS in tests/module_params/arity_mismatch.roc ─────────────────────

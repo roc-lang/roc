@@ -1,5 +1,5 @@
 // Keep this benchmark. It's commented because it requires nightly rust.
-use cli_utils::bench_utils::{
+use cli_test_utils::bench_utils::{
     bench_cfold, bench_deriv, bench_nqueens, bench_quicksort, bench_rbtree_ck, bench_rbtree_delete,
 };
 use criterion_perf_events::Perf;

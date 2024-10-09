@@ -23,7 +23,7 @@ jobs:
       - name: roc test all builtins
         run: nix develop -c ./ci/roc_test_builtins.sh
 
-      - name: test wasm32 cli_run
+      - name: test wasm32 cli_tests
         run: nix develop -c cargo test --locked --release --features="wasm32-cli-run"
 
       - name: test the dev backend # these tests require an explicit feature flag

@@ -37,7 +37,7 @@ jobs:
 
       - name: regular rust tests
         # see #5904 for skipped test
-        run: cargo test --locked --release -- --skip cli_run::expects_dev_and_test
+        run: cargo test --locked --release -- --skip cli_tests::expects_dev_and_test
 
       - name: tests examples in docs
         run:  cargo test --doc --release
