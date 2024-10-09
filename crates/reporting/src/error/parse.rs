@@ -995,7 +995,6 @@ fn to_str_report<'a>(
                         suggestion("An escaped quote: ", "\\\""),
                         suggestion("An escaped backslash: ", "\\\\"),
                         suggestion("A unicode code point: ", "\\u(00FF)"),
-                        suggestion("An interpolated string: ", "$(myVariable)"),
                     ])
                     .indent(4),
             ]);
