@@ -4,6 +4,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use bumpalo::Bump;
+use roc_can::abilities::{IAbilitiesStore, Resolved};
 use roc_can::expr::{DeclarationTag, Declarations, Expr};
 use roc_error_macros::{internal_error, user_error};
 use roc_fmt::def::fmt_defs;
@@ -287,16 +288,13 @@ pub fn annotate_file(arena: &Bump, file: &PathBuf) -> Result<(), String> {
     )
     .map_err(|e| format!("{:?}", e))?;
 
-    let buf = annotate(&arena, &mut loaded)?;
+    let buf = annotate_module(&mut loaded)?;
 
     std::fs::write(&file, buf.as_str()).unwrap();
     Ok(())
 }
 
-fn annotate<'a>(
-    arena: &'a Bump,
-    loaded: &'a mut LoadedModule,
-) -> Result<bumpalo::collections::String<'a>, String> {
+fn annotate_module(loaded: &mut LoadedModule) -> Result<String, String> {
     let (decls, subs, abilities) =
         if let Some(decls) = loaded.declarations_by_id.get(&loaded.module_id) {
             let subs = loaded.solved.inner_mut();
@@ -315,7 +313,27 @@ fn annotate<'a>(
 
     let src = &loaded.sources.get(&loaded.module_id).ok_or("no src")?.1;
 
-    let mut buffer = bumpalo::collections::String::new_in(arena);
+    let annotated_src = annotate(
+        decls,
+        subs,
+        abilities,
+        src,
+        loaded.module_id,
+        &loaded.interns,
+    );
+
+    Ok(annotated_src)
+}
+
+fn annotate(
+    decls: &Declarations,
+    subs: &mut Subs,
+    abilities: &IAbilitiesStore<Resolved>,
+    src: &str,
+    module_id: ModuleId,
+    interns: &Interns,
+) -> String {
+    let mut buffer = String::new();
     let mut file_progress = 0;
 
     // TODO: check assumption that this is always in order
@@ -338,14 +356,7 @@ fn annotate<'a>(
             _ => symbol.byte_range(),
         };
 
-        let (position, edit) = annotate_edit(
-            src,
-            subs,
-            &loaded.interns,
-            loaded.module_id,
-            var,
-            byte_range,
-        );
+        let (position, edit) = annotate_edit(src, subs, interns, module_id, var, byte_range);
 
         buffer.push_str(&src[file_progress..position]);
         buffer.push_str(&edit);
@@ -354,7 +365,7 @@ fn annotate<'a>(
     }
     buffer.push_str(&src[file_progress..]);
 
-    Ok(buffer)
+    buffer
 }
 
 fn annotate_edit(

@@ -2679,6 +2679,7 @@ dependencies = [
  "log",
  "parking_lot",
  "roc_can",
+ "roc_cli",
  "roc_collections",
  "roc_fmt",
  "roc_load",

@@ -4,6 +4,7 @@ use roc_can::{
     expr::Expr,
     traverse::{DeclarationInfo, FoundDeclaration},
 };
+use roc_cli::annotation_edit;
 use std::collections::HashMap;
 
 use bumpalo::Bump;
@@ -359,25 +360,20 @@ impl AnalyzedDocument {
             return None;
         }
 
-        let symbol_str = latest_doc.source[symbol_range].to_owned();
+        let (offset, new_text) = annotation_edit(
+            &self.doc_info.source,
+            &mut subs.clone(),
+            interns,
+            *module_id,
+            found_decl.var(),
+            symbol_range,
+        );
 
-        let LineColumn { line, column } = line_info.convert_pos(found_decl.region().start());
-        let lsp_position = tower_lsp::lsp_types::Position {
-            line,
-            character: column,
-        };
-        let range = Range {
-            start: lsp_position,
-            end: lsp_position,
-        };
+        let LineColumn { line, column } = line_info.convert_offset(offset as u32);
+        let position = Position::new(line, column);
+        let range = Range::new(position, position);
 
-        let edit = TextEdit {
-            range,
-            new_text: format!(
-                "{symbol_str} : {signature}\n{}",
-                " ".repeat(column as usize)
-            ),
-        };
+        let edit = TextEdit { range, new_text };
         Some(edit)
     }
 }
