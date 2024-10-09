@@ -177,14 +177,24 @@ impl<'a> Formattable for Expr<'a> {
             Str(literal) => {
                 fmt_str_literal(buf, *literal, indent);
             }
-            Var { module_name, ident } => {
-                buf.indent(indent);
-                if !module_name.is_empty() {
-                    buf.push_str(module_name);
+            Var {
+                module_name,
+                ident,
+                closure_shortcut,
+            } => {
+                if *closure_shortcut == None {
+                    buf.indent(indent);
+                    if !module_name.is_empty() {
+                        buf.push_str(module_name);
+                        buf.push('.');
+                    }
+
+                    buf.push_str(ident);
+                } else {
+                    // if we reach this place and were not interrupted by the `RecordAccess` or `TupleAccess` which skips its var completely,
+                    // then it means we format this kind of identity function `\.` where dot means the var identifier
                     buf.push('.');
                 }
-
-                buf.push_str(ident);
             }
             Underscore(name) => {
                 buf.indent(indent);
@@ -1236,7 +1246,7 @@ fn fmt_closure<'a>(
     buf.push('\\');
 
     match shortcut {
-        Some(sh) => match sh {
+        Some(shortcut) => match shortcut {
             ClosureShortcut::BinOp => {
                 if let BinOps([(_, binop)], loc_right) = loc_ret.value {
                     push_op(buf, binop.value);
@@ -1265,8 +1275,8 @@ fn fmt_closure<'a>(
                     return;
                 }
             }
-            ClosureShortcut::FieldOrTupleAccess => {
-                // do nothing , it will be handled by the Expr::RecordAccess or Expr::TupleAccess
+            ClosureShortcut::Access => {
+                // do nothing , it will be handled by the `RecordAccess` or `TupleAccess` or `Var`
             }
         },
         None => {

@@ -405,9 +405,10 @@ pub enum TryTarget {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ClosureShortcut {
     BinOp,
-    FieldOrTupleAccess,
+    Access,
 }
 
+// todo: @perf consider making it a bool to save the space in Var, etc.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ClosureShortcutForAccess {
     Yes,
@@ -491,6 +492,10 @@ pub enum Expr<'a> {
     Var {
         module_name: &'a str, // module_name will only be filled if the original Roc code stated something like `5 + SomeModule.myVar`, module_name will be blank if it was `5 + myVar`
         ident: &'a str,
+        // Shortcut instructs to output the variable in the context of closure shortcut as '.' for the shortcut identity function `\.`
+        // todo: @revisit for now ignoring it in the AST snapshot testing
+        #[educe(Debug(ignore))]
+        closure_shortcut: Option<ClosureShortcutForAccess>,
     },
 
     Underscore(&'a str),
@@ -566,6 +571,26 @@ pub enum Expr<'a> {
 }
 
 impl Expr<'_> {
+    pub fn new_var<'a>(module_name: &'a str, ident: &'a str) -> Expr<'a> {
+        Expr::Var {
+            module_name,
+            ident,
+            closure_shortcut: None,
+        }
+    }
+
+    pub const fn new_var_shortcut<'a>(
+        module_name: &'a str,
+        ident: &'a str,
+        closure_shortcut: Option<ClosureShortcutForAccess>,
+    ) -> Expr<'a> {
+        Expr::Var {
+            module_name,
+            ident,
+            closure_shortcut,
+        }
+    }
+
     pub fn get_region_spanning_binops(&self) -> Region {
         match self {
             Expr::BinOps(firsts, last) => {
@@ -2207,11 +2232,13 @@ impl<'a> Expr<'a> {
     pub const REPL_OPAQUE_FUNCTION: Self = Expr::Var {
         module_name: "",
         ident: "<function>",
+        closure_shortcut: None,
     };
 
     pub const REPL_RUNTIME_CRASH: Self = Expr::Var {
         module_name: "",
         ident: "*",
+        closure_shortcut: None,
     };
 
     pub fn loc_ref(&'a self, region: Region) -> Loc<&'a Self> {

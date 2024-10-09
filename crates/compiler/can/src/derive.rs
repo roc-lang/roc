@@ -31,14 +31,10 @@ fn to_encoder<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
 
     // Encode.toEncoder payload
     let call_member = alloc_expr(ast::Expr::Apply(
-        alloc_expr(ast::Expr::Var {
-            module_name: "Encode",
-            ident: "toEncoder",
-        }),
-        &*env.arena.alloc([&*alloc_expr(ast::Expr::Var {
-            module_name: "",
-            ident: payload,
-        })]),
+        alloc_expr(ast::Expr::new_var("Encode", "toEncoder")),
+        &*env
+            .arena
+            .alloc([&*alloc_expr(ast::Expr::new_var("", payload))]),
         roc_module::called_via::CalledVia::Space,
     ));
 
@@ -60,33 +56,18 @@ fn decoder<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
 
         // Decode.decodeWith bytes Decode.decoder fmt
         let call_decode_with = ast::Expr::Apply(
-            alloc_expr(ast::Expr::Var {
-                module_name: "Decode",
-                ident: "decodeWith",
-            }),
+            alloc_expr(ast::Expr::new_var("Decode", "decodeWith")),
             env.arena.alloc([
-                &*alloc_expr(ast::Expr::Var {
-                    module_name: "",
-                    ident: bytes,
-                }),
-                alloc_expr(ast::Expr::Var {
-                    module_name: "Decode",
-                    ident: "decoder",
-                }),
-                alloc_expr(ast::Expr::Var {
-                    module_name: "",
-                    ident: fmt,
-                }),
+                &*alloc_expr(ast::Expr::new_var("", bytes)),
+                alloc_expr(ast::Expr::new_var("Decode", "decoder")),
+                alloc_expr(ast::Expr::new_var("", fmt)),
             ]),
             CalledVia::Space,
         );
 
         // Decode.mapResult (Decode.decodeWith bytes Decode.decoder fmt) @Opaq
         let call_map_result = ast::Expr::Apply(
-            alloc_expr(ast::Expr::Var {
-                module_name: "Decode",
-                ident: "mapResult",
-            }),
+            alloc_expr(ast::Expr::new_var("Decode", "mapResult")),
             env.arena.alloc([
                 &*alloc_expr(call_decode_with),
                 alloc_expr(ast::Expr::OpaqueRef(at_opaque)),
@@ -107,10 +88,7 @@ fn decoder<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
 
         // Decode.custom \bytes, fmt -> ...
         ast::Expr::Apply(
-            alloc_expr(ast::Expr::Var {
-                module_name: "Decode",
-                ident: "custom",
-            }),
+            alloc_expr(ast::Expr::new_var("Decode", "custom")),
             env.arena.alloc([&*alloc_expr(custom_closure)]),
             CalledVia::Space,
         )
@@ -138,19 +116,10 @@ fn hash<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
 
     // Hash.hash hasher payload
     let call_member = alloc_expr(ast::Expr::Apply(
-        alloc_expr(ast::Expr::Var {
-            module_name: "Hash",
-            ident: "hash",
-        }),
+        alloc_expr(ast::Expr::new_var("Hash", "hash")),
         &*env.arena.alloc([
-            &*alloc_expr(ast::Expr::Var {
-                module_name: "",
-                ident: hasher,
-            }),
-            &*alloc_expr(ast::Expr::Var {
-                module_name: "",
-                ident: payload,
-            }),
+            &*alloc_expr(ast::Expr::new_var("", hasher)),
+            &*alloc_expr(ast::Expr::new_var("", payload)),
         ]),
         roc_module::called_via::CalledVia::Space,
     ));
@@ -193,19 +162,10 @@ fn is_eq<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
 
     // Bool.isEq payload1 payload2
     let call_member = alloc_expr(ast::Expr::Apply(
-        alloc_expr(ast::Expr::Var {
-            module_name: "Bool",
-            ident: "isEq",
-        }),
+        alloc_expr(ast::Expr::new_var("Bool", "isEq")),
         &*env.arena.alloc([
-            &*alloc_expr(ast::Expr::Var {
-                module_name: "",
-                ident: payload1,
-            }),
-            &*alloc_expr(ast::Expr::Var {
-                module_name: "",
-                ident: payload2,
-            }),
+            &*alloc_expr(ast::Expr::new_var("", payload1)),
+            &*alloc_expr(ast::Expr::new_var("", payload2)),
         ]),
         roc_module::called_via::CalledVia::Space,
     ));
@@ -240,14 +200,10 @@ fn to_inspector<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
 
     // Inspect.toInspector payload
     let to_inspector_payload = alloc_expr(ast::Expr::Apply(
-        alloc_expr(ast::Expr::Var {
-            module_name: "Inspect",
-            ident: "toInspector",
-        }),
-        &*env.arena.alloc([&*alloc_expr(ast::Expr::Var {
-            module_name: "",
-            ident: payload,
-        })]),
+        alloc_expr(ast::Expr::new_var("Inspect", "toInspector")),
+        &*env
+            .arena
+            .alloc([&*alloc_expr(ast::Expr::new_var("", payload))]),
         roc_module::called_via::CalledVia::Space,
     ));
 
@@ -258,10 +214,7 @@ fn to_inspector<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
     let opaque_name = alloc_expr(ast::Expr::Str(ast::StrLiteral::PlainLine(at_opaque)));
 
     let opaque_inspector = alloc_expr(ast::Expr::Apply(
-        alloc_expr(ast::Expr::Var {
-            module_name: "Inspect",
-            ident: "tag",
-        }),
+        alloc_expr(ast::Expr::new_var("Inspect", "tag")),
         &*env.arena.alloc([&*opaque_name, &*to_inspector_list]),
         roc_module::called_via::CalledVia::Space,
     ));
@@ -270,16 +223,10 @@ fn to_inspector<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
 
     // \fmt -> Inspect.apply opaqueInspector fmt
     let apply_opaque_inspector = alloc_expr(ast::Expr::Apply(
-        alloc_expr(ast::Expr::Var {
-            module_name: "Inspect",
-            ident: "apply",
-        }),
+        alloc_expr(ast::Expr::new_var("Inspect", "apply")),
         &*env.arena.alloc([
             &*opaque_inspector,
-            &*alloc_expr(ast::Expr::Var {
-                module_name: "",
-                ident: fmt,
-            }),
+            &*alloc_expr(ast::Expr::new_var("", fmt)),
         ]),
         roc_module::called_via::CalledVia::Space,
     ));
@@ -295,10 +242,7 @@ fn to_inspector<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
 
     // Inspect.custom \fmt -> ...
     let custom = alloc_expr(ast::Expr::Apply(
-        alloc_expr(ast::Expr::Var {
-            module_name: "Inspect",
-            ident: "custom",
-        }),
+        alloc_expr(ast::Expr::new_var("Inspect", "custom")),
         env.arena.alloc([&*custom_closure]),
         CalledVia::Space,
     ));

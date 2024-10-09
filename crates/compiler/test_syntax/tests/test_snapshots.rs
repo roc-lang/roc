@@ -9,7 +9,7 @@ extern crate roc_parse;
 mod test_snapshots {
     use bumpalo::collections::vec::Vec;
     use bumpalo::{self, Bump};
-    use roc_parse::ast::Expr::{self, *};
+    use roc_parse::ast::Expr::{self};
     use roc_parse::ast::StrSegment::*;
     use roc_parse::ast::{self, EscapedChar};
     use roc_parse::ast::{Malformed, StrLiteral::*};
@@ -779,10 +779,7 @@ mod test_snapshots {
     #[test]
     fn string_with_interpolation_in_middle() {
         assert_segments(r#""Hi, $(name)!""#, |arena| {
-            let expr = arena.alloc(Var {
-                module_name: "",
-                ident: "name",
-            });
+            let expr = arena.alloc(Expr::new_var("", "name"));
 
             bumpalo::vec![in arena;
                  Plaintext("Hi, "),
@@ -795,10 +792,7 @@ mod test_snapshots {
     #[test]
     fn string_with_interpolation_in_front() {
         assert_segments(r#""$(name), hi!""#, |arena| {
-            let expr = arena.alloc(Var {
-                module_name: "",
-                ident: "name",
-            });
+            let expr = arena.alloc(Expr::new_var("", "name"));
 
             bumpalo::vec![in arena;
                  Interpolated(Loc::new(3, 7, expr)),
@@ -810,10 +804,7 @@ mod test_snapshots {
     #[test]
     fn string_with_interpolation_in_back() {
         assert_segments(r#""Hello $(name)""#, |arena| {
-            let expr = arena.alloc(Var {
-                module_name: "",
-                ident: "name",
-            });
+            let expr = arena.alloc(Expr::new_var("", "name"));
 
             bumpalo::vec![in arena;
                  Plaintext("Hello "),
@@ -825,15 +816,9 @@ mod test_snapshots {
     #[test]
     fn string_with_multiple_interpolations() {
         assert_segments(r#""Hi, $(name)! How is $(project) going?""#, |arena| {
-            let expr1 = arena.alloc(Var {
-                module_name: "",
-                ident: "name",
-            });
+            let expr1 = arena.alloc(Expr::new_var("", "name"));
 
-            let expr2 = arena.alloc(Var {
-                module_name: "",
-                ident: "project",
-            });
+            let expr2 = arena.alloc(Expr::new_var("", "project"));
 
             bumpalo::vec![in arena;
                  Plaintext("Hi, "),

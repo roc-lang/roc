@@ -100,12 +100,6 @@ pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str, ()> {
     }
 }
 
-macro_rules! advance_state {
-    ($state:expr, $n:expr) => {
-        Ok($state.advance($n))
-    };
-}
-
 /// This is a helper function for parsing function args.
 /// The rules for (-) are special-cased, and they come up in function args.
 ///
@@ -131,7 +125,7 @@ pub fn parse_ident<'a>(arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Ide
     let initial = state.clone();
     match chomp_identifier_chain(arena, state.bytes(), state.pos()) {
         Ok((width, ident)) => {
-            let state = advance_state!(state, width as usize)?;
+            let state = state.advance(width as usize);
 
             if let Ident::Access { module_name, parts } = ident {
                 if module_name.is_empty() {
@@ -152,26 +146,25 @@ pub fn parse_ident<'a>(arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Ide
         Err((width, fail)) => match fail {
             BadIdent::Start(pos) => Err((NoProgress, EExpr::Start(pos))),
             BadIdent::Space(e, pos) => Err((NoProgress, EExpr::Space(e, pos))),
-            _ => malformed_identifier(
-                initial.bytes(),
-                fail,
-                advance_state!(state, width as usize)?,
-            ),
+            _ => {
+                let (ident, state) =
+                    malformed_ident(initial.bytes(), fail, state.advance(width as usize));
+                Ok((MadeProgress, ident, state))
+            }
         },
     }
 }
 
-pub(crate) fn malformed_identifier<'a>(
+pub(crate) fn malformed_ident<'a>(
     initial_bytes: &'a [u8],
     problem: BadIdent,
-    mut state: State<'a>,
-) -> ParseResult<'a, Ident<'a>, EExpr<'a>> {
+    state: State<'a>,
+) -> (Ident<'a>, State<'a>) {
     let chomped = chomp_malformed(state.bytes());
     let delta = initial_bytes.len() - state.bytes().len();
     let parsed_str = unsafe { std::str::from_utf8_unchecked(&initial_bytes[..chomped + delta]) };
-
-    state = state.advance(chomped);
-    Ok((MadeProgress, Ident::Malformed(parsed_str, problem), state))
+    let ident = Ident::Malformed(parsed_str, problem);
+    (ident, state.advance(chomped))
 }
 
 /// skip forward to the next non-identifier character
@@ -270,7 +263,7 @@ where
         }
     }
 
-    if let Ok((next, _width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
+    if let Ok((next, _)) = char::from_utf8_slice_start(&buffer[chomped..]) {
         // This would mean we have e.g.:
         // * identifier followed by a _
         // * an integer followed by an alphabetic char
@@ -521,31 +514,6 @@ fn chomp_identifier_chain<'a>(
     }
 }
 
-pub(crate) fn parse_closure_shortcut_access_ident<'a>(
-    arg_name: &'a str,
-    arena: &'a Bump,
-    state: State<'a>,
-) -> ParseResult<'a, Ident<'a>, EExpr<'a>> {
-    let mut parts = Vec::with_capacity_in(4, arena);
-    parts.push(Accessor::RecordField(arg_name));
-
-    let initial = state.clone();
-    let pos = state.pos();
-    match chomp_access_chain(&state.bytes(), &mut parts) {
-        Ok(width) => {
-            let module_name = "";
-            let parts = parts.into_bump_slice();
-            let ident = Ident::Access { module_name, parts };
-            Ok((MadeProgress, ident, state.advance(width as usize)))
-        }
-        Err(width) => {
-            // todo: @wip check if relying on the malformed identifier at the end to then check for the suffixes?
-            let fail = BadIdent::WeirdDotAccess(pos.bump_column(width));
-            malformed_identifier(initial.bytes(), fail, state.advance(width as usize))
-        }
-    }
-}
-
 fn chomp_module_chain(buffer: &[u8]) -> Result<u32, Progress> {
     let mut chomped = 0;
 
@@ -604,7 +572,10 @@ pub(crate) fn chomp_concrete_type(buffer: &[u8]) -> Result<(&str, &str, usize), 
     }
 }
 
-fn chomp_access_chain<'a>(buffer: &'a [u8], parts: &mut Vec<'a, Accessor<'a>>) -> Result<u32, u32> {
+pub(crate) fn chomp_access_chain<'a>(
+    buffer: &'a [u8],
+    parts: &mut Vec<'a, Accessor<'a>>,
+) -> Result<u32, u32> {
     let mut chomped = 0;
     while let Some(b'.') = buffer.get(chomped) {
         let next = chomped + 1;

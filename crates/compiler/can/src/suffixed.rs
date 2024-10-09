@@ -15,6 +15,7 @@ thread_local! {
     static SUFFIXED_ANSWER_COUNTER: Cell<usize> = const { Cell::new(0) };
 }
 
+// todo: @wip can we utilize it for the CLOSURE_SHORTCUT_ARG?
 /// Generates a unique identifier, useful for intermediate items during desugaring.
 fn next_unique_suffixed_ident() -> String {
     SUFFIXED_ANSWER_COUNTER.with(|counter| {
@@ -81,13 +82,7 @@ fn init_unwrapped_err<'a>(
             // (sub) expression.
             // e.g. `x = foo (bar!)` unwraps to `x = Task.await (bar) \#!0_arg -> foo #!0_arg`
             let ident = arena.alloc(format!("{}_arg", next_unique_suffixed_ident()));
-            let sub_new = arena.alloc(Loc::at(
-                unwrapped_expr.region,
-                Expr::Var {
-                    module_name: "",
-                    ident,
-                },
-            ));
+            let sub_new = arena.alloc(Loc::at(unwrapped_expr.region, Expr::new_var("", ident)));
             let sub_pat = arena.alloc(Loc::at(
                 unwrapped_expr.region,
                 Pattern::Identifier { ident },
@@ -1000,13 +995,7 @@ pub fn apply_try_function<'a>(
             };
 
             // #!0_expr (variable)
-            let new_var = arena.alloc(Loc::at(
-                region,
-                Expr::Var {
-                    module_name: "",
-                    ident: new_ident,
-                },
-            ));
+            let new_var = arena.alloc(Loc::at(region, Expr::new_var("", new_ident)));
 
             // (
             //     #!0_expr : Target loc_type _
@@ -1053,13 +1042,10 @@ pub fn apply_try_function<'a>(
     arena.alloc(Loc::at(
         region,
         Apply(
-            arena.alloc(Loc {
+            arena.alloc(Loc::at(
                 region,
-                value: Var {
-                    module_name: try_function_module,
-                    ident: try_function_ident,
-                },
-            }),
+                Expr::new_var(try_function_module, try_function_ident),
+            )),
             arena.alloc([try_function_first_arg, closure]),
             called_via,
         ),

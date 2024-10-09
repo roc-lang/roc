@@ -4907,9 +4907,25 @@ mod test_fmt {
     fn simple_closure_shortcut_for_identity_function() {
         expr_formats_same(indoc!(
             r"
-            \.foo
+            \.
             "
         ));
+    }
+
+    #[test]
+    fn simple_closure_shortcut_for_identity_function_format() {
+        expr_formats_to(
+            indoc!(
+                r"
+            \ .
+            "
+            ),
+            indoc!(
+                r"
+            \un -> un
+            "
+            ),
+        );
     }
 
     #[test]
@@ -4933,10 +4949,6 @@ mod test_fmt {
                     i + length)
             "
         ));
-    }
-
-    #[test]
-    fn apply_lambda_shortcut() {
         expr_formats_same(indoc!(
             r"
             List.map
@@ -4957,6 +4969,13 @@ mod test_fmt {
                 (\i -> i)
             "
         ));
+
+        expr_formats_same(indoc!(
+            r"
+            shout
+            |> List.map xs \.
+            "
+        ));
     }
 
     #[test]
@@ -4967,6 +4986,15 @@ mod test_fmt {
             |> List.map
                 xs
                 (\i -> i)
+            |> List.join
+            "
+        ));
+        expr_formats_same(indoc!(
+            r"
+            shout
+            |> List.map
+                xs
+                \.
             |> List.join
             "
         ));
@@ -4987,7 +5015,6 @@ mod test_fmt {
         ))
     }
 
-    // todo: @wip apply shortcut here, seems like a nice place
     #[test]
     fn pipeline_apply_lambda_multiline() {
         expr_formats_same(indoc!(
@@ -4995,6 +5022,23 @@ mod test_fmt {
                 example = \model ->
                     model
                     |> withModel
+                        (\result ->
+                            when result is
+                                Err _ ->
+                                    Err {}
+
+                                Ok val ->
+                                    Ok {}
+                        )
+
+                example
+            "
+        ));
+
+        expr_formats_same(indoc!(
+            r"
+                example = \|>
+                    withModel
                         (\result ->
                             when result is
                                 Err _ ->

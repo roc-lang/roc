@@ -966,9 +966,9 @@ pub fn canonicalize_expr<'a>(
                 (expr, output)
             }
         }
-        ast::Expr::Var { module_name, ident } => {
-            canonicalize_var_lookup(env, var_store, scope, module_name, ident, region)
-        }
+        ast::Expr::Var {
+            module_name, ident, ..
+        } => canonicalize_var_lookup(env, var_store, scope, module_name, ident, region),
         ast::Expr::Underscore(name) => {
             // we parse underscores, but they are not valid expression syntax
 

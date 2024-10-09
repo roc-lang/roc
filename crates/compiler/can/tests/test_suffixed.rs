@@ -657,10 +657,7 @@ mod test_suffixed_helpers {
     #[test]
     fn test_matching_answer() {
         let loc_pat = Loc::at_zero(Pattern::Identifier { ident: "#!0_arg" });
-        let loc_new = Loc::at_zero(Expr::Var {
-            module_name: "",
-            ident: "#!0_arg",
-        });
+        let loc_new = Loc::at_zero(Expr::new_var("", "#!0_arg"));
 
         std::assert!(is_matching_intermediate_answer(&loc_pat, &loc_new));
     }

@@ -804,10 +804,10 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 inner_var,
             );
 
-            let box_box = env.arena.alloc(Loc::at_zero(Expr::Var {
-                module_name: "Box",
-                ident: "box",
-            }));
+            let box_box = env.arena.alloc(Loc::at_zero(Expr::new_var(
+                "Box",
+                "box",
+            )));
             let box_box_arg = &*env.arena.alloc(Loc::at_zero(inner_expr));
             let box_box_args = env.arena.alloc([box_box_arg]);
 
@@ -1367,10 +1367,9 @@ fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a
                 }
             }
         }
-        Alias(Symbol::BOOL_BOOL, _, _, _) => Expr::Var {
-            module_name: "Bool",
-            ident: if value { "true" } else { "false" },
-        },
+        Alias(Symbol::BOOL_BOOL, _, _, _) => {
+            Expr::new_var("Bool", if value { "true" } else { "false" })
+        }
         Alias(_, _, var, _) => {
             let content = env.subs.get_content_without_compacting(*var);
 

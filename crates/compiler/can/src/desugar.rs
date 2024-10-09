@@ -61,10 +61,9 @@ fn new_op_call_expr<'a>(
 
             let args = env.arena.alloc([left, right]);
 
-            let loc_expr = env.arena.alloc(Loc {
-                value: Expr::Var { module_name, ident },
-                region: loc_op.region,
-            });
+            let loc_expr = env
+                .arena
+                .alloc(Loc::at(loc_op.region, Expr::new_var(module_name, ident)));
 
             Apply(loc_expr, args, CalledVia::BinOp(binop))
         }
@@ -479,13 +478,9 @@ pub fn desugar_expr<'a>(
             let region = loc_expr.region;
 
             let closure_body = RecordUpdate {
-                update: env.arena.alloc(Loc {
-                    region,
-                    value: Expr::Var {
-                        module_name: "",
-                        ident: "#record_updater_record",
-                    },
-                }),
+                update: env
+                    .arena
+                    .alloc(Loc::at(region, Expr::new_var("", "#record_updater_record"))),
                 fields: Collection::with_items(
                     Vec::from_iter_in(
                         [Loc::at(
@@ -493,13 +488,10 @@ pub fn desugar_expr<'a>(
                             AssignedField::RequiredValue(
                                 Loc::at(region, field_name),
                                 &[],
-                                &*env.arena.alloc(Loc {
+                                &*env.arena.alloc(Loc::at(
                                     region,
-                                    value: Expr::Var {
-                                        module_name: "",
-                                        ident: "#record_updater_field",
-                                    },
-                                }),
+                                    Expr::new_var("", "#record_updater_field"),
+                                )),
                             ),
                         )],
                         env.arena,
@@ -616,13 +608,9 @@ pub fn desugar_expr<'a>(
                     AssignedField::IgnoredValue(loc_name, _, loc_val) => (loc_name, loc_val, true),
                     AssignedField::LabelOnly(loc_name) => (
                         loc_name,
-                        &*env.arena.alloc(Loc {
-                            region: loc_name.region,
-                            value: Expr::Var {
-                                module_name: "",
-                                ident: loc_name.value,
-                            },
-                        }),
+                        &*env
+                            .arena
+                            .alloc(Loc::at(loc_name.region, Expr::new_var("", loc_name.value))),
                         false,
                     ),
                     AssignedField::OptionalValue(loc_name, _, loc_val) => {
@@ -666,17 +654,11 @@ pub fn desugar_expr<'a>(
                         [
                             &*env.arena.alloc(Loc::at(
                                 region,
-                                Expr::Var {
-                                    module_name: "",
-                                    ident: "#record_builder_closure_arg_a",
-                                },
+                                Expr::new_var("", "#record_builder_closure_arg_a"),
                             )),
                             &*env.arena.alloc(Loc::at(
                                 region,
-                                Expr::Var {
-                                    module_name: "",
-                                    ident: "#record_builder_closure_arg_b",
-                                },
+                                Expr::new_var("", "#record_builder_closure_arg_b"),
                             )),
                         ],
                         env.arena,
@@ -754,12 +736,10 @@ pub fn desugar_expr<'a>(
                                     &[],
                                     env.arena.alloc(Loc::at(
                                         field.name.region,
-                                        Expr::Var {
-                                            module_name: "",
-                                            ident: env
-                                                .arena
-                                                .alloc_str(&format!("#{}", field.name.value)),
-                                        },
+                                        Expr::new_var(
+                                            "",
+                                            env.arena.alloc_str(&format!("#{}", field.name.value)),
+                                        ),
                                     )),
                                 ),
                             )
@@ -941,14 +921,8 @@ pub fn desugar_expr<'a>(
             // in terms of integers exclusively and not need to create strings
             // which canonicalization then needs to look up, check if they're exposed, etc
             let value = match op {
-                Negate => Var {
-                    module_name: ModuleName::NUM,
-                    ident: "neg",
-                },
-                Not => Var {
-                    module_name: ModuleName::BOOL,
-                    ident: "not",
-                },
+                Negate => Expr::new_var(ModuleName::NUM, "neg"),
+                Not => Expr::new_var(ModuleName::BOOL, "not"),
             };
             let loc_fn_var = env.arena.alloc(Loc { region, value });
             let desugared_args = env.arena.alloc([desugar_expr(env, scope, loc_arg)]);
@@ -1135,13 +1109,7 @@ fn desugar_field<'a>(
         ),
         LabelOnly(loc_str) => {
             // Desugar { x } into { x: x }
-            let loc_expr = Loc {
-                value: Var {
-                    module_name: "",
-                    ident: loc_str.value,
-                },
-                region: loc_str.region,
-            };
+            let loc_expr = Loc::at(loc_str.region, Expr::new_var("", loc_str.value));
 
             RequiredValue(
                 Loc {
@@ -1303,13 +1271,7 @@ fn desugar_dbg_expr<'a>(
     defs.push_value_def(value_def, region, &[], &[]);
 
     // tmpVar
-    let tmp_var = env.arena.alloc(Loc {
-        value: Var {
-            module_name: "",
-            ident,
-        },
-        region,
-    });
+    let tmp_var = env.arena.alloc(Loc::at(region, Expr::new_var("", ident)));
 
     // LowLevelDbg
     let dbg_stmt = env.arena.alloc(Loc {
@@ -1343,10 +1305,7 @@ fn desugar_dbg_stmt<'a>(
 ) -> &'a Expr<'a> {
     let region = condition.region;
 
-    let inspect_fn = Var {
-        module_name: ModuleName::INSPECT,
-        ident: "toStr",
-    };
+    let inspect_fn = Expr::new_var(ModuleName::INSPECT, "toStr");
     let loc_inspect_fn_var = env.arena.alloc(Loc {
         value: inspect_fn,
         region,

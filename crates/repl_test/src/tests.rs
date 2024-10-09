@@ -629,6 +629,11 @@ fn identity_lambda() {
     expect_success("\\x -> x", "<function> : a -> a");
 }
 
+#[test]
+fn identity_lambda_shortcut() {
+    expect_success("\\.", "<function> : a -> a");
+}
+
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn sum_lambda() {

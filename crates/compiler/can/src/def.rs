@@ -624,7 +624,9 @@ fn canonicalize_claimed_ability_impl<'a>(
         }
         AssignedField::RequiredValue(label, _spaces, value) => {
             let impl_ident = match value.value {
-                ast::Expr::Var { module_name, ident } => {
+                ast::Expr::Var {
+                    module_name, ident, ..
+                } => {
                     if module_name.is_empty() {
                         ident
                     } else {

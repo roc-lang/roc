@@ -10,8 +10,8 @@ use crate::blankspace::{
 };
 use crate::header::module_name_help;
 use crate::ident::{
-    chomp_integer_part, lowercase_ident, parse_closure_shortcut_access_ident, parse_ident,
-    parse_lowercase_ident, unqualified_ident, Accessor, Ident, Suffix,
+    chomp_access_chain, chomp_integer_part, lowercase_ident, malformed_ident, parse_ident,
+    parse_lowercase_ident, unqualified_ident, Accessor, BadIdent, Ident, Suffix,
 };
 use crate::number_literal::parse_number_base;
 use crate::parser::{
@@ -320,6 +320,7 @@ fn parse_if_when_closure<'a>(
     }
 }
 
+// todo: @wip @duplicate unify with the `parse_term` via the condition flag or function reuse
 fn parse_negative_or_term<'a>(
     flags: ExprParseFlags,
     arena: &'a Bump,
@@ -1938,7 +1939,9 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
     }
 
     let mut pat = match expr.item {
-        Expr::Var { module_name, ident } => {
+        Expr::Var {
+            module_name, ident, ..
+        } => {
             if module_name.is_empty() {
                 Pattern::Identifier { ident }
             } else {
@@ -2133,8 +2136,10 @@ pub fn parse_top_level_defs<'a>(
     Ok((MadeProgress, output, state))
 }
 
-// todo: @wip is it possible to create a special unique name, like use some symbol at end, that normally rejected by ident names?
-const CLOSURE_SHORTCUT_ARG: &str = "un";
+// todo: @revisit now it is a fixed name which is "rarely used" (at least in the Roc compiler source),
+// it also helps to have nice identifier on re-format without additional processing.
+// but we may consider generating the unique `next_unique_suffixed_ident` from the `suffixed` desugaring.
+pub const CLOSURE_SHORTCUT_ARG: &str = "un";
 
 /// If Ok it always returns MadeProgress
 fn rest_of_closure<'a>(
@@ -2148,17 +2153,14 @@ fn rest_of_closure<'a>(
         return Err((NoProgress, EClosure::Start(state.pos())));
     }
 
-    // todo: @wip expanding to `\un -> un :> Ok _ -> 1, Err _ -> 0`
-    // - [ ] `\:> Ok _ -> 1, Err _ -> 0` into ???
-
     let after_slash = state.pos();
 
     // Expand the shortcut into the full code guided by presence of space after slash (only if actual shortcut follows)
     // e.g. this `\ .foo.bar` will expand to `\un -> un.foo.bar`, but this `\.foo.bar` will stay as-is in the formatted output
-    let mut keep_shortcut_on_format = true;
+    let mut format_keeps_shortcut = true;
     if state.bytes().first() == Some(&b' ') {
         state.advance_mut(1);
-        keep_shortcut_on_format = false;
+        format_keeps_shortcut = false;
     };
 
     // note: @feat closure-shortcut
@@ -2170,10 +2172,28 @@ fn rest_of_closure<'a>(
         params.push(param);
 
         let ident_state = state.clone();
-        let (ident, state) = match parse_closure_shortcut_access_ident(ident, arena, state) {
-            Ok((_, out, state)) => (out, state),
-            Err((_, fail)) => {
-                return Err((MadeProgress, EClosure::Body(arena.alloc(fail), after_slash)))
+        let mut parts = Vec::with_capacity_in(4, arena);
+        parts.push(Accessor::RecordField(ident));
+
+        let initial = state.clone();
+        let pos = state.pos();
+        let module_name = "";
+        let (ident, state) = match chomp_access_chain(&state.bytes(), &mut parts) {
+            Ok(width) => {
+                let parts = parts.into_bump_slice();
+                let ident = Ident::Access { module_name, parts };
+                (ident, state.advance(width as usize))
+            }
+            Err(1) => {
+                // Here we handling the identity function `\.`
+                // where we found the `.` but did not find anything afterwards, therefore the width is 1.
+                let parts = parts.into_bump_slice();
+                let ident = Ident::Access { module_name, parts };
+                (ident, state.inc())
+            }
+            Err(width) => {
+                let fail = BadIdent::WeirdDotAccess(pos.bump_column(width));
+                malformed_ident(initial.bytes(), fail, state.advance(width as usize))
             }
         };
 
@@ -2185,9 +2205,16 @@ fn rest_of_closure<'a>(
             }
         };
 
-        let ident = ident_to_expr(arena, ident, keep_shortcut_on_format);
+        let ident = ident_to_expr(arena, ident, format_keeps_shortcut);
         let ident = apply_expr_access_chain(arena, ident, suffixes);
         let ident = Loc::pos(after_slash, ident_end, ident);
+
+        // todo: @wip for the identity function and Unary Negate and Not, should we consider to stop here and return early
+        // to avoid putting the lambda in parens in the middle of the Apply list,
+        // e.g, instead of `Foo.bar (\.) 42` it enable us to write `Foo.bar \. 42`
+
+        // todo: @wip current RecordAccessor '.foo { foo: 3 }', RecordUpdater '&foo { foo: 1 } 2' functions are stopped here,
+        // basically implying the parens. I need to test the same cases with the closure shortcut.
 
         let err_pos = state.pos();
         let inc_indent: u32 = slash_indent + 1;
@@ -2199,8 +2226,8 @@ fn rest_of_closure<'a>(
                 }
             };
 
-        let closure_shortcut = if keep_shortcut_on_format {
-            Some(ClosureShortcut::FieldOrTupleAccess)
+        let closure_shortcut = if format_keeps_shortcut {
+            Some(ClosureShortcut::Access)
         } else {
             None
         };
@@ -2217,20 +2244,21 @@ fn rest_of_closure<'a>(
     if let Ok((_, binop, state)) = parse_bin_op(MadeProgress, state.clone()) {
         let after_binop = state.pos();
 
-        let ident = CLOSURE_SHORTCUT_ARG;
-        let param = Loc::pos(after_slash, after_binop, Pattern::Identifier { ident });
+        let param = Pattern::Identifier {
+            ident: CLOSURE_SHORTCUT_ARG,
+        };
+        let param = Loc::pos(after_slash, after_binop, param);
         let mut params = Vec::with_capacity_in(1, arena);
         params.push(param);
 
         // the closure parameter is the left value of binary operator
-        let module_name = "";
-        let term = Expr::Var { module_name, ident };
-        let loc_term = Loc::pos(after_slash, after_binop, term);
+        let expr = Expr::new_var("", CLOSURE_SHORTCUT_ARG);
+        let expr: Loc<Expr<'_>> = Loc::pos(after_slash, after_binop, expr);
 
         let expr_state = ExprState {
             operators: Vec::new_in(arena),
             arguments: Vec::new_in(arena),
-            expr: loc_term,
+            expr,
             spaces_after: &[],
             end: after_slash,
         };
@@ -2261,7 +2289,7 @@ fn rest_of_closure<'a>(
 
         let loc_body = Loc::pos(after_binop, state.pos(), body);
 
-        let closure_shortcut = if keep_shortcut_on_format {
+        let closure_shortcut = if format_keeps_shortcut {
             Some(ClosureShortcut::BinOp)
         } else {
             None
@@ -3329,10 +3357,18 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>, is_closure_shortcut: bool)
         Ident::Access { module_name, parts } => {
             let mut iter = parts.iter();
 
+            let closure_shortcut = if is_closure_shortcut {
+                Some(ClosureShortcutForAccess::Yes)
+            } else {
+                None
+            };
+
             // The first value in the iterator is the variable name,
             // e.g. `foo` in `foo.bar.baz`
             let mut answer = match iter.next() {
-                Some(Accessor::RecordField(ident)) => Expr::Var { module_name, ident },
+                Some(Accessor::RecordField(ident)) => {
+                    Expr::new_var_shortcut(module_name, ident, closure_shortcut)
+                }
                 Some(Accessor::TupleIndex(_)) => {
                     // TODO: make this state impossible to represent in Ident::Access,
                     // by splitting out parts[0] into a separate field with a type of `&'a str`,
@@ -3348,11 +3384,7 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>, is_closure_shortcut: bool)
             // e.g. `bar` in `foo.bar.baz`, followed by `baz`
             let mut first = true;
             for field in iter {
-                let shortcut = if is_closure_shortcut && first {
-                    Some(ClosureShortcutForAccess::Yes)
-                } else {
-                    None
-                };
+                let shortcut = if first { closure_shortcut } else { None };
                 first = false;
                 // Wrap the previous answer in the new one, so we end up
                 // with a nested Expr. That way, `foo.bar.baz` gets represented

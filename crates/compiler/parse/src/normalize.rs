@@ -721,7 +721,7 @@ impl<'a> Normalize<'a> for Expr<'a> {
                 fields: fields.normalize(arena),
             },
             Expr::Tuple(a) => Expr::Tuple(a.normalize(arena)),
-            Expr::Var { module_name, ident } => Expr::Var { module_name, ident },
+            v @ Expr::Var { .. } => v,
             Expr::Underscore(a) => Expr::Underscore(a),
             Expr::Tag(a) => Expr::Tag(a),
             Expr::OpaqueRef(a) => Expr::OpaqueRef(a),

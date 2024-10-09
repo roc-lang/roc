@@ -30,3 +30,4 @@ pub const KEYWORDS: [&str; 11] = [
 // Implement via the fixed matches starting from the first character or from the length of the input string,
 // see http://0x80.pl/notesen/2023-04-30-lookup-in-strings.html
 // and http://0x80.pl/notesen/2022-01-29-http-verb-parse.html
+// Benchmark the assumptions, as we have only 11 keywords (at 2024-10-09) - the iterative comparison may still win in the parser cases.

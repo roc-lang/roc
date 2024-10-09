@@ -471,7 +471,7 @@ mod test_reporting {
             .replace(ANSI_STYLE_CODES.bold, "<bold>")
             .replace(ANSI_STYLE_CODES.underline, "<underline>")
     }
-
+    // todo: @wip debug why it slow?
     test_report!(
         value_not_exposed,
         indoc!(
