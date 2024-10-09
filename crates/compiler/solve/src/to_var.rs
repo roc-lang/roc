@@ -752,6 +752,16 @@ pub(crate) fn type_to_var_help(
 
                 env.register_with_known_var(destination, rank, content)
             }
+            Pure => {
+                let content = Content::Pure;
+
+                env.register_with_known_var(destination, rank, content)
+            }
+            Effectful => {
+                let content = Content::Effectful;
+
+                env.register_with_known_var(destination, rank, content)
+            }
             Error => {
                 let content = Content::Error;
 
