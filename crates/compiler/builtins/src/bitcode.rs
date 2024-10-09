@@ -428,6 +428,10 @@ pub const DEC_ROUND: IntrinsicName = int_intrinsic!("roc_builtins.dec.round");
 pub const DEC_FLOOR: IntrinsicName = int_intrinsic!("roc_builtins.dec.floor");
 pub const DEC_CEILING: IntrinsicName = int_intrinsic!("roc_builtins.dec.ceiling");
 
+pub const CRYPT_EMPTY_SHA256: &str = "roc_builtins.crypt.emptySha256";
+pub const CRYPT_SHA256_ADD_BYTES: &str = "roc_builtins.crypt.sha256AddBytes";
+pub const CRYPT_SHA256_DIGEST: &str = "roc_builtins.crypt.sha156Digest";
+
 pub const UTILS_DBG_IMPL: &str = "roc_builtins.utils.dbg_impl";
 pub const UTILS_TEST_PANIC: &str = "roc_builtins.utils.test_panic";
 pub const UTILS_ALLOCATE_WITH_REFCOUNT: &str = "roc_builtins.utils.allocate_with_refcount";
