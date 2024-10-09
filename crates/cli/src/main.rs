@@ -22,6 +22,7 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use target_lexicon::Triple;
+use tempfile::Builder;
 
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -217,26 +218,87 @@ fn main() -> io::Result<()> {
 
             let opt_main_path = matches.get_one::<PathBuf>(FLAG_MAIN);
 
-            match check_file(
-                &arena,
-                roc_file_path.to_owned(),
-                opt_main_path.cloned(),
-                emit_timings,
-                RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
-                threading,
-            ) {
-                Ok((problems, total_time)) => {
-                    problems.print_error_warning_count(total_time);
-                    Ok(problems.exit_code())
-                }
+            match roc_file_path.extension().and_then(OsStr::to_str) {
+                Some("md") => {
+                    // Extract the blocks of roc code, do this smarter!
+                    let markdown_contents = fs::read_to_string(roc_file_path.as_path())?;
+                    let mut roc_blocks: Vec<String> = Vec::new();
+                    let mut in_roc_block: bool = false;
+                    let mut current_block = String::new();
 
-                Err(LoadingProblem::FormattedReport(report)) => {
-                    print!("{report}");
+                    for line in markdown_contents.lines() {
+                        if line == "```roc" {
+                            in_roc_block = true;
+                        } else if (line == "```") & in_roc_block {
+                            in_roc_block = false;
+                            roc_blocks.push(current_block);
+                            current_block = String::new();
+                        } else if in_roc_block {
+                            current_block.push_str(line);
+                            current_block.push_str("\n");
+                        }
+                    }
 
-                    Ok(1)
+                    // now check each block, we exit early if any single block does not check
+                    let mut exit_code = 0;
+
+                    for block in roc_blocks.iter() {
+                        let mut file = Builder::new().suffix(".roc").tempfile()?;
+                        write!(file, "{}", block)?;
+
+                        match check_file(
+                            &arena,
+                            file.path().to_owned(),
+                            opt_main_path.cloned(),
+                            emit_timings,
+                            RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
+                            threading,
+                        ) {
+                            Ok((problems, total_time)) => {
+                                problems.print_error_warning_count(total_time);
+                                exit_code = problems.exit_code();
+                            }
+
+                            Err(LoadingProblem::FormattedReport(report)) => {
+                                print!("{report}");
+
+                                exit_code = 1;
+                            }
+                            Err(other) => {
+                                panic!("build_file failed with error:\n{other:?}");
+                            }
+                        }
+
+                        if exit_code != 0 {
+                            break;
+                        }
+                    }
+
+                    Ok(exit_code)
                 }
-                Err(other) => {
-                    panic!("build_file failed with error:\n{other:?}");
+                _ => {
+                    match check_file(
+                        &arena,
+                        roc_file_path.to_owned(),
+                        opt_main_path.cloned(),
+                        emit_timings,
+                        RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
+                        threading,
+                    ) {
+                        Ok((problems, total_time)) => {
+                            problems.print_error_warning_count(total_time);
+                            Ok(problems.exit_code())
+                        }
+
+                        Err(LoadingProblem::FormattedReport(report)) => {
+                            print!("{report}");
+
+                            Ok(1)
+                        }
+                        Err(other) => {
+                            panic!("build_file failed with error:\n{other:?}");
+                        }
+                    }
                 }
             }
         }
