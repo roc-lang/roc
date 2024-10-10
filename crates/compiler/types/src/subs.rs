@@ -8,8 +8,9 @@ use roc_collections::{VecMap, VecSet};
 use roc_error_macros::internal_error;
 use roc_module::ident::{Lowercase, TagName, Uppercase};
 use roc_module::symbol::{ModuleId, Symbol};
+use soa::{GetSlice, Index, Slice};
 use std::fmt;
-use std::iter::{once, Iterator, Map};
+use std::iter::{once, Iterator};
 
 use crate::unification_table::{self, UnificationTable};
 
@@ -150,8 +151,7 @@ impl Subs {
         let mut slices: Vec<SubsSlice<u8>> = Vec::new();
 
         for field_name in lowercases {
-            let slice =
-                SubsSlice::extend_new(&mut buf, field_name.as_str().as_bytes().iter().copied());
+            let slice = Slice::extend_new(&mut buf, field_name.as_str().as_bytes().iter().copied());
             slices.push(slice);
         }
 
@@ -170,8 +170,7 @@ impl Subs {
         let mut slices: Vec<SerializedTagName> = Vec::new();
 
         for TagName(uppercase) in tag_names {
-            let slice =
-                SubsSlice::extend_new(&mut buf, uppercase.as_str().as_bytes().iter().copied());
+            let slice = Slice::extend_new(&mut buf, uppercase.as_str().as_bytes().iter().copied());
             let serialized = SerializedTagName(slice);
             slices.push(serialized);
         }

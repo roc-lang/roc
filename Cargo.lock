@@ -2335,6 +2335,7 @@ dependencies = [
  "roc_region",
  "roc_serialize",
  "roc_types",
+ "soa",
  "static_assertions",
  "ven_pretty",
 ]
@@ -2475,6 +2476,7 @@ dependencies = [
  "roc_module",
  "roc_region",
  "roc_types",
+ "soa",
 ]
 
 [[package]]
