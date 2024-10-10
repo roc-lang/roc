@@ -9,8 +9,8 @@ use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{
-    Content, ExhaustiveMark, FlatType, LambdaSet, OptVariable, RecordFields, RedundantMark,
-    SubsSlice, TagExt, UnionLambdas, UnionTags, Variable,
+    Content, ExhaustiveMark, FlatType, LambdaSet, OptVariable, RecordFields, RedundantMark, TagExt,
+    UnionLambdas, UnionTags, Variable,
 };
 use roc_types::types::RecordField;
 
@@ -66,7 +66,7 @@ use super::wrap_in_decode_custom_decode_with;
 ///                    Ok f1 -> Ok { f1, f0 }
 ///                    Err _ -> Err TooShort
 ///            Err _ -> Err TooShort
-///       
+///
 ///            Decode.custom \bytes, fmt -> Decode.decodeWith bytes (Decode.record initialState stepField finalizer) fmt
 ///```
 pub(crate) fn decoder(
@@ -108,7 +108,8 @@ pub(crate) fn decoder(
     let decode_record_var = env.import_builtin_symbol_var(Symbol::DECODE_RECORD);
     let this_decode_record_var = {
         let flat_type = FlatType::Func(
-            SubsSlice::insert_into_subs(env.subs, [initial_state_var, step_var, finalizer_var]),
+            env.subs
+                .insert_into_vars([initial_state_var, step_var, finalizer_var]),
             decode_record_lambda_set,
             record_decoder_var,
         );
@@ -200,7 +201,7 @@ pub(super) fn step_field(
     let mut branches = Vec::with_capacity(fields.len() + 1);
     let keep_payload_var = env.subs.fresh_unnamed_flex_var();
     let keep_or_skip_var = {
-        let keep_payload_subs_slice = SubsSlice::insert_into_subs(env.subs, [keep_payload_var]);
+        let keep_payload_subs_slice = env.subs.insert_into_vars([keep_payload_var]);
         let flat_type = FlatType::TagUnion(
             UnionTags::insert_slices_into_subs(
                 env.subs,
@@ -337,7 +338,7 @@ pub(super) fn step_field(
     };
 
     {
-        let args_slice = SubsSlice::insert_into_subs(env.subs, [state_record_var, Variable::STR]);
+        let args_slice = env.subs.insert_into_vars([state_record_var, Variable::STR]);
 
         env.subs.set_content(
             function_type,
@@ -403,7 +404,7 @@ fn custom_decoder(env: &mut Env<'_>, args: DecodingFieldArgs) -> (Variable, Expr
         let decode_custom_var = env.import_builtin_symbol_var(Symbol::DECODE_CUSTOM);
         let decode_custom_closure_var = env.subs.fresh_unnamed_flex_var();
         let this_decode_custom_var = {
-            let subs_slice = SubsSlice::insert_into_subs(env.subs, [this_custom_callback_var]);
+            let subs_slice = env.subs.insert_into_vars([this_custom_callback_var]);
             let flat_type =
                 FlatType::Func(subs_slice, decode_custom_closure_var, decode_custom_ret_var);
 
@@ -566,7 +567,7 @@ fn custom_decoder_lambda(env: &mut Env<'_>, args: DecodingFieldArgs) -> (Variabl
                 ambient_function: this_custom_callback_var,
             });
             let custom_callback_lambda_set_var = synth_var(env.subs, content);
-            let subs_slice = SubsSlice::insert_into_subs(env.subs, [bytes_arg_var, fmt_arg_var]);
+            let subs_slice = env.subs.insert_into_vars([bytes_arg_var, fmt_arg_var]);
 
             env.subs.set_content(
                 this_custom_callback_var,
@@ -979,7 +980,7 @@ pub(super) fn finalizer(
     };
     let closure_type = synth_var(env.subs, Content::LambdaSet(lambda_set));
     let flat_type = FlatType::Func(
-        SubsSlice::insert_into_subs(env.subs, [state_record_var, fmt_arg_var]),
+        env.subs.insert_into_vars([state_record_var, fmt_arg_var]),
         closure_type,
         return_type_var,
     );
@@ -1020,7 +1021,7 @@ pub(super) fn finalizer(
 ///             decRec-> decRec.result
 ///     Ok a -> Ok a
 /// ```
-/// Tries to decode the field with a zero byte input if it missing,  
+/// Tries to decode the field with a zero byte input if it missing,
 /// this allows the decoder to decode types that have a state for "missing", such as
 /// an "Option" type.
 ///
@@ -1266,8 +1267,9 @@ fn make_decode_with_vars(
     let decode_with_var = env.import_builtin_symbol_var(Symbol::DECODE_DECODE_WITH);
     let lambda_set_var = env.subs.fresh_unnamed_flex_var();
     let this_decode_with_var = {
-        let subs_slice =
-            SubsSlice::insert_into_subs(env.subs, [bytes_arg_var, decoder_var, fmt_arg_var]);
+        let subs_slice = env
+            .subs
+            .insert_into_vars([bytes_arg_var, decoder_var, fmt_arg_var]);
         let this_decode_with_var = synth_var(
             env.subs,
             Content::Structure(FlatType::Func(subs_slice, lambda_set_var, rec_var)),
