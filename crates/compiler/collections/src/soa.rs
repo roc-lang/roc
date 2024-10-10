@@ -1,5 +1,7 @@
 use std::usize;
 
+/// DEPRECATED - use crates/soa instead!
+
 pub struct Index<T> {
     index: u32,
     _marker: std::marker::PhantomData<T>,

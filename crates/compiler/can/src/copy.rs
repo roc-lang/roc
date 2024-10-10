@@ -12,7 +12,7 @@ use roc_module::{
 use roc_types::{
     subs::{
         self, AliasVariables, Descriptor, GetSubsSlice, OptVariable, RecordFields, Subs, SubsIndex,
-        SubsSlice, TupleElems, UnionLambdas, UnionTags, Variable, VariableSubsSlice,
+        SubsSlice, TupleElems, UnionLambdas, UnionTags, Variable,
     },
     types::{RecordField, Uls},
 };
@@ -919,8 +919,7 @@ fn deep_copy_type_vars<C: CopyEnv>(
 
         macro_rules! clone_var_slice {
             ($slice:expr) => {{
-                let new_arguments =
-                    VariableSubsSlice::reserve_into_subs(env.target(), $slice.len());
+                let new_arguments = env.target().reserve_into_vars($slice.len());
                 for (target_index, var_index) in (new_arguments.indices()).zip($slice) {
                     let var = env.source()[var_index];
                     let copy_var = env.get_copy(var).into_variable().unwrap_or(var);
@@ -1032,8 +1031,7 @@ fn deep_copy_type_vars<C: CopyEnv>(
                     }
 
                     perform_clone!({
-                        let new_variable_slices =
-                            SubsSlice::reserve_variable_slices(env.target(), tags.len());
+                        let new_variable_slices = env.target().reserve_variable_slices(tags.len());
                         let it = (new_variable_slices.indices()).zip(tags.variables());
                         for (target_index, index) in it {
                             let slice = env.source()[index];
@@ -1058,8 +1056,7 @@ fn deep_copy_type_vars<C: CopyEnv>(
                     }
 
                     perform_clone!({
-                        let new_variable_slices =
-                            SubsSlice::reserve_variable_slices(env.target(), tags.len());
+                        let new_variable_slices = env.target().reserve_variable_slices(tags.len());
                         let it = (new_variable_slices.indices()).zip(tags.variables());
                         for (target_index, index) in it {
                             let slice = env.source()[index];
@@ -1135,8 +1132,7 @@ fn deep_copy_type_vars<C: CopyEnv>(
                 let new_ambient_function = descend_var!(ambient_function);
 
                 perform_clone!({
-                    let new_variable_slices =
-                        SubsSlice::reserve_variable_slices(env.target(), solved.len());
+                    let new_variable_slices = env.target().reserve_variable_slices(solved.len());
                     let it = (new_variable_slices.indices()).zip(solved.variables());
                     for (target_index, index) in it {
                         let slice = env.source()[index];
@@ -1150,8 +1146,7 @@ fn deep_copy_type_vars<C: CopyEnv>(
                     let new_solved =
                         UnionLambdas::from_slices(new_solved_labels, new_variable_slices);
 
-                    let new_unspecialized =
-                        SubsSlice::reserve_uls_slice(env.target(), unspecialized.len());
+                    let new_unspecialized = env.target().reserve_uls_slice(unspecialized.len());
                     for (target_index, uls_index) in
                         (new_unspecialized.into_iter()).zip(unspecialized.into_iter())
                     {

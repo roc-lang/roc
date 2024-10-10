@@ -3242,7 +3242,7 @@ fn unify_flat_type<M: MetaCollector>(
             let mut outcome = unify_zip_slices(env, pool, *l_args, *r_args, ctx.mode);
 
             if outcome.mismatches.is_empty() {
-                let chosen_args = SubsSlice::reserve_into_subs(env, l_args.len());
+                let chosen_args = env.reserve_into_vars(l_args.len());
                 for ((store, var1), var2) in chosen_args
                     .into_iter()
                     .zip(l_args.into_iter())

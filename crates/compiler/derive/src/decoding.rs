@@ -68,7 +68,8 @@ fn wrap_in_decode_custom_decode_with(
 
         // Decode.decodeWith : bytes, inner_decoder, fmt -> DecoderResult (List val)
         let this_decode_with_var_slice =
-            SubsSlice::insert_into_subs(env.subs, [bytes_var, inner_decoder_var, fmt_var]);
+            env.subs
+                .insert_into_vars([bytes_var, inner_decoder_var, fmt_var]);
         let this_decode_with_clos_var = env.subs.fresh_unnamed_flex_var();
         let this_decode_with_ret_var = env.subs.fresh_unnamed_flex_var();
         let this_decode_with_fn_var = synth_var(
@@ -131,7 +132,7 @@ fn wrap_in_decode_custom_decode_with(
         );
 
         // bytes, fmt -[[fn_name]]-> DecoderResult (List elem)
-        let args_slice = SubsSlice::insert_into_subs(env.subs, [bytes_var, fmt_var]);
+        let args_slice = env.subs.insert_into_vars([bytes_var, fmt_var]);
         env.subs.set_content(
             fn_var,
             Content::Structure(FlatType::Func(
@@ -173,7 +174,7 @@ fn wrap_in_decode_custom_decode_with(
         let decode_custom_type = env.import_builtin_symbol_var(Symbol::DECODE_CUSTOM);
 
         // (List U8, fmt -> DecodeResult (List elem)) -> Decoder (List elem) fmt
-        let this_decode_custom_args = SubsSlice::insert_into_subs(env.subs, [custom_var]);
+        let this_decode_custom_args = env.subs.insert_into_vars([custom_var]);
         let this_decode_custom_clos_var = env.subs.fresh_unnamed_flex_var();
         let this_decode_custom_ret_var = env.subs.fresh_unnamed_flex_var();
         let this_decode_custom_fn_var = synth_var(

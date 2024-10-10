@@ -158,11 +158,11 @@ macro_rules! v {
          }
      }};
      (Symbol::$sym:ident $($arg:expr)*) => {{
-         use roc_types::subs::{Subs, SubsSlice, Content, FlatType};
+         use roc_types::subs::{Subs, Content, FlatType};
          use roc_module::symbol::Symbol;
          |subs: &mut Subs| {
              let $sym = vec![ $( $arg(subs) ,)* ];
-             let var_slice = SubsSlice::insert_into_subs(subs, $sym);
+             let var_slice = subs.insert_into_vars($sym);
              roc_derive::synth_var(subs, Content::Structure(FlatType::Apply(Symbol::$sym, var_slice)))
          }
      }};

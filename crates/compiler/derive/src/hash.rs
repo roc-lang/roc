@@ -20,7 +20,7 @@ use roc_types::{
     subs::{
         Content, ExhaustiveMark, FlatType, GetSubsSlice, LambdaSet, OptVariable, RecordFields,
         RedundantMark, Subs, SubsIndex, SubsSlice, TagExt, TupleElems, UnionLambdas, UnionTags,
-        Variable, VariableSubsSlice,
+        Variable,
     },
     types::RecordField,
 };
@@ -206,7 +206,7 @@ fn hash_tag_union(
         let flex_tag_labels = tags
             .into_iter()
             .map(|(label, arity)| {
-                let variables_slice = VariableSubsSlice::reserve_into_subs(env.subs, arity.into());
+                let variables_slice = env.subs.reserve_into_vars(arity.into());
                 for var_index in variables_slice {
                     env.subs[var_index] = env.subs.fresh_unnamed_flex_var();
                 }
@@ -366,7 +366,7 @@ fn hash_newtype_tag_union(
     let (union_var, tag_name, payload_variables) = {
         let (label, arity) = tag;
 
-        let variables_slice = VariableSubsSlice::reserve_into_subs(env.subs, arity.into());
+        let variables_slice = env.subs.reserve_into_vars(arity.into());
         for var_index in variables_slice {
             env.subs[var_index] = env.subs.fresh_unnamed_flex_var();
         }
@@ -466,8 +466,7 @@ fn call_hash_ability_member(
     let exposed_hash_fn_var = env.import_builtin_symbol_var(member);
 
     // (typeof body), (typeof field) -[clos]-> hasher_result
-    let this_arguments_slice =
-        VariableSubsSlice::insert_into_subs(env.subs, [in_hasher_var, in_val_var]);
+    let this_arguments_slice = env.subs.insert_into_vars([in_hasher_var, in_val_var]);
     let this_hash_clos_var = env.subs.fresh_unnamed_flex_var();
     let this_out_hasher_var = env.subs.fresh_unnamed_flex_var();
     let this_hash_fn_var = synth_var(
@@ -530,7 +529,7 @@ fn build_outer_derived_closure(
         );
 
         // hasher, rcd_var -[fn_name]-> (hasher = body_var)
-        let args_slice = SubsSlice::insert_into_subs(env.subs, [hasher_var, val_var]);
+        let args_slice = env.subs.insert_into_vars([hasher_var, val_var]);
         env.subs.set_content(
             fn_var,
             Content::Structure(FlatType::Func(args_slice, fn_clos_var, body_var)),

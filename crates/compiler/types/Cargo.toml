@@ -20,3 +20,5 @@ ven_pretty = { path = "../../vendor/pretty" }
 
 bumpalo.workspace = true
 static_assertions.workspace = true
+
+soa.workspace = true
