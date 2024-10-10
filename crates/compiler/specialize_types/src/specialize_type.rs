@@ -10,10 +10,8 @@ use roc_types::{
         Content, FlatType, RecordFields, Subs, TagExt, TupleElems, UnionLabels, UnionTags,
         Variable, VariableSubsSlice,
     },
-    types::{AliasKind, RecordField},
+    types::RecordField,
 };
-
-mod mono_type;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Problem {
@@ -81,7 +79,7 @@ fn lower_var(
                         .collect::<Vec<Variable>>();
 
                     Content::Structure(FlatType::Apply(
-                        symbol,
+                        *symbol,
                         VariableSubsSlice::insert_into_subs(subs, new_args),
                     ))
                 }
@@ -90,8 +88,8 @@ fn lower_var(
                         .into_iter()
                         .map(|var_index| lower_var(cache, subs, problems, subs[var_index]))
                         .collect::<Vec<_>>();
-                    let new_closure = lower_var(cache, subs, problems, closure);
-                    let new_ret = lower_var(cache, subs, problems, ret);
+                    let new_closure = lower_var(cache, subs, problems, *closure);
+                    let new_ret = lower_var(cache, subs, problems, *ret);
                     Content::Structure(FlatType::Func(
                         VariableSubsSlice::insert_into_subs(subs, new_args),
                         new_closure,
@@ -99,7 +97,7 @@ fn lower_var(
                     ))
                 }
                 FlatType::Record(fields, ext) => {
-                    let mut fields = resolve_record_ext(subs, problems, fields, ext);
+                    let mut fields = resolve_record_ext(subs, problems, *fields, *ext);
 
                     // Now lower all the fields we gathered. Do this in a separate pass to avoid borrow errors on Subs.
                     for (_, field) in fields.iter_mut() {
@@ -117,7 +115,7 @@ fn lower_var(
                     ))
                 }
                 FlatType::Tuple(elems, ext) => {
-                    let mut elems = resolve_tuple_ext(subs, problems, elems, ext);
+                    let mut elems = resolve_tuple_ext(subs, problems, *elems, *ext);
 
                     // Now lower all the elems we gathered. Do this in a separate pass to avoid borrow errors on Subs.
                     lower_vars(elems.iter_mut().map(|(_, var)| var), cache, subs, problems);
@@ -128,7 +126,7 @@ fn lower_var(
                     ))
                 }
                 FlatType::TagUnion(tags, ext) => {
-                    let mut tags = resolve_tag_ext(subs, problems, tags, ext);
+                    let mut tags = resolve_tag_ext(subs, problems, *tags, *ext);
 
                     // Now lower all the tags we gathered. Do this in a separate pass to avoid borrow errors on Subs.
                     lower_vars(tags.iter_mut().flat_map(|(_, vars)| vars.iter_mut()), cache, subs, problems);
@@ -142,7 +140,7 @@ fn lower_var(
                     // If this is still a FunctionOrTagUnion, turn it into a TagUnion.
 
                     // First, resolve the ext var.
-                    let mut tags = resolve_tag_ext(subs, problems, UnionTags::default(), ext);
+                    let mut tags = resolve_tag_ext(subs, problems, UnionTags::default(), *ext);
 
                     // Now lower all the tags we gathered from the ext var.
                     // (Do this in a separate pass to avoid borrow errors on Subs.)
@@ -159,13 +157,13 @@ fn lower_var(
                     ))
                 }
                 FlatType::RecursiveTagUnion(rec, tags, ext) => {
-                    let mut tags = resolve_tag_ext(subs, problems, tags, ext);
+                    let mut tags = resolve_tag_ext(subs, problems, *tags, *ext);
 
                     // Now lower all the tags we gathered. Do this in a separate pass to avoid borrow errors on Subs.
                     lower_vars(tags.iter_mut().flat_map(|(_, vars)| vars.iter_mut()), cache, subs, problems);
 
                     Content::Structure(FlatType::RecursiveTagUnion(
-                        lower_var(cache, subs, problems, rec),
+                        lower_var(cache, subs, problems, *rec),
                         UnionTags::insert_into_subs(subs, tags),
                         TagExt::Any(Variable::EMPTY_TAG_UNION),
                     ))
@@ -180,16 +178,12 @@ fn lower_var(
             | Content::FlexAbleVar(_, _)
             | Content::RigidAbleVar(_, _)
             | Content::RecursionVar { .. } => Content::Structure(FlatType::EmptyTagUnion),
-            Content::LambdaSet(lambda_set) => Content::LambdaSet(lambda_set),
+            Content::LambdaSet(lambda_set) => Content::LambdaSet(*lambda_set),
             Content::ErasedLambda => Content::ErasedLambda,
-            Content::Alias(_symbol, _args, real, AliasKind::Structural) => {
-                // Unwrap type aliases.
-                let new_real = lower_var(cache, subs, problems, real);
-                cache.set_monomorphic(new_real);
-                return new_real;
-            }
-            Content::Alias(symbol, args, real, AliasKind::Opaque) => {
-                Content::Alias(symbol, args, lower_var(cache, subs, problems, real), AliasKind::Opaque)
+            Content::Alias(symbol, args, real, kind) => {
+                let todo = (); // TODO we should unwrap this, but doing that probably means changing this from root_var to other stuff.
+                let new_real = lower_var(cache, subs, problems, *real);
+                Content::Alias(*symbol, *args, new_real, *kind)
             }
             Content::Error => Content::Error,
         };
