@@ -20,7 +20,7 @@ use roc_types::{
     subs::{
         Content, ExhaustiveMark, FlatType, GetSubsSlice, LambdaSet, OptVariable, RecordFields,
         RedundantMark, Subs, SubsIndex, SubsSlice, TagExt, TupleElems, UnionLambdas, UnionTags,
-        Variable, VariableSubsSlice,
+        Variable, VariableSlice,
     },
     types::RecordField,
 };
@@ -206,7 +206,7 @@ fn hash_tag_union(
         let flex_tag_labels = tags
             .into_iter()
             .map(|(label, arity)| {
-                let variables_slice = VariableSubsSlice::reserve_into_subs(env.subs, arity.into());
+                let variables_slice = VariableSlice::reserve_into_subs(env.subs, arity.into());
                 for var_index in variables_slice {
                     env.subs[var_index] = env.subs.fresh_unnamed_flex_var();
                 }
@@ -266,7 +266,7 @@ fn hash_tag_union(
             // A
             let tag_name = env.subs[tag].clone();
             // t11 .. t1n
-            let payload_vars = env.subs.get_subs_slice(env.subs[payloads]).to_vec();
+            let payload_vars = env.subs.get_slice(env.subs[payloads]).to_vec();
             // x11 .. x1n
             let payload_syms: Vec<_> = std::iter::repeat_with(|| env.unique_symbol())
                 .take(payload_vars.len())
@@ -366,7 +366,7 @@ fn hash_newtype_tag_union(
     let (union_var, tag_name, payload_variables) = {
         let (label, arity) = tag;
 
-        let variables_slice = VariableSubsSlice::reserve_into_subs(env.subs, arity.into());
+        let variables_slice = VariableSlice::reserve_into_subs(env.subs, arity.into());
         for var_index in variables_slice {
             env.subs[var_index] = env.subs.fresh_unnamed_flex_var();
         }
@@ -387,7 +387,7 @@ fn hash_newtype_tag_union(
         (
             tag_union_var,
             label,
-            env.subs.get_subs_slice(variables_slice).to_vec(),
+            env.subs.get_slice(variables_slice).to_vec(),
         )
     };
 
@@ -467,7 +467,7 @@ fn call_hash_ability_member(
 
     // (typeof body), (typeof field) -[clos]-> hasher_result
     let this_arguments_slice =
-        VariableSubsSlice::insert_into_subs(env.subs, [in_hasher_var, in_val_var]);
+        VariableSlice::insert_into_subs(env.subs, [in_hasher_var, in_val_var]);
     let this_hash_clos_var = env.subs.fresh_unnamed_flex_var();
     let this_out_hasher_var = env.subs.fresh_unnamed_flex_var();
     let this_hash_fn_var = synth_var(

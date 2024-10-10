@@ -1,13 +1,13 @@
-use roc_module::{
-    ident::{Lowercase, TagName},
-    symbol::Symbol,
-};
-use roc_types::subs::{Content, FlatType, GetSubsSlice, Subs, Variable};
-
 use crate::{
     util::{check_derivable_ext_var, debug_name_record, debug_name_tag, debug_name_tuple},
     DeriveError,
 };
+use roc_module::{
+    ident::{Lowercase, TagName},
+    symbol::Symbol,
+};
+use roc_types::subs::{Content, FlatType, Subs, Variable};
+use soa::GetSlice;
 
 #[derive(Hash)]
 pub enum FlatHash {
@@ -106,7 +106,7 @@ impl FlatHash {
                     Ok(Key(FlatHashKey::TagUnion(tag_names_and_payload_sizes)))
                 }
                 FlatType::FunctionOrTagUnion(names_index, _, _) => Ok(Key(FlatHashKey::TagUnion(
-                    subs.get_subs_slice(names_index)
+                    subs.get_slice(names_index)
                         .iter()
                         .map(|t| (t.clone(), 0))
                         .collect(),

@@ -1,6 +1,6 @@
 use std::hint::unreachable_unchecked;
 
-use crate::subs::{Content, Descriptor, Mark, OptVariable, Rank, Variable, VariableSubsSlice};
+use crate::subs::{Content, Descriptor, Mark, OptVariable, Rank, Variable, VariableSlice};
 use roc_serialize::bytes;
 
 #[derive(Clone, Default)]
@@ -53,7 +53,7 @@ impl UnificationTable {
         self.contents.is_empty()
     }
 
-    pub fn reserve(&mut self, extra_length: usize) -> VariableSubsSlice {
+    pub fn reserve(&mut self, extra_length: usize) -> VariableSlice {
         use std::iter::repeat;
 
         let start = self.contents.len();
@@ -63,7 +63,7 @@ impl UnificationTable {
         self.metadata
             .extend(repeat(Combine::NONE).take(extra_length));
 
-        VariableSubsSlice::new(start as _, extra_length as _)
+        VariableSlice::new(start as _, extra_length as _)
     }
 
     pub fn push(

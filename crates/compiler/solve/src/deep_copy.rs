@@ -194,7 +194,7 @@ fn deep_copy_var_help(
 
                             // When copying a let-generalized record to a specialized region, rigid
                             // optionals just become optionals.
-                            let field_types = subs.get_subs_slice(fields.record_fields());
+                            let field_types = subs.get_slice(fields.record_fields());
                             let has_rigid_optional_field = field_types
                                 .iter()
                                 .any(|f| matches!(f, RecordField::RigidOptional(..)));

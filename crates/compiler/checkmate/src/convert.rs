@@ -3,9 +3,10 @@ use std::collections::HashMap;
 use roc_module::{ident, symbol};
 use roc_types::{
     num,
-    subs::{self, GetSubsSlice, Subs, SubsIndex, SubsSlice, UnionLabels},
+    subs::{self, Subs, UnionLabels},
     types,
 };
+use soa::GetSlice;
 
 use roc_checkmate_schema::{
     AliasKind, AliasTypeVariables, ClosureType, Content, NumericRange, NumericRangeKind, Rank,
@@ -52,7 +53,7 @@ where
     T: AsSchema<U>,
 {
     fn as_schema(&self, subs: &Subs) -> Vec<U> {
-        subs.get_subs_slice(*self)
+        subs.get_slice(*self)
             .iter()
             .map(|i| i.as_schema(subs))
             .collect()

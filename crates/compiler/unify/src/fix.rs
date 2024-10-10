@@ -258,8 +258,8 @@ fn find_chain(subs: &Subs, left: Variable, right: Variable) -> impl Iterator<Ite
                     let mut chain = short_circuit(
                         subs,
                         needle,
-                        subs.get_subs_slice(*left_vars).iter(),
-                        subs.get_subs_slice(*right_vars).iter(),
+                        subs.get_slice(*left_vars).iter(),
+                        subs.get_slice(*right_vars).iter(),
                     )?;
                     chain.push((left, right));
                     Ok(chain)
@@ -273,8 +273,8 @@ fn find_chain(subs: &Subs, left: Variable, right: Variable) -> impl Iterator<Ite
                         short_circuit(
                             subs,
                             needle,
-                            subs.get_subs_slice(*left_args).iter(),
-                            subs.get_subs_slice(*right_args).iter(),
+                            subs.get_slice(*left_args).iter(),
+                            subs.get_slice(*right_args).iter(),
                         )
                     };
                     let mut chain =
@@ -307,8 +307,8 @@ fn find_chain(subs: &Subs, left: Variable, right: Variable) -> impl Iterator<Ite
                     FunctionOrTagUnion(_right_tag_name, right_sym, right_var),
                 ) => {
                     assert_eq!(
-                        subs.get_subs_slice(*left_sym),
-                        subs.get_subs_slice(*right_sym)
+                        subs.get_slice(*left_sym),
+                        subs.get_slice(*right_sym)
                     );
                     let mut chain = help(subs, needle, left_var.var(), right_var.var())?;
                     chain.push((left, right));

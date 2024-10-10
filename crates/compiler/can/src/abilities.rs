@@ -687,10 +687,7 @@ mod serialize {
     use roc_module::symbol::Symbol;
     use roc_region::all::Region;
     use roc_serialize::bytes;
-    use roc_types::{
-        subs::{SubsSlice, Variable},
-        types::MemberImpl,
-    };
+    use roc_types::{subs::Variable, types::MemberImpl};
 
     use super::{
         AbilitiesStore, AbilityMemberData, ImplKey, MemberSpecializationInfo, Resolved,

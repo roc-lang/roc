@@ -1,8 +1,7 @@
 use crate::num::NumericRange;
 use crate::pretty_print::Parens;
 use crate::subs::{
-    GetSubsSlice, RecordFields, Subs, TagExt, TupleElems, UnionTags, VarStore, Variable,
-    VariableSubsSlice,
+    RecordFields, Subs, TagExt, TupleElems, UnionTags, VarStore, Variable, VariableSlice,
 };
 use roc_collections::all::{HumanIndex, ImMap, ImSet, MutMap, MutSet, SendMap};
 use roc_collections::soa::{Index, Slice};
@@ -13,6 +12,7 @@ use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
+use soa::GetSlice;
 use std::fmt;
 use std::fmt::Write;
 use std::path::PathBuf;
@@ -4273,13 +4273,7 @@ pub fn gather_tags_unsorted_iter(
     subs: &Subs,
     other_fields: UnionTags,
     mut ext: TagExt,
-) -> Result<
-    (
-        impl Iterator<Item = (&TagName, VariableSubsSlice)> + '_,
-        TagExt,
-    ),
-    GatherTagsError,
-> {
+) -> Result<(impl Iterator<Item = (&TagName, VariableSlice)> + '_, TagExt), GatherTagsError> {
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
 
@@ -4342,11 +4336,11 @@ pub fn gather_tags_slices(
     subs: &Subs,
     other_fields: UnionTags,
     ext: TagExt,
-) -> Result<(Vec<(TagName, VariableSubsSlice)>, TagExt), GatherTagsError> {
+) -> Result<(Vec<(TagName, VariableSlice)>, TagExt), GatherTagsError> {
     let (it, ext) = gather_tags_unsorted_iter(subs, other_fields, ext)?;
 
     let mut result: Vec<_> = it
-        .map(|(ref_label, field): (_, VariableSubsSlice)| (ref_label.clone(), field))
+        .map(|(ref_label, field): (_, VariableSlice)| (ref_label.clone(), field))
         .collect();
 
     result.sort_by(|(a, _), (b, _)| a.cmp(b));
@@ -4362,9 +4356,7 @@ pub fn gather_tags(
     let (it, ext) = gather_tags_unsorted_iter(subs, other_fields, ext)?;
 
     let mut result: Vec<_> = it
-        .map(|(ref_label, field): (_, VariableSubsSlice)| {
-            (ref_label.clone(), subs.get_subs_slice(field))
-        })
+        .map(|(ref_label, field): (_, VariableSlice)| (ref_label.clone(), subs.get_slice(field)))
         .collect();
 
     result.sort_by(|(a, _), (b, _)| a.cmp(b));

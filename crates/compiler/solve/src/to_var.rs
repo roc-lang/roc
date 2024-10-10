@@ -11,7 +11,7 @@ use roc_types::{
     subs::{
         self, AliasVariables, Content, FlatType, GetSubsSlice, LambdaSet, OptVariable, Rank,
         RecordFields, Subs, SubsSlice, TagExt, TupleElems, UnionLabels, UnionLambdas, UnionTags,
-        Variable, VariableSubsSlice,
+        Variable, VariableSlice,
     },
     types::{
         gather_fields_unsorted_iter, gather_tuple_elems_unsorted_iter, AliasKind, AliasShared,
@@ -329,7 +329,7 @@ pub(crate) fn type_to_var_help(
                 region: _,
             } => {
                 let arguments = types.get_type_arguments(typ_index);
-                let new_arguments = VariableSubsSlice::reserve_into_subs(env.subs, arguments.len());
+                let new_arguments = VariableSlice::reserve_into_subs(env.subs, arguments.len());
                 for (target_index, var_index) in
                     (new_arguments.indices()).zip(arguments.into_iter())
                 {
@@ -403,7 +403,7 @@ pub(crate) fn type_to_var_help(
             // This case is important for the rank of boolean variables
             Function(closure_type, ret_type) => {
                 let arguments = types.get_type_arguments(typ_index);
-                let new_arguments = VariableSubsSlice::reserve_into_subs(env.subs, arguments.len());
+                let new_arguments = VariableSlice::reserve_into_subs(env.subs, arguments.len());
                 for (target_index, var_index) in
                     (new_arguments.indices()).zip(arguments.into_iter())
                 {
@@ -603,8 +603,7 @@ pub(crate) fn type_to_var_help(
                     let all_vars_length = type_arguments.len()
                         + lambda_set_variables.len()
                         + infer_ext_in_output_variables.len();
-                    let new_variables =
-                        VariableSubsSlice::reserve_into_subs(env.subs, all_vars_length);
+                    let new_variables = VariableSlice::reserve_into_subs(env.subs, all_vars_length);
 
                     let type_arguments_offset = 0;
                     let lambda_set_vars_offset = type_arguments_offset + type_arguments.len();
@@ -704,8 +703,7 @@ pub(crate) fn type_to_var_help(
                     let lambda_set_vars_offset = type_arguments_offset + type_arguments.len();
                     let infer_ext_vars_offset = lambda_set_vars_offset + lambda_set_variables.len();
 
-                    let new_variables =
-                        VariableSubsSlice::reserve_into_subs(env.subs, all_vars_length);
+                    let new_variables = VariableSlice::reserve_into_subs(env.subs, all_vars_length);
 
                     for (((target_index, typ), region), abilities) in
                         (new_variables.indices().skip(type_arguments_offset))
@@ -773,7 +771,7 @@ pub(crate) fn type_to_var_help(
                     .set_content(var, Content::RigidAbleVar(a, abilities_slice));
             }
             Content::RigidAbleVar(_, abs)
-                if (env.subs.get_subs_slice(abs).iter()).eq(abilities.sorted_iter()) =>
+                if (env.subs.get_slice(abs).iter()).eq(abilities.sorted_iter()) =>
             {
                 // pass, already bound
             }
@@ -1021,11 +1019,11 @@ fn register_tag_arguments(
     types: &mut Types,
     stack: &mut bumpalo::collections::Vec<'_, TypeToVar>,
     arguments: Slice<TypeTag>,
-) -> VariableSubsSlice {
+) -> VariableSlice {
     if arguments.is_empty() {
-        VariableSubsSlice::default()
+        VariableSlice::default()
     } else {
-        let new_variables = VariableSubsSlice::reserve_into_subs(env.subs, arguments.len());
+        let new_variables = VariableSlice::reserve_into_subs(env.subs, arguments.len());
         let it = new_variables.indices().zip(arguments.into_iter());
 
         for (target_index, argument) in it {
@@ -1115,7 +1113,7 @@ fn insert_tags_slow_path(
     arena: &'_ bumpalo::Bump,
     types: &mut Types,
     union_tags: UnionTags,
-    mut tag_vars: bumpalo::collections::Vec<(TagName, VariableSubsSlice)>,
+    mut tag_vars: bumpalo::collections::Vec<(TagName, VariableSlice)>,
     stack: &mut bumpalo::collections::Vec<'_, TypeToVar>,
 ) -> UnionTags {
     let (tags, payload_slices) = types.union_tag_slices(union_tags);
@@ -1124,7 +1122,7 @@ fn insert_tags_slow_path(
     {
         let tag_argument_types = &types[tag_argument_types_index];
 
-        let new_slice = VariableSubsSlice::reserve_into_subs(env.subs, tag_argument_types.len());
+        let new_slice = VariableSlice::reserve_into_subs(env.subs, tag_argument_types.len());
 
         for (i, arg) in (new_slice.indices()).zip(tag_argument_types.into_iter()) {
             let var = RegisterVariable::with_stack(env, rank, arena, types, arg, stack);

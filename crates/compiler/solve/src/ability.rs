@@ -668,7 +668,7 @@ trait DerivableVisitor {
 
         macro_rules! push_var_slice {
             ($slice:expr) => {
-                stack.extend(subs.get_subs_slice($slice))
+                stack.extend(subs.get_slice($slice))
             };
         }
 
@@ -702,7 +702,7 @@ trait DerivableVisitor {
                     subs.set_content(var, Content::FlexAbleVar(opt_name, merged_abilites));
                 }
                 RigidAbleVar(_, abilities) => {
-                    if !subs.get_subs_slice(abilities).contains(&Self::ABILITY) {
+                    if !subs.get_slice(abilities).contains(&Self::ABILITY) {
                         return Err(NotDerivable {
                             var,
                             context: NotDerivableContext::NoContext,

@@ -14,7 +14,7 @@ use roc_target::{PtrWidth, Target};
 use roc_types::num::NumericRange;
 use roc_types::subs::{
     self, Content, FlatType, GetSubsSlice, OptVariable, RecordFields, Subs, TagExt, TupleElems,
-    UnsortedUnionLabels, Variable, VariableSubsSlice,
+    UnsortedUnionLabels, Variable, VariableSlice,
 };
 use roc_types::types::{
     gather_fields_unsorted_iter, gather_tuple_elems_unsorted_iter, RecordField, RecordFieldsError,
@@ -1418,7 +1418,7 @@ impl<'a> ClosureDataKind<'a> {
 
 fn build_function_closure_data<'a>(
     env: &mut Env<'a, '_>,
-    args: VariableSubsSlice,
+    args: VariableSlice,
     closure_var: Variable,
     ret_var: Variable,
 ) -> Cacheable<Result<ClosureDataKind<'a>, LayoutProblem>> {
@@ -1814,7 +1814,7 @@ impl<'a> LambdaSet<'a> {
         cache: &mut LayoutCache<'a>,
         arena: &'a Bump,
         subs: &Subs,
-        args: VariableSubsSlice,
+        args: VariableSlice,
         closure_var: Variable,
         ret_var: Variable,
     ) -> Result<Self, LayoutProblem> {
@@ -1824,7 +1824,7 @@ impl<'a> LambdaSet<'a> {
 
     fn from_var(
         env: &mut Env<'a, '_>,
-        args: VariableSubsSlice,
+        args: VariableSlice,
         closure_var: Variable,
         ret_var: Variable,
     ) -> Cacheable<Result<Self, LayoutProblem>> {
@@ -1843,7 +1843,7 @@ impl<'a> LambdaSet<'a> {
 
     fn from_var_help(
         env: &mut Env<'a, '_>,
-        args: VariableSubsSlice,
+        args: VariableSlice,
         closure_var: Variable,
         ret_var: Variable,
     ) -> Cacheable<Result<Self, LayoutProblem>> {
@@ -2146,12 +2146,12 @@ fn lambda_set_size(subs: &Subs, var: Variable) -> (usize, usize, usize) {
             }
             Content::Structure(flat_type) => match flat_type {
                 FlatType::Apply(_, args) => {
-                    for var in subs.get_subs_slice(*args) {
+                    for var in subs.get_slice(*args) {
                         stack.push((*var, depth_any + 1, depth_lset));
                     }
                 }
                 FlatType::Func(args, lset, ret) => {
-                    for var in subs.get_subs_slice(*args) {
+                    for var in subs.get_slice(*args) {
                         stack.push((*var, depth_any + 1, depth_lset));
                     }
                     stack.push((*lset, depth_any + 1, depth_lset));
@@ -3442,7 +3442,7 @@ fn layout_from_flat_type<'a>(
                 "If ext_var wasn't empty, this wouldn't be a FunctionOrTagUnion!"
             );
 
-            let tag_names = subs.get_subs_slice(tag_names);
+            let tag_names = subs.get_slice(tag_names);
             let unsorted_tags = UnsortedUnionLabels {
                 tags: tag_names.iter().map(|t| (t, &[] as &[Variable])).collect(),
             };
