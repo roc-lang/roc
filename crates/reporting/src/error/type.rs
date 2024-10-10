@@ -1679,6 +1679,8 @@ fn to_expr_report<'b>(
                     severity,
                 }
             }
+            Reason::CallInFunction(_) => todo!("[purity-inference] CallInFunction"),
+            Reason::CallInTopLevelDef => todo!("[purity-inference] CallInTopLevelDef"),
         },
     }
 }
