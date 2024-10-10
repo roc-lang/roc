@@ -4298,8 +4298,9 @@ mod test_reporting {
     4│      f :: I64
               ^^
 
-    I have no specific suggestion for this operator, see TODO for the full
-    list of operators in Roc.
+    I have no specific suggestion for this operator, see
+    https://www.roc-lang.org/tutorial#operator-desugaring-table for the
+    full list of operators in Roc.
     "#
     );
 
@@ -5655,7 +5656,7 @@ mod test_reporting {
     test_report!(
         weird_escape,
         r#""abc\qdef""#,
-        @r###"
+        @r#"
     ── WEIRD ESCAPE in tmp/weird_escape/Test.roc ───────────────────────────────────
 
     I was partway through parsing a  string literal, but I got stuck here:
@@ -5672,8 +5673,7 @@ mod test_reporting {
         - An escaped quote: \"
         - An escaped backslash: \\
         - A unicode code point: \u(00FF)
-        - An interpolated string: $(myVariable)
-    "###
+    "#
     );
 
     test_report!(
@@ -6051,8 +6051,9 @@ All branches in an `if` must have the same type!
     5│          5 ** 3
                   ^^
 
-    I have no specific suggestion for this operator, see TODO for the full
-    list of operators in Roc.
+    I have no specific suggestion for this operator, see
+    https://www.roc-lang.org/tutorial#operator-desugaring-table for the
+    full list of operators in Roc.
     "#
     );
 

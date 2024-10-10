@@ -23,26 +23,28 @@ SpacesBefore {
                             "Model",
                         ),
                     ],
-                    signature: @55-77 TypedIdent {
-                        ident: @55-59 "main",
-                        spaces_before_colon: [],
-                        ann: @62-77 Apply(
-                            "",
-                            "App",
-                            [
-                                @66-71 Apply(
-                                    "",
-                                    "Flags",
-                                    [],
-                                ),
-                                @72-77 Apply(
-                                    "",
-                                    "Model",
-                                    [],
-                                ),
-                            ],
-                        ),
-                    },
+                    signatures: [
+                        @55-77 TypedIdent {
+                            ident: @55-59 "main",
+                            spaces_before_colon: [],
+                            ann: @62-77 Apply(
+                                "",
+                                "App",
+                                [
+                                    @66-71 Apply(
+                                        "",
+                                        "Flags",
+                                        [],
+                                    ),
+                                    @72-77 Apply(
+                                        "",
+                                        "Model",
+                                        [],
+                                    ),
+                                ],
+                            ),
+                        },
+                    ],
                 },
             },
             exposes: KeywordItem {

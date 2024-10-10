@@ -354,58 +354,6 @@ pub fn rest_of_str_like<'a>(
                 // This is the start of a new escape. Look at the next byte
                 // to figure out what type of escape it is.
                 match bytes.next() {
-                    Some(b'(') => {
-                        // Advance past the `\(` before using the expr parser
-                        state.advance_mut(2);
-
-                        let original_byte_count = state.bytes().len();
-
-                        // This is an interpolated variable.
-                        // Parse an arbitrary expression, then give a
-                        // canonicalization error if that expression variant
-                        // is not allowed inside a string interpolation.
-                        let expr_pos = state.pos();
-                        let ((spaces_before, _), news) =
-                            match eat_space(arena, state.clone(), false) {
-                                Ok((_, out, state)) => (out, state),
-                                Err((p, fail)) => {
-                                    return Err((p, EString::Format(arena.alloc(fail), expr_pos)));
-                                }
-                            };
-
-                        let (expr, mut news) = match parse_expr_start(
-                            CHECK_FOR_ARROW | ACCEPT_MULTI_BACKPASSING,
-                            None, 
-                            arena,
-                            news,
-                            0,
-                        ) {
-                            Ok((_, expr, state)) => (expr, state),
-                            Err((p, fail)) => {
-                                return Err((p, EString::Format(arena.alloc(fail), expr_pos)));
-                            }
-                        };
-
-                        let expr = expr.spaced_before(arena, spaces_before);
-                        let expr = &*arena.alloc(expr.value);
-                        let expr = Loc::pos(expr_pos, news.pos(), expr);
-
-                        if news.bytes().first() != Some(&b')') {
-                            return Err((MadeProgress, EString::FormatEnd(news.pos())));
-                        }
-                        news.advance_mut(1);
-
-                        // Advance the iterator past the expr we just parsed.
-                        for _ in 0..(original_byte_count - news.bytes().len()) {
-                            bytes.next();
-                        }
-
-                        segments.push(StrSegment::DeprecatedInterpolated(expr));
-
-                        // Reset the segment
-                        segment_parsed_bytes = 0;
-                        state = news;
-                    }
                     Some(b'u') => {
                         // Advance past the `\u` before using the expr parser
                         state.advance_mut(2);
@@ -455,8 +403,8 @@ pub fn rest_of_str_like<'a>(
                     }
                     _ => {
                         // Invalid escape! A backslash must be followed
-                        // by either an open paren or else one of the
-                        // escapable characters (\n, \t, \", \\, etc)
+                        // by one of these escapable characters:
+                        // (\n, \t, \", \\, etc)
                         return Err((MadeProgress, EString::UnknownEscape(state.pos())));
                     }
                 }

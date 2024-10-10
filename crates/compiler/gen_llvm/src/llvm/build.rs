@@ -5592,7 +5592,7 @@ pub fn build_wasm_test_wrapper<'a, 'ctx>(
         opt_level,
         procedures,
         vec![],
-        EntryPoint::Single(entry_point),
+        EntryPoint::Program(env.arena.alloc([entry_point])),
         Some(&std::env::temp_dir().join("test.ll")),
     );
 
@@ -5619,7 +5619,7 @@ pub fn build_procedures_return_main<'a, 'ctx>(
         opt_level,
         procedures,
         host_exposed_lambda_sets,
-        EntryPoint::Single(entry_point),
+        EntryPoint::Program(env.arena.alloc([entry_point])),
         Some(&std::env::temp_dir().join("test.ll")),
     );
 
