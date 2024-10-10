@@ -559,34 +559,6 @@ fn solve(
                     }
                 }
             }
-            CallFx(env_call_fx, call_fx_var) => {
-                match unify(
-                    &mut env.uenv(),
-                    *env_call_fx,
-                    *call_fx_var,
-                    UnificationMode::EQ,
-                    Polarity::OF_VALUE,
-                ) {
-                    Success {
-                        vars,
-                        must_implement_ability,
-                        lambda_sets_to_specialize,
-                        extra_metadata: _,
-                    } => {
-                        env.introduce(rank, &vars);
-
-                        debug_assert!(must_implement_ability.is_empty());
-                        debug_assert!(lambda_sets_to_specialize.is_empty());
-                    }
-                    Failure(vars, _actual_type, _exected_type, _bad_impls) => {
-                        env.introduce(rank, &vars);
-
-                        todo!("[purity-inference] can this actually happen?");
-                    }
-                }
-
-                state
-            }
             Store(source_index, target, _filename, _linenr) => {
                 // a special version of Eq that is used to store types in the AST.
                 // IT DOES NOT REPORT ERRORS!

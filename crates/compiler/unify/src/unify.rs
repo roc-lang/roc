@@ -1151,7 +1151,7 @@ fn unify_pure<M: MetaCollector>(env: &mut Env, ctx: &Context, other: &Content) -
     match other {
         Pure => merge(env, ctx, Pure),
         Effectful => merge(env, ctx, Effectful),
-        FlexVar(_) => merge(env, ctx, Pure),
+        FlexVar(_) => merge(env, ctx, *other),
         RigidVar(_)
         | FlexAbleVar(_, _)
         | RigidAbleVar(_, _)
@@ -1171,8 +1171,8 @@ fn unify_pure<M: MetaCollector>(env: &mut Env, ctx: &Context, other: &Content) -
 #[must_use]
 fn unify_effectful<M: MetaCollector>(env: &mut Env, ctx: &Context, other: &Content) -> Outcome<M> {
     match other {
-        Pure | Effectful => merge(env, ctx, Effectful),
-        FlexVar(_) => merge(env, ctx, Effectful),
+        Effectful | FlexVar(_) => merge(env, ctx, Effectful),
+        Pure => mismatch!("Cannot unify effectful with pure"),
         RigidVar(_)
         | FlexAbleVar(_, _)
         | RigidAbleVar(_, _)

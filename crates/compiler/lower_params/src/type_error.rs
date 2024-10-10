@@ -181,6 +181,8 @@ fn remove_for_reason(
             def_region: _,
         }
         | Reason::CrashArg
+        | Reason::CallInFunction(_)
+        | Reason::CallInTopLevelDef
         | Reason::ImportParams(_) => {}
     }
 }

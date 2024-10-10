@@ -1645,6 +1645,8 @@ fn to_expr_report<'b>(
                 unimplemented!("record default field is not implemented yet")
             }
             Reason::ImportParams(_) => unreachable!(),
+            Reason::CallInFunction(_) => todo!("[purity-inference] CallInFunction"),
+            Reason::CallInTopLevelDef => todo!("[purity-inference] CallInTopLevelDef"),
         },
     }
 }
