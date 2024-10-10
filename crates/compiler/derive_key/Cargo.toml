@@ -12,5 +12,3 @@ roc_error_macros = { path = "../../error_macros" }
 roc_module = { path = "../module" }
 roc_region = { path = "../region" }
 roc_types = { path = "../types" }
-
-soa.workspace = true

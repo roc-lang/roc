@@ -13,7 +13,7 @@ use roc_types::subs::Content::{self, *};
 use roc_types::subs::{
     AliasVariables, Descriptor, ErrorTypeContext, FlatType, GetSubsSlice, LambdaSet, Mark,
     OptVariable, RecordFields, Subs, SubsIndex, SubsSlice, TagExt, TupleElems, UlsOfVar,
-    UnionLabels, UnionLambdas, UnionTags, Variable, VariableSlice,
+    UnionLabels, UnionLambdas, UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::{
     AliasKind, DoesNotImplementAbility, ErrorType, Mismatch, Polarity, RecordField, Uls,
@@ -662,20 +662,20 @@ fn check_and_merge_valid_range<M: MetaCollector>(
                 }
                 NumericRange::NumAtLeastSigned(_) | NumericRange::NumAtLeastEitherSign(_) => {
                     debug_assert_eq!(args.len(), 1);
-                    let arg = envget_slice(args.all_variables())[0];
+                    let arg = env.get_subs_slice(args.all_variables())[0];
                     let new_range_var = wrap_range_var(env, symbol, range_var, kind);
                     unify_pool(env, pool, new_range_var, arg, ctx.mode)
                 }
             },
             Symbol::NUM_NUM => {
                 debug_assert_eq!(args.len(), 1);
-                let arg = envget_slice(args.all_variables())[0];
+                let arg = env.get_subs_slice(args.all_variables())[0];
                 let new_range_var = wrap_range_var(env, symbol, range_var, kind);
                 unify_pool(env, pool, new_range_var, arg, ctx.mode)
             }
             Symbol::NUM_INT | Symbol::NUM_INTEGER => {
                 debug_assert_eq!(args.len(), 1);
-                let arg = envget_slice(args.all_variables())[0];
+                let arg = env.get_subs_slice(args.all_variables())[0];
                 let new_range_var = wrap_range_var(env, symbol, range_var, kind);
                 unify_pool(env, pool, new_range_var, arg, ctx.mode)
             }
@@ -1024,7 +1024,7 @@ fn unify_structure<M: MetaCollector>(
         }
         RigidAbleVar(_, _abilities) => {
             mismatch!(
-                %not_able, ctx.first, envget_slice(*_abilities),
+                %not_able, ctx.first, env.get_subs_slice(*_abilities),
                 "trying to unify {:?} with RigidAble {:?}",
                 &flat_type,
                 &other
@@ -1220,7 +1220,7 @@ fn extract_specialization_lambda_set<M: MetaCollector>(
     );
     debug_assert!(member_rec_var.is_none());
 
-    let member_uls = envget_slice(member_uls_slice);
+    let member_uls = env.get_subs_slice(member_uls_slice);
     debug_assert!(
         member_uls.len() <= 1,
         "member signature lambda sets should contain at most one unspecialized lambda set"
@@ -1257,8 +1257,8 @@ fn extract_specialization_lambda_set<M: MetaCollector>(
 
 #[derive(Debug)]
 struct Sides {
-    left: Vec<(Symbol, VariableSlice)>,
-    right: Vec<(Symbol, VariableSlice)>,
+    left: Vec<(Symbol, VariableSubsSlice)>,
+    right: Vec<(Symbol, VariableSubsSlice)>,
 }
 
 impl Default for Sides {
@@ -1271,9 +1271,9 @@ impl Default for Sides {
 }
 
 struct SeparatedUnionLambdas {
-    only_in_left: Vec<(Symbol, VariableSlice)>,
-    only_in_right: Vec<(Symbol, VariableSlice)>,
-    joined: Vec<(Symbol, VariableSlice)>,
+    only_in_left: Vec<(Symbol, VariableSubsSlice)>,
+    only_in_right: Vec<(Symbol, VariableSubsSlice)>,
+    joined: Vec<(Symbol, VariableSubsSlice)>,
 }
 
 fn separate_union_lambdas<M: MetaCollector>(
@@ -1545,8 +1545,8 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
         (false, true) => return Ok((uls_left, Default::default())),
         (true, false) => return Ok((uls_right, Default::default())),
         (false, false) => (
-            envget_slice(uls_left).to_vec(),
-            envget_slice(uls_right).to_vec(),
+            env.get_subs_slice(uls_left).to_vec(),
+            env.get_subs_slice(uls_right).to_vec(),
         ),
     };
 
@@ -1842,19 +1842,19 @@ fn unify_lambda_set_help<M: MetaCollector>(
 
     let all_lambdas = joined
         .into_iter()
-        .map(|(name, slice)| (name, envget_slice(slice).to_vec()));
+        .map(|(name, slice)| (name, env.get_subs_slice(slice).to_vec()));
 
     let all_lambdas = merge_sorted_preserving_duplicates(
         all_lambdas,
         only_in_left.into_iter().map(|(name, subs_slice)| {
-            let vec = envget_slice(subs_slice).to_vec();
+            let vec = env.get_subs_slice(subs_slice).to_vec();
             (name, vec)
         }),
     );
     let all_lambdas = merge_sorted_preserving_duplicates(
         all_lambdas,
         only_in_right.into_iter().map(|(name, subs_slice)| {
-            let vec = envget_slice(subs_slice).to_vec();
+            let vec = env.get_subs_slice(subs_slice).to_vec();
             (name, vec)
         }),
     );
@@ -2521,7 +2521,7 @@ fn separate_union_tags(
     ext1: TagExt,
     fields2: UnionTags,
     ext2: TagExt,
-) -> (Separate<TagName, VariableSlice>, TagExt, TagExt) {
+) -> (Separate<TagName, VariableSubsSlice>, TagExt, TagExt) {
     let (it1, new_ext1) = fields1.sorted_slices_iterator_and_ext(subs, ext1);
     let (it2, new_ext2) = fields2.sorted_slices_iterator_and_ext(subs, ext2);
 
@@ -2880,7 +2880,10 @@ fn unify_tag_unions<M: MetaCollector>(
 #[derive(Debug)]
 enum OtherTags2 {
     Empty,
-    Union(Vec<(TagName, VariableSlice)>, Vec<(TagName, VariableSlice)>),
+    Union(
+        Vec<(TagName, VariableSubsSlice)>,
+        Vec<(TagName, VariableSubsSlice)>,
+    ),
 }
 
 /// Promotes a non-recursive tag union or lambda set to its recursive variant, if it is found to be
@@ -3010,7 +3013,7 @@ fn unify_shared_tags<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
     ctx: &Context,
-    shared_tags: Vec<(TagName, (VariableSlice, VariableSlice))>,
+    shared_tags: Vec<(TagName, (VariableSubsSlice, VariableSubsSlice))>,
     other_tags: OtherTags2,
     ext: TagExt,
 ) -> Outcome<M> {
@@ -3102,7 +3105,7 @@ fn unify_shared_tags<M: MetaCollector>(
                 all_fields = merge_sorted(
                     all_fields,
                     other1.into_iter().map(|(field_name, subs_slice)| {
-                        let vec = envget_slice(subs_slice).to_vec();
+                        let vec = env.get_subs_slice(subs_slice).to_vec();
 
                         (field_name, vec)
                     }),
@@ -3111,7 +3114,7 @@ fn unify_shared_tags<M: MetaCollector>(
                 all_fields = merge_sorted(
                     all_fields,
                     other2.into_iter().map(|(field_name, subs_slice)| {
-                        let vec = envget_slice(subs_slice).to_vec();
+                        let vec = env.get_subs_slice(subs_slice).to_vec();
 
                         (field_name, vec)
                     }),
@@ -3416,7 +3419,7 @@ fn unify_rigid<M: MetaCollector>(
             // Mismatch - Rigid can unify with FlexAble only when the Rigid has an ability
             // bound as well, otherwise the user failed to correctly annotate the bound.
             mismatch!(
-                %not_able, ctx.first, envget_slice(*other_ability),
+                %not_able, ctx.first, env.get_subs_slice(*other_ability),
                 "Rigid {:?} with FlexAble {:?}", ctx.first, other
             )
         }
@@ -3465,8 +3468,8 @@ fn unify_rigid_able<M: MetaCollector>(
         }
         FlexAbleVar(_, other_abilities_slice) => {
             let (abilities, other_abilities) = (
-                envget_slice(abilities_slice),
-                envget_slice(*other_abilities_slice),
+                env.get_subs_slice(abilities_slice),
+                env.get_subs_slice(*other_abilities_slice),
             );
 
             if abilities_are_superset(abilities, other_abilities) {
@@ -3564,8 +3567,8 @@ pub fn merged_ability_slices(
     right_slice: SubsSlice<Symbol>,
 ) -> SubsSlice<Symbol> {
     // INVARIANT: abilities slices are inserted sorted into subs
-    let left = subs.get_slice(left_slice);
-    let right = subs.get_slice(right_slice);
+    let left = subs.get_subs_slice(left_slice);
+    let right = subs.get_subs_slice(right_slice);
 
     #[cfg(debug_assertions)]
     {
@@ -3615,8 +3618,8 @@ fn unify_flex_able<M: MetaCollector>(
 
         RigidAbleVar(_, other_abilities_slice) => {
             let (abilities, other_abilities) = (
-                envget_slice(abilities_slice),
-                envget_slice(*other_abilities_slice),
+                env.get_subs_slice(abilities_slice),
+                env.get_subs_slice(*other_abilities_slice),
             );
 
             if abilities_are_superset(other_abilities, abilities) {
@@ -3672,7 +3675,7 @@ fn merge_flex_able_with_concrete<M: MetaCollector>(
 ) -> Outcome<M> {
     let mut outcome = merge(env, ctx, concrete_content);
 
-    for &ability in envget_slice(abilities) {
+    for &ability in env.get_subs_slice(abilities) {
         let must_implement_ability = MustImplementAbility {
             typ: concrete_obligation,
             ability,
@@ -3862,12 +3865,12 @@ fn unify_function_or_tag_union_and_func<M: MetaCollector>(
     tag_names_slice: SubsSlice<TagName>,
     tag_fn_lambdas: SubsSlice<Symbol>,
     tag_ext: TagExt,
-    function_arguments: VariableSlice,
+    function_arguments: VariableSubsSlice,
     function_return: Variable,
     function_lambda_set: Variable,
     left: bool,
 ) -> Outcome<M> {
-    let tag_names = envget_slice(tag_names_slice).to_vec();
+    let tag_names = env.get_subs_slice(tag_names_slice).to_vec();
 
     let union_tags = UnionTags::insert_slices_into_subs(
         env,
@@ -3884,7 +3887,7 @@ fn unify_function_or_tag_union_and_func<M: MetaCollector>(
     };
 
     {
-        let lambda_names = envget_slice(tag_fn_lambdas).to_vec();
+        let lambda_names = env.get_subs_slice(tag_fn_lambdas).to_vec();
         let new_lambda_names = SubsSlice::extend_new(&mut env.symbol_names, lambda_names);
         let empty_captures_slices = SubsSlice::extend_new(
             &mut env.variable_slices,
@@ -3946,8 +3949,8 @@ fn unify_two_function_or_tag_unions<M: MetaCollector>(
     ext2: TagExt,
 ) -> Outcome<M> {
     let merged_tags = {
-        let mut all_tags: Vec<_> = (envget_slice(tag_names_1).iter())
-            .chain(envget_slice(tag_names_2))
+        let mut all_tags: Vec<_> = (env.get_subs_slice(tag_names_1).iter())
+            .chain(env.get_subs_slice(tag_names_2))
             .cloned()
             .collect();
         all_tags.sort();
@@ -3955,8 +3958,8 @@ fn unify_two_function_or_tag_unions<M: MetaCollector>(
         SubsSlice::extend_new(&mut env.tag_names, all_tags)
     };
     let merged_lambdas = {
-        let mut all_lambdas: Vec<_> = (envget_slice(tag_symbols_1).iter())
-            .chain(envget_slice(tag_symbols_2))
+        let mut all_lambdas: Vec<_> = (env.get_subs_slice(tag_symbols_1).iter())
+            .chain(env.get_subs_slice(tag_symbols_2))
             .cloned()
             .collect();
         all_lambdas.sort();

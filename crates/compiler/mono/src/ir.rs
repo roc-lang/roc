@@ -34,7 +34,7 @@ use roc_std::RocDec;
 use roc_target::Target;
 use roc_types::subs::{
     instantiate_rigids, storage_copy_var_to, Content, ExhaustiveMark, FlatType, RedundantMark,
-    StorageSubs, Subs, Variable, VariableSlice,
+    StorageSubs, Subs, Variable, VariableSubsSlice,
 };
 use std::collections::HashMap;
 use ven_pretty::{text, BoxAllocator, DocAllocator, DocBuilder};
@@ -6648,7 +6648,7 @@ fn convert_tag_union<'a>(
 #[allow(clippy::too_many_arguments)]
 fn tag_union_to_function<'a>(
     env: &mut Env<'a, '_>,
-    argument_variables: VariableSlice,
+    argument_variables: VariableSubsSlice,
     return_variable: Variable,
     tag_name: TagName,
     proc_symbol: Symbol,
@@ -10088,7 +10088,7 @@ fn find_lambda_sets_help(
             | Content::RecursionVar { .. } => {}
             Content::Structure(flat_type) => match flat_type {
                 FlatType::Apply(_, arguments) => {
-                    stack.extend(subs.get_slice(*arguments).iter().rev());
+                    stack.extend(subs.get_subs_slice(*arguments).iter().rev());
                 }
                 FlatType::Func(arguments, lambda_set_var, ret_var) => {
                     use std::collections::hash_map::Entry;
@@ -10105,11 +10105,11 @@ fn find_lambda_sets_help(
                     stack.push(*ret_var);
                 }
                 FlatType::Record(fields, ext) => {
-                    stack.extend(subs.get_slice(fields.variables()).iter().rev());
+                    stack.extend(subs.get_subs_slice(fields.variables()).iter().rev());
                     stack.push(*ext);
                 }
                 FlatType::Tuple(elements, ext) => {
-                    stack.extend(subs.get_slice(elements.variables()).iter().rev());
+                    stack.extend(subs.get_subs_slice(elements.variables()).iter().rev());
                     stack.push(*ext);
                 }
                 FlatType::FunctionOrTagUnion(_, _, ext) => {
@@ -10123,7 +10123,7 @@ fn find_lambda_sets_help(
                 | FlatType::RecursiveTagUnion(_, union_tags, ext) => {
                     for tag in union_tags.variables() {
                         stack.extend(
-                            subs.get_slice(subs.variable_slices[tag.index as usize])
+                            subs.get_subs_slice(subs.variable_slices[tag.index as usize])
                                 .iter()
                                 .rev(),
                         );

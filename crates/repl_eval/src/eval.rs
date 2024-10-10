@@ -475,7 +475,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                     single_tag_union_to_ast(env, mem, addr, field_layouts, tag_name, payload_vars)
                 }
                 Content::Structure(FlatType::FunctionOrTagUnion(tag_names, _, _)) => {
-                    let tag_name = &env.subs.get_slice(*tag_names)[0];
+                    let tag_name = &env.subs.get_subs_slice(*tag_names)[0];
 
                     single_tag_union_to_ast(env, mem, addr, field_layouts, tag_name, &[])
                 }
@@ -668,7 +668,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 single_tag_union_to_ast(env, mem, addr, field_layouts, tag_name, payload_vars)
             }
             Content::Structure(FlatType::FunctionOrTagUnion(tag_names, _, _)) => {
-                let tag_name = &env.subs.get_slice(*tag_names)[0];
+                let tag_name = &env.subs.get_subs_slice(*tag_names)[0];
                 single_tag_union_to_ast(env, mem, addr, field_layouts, tag_name, &[])
             }
             Content::Structure(FlatType::EmptyRecord) => {
@@ -1270,7 +1270,7 @@ fn unpack_single_element_tag_union(subs: &Subs, tags: UnionTags) -> (&TagName, &
 
     let tag_name = &subs[tag_name_index];
     let subs_slice = subs[payload_vars_index];
-    let payload_vars = subs.get_slice(subs_slice);
+    let payload_vars = subs.get_subs_slice(subs_slice);
 
     (tag_name, payload_vars)
 }
@@ -1284,13 +1284,13 @@ fn unpack_two_element_tag_union(
 
     let tag_name1 = &subs[tag_name_index];
     let subs_slice = subs[payload_vars_index];
-    let payload_vars1 = subs.get_slice(subs_slice);
+    let payload_vars1 = subs.get_subs_slice(subs_slice);
 
     let (tag_name_index, payload_vars_index) = it.next().unwrap();
 
     let tag_name2 = &subs[tag_name_index];
     let subs_slice = subs[payload_vars_index];
-    let payload_vars2 = subs.get_slice(subs_slice);
+    let payload_vars2 = subs.get_subs_slice(subs_slice);
 
     (tag_name1, payload_vars1, tag_name2, payload_vars2)
 }
@@ -1350,7 +1350,7 @@ fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a
                     tag_name_to_expr(env, tag_name)
                 }
                 FlatType::FunctionOrTagUnion(tags, _, _) if tags.len() == 2 => {
-                    let tags = env.subs.get_slice(*tags);
+                    let tags = env.subs.get_subs_slice(*tags);
                     let tag_name_1 = &tags[0];
                     let tag_name_2 = &tags[1];
 
@@ -1455,7 +1455,7 @@ fn byte_to_ast<'a>(env: &mut Env<'a, '_>, value: u8, content: &Content) -> Expr<
 
                     let tags_vec: std::vec::Vec<(TagName, std::vec::Vec<Variable>)> = env
                         .subs
-                        .get_slice(*tags)
+                        .get_subs_slice(*tags)
                         .iter()
                         .map(|t| (t.clone(), vec![]))
                         .collect();

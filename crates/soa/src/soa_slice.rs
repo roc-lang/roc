@@ -8,42 +8,39 @@ use crate::soa_index::Index;
 ///
 /// Unlike a Rust slice, this is a u32 offset
 /// rather than a pointer, and the length is u16.
-pub struct Slice<Array, Elem> {
+pub struct Slice<T> {
     pub start: u32,
     pub length: u16,
-    _marker: core::marker::PhantomData<(Array, Elem)>,
+    _marker: core::marker::PhantomData<T>,
 }
 
-impl<T, U> fmt::Debug for Slice<T, U> {
+impl<T> fmt::Debug for Slice<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "Slice<{}, {}> {{ start: {}, length: {} }}",
-            core::any::type_name::<T>(),
-            core::any::type_name::<U>(),
-            self.start,
-            self.length
+            "Slice {{ start: {}, length: {} }}",
+            self.start, self.length
         )
     }
 }
 
 // derive of copy and clone does not play well with PhantomData
 
-impl<T, U> Copy for Slice<T, U> {}
+impl<T> Copy for Slice<T> {}
 
-impl<T, U> Clone for Slice<T, U> {
+impl<T> Clone for Slice<T> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T, U> Default for Slice<T, U> {
+impl<T> Default for Slice<T> {
     fn default() -> Self {
         Self::empty()
     }
 }
 
-impl<Array, Elem> Slice<Array, Elem> {
+impl<T> Slice<T> {
     pub fn empty() -> Self {
         Self {
             start: 0,
@@ -52,11 +49,11 @@ impl<Array, Elem> Slice<Array, Elem> {
         }
     }
 
-    pub fn get_slice<'a>(&self, slice: &'a [Elem]) -> &'a [Elem] {
+    pub fn get_slice<'a>(&self, slice: &'a [T]) -> &'a [T] {
         &slice[self.indices()]
     }
 
-    pub fn get_slice_mut<'a>(&self, slice: &'a mut [Elem]) -> &'a mut [Elem] {
+    pub fn get_slice_mut<'a>(&self, slice: &'a mut [T]) -> &'a mut [T] {
         &mut slice[self.indices()]
     }
 
@@ -81,7 +78,7 @@ impl<Array, Elem> Slice<Array, Elem> {
         }
     }
 
-    pub fn extend_new(vec: &mut Vec<Elem>, it: impl IntoIterator<Item = Elem>) -> Self {
+    pub fn extend_new(vec: &mut Vec<T>, it: impl IntoIterator<Item = T>) -> Self {
         let start = vec.len();
 
         vec.extend(it);
@@ -92,8 +89,8 @@ impl<Array, Elem> Slice<Array, Elem> {
     }
 }
 
-impl<Array, Elem> IntoIterator for Slice<Array, Elem> {
-    type Item = Index<Elem>;
+impl<T> IntoIterator for Slice<T> {
+    type Item = Index<T>;
 
     #[allow(clippy::type_complexity)]
     type IntoIter = Map<core::ops::Range<u32>, fn(u32) -> Self::Item>;
@@ -110,6 +107,6 @@ fn u32_to_index<T>(i: u32) -> Index<T> {
     }
 }
 
-pub trait GetSlice<Array, Elem> {
-    fn get_slice(&self, slice: Slice<Array, Elem>) -> &[Elem];
+pub trait GetSlice<T> {
+    fn get_slice(&self, slice: Slice<T>) -> &[T];
 }

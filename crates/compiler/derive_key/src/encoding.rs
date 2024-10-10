@@ -2,8 +2,7 @@ use roc_module::{
     ident::{Lowercase, TagName},
     symbol::Symbol,
 };
-use roc_types::subs::{Content, FlatType, Subs, Variable};
-use soa::GetSlice;
+use roc_types::subs::{Content, FlatType, GetSubsSlice, Subs, Variable};
 
 use crate::{
     util::{check_derivable_ext_var, debug_name_record, debug_name_tag, debug_name_tuple},
@@ -112,7 +111,7 @@ impl FlatEncodable {
                 }
                 FlatType::FunctionOrTagUnion(names_index, _, _) => {
                     Ok(Key(FlatEncodableKey::TagUnion(
-                        subs.get_slice(names_index)
+                        subs.get_subs_slice(names_index)
                             .iter()
                             .map(|t| (t.clone(), 0))
                             .collect(),

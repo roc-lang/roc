@@ -11,12 +11,11 @@ use roc_module::{
 };
 use roc_types::{
     subs::{
-        self, AliasVariables, Descriptor, OptVariable, RecordFields, Subs, TupleElems,
-        UnionLambdas, UnionTags, Variable, VariableSlice,
+        self, AliasVariables, Descriptor, GetSubsSlice, OptVariable, RecordFields, Subs, SubsIndex,
+        SubsSlice, TupleElems, UnionLambdas, UnionTags, Variable, VariableSlice,
     },
     types::{RecordField, Uls},
 };
-use soa::GetSlice;
 
 trait CopyEnv {
     #[inline(always)]
@@ -917,7 +916,8 @@ fn deep_copy_type_vars<C: CopyEnv>(
 
         macro_rules! clone_var_slice {
             ($slice:expr) => {{
-                let new_arguments = VariableSlice::reserve_into_subs(env.target(), $slice.len());
+                let new_arguments =
+                    VariableSubsSlice::reserve_into_subs(env.target(), $slice.len());
                 for (target_index, var_index) in (new_arguments.indices()).zip($slice) {
                     let var = env.source()[var_index];
                     let copy_var = env.get_copy(var).into_variable().unwrap_or(var);
@@ -1269,7 +1269,7 @@ mod test {
         match subs.get_content_without_compacting(var) {
             FlexAbleVar(Some(name), abilities) => {
                 assert_eq!(subs[*name].as_str(), "a");
-                assert_eq!(subs.get_slice(*abilities), [Symbol::UNDERSCORE]);
+                assert_eq!(subs.get_subs_slice(*abilities), [Symbol::UNDERSCORE]);
             }
             it => unreachable!("{:?}", it),
         }
@@ -1291,7 +1291,7 @@ mod test {
         match subs.get_content_without_compacting(var) {
             RigidAbleVar(name, abilities) => {
                 assert_eq!(subs[*name].as_str(), "a");
-                assert_eq!(subs.get_slice(*abilities), [Symbol::UNDERSCORE]);
+                assert_eq!(subs.get_subs_slice(*abilities), [Symbol::UNDERSCORE]);
             }
             it => internal_error!("{:?}", it),
         }

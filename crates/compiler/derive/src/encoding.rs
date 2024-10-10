@@ -14,7 +14,8 @@ use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{
     Content, ExhaustiveMark, FlatType, GetSubsSlice, LambdaSet, OptVariable, RecordFields,
-    RedundantMark, SubsSlice, TagExt, TupleElems, UnionLambdas, UnionTags, Variable, VariableSlice,
+    RedundantMark, SubsSlice, TagExt, TupleElems, UnionLambdas, UnionTags, Variable,
+    VariableSubsSlice,
 };
 use roc_types::types::RecordField;
 
@@ -70,7 +71,8 @@ pub(crate) fn derive_to_encoder(
             let flex_tag_labels = tags
                 .into_iter()
                 .map(|(label, arity)| {
-                    let variables_slice = VariableSlice::reserve_into_subs(env.subs, arity.into());
+                    let variables_slice =
+                        VariableSubsSlice::reserve_into_subs(env.subs, arity.into());
                     for var_index in variables_slice {
                         env.subs[var_index] = env.subs.fresh_unnamed_flex_var();
                     }
@@ -204,7 +206,7 @@ fn to_encoder_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
 
     // List elem, to_elem_encoder_fn_var -[clos]-> t1
     let this_encode_list_args_slice =
-        VariableSlice::insert_into_subs(env.subs, [list_var, to_elem_encoder_fn_var]);
+        VariableSubsSlice::insert_into_subs(env.subs, [list_var, to_elem_encoder_fn_var]);
     let this_encode_list_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
     let this_list_encoder_var = env.subs.fresh_unnamed_flex_var(); // t1
     let this_encode_list_fn_var = synth_var(
@@ -316,7 +318,7 @@ fn to_encoder_record(
         .map(|(field_name_index, field_var_index, _)| {
             let field_name = env.subs[field_name_index].clone();
             let field_var = env.subs[field_var_index];
-            let field_var_slice = VariableSlice::new(field_var_index.index, 1);
+            let field_var_slice = VariableSubsSlice::new(field_var_index.index, 1);
 
             // key: "a"
             let key_field = Field {
@@ -405,7 +407,7 @@ fn to_encoder_record(
         .collect::<Vec<_>>();
 
     // typeof [ { key: .., value: .. }, { key: .., value: .. } ]
-    let fields_rcd_var_slice = VariableSlice::insert_into_subs(env.subs, once(whole_rcd_var));
+    let fields_rcd_var_slice = VariableSubsSlice::insert_into_subs(env.subs, once(whole_rcd_var));
     let fields_list_var = synth_var(
         env.subs,
         Content::Structure(FlatType::Apply(Symbol::LIST_LIST, fields_rcd_var_slice)),
@@ -422,7 +424,8 @@ fn to_encoder_record(
     let encode_record_fn_var = env.import_builtin_symbol_var(Symbol::ENCODE_RECORD);
 
     // fields_list_var -[clos]-> t1
-    let fields_list_var_slice = VariableSlice::insert_into_subs(env.subs, once(fields_list_var));
+    let fields_list_var_slice =
+        VariableSubsSlice::insert_into_subs(env.subs, once(fields_list_var));
     let encode_record_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
     let encoder_var = env.subs.fresh_unnamed_flex_var(); // t1
     let this_encode_record_fn_var = synth_var(
@@ -525,7 +528,7 @@ fn to_encoder_tuple(
         .map(|(elem_index, elem_var_index)| {
             let index = env.subs[elem_index];
             let elem_var = env.subs[elem_var_index];
-            let elem_var_slice = VariableSlice::new(elem_var_index.index, 1);
+            let elem_var_slice = VariableSubsSlice::new(elem_var_index.index, 1);
 
             // tup.0
             let tuple_access = TupleAccess {
@@ -584,7 +587,7 @@ fn to_encoder_tuple(
 
     // typeof [ toEncoder tup.0, toEncoder tup.1 ]
     let whole_encoder_in_list_var_slice =
-        VariableSlice::insert_into_subs(env.subs, once(whole_encoder_in_list_var));
+        VariableSubsSlice::insert_into_subs(env.subs, once(whole_encoder_in_list_var));
     let elem_encoders_list_var = synth_var(
         env.subs,
         Content::Structure(FlatType::Apply(
@@ -605,7 +608,7 @@ fn to_encoder_tuple(
 
     // elem_encoders_list_var -[clos]-> t1
     let elem_encoders_list_var_slice =
-        VariableSlice::insert_into_subs(env.subs, once(elem_encoders_list_var));
+        VariableSubsSlice::insert_into_subs(env.subs, once(elem_encoders_list_var));
     let encode_tuple_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
     let encoder_var = env.subs.fresh_unnamed_flex_var(); // t1
     let this_encode_tuple_fn_var = synth_var(
@@ -709,7 +712,7 @@ fn to_encoder_tag_union(
             let tag_name = &env.subs[tag_name_index].clone();
             let vars_slice = env.subs[tag_vars_slice_index];
             // t1 t2
-            let payload_vars = env.subs.get_slice(vars_slice).to_vec();
+            let payload_vars = env.subs.get_subs_slice(vars_slice).to_vec();
             // v1 v2
             let payload_syms: Vec<_> = std::iter::repeat_with(|| env.unique_symbol())
                 .take(payload_vars.len())
@@ -743,7 +746,8 @@ fn to_encoder_tag_union(
                         env.import_builtin_symbol_var(Symbol::ENCODE_TO_ENCODER);
 
                     // wanted: t1 -[clos]-> t'
-                    let var_slice_of_sym_var = VariableSlice::insert_into_subs(env.subs, [sym_var]); // [ t1 ]
+                    let var_slice_of_sym_var =
+                        VariableSubsSlice::insert_into_subs(env.subs, [sym_var]); // [ t1 ]
                     let to_encoder_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
                     let encoder_var = env.subs.fresh_unnamed_flex_var(); // t'
                     let this_to_encoder_fn_var = synth_var(
@@ -785,7 +789,7 @@ fn to_encoder_tag_union(
 
             // typeof [ Encode.toEncoder v1, Encode.toEncoder v2 ]
             let whole_encoders_var_slice =
-                VariableSlice::insert_into_subs(env.subs, [whole_payload_encoders_var]);
+                VariableSubsSlice::insert_into_subs(env.subs, [whole_payload_encoders_var]);
             let payload_encoders_list_var = synth_var(
                 env.subs,
                 Content::Structure(FlatType::Apply(Symbol::LIST_LIST, whole_encoders_var_slice)),
@@ -802,7 +806,7 @@ fn to_encoder_tag_union(
             let encode_tag_fn_var = env.import_builtin_symbol_var(Symbol::ENCODE_TAG);
 
             // wanted: Str, List whole_encoders_var -[clos]-> t'
-            let this_encode_tag_args_var_slice = VariableSlice::insert_into_subs(
+            let this_encode_tag_args_var_slice = VariableSubsSlice::insert_into_subs(
                 env.subs,
                 [Variable::STR, payload_encoders_list_var],
             );
@@ -960,7 +964,7 @@ fn wrap_in_encode_custom(
 
     // wanted: Encode.appendWith : List U8, encoder_var, fmt -[clos]-> List U8 where fmt implements EncoderFormatting
     let this_append_with_args_var_slice =
-        VariableSlice::insert_into_subs(env.subs, [Variable::LIST_U8, encoder_var, fmt_var]);
+        VariableSubsSlice::insert_into_subs(env.subs, [Variable::LIST_U8, encoder_var, fmt_var]);
     let this_append_with_clos_var = env.subs.fresh_unnamed_flex_var(); // -[clos]->
     let this_append_with_fn_var = synth_var(
         env.subs,
@@ -1050,7 +1054,7 @@ fn wrap_in_encode_custom(
     let custom_fn_var = env.import_builtin_symbol_var(Symbol::ENCODE_CUSTOM);
 
     // wanted: Encode.custom : fn_var -[clos]-> t'
-    let this_custom_args_var_slice = VariableSlice::insert_into_subs(env.subs, [fn_var]);
+    let this_custom_args_var_slice = VariableSubsSlice::insert_into_subs(env.subs, [fn_var]);
     let this_custom_clos_var = env.subs.fresh_unnamed_flex_var(); // -[clos]->
     let this_custom_encoder_var = env.subs.fresh_unnamed_flex_var(); // t'
     let this_custom_fn_var = synth_var(

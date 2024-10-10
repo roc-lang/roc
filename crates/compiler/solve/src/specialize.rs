@@ -19,7 +19,6 @@ use roc_types::{
     types::{AliasKind, MemberImpl, Polarity, Uls},
 };
 use roc_unify::unify::{unify, MustImplementConstraints};
-use soa::GetSlice;
 
 use crate::{
     ability::builtin_module_with_unlisted_ability_impl,
@@ -341,7 +340,7 @@ pub fn compact_lambda_sets_of_vars<P: Phase>(
                     ambient_function,
                 } = env.subs.get_lambda_set(lambda_set);
                 let lambda_set_rank = env.subs.get_rank(lambda_set);
-                let unspecialized = env.subs.get_slice(unspecialized);
+                let unspecialized = env.subs.get_subs_slice(unspecialized);
                 // TODO: is it faster to traverse once, see if we only have one concrete lambda, and
                 // bail in that happy-path, rather than always splitting?
                 let (concrete, mut not_concrete): (Vec<_>, Vec<_>) = unspecialized
@@ -405,10 +404,10 @@ pub fn compact_lambda_sets_of_vars<P: Phase>(
         uls_a.sort_by(|v1, v2| {
             let unspec_1 = env
                 .subs
-                .get_slice(env.subs.get_lambda_set(*v1).unspecialized);
+                .get_subs_slice(env.subs.get_lambda_set(*v1).unspecialized);
             let unspec_2 = env
                 .subs
-                .get_slice(env.subs.get_lambda_set(*v2).unspecialized);
+                .get_subs_slice(env.subs.get_lambda_set(*v2).unspecialized);
 
             let Uls(_, f1, r1) = unique_unspecialized_lambda(env.subs, c_a, unspec_1).unwrap();
             let Uls(_, f2, r2) = unique_unspecialized_lambda(env.subs, c_a, unspec_2).unwrap();
@@ -487,7 +486,7 @@ fn compact_lambda_set<P: Phase>(
 
     debug_assert!(!unspecialized.is_empty());
 
-    let unspecialized = env.subs.get_slice(unspecialized);
+    let unspecialized = env.subs.get_subs_slice(unspecialized);
 
     // 1. Let `t_f1` be the directly ambient function of the lambda set containing `C:f:r`.
     let Uls(c, f, r) =

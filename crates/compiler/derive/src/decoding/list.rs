@@ -38,7 +38,7 @@ pub(crate) fn decoder(env: &mut Env<'_>, _def_symbol: Symbol) -> (Expr, Variable
                 Content::Alias(Symbol::DECODE_DECODER_OPAQUE, vars, _, AliasKind::Opaque)
                     if vars.type_variables_len == 2 =>
                 {
-                    env.subs.get_slice(vars.type_variables())[0]
+                    env.subs.get_subs_slice(vars.type_variables())[0]
                 }
                 _ => internal_error!("Decode.decode not an opaque type"),
             };

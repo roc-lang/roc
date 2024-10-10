@@ -381,7 +381,7 @@ fn number_lambda_sets(subs: &Subs, initial: Variable) -> Vec<Variable> {
                     stack.push(rec_var);
                 }
 
-                for Uls(var, _, _) in subs.get_slice(*unspecialized) {
+                for Uls(var, _, _) in subs.get_subs_slice(*unspecialized) {
                     stack.push(*var);
                 }
             }

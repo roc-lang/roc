@@ -7,34 +7,28 @@ use crate::soa_slice::Slice;
 ///
 /// Unlike a Rust pointer, this is a u32 offset
 /// rather than usize.
-pub struct Index<Array, Elem> {
+pub struct Index<T> {
     pub index: u32,
-    pub(crate) _marker: core::marker::PhantomData<(Array, Elem)>,
+    pub(crate) _marker: core::marker::PhantomData<T>,
 }
 
-impl<Array, Elem> fmt::Debug for Index<Array, Elem> {
+impl<T> fmt::Debug for Index<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "Index<{}, {}>({})",
-            core::any::type_name::<Array>(),
-            core::any::type_name::<Elem>(),
-            self.index
-        )
+        write!(f, "Index<{}>({})", core::any::type_name::<T>(), self.index)
     }
 }
 
 // derive of copy and clone does not play well with PhantomData
 
-impl<Array, Elem> Copy for Index<Array, Elem> {}
+impl<T> Copy for Index<T> {}
 
-impl<Array, Elem> Clone for Index<Array, Elem> {
+impl<T> Clone for Index<T> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<Array, Elem> Index<Array, Elem> {
+impl<T> Index<T> {
     pub const fn new(start: u32) -> Self {
         Self {
             index: start,
@@ -42,7 +36,7 @@ impl<Array, Elem> Index<Array, Elem> {
         }
     }
 
-    pub fn push_new(vector: &mut Vec<Elem>, value: Elem) -> Self {
+    pub fn push_new(vector: &mut Vec<T>, value: T) -> Self {
         let index = Self::new(vector.len() as _);
 
         vector.push(value);
@@ -50,7 +44,7 @@ impl<Array, Elem> Index<Array, Elem> {
         index
     }
 
-    pub const fn as_slice(self) -> Slice<Array, Elem> {
+    pub const fn as_slice(self) -> Slice<T> {
         Slice::new(self.index, 1)
     }
 }

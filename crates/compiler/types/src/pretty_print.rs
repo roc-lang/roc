@@ -1,8 +1,8 @@
 #![allow(clippy::too_many_arguments)]
 
 use crate::subs::{
-    self, AliasVariables, Content, FlatType, Label, Subs, UnionLabels, UnsortedUnionLabels,
-    Variable,
+    self, AliasVariables, Content, FlatType, GetSubsSlice, Label, Subs, SubsIndex, UnionLabels,
+    UnsortedUnionLabels, Variable,
 };
 use crate::types::{
     name_type_var, name_type_var_with_hint, AbilitySet, Polarity, RecordField, Uls,
@@ -11,7 +11,6 @@ use roc_collections::all::MutMap;
 use roc_collections::VecSet;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use soa::{GetSlice, Index};
 
 pub static WILDCARD: &str = "*";
 static EMPTY_RECORD: &str = "{}";
@@ -536,12 +535,12 @@ fn set_root_name(root: Variable, name: Lowercase, subs: &mut Subs) {
 
     match old_content {
         FlexVar(_) => {
-            let name_index = Index::push_new(&mut subs.field_names, name);
+            let name_index = SubsIndex::push_new(&mut subs.field_names, name);
             let content = FlexVar(Some(name_index));
             subs.set_content(root, content);
         }
         &FlexAbleVar(_, ability) => {
-            let name_index = Index::push_new(&mut subs.field_names, name);
+            let name_index = SubsIndex::push_new(&mut subs.field_names, name);
             let content = FlexAbleVar(Some(name_index), ability);
             subs.set_content(root, content);
         }
@@ -550,7 +549,7 @@ fn set_root_name(root: Variable, name: Lowercase, subs: &mut Subs) {
             structure,
         } => {
             let structure = *structure;
-            let name_index = Index::push_new(&mut subs.field_names, name);
+            let name_index = SubsIndex::push_new(&mut subs.field_names, name);
             let content = RecursionVar {
                 structure,
                 opt_name: Some(name_index),
@@ -693,13 +692,13 @@ fn write_content<'a>(
             let name = opt_name_index
                 .map(|name_index| subs.field_names[name_index.index as usize].as_str())
                 .unwrap_or(WILDCARD);
-            let abilities = AbilitySet::from_iter(subs.get_slice(*abilities).iter().copied());
+            let abilities = AbilitySet::from_iter(subs.get_subs_slice(*abilities).iter().copied());
             ctx.able_variables.push((name, abilities));
             buf.push_str(name);
         }
         RigidAbleVar(name_index, abilities) => {
             let name = subs.field_names[name_index.index as usize].as_str();
-            let abilities = AbilitySet::from_iter(subs.get_slice(*abilities).iter().copied());
+            let abilities = AbilitySet::from_iter(subs.get_subs_slice(*abilities).iter().copied());
             ctx.able_variables.push((name, abilities));
             buf.push_str(name);
         }
@@ -860,11 +859,11 @@ fn write_content<'a>(
                 write_content(env, ctx, rec_var, subs, buf, parens, pol)
             }
 
-            for Uls(var, member, region) in subs.get_slice(*unspecialized) {
+            for Uls(var, member, region) in subs.get_subs_slice(*unspecialized) {
                 buf.push_str(" + ");
                 write_content(env, ctx, *var, subs, buf, Parens::Unnecessary, pol);
                 buf.push(':');
-                buf.push_str(&print_symbol(&member));
+                buf.push_str(&print_symbol(member));
                 buf.push(':');
                 buf.push_str(&region.to_string());
             }
@@ -1107,7 +1106,7 @@ fn write_flat_type<'a>(
             env,
             ctx,
             *symbol,
-            subs.get_slice(*args),
+            subs.get_subs_slice(*args),
             subs,
             buf,
             parens,
@@ -1119,7 +1118,7 @@ fn write_flat_type<'a>(
         Func(args, closure, ret) => write_fn(
             env,
             ctx,
-            subs.get_slice(*args),
+            subs.get_subs_slice(*args),
             *closure,
             *ret,
             subs,
@@ -1268,7 +1267,7 @@ fn write_flat_type<'a>(
 
             let mut tags: MutMap<TagName, _> = MutMap::default();
             tags.extend(
-                subs.get_slice(*tag_names)
+                subs.get_subs_slice(*tag_names)
                     .iter()
                     .map(|t| (t.clone(), vec![])),
             );
@@ -1324,7 +1323,7 @@ pub fn push_union<L: Label>(
     fields.reserve(tags.len());
     for (name_index, slice_index) in tags.iter_all() {
         let subs_slice = subs[slice_index];
-        let slice = subs.get_slice(subs_slice);
+        let slice = subs.get_subs_slice(subs_slice);
         let tag_name = L::index_subs(subs, name_index).clone();
 
         fields.push((tag_name, slice.to_vec()));
@@ -1358,7 +1357,7 @@ pub fn chase_ext_tag_union(
         }
         Content::Structure(FunctionOrTagUnion(tag_names, _, ext_var)) => {
             fields.extend(
-                subs.get_slice(*tag_names)
+                subs.get_subs_slice(*tag_names)
                     .iter()
                     .map(|t| (t.clone(), vec![])),
             );

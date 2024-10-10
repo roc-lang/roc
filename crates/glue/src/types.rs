@@ -1263,7 +1263,7 @@ fn add_function_type<'a>(
     ret_var: Variable,
     is_toplevel: bool,
 ) -> TypeId {
-    let args = env.subs.get_slice(*args);
+    let args = env.subs.get_subs_slice(*args);
     let mut arg_type_ids = Vec::with_capacity(args.len());
 
     let name = format!("RocFunction_{closure_var:?}");
@@ -1459,7 +1459,8 @@ fn add_type_help<'a>(
                                 // Result should always have exactly two tags: Ok and Err
                                 debug_assert_eq!(tags.len(), 2);
 
-                                let type_vars = env.subs.get_slice(alias_vars.type_variables());
+                                let type_vars =
+                                    env.subs.get_subs_slice(alias_vars.type_variables());
 
                                 let ok_var = type_vars[0];
                                 let ok_layout =
@@ -1496,7 +1497,7 @@ fn add_type_help<'a>(
                         add_type_help(env, layout, *real_var, opt_name, types)
                     }
                     LayoutRepr::Struct { .. } if *name == Symbol::DICT_DICT => {
-                        let type_vars = env.subs.get_slice(alias_vars.type_variables());
+                        let type_vars = env.subs.get_subs_slice(alias_vars.type_variables());
 
                         let key_var = type_vars[0];
                         let key_layout =
@@ -1522,7 +1523,7 @@ fn add_type_help<'a>(
                         type_id
                     }
                     LayoutRepr::Struct { .. } if *name == Symbol::SET_SET => {
-                        let type_vars = env.subs.get_slice(alias_vars.type_variables());
+                        let type_vars = env.subs.get_subs_slice(alias_vars.type_variables());
 
                         let key_var = type_vars[0];
                         let key_layout =
@@ -1540,7 +1541,7 @@ fn add_type_help<'a>(
                         type_id
                     }
                     LayoutRepr::LambdaSet(_lambda_set) if *name == Symbol::TASK_TASK => {
-                        let type_vars = env.subs.get_slice(alias_vars.type_variables());
+                        let type_vars = env.subs.get_subs_slice(alias_vars.type_variables());
                         debug_assert_eq!(type_vars.len(), 2);
 
                         let ok_var = type_vars[0];
@@ -1692,7 +1693,7 @@ fn add_builtin_type<'a>(
             types.add_anonymous(&env.layout_cache.interner, RocType::RocStr, layout)
         }
         (Builtin::List(elem_layout), Structure(Apply(Symbol::LIST_LIST, args))) => {
-            let args = env.subs.get_slice(*args);
+            let args = env.subs.get_subs_slice(*args);
             debug_assert_eq!(args.len(), 1);
 
             let elem_id = add_type_help(env, elem_layout, args[0], opt_name, types);
@@ -1719,7 +1720,7 @@ fn add_builtin_type<'a>(
                     Content::Structure(FlatType::Apply(Symbol::LIST_LIST, args_subs_slice)),
                 ) => {
                     let (key_var, val_var) = {
-                        let args_tuple = env.subs.get_slice(*args_subs_slice);
+                        let args_tuple = env.subs.get_subs_slice(*args_subs_slice);
 
                         debug_assert_eq!(args_tuple.len(), 1);
 
@@ -1768,7 +1769,7 @@ fn add_builtin_type<'a>(
                     LayoutRepr::Struct(field_layouts),
                     Alias(Symbol::DICT_DICT, alias_args, _alias_var, AliasKind::Opaque),
                 ) => {
-                    let dict_type_vars = env.subs.get_slice(alias_args.type_variables());
+                    let dict_type_vars = env.subs.get_subs_slice(alias_args.type_variables());
 
                     debug_assert_eq!(dict_type_vars.len(), 2);
 

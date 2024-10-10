@@ -10,10 +10,10 @@ use roc_module::ident::{Lowercase, TagIdIntType, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{
-    Content, FlatType, RedundantMark, SortedTagsIterator, Subs, SubsFmtContent, Variable,
+    Content, FlatType, GetSubsSlice, RedundantMark, SortedTagsIterator, Subs, SubsFmtContent,
+    Variable,
 };
 use roc_types::types::{gather_tags_unsorted_iter, AliasKind};
-use soa::GetSlice;
 
 pub use roc_exhaustive::Context as ExhaustiveContext;
 
@@ -151,12 +151,14 @@ fn index_var(
             }
             Content::Structure(structure) => match structure {
                 FlatType::Func(_, _, _) => return Err(TypeError),
-                FlatType::Apply(Symbol::LIST_LIST, args) => match (subs.get_slice(*args), ctor) {
-                    ([elem_var], IndexCtor::List) => {
-                        return Ok(vec![*elem_var]);
+                FlatType::Apply(Symbol::LIST_LIST, args) => {
+                    match (subs.get_subs_slice(*args), ctor) {
+                        ([elem_var], IndexCtor::List) => {
+                            return Ok(vec![*elem_var]);
+                        }
+                        _ => internal_error!("list types can only be indexed by list patterns"),
                     }
-                    _ => internal_error!("list types can only be indexed by list patterns"),
-                },
+                }
                 FlatType::Apply(..) => internal_error!("not an indexable constructor"),
                 FlatType::Record(fields, ext) => {
                     let fields_order = match render_as {
@@ -217,7 +219,7 @@ fn index_var(
                         }
                     };
 
-                    let tags = subs.get_slice(*tags);
+                    let tags = subs.get_subs_slice(*tags);
                     debug_assert!(tags.contains(tag_ctor), "constructor must be known in the indexable type if we are exhautiveness checking");
 
                     return Ok(vec![]);
@@ -665,7 +667,7 @@ fn convert_tag(subs: &Subs, whole_var: Variable, this_tag: &TagName) -> (Union, 
                     internal_error!("Content is not a tag union: {:?}", subs.dbg(whole_var))
                 });
             let mut all_tags: Vec<(TagName, &[Variable])> = Vec::with_capacity(tags.len());
-            for tag in subs.get_slice(*tags) {
+            for tag in subs.get_subs_slice(*tags) {
                 all_tags.push((tag.clone(), &[]));
             }
             for (tag, vars) in ext_tags {

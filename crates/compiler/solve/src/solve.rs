@@ -1550,17 +1550,17 @@ fn open_tag_union(env: &mut InferenceEnv, var: Variable) {
 
             Structure(Record(fields, _)) => {
                 // Open up all nested tag unions.
-                stack.extend(env.subs.get_slice(fields.variables()));
+                stack.extend(env.subs.get_subs_slice(fields.variables()));
             }
 
             Structure(Tuple(elems, _)) => {
                 // Open up all nested tag unions.
-                stack.extend(env.subs.get_slice(elems.variables()));
+                stack.extend(env.subs.get_subs_slice(elems.variables()));
             }
 
             Structure(Apply(Symbol::LIST_LIST, args)) => {
                 // Open up nested tag unions.
-                stack.extend(env.subs.get_slice(args));
+                stack.extend(env.subs.get_subs_slice(args));
             }
 
             _ => {
@@ -1627,12 +1627,12 @@ fn close_pattern_matched_tag_unions(subs: &mut Subs, var: Variable) {
 
             Structure(Record(fields, _)) => {
                 // Close up all nested tag unions.
-                stack.extend(subs.get_slice(fields.variables()));
+                stack.extend(subs.get_subs_slice(fields.variables()));
             }
 
             Structure(Apply(Symbol::LIST_LIST, args)) => {
                 // Close up nested tag unions.
-                stack.extend(subs.get_slice(args));
+                stack.extend(subs.get_subs_slice(args));
             }
 
             Alias(_, _, real_var, _) => {
