@@ -3,7 +3,9 @@ use self::BinOp::*;
 use std::cmp::Ordering;
 use std::fmt;
 
-const PRECEDENCES: [(BinOp, u8); 16] = [
+const BIN_OP_COUNT: usize = 17;
+
+const PRECEDENCES: [(BinOp, u8); BIN_OP_COUNT] = [
     (Caret, 8),
     (Star, 7),
     (Slash, 7),
@@ -12,6 +14,7 @@ const PRECEDENCES: [(BinOp, u8); 16] = [
     (Plus, 5),
     (Minus, 5),
     (Pizza, 4),
+    (When, 4),
     (Equals, 3),
     (NotEquals, 3),
     (LessThan, 2),
@@ -22,7 +25,7 @@ const PRECEDENCES: [(BinOp, u8); 16] = [
     (Or, 0),
 ];
 
-const ASSOCIATIVITIES: [(BinOp, Associativity); 16] = [
+const ASSOCIATIVITIES: [(BinOp, Associativity); BIN_OP_COUNT] = [
     (Caret, RightAssociative),
     (Star, LeftAssociative),
     (Slash, LeftAssociative),
@@ -31,6 +34,7 @@ const ASSOCIATIVITIES: [(BinOp, Associativity); 16] = [
     (Plus, LeftAssociative),
     (Minus, LeftAssociative),
     (Pizza, LeftAssociative),
+    (When, LeftAssociative),
     (Equals, NonAssociative),
     (NotEquals, NonAssociative),
     (LessThan, NonAssociative),
@@ -41,7 +45,7 @@ const ASSOCIATIVITIES: [(BinOp, Associativity); 16] = [
     (Or, RightAssociative),
 ];
 
-const DISPLAY_STRINGS: [(BinOp, &str); 16] = [
+const DISPLAY_STRINGS: [(BinOp, &str); BIN_OP_COUNT] = [
     (Caret, "^"),
     (Star, "*"),
     (Slash, "/"),
@@ -50,6 +54,7 @@ const DISPLAY_STRINGS: [(BinOp, &str); 16] = [
     (Plus, "+"),
     (Minus, "-"),
     (Pizza, "|>"),
+    (When, "~"),
     (Equals, "=="),
     (NotEquals, "!="),
     (LessThan, "<"),
@@ -145,6 +150,7 @@ pub enum BinOp {
     Plus,
     Minus,
     Pizza,
+    When, // todo: @wip @not_implemented
     Equals,
     NotEquals,
     LessThan,
@@ -160,7 +166,7 @@ impl BinOp {
     /// how wide this operator is when typed out
     pub fn width(self) -> u16 {
         match self {
-            Caret | Star | Slash | Percent | Plus | Minus | LessThan | GreaterThan => 1,
+            Caret | Star | Slash | Percent | Plus | Minus | LessThan | GreaterThan | When => 1,
             DoubleSlash | Equals | NotEquals | LessThanOrEq | GreaterThanOrEq | And | Or
             | Pizza => 2,
         }
@@ -196,13 +202,13 @@ pub enum Associativity {
 
 impl BinOp {
     pub fn associativity(self) -> Associativity {
-        const ASSOCIATIVITY_TABLE: [Associativity; 16] = generate_associativity_table();
+        const ASSOCIATIVITY_TABLE: [Associativity; BIN_OP_COUNT] = generate_associativity_table();
 
         ASSOCIATIVITY_TABLE[self as usize]
     }
 
     fn precedence(self) -> u8 {
-        const PRECEDENCE_TABLE: [u8; 16] = generate_precedence_table();
+        const PRECEDENCE_TABLE: [u8; BIN_OP_COUNT] = generate_precedence_table();
 
         PRECEDENCE_TABLE[self as usize]
     }
@@ -222,14 +228,14 @@ impl Ord for BinOp {
 
 impl std::fmt::Display for BinOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        const DISPLAY_TABLE: [&str; 16] = generate_display_table();
+        const DISPLAY_TABLE: [&str; BIN_OP_COUNT] = generate_display_table();
 
         write!(f, "{}", DISPLAY_TABLE[*self as usize])
     }
 }
 
-const fn generate_precedence_table() -> [u8; 16] {
-    let mut table = [0u8; 16];
+const fn generate_precedence_table() -> [u8; BIN_OP_COUNT] {
+    let mut table = [0u8; BIN_OP_COUNT];
     let mut i = 0;
 
     while i < PRECEDENCES.len() {
@@ -240,8 +246,8 @@ const fn generate_precedence_table() -> [u8; 16] {
     table
 }
 
-const fn generate_associativity_table() -> [Associativity; 16] {
-    let mut table = [NonAssociative; 16];
+const fn generate_associativity_table() -> [Associativity; BIN_OP_COUNT] {
+    let mut table = [NonAssociative; BIN_OP_COUNT];
     let mut i = 0;
 
     while i < ASSOCIATIVITIES.len() {
@@ -252,8 +258,8 @@ const fn generate_associativity_table() -> [Associativity; 16] {
     table
 }
 
-const fn generate_display_table() -> [&'static str; 16] {
-    let mut table = [""; 16];
+const fn generate_display_table() -> [&'static str; BIN_OP_COUNT] {
+    let mut table = [""; BIN_OP_COUNT];
     let mut i = 0;
 
     while i < DISPLAY_STRINGS.len() {

@@ -2139,7 +2139,7 @@ pub fn parse_top_level_defs<'a>(
 // todo: @revisit now it is a fixed name which is "rarely used" (at least in the Roc compiler source),
 // it also helps to have nice identifier on re-format without additional processing.
 // but we may consider generating the unique `next_unique_suffixed_ident` from the `suffixed` desugaring.
-pub const CLOSURE_SHORTCUT_ARG: &str = "un";
+pub const CLOSURE_SHORTCUT_ARG: &str = "un"; //todo: @wip rename to "nu" as more rare fruit
 
 /// If Ok it always returns MadeProgress
 fn rest_of_closure<'a>(
@@ -2239,7 +2239,7 @@ fn rest_of_closure<'a>(
         return Ok((MadeProgress, short_closure, state));
     }
 
-    // Either pipe shortcut `\|> f` into the `\p -> p |> f`,
+    // Either pipe shortcut `\|> f` into `\p -> p |> f`,
     // or the rest of BinOp's, e.g. `\+ 1` into `\p -> p + 1`,
     if let Ok((_, binop, state)) = parse_bin_op(MadeProgress, state.clone()) {
         let after_binop = state.pos();
