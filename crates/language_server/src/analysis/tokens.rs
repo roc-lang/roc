@@ -375,10 +375,10 @@ impl IterTokens for ProvidesTo<'_> {
 
 impl IterTokens for PlatformRequires<'_> {
     fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
-        let Self { rigids, signature } = self;
+        let Self { rigids, signatures } = self;
 
         (rigids.iter_tokens(arena).into_iter())
-            .chain(signature.iter_tokens(arena))
+            .chain(signatures.iter_tokens(arena))
             .collect_in(arena)
     }
 }

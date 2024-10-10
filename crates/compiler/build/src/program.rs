@@ -1,6 +1,7 @@
 use crate::link::{
     legacy_host_file, link, preprocess_host_wasm32, rebuild_host, LinkType, LinkingStrategy,
 };
+use bumpalo::collections::CollectIn;
 use bumpalo::Bump;
 use inkwell::memory_buffer::MemoryBuffer;
 use roc_error_macros::internal_error;
@@ -227,11 +228,16 @@ fn gen_from_mono_module_llvm<'a>(
             exposed_to_host,
             platform_path: _,
         } => {
-            // TODO support multiple of these!
-            debug_assert_eq!(exposed_to_host.len(), 1);
-            let (symbol, layout) = exposed_to_host[0];
+            let entry_points: bumpalo::collections::Vec<_> = exposed_to_host
+                .iter()
+                .map(|(fn_name, symbol, layout)| SingleEntryPoint {
+                    name: fn_name,
+                    symbol: *symbol,
+                    layout: *layout,
+                })
+                .collect_in(arena);
 
-            roc_mono::ir::EntryPoint::Single(SingleEntryPoint { symbol, layout })
+            roc_mono::ir::EntryPoint::Program(entry_points.into_bump_slice())
         }
         EntryPoint::Test => roc_mono::ir::EntryPoint::Expects { symbols: &[] },
     };

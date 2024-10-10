@@ -2326,6 +2326,8 @@ Here are various Roc expressions involving operators, and what they desugar to.
 | `!a`                         | `Bool.not a`       |
 | <code>a \|> f</code>         | `f a`              |
 | <code>f a b \|> g x y</code> | `g (f a b) x y`    |
+| `f!`                         | [see example](https://www.roc-lang.org/examples/DesugaringAwait/README.html)     |
+| `f?`                         | [see example](https://www.roc-lang.org/examples/DesugaringTry/README.html)     |
 
 </section>
 <script type="text/javascript" src="/builtins/search.js" defer></script>

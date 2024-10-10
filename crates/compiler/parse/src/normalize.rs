@@ -254,7 +254,7 @@ impl<'a> Normalize<'a> for PlatformRequires<'a> {
     fn normalize(&self, arena: &'a Bump) -> Self {
         PlatformRequires {
             rigids: self.rigids.normalize(arena),
-            signature: self.signature.normalize(arena),
+            signatures: self.signatures.map_items(arena, |x| x.normalize(arena)),
         }
     }
 }
@@ -649,13 +649,6 @@ fn normalize_str_segments<'a>(
                 }
                 new_segments.push(StrSegment::Interpolated(e.normalize(arena)));
             }
-            StrSegment::DeprecatedInterpolated(e) => {
-                if !last_text.is_empty() {
-                    let text = std::mem::replace(last_text, String::new_in(arena));
-                    new_segments.push(StrSegment::Plaintext(text.into_bump_str()));
-                }
-                new_segments.push(StrSegment::Interpolated(e.normalize(arena)));
-            }
         }
     }
 }
@@ -680,7 +673,6 @@ impl<'a> Normalize<'a> for StrSegment<'a> {
             StrSegment::Unicode(t) => StrSegment::Unicode(t.normalize(arena)),
             StrSegment::EscapedChar(c) => StrSegment::EscapedChar(c),
             StrSegment::Interpolated(t) => StrSegment::Interpolated(t.normalize(arena)),
-            StrSegment::DeprecatedInterpolated(t) => StrSegment::Interpolated(t.normalize(arena)),
         }
     }
 }

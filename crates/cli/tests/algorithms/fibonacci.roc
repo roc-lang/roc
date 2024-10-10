@@ -1,7 +1,4 @@
-app "fibonacci"
-    packages { pf: "fibonacci-platform/main.roc" }
-    imports []
-    provides [main] to pf
+app [main] { pf: platform "fibonacci-platform/main.roc" }
 
 main = \n -> fib n 0 1
 

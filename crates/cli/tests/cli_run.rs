@@ -1016,6 +1016,17 @@ mod cli_run {
         )
     }
 
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn multiple_exposed() {
+        test_roc_app_slim(
+            "crates/cli/tests/multiple_exposed",
+            "main.roc",
+            "",
+            UseValgrind::Yes,
+        )
+    }
+
     // TODO: write a new test once mono bugs are resolved in investigation
     #[test]
     #[cfg(not(debug_assertions))] // https://github.com/roc-lang/roc/issues/4806
