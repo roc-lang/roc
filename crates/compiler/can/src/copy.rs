@@ -12,7 +12,7 @@ use roc_module::{
 use roc_types::{
     subs::{
         self, AliasVariables, Descriptor, GetSubsSlice, OptVariable, RecordFields, Subs, SubsIndex,
-        SubsSlice, TupleElems, UnionLambdas, UnionTags, Variable, VariableSubsSlice,
+        SubsSlice, TupleElems, UnionLambdas, UnionTags, Variable, VariableSlice,
     },
     types::{RecordField, Uls},
 };
@@ -162,7 +162,7 @@ impl<'a> CopyEnv for AcrossSubs<'a> {
     fn clone_field_names(&mut self, field_names: SubsSlice<Lowercase>) -> SubsSlice<Lowercase> {
         SubsSlice::extend_new(
             &mut self.target.field_names,
-            self.source.get_subs_slice(field_names).iter().cloned(),
+            self.source.get_slice(field_names).iter().cloned(),
         )
     }
 
@@ -173,10 +173,7 @@ impl<'a> CopyEnv for AcrossSubs<'a> {
     ) -> SubsSlice<usize> {
         SubsSlice::extend_new(
             &mut self.target.tuple_elem_indices,
-            self.source
-                .get_subs_slice(tuple_elem_indices)
-                .iter()
-                .cloned(),
+            self.source.get_slice(tuple_elem_indices).iter().cloned(),
         )
     }
 
@@ -184,7 +181,7 @@ impl<'a> CopyEnv for AcrossSubs<'a> {
     fn clone_tag_names(&mut self, tag_names: SubsSlice<TagName>) -> SubsSlice<TagName> {
         SubsSlice::extend_new(
             &mut self.target.tag_names,
-            self.source.get_subs_slice(tag_names).iter().cloned(),
+            self.source.get_slice(tag_names).iter().cloned(),
         )
     }
 
@@ -192,7 +189,7 @@ impl<'a> CopyEnv for AcrossSubs<'a> {
     fn clone_lambda_names(&mut self, lambda_names: SubsSlice<Symbol>) -> SubsSlice<Symbol> {
         SubsSlice::extend_new(
             &mut self.target.symbol_names,
-            self.source.get_subs_slice(lambda_names).iter().cloned(),
+            self.source.get_slice(lambda_names).iter().cloned(),
         )
     }
 
@@ -203,7 +200,7 @@ impl<'a> CopyEnv for AcrossSubs<'a> {
     ) -> SubsSlice<RecordField<()>> {
         SubsSlice::extend_new(
             &mut self.target.record_fields,
-            self.source.get_subs_slice(record_fields).iter().copied(),
+            self.source.get_slice(record_fields).iter().copied(),
         )
     }
 }
