@@ -12,7 +12,6 @@ use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern, PermitS
 use crate::procedure::{QualifiedReference, References};
 use crate::scope::{Scope, SymbolLookup};
 use crate::traverse::{walk_expr, Visitor};
-use roc_collections::soa::Index;
 use roc_collections::{SendMap, VecMap, VecSet};
 use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
@@ -27,6 +26,7 @@ use roc_region::all::{Loc, Region};
 use roc_types::num::SingleQuoteBound;
 use roc_types::subs::{ExhaustiveMark, IllegalCycleMark, RedundantMark, VarStore, Variable};
 use roc_types::types::{Alias, Category, IndexOrField, LambdaSet, OptAbleVar, Type};
+use soa::Index;
 use std::fmt::{Debug, Display};
 use std::path::PathBuf;
 use std::sync::Arc;

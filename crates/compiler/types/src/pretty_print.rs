@@ -152,7 +152,7 @@ fn find_names_needed(
 
             // User-defined names are already taken.
             // We must not accidentally generate names that collide with them!
-            let name = subs.field_names[name_index.index as usize].clone();
+            let name = name_index.get_in(&subs.field_names).clone();
             match names_taken.get(&name) {
                 Some(var) if *var == root => {}
                 Some(_) => {
@@ -680,24 +680,24 @@ fn write_content<'a>(
 
     match subs.get_content_without_compacting(var) {
         FlexVar(Some(name_index)) => {
-            let name = &subs.field_names[name_index.index as usize];
+            let name = name_index.get_in(&subs.field_names);
             buf.push_str(name.as_str())
         }
         FlexVar(None) => buf.push_str(WILDCARD),
         RigidVar(name_index) => {
-            let name = &subs.field_names[name_index.index as usize];
+            let name = name_index.get_in(&subs.field_names);
             buf.push_str(name.as_str())
         }
         FlexAbleVar(opt_name_index, abilities) => {
             let name = opt_name_index
-                .map(|name_index| subs.field_names[name_index.index as usize].as_str())
+                .map(|name_index| name_index.get_in(&subs.field_names).as_str())
                 .unwrap_or(WILDCARD);
             let abilities = AbilitySet::from_iter(subs.get_subs_slice(*abilities).iter().copied());
             ctx.able_variables.push((name, abilities));
             buf.push_str(name);
         }
         RigidAbleVar(name_index, abilities) => {
-            let name = subs.field_names[name_index.index as usize].as_str();
+            let name = name_index.get_in(&subs.field_names).as_str();
             let abilities = AbilitySet::from_iter(subs.get_subs_slice(*abilities).iter().copied());
             ctx.able_variables.push((name, abilities));
             buf.push_str(name);
@@ -713,7 +713,7 @@ fn write_content<'a>(
 
                     ctx.recursion_structs_to_expand.insert(structure_root);
                 } else {
-                    let name = &subs.field_names[name_index.index as usize];
+                    let name = name_index.get_in(&subs.field_names);
                     buf.push_str(name.as_str())
                 }
             }

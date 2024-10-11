@@ -8,11 +8,11 @@ use crate::ident::Accessor;
 use crate::parser::ESingleQuote;
 use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
-use roc_collections::soa::{EitherIndex, Index, Slice};
 use roc_error_macros::internal_error;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
 use roc_module::ident::QualifiedModuleName;
 use roc_region::all::{Loc, Position, Region};
+use soa::{EitherIndex, Index, Slice};
 
 #[derive(Debug, Clone)]
 pub struct FullAst<'a> {
@@ -623,7 +623,7 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::Defs(defs, expr) => {
             let any_defs_suffixed = defs.tags.iter().any(|tag| match tag.split() {
                 Ok(_) => false,
-                Err(value_index) => match defs.value_defs[value_index.index()] {
+                Err(value_index) => match value_index.get_in(&defs.value_defs) {
                     ValueDef::Body(_, loc_expr) => is_expr_suffixed(&loc_expr.value),
                     ValueDef::AnnotatedBody { body_expr, .. } => is_expr_suffixed(&body_expr.value),
                     _ => false,
@@ -1025,7 +1025,7 @@ impl<'a, 'b> Iterator for RecursiveValueDefIter<'a, 'b> {
         match self.current.tags.get(self.index) {
             Some(tag) => {
                 if let Err(def_index) = tag.split() {
-                    let def = &self.current.value_defs[def_index.index()];
+                    let def = def_index.get_in(&self.current.value_defs);
                     let region = &self.current.regions[self.index];
 
                     match def {
@@ -1195,8 +1195,8 @@ impl<'a> Defs<'a> {
 
     pub fn defs(&self) -> impl Iterator<Item = Result<&TypeDef<'a>, &ValueDef<'a>>> {
         self.tags.iter().map(|tag| match tag.split() {
-            Ok(type_index) => Ok(&self.type_defs[type_index.index()]),
-            Err(value_index) => Err(&self.value_defs[value_index.index()]),
+            Ok(type_index) => Ok(type_index.get_in(&self.type_defs)),
+            Err(value_index) => Err(value_index.get_in(&self.value_defs)),
         })
     }
 
@@ -1207,10 +1207,13 @@ impl<'a> Defs<'a> {
             .iter()
             .enumerate()
             .map(|(i, tag)| match tag.split() {
-                Ok(type_index) => Ok(Loc::at(self.regions[i], self.type_defs[type_index.index()])),
+                Ok(type_index) => Ok(Loc::at(
+                    self.regions[i],
+                    *type_index.get_in(&self.type_defs),
+                )),
                 Err(value_index) => Err(Loc::at(
                     self.regions[i],
-                    self.value_defs[value_index.index()],
+                    *value_index.get_in(&self.value_defs),
                 )),
             })
     }
@@ -1221,14 +1224,14 @@ impl<'a> Defs<'a> {
             .enumerate()
             .filter_map(|(tag_index, tag)| match tag.split() {
                 Ok(_) => None,
-                Err(value_index) => Some((tag_index, &self.value_defs[value_index.index()])),
+                Err(value_index) => Some((tag_index, value_index.get_in(&self.value_defs))),
             })
     }
 
     pub fn last(&self) -> Option<Result<&TypeDef<'a>, &ValueDef<'a>>> {
         self.tags.last().map(|tag| match tag.split() {
-            Ok(type_index) => Ok(&self.type_defs[type_index.index()]),
-            Err(value_index) => Err(&self.value_defs[value_index.index()]),
+            Ok(type_index) => Ok(type_index.get_in(&self.type_defs)),
+            Err(value_index) => Err(value_index.get_in(&self.value_defs)),
         })
     }
 
@@ -1240,7 +1243,7 @@ impl<'a> Defs<'a> {
             .rev()
             .find_map(|(tag_index, tag)| match tag.split() {
                 Ok(_) => None,
-                Err(value_index) => match self.value_defs[value_index.index()] {
+                Err(value_index) => match *value_index.get_in(&self.value_defs) {
                     ValueDef::Body(
                         Loc {
                             value: Pattern::RecordDestructure(collection),
@@ -1270,7 +1273,7 @@ impl<'a> Defs<'a> {
         {
             Ok(type_index) => {
                 // remove from vec
-                self.type_defs.remove(type_index.index());
+                unsafe { self.type_defs.remove(type_index.index()) };
 
                 // update all of the remaining indexes in type_defs
                 for (current_tag_index, tag) in self.tags.iter_mut().enumerate() {
@@ -1282,7 +1285,7 @@ impl<'a> Defs<'a> {
             }
             Err(value_index) => {
                 // remove from vec
-                self.value_defs.remove(value_index.index());
+                unsafe { self.value_defs.remove(value_index.index()) };
 
                 // update all of the remaining indexes in value_defs
                 for (current_tag_index, tag) in self.tags.iter_mut().enumerate() {
@@ -1311,11 +1314,17 @@ impl<'a> Defs<'a> {
 
         self.regions.push(region);
 
-        let before = Slice::extend_new(&mut self.spaces, spaces_before.iter().copied());
-        self.space_before.push(before);
+        self.space_before.push({
+            let start = self.spaces.len() as u32;
+            self.spaces.extend(spaces_before.iter().copied());
+            Slice::new(start, spaces_before.len() as u16, &self.spaces)
+        });
 
-        let after = Slice::extend_new(&mut self.spaces, spaces_after.iter().copied());
-        self.space_after.push(after);
+        self.space_after.push({
+            let start = self.spaces.len() as u32;
+            self.spaces.extend(spaces_after.iter().copied());
+            Slice::new(start, spaces_after.len() as u16, &self.spaces)
+        });
     }
 
     pub fn push_value_def(
@@ -1325,7 +1334,11 @@ impl<'a> Defs<'a> {
         spaces_before: &[CommentOrNewline<'a>],
         spaces_after: &[CommentOrNewline<'a>],
     ) {
-        let value_def_index = Index::push_new(&mut self.value_defs, value_def);
+        let value_def_index = {
+            let index = Index::new(self.value_defs.len() as u32, &self.value_defs);
+            self.value_defs.push(value_def);
+            index
+        };
         let tag = EitherIndex::from_right(value_def_index);
         self.push_def_help(tag, region, spaces_before, spaces_after)
     }
@@ -1347,7 +1360,7 @@ impl<'a> Defs<'a> {
             }
             Err(value_index) => {
                 self.regions[tag_index] = region;
-                self.value_defs[value_index.index()] = value_def;
+                *value_index.get_in_mut(&mut self.value_defs) = value_def;
             }
         }
     }
@@ -1359,7 +1372,11 @@ impl<'a> Defs<'a> {
         spaces_before: &[CommentOrNewline<'a>],
         spaces_after: &[CommentOrNewline<'a>],
     ) {
-        let type_def_index = Index::push_new(&mut self.type_defs, type_def);
+        let type_def_index = {
+            let index = Index::new(self.type_defs.len() as u32, &self.type_defs);
+            self.type_defs.push(type_def);
+            index
+        };
         let tag = EitherIndex::from_left(type_def_index);
         self.push_def_help(tag, region, spaces_before, spaces_after)
     }
@@ -1373,13 +1390,13 @@ impl<'a> Defs<'a> {
 
         for (tag_index, tag) in self.tags.iter().enumerate() {
             let region = self.regions[tag_index];
-            let space_before = {
+            let space_before = unsafe {
                 let start = self.space_before[tag_index].start();
                 let len = self.space_before[tag_index].len();
 
                 &self.spaces[start..(start + len)]
             };
-            let space_after = {
+            let space_after = unsafe {
                 let start = self.space_after[tag_index].start();
                 let len = self.space_after[tag_index].len();
 
@@ -1388,18 +1405,28 @@ impl<'a> Defs<'a> {
 
             match tag.split() {
                 Ok(type_def_index) => {
-                    let type_def = self.type_defs[type_def_index.index()];
+                    let type_def = *type_def_index.get_in(&self.type_defs);
 
                     match tag_index.cmp(&target) {
                         std::cmp::Ordering::Less => {
                             // before
-                            let type_def_index = Index::push_new(&mut before.type_defs, type_def);
+                            let type_def_index = {
+                                let index =
+                                    Index::new(before.type_defs.len() as u32, &before.type_defs);
+                                before.type_defs.push(type_def);
+                                index
+                            };
                             let tag = EitherIndex::from_left(type_def_index);
                             before.push_def_help(tag, region, space_before, space_after);
                         }
                         std::cmp::Ordering::Greater => {
                             // after
-                            let type_def_index = Index::push_new(&mut after.type_defs, type_def);
+                            let type_def_index = {
+                                let index =
+                                    Index::new(after.type_defs.len() as u32, &after.type_defs);
+                                after.type_defs.push(type_def);
+                                index
+                            };
                             let tag = EitherIndex::from_left(type_def_index);
                             after.push_def_help(tag, region, space_before, space_after);
                         }
@@ -1409,20 +1436,28 @@ impl<'a> Defs<'a> {
                     }
                 }
                 Err(value_def_index) => {
-                    let value_def = self.value_defs[value_def_index.index()];
+                    let value_def = *value_def_index.get_in(&self.value_defs);
 
                     match tag_index.cmp(&target) {
                         std::cmp::Ordering::Less => {
                             // before
-                            let new_value_def_index =
-                                Index::push_new(&mut before.value_defs, value_def);
+                            let new_value_def_index = {
+                                let index =
+                                    Index::new(before.value_defs.len() as u32, &before.value_defs);
+                                before.value_defs.push(value_def);
+                                index
+                            };
                             let tag = EitherIndex::from_right(new_value_def_index);
                             before.push_def_help(tag, region, space_before, space_after);
                         }
                         std::cmp::Ordering::Greater => {
                             // after
-                            let new_value_def_index =
-                                Index::push_new(&mut after.value_defs, value_def);
+                            let new_value_def_index = {
+                                let index =
+                                    Index::new(after.value_defs.len() as u32, &after.value_defs);
+                                after.value_defs.push(value_def);
+                                index
+                            };
                             let tag = EitherIndex::from_right(new_value_def_index);
                             after.push_def_help(tag, region, space_before, space_after);
                         }

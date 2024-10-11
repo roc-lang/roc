@@ -1,7 +1,6 @@
 use std::cell::RefCell;
 
 use roc_can::{abilities::AbilitiesStore, constraint::TypeOrVar, expected::Expected};
-use roc_collections::soa::{Index, Slice};
 use roc_error_macros::internal_error;
 use roc_module::{ident::TagName, symbol::Symbol};
 use roc_region::all::Loc;
@@ -19,6 +18,7 @@ use roc_types::{
     },
 };
 use roc_unify::unify::{unify, Unified};
+use soa::{Index, Slice};
 
 use crate::{
     ability::{AbilityImplError, ObligationCache},

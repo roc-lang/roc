@@ -7,7 +7,6 @@ pub mod all;
 mod reference_matrix;
 mod small_string_interner;
 mod small_vec;
-pub mod soa;
 mod vec_map;
 mod vec_set;
 

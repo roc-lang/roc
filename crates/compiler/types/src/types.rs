@@ -5,7 +5,6 @@ use crate::subs::{
     VariableSubsSlice,
 };
 use roc_collections::all::{HumanIndex, ImMap, ImSet, MutMap, MutSet, SendMap};
-use roc_collections::soa::{Index, Slice};
 use roc_collections::VecMap;
 use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
@@ -13,6 +12,7 @@ use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
+use soa::{Index, Slice};
 use std::fmt;
 use std::fmt::Write;
 use std::path::PathBuf;
@@ -486,17 +486,17 @@ impl Default for Types {
 }
 
 impl Types {
-    pub const EMPTY_RECORD: Index<TypeTag> = Index::new(0);
+    pub const EMPTY_RECORD: Index<TypeTag> = unsafe { Index::new_unchecked(0) };
     const EMPTY_RECORD_TAG: TypeTag = TypeTag::Variable(Variable::EMPTY_RECORD);
-    const EMPTY_RECORD_ARGS: Slice<TypeTag> = Slice::empty();
+    const EMPTY_RECORD_ARGS: Slice<TypeTag> = unsafe { Slice::empty_unchecked() };
 
-    pub const EMPTY_TAG_UNION: Index<TypeTag> = Index::new(1);
+    pub const EMPTY_TAG_UNION: Index<TypeTag> = unsafe { Index::new_unchecked(1) };
     const EMPTY_TAG_UNION_TAG: TypeTag = TypeTag::Variable(Variable::EMPTY_TAG_UNION);
-    const EMPTY_TAG_UNION_ARGS: Slice<TypeTag> = Slice::empty();
+    const EMPTY_TAG_UNION_ARGS: Slice<TypeTag> = unsafe { Slice::empty_unchecked() };
 
-    pub const STR: Index<TypeTag> = Index::new(2);
+    pub const STR: Index<TypeTag> = unsafe { Index::new_unchecked(1) };
     const STR_TAG: TypeTag = TypeTag::Variable(Variable::STR);
-    const STR_ARGS: Slice<TypeTag> = Slice::empty();
+    const STR_ARGS: Slice<TypeTag> = unsafe { Slice::empty_unchecked() };
 
     pub fn new() -> Self {
         Self {
@@ -1280,8 +1280,8 @@ mod debug_types {
     };
 
     use super::{TypeTag, Types};
-    use roc_collections::soa::{Index, Slice};
     use roc_module::ident::TagName;
+    use soa::{Index, Slice};
     use ven_pretty::{text, Arena, DocAllocator, DocBuilder};
 
     pub struct DebugTag<'a>(pub &'a Types, pub Index<TypeTag>);
@@ -4557,4 +4557,8 @@ mod test {
             _ => panic!(),
         }
     }
+}
+
+const fn unsafe_index<T>(index: u32) -> Index<T> {
+    unsafe { Index::new_unchecked(index) }
 }
