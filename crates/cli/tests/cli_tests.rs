@@ -51,8 +51,7 @@ mod cli_tests {
     #[test]
     #[cfg_attr(windows, ignore)]
     fn platform_switching_rust() {
-        
-        let cli_build_cmd = ExecCli::new(
+        let cli_build = ExecCli::new(
                                 CMD_BUILD,
                                 file_from_root("examples/platform-switching", "rocLovesRust.roc")
             )
@@ -61,62 +60,206 @@ mod cli_tests {
         
         let expected_output = "Roc <3 Rust!\n";
         
-        cli_build_cmd.full_check(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND);
+        cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
     }
-    /*
+    
     #[test]
     #[cfg_attr(windows, ignore)]
     fn platform_switching_zig() {
-        let runner = ExecCli::new_roc()
-            .arg(CMD_RUN)
+        let cli_build = ExecCli::new(
+                                CMD_BUILD,
+                                file_from_root("examples/platform-switching", "rocLovesZig.roc")
+            )
             .arg(BUILD_HOST_FLAG)
-            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-            .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .with_valgrind(ALLOW_VALGRIND)
-            .arg(file_from_root("examples/platform-switching", "rocLovesZig.roc").as_path());
-
-        let out = runner.run();
-        out.assert_clean_success();
-        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
+        
+        let expected_output = "Roc <3 Zig!\n";
+        
+        cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
     }
-
+    
     #[test]
     fn platform_switching_wasm() {
         // this is a web assembly example, but we don't test with JS at the moment
         // so let's just check it for now
-        let runner = ExecCli::new_roc().arg(CMD_CHECK).arg(
-            file_from_root("examples/platform-switching", "rocLovesWebAssembly.roc").as_path(),
-        );
+        let cli_check = ExecCli::new(
+                                CMD_CHECK,
+                                file_from_root("examples/platform-switching", "rocLovesWebAssembly.roc")
+            );
 
-        let out = runner.run();
-        out.assert_clean_success();
+        let cli_check_out = cli_check.run();
+        cli_check_out.assert_clean_success();
     }
+    
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "Flaky failure: Roc command failed with status ExitStatus(ExitStatus(3221225477))"
+    )]
+    fn fibonacci() {
+        let cli_build = ExecCli::new(
+                                CMD_BUILD,
+                                file_from_root("crates/cli/tests/test-projects/algorithms", "fibonacci.roc")
+            )
+            .arg(BUILD_HOST_FLAG)
+            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
+        
+        let expected_output = "55\n";
+        
+        cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
+    }
+    
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn quicksort() {
+        let cli_build = ExecCli::new(
+                                CMD_BUILD,
+                                file_from_root("crates/cli/tests/test-projects/algorithms", "quicksort.roc")
+            )
+            .arg(BUILD_HOST_FLAG)
+            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
+        
+        let expected_output = "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n";
+        
+        cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
+    }
+    
+    // TODO: write a new test once mono bugs are resolved in investigation
+    // Encountering this TODO years later, I presume the new test should test the execution, not just roc check.
+    #[test]
+    #[cfg(not(debug_assertions))] // https://github.com/roc-lang/roc/issues/4806 - later observation: this issue is closed but the tests still hangs in debug mode
+    fn check_virtual_dom_server() {        
+        let cli_check = ExecCli::new(
+                                CMD_CHECK,
+                                file_from_root("examples/virtual-dom-wip", "example-server.roc")
+            );
 
+        let cli_check_out = cli_check.run();
+        cli_check_out.assert_clean_success();
+    }
+    
+    // TODO: write a new test once mono bugs are resolved in investigation
+    // Encountering this TODO years later, I presume the new test should test the execution, not just roc check.
+    #[test]
+    #[cfg(not(debug_assertions))] // https://github.com/roc-lang/roc/issues/4806 - later observation: this issue is closed but the tests still hangs in debug mode
+    fn check_virtual_dom_client() {
+        let cli_check = ExecCli::new(
+                                CMD_CHECK,
+                                file_from_root("examples/virtual-dom-wip", "example-client.roc")
+            );
+
+        let cli_check_out = cli_check.run();
+        cli_check_out.assert_clean_success();
+    }
+    
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    // tea = The Elm Architecture
+    fn terminal_ui_tea() {
+        let cli_build = ExecCli::new(
+                                CMD_BUILD,
+                                file_from_root("crates/cli/tests/test-projects/tui", "main.roc")
+            )
+            .arg(BUILD_HOST_FLAG)
+            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
+        
+        let expected_output = "Hello World!\nHello Worldfoo!\n";
+        
+        cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, Some("foo\n"), None);
+    }
+    
+    
+    // TODO check this out, there's more that's going wrong than a segfault
+    #[test]
+    /*#[cfg_attr(
+        any(target_os = "windows", target_os = "linux", target_os = "macos"),
+        ignore = "Segfault, likely broken because of alias analysis: https://github.com/roc-lang/roc/issues/6544"
+    )]*/
+    fn false_interpreter() {
+        let cli_build = ExecCli::new(
+                                CMD_BUILD,
+                                file_from_root("crates/cli/tests/test-projects/false-interpreter", "main.roc")
+            )
+            .arg(BUILD_HOST_FLAG)
+            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
+        
+        let sqrt_false_path_buf = file_from_root("crates/cli/tests/test-projects/false-interpreter/examples", "sqrt.false");
+        
+        let app_args = ["--",
+                        sqrt_false_path_buf
+                            .as_path()
+                            .to_str()
+                            .unwrap()];
+        
+        cli_build.full_check_build_and_run("1414", TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, Some(&app_args));
+    }
+    
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn transitive_expects() {
+        let cli_test = ExecCli::new(
+                                CMD_TEST,
+                                file_from_root("crates/cli/tests/test-projects/expects_transitive", "main.roc")
+            );
+
+        let cli_test_out = cli_test.run();
+        cli_test_out.assert_clean_success();
+        cli_test_out.assert_stdout_and_stderr_ends_with("0 failed and 3 passed in <ignored for test> ms.\n");
+    }
+    
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn transitive_expects_verbose() {
+        let cli_test = ExecCli::new(
+                                CMD_TEST,
+                                file_from_root("crates/cli/tests/test-projects/expects_transitive", "main.roc")
+            ).arg("--verbose");
+
+        let cli_test_out = cli_test.run();
+        cli_test_out.assert_clean_success();
+        insta::assert_snapshot!(cli_test_out.normalize_stdout_and_stderr());
+    }
+    
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn multiple_exposed() {
+        let cli_build = ExecCli::new(
+                                CMD_BUILD,
+                                file_from_root("crates/cli/tests/test-projects/multiple_exposed", "main.roc")
+            )
+            .arg(BUILD_HOST_FLAG)
+            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
+        
+        let expected_output = "55\n3628800\n";
+        
+        cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
+    }
+    
     #[test]
     #[cfg_attr(windows, ignore)]
     fn test_module_imports_pkg_w_flag() {
-        let runner = ExecCli::new_roc()
-            .arg(CMD_TEST)
-            .with_valgrind(ALLOW_VALGRIND)
-            .add_args(["--main", "tests/module_imports_pkg/app.roc"])
-            .arg(file_from_root("crates/cli/tests/module_imports_pkg", "Module.roc").as_path());
+        let cli_test = ExecCli::new(
+                                CMD_TEST,
+                                file_from_root("crates/cli/tests/test-projects/module_imports_pkg", "Module.roc")
+            ).add_args(["--main", "tests/test-projects/module_imports_pkg/app.roc"]);
 
-        let out = runner.run();
-        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+        let cli_test_out = cli_test.run();
+        cli_test_out.assert_clean_success();
+        cli_test_out.assert_stdout_and_stderr_ends_with("0 failed and 1 passed in <ignored for test> ms.\n");
     }
-
+    
     #[test]
     #[cfg_attr(windows, ignore)]
     fn test_module_imports_pkg_no_flag() {
-        let runner = ExecCli::new_roc()
-            .arg(CMD_TEST)
-            .with_valgrind(ALLOW_VALGRIND)
-            .arg(file_from_root("crates/cli/tests/module_imports_pkg", "Module.roc").as_path());
+        let cli_test = ExecCli::new(
+                                CMD_TEST,
+                                file_from_root("crates/cli/tests/test-projects/module_imports_pkg", "Module.roc")
+            );
 
-        let out = runner.run();
-        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+        let cli_test_out = cli_test.run();
+        insta::assert_snapshot!(cli_test_out.normalize_stdout_and_stderr());
     }
-
+    /*
     #[test]
     #[cfg_attr(windows, ignore)]
     fn test_module_imports_unknown_pkg() {
@@ -146,167 +289,6 @@ mod cli_tests {
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
             .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
             .arg(file_from_root("crates/cli/tests/platform_requires_pkg", "app.roc").as_path());
-
-        let out = runner.run();
-        out.assert_clean_success();
-        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
-    }
-
-    #[test]
-    #[cfg_attr(windows, ignore)]
-    fn transitive_expects() {
-        let runner = ExecCli::new_roc()
-            .arg(CMD_TEST)
-            .with_valgrind(ALLOW_VALGRIND)
-            .arg(file_from_root("crates/cli/tests/expects_transitive", "main.roc").as_path());
-
-        let out = runner.run();
-        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
-    }
-
-    #[test]
-    #[cfg_attr(windows, ignore)]
-    fn transitive_expects_verbose() {
-        let runner = ExecCli::new_roc()
-            .arg(CMD_TEST)
-            .with_valgrind(ALLOW_VALGRIND)
-            .arg("--verbose")
-            .arg(file_from_root("crates/cli/tests/expects_transitive", "main.roc").as_path());
-
-        let out = runner.run();
-        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
-    }
-
-    #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "Flaky failure: Roc command failed with status ExitStatus(ExitStatus(3221225477))"
-    )]
-    fn fibonacci() {
-        let runner = ExecCli::new_roc()
-            .arg(CMD_RUN)
-            .arg(BUILD_HOST_FLAG)
-            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-            .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .with_valgrind(ALLOW_VALGRIND)
-            .arg(file_from_root("crates/cli/tests/algorithms", "fibonacci.roc").as_path());
-
-        let out = runner.run();
-        out.assert_clean_success();
-        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
-    }
-
-    #[test]
-    #[cfg_attr(windows, ignore)]
-    fn quicksort() {
-        let runner = ExecCli::new_roc()
-            .arg(CMD_RUN)
-            .arg(BUILD_HOST_FLAG)
-            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-            .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .with_valgrind(ALLOW_VALGRIND)
-            .arg(file_from_root("crates/cli/tests/algorithms", "quicksort.roc").as_path());
-
-        let out = runner.run();
-        out.assert_clean_success();
-        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
-    }
-
-    #[test]
-    #[cfg_attr(windows, ignore)]
-    fn multiple_exposed() {
-        let runner = ExecCli::new_roc()
-            .arg(CMD_RUN)
-            .arg(BUILD_HOST_FLAG)
-            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-            .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .with_valgrind(ALLOW_VALGRIND)
-            .arg(file_from_root("crates/cli/tests/multiple_exposed", "main.roc").as_path())
-            .with_stdin_vals(vec!["foo\n"]);
-
-        let out = runner.run();
-        out.assert_clean_success();
-        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
-    }
-
-    // TODO: write a new test once mono bugs are resolved in investigation
-    #[test]
-    #[cfg(not(debug_assertions))] // https://github.com/roc-lang/roc/issues/4806
-    fn check_virtual_dom_server() {
-        ExecCli::new_roc()
-            .add_args([
-                CMD_CHECK,
-                file_from_root("examples/virtual-dom-wip", "example-server.roc")
-                    .to_str()
-                    .unwrap(),
-            ])
-            .run()
-            .assert_clean_success();
-    }
-
-    // TODO: write a new test once mono bugs are resolved in investigation
-    #[test]
-    #[cfg(not(debug_assertions))] // https://github.com/roc-lang/roc/issues/4806
-    fn check_virtual_dom_client() {
-        ExecCli::new_roc()
-            .add_args([
-                CMD_CHECK,
-                file_from_root("examples/virtual-dom-wip", "example-client.roc")
-                    .to_str()
-                    .unwrap(),
-            ])
-            .run()
-            .assert_clean_success();
-    }
-
-    #[test]
-    #[cfg_attr(windows, ignore)]
-    // tea = The Elm Architecture
-    fn terminal_ui_tea() {
-        let runner = ExecCli::new_roc()
-            .arg(CMD_RUN)
-            .arg(BUILD_HOST_FLAG)
-            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-            .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .with_valgrind(ALLOW_VALGRIND)
-            .arg(file_from_root("crates/cli/tests/tui", "main.roc").as_path())
-            .with_stdin_vals(vec!["foo\n"]);
-
-        let out = runner.run();
-        out.assert_clean_success();
-        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
-    }
-
-    #[test]
-    #[cfg_attr(
-        any(target_os = "windows", target_os = "linux", target_os = "macos"),
-        ignore = "Segfault, likely broken because of alias analysis: https://github.com/roc-lang/roc/issues/6544"
-    )]
-    fn false_interpreter() {
-        // Test building
-        let build_runner = ExecCli::new_roc()
-            .arg(CMD_BUILD)
-            .arg(BUILD_HOST_FLAG)
-            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-            .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .arg(file_from_root("crates/cli/tests/false-interpreter", "False.roc").as_path())
-            .run();
-
-        build_runner.assert_clean_success();
-
-        // Test running
-        let runner = ExecCli::new_roc()
-            .arg(CMD_RUN)
-            .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .with_valgrind(ALLOW_VALGRIND)
-            .arg(file_from_root("crates/cli/tests/false-interpreter", "False.roc").as_path())
-            .add_args([
-                "--",
-                file_from_root("crates/cli/tests/false-interpreter/examples", "sqrt.false")
-                    .as_path()
-                    .to_str()
-                    .unwrap(),
-            ]);
 
         let out = runner.run();
         out.assert_clean_success();

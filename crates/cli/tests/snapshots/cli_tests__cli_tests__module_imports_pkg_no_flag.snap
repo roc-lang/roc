@@ -1,8 +1,8 @@
 ---
 source: crates/cli/tests/cli_tests.rs
-expression: out.normalize_stdout_and_stderr()
+expression: cli_test_out.normalize_stdout_and_stderr()
 ---
-── UNRECOGNIZED PACKAGE in tests/module_imports_pkg/Module.roc ─────────────────
+── UNRECOGNIZED PACKAGE in tests/test-projects/module_imports_pkg/Module.roc ───
 
 This module is trying to import from `pkg`:
 

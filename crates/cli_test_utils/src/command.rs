@@ -6,7 +6,7 @@ use regex::Regex;
 use roc_command_utils::pretty_command_string;
 use roc_reporting::report::ANSI_STYLE_CODES;
 
-pub fn run_command(mut cmd: Command, stdin_vals:&[&str]) -> CmdOut {
+pub fn run_command(mut cmd: Command, stdin_opt: Option<&str>) -> CmdOut {
     let cmd_str = pretty_command_string(&cmd);
 
     let command = cmd
@@ -20,7 +20,7 @@ pub fn run_command(mut cmd: Command, stdin_vals:&[&str]) -> CmdOut {
 
     let stdin = roc_cmd_child.stdin.as_mut().expect("Failed to open stdin");
 
-    for stdin_str in stdin_vals.iter() {
+    if let Some(stdin_str) = stdin_opt {
         stdin
             .write_all(stdin_str.as_bytes())
             .unwrap_or_else(|err| {
@@ -89,24 +89,28 @@ impl CmdOut {
     /// This normalises the output for comparison in tests such as replacing timings
     /// with a placeholder, or stripping ANSI colors
     pub fn assert_stdout_and_stderr_ends_with(&self, expected: &str) {
-        let normalised_output = format!(
-            "{}{}",
-            normalize_for_tests(&self.stdout),
-            normalize_for_tests(&self.stderr)
-        );
+        let normalised_stdout_stderr = self.normalize_stdout_and_stderr();
 
         assert!(
-            normalised_output.ends_with(expected),
+            normalised_stdout_stderr.ends_with(expected),
             "\n{}EXPECTED stdout and stderr after normalizing:\n----------------\n{}{}\n{}ACTUAL stdout and stderr after normalizing:\n----------------\n{}{}{}\n----------------\n{}",
             ANSI_STYLE_CODES.cyan,
             ANSI_STYLE_CODES.reset,
             expected,
             ANSI_STYLE_CODES.cyan,
             ANSI_STYLE_CODES.reset,
-            normalised_output,
+            normalised_stdout_stderr,
             ANSI_STYLE_CODES.cyan,
             ANSI_STYLE_CODES.reset,
         );
+    }
+    
+    pub fn normalize_stdout_and_stderr(&self) -> String {
+        format!(
+            "{}{}",
+            normalize_for_tests(&self.stdout),
+            normalize_for_tests(&self.stderr)
+        )
     }
 }
 

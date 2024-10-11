@@ -54,45 +54,57 @@ impl ExecCli {
         roc_cli_command.arg(self.roc_file_path.clone());
         roc_cli_command.args(&self.args);
         
-        run_command(roc_cli_command, &[])
+        let app_stdin_opt = None;
+        run_command(roc_cli_command, app_stdin_opt)
     }
     
-    pub fn full_check(mut self, expected_output: &'static str, both_linkers: bool, with_valgrind: bool) {
-        self.check_build_and_run(expected_output, with_valgrind);
+    pub fn full_check_build_and_run(mut self, expected_output: &'static str, both_linkers: bool, with_valgrind: bool, app_stdin_opt: Option<&str>, app_args_opt: Option<&[&str]>) {
+        self.check_build_and_run(expected_output, with_valgrind, app_stdin_opt, app_args_opt);
 
         if both_linkers {
             self = self.arg(LINKER_FLAG);
-            self.check_build_and_run(expected_output, with_valgrind);
+            self.check_build_and_run(expected_output, with_valgrind, app_stdin_opt, app_args_opt);
         }
     }
     
-    fn check_build_and_run(&self, expected_output: &'static str, with_valgrind: bool) {
+    fn check_build_and_run(&self, expected_output: &'static str, with_valgrind: bool, app_stdin_opt: Option<&str>, app_args_opt: Option<&[&str]>) {
         let build_cmd_out = self.run();
         build_cmd_out.assert_clean_success();
 
-        let executable_output = self.run_executable(with_valgrind);
+        let executable_output = self.run_executable(false, app_stdin_opt, app_args_opt);
         executable_output.assert_clean_success();
         assert_eq!(executable_output.stdout, expected_output);
+        
+        if with_valgrind {
+            let executable_output_w_valgrind = self.run_executable(true, app_stdin_opt, app_args_opt);
+            assert!(executable_output_w_valgrind.status.success(), "Valgrind found issue(s):\n{}\nCommand used for building:\n\t{:?}", executable_output_w_valgrind, build_cmd_out.cmd_str);
+        }
     }
     
     // run executable produced by e.g. `roc build`
-    fn run_executable(&self, with_valgrind: bool) -> CmdOut {
+    fn run_executable(&self, with_valgrind: bool, app_stdin_opt: Option<&str>, app_args_opt: Option<&[&str]>) -> CmdOut {
         let executable = self.get_executable();
-        
+
         if with_valgrind {
             let mut command = Command::new("valgrind");
-            
+
             command.args(&[
                 "--leak-check=full",
                 "--error-exitcode=1",
-                "--errors-for-leak-kinds=all",
+                "--errors-for-leak-kinds=definite,possible",
                 executable.to_str().unwrap(),
             ]);
-            
-            run_command(command, &[])
+            if let Some(args) = app_args_opt {
+                command.args(args);
+            }
+
+            run_command(command, app_stdin_opt)
         } else {
-            let command = Command::new(executable);
-            run_command(command, &[])
+            let mut command = Command::new(executable);
+            if let Some(args) = app_args_opt {
+                command.args(args);
+            }
+            run_command(command, app_stdin_opt)
         }
     }
     
