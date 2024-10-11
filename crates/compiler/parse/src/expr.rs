@@ -28,10 +28,10 @@ use crate::type_annotation;
 use crate::{header, keyword};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use roc_collections::soa::Slice;
 use roc_error_macros::internal_error;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
-use soa::Slice;
 
 use crate::parser::Progress::{self, *};
 
@@ -2286,11 +2286,7 @@ pub fn parse_top_level_defs<'a>(
     }
 
     if output.tags.len() > existing_len {
-        let after = {
-            let start = output.spaces.len() as u32;
-            output.spaces.extend(last_space.iter().copied());
-            Slice::new(start, last_space.len() as u16, &output.spaces)
-        };
+        let after = Slice::extend_new(&mut output.spaces, last_space.iter().copied());
         let last = output.tags.len() - 1;
         debug_assert!(output.space_after[last].is_empty() || after.is_empty());
         output.space_after[last] = after;

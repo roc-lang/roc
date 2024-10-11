@@ -22,6 +22,7 @@ use roc_can::expr::{
 use roc_can::pattern::Pattern;
 use roc_can::traverse::symbols_introduced_from_pattern;
 use roc_collections::all::{HumanIndex, MutMap, SendMap};
+use roc_collections::soa::{Index, Slice};
 use roc_collections::VecMap;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::{ModuleId, Symbol};
@@ -32,7 +33,6 @@ use roc_types::types::{
     AliasKind, AnnotationSource, Category, IndexOrField, OptAbleType, PReason, Reason, RecordField,
     TypeExtension, TypeTag, Types,
 };
-use soa::{Index, Slice};
 
 /// This is for constraining Defs
 #[derive(Default, Debug)]

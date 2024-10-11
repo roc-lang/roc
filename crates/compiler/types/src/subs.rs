@@ -15,37 +15,9 @@ use std::iter::{once, Iterator};
 
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
-// if it went up, maybe check that the change is really required.
-roc_error_macros::assert_sizeof_all!(
-    Descriptor,
-    5 * 8 + 4 + {
-        // extra bytes in debug builds for extra Index/Slice array pointer storage for verification
-        #[cfg(debug_assertions)]
-        {
-            20
-        }
-
-        #[cfg(not(debug_assertions))]
-        {
-            0
-        }
-    }
-);
-roc_error_macros::assert_sizeof_all!(
-    FlatType,
-    3 * 8 + 4 + {
-        // extra bytes in debug builds for extra Index/Slice array pointer storage for verification
-        #[cfg(debug_assertions)]
-        {
-            12
-        }
-
-        #[cfg(not(debug_assertions))]
-        {
-            0
-        }
-    }
-);
+// if it went up, maybe check that the change is really required
+roc_error_macros::assert_sizeof_all!(Descriptor, 5 * 8 + 4);
+roc_error_macros::assert_sizeof_all!(FlatType, 3 * 8 + 4);
 roc_error_macros::assert_sizeof_all!(UnionTags, 12);
 roc_error_macros::assert_sizeof_all!(RecordFields, 2 * 8);
 
@@ -297,7 +269,7 @@ impl Subs {
 
         let mut lowercases = Vec::with_capacity(length);
         for subs_slice in slices {
-            let bytes = subs_slice.get_slice(&string_slice);
+            let bytes = &string_slice[subs_slice.indices()];
             offset += bytes.len();
             let string = unsafe { std::str::from_utf8_unchecked(bytes) };
 
@@ -315,7 +287,7 @@ impl Subs {
 
         let mut tag_names = Vec::with_capacity(length);
         for SerializedTagName(subs_slice) in slices {
-            let bytes = subs_slice.get_slice(&string_slice);
+            let bytes = &string_slice[subs_slice.indices()];
             offset += bytes.len();
             let string = unsafe { std::str::from_utf8_unchecked(bytes) };
 
@@ -441,10 +413,10 @@ impl Default for Subs {
 }
 
 /// A slice into the Vec<T> of subs
-pub type SubsSlice<T> = Slice<T>;
+pub type SubsSlice<T> = Slice<Subs, T>;
 
 /// An index into the Vec<T> of subs
-pub type SubsIndex<T> = Index<T>;
+pub type SubsIndex<T> = Index<Subs, T>;
 
 // make `subs[some_index]` work. The types/trait resolution make sure we get the
 // element from the right vector
@@ -453,13 +425,13 @@ impl std::ops::Index<SubsIndex<Variable>> for Subs {
     type Output = Variable;
 
     fn index(&self, index: SubsIndex<Variable>) -> &Self::Output {
-        index.get_in(&self.variables)
+        &self.variables[index.index as usize]
     }
 }
 
 impl std::ops::IndexMut<SubsIndex<Variable>> for Subs {
     fn index_mut(&mut self, index: SubsIndex<Variable>) -> &mut Self::Output {
-        index.get_in_mut(&mut self.variables)
+        &mut self.variables[index.index as usize]
     }
 }
 
@@ -467,7 +439,7 @@ impl std::ops::Index<SubsIndex<Lowercase>> for Subs {
     type Output = Lowercase;
 
     fn index(&self, index: SubsIndex<Lowercase>) -> &Self::Output {
-        index.get_in(&self.field_names)
+        &self.field_names[index.index as usize]
     }
 }
 
@@ -475,7 +447,7 @@ impl std::ops::Index<SubsIndex<usize>> for Subs {
     type Output = usize;
 
     fn index(&self, index: SubsIndex<usize>) -> &Self::Output {
-        index.get_in(&self.tuple_elem_indices)
+        &self.tuple_elem_indices[index.index as usize]
     }
 }
 
@@ -483,13 +455,13 @@ impl std::ops::Index<SubsIndex<TagName>> for Subs {
     type Output = TagName;
 
     fn index(&self, index: SubsIndex<TagName>) -> &Self::Output {
-        index.get_in(&self.tag_names)
+        &self.tag_names[index.index as usize]
     }
 }
 
 impl std::ops::IndexMut<SubsIndex<TagName>> for Subs {
     fn index_mut(&mut self, index: SubsIndex<TagName>) -> &mut Self::Output {
-        index.get_in_mut(&mut self.tag_names)
+        &mut self.tag_names[index.index as usize]
     }
 }
 
@@ -497,13 +469,13 @@ impl std::ops::Index<SubsIndex<Symbol>> for Subs {
     type Output = Symbol;
 
     fn index(&self, index: SubsIndex<Symbol>) -> &Self::Output {
-        index.get_in(&self.symbol_names)
+        &self.symbol_names[index.index as usize]
     }
 }
 
 impl std::ops::IndexMut<SubsIndex<Symbol>> for Subs {
     fn index_mut(&mut self, index: SubsIndex<Symbol>) -> &mut Self::Output {
-        index.get_in_mut(&mut self.symbol_names)
+        &mut self.symbol_names[index.index as usize]
     }
 }
 
@@ -511,19 +483,19 @@ impl std::ops::Index<SubsIndex<Uls>> for Subs {
     type Output = Uls;
 
     fn index(&self, index: SubsIndex<Uls>) -> &Self::Output {
-        index.get_in(&self.unspecialized_lambda_sets)
+        &self.unspecialized_lambda_sets[index.index as usize]
     }
 }
 
 impl std::ops::IndexMut<SubsIndex<Uls>> for Subs {
     fn index_mut(&mut self, index: SubsIndex<Uls>) -> &mut Self::Output {
-        index.get_in_mut(&mut self.unspecialized_lambda_sets)
+        &mut self.unspecialized_lambda_sets[index.index as usize]
     }
 }
 
 impl std::ops::IndexMut<SubsIndex<Lowercase>> for Subs {
     fn index_mut(&mut self, index: SubsIndex<Lowercase>) -> &mut Self::Output {
-        index.get_in_mut(&mut self.field_names)
+        &mut self.field_names[index.index as usize]
     }
 }
 
@@ -531,13 +503,13 @@ impl std::ops::Index<SubsIndex<RecordField<()>>> for Subs {
     type Output = RecordField<()>;
 
     fn index(&self, index: SubsIndex<RecordField<()>>) -> &Self::Output {
-        index.get_in(&self.record_fields)
+        &self.record_fields[index.index as usize]
     }
 }
 
 impl std::ops::IndexMut<SubsIndex<RecordField<()>>> for Subs {
     fn index_mut(&mut self, index: SubsIndex<RecordField<()>>) -> &mut Self::Output {
-        index.get_in_mut(&mut self.record_fields)
+        &mut self.record_fields[index.index as usize]
     }
 }
 
@@ -545,13 +517,13 @@ impl std::ops::Index<SubsIndex<VariableSubsSlice>> for Subs {
     type Output = VariableSubsSlice;
 
     fn index(&self, index: SubsIndex<VariableSubsSlice>) -> &Self::Output {
-        index.get_in(&self.variable_slices)
+        &self.variable_slices[index.index as usize]
     }
 }
 
 impl std::ops::IndexMut<SubsIndex<VariableSubsSlice>> for Subs {
     fn index_mut(&mut self, index: SubsIndex<VariableSubsSlice>) -> &mut Self::Output {
-        index.get_in_mut(&mut self.variable_slices)
+        &mut self.variable_slices[index.index as usize]
     }
 }
 
@@ -1520,41 +1492,33 @@ pub struct SubsSnapshot {
     uls_of_var_snapshot: UlsOfVarSnapshot,
 }
 
-fn unchecked_slice<T>(start: u32, len: u16) -> SubsSlice<T> {
-    unsafe { SubsSlice::new_unchecked(start, len) }
-}
-
-fn unchecked_index<T>(index: u32) -> SubsIndex<T> {
-    unsafe { SubsIndex::new_unchecked(index) }
-}
-
 impl Subs {
     // IFTTT INIT-TagNames
-    pub const RESULT_TAG_NAMES: SubsSlice<TagName> = unchecked_slice(0, 2);
-    pub const TAG_NAME_ERR: SubsIndex<TagName> = unchecked_index(0);
-    pub const TAG_NAME_OK: SubsIndex<TagName> = unchecked_index(1);
-    pub const TAG_NAME_INVALID_NUM_STR: SubsIndex<TagName> = unchecked_index(2);
-    pub const TAG_NAME_BAD_UTF_8: SubsIndex<TagName> = unchecked_index(3);
-    pub const TAG_NAME_OUT_OF_BOUNDS: SubsIndex<TagName> = unchecked_index(4);
+    pub const RESULT_TAG_NAMES: SubsSlice<TagName> = SubsSlice::new(0, 2);
+    pub const TAG_NAME_ERR: SubsIndex<TagName> = SubsIndex::new(0);
+    pub const TAG_NAME_OK: SubsIndex<TagName> = SubsIndex::new(1);
+    pub const TAG_NAME_INVALID_NUM_STR: SubsIndex<TagName> = SubsIndex::new(2);
+    pub const TAG_NAME_BAD_UTF_8: SubsIndex<TagName> = SubsIndex::new(3);
+    pub const TAG_NAME_OUT_OF_BOUNDS: SubsIndex<TagName> = SubsIndex::new(4);
     // END INIT-TagNames
 
     // IFTTT INIT-VariableSubsSlice
-    pub const STR_SLICE: VariableSubsSlice = unchecked_slice(0, 1);
+    pub const STR_SLICE: VariableSubsSlice = SubsSlice::new(0, 1);
     // END INIT-VariableSubsSlice
 
     // IFTTT INIT-SymbolSubsSlice
     #[rustfmt::skip]
-    pub const AB_ENCODING: SubsSlice<Symbol>        = unchecked_slice(0, 1);
+    pub const AB_ENCODING: SubsSlice<Symbol>        = SubsSlice::new(0, 1);
     #[rustfmt::skip]
-    pub const AB_DECODING: SubsSlice<Symbol>        = unchecked_slice(1, 1);
+    pub const AB_DECODING: SubsSlice<Symbol>        = SubsSlice::new(1, 1);
     #[rustfmt::skip]
-    pub const AB_HASHER: SubsSlice<Symbol>          = unchecked_slice(2, 1);
+    pub const AB_HASHER: SubsSlice<Symbol>          = SubsSlice::new(2, 1);
     #[rustfmt::skip]
-    pub const AB_HASH: SubsSlice<Symbol>            = unchecked_slice(3, 1);
+    pub const AB_HASH: SubsSlice<Symbol>            = SubsSlice::new(3, 1);
     #[rustfmt::skip]
-    pub const AB_EQ: SubsSlice<Symbol>              = unchecked_slice(4, 1);
+    pub const AB_EQ: SubsSlice<Symbol>              = SubsSlice::new(4, 1);
     #[rustfmt::skip]
-    pub const AB_INSPECT: SubsSlice<Symbol>         = unchecked_slice(5, 1);
+    pub const AB_INSPECT: SubsSlice<Symbol>         = SubsSlice::new(5, 1);
     // END INIT-SymbolSubsSlice
 
     pub fn new() -> Self {
@@ -1684,7 +1648,7 @@ impl Subs {
         self.variables
             .extend(std::iter::repeat(Variable::NULL).take(length));
 
-        Slice::new(start, length as u16, &self.variables)
+        Slice::new(start, length as u16)
     }
 
     pub fn insert_into_vars<I>(&mut self, input: I) -> VariableSubsSlice
@@ -1697,7 +1661,7 @@ impl Subs {
 
         let length = (self.variables.len() as u32 - start) as u16;
 
-        Slice::new(start, length as u16, &self.variables)
+        Slice::new(start, length)
     }
 
     pub fn reserve_variable_slices(&mut self, length: usize) -> SubsSlice<VariableSubsSlice> {
@@ -1710,7 +1674,7 @@ impl Subs {
             self.variable_slices.push(value);
         }
 
-        Slice::new(start, length as u16, &self.variable_slices)
+        Slice::new(start, length as u16)
     }
 
     pub fn reserve_tag_names(&mut self, length: usize) -> SubsSlice<TagName> {
@@ -1719,7 +1683,7 @@ impl Subs {
         self.tag_names
             .extend(std::iter::repeat(TagName(Uppercase::default())).take(length));
 
-        Slice::new(start, length as u16, &self.tag_names)
+        Slice::new(start, length as u16)
     }
 
     pub fn reserve_uls_slice(&mut self, length: usize) -> SubsSlice<Uls> {
@@ -1728,7 +1692,7 @@ impl Subs {
         self.unspecialized_lambda_sets
             .extend(std::iter::repeat(Uls(Variable::NULL, Symbol::UNDERSCORE, 0)).take(length));
 
-        Slice::new(start, length as u16, &self.unspecialized_lambda_sets)
+        Slice::new(start, length as u16)
     }
 
     #[inline(always)]
@@ -2245,53 +2209,11 @@ impl From<Content> for Descriptor {
     }
 }
 
-roc_error_macros::assert_sizeof_all!(
-    Content,
-    4 * 8 + {
-        // extra bytes in debug builds for extra Index/Slice array pointer storage for verification
-        #[cfg(debug_assertions)]
-        {
-            16
-        }
-
-        #[cfg(not(debug_assertions))]
-        {
-            0
-        }
-    }
-);
+roc_error_macros::assert_sizeof_all!(Content, 4 * 8);
 roc_error_macros::assert_sizeof_all!((Symbol, AliasVariables, Variable), 8 + 12 + 4);
 roc_error_macros::assert_sizeof_all!(AliasVariables, 12);
-roc_error_macros::assert_sizeof_all!(
-    FlatType,
-    3 * 8 + 4 + {
-        // extra bytes in debug builds for extra Index/Slice array pointer storage for verification
-        #[cfg(debug_assertions)]
-        {
-            12
-        }
-
-        #[cfg(not(debug_assertions))]
-        {
-            0
-        }
-    }
-);
-roc_error_macros::assert_sizeof_all!(
-    LambdaSet,
-    3 * 8 + 4 + {
-        // extra bytes in debug builds for extra Index/Slice array pointer storage for verification
-        #[cfg(debug_assertions)]
-        {
-            12
-        }
-
-        #[cfg(not(debug_assertions))]
-        {
-            0
-        }
-    }
-);
+roc_error_macros::assert_sizeof_all!(FlatType, 3 * 8 + 4);
+roc_error_macros::assert_sizeof_all!(LambdaSet, 3 * 8 + 4);
 
 roc_error_macros::assert_sizeof_aarch64!((Variable, Option<Lowercase>), 4 * 8);
 roc_error_macros::assert_sizeof_wasm!((Variable, Option<Lowercase>), 4 * 4);
@@ -2390,16 +2312,16 @@ pub struct AliasVariables {
 
 impl AliasVariables {
     pub const fn all_variables(&self) -> VariableSubsSlice {
-        unsafe { SubsSlice::new_unchecked(self.variables_start, self.all_variables_len) }
+        SubsSlice::new(self.variables_start, self.all_variables_len)
     }
 
     pub const fn type_variables(&self) -> VariableSubsSlice {
-        unsafe { SubsSlice::new_unchecked(self.variables_start, self.type_variables_len) }
+        SubsSlice::new(self.variables_start, self.type_variables_len)
     }
 
     pub const fn lambda_set_variables(&self) -> VariableSubsSlice {
         let start = self.variables_start + self.type_variables_len as u32;
-        unsafe { SubsSlice::new_unchecked(start, self.lambda_set_variables_len) }
+        SubsSlice::new(start, self.lambda_set_variables_len)
     }
 
     pub const fn infer_ext_in_output_variables(&self) -> VariableSubsSlice {
@@ -2407,7 +2329,7 @@ impl AliasVariables {
             self.type_variables_len as u32 + self.lambda_set_variables_len as u32;
         let start = self.variables_start + infer_ext_vars_offset;
         let infer_ext_vars_len = self.all_variables_len - infer_ext_vars_offset as u16;
-        unsafe { SubsSlice::new_unchecked(start, infer_ext_vars_len) }
+        SubsSlice::new(start, infer_ext_vars_len)
     }
 
     pub const fn len(&self) -> usize {
@@ -2724,7 +2646,7 @@ where
         }
 
         let slice = subs.variable_slices[self.values_start as usize];
-        slice.len() == 1
+        slice.length == 1
     }
 
     pub fn from_tag_name_index(index: SubsIndex<L>) -> Self {
@@ -2743,8 +2665,8 @@ where
 
         Self {
             length: labels.len() as u16,
-            labels_start: labels.start(),
-            values_start: variables.start(),
+            labels_start: labels.start,
+            values_start: variables.start,
             _marker: Default::default(),
         }
     }
@@ -3072,25 +2994,24 @@ impl RecordFields {
     }
 
     pub const fn variables(&self) -> SubsSlice<Variable> {
-        unsafe { SubsSlice::new_unchecked(self.variables_start, self.length) }
+        SubsSlice::new(self.variables_start, self.length)
     }
 
     pub const fn field_names(&self) -> SubsSlice<Lowercase> {
-        unsafe { SubsSlice::new_unchecked(self.field_names_start, self.length) }
+        SubsSlice::new(self.field_names_start, self.length)
     }
 
     pub const fn record_fields(&self) -> SubsSlice<RecordField<()>> {
-        unsafe { SubsSlice::new_unchecked(self.field_types_start, self.length) }
+        SubsSlice::new(self.field_types_start, self.length)
     }
 
     pub fn iter_variables(&self) -> impl Iterator<Item = SubsIndex<Variable>> {
-        let slice = unsafe { SubsSlice::new_unchecked(self.variables_start, self.length) };
+        let slice = SubsSlice::new(self.variables_start, self.length);
         slice.into_iter()
     }
 
     pub fn has_only_optional_fields(&self, subs: &Subs) -> bool {
-        let slice: SubsSlice<RecordField<()>> =
-            unsafe { SubsSlice::new_unchecked(self.field_types_start, self.length) };
+        let slice: SubsSlice<RecordField<()>> = SubsSlice::new(self.field_types_start, self.length);
 
         subs.get_subs_slice(slice)
             .iter()
@@ -3223,15 +3144,7 @@ impl RecordFields {
 
         let it = range1.into_iter().zip(range2).zip(range3);
 
-        unsafe {
-            it.map(|((i1, i2), i3)| {
-                (
-                    SubsIndex::new_unchecked(i1),
-                    SubsIndex::new_unchecked(i2),
-                    SubsIndex::new_unchecked(i3),
-                )
-            })
-        }
+        it.map(|((i1, i2), i3)| (SubsIndex::new(i1), SubsIndex::new(i2), SubsIndex::new(i3)))
     }
 }
 
@@ -3292,15 +3205,15 @@ impl TupleElems {
     }
 
     pub const fn variables(&self) -> SubsSlice<Variable> {
-        unsafe { SubsSlice::new_unchecked(self.variables_start, self.length) }
+        SubsSlice::new(self.variables_start, self.length)
     }
 
     pub const fn elem_indices(&self) -> SubsSlice<usize> {
-        unsafe { SubsSlice::new_unchecked(self.elem_index_start, self.length) }
+        SubsSlice::new(self.elem_index_start, self.length)
     }
 
     pub fn iter_variables(&self) -> impl Iterator<Item = SubsIndex<Variable>> {
-        let slice = unsafe { SubsSlice::new_unchecked(self.variables_start, self.length) };
+        let slice = SubsSlice::new(self.variables_start, self.length);
         slice.into_iter()
     }
 
@@ -3312,7 +3225,7 @@ impl TupleElems {
 
         let it = range1.into_iter().zip(range2);
 
-        unsafe { it.map(|(i1, i2)| (SubsIndex::new_unchecked(i1), SubsIndex::new_unchecked(i2))) }
+        it.map(|(i1, i2)| (SubsIndex::new(i1), SubsIndex::new(i2)))
     }
 
     pub fn insert_into_subs<I>(subs: &mut Subs, input: I) -> Self

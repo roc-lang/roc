@@ -2,7 +2,6 @@ use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
-use soa::Slice;
 
 use crate::{
     ast::{
@@ -723,8 +722,8 @@ impl<'a> Normalize<'a> for Expr<'a> {
             Expr::Crash => Expr::Crash,
             Expr::Defs(a, b) => {
                 let mut defs = a.clone();
-                defs.space_before = vec![Slice::empty(&defs.spaces); defs.len()];
-                defs.space_after = vec![Slice::empty(&defs.spaces); defs.len()];
+                defs.space_before = vec![Default::default(); defs.len()];
+                defs.space_after = vec![Default::default(); defs.len()];
                 defs.regions = vec![Region::zero(); defs.len()];
                 defs.spaces.clear();
 

@@ -19,8 +19,6 @@ roc_error_macros = { path = "../../error_macros" }
 bumpalo.workspace = true
 encode_unicode.workspace = true
 
-soa.workspace = true
-
 [dev-dependencies]
 criterion.workspace = true
 indoc.workspace = true

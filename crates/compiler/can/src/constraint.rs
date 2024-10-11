@@ -5,12 +5,12 @@ use std::sync::Arc;
 use crate::abilities::SpecializationId;
 use crate::exhaustive::{ExhaustiveContext, SketchedRows};
 use crate::expected::{Expected, PExpected};
+use roc_collections::soa::{EitherIndex, Index, Slice};
 use roc_module::ident::TagName;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{ExhaustiveMark, IllegalCycleMark, Variable};
 use roc_types::types::{Category, PatternCategory, TypeTag, Types};
-use soa::{EitherIndex, Index, Slice};
 
 pub struct Constraints {
     pub constraints: Vec<Constraint>,
@@ -131,36 +131,36 @@ impl Constraints {
         }
     }
 
-    pub const EMPTY_RECORD: Index<Cell<Index<TypeTag>>> = unsafe_index(0);
-    pub const EMPTY_TAG_UNION: Index<Cell<Index<TypeTag>>> = unsafe_index(1);
-    pub const STR: Index<Cell<Index<TypeTag>>> = unsafe_index(2);
+    pub const EMPTY_RECORD: Index<Cell<Index<TypeTag>>> = Index::new(0);
+    pub const EMPTY_TAG_UNION: Index<Cell<Index<TypeTag>>> = Index::new(1);
+    pub const STR: Index<Cell<Index<TypeTag>>> = Index::new(2);
 
-    pub const CATEGORY_RECORD: Index<Category> = unsafe_index(0);
-    pub const CATEGORY_FOREIGNCALL: Index<Category> = unsafe_index(1);
-    pub const CATEGORY_OPAQUEARG: Index<Category> = unsafe_index(2);
-    pub const CATEGORY_LAMBDA: Index<Category> = unsafe_index(3);
-    pub const CATEGORY_CLOSURESIZE: Index<Category> = unsafe_index(4);
-    pub const CATEGORY_STRINTERPOLATION: Index<Category> = unsafe_index(5);
-    pub const CATEGORY_IF: Index<Category> = unsafe_index(6);
-    pub const CATEGORY_WHEN: Index<Category> = unsafe_index(7);
-    pub const CATEGORY_FLOAT: Index<Category> = unsafe_index(8);
-    pub const CATEGORY_INT: Index<Category> = unsafe_index(9);
-    pub const CATEGORY_NUM: Index<Category> = unsafe_index(10);
-    pub const CATEGORY_LIST: Index<Category> = unsafe_index(11);
-    pub const CATEGORY_STR: Index<Category> = unsafe_index(12);
-    pub const CATEGORY_CHARACTER: Index<Category> = unsafe_index(13);
+    pub const CATEGORY_RECORD: Index<Category> = Index::new(0);
+    pub const CATEGORY_FOREIGNCALL: Index<Category> = Index::new(1);
+    pub const CATEGORY_OPAQUEARG: Index<Category> = Index::new(2);
+    pub const CATEGORY_LAMBDA: Index<Category> = Index::new(3);
+    pub const CATEGORY_CLOSURESIZE: Index<Category> = Index::new(4);
+    pub const CATEGORY_STRINTERPOLATION: Index<Category> = Index::new(5);
+    pub const CATEGORY_IF: Index<Category> = Index::new(6);
+    pub const CATEGORY_WHEN: Index<Category> = Index::new(7);
+    pub const CATEGORY_FLOAT: Index<Category> = Index::new(8);
+    pub const CATEGORY_INT: Index<Category> = Index::new(9);
+    pub const CATEGORY_NUM: Index<Category> = Index::new(10);
+    pub const CATEGORY_LIST: Index<Category> = Index::new(11);
+    pub const CATEGORY_STR: Index<Category> = Index::new(12);
+    pub const CATEGORY_CHARACTER: Index<Category> = Index::new(13);
 
-    pub const PCATEGORY_RECORD: Index<PatternCategory> = unsafe_index(0);
-    pub const PCATEGORY_EMPTYRECORD: Index<PatternCategory> = unsafe_index(1);
-    pub const PCATEGORY_PATTERNGUARD: Index<PatternCategory> = unsafe_index(2);
-    pub const PCATEGORY_PATTERNDEFAULT: Index<PatternCategory> = unsafe_index(3);
-    pub const PCATEGORY_SET: Index<PatternCategory> = unsafe_index(4);
-    pub const PCATEGORY_MAP: Index<PatternCategory> = unsafe_index(5);
-    pub const PCATEGORY_STR: Index<PatternCategory> = unsafe_index(6);
-    pub const PCATEGORY_NUM: Index<PatternCategory> = unsafe_index(7);
-    pub const PCATEGORY_INT: Index<PatternCategory> = unsafe_index(8);
-    pub const PCATEGORY_FLOAT: Index<PatternCategory> = unsafe_index(9);
-    pub const PCATEGORY_CHARACTER: Index<PatternCategory> = unsafe_index(10);
+    pub const PCATEGORY_RECORD: Index<PatternCategory> = Index::new(0);
+    pub const PCATEGORY_EMPTYRECORD: Index<PatternCategory> = Index::new(1);
+    pub const PCATEGORY_PATTERNGUARD: Index<PatternCategory> = Index::new(2);
+    pub const PCATEGORY_PATTERNDEFAULT: Index<PatternCategory> = Index::new(3);
+    pub const PCATEGORY_SET: Index<PatternCategory> = Index::new(4);
+    pub const PCATEGORY_MAP: Index<PatternCategory> = Index::new(5);
+    pub const PCATEGORY_STR: Index<PatternCategory> = Index::new(6);
+    pub const PCATEGORY_NUM: Index<PatternCategory> = Index::new(7);
+    pub const PCATEGORY_INT: Index<PatternCategory> = Index::new(8);
+    pub const PCATEGORY_FLOAT: Index<PatternCategory> = Index::new(9);
+    pub const PCATEGORY_CHARACTER: Index<PatternCategory> = Index::new(10);
 
     #[inline(always)]
     pub fn push_type(&mut self, types: &Types, typ: Index<TypeTag>) -> TypeOrVar {
@@ -199,7 +199,7 @@ impl Constraints {
     const fn push_type_variable(var: Variable) -> TypeOrVar {
         // that's right, we use the variable's integer value as the index
         // that way, we don't need to push anything onto a vector
-        let index: Index<Variable> = Index::new(var.index(), self.type_slices.as_slice());
+        let index: Index<Variable> = Index::new(var.index());
 
         EitherIndex::from_right(index)
     }
@@ -337,16 +337,7 @@ impl Constraints {
         category: PatternCategory,
         region: Region,
     ) -> Constraint {
-        let category_index = {
-            let index = Index::new(
-                self.pattern_categories.len() as u32,
-                self.pattern_categories.as_slice(),
-            );
-
-            self.pattern_categories.push(category);
-
-            index
-        };
+        let category_index = Index::push_new(&mut self.pattern_categories, category);
 
         let includes_tag = IncludesTag {
             type_index,
@@ -356,16 +347,7 @@ impl Constraints {
             region,
         };
 
-        let includes_tag_index = {
-            let index = Index::new(
-                self.includes_tags.len() as u32,
-                self.includes_tags.as_slice(),
-            );
-
-            self.includes_tags.push(includes_tag);
-
-            index
-        };
+        let includes_tag_index = Index::push_new(&mut self.includes_tags, includes_tag);
 
         Constraint::IncludesTag(includes_tag_index)
     }
@@ -378,7 +360,7 @@ impl Constraints {
         self.variables.extend(it);
         let length = self.variables.len() - start;
 
-        Slice::new(start as u32, length as u16, self.variables.as_slice())
+        Slice::new(start as _, length as _)
     }
 
     fn def_types_slice<I>(&mut self, it: I) -> DefTypes
@@ -405,8 +387,8 @@ impl Constraints {
         }
 
         DefTypes {
-            types: Slice::new(types_start as u32, length as u16, &self.type_slices),
-            loc_symbols: Slice::new(loc_symbols_start as u32, length as u16, &self.loc_symbols),
+            types: Slice::new(types_start as _, length as _),
+            loc_symbols: Slice::new(loc_symbols_start as _, length as _),
         }
     }
 
@@ -417,7 +399,7 @@ impl Constraints {
     where
         I: IntoIterator<Item = Variable>,
     {
-        let defs_and_ret_constraint = Index::new(self.constraints.len() as u32, &self.constraints);
+        let defs_and_ret_constraint = Index::new(self.constraints.len() as _);
 
         self.constraints.push(defs_constraint);
         self.constraints.push(Constraint::True);
@@ -433,7 +415,7 @@ impl Constraints {
             generalizable: Generalizable(false),
         };
 
-        let let_index = Index::new(self.let_constraints.len() as u32, &self.let_constraints);
+        let let_index = Index::new(self.let_constraints.len() as _);
         self.let_constraints.push(let_contraint);
 
         Constraint::Let(let_index, Slice::default())
@@ -448,7 +430,7 @@ impl Constraints {
     {
         let defs_constraint = self.and_constraint(defs_constraint);
 
-        let defs_and_ret_constraint = Index::new(self.constraints.len() as u32, &self.constraints);
+        let defs_and_ret_constraint = Index::new(self.constraints.len() as _);
         self.constraints.push(defs_constraint);
         self.constraints.push(Constraint::True);
 
@@ -460,7 +442,7 @@ impl Constraints {
             generalizable: Generalizable(false),
         };
 
-        let let_index = Index::new(self.let_constraints.len() as u32, &self.let_constraints);
+        let let_index = Index::new(self.let_constraints.len() as _);
         self.let_constraints.push(let_contraint);
 
         Constraint::Let(let_index, Slice::default())
@@ -483,7 +465,7 @@ impl Constraints {
         I3::IntoIter: ExactSizeIterator,
     {
         // defs and ret constraint are stored consequtively, so we only need to store one index
-        let defs_and_ret_constraint = Index::new(self.constraints.len() as u32, &self.constraints);
+        let defs_and_ret_constraint = Index::new(self.constraints.len() as _);
 
         self.constraints.push(defs_constraint);
         self.constraints.push(ret_constraint);
@@ -496,7 +478,7 @@ impl Constraints {
             generalizable,
         };
 
-        let let_index = Index::new(self.let_constraints.len() as u32, &self.let_constraints);
+        let let_index = Index::new(self.let_constraints.len() as _);
         self.let_constraints.push(let_constraint);
 
         Constraint::Let(let_index, Slice::default())
@@ -532,7 +514,7 @@ impl Constraints {
         I3::IntoIter: ExactSizeIterator,
     {
         // defs and ret constraint are stored consequtively, so we only need to store one index
-        let defs_and_ret_constraint = Index::new(self.constraints.len() as u32, &self.constraints);
+        let defs_and_ret_constraint = Index::new(self.constraints.len() as _);
 
         self.constraints.push(Constraint::True);
         self.constraints.push(module_constraint);
@@ -547,7 +529,7 @@ impl Constraints {
             generalizable: Generalizable(true),
         };
 
-        let let_index = Index::new(self.let_constraints.len() as u32, &self.let_constraints);
+        let let_index = Index::new(self.let_constraints.len() as _);
         self.let_constraints.push(let_contraint);
 
         let pool_slice = self.variable_slice(pool_variables.iter().copied());
@@ -568,9 +550,12 @@ impl Constraints {
             1 => it.next().unwrap(),
             _ => {
                 let start = self.constraints.len() as u32;
+
                 self.constraints.extend(it);
+
                 let end = self.constraints.len() as u32;
-                let slice = Slice::new(start, (end - start) as u16, &self.constraints);
+
+                let slice = Slice::new(start, (end - start) as u16);
 
                 Constraint::And(slice)
             }
@@ -590,19 +575,17 @@ impl Constraints {
         match constraint {
             Constraint::SaveTheEnvironment => true,
             Constraint::Let(index, _) => {
-                let let_constraint = index.get_in(&self.let_constraints);
+                let let_constraint = &self.let_constraints[index.index()];
 
-                unsafe {
-                    let offset = let_constraint.defs_and_ret_constraint.index();
-                    let defs_constraint = &self.constraints[offset];
-                    let ret_constraint = &self.constraints[offset + 1];
+                let offset = let_constraint.defs_and_ret_constraint.index();
+                let defs_constraint = &self.constraints[offset];
+                let ret_constraint = &self.constraints[offset + 1];
 
-                    self.contains_save_the_environment(defs_constraint)
-                        || self.contains_save_the_environment(ret_constraint)
-                }
+                self.contains_save_the_environment(defs_constraint)
+                    || self.contains_save_the_environment(ret_constraint)
             }
             Constraint::And(slice) => {
-                let constraints = slice.get_slice(&self.constraints);
+                let constraints = &self.constraints[slice.indices()];
 
                 constraints
                     .iter()
@@ -684,11 +667,7 @@ impl Constraints {
         // we add a dummy symbol to these regions, so we can store the data in the loc_symbols vec
         let it = expr_regions.into_iter().map(|r| (Symbol::ATTR_ATTR, r));
         let expr_regions = Slice::extend_new(&mut self.loc_symbols, it);
-        let expr_regions = Slice::new(
-            expr_regions.start() as u32,
-            expr_regions.len() as u16,
-            &expr_regions,
-        );
+        let expr_regions = Slice::new(expr_regions.start() as _, expr_regions.len() as _);
 
         let cycle = Cycle {
             def_names,
@@ -725,7 +704,7 @@ impl std::ops::Index<ExpectedTypeIndex> for Constraints {
     type Output = Expected<TypeOrVar>;
 
     fn index(&self, index: ExpectedTypeIndex) -> &Self::Output {
-        index.get_in(&self.expectations)
+        &self.expectations[index.index()]
     }
 }
 
@@ -733,7 +712,7 @@ impl std::ops::Index<PExpectedTypeIndex> for Constraints {
     type Output = PExpected<TypeOrVar>;
 
     fn index(&self, index: PExpectedTypeIndex) -> &Self::Output {
-        index.get_in(&self.pattern_expectations)
+        &self.pattern_expectations[index.index()]
     }
 }
 
@@ -902,8 +881,4 @@ impl std::fmt::Debug for Constraint {
             }
         }
     }
-}
-
-const fn unsafe_index<T, U>(index: u32) -> Index<T, U> {
-    unsafe { Index::new_unchecked(index) }
 }
