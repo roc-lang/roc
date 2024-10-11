@@ -1,4 +1,10 @@
-use core::fmt;
+use core::{
+    any,
+    cmp::Ordering,
+    fmt::{self, Formatter},
+    hash::{Hash, Hasher},
+    marker::PhantomData,
+};
 
 use crate::soa_slice::Slice;
 
@@ -7,50 +13,84 @@ use crate::soa_slice::Slice;
 ///
 /// Unlike a Rust pointer, this is a u32 offset
 /// rather than usize.
-pub struct Index<Array, Elem> {
-    pub index: u32,
-    pub(crate) _marker: core::marker::PhantomData<(Array, Elem)>,
+pub struct Index<T> {
+    pub(crate) index: u32,
+    pub(crate) _marker: PhantomData<T>,
 }
 
-impl<Array, Elem> fmt::Debug for Index<Array, Elem> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "Index<{}, {}>({})",
-            core::any::type_name::<Array>(),
-            core::any::type_name::<Elem>(),
-            self.index
-        )
+impl<T> PartialEq for Index<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.index == other.index
+    }
+}
+
+impl<T> Eq for Index<T> {}
+
+impl<T> PartialOrd for Index<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<T> Ord for Index<T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.index.cmp(&other.index)
+    }
+}
+
+impl<T> fmt::Debug for Index<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "Index<{}>({})", any::type_name::<T>(), self.index)
     }
 }
 
 // derive of copy and clone does not play well with PhantomData
 
-impl<Array, Elem> Copy for Index<Array, Elem> {}
+impl<T> Copy for Index<T> {}
 
-impl<Array, Elem> Clone for Index<Array, Elem> {
+impl<T> Clone for Index<T> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<Array, Elem> Index<Array, Elem> {
+impl<T> Hash for Index<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.index.hash(state);
+    }
+}
+
+impl<T> Index<T> {
     pub const fn new(start: u32) -> Self {
         Self {
             index: start,
-            _marker: core::marker::PhantomData,
+            _marker: PhantomData,
         }
     }
 
-    pub fn push_new(vector: &mut Vec<Elem>, value: Elem) -> Self {
-        let index = Self::new(vector.len() as _);
-
-        vector.push(value);
-
-        index
+    pub const fn as_slice(self) -> Slice<T> {
+        Slice {
+            start: self.index,
+            length: 1,
+            _marker: PhantomData,
+        }
     }
 
-    pub const fn as_slice(self) -> Slice<Array, Elem> {
-        Slice::new(self.index, 1)
+    pub const fn index(self) -> usize {
+        self.index as usize
+    }
+}
+
+impl<'a, T> core::ops::Index<Index<T>> for [T] {
+    type Output = T;
+
+    fn index(&self, index: Index<T>) -> &Self::Output {
+        &self[index.index()]
+    }
+}
+
+impl<'a, T> core::ops::IndexMut<Index<T>> for [T] {
+    fn index_mut(&mut self, index: Index<T>) -> &mut Self::Output {
+        &mut self[index.index()]
     }
 }

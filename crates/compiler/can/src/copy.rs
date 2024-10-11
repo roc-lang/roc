@@ -155,15 +155,13 @@ impl<'a> CopyEnv for AcrossSubs<'a> {
 
     #[inline(always)]
     fn clone_name(&mut self, name: SubsIndex<Lowercase>) -> SubsIndex<Lowercase> {
-        SubsIndex::push_new(&mut self.target.field_names, self.source[name].clone())
+        self.target.push_field_name(self.source[name].clone())
     }
 
     #[inline(always)]
     fn clone_field_names(&mut self, field_names: SubsSlice<Lowercase>) -> SubsSlice<Lowercase> {
-        SubsSlice::extend_new(
-            &mut self.target.field_names,
-            self.source.get_subs_slice(field_names).iter().cloned(),
-        )
+        self.target
+            .extend_field_names(self.source.get_subs_slice(field_names).iter().cloned())
     }
 
     #[inline(always)]
@@ -171,29 +169,26 @@ impl<'a> CopyEnv for AcrossSubs<'a> {
         &mut self,
         tuple_elem_indices: SubsSlice<usize>,
     ) -> SubsSlice<usize> {
-        SubsSlice::extend_new(
-            &mut self.target.tuple_elem_indices,
+        let start = self.target.tuple_elem_indices.len() as u32;
+        self.target.tuple_elem_indices.extend(
             self.source
                 .get_subs_slice(tuple_elem_indices)
                 .iter()
                 .cloned(),
-        )
+        );
+        SubsSlice::new(start, self.target.tuple_elem_indices.len() as u16)
     }
 
     #[inline(always)]
     fn clone_tag_names(&mut self, tag_names: SubsSlice<TagName>) -> SubsSlice<TagName> {
-        SubsSlice::extend_new(
-            &mut self.target.tag_names,
-            self.source.get_subs_slice(tag_names).iter().cloned(),
-        )
+        self.target
+            .extend_tag_names(self.source.get_subs_slice(tag_names).iter().cloned())
     }
 
     #[inline(always)]
     fn clone_lambda_names(&mut self, lambda_names: SubsSlice<Symbol>) -> SubsSlice<Symbol> {
-        SubsSlice::extend_new(
-            &mut self.target.symbol_names,
-            self.source.get_subs_slice(lambda_names).iter().cloned(),
-        )
+        self.target
+            .extend_symbol_names(self.source.get_subs_slice(lambda_names).iter().cloned())
     }
 
     #[inline(always)]
@@ -201,10 +196,11 @@ impl<'a> CopyEnv for AcrossSubs<'a> {
         &mut self,
         record_fields: SubsSlice<RecordField<()>>,
     ) -> SubsSlice<RecordField<()>> {
-        SubsSlice::extend_new(
-            &mut self.target.record_fields,
-            self.source.get_subs_slice(record_fields).iter().copied(),
-        )
+        let start = self.target.record_fields.len() as u32;
+        self.target
+            .record_fields
+            .extend(self.source.get_subs_slice(record_fields).iter().copied());
+        SubsSlice::new(start, self.target.record_fields.len() as u16)
     }
 }
 
@@ -993,9 +989,9 @@ fn deep_copy_type_vars<C: CopyEnv>(
                         let new_fields = {
                             RecordFields {
                                 length: fields.length,
-                                field_names_start: new_field_names.start,
-                                variables_start: new_variables.start,
-                                field_types_start: new_record_fields.start,
+                                field_names_start: new_field_names.start() as u32,
+                                variables_start: new_variables.start() as u32,
+                                field_types_start: new_record_fields.start() as u32,
                             }
                         };
 
@@ -1014,8 +1010,8 @@ fn deep_copy_type_vars<C: CopyEnv>(
                         let new_elems = {
                             TupleElems {
                                 length: elems.length,
-                                variables_start: new_variables.start,
-                                elem_index_start: new_elem_indices.start,
+                                variables_start: new_variables.start() as u32,
+                                elem_index_start: new_elem_indices.start() as u32,
                             }
                         };
 
@@ -1106,7 +1102,7 @@ fn deep_copy_type_vars<C: CopyEnv>(
                 perform_clone!({
                     let new_variables = clone_var_slice!(arguments.all_variables());
                     let new_arguments = AliasVariables {
-                        variables_start: new_variables.start,
+                        variables_start: new_variables.start() as u32,
                         ..arguments
                     };
 
@@ -1193,7 +1189,7 @@ mod test {
     use roc_types::{
         subs::{
             self, Content, Content::*, Descriptor, FlatType, GetSubsSlice, Mark, OptVariable, Rank,
-            Subs, SubsIndex, SubsSlice, Variable,
+            Subs, SubsSlice, Variable,
         },
         types::Uls,
     };
@@ -1212,7 +1208,7 @@ mod test {
     fn copy_flex_var() {
         let mut subs = Subs::new();
 
-        let field_name = SubsIndex::push_new(&mut subs.field_names, "a".into());
+        let field_name = subs.push_field_name("a".into());
         let var = new_var(&mut subs, FlexVar(Some(field_name)));
 
         let mut copied = vec![];
@@ -1233,7 +1229,7 @@ mod test {
     fn copy_rigid_var() {
         let mut subs = Subs::new();
 
-        let field_name = SubsIndex::push_new(&mut subs.field_names, "a".into());
+        let field_name = subs.push_field_name("a".into());
         let var = new_var(&mut subs, RigidVar(field_name));
 
         let mut copied = vec![];
@@ -1254,8 +1250,8 @@ mod test {
     fn copy_flex_able_var() {
         let mut subs = Subs::new();
 
-        let field_name = SubsIndex::push_new(&mut subs.field_names, "a".into());
-        let abilities = SubsSlice::extend_new(&mut subs.symbol_names, [Symbol::UNDERSCORE]);
+        let field_name = subs.push_field_name("a".into());
+        let abilities = subs.extend_symbol_names([Symbol::UNDERSCORE]);
         let var = new_var(&mut subs, FlexAbleVar(Some(field_name), abilities));
 
         let mut copied = vec![];
@@ -1277,8 +1273,8 @@ mod test {
     fn copy_rigid_able_var() {
         let mut subs = Subs::new();
 
-        let field_name = SubsIndex::push_new(&mut subs.field_names, "a".into());
-        let abilities = SubsSlice::extend_new(&mut subs.symbol_names, [Symbol::UNDERSCORE]);
+        let field_name = subs.push_field_name("a".into());
+        let abilities = subs.extend_symbol_names([Symbol::UNDERSCORE]);
         let var = new_var(&mut subs, RigidAbleVar(field_name, abilities));
 
         let mut copied = vec![];
@@ -1299,8 +1295,8 @@ mod test {
     fn copy_deep_expr() {
         let mut subs = Subs::new();
 
-        let a = SubsIndex::push_new(&mut subs.field_names, "a".into());
-        let b = SubsIndex::push_new(&mut subs.field_names, "b".into());
+        let a = subs.push_field_name("a".into());
+        let b = subs.push_field_name("b".into());
         let var1 = new_var(&mut subs, FlexVar(Some(a)));
         let var2 = new_var(&mut subs, FlexVar(Some(b)));
 
@@ -1385,8 +1381,8 @@ mod test {
         let mut source = Subs::new();
         let mut target = Subs::new();
 
-        let a = SubsIndex::push_new(&mut source.field_names, "a".into());
-        let b = SubsIndex::push_new(&mut source.field_names, "b".into());
+        let a = source.push_field_name("a".into());
+        let b = source.push_field_name("b".into());
         let var1 = new_var(&mut source, FlexVar(Some(a)));
         let var2 = new_var(&mut source, FlexVar(Some(b)));
 
@@ -1467,10 +1463,13 @@ mod test {
         let mut target = Subs::new();
 
         let a = new_var(&mut source, FlexVar(None));
-        let uls = SubsSlice::extend_new(
-            &mut source.unspecialized_lambda_sets,
-            vec![Uls(a, Symbol::UNDERSCORE, 3)],
-        );
+        let uls = {
+            let start = source.unspecialized_lambda_sets.len() as u32;
+            source
+                .unspecialized_lambda_sets
+                .extend([Uls(a, Symbol::UNDERSCORE, 3)]);
+            SubsSlice::new(start, source.unspecialized_lambda_sets.len() as u16)
+        };
         let lambda_set_var = new_var(
             &mut source,
             LambdaSet(subs::LambdaSet {
