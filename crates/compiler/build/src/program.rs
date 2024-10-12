@@ -784,6 +784,13 @@ fn build_loaded_file<'a>(
             platform_main_roc.with_file_name(roc_linker::preprocessed_host_filename(target));
         let legacy_host_path = legacy_host_file(target, &platform_main_roc);
         if !preprocessed_host_path.exists() && legacy_host_path.exists() {
+            eprintln!(
+                "LinkingStrategy was set to Surgical (default) in combination with `--prebuilt-platform`. \
+                I tried to find the surgical host at {} but it does not exist. \
+                I could find the legacy host at {}, so I will continue with the Legacy LinkingStrategy...",
+                preprocessed_host_path.display(),
+                legacy_host_path.display()
+            );
             linking_strategy = LinkingStrategy::Legacy;
         }
     }
