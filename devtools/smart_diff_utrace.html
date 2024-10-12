@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>uftrace Diff Tool</title>
+    <style>
+        /* This uftrace diff tool ignores differences in `{`,`}` and `;`.*/
+        /* CSS styles */
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+
+        h1 {
+            text-align: center;
+        }
+
+        #input-area, #result-area {
+            display: flex;
+            margin-bottom: 20px;
+        }
+
+        #input-area textarea {
+            width: 50%;
+            height: 200px;
+            margin: 5px;
+            padding: 10px;
+            font-family: monospace;
+        }
+
+        /* Targeting only direct child divs */
+        #result-area > div {
+            width: 50%;
+            margin: 5px;
+            border: 1px solid #ccc;
+            /* Quadrupled the height from 300px to 1200px */
+            height: 1200px;
+            overflow-y: scroll;
+            white-space: pre-wrap;
+            font-family: monospace;
+        }
+
+        /* Styles for each line in the results */
+        #result1 div, #result2 div {
+            padding: 2px 5px;
+            border-bottom: 1px solid #eee;
+        }   
+
+        .highlight {
+            background-color: yellow;
+        }
+
+        #compare-btn {
+            display: block;
+            margin: 0 auto;
+            padding: 10px 20px;
+            font-size: 16px;
+        }
+
+    </style>
+</head>
+<body>
+    <h1>Text Comparison Tool</h1>
+    <div id="input-area">
+        <textarea id="text1" placeholder="Enter Text 1"></textarea>
+        <textarea id="text2" placeholder="Enter Text 2"></textarea>
+    </div>
+    <button id="compare-btn">Compare</button>
+
+    <div id="result-area">
+        <div id="result1"></div>
+        <div id="result2"></div>
+    </div>
+
+    <script>
+        document.getElementById('compare-btn').addEventListener('click', function() {
+            // Get text from textareas
+            let text1 = document.getElementById('text1').value;
+            let text2 = document.getElementById('text2').value;
+
+            // Function to process lines: remove { }, ; then trim
+            function processLine(line) {
+                return line.replace(/[{};]/g, '').trim();
+            }
+
+            // Split texts into lines and process them
+            let rawLines1 = text1.split(/\r?\n/);
+            let rawLines2 = text2.split(/\r?\n/);
+
+            let lines1 = rawLines1.map(processLine);
+            let lines2 = rawLines2.map(processLine);
+
+            // Find common lines
+            let set1 = new Set(lines1);
+            let set2 = new Set(lines2);
+            let commonLines = new Set([...set1].filter(line => line && set2.has(line)));
+
+            // Display texts with highlighting
+            let result1 = document.getElementById('result1');
+            let result2 = document.getElementById('result2');
+
+            result1.innerHTML = '';
+            result2.innerHTML = '';
+
+            // Display lines for Text 1
+            for (let i = 0; i < rawLines1.length; i++) {
+                let originalLine = rawLines1[i];
+                let processedLine = lines1[i];
+
+                let div = document.createElement('div');
+                div.textContent = originalLine;
+
+                if (!commonLines.has(processedLine)) {
+                    div.classList.add('highlight');
+                }
+                result1.appendChild(div);
+            }
+
+            // Display lines for Text 2
+            for (let i = 0; i < rawLines2.length; i++) {
+                let originalLine = rawLines2[i];
+                let processedLine = lines2[i];
+
+                let div = document.createElement('div');
+                div.textContent = originalLine;
+
+                if (!commonLines.has(processedLine)) {
+                    div.classList.add('highlight');
+                }
+                result2.appendChild(div);
+            }
+        });
+    </script>
+</body>
+</html>
