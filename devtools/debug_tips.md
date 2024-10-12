@@ -97,4 +97,6 @@ It can be valuable if you want to compare two compiler versions/commits and see 
 5. Example usage: `uftrace record --filter 'roc_*' ./target/debug/roc build examples/platform-switching/rocLovesRust.roc`
 6. Show the trace and drop all functions that do not start with `roc`: `uftrace replay -f none --notrace '^[^r]|^r[^o]|^ro[^c]' -D 5`. `-D 5` sets the function call depth, feel free to modify it to best suit your purpose.
 
+Depending on which functions you are interested in, you may also want to set `let threads = Threads::Single;` in the function `load` in `crates/compiler/load_internal/src/file.rs`. That avoids function calls from being obscured between multiple threads.
+
 uftrace also allows you to log function arguments but I have not played with that yet. Our arguments can contain a lot of data, so that may not be so practical.
