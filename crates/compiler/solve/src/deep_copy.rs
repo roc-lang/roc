@@ -121,7 +121,7 @@ fn deep_copy_var_help(
 
     macro_rules! copy_sequence {
         ($length:expr, $variables:expr) => {{
-            let new_variables = SubsSlice::reserve_into_subs(subs, $length as _);
+            let new_variables = subs.reserve_into_vars($length as _);
             for (target_index, var_index) in (new_variables.indices()).zip($variables) {
                 let var = subs[var_index];
                 let copy_var = work!(var);
@@ -134,7 +134,7 @@ fn deep_copy_var_help(
 
     macro_rules! copy_union {
         ($tags:expr) => {{
-            let new_variable_slices = SubsSlice::reserve_variable_slices(subs, $tags.len());
+            let new_variable_slices = subs.reserve_variable_slices($tags.len());
 
             let it = (new_variable_slices.indices()).zip($tags.variables());
             for (target_index, index) in it {
@@ -311,7 +311,7 @@ fn deep_copy_var_help(
 
                 let new_solved = copy_union!(solved);
                 let new_rec_var = recursion_var.map(|v| work!(v));
-                let new_unspecialized = SubsSlice::reserve_uls_slice(subs, unspecialized.len());
+                let new_unspecialized = subs.reserve_uls_slice(unspecialized.len());
 
                 for (new_uls_index, uls_index) in
                     (new_unspecialized.into_iter()).zip(unspecialized.into_iter())
