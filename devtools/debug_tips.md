@@ -99,6 +99,6 @@ It can be valuable if you want to compare two compiler versions/commits and see 
 
 Depending on which functions you are interested in, you may also want to set `let threads = Threads::Single;` in the function `load` in `crates/compiler/load_internal/src/file.rs`. That avoids function calls from being obscured between multiple threads.
 
-If you want to compare the outputs of `uftrace replay -f none ...` between two versions/commits of the compiler, you can do so easily with smart_diff_utrace.html in this repository. This tool ignores differences in `{`,`}` and `;`.
+If you want to compare the outputs of `uftrace replay -f none ...` between two versions/commits of the compiler, you can do so easily with smart_diff_utrace.html in this devtools folder. This tool ignores differences in `{`,`}` and `;`.
 
 uftrace also allows you to log function arguments but I have not played with that yet. Our arguments can contain a lot of data, so that may not be so practical.
