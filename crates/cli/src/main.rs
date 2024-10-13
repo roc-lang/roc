@@ -18,6 +18,7 @@ use roc_load::{FunctionKind, LoadingProblem, Threading};
 use roc_packaging::cache::{self, RocCacheDir};
 use roc_target::Target;
 use std::fs::{self, FileType};
+use std::io::BufRead;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -221,12 +222,14 @@ fn main() -> io::Result<()> {
             match roc_file_path.extension().and_then(OsStr::to_str) {
                 Some("md") => {
                     // Extract the blocks of roc code, do this smarter!
-                    let markdown_contents = fs::read_to_string(roc_file_path.as_path())?;
+                    let f = fs::File::open(roc_file_path.as_path())?;
+                    let markdown_contents = io::BufReader::new(f);
                     let mut roc_blocks: Vec<String> = Vec::new();
                     let mut in_roc_block: bool = false;
                     let mut current_block = String::new();
 
                     for line in markdown_contents.lines() {
+                        let line = line.unwrap();
                         if line == "```roc" {
                             in_roc_block = true;
                         } else if (line == "```") & in_roc_block {
@@ -234,7 +237,7 @@ fn main() -> io::Result<()> {
                             roc_blocks.push(current_block);
                             current_block = String::new();
                         } else if in_roc_block {
-                            current_block.push_str(line);
+                            current_block.push_str(&line);
                             current_block.push_str("\n");
                         }
                     }
