@@ -5,7 +5,7 @@ use crate::subs::{
     VariableSubsSlice,
 };
 use roc_collections::all::{HumanIndex, ImMap, ImSet, MutMap, MutSet, SendMap};
-use roc_collections::soa::{Index, Slice};
+use roc_collections::soa::{index_push_new, slice_extend_new, Index, Slice};
 use roc_collections::VecMap;
 use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
@@ -602,7 +602,7 @@ impl Types {
         self.tags_slices
             .extend(repeat(Slice::default()).take(length));
 
-        Slice::extend_new(&mut self.tags, repeat(TypeTag::EmptyRecord).take(length))
+        slice_extend_new(&mut self.tags, repeat(TypeTag::EmptyRecord).take(length))
     }
 
     fn reserve_type_tag(&mut self) -> Index<TypeTag> {
@@ -610,7 +610,7 @@ impl Types {
 
         self.tags_slices.push(Slice::default());
 
-        Index::push_new(&mut self.tags, TypeTag::EmptyRecord)
+        index_push_new(&mut self.tags, TypeTag::EmptyRecord)
     }
 
     fn set_type_tag(&mut self, index: Index<TypeTag>, tag: TypeTag, type_slice: Slice<TypeTag>) {
@@ -644,10 +644,10 @@ impl Types {
         extension: &TypeExtension,
     ) -> (UnionTags, Slice<TypeTag>) {
         let tag_names_slice =
-            Slice::extend_new(&mut self.tag_names, tags.iter().map(|(n, _)| n.clone()));
+            slice_extend_new(&mut self.tag_names, tags.iter().map(|(n, _)| n.clone()));
 
         // Store the payload slices in the aside buffer
-        let type_slices = Slice::extend_new(
+        let type_slices = slice_extend_new(
             &mut self.aside_types_slices,
             std::iter::repeat(Slice::default()).take(tags.len()),
         );
@@ -698,7 +698,7 @@ impl Types {
             Slice::new(slice.start() as _, slice.len() as _)
         };
 
-        let type_argument_abilities = Slice::extend_new(
+        let type_argument_abilities = slice_extend_new(
             &mut self.type_arg_abilities,
             type_arguments
                 .iter()
@@ -706,7 +706,7 @@ impl Types {
         );
 
         // TODO: populate correctly
-        let type_argument_regions = Slice::extend_new(
+        let type_argument_regions = slice_extend_new(
             &mut self.regions,
             std::iter::repeat(Region::zero()).take(type_arguments.len()),
         );
@@ -759,7 +759,7 @@ impl Types {
             }
             Type::Apply(symbol, arguments, region) => {
                 let type_argument_regions =
-                    Slice::extend_new(&mut self.regions, arguments.iter().map(|t| t.region));
+                    slice_extend_new(&mut self.regions, arguments.iter().map(|t| t.region));
 
                 let type_slice = {
                     let slice = self.reserve_type_tags(arguments.len());
@@ -835,12 +835,12 @@ impl Types {
                     slice
                 };
 
-                let field_types = Slice::extend_new(
+                let field_types = slice_extend_new(
                     &mut self.field_types,
                     fields.values().map(|f| f.map(|_| ())),
                 );
 
-                let field_names = Slice::extend_new(&mut self.field_names, fields.keys().cloned());
+                let field_names = slice_extend_new(&mut self.field_names, fields.keys().cloned());
 
                 let record_fields = RecordFields {
                     length: fields.len() as u16,
@@ -870,7 +870,7 @@ impl Types {
                 };
 
                 let elem_index_slice =
-                    Slice::extend_new(&mut self.tuple_elem_indices, elems.iter().map(|(i, _)| *i));
+                    slice_extend_new(&mut self.tuple_elem_indices, elems.iter().map(|(i, _)| *i));
 
                 let tuple_elems = TupleElems {
                     length: elems.len() as u16,
@@ -902,7 +902,7 @@ impl Types {
                 infer_ext_in_output_types,
             }) => {
                 let type_argument_regions =
-                    Slice::extend_new(&mut self.regions, type_arguments.iter().map(|t| t.region));
+                    slice_extend_new(&mut self.regions, type_arguments.iter().map(|t| t.region));
 
                 let type_arguments_slice = {
                     let slice = self.reserve_type_tags(type_arguments.len());
@@ -936,7 +936,7 @@ impl Types {
                     Slice::new(slice.start() as _, slice.len() as _)
                 };
 
-                let type_argument_abilities = Slice::extend_new(
+                let type_argument_abilities = slice_extend_new(
                     &mut self.type_arg_abilities,
                     type_arguments
                         .iter()
@@ -951,7 +951,7 @@ impl Types {
                     infer_ext_in_output_variables: infer_ext_in_output_slice,
                 };
 
-                let shared = Index::push_new(&mut self.aliases, alias_shared);
+                let shared = index_push_new(&mut self.aliases, alias_shared);
 
                 let tag = TypeTag::DelayedAlias { shared };
 
@@ -982,7 +982,7 @@ impl Types {
                     infer_ext_in_output_types,
                 );
 
-                let shared = Index::push_new(&mut self.aliases, alias_shared);
+                let shared = index_push_new(&mut self.aliases, alias_shared);
                 let actual = self.from_old_type(actual);
 
                 let tag = match kind {
@@ -1056,7 +1056,7 @@ impl Types {
                     lambda_set_variables: new_lambda_set_variables,
                     infer_ext_in_output_variables: new_infer_ext_in_output_variables,
                 };
-                Index::push_new(&mut self.aliases, new_shared)
+                index_push_new(&mut self.aliases, new_shared)
             }};
         }
 
@@ -1064,7 +1064,7 @@ impl Types {
             ($union_tags:expr) => {{
                 let (tags, payload_slices) = self.union_tag_slices($union_tags);
 
-                let new_payload_slices = Slice::extend_new(
+                let new_payload_slices = slice_extend_new(
                     &mut self.aside_types_slices,
                     std::iter::repeat(Slice::default()).take(payload_slices.len()),
                 );
