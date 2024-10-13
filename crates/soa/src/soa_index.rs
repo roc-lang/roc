@@ -14,8 +14,8 @@ use crate::soa_slice::Slice;
 /// Unlike a Rust pointer, this is a u32 offset
 /// rather than usize.
 pub struct Index<T> {
-    pub(crate) index: u32,
-    pub(crate) _marker: PhantomData<T>,
+    pub index: u32,
+    pub _marker: PhantomData<T>,
 }
 
 impl<T> PartialEq for Index<T> {
@@ -81,7 +81,7 @@ impl<T> Index<T> {
     }
 }
 
-impl<'a, T> core::ops::Index<Index<T>> for [T] {
+impl<T> core::ops::Index<Index<T>> for [T] {
     type Output = T;
 
     fn index(&self, index: Index<T>) -> &Self::Output {
@@ -89,7 +89,7 @@ impl<'a, T> core::ops::Index<Index<T>> for [T] {
     }
 }
 
-impl<'a, T> core::ops::IndexMut<Index<T>> for [T] {
+impl<T> core::ops::IndexMut<Index<T>> for [T] {
     fn index_mut(&mut self, index: Index<T>) -> &mut Self::Output {
         &mut self[index.index()]
     }

@@ -10124,7 +10124,7 @@ fn find_lambda_sets_help(
                 | FlatType::RecursiveTagUnion(_, union_tags, ext) => {
                     for tag in union_tags.variables() {
                         stack.extend(
-                            subs.get_subs_slice(subs.variable_slices[tag.index as usize])
+                            subs.get_subs_slice(subs.variable_slices[tag.index()])
                                 .iter()
                                 .rev(),
                         );
@@ -10146,7 +10146,7 @@ fn find_lambda_sets_help(
                 // the lambda set itself should already be caught by Func above, but the
                 // capture can itself contain more lambda sets
                 for index in lambda_set.solved.variables() {
-                    let subs_slice = subs.variable_slices[index.index as usize];
+                    let subs_slice = subs.variable_slices[index.index()];
                     stack.extend(subs.variables[subs_slice.indices()].iter());
                 }
             }

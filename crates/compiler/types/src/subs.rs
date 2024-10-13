@@ -2734,8 +2734,8 @@ where
 
         Self {
             length: labels.len() as u16,
-            labels_start: labels.start() as u32,
-            values_start: variables.start() as u32,
+            labels_start: labels.start(),
+            values_start: variables.start(),
             _marker: Default::default(),
         }
     }
@@ -4977,7 +4977,7 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
                         RecordFields {
                             length: fields.len() as u16,
                             field_names_start,
-                            variables_start: new_variables.start() as u32,
+                            variables_start: new_variables.start(),
                             field_types_start,
                         }
                     };
@@ -5003,7 +5003,7 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
 
                         TupleElems {
                             length: elems.len() as u16,
-                            variables_start: new_variables.start() as u32,
+                            variables_start: new_variables.start(),
                             elem_index_start,
                         }
                     };
@@ -5133,7 +5133,7 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
             }
 
             let new_arguments = AliasVariables {
-                variables_start: new_variables.start() as u32,
+                variables_start: new_variables.start(),
                 ..arguments
             };
 
@@ -5443,7 +5443,7 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
                         RecordFields {
                             length: fields.len() as u16,
                             field_names_start,
-                            variables_start: new_variables.start() as u32,
+                            variables_start: new_variables.start(),
                             field_types_start,
                         }
                     };
@@ -5469,7 +5469,7 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
 
                         TupleElems {
                             length: elems.len() as u16,
-                            variables_start: new_variables.start() as u32,
+                            variables_start: new_variables.start(),
                             elem_index_start,
                         }
                     };
@@ -5637,7 +5637,7 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
             }
 
             let new_arguments = AliasVariables {
-                variables_start: new_variables.start() as u32,
+                variables_start: new_variables.start(),
                 ..arguments
             };
 

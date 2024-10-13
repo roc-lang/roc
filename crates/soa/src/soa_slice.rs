@@ -9,9 +9,9 @@ use crate::soa_index::Index;
 /// rather than a pointer, and the length is u16.
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 pub struct Slice<T> {
-    pub(crate) start: u32,
-    pub(crate) length: u16,
-    pub(crate) _marker: core::marker::PhantomData<T>,
+    pub start: u32,
+    pub length: u16,
+    pub _marker: core::marker::PhantomData<T>,
 }
 
 impl<T> fmt::Debug for Slice<T> {
@@ -51,22 +51,10 @@ impl<T> Slice<T> {
         }
     }
 
-    /// Create an empty slice that isn't associated with any particular array.
-    /// This is marked as unsafe because it omits the runtime checks (in debug builds)
-    /// which verify that indices made from this slice are compared with other
-    /// indices into the original array.
-    pub unsafe fn empty_unchecked() -> Self {
-        Self {
-            start: 0,
-            length: 0,
-            _marker: PhantomData,
-        }
-    }
-
     /// This is unsafe because it doesn't verify that the start index being returned is being used with the original
     /// slice it was created with. Self::get_in is the safe alternative to this.
-    pub const fn start(self) -> usize {
-        self.start as usize
+    pub const fn start(self) -> u32 {
+        self.start
     }
 
     pub fn advance(&mut self, amount: u32) {
@@ -109,18 +97,6 @@ impl<T> Slice<T> {
     }
 
     pub const fn new(start: u32, length: u16) -> Self {
-        Self {
-            start,
-            length,
-            _marker: PhantomData,
-        }
-    }
-
-    /// Create a new slice that isn't associated with any particular array.
-    /// This is marked as unsafe because it omits the runtime checks (in debug builds)
-    /// which verify in debug builds that indices made from this slice are compared with other
-    /// indices into the original array.
-    pub const unsafe fn new_unchecked(start: u32, length: u16) -> Self {
         Self {
             start,
             length,
