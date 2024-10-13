@@ -1034,16 +1034,14 @@ mod serialize {
                     specialization_lambda_sets,
                 } in spec_info
                 {
-                    let regions = {
-                        let start = spec_lambda_sets_regions.len() as u32;
-                        spec_lambda_sets_regions.extend(specialization_lambda_sets.keys().copied());
-                        SubsSlice::new(start, spec_lambda_sets_regions.len() as u16)
-                    };
-                    let vars = {
-                        let start = spec_lambda_sets_vars.len() as u32;
-                        spec_lambda_sets_vars.extend(specialization_lambda_sets.values().copied());
-                        SubsSlice::new(start, spec_lambda_sets_vars.len() as u16)
-                    };
+                    let regions = SubsSlice::extend_new(
+                        &mut spec_lambda_sets_regions,
+                        specialization_lambda_sets.keys().copied(),
+                    );
+                    let vars = SubsSlice::extend_new(
+                        &mut spec_lambda_sets_vars,
+                        specialization_lambda_sets.values().copied(),
+                    );
                     ser_member_spec_infos.push(SerMemberSpecInfo(*symbol, regions, vars));
                 }
 
@@ -1170,18 +1168,14 @@ mod serialize {
                             symbol,
                             specialization_lambda_sets,
                         }) => {
-                            let regions = {
-                                let start = spec_lambda_sets_regions.len() as u32;
-                                spec_lambda_sets_regions
-                                    .extend(specialization_lambda_sets.keys().copied());
-                                SubsSlice::new(start, spec_lambda_sets_regions.len() as u16)
-                            };
-                            let vars = {
-                                let start = spec_lambda_sets_vars.len() as u32;
-                                spec_lambda_sets_vars
-                                    .extend(specialization_lambda_sets.values().copied());
-                                SubsSlice::new(start, spec_lambda_sets_vars.len() as u16)
-                            };
+                            let regions = SubsSlice::extend_new(
+                                &mut spec_lambda_sets_regions,
+                                specialization_lambda_sets.keys().copied(),
+                            );
+                            let vars = SubsSlice::extend_new(
+                                &mut spec_lambda_sets_vars,
+                                specialization_lambda_sets.values().copied(),
+                            );
                             SerResolvedImpl::Impl(SerMemberSpecInfo(*symbol, regions, vars))
                         }
                         ResolvedImpl::Error => SerResolvedImpl::Error,
