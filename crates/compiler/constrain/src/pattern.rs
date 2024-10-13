@@ -171,7 +171,7 @@ fn headers_from_annotation_help(
                             return false;
                         }
 
-                        arguments.iter().zip(arg_types_slice.into_iter()).all(
+                        arguments.iter().zip(arg_types_slice).all(
                             |(arg_pattern, arg_type)| {
                                 headers_from_annotation_help(
                                     types,

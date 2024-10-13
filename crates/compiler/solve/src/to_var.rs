@@ -1020,7 +1020,7 @@ fn register_tag_arguments(
         VariableSubsSlice::default()
     } else {
         let new_variables = env.subs.reserve_into_vars(arguments.len());
-        let it = new_variables.indices().zip(arguments.into_iter());
+        let it = new_variables.indices().zip(arguments);
 
         for (target_index, argument) in it {
             let var = RegisterVariable::with_stack(env, rank, arena, types, argument, stack);
@@ -1071,7 +1071,7 @@ fn insert_tags_fast_path(
     let new_variable_slices = env.subs.reserve_variable_slices(tags.len());
     match find_tag_name_run(&types[tags], env.subs) {
         Some(new_tag_names) => {
-            let it = (new_variable_slices.indices()).zip(payload_slices.into_iter());
+            let it = (new_variable_slices.indices()).zip(payload_slices);
 
             for (variable_slice_index, arguments_index) in it {
                 let arguments = types[arguments_index];
@@ -1086,8 +1086,8 @@ fn insert_tags_fast_path(
 
             let it = (new_variable_slices.indices())
                 .zip(new_tag_names.indices())
-                .zip(tags.into_iter())
-                .zip(payload_slices.into_iter());
+                .zip(tags)
+                .zip(payload_slices);
 
             for (((variable_slice_index, tag_name_index), tag_name), arguments_index) in it {
                 let arguments = types[arguments_index];

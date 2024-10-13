@@ -845,7 +845,7 @@ impl Types {
                 let record_fields = RecordFields {
                     length: fields.len() as u16,
                     field_names_start: field_names.start() as u32,
-                    variables_start: field_type_slice.start() as u32,
+                    variables_start: field_type_slice.start(),
                     field_types_start: field_types.start() as u32,
                 };
 
@@ -874,7 +874,7 @@ impl Types {
 
                 let tuple_elems = TupleElems {
                     length: elems.len() as u16,
-                    variables_start: elem_type_slice.start() as u32,
+                    variables_start: elem_type_slice.start(),
                     elem_index_start: elem_index_slice.start() as u32,
                 };
 
@@ -1419,8 +1419,8 @@ mod debug_types {
                 let (names, kind, tys) = types.record_fields_slices(fields);
                 let fmt_fields = names
                     .into_iter()
-                    .zip(kind.into_iter())
-                    .zip(tys.into_iter())
+                    .zip(kind)
+                    .zip(tys)
                     .map(|((name, kind), ty)| {
                         let (name, kind) = (&types[name], types[kind]);
                         let fmt_kind = f.text(match kind {
@@ -1484,7 +1484,7 @@ mod debug_types {
         let (tags, payload_slices) = types.union_tag_slices(tags);
         let fmt_tags =
             tags.into_iter()
-                .zip(payload_slices.into_iter())
+                .zip(payload_slices)
                 .map(|(tag, payload_slice_index)| {
                     let payload_slice = types[payload_slice_index];
                     let fmt_payloads = payload_slice
@@ -1523,7 +1523,7 @@ mod debug_types {
         let args = types.get_type_arguments(tag);
         let fmt_args = args
             .into_iter()
-            .zip(type_argument_abilities.into_iter())
+            .zip(type_argument_abilities)
             .map(|(arg, abilities)| {
                 let abilities = &types[abilities];
                 let arg = typ(types, f, Arg, arg);
