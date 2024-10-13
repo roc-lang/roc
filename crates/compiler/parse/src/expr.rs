@@ -241,6 +241,9 @@ fn parse_term<'a>(
                 Ok((p, expr, state)) => Ok((p, Loc::pos(start, state.pos(), expr), state)),
                 Err((p, fail)) => Err((p, EExpr::Closure(fail, start))),
             },
+            b'_' => Err((NoProgress, EExpr::Start(start))),
+            b'-' => Err((NoProgress, EExpr::Start(start))),
+            b'!' => Err((NoProgress, EExpr::Start(start))),
             b'(' => rest_of_expr_in_parens_etc(start, arena, state.inc()),
             b'{' => parse_record_expr(start, arena, state, min_indent),
             b'[' => rest_of_list_expr(start, arena, state.inc()),
@@ -265,6 +268,12 @@ fn parse_term<'a>(
                 Err((p, fail)) => Err((p, EExpr::Number(fail, start))),
             },
             _ => {
+                if at_keyword(keyword::CRASH, &state) {
+                    let state = state.advance(keyword::CRASH.len());
+                    let expr = Loc::pos(start, state.pos(), Expr::Crash);
+                    return Ok((MadeProgress, expr, state));
+                }
+
                 if at_keyword(keyword::DBG, &state) {
                     let state = state.advance(keyword::DBG.len());
                     let dbg_expr = Loc::pos(start, state.pos(), Expr::Dbg);
@@ -330,6 +339,7 @@ fn parse_negative_or_term<'a>(
     let start = state.pos();
     if let Some(b) = state.bytes().first() {
         match b {
+            b'\\' => Err((NoProgress, EExpr::Start(start))),
             b'_' => {
                 let state = state.inc();
                 match parse_lowercase_ident(state.clone()) {
@@ -344,34 +354,42 @@ fn parse_negative_or_term<'a>(
                     Err(_) => Err((MadeProgress, EExpr::End(start))),
                 }
             }
-            b'-' if !state
-                .bytes()
-                .get(1)
-                .map(|b| b.is_ascii_whitespace() || *b == b'#')
-                .unwrap_or(false) =>
-            {
-                parse_unary_minus(start, flags, arena, state, min_indent)
-            }
             b'-' => {
-                // drop the minus
-                match parse_number_base(true, &state.bytes()[1..], state) {
-                    Ok((p, literal, state)) => {
-                        let expr = literal_to_expr(literal);
-                        Ok((p, Loc::pos(start, state.pos(), expr), state))
+                if !state
+                    .bytes()
+                    .get(1)
+                    .map(|b| b.is_ascii_whitespace() || *b == b'#')
+                    .unwrap_or(false)
+                {
+                    // unary minus should not be followed by whitespace or comment
+                    let initial = state.clone();
+                    let state = state.inc();
+                    let loc_op = Region::new(start, state.pos());
+
+                    match parse_term(flags, arena, state, min_indent) {
+                        Ok((_, out, state)) => {
+                            let expr = numeric_negate_expr(arena, &initial, loc_op, out, &[]);
+                            Ok((MadeProgress, expr, state))
+                        }
+                        Err((_, fail)) => Err((MadeProgress, fail)),
                     }
-                    Err((MadeProgress, fail)) => Err((MadeProgress, EExpr::Number(fail, start))),
-                    Err(_) => {
-                        // it may be the case with split arrow `- >` or similar,
-                        // so it should not considered as bad number, let's keep parsing until we find the closest error.
-                        Err((NoProgress, EExpr::Start(start)))
+                } else {
+                    // drop the minus and parse '0b', '0o', '0x', etc.
+                    match parse_number_base(true, &state.bytes()[1..], state) {
+                        Ok((p, literal, state)) => {
+                            let expr = literal_to_expr(literal);
+                            Ok((p, Loc::pos(start, state.pos(), expr), state))
+                        }
+                        Err((MadeProgress, fail)) => {
+                            Err((MadeProgress, EExpr::Number(fail, start)))
+                        }
+                        Err(_) => {
+                            // it may be the case with split arrow `- >` or similar,
+                            // so it should not considered as bad number, let's keep parsing until we find the closest error.
+                            Err((NoProgress, EExpr::Start(start)))
+                        }
                     }
                 }
-            }
-            b'0'..=b'9' => {
-                let (p, literal, state) = parse_number_base(false, state.bytes(), state)
-                    .map_err(|(p, fail)| (p, EExpr::Number(fail, start)))?;
-                let expr = literal_to_expr(literal);
-                Ok((p, Loc::pos(start, state.pos(), expr), state))
             }
             b'!' => rest_of_logical_not(start, flags, arena, state.inc(), min_indent),
             b'(' => rest_of_expr_in_parens_etc(start, arena, state.inc()),
@@ -389,6 +407,12 @@ fn parse_negative_or_term<'a>(
                     }
                     Err((p, fail)) => Err((p, EExpr::Str(fail, start))),
                 }
+            }
+            b'0'..=b'9' => {
+                let (p, literal, state) = parse_number_base(false, state.bytes(), state)
+                    .map_err(|(p, fail)| (p, EExpr::Number(fail, start)))?;
+                let expr = literal_to_expr(literal);
+                Ok((p, Loc::pos(start, state.pos(), expr), state))
             }
             _ => {
                 if at_keyword(keyword::CRASH, &state) {
@@ -888,7 +912,7 @@ fn to_call<'a>(
     }
 }
 
-fn numeric_negate_expression<'a>(
+fn numeric_negate_expr<'a>(
     arena: &'a Bump,
     state: &State<'a>,
     loc_op: Region,
@@ -1703,7 +1727,7 @@ fn parse_negated_term<'a>(
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
     let (_, negated_expr, state) = parse_term(flags, arena, state, min_indent)?;
 
-    let arg = numeric_negate_expression(
+    let arg = numeric_negate_expr(
         arena,
         &initial_state,
         loc_op.region,
@@ -3784,27 +3808,6 @@ fn apply_expr_access_chain<'a>(
         })
 }
 
-/// A minus is unary if:
-/// - it is preceded by whitespace (spaces, newlines, comments)
-/// - it is not followed by whitespace
-fn parse_unary_minus<'a>(
-    start: Position,
-    flags: ExprParseFlags,
-    arena: &'a Bump,
-    state: State<'a>,
-    min_indent: u32,
-) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
-    let initial = state.clone();
-    let state = state.inc();
-    let loc_op = Region::new(start, state.pos());
-
-    let (_, loc_expr, state) =
-        parse_term(flags, arena, state, min_indent).map_err(|(_, fail)| (MadeProgress, fail))?;
-
-    let expr = numeric_negate_expression(arena, &initial, loc_op, loc_expr, &[]);
-    Ok((MadeProgress, expr, state))
-}
-
 fn literal_to_expr(literal: crate::number_literal::NumLiteral<'_>) -> Expr<'_> {
     use crate::number_literal::NumLiteral::*;
     match literal {
@@ -3845,16 +3848,15 @@ fn rest_of_logical_not<'a>(
     };
 }
 
-const BINOP_CHAR_SET: &[u8] = b"+-/*=.<>:&|^?%!";
+const BINOP_CHAR_SET: &[u8] = b"+-/*=.<>:&|^?%!~";
 
-const BINOP_CHAR_MASK: [bool; 125] = {
-    let mut result = [false; 125];
+const BINOP_CHAR_MASK: u128 = {
+    let mut result = 0u128;
 
     let mut i = 0;
     while i < BINOP_CHAR_SET.len() {
         let index = BINOP_CHAR_SET[i] as usize;
-
-        result[index] = true;
+        result |= 1 << index;
 
         i += 1;
     }
@@ -3889,7 +3891,7 @@ fn parse_bin_op<'a>(err_progress: Progress, state: State<'a>) -> ParseResult<'a,
 fn parse_operator<'a, F, G, E>(
     to_expectation: F,
     to_error: G,
-    mut state: State<'a>,
+    state: State<'a>,
 ) -> ParseResult<'a, OperatorOrDef, E>
 where
     F: Fn(Position) -> E,
@@ -3900,15 +3902,7 @@ where
 
     macro_rules! good {
         ($op:expr, $width:expr) => {{
-            state = state.advance($width);
-
-            Ok((MadeProgress, $op, state))
-        }};
-    }
-
-    macro_rules! bad_made_progress {
-        ($op:expr) => {{
-            Err((MadeProgress, to_error($op, state.pos())))
+            Ok((MadeProgress, $op, state.advance($width)))
         }};
     }
 
@@ -3943,7 +3937,8 @@ where
         }
         "<-" => good!(OperatorOrDef::Backpassing, 2),
         "!" => Err((NoProgress, to_error("!", state.pos()))),
-        _ => bad_made_progress!(chomped),
+        "~" => good!(OperatorOrDef::BinOp(BinOp::When), 2),
+        _ => Err((MadeProgress, to_error(chomped, state.pos()))),
     }
 }
 
@@ -3951,11 +3946,11 @@ fn chomp_ops(bytes: &[u8]) -> &str {
     let mut chomped = 0;
 
     for c in bytes.iter() {
-        if let Some(true) = BINOP_CHAR_MASK.get(*c as usize) {
-            chomped += 1;
-        } else {
+        let index = *c as usize;
+        if index > 127 || (BINOP_CHAR_MASK & (1 << index) == 0) {
             break;
         }
+        chomped += 1;
     }
 
     unsafe {
