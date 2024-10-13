@@ -61,12 +61,12 @@ impl<T> Slice<T> {
         self.start += amount
     }
 
-    pub fn get_slice<'a>(&self, slice: &'a [T]) -> &'a [T] {
-        &slice[self.indices()]
+    pub fn get_slice<'a>(&self, elems: &'a [T]) -> &'a [T] {
+        &elems[self.indices()]
     }
 
-    pub fn get_slice_mut<'a>(&self, slice: &'a mut [T]) -> &'a mut [T] {
-        &mut slice[self.indices()]
+    pub fn get_slice_mut<'a>(&self, elems: &'a mut [T]) -> &'a mut [T] {
+        &mut elems[self.indices()]
     }
 
     #[inline(always)]

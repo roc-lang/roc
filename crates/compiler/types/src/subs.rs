@@ -11,7 +11,7 @@ use roc_module::ident::{Lowercase, TagName, Uppercase};
 use roc_module::symbol::{ModuleId, Symbol};
 use soa::{Index, Slice};
 use std::fmt;
-use std::iter::{once, Iterator};
+use std::iter::{self, Iterator};
 
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
@@ -1625,7 +1625,7 @@ impl Subs {
             ))
         });
 
-        let u8_slice = subs.insert_into_vars(std::iter::once(Variable::U8));
+        let u8_slice = subs.insert_into_vars(iter::once(Variable::U8));
         subs.set_content(
             Variable::LIST_U8,
             Content::Structure(FlatType::Apply(Symbol::LIST_LIST, u8_slice)),
@@ -1703,7 +1703,7 @@ impl Subs {
         Slice::new(start, (end - start) as u16)
     }
 
-    /// Reserve space for `length` variables in the subs.variables array
+    /// Reserve space for `length` variables in our `variables`
     ///
     /// This is useful when we know how many variables e.g. a loop will produce,
     /// but the loop itself also produces new variables. We often want to work
@@ -2630,13 +2630,13 @@ pub type UnionLambdas = UnionLabels<Symbol>;
 impl UnionTags {
     pub fn for_result(subs: &mut Subs, ok_payload: Variable, err_payload: Variable) -> Self {
         let ok_tuple = {
-            let variables_slice = subs.insert_into_vars(std::iter::once(ok_payload));
+            let variables_slice = subs.insert_into_vars(iter::once(ok_payload));
 
             ("Ok".into(), variables_slice)
         };
 
         let err_tuple = {
-            let variables_slice = subs.insert_into_vars(std::iter::once(err_payload));
+            let variables_slice = subs.insert_into_vars(iter::once(err_payload));
 
             ("Err".into(), variables_slice)
         };
@@ -3444,22 +3444,22 @@ fn occurs(
                     safe!([Variable], subs.get_subs_slice(*args)).iter(),
                 ),
                 Func(arg_vars, closure_var, ret_var) => {
-                    let it = once(safe!(Variable, ret_var))
-                        .chain(once(safe!(Variable, closure_var)))
+                    let it = iter::once(safe!(Variable, ret_var))
+                        .chain(iter::once(safe!(Variable, closure_var)))
                         .chain(safe!([Variable], subs.get_subs_slice(*arg_vars)).iter());
                     short_circuit(subs, root_var, ctx, it)
                 }
                 Record(vars_by_field, ext) => {
                     let slice =
                         VariableSubsSlice::new(vars_by_field.variables_start, vars_by_field.length);
-                    let it = once(safe!(Variable, ext))
+                    let it = iter::once(safe!(Variable, ext))
                         .chain(safe!([Variable], subs.get_subs_slice(slice)).iter());
                     short_circuit(subs, root_var, ctx, it)
                 }
                 Tuple(vars_by_elem, ext) => {
                     let slice =
                         VariableSubsSlice::new(vars_by_elem.variables_start, vars_by_elem.length);
-                    let it = once(safe!(Variable, ext))
+                    let it = iter::once(safe!(Variable, ext))
                         .chain(safe!([Variable], subs.get_subs_slice(slice)).iter());
                     short_circuit(subs, root_var, ctx, it)
                 }
@@ -3470,7 +3470,7 @@ fn occurs(
                     short_circuit_help(subs, root_var, ctx, ext_var)
                 }
                 FunctionOrTagUnion(_, _, ext) => {
-                    short_circuit(subs, root_var, ctx, once(&ext.var()))
+                    short_circuit(subs, root_var, ctx, iter::once(&ext.var()))
                 }
                 RecursiveTagUnion(_, tags, ext) => {
                     let ext_var = ext.var();
