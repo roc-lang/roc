@@ -1182,6 +1182,7 @@ fn canonicalize_value_defs<'a>(
             }
             PendingValue::InvalidIngestedFile => { /* skip */ }
             PendingValue::ImportNameConflict => { /* skip */ }
+            PendingValue::StmtAfterExpr => { /* skip */ }
         }
     }
 
@@ -3019,6 +3020,7 @@ enum PendingValue<'a> {
     SignatureDefMismatch,
     InvalidIngestedFile,
     ImportNameConflict,
+    StmtAfterExpr,
 }
 
 struct PendingExpectOrDbg<'a> {
@@ -3293,6 +3295,7 @@ fn to_pending_value_def<'a>(
 
             PendingValue::Def(PendingValueDef::IngestedFile(loc_pattern, ingested_file.annotation.map(|ann| ann.annotation), ingested_file.path))
         }
+        StmtAfterExpr => PendingValue::StmtAfterExpr,
         Stmt(_) => internal_error!("a Stmt was not desugared correctly, should have been converted to a Body(...) in desguar"),
     }
 }

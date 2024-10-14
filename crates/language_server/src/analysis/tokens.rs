@@ -643,6 +643,7 @@ impl IterTokens for ValueDef<'_> {
                 onetoken(Token::Import, import.name.item.region, arena)
             }
             ValueDef::Stmt(loc_expr) => loc_expr.iter_tokens(arena),
+            ValueDef::StmtAfterExpr => BumpVec::new_in(arena),
         }
     }
 }

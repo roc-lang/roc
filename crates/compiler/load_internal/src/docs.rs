@@ -282,6 +282,10 @@ fn generate_entry_docs(
                     // Don't generate docs for ingested file imports
                 }
 
+                ValueDef::StmtAfterExpr { .. } => {
+                    // Ignore. Canonicalization will produce an error.
+                }
+
                 ValueDef::Stmt(loc_expr) => {
                     if let roc_parse::ast::Expr::Var {
                         ident: identifier, ..

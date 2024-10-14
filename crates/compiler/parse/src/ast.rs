@@ -841,6 +841,8 @@ pub enum ValueDef<'a> {
     IngestedFileImport(IngestedFileImport<'a>),
 
     Stmt(&'a Loc<Expr<'a>>),
+
+    StmtAfterExpr,
 }
 
 impl<'a> ValueDef<'a> {
@@ -1093,7 +1095,9 @@ impl<'a, 'b> Iterator for RecursiveValueDefIter<'a, 'b> {
                             }
                         }
                         ValueDef::Stmt(loc_expr) => self.push_pending_from_expr(&loc_expr.value),
-                        ValueDef::Annotation(_, _) | ValueDef::IngestedFileImport(_) => {}
+                        ValueDef::Annotation(_, _)
+                        | ValueDef::IngestedFileImport(_)
+                        | ValueDef::StmtAfterExpr => {}
                     }
 
                     self.index += 1;
@@ -2752,6 +2756,7 @@ impl<'a> Malformed for ValueDef<'a> {
                 annotation,
             }) => path.is_malformed() || annotation.is_malformed(),
             ValueDef::Stmt(loc_expr) => loc_expr.is_malformed(),
+            ValueDef::StmtAfterExpr => false,
         }
     }
 }

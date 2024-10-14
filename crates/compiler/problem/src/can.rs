@@ -251,6 +251,7 @@ pub enum Problem {
     ReturnAtEndOfFunction {
         region: Region,
     },
+    StmtAfterExpr(Region),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -335,6 +336,7 @@ impl Problem {
             Problem::ReturnOutsideOfFunction { .. } => Warning,
             Problem::StatementsAfterReturn { .. } => Warning,
             Problem::ReturnAtEndOfFunction { .. } => Warning,
+            Problem::StmtAfterExpr(_) => Fatal,
         }
     }
 
@@ -505,6 +507,7 @@ impl Problem {
             | Problem::BadRecursion(cycle_entries) => {
                 cycle_entries.first().map(|entry| entry.expr_region)
             }
+            Problem::StmtAfterExpr(region) => Some(*region),
             Problem::RuntimeError(RuntimeError::UnresolvedTypeVar)
             | Problem::RuntimeError(RuntimeError::ErroneousType)
             | Problem::RuntimeError(RuntimeError::NonExhaustivePattern)
