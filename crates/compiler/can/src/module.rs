@@ -533,7 +533,7 @@ pub fn canonicalize_module_defs<'a>(
                                 aliases: Default::default(),
                             };
 
-                            let hosted_def = crate::task_module::build_host_exposed_def(
+                            let hosted_def = crate::effect_module::build_host_exposed_def(
                                 &mut scope, *symbol, &ident, var_store, annotation,
                             );
 
@@ -586,7 +586,7 @@ pub fn canonicalize_module_defs<'a>(
                                 aliases: Default::default(),
                             };
 
-                            let hosted_def = crate::task_module::build_host_exposed_def(
+                            let hosted_def = crate::effect_module::build_host_exposed_def(
                                 &mut scope, *symbol, &ident, var_store, annotation,
                             );
 
