@@ -1,11 +1,9 @@
 app [main] { pf: platform "effects-platform/main.roc" }
 
-import pf.PlatformTasks
+import pf.Effect
 
-main : Task {} []
-main =
-    line = PlatformTasks.getLine!
-    PlatformTasks.putLine! "You entered: $(line)"
-    PlatformTasks.putLine! "It is known"
-
-    Task.ok {}
+main : {} => {}
+main = \{} ->
+    line = Effect.getLine {}
+    _ = Effect.putLine "You entered: $(line)"
+    Effect.putLine "It is known"

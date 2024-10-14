@@ -33,7 +33,7 @@ pub fn build_host_exposed_def(
 
     let def_body = {
         match typ.shallow_structural_dealias() {
-            Type::Function(args, _, _, _) => {
+            Type::Function(args, _, _, fx) if **fx == Type::Pure => {
                 for i in 0..args.len() {
                     let name = format!("closure_arg_{ident}_{i}");
 
@@ -105,6 +105,45 @@ pub fn build_host_exposed_def(
                     recursive: Recursive::NotRecursive,
                     arguments,
                     loc_body: Box::new(Loc::at_zero(body)),
+                })
+            }
+            Type::Function(args, _, _, fx) if **fx == Type::Effectful => {
+                for i in 0..args.len() {
+                    let name = format!("{ident}_arg_{i}");
+
+                    let arg_symbol = {
+                        let ident = name.clone().into();
+                        scope.introduce(ident, Region::zero()).unwrap()
+                    };
+
+                    let arg_var = var_store.fresh();
+
+                    arguments.push((
+                        arg_var,
+                        AnnotatedMark::new(var_store),
+                        Loc::at_zero(Pattern::Identifier(arg_symbol)),
+                    ));
+
+                    linked_symbol_arguments.push((arg_var, Expr::Var(arg_symbol, arg_var)));
+                }
+
+                let foreign_symbol_name = format!("roc_fx_{ident}");
+                let foreign_call = Expr::ForeignCall {
+                    foreign_symbol: foreign_symbol_name.into(),
+                    args: linked_symbol_arguments,
+                    ret_var: var_store.fresh(),
+                };
+
+                Expr::Closure(ClosureData {
+                    function_type: var_store.fresh(),
+                    closure_type: var_store.fresh(),
+                    return_type: var_store.fresh(),
+                    fx_type: var_store.fresh(),
+                    name: symbol,
+                    captured_symbols: std::vec::Vec::new(),
+                    recursive: Recursive::NotRecursive,
+                    arguments,
+                    loc_body: Box::new(Loc::at_zero(foreign_call)),
                 })
             }
             _ => {
