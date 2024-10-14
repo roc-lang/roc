@@ -242,6 +242,7 @@ pub enum Problem {
         one_occurrence: Region,
         kind: AliasKind,
     },
+    StmtAfterExpr(Region),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -323,6 +324,7 @@ impl Problem {
             Problem::OverAppliedDbg { .. } => RuntimeError,
             Problem::DefsOnlyUsedInRecursion(_, _) => Warning,
             Problem::FileProblem { .. } => Fatal,
+            Problem::StmtAfterExpr(_) => Fatal,
         }
     }
 
@@ -490,6 +492,7 @@ impl Problem {
             | Problem::BadRecursion(cycle_entries) => {
                 cycle_entries.first().map(|entry| entry.expr_region)
             }
+            Problem::StmtAfterExpr(region) => Some(*region),
             Problem::RuntimeError(RuntimeError::UnresolvedTypeVar)
             | Problem::RuntimeError(RuntimeError::ErroneousType)
             | Problem::RuntimeError(RuntimeError::NonExhaustivePattern)

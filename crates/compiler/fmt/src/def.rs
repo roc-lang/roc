@@ -4,6 +4,7 @@ use crate::expr::fmt_str_literal;
 use crate::pattern::fmt_pattern;
 use crate::spaces::{fmt_default_newline, fmt_default_spaces, fmt_spaces, INDENT};
 use crate::Buf;
+use roc_error_macros::internal_error;
 use roc_parse::ast::{
     AbilityMember, Defs, Expr, ExtractSpaces, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
     ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport,
@@ -423,6 +424,7 @@ impl<'a> Formattable for ValueDef<'a> {
             ModuleImport(module_import) => module_import.is_multiline(),
             IngestedFileImport(ingested_file_import) => ingested_file_import.is_multiline(),
             Stmt(loc_expr) => loc_expr.is_multiline(),
+            StmtAfterExpr => internal_error!("shouldn't exist before can"),
         }
     }
 
@@ -464,6 +466,7 @@ impl<'a> Formattable for ValueDef<'a> {
             ModuleImport(module_import) => module_import.format(buf, indent),
             IngestedFileImport(ingested_file_import) => ingested_file_import.format(buf, indent),
             Stmt(loc_expr) => loc_expr.format_with_options(buf, parens, newlines, indent),
+            StmtAfterExpr => internal_error!("shouldn't exist before can"),
         }
     }
 }

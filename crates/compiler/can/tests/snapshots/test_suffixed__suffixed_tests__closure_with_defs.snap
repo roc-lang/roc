@@ -62,6 +62,7 @@ Defs {
                                         [],
                                     ),
                                 ],
+                                Pure,
                                 @34-45 Apply(
                                     "",
                                     "Task",

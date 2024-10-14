@@ -4322,21 +4322,15 @@ mod test_reporting {
             "
         ),
         @r###"
-    ── STATEMENT AFTER EXPRESSION in tmp/double_equals_in_def/Test.roc ─────────────
+    ── STATEMENT AFTER EXPRESSION in /code/proj/Main.roc ───────────────────────────
 
     I just finished parsing an expression with a series of definitions,
 
     and this line is indented as if it's intended to be part of that
     expression:
 
-    1│  app "test" provides [main] to "./platform"
-    2│
-    3│  main =
-    4│      x = 3
-    5│      y =
     6│          x == 5
-    7│          Num.add 1 2
-                ^
+                ^^^^^^
 
     However, I already saw the final expression in that series of
     definitions.

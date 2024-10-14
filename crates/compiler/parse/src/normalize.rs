@@ -439,6 +439,7 @@ impl<'a> Normalize<'a> for ValueDef<'a> {
                 IngestedFileImport(ingested_file_import.normalize(arena))
             }
             Stmt(loc_expr) => Stmt(arena.alloc(loc_expr.normalize(arena))),
+            StmtAfterExpr => StmtAfterExpr,
         }
     }
 }
@@ -1063,7 +1064,6 @@ impl<'a> Normalize<'a> for EExpr<'a> {
             EExpr::IndentEnd(_pos) => EExpr::IndentEnd(Position::zero()),
             EExpr::UnexpectedComma(_pos) => EExpr::UnexpectedComma(Position::zero()),
             EExpr::UnexpectedTopLevelExpr(_pos) => EExpr::UnexpectedTopLevelExpr(Position::zero()),
-            EExpr::StmtAfterExpr(_pos) => EExpr::StmtAfterExpr(Position::zero()),
             EExpr::RecordUpdateOldBuilderField(_pos) => {
                 EExpr::RecordUpdateOldBuilderField(Region::zero())
             }

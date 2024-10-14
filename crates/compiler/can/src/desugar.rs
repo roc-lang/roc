@@ -11,8 +11,8 @@ use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
 use roc_parse::ast::{
-    AssignedField, Collection, Defs, ModuleImportParams, Pattern, StrLiteral, StrSegment,
-    TypeAnnotation, ValueDef, WhenBranch,
+    is_expr_suffixed, AssignedField, Collection, Defs, ModuleImportParams, Pattern, StrLiteral,
+    StrSegment, TypeAnnotation, ValueDef, WhenBranch,
 };
 use roc_problem::can::Problem;
 use roc_region::all::{Loc, Region};
@@ -153,10 +153,19 @@ fn desugar_value_def<'a>(
         }
         IngestedFileImport(_) => *def,
 
+        StmtAfterExpr => internal_error!("unexpected StmtAfterExpr"),
+
         Stmt(stmt_expr) => {
             // desugar `stmt_expr!` to
             // _ : {}
             // _ = stmt_expr!
+
+            if !is_expr_suffixed(&stmt_expr.value) {
+                // [purity-inference] TODO: this is ok in purity inference mode
+                env.problems.push(Problem::StmtAfterExpr(stmt_expr.region));
+
+                return ValueDef::StmtAfterExpr;
+            }
 
             let region = stmt_expr.region;
             let new_pat = env
@@ -317,7 +326,7 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
 
         // TODO support desugaring of Dbg, Expect, and ExpectFx
         Dbg { .. } | ExpectFx { .. } => value_def,
-        ModuleImport { .. } | IngestedFileImport(_) => value_def,
+        ModuleImport { .. } | IngestedFileImport(_) | StmtAfterExpr => value_def,
 
         Stmt(..) => {
             internal_error!(
