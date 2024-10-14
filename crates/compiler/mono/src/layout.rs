@@ -593,7 +593,7 @@ impl<'a> RawFunctionLayout<'a> {
         let arena = env.arena;
 
         match flat_type {
-            Func(args, closure_var, ret_var, fx_var) => {
+            Func(args, closure_var, ret_var, _fx_var) => {
                 let mut fn_args = Vec::with_capacity_in(args.len(), arena);
 
                 let mut cache_criteria = CACHEABLE;
@@ -2151,7 +2151,7 @@ fn lambda_set_size(subs: &Subs, var: Variable) -> (usize, usize, usize) {
                         stack.push((*var, depth_any + 1, depth_lset));
                     }
                 }
-                FlatType::Func(args, lset, ret, fx_var) => {
+                FlatType::Func(args, lset, ret, _fx_var) => {
                     for var in subs.get_subs_slice(*args) {
                         stack.push((*var, depth_any + 1, depth_lset));
                     }
@@ -3321,7 +3321,7 @@ fn layout_from_flat_type<'a>(
                 }
             }
         }
-        Func(args, closure_var, ret_var, fx_var) => {
+        Func(args, closure_var, ret_var, _fx_var) => {
             if env.is_seen(closure_var) {
                 // TODO(recursive-layouts): after the naked pointer is updated, we can cache `var` to
                 // point to the updated layout.
