@@ -410,7 +410,6 @@ pub fn desugar_expr<'a>(
         | Try => loc_expr,
 
         Var { module_name, ident } => {
-            // TODO remove when purity inference fully replaces Task
             // [purity-inference] TODO: only in Task mode
             if ident.ends_with('!') {
                 env.arena.alloc(Loc::at(

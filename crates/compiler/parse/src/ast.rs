@@ -394,6 +394,7 @@ pub enum StrLiteral<'a> {
 /// Values that can be tried, extracting success values or "returning early" on failure
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TryTarget {
+    // TODO: Remove when purity inference replaces Task fully
     /// Tasks suffixed with ! are `Task.await`ed
     Task,
     /// Results suffixed with ? are `Result.try`ed
@@ -594,10 +595,7 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::Var {
             module_name: _,
             ident,
-        } => {
-            // TODO remove when purity inference fully replaces Task
-            ident.ends_with('!')
-        }
+        } => ident.ends_with('!'),
 
         Expr::TrySuffix { .. } => true,
 
