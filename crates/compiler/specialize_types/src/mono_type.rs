@@ -1,4 +1,4 @@
-use roc_module::{ident::Lowercase, symbol::Symbol};
+use roc_module::symbol::Symbol;
 use soa::{Id, Slice, Slice2};
 
 /// For now, a heap-allocated string. In the future, this will be something else.
@@ -26,9 +26,10 @@ impl MonoTypes {
         todo!("extend")
     }
 
-    pub(crate) fn add_record(
+    /// We only use the field labels for sorting later; we don't care what format they're in otherwise.
+    pub(crate) fn add_record<Label: Ord>(
         &self,
-        ext: impl Iterator<Item = (Lowercase, Id<MonoType>)>,
+        fields: impl Iterator<Item = (Label, Id<MonoType>)>,
     ) -> Id<MonoType> {
         todo!("extend")
     }

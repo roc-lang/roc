@@ -3,7 +3,10 @@
 /// specializations of that type wherever necessary.
 ///
 /// This only operates at the type level. It does not create new function implementations (for example).
-use crate::mono_type::{MonoType, MonoTypes};
+use crate::{
+    debug_info::DebugInfo,
+    mono_type::{self, MonoType, MonoTypes},
+};
 use core::iter;
 use roc_collections::{Push, VecMap};
 use roc_module::ident::{Lowercase, TagName};
@@ -41,19 +44,33 @@ impl MonoCache {
         subs: &mut Subs,
         mono_types: &mut MonoTypes,
         problems: &mut impl Push<Problem>,
+        debug_info: &mut Option<DebugInfo>,
         var: Variable,
     ) -> Id<MonoType> {
-        lower_var(self, subs, mono_types, problems, var)
+        lower_var(
+            Env {
+                cache: self,
+                subs,
+                mono_types,
+                problems,
+                debug_info,
+            },
+            var,
+        )
     }
 }
 
-fn lower_var(
-    cache: &mut MonoCache,
-    subs: &mut Subs,
-    mono_types: &mut MonoTypes,
-    problems: &mut impl Push<Problem>,
-    var: Variable,
-) -> Id<MonoType> {
+struct Env<'c, 'd, 'm, 'p, 's, P: Push<Problem>> {
+    cache: &'c mut MonoCache,
+    subs: &'s mut Subs,
+    mono_types: &'m mut MonoTypes,
+    problems: &'p mut P,
+    debug_info: &'d mut Option<DebugInfo>,
+}
+
+fn lower_var<P: Push<Problem>>(env: Env<'_, '_, '_, '_, '_, P>, var: Variable) -> Id<MonoType> {
+    let cache = env.cache;
+    let subs = env.subs;
     let root_var = subs.get_root_key_without_compacting(var);
 
     // TODO: we could replace this cache by having Subs store a Content::Monomorphic(Id<MonoType>)
@@ -63,28 +80,31 @@ fn lower_var(
         return *mono_id;
     }
 
+    let mono_types = env.mono_types;
+    let problems = env.problems;
+
+    // Convert the Content to a MonoType, often by passing an iterator. None of these iterators introduce allocations.
     let mono_id = match *subs.get_content_without_compacting(root_var) {
             Content::Structure(flat_type) => match flat_type {
                 FlatType::Apply(symbol, args) => {
                     let new_args = args
                         .into_iter()
-                        .map(|var_index| lower_var(cache, subs, mono_types, problems, subs[var_index]));
+                        .map(|var_index| lower_var(env, subs[var_index]));
 
                     mono_types.add_apply(symbol, new_args)
                 }
                 FlatType::Func(args, closure, ret) => {
                     let new_args = args
                         .into_iter()
-                        .map(|var_index| lower_var(cache, subs, mono_types, problems, subs[var_index]));
+                        .map(|var_index| lower_var(env, subs[var_index]));
 
-                    let new_closure = lower_var(cache, subs, mono_types, problems, closure);
-                    let new_ret = lower_var(cache, subs, mono_types, problems, ret);
+                    let new_closure = lower_var(env,  closure);
+                    let new_ret = lower_var(env,  ret);
 
                     mono_types.add_function(new_closure, new_ret, new_args)
                 }
                 FlatType::Record(fields, ext) => {
-                    let todo = (); // TODO the basic design here is to make an iterator that does what we want,
-                                   // so that it's no_std, doesn't allocate, etc. - just gives modularity.
+                    let todo = (); // TODO populate debuginfo (if it's Some, meaning we want it)
                     mono_types.add_record(
                         LowerRecordIterator {
                             cache,
@@ -96,15 +116,16 @@ fn lower_var(
                         })
                 }
                 FlatType::Tuple(elems, ext) => {
-                    let mut elems = resolve_tuple_ext(subs, problems, *elems, *ext);
-
-                    // Now lower all the elems we gathered. Do this in a separate pass to avoid borrow errors on Subs.
-                    lower_vars(elems.iter_mut().map(|(_, var)| var), cache, subs, problems);
-
-                    Content::Structure(FlatType::Tuple(
-                        TupleElems::insert_into_subs(subs, elems),
-                        Variable::EMPTY_TUPLE,
-                    ))
+                    let todo = (); // TODO populate debuginfo (if it's Some, meaning we want it)
+                    mono_types.add_tuple(
+                        LowerTupleIterator {
+                            cache,
+                            subs,
+                            mono_types,
+                            problems,
+                            elems: elems.sorted_iterator(subs, ext),
+                            ext,
+                        })
                 }
                 FlatType::TagUnion(tags, ext) => {
                     let mut tags = resolve_tag_ext(subs, problems, *tags, *ext);
@@ -228,7 +249,66 @@ struct LowerRecordIterator<'c, 's, 'm, 'p, 'r, P: Push<Problem>> {
     subs: &'s mut Subs,
     mono_types: &'m mut MonoTypes,
     problems: &'p mut P,
-    fields: SortedFieldIterator<'r>,
+    fields: SortedFieldIterator<'r>, // TODO impl Iterator
+    ext: Variable,
+}
+
+impl<'c, 's, 'm, 'p, 'r, P> Iterator for LowerRecordIterator<'c, 's, 'm, 'p, 'r, P>
+where
+    P: Push<Problem>,
+{
+    type Item = (Lowercase, Id<MonoType>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // Collapse (recursively) all the fields in ext into a flat list of fields.
+        loop {
+            if let Some((label, field)) = self.fields.next() {
+                let var = match field {
+                    RecordField::Demanded(var) => var,
+                    RecordField::Required(var) => var,
+                    RecordField::Optional(var) => var,
+                    RecordField::RigidRequired(var) => var,
+                    RecordField::RigidOptional(var) => var,
+                };
+
+                return Some((
+                    label,
+                    lower_var(self.cache, self.subs, self.mono_types, self.problems, var),
+                ));
+            }
+
+            match self.subs.get_content_without_compacting(self.ext) {
+                Content::Structure(FlatType::Record(new_fields, new_ext)) => {
+                    // Update fields and ext and loop back again to process them.
+                    self.fields = new_fields.sorted_iterator(self.subs, self.ext);
+                    self.ext = *new_ext;
+                }
+                Content::Structure(FlatType::EmptyRecord) => return None,
+                Content::FlexVar(_) | Content::FlexAbleVar(_, _) => return None,
+                Content::Alias(_, _, real, _) => {
+                    // Follow the alias and process it on the next iteration of the loop.
+                    self.ext = *real;
+
+                    // We just processed these fields, so don't process them again!
+                    self.fields = Box::new(iter::empty());
+                }
+                _ => {
+                    // This should never happen! If it does, record a Problem and break.
+                    self.problems.push(Problem::RecordExtWasNotRecord);
+
+                    return None;
+                }
+            }
+        }
+    }
+}
+
+struct LowerTupleIterator<'c, 's, 'm, 'p, 'r, P: Push<Problem>> {
+    cache: &'c mut MonoCache,
+    subs: &'s mut Subs,
+    mono_types: &'m mut MonoTypes,
+    problems: &'p mut P,
+    fields: SortedElemsIterator<'r>,
     ext: Variable,
 }
 
@@ -333,6 +413,6 @@ fn lower_vars<'a>(
     problems: &mut impl Push<Problem>,
 ) {
     for var in vars {
-        *var = lower_var(cache, subs, mono_types, problems, *var);
+        *var = lower_var(env, *var);
     }
 }
