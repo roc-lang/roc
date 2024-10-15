@@ -169,9 +169,6 @@ fn record_field_access_chain<'a>() -> impl Parser<'a, Vec<'a, Suffix<'a>>, EExpr
                 )
             )
         ),
-        map(byte(b'!', EExpr::Access), |_| Suffix::TrySuffix(
-            TryTarget::Task
-        )),
         map(byte(b'?', EExpr::Access), |_| Suffix::TrySuffix(
             TryTarget::Result
         )),
