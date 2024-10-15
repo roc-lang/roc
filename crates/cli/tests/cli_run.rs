@@ -1067,7 +1067,6 @@ mod cli_run {
     fn cli_form_check() {
         let path = file_path_from_root("crates/cli/tests/cli", "form.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
-        dbg!(out.stdout, out.stderr);
         assert_valid_roc_check_status(out.status);
     }
 
@@ -1077,7 +1076,6 @@ mod cli_run {
     fn cli_form_markdown_check() {
         let path = file_path_from_root("crates/cli/tests/cli", "form.md");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
-        dbg!(out.stdout, out.stderr);
         assert_valid_roc_check_status(out.status);
     }
 
