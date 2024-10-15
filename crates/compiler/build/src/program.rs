@@ -873,7 +873,13 @@ fn build_loaded_file<'a>(
         // The following 4 cases represent the possible valid host states for the compiler once
         // host rebuilding has been removed.
         (Ok(host_path), _, false, _) => PrebuiltHost::Legacy(host_path),
-        (_, Ok(artifacts), false, _) => PrebuiltHost::Surgical(artifacts),
+        (_, Ok(artifacts), false, _) => {
+            // Copy preprocessed host to executable location.
+            // The surgical linker will modify that copy in-place.
+            std::fs::copy(&artifacts.preprocessed_host, output_exe_path.as_path()).unwrap();
+
+            PrebuiltHost::Surgical(artifacts)
+        },
         (Err(_), Err(_), false, LinkType::Dylib) => PrebuiltHost::None,
         (Err(_), Err(_), false, LinkType::None) => PrebuiltHost::None,
         (Err(legacy_paths), Err(surgical_paths), false, LinkType::Executable) => {
