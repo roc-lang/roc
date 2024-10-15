@@ -1285,7 +1285,12 @@ fn surgery_macho_help(
     // Move data and deal with relocations.
     for sec in rodata_sections
         .iter()
-        .chain(bss_sections.iter())
+        .chain(bss_sections.iter()) // TODO why do we even
+        // include uninitialized
+        // data if it cannot
+        // ever have any
+        // relocations in the
+        // first place?
         .chain(text_sections.iter())
     {
         let data = match sec.data() {
@@ -1345,6 +1350,20 @@ fn surgery_macho_help(
                             RelocationKind::Relative | RelocationKind::PltRelative => {
                                 target_offset - virt_base as i64 + rel.1.addend()
                             }
+                            RelocationKind::MachO { value, relative } => match value {
+                                macho::ARM64_RELOC_SUBTRACTOR => {
+                                    println!("Handle SUB reloc");
+                                    0
+                                }
+                                macho::ARM64_RELOC_UNSIGNED => {
+                                    println!("Handle UNSIGNED reloc");
+                                    0
+                                }
+                                _ => {
+                                    println!("Handle other MachO relocs");
+                                    0
+                                }
+                            },
                             x => {
                                 internal_error!("Relocation Kind not yet support: {:?}", x);
                             }
