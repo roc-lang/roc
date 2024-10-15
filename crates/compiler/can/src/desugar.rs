@@ -349,7 +349,6 @@ pub fn desugar_expr<'a>(
         | NonBase10Int { .. }
         | SingleQuote(_)
         | AccessorFunction(_)
-        | Var { .. }
         | Underscore { .. }
         | MalformedIdent(_, _)
         | MalformedClosure
@@ -361,6 +360,25 @@ pub fn desugar_expr<'a>(
         | Tag(_)
         | OpaqueRef(_)
         | Crash => loc_expr,
+
+        Var { module_name, ident } => {
+            // TODO remove when purity inference fully replaces Task
+            // [purity-inference] TODO: only in Task mode
+            if ident.ends_with('!') {
+                env.arena.alloc(Loc::at(
+                    loc_expr.region,
+                    TrySuffix {
+                        expr: env.arena.alloc(Var {
+                            module_name,
+                            ident: ident.trim_end_matches('!'),
+                        }),
+                        target: roc_parse::ast::TryTarget::Task,
+                    },
+                ))
+            } else {
+                loc_expr
+            }
+        }
 
         Str(str_literal) => match str_literal {
             StrLiteral::PlainLine(_) => loc_expr,
