@@ -954,52 +954,50 @@ fn numeric_negate_expr<'a>(
     Loc::at(region, new_expr).spaced_before(arena, spaces)
 }
 
-// todo: @wip
 fn import_params<'a>() -> impl Parser<'a, ModuleImportParams<'a>, EImportParams<'a>> {
-    then(
-        and(
-            backtrackable(space0_e(EImportParams::Indent)),
-            specialize_err(EImportParams::Record, loc(record_help())),
-        ),
-        |arena, state, _, (before, loc_record): (_, Loc<RecordHelp<'a>>)| {
-            if let Some(prefix) = loc_record.value.prefix {
-                match prefix {
-                    (update, RecordHelpPrefix::Update) => {
-                        return Err((
-                            MadeProgress,
-                            EImportParams::RecordUpdateFound(update.region),
-                        ))
-                    }
-                    (mapper, RecordHelpPrefix::Mapper) => {
-                        return Err((
-                            MadeProgress,
-                            EImportParams::RecordBuilderFound(mapper.region),
-                        ))
-                    }
-                }
-            }
-
-            let params = loc_record
-                .value
-                .fields
-                .map_items_result(arena, |loc_field| {
-                    match loc_field.value.to_assigned_field(arena) {
-                        AssignedField::IgnoredValue(_, _, _) => Err((
-                            MadeProgress,
-                            EImportParams::RecordIgnoredFieldFound(loc_field.region),
-                        )),
-                        field => Ok(Loc::at(loc_field.region, field)),
-                    }
-                })?;
-
-            let import_params = ModuleImportParams {
-                before,
-                params: Loc::at(loc_record.region, params),
+    move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
+        let (spaces_before, state) =
+            match eat_space_check(EImportParams::Indent, arena, state, min_indent, false) {
+                Ok((_, sp, state)) => (sp, state),
+                Err((_, fail)) => return Err((NoProgress, fail)),
             };
 
-            Ok((MadeProgress, import_params, state))
-        },
-    )
+        let record_pos = state.pos();
+        let (record, state) = match record_help().parse(arena, state, min_indent) {
+            Ok((_, out, state)) => (out, state),
+            Err((p, fail)) => return Err((p, EImportParams::Record(fail, record_pos))),
+        };
+        let record_at = Region::new(record_pos, state.pos());
+
+        if let Some(prefix) = record.prefix {
+            let fail = match prefix {
+                (update, RecordHelpPrefix::Update) => {
+                    EImportParams::RecordUpdateFound(update.region)
+                }
+                (mapper, RecordHelpPrefix::Mapper) => {
+                    EImportParams::RecordBuilderFound(mapper.region)
+                }
+            };
+            return Err((MadeProgress, fail));
+        }
+
+        let params = record.fields.map_items_result(arena, |loc_field| {
+            match loc_field.value.to_assigned_field(arena) {
+                AssignedField::IgnoredValue(_, _, _) => Err((
+                    MadeProgress,
+                    EImportParams::RecordIgnoredFieldFound(loc_field.region),
+                )),
+                field => Ok(Loc::at(loc_field.region, field)),
+            }
+        })?;
+
+        let import_params = ModuleImportParams {
+            before: spaces_before,
+            params: Loc::at(record_at, params),
+        };
+
+        Ok((MadeProgress, import_params, state))
+    }
 }
 
 #[inline(always)]
@@ -1077,16 +1075,31 @@ fn import_exposed_name<'a>(
 
 #[inline(always)]
 fn import_ingested_file_as<'a>(
-) -> impl Parser<'a, header::KeywordItem<'a, ImportAsKeyword, Loc<&'a str>>, EImport<'a>> {
-    record!(header::KeywordItem {
-        keyword: header::spaces_around_keyword(
-            ImportAsKeyword,
-            EImport::As,
-            EImport::IndentAs,
-            EImport::IndentIngestedName
-        ),
-        item: specialize_err(|(), pos| EImport::IngestedName(pos), loc(lowercase_ident()))
-    })
+    arena: &'a Bump,
+    state: State<'a>,
+    min_indent: u32,
+) -> ParseResult<'a, header::KeywordItem<'a, ImportAsKeyword, Loc<&'a str>>, EImport<'a>> {
+    let (keyword, state) = match header::spaces_around_keyword(
+        ImportAsKeyword,
+        EImport::As,
+        EImport::IndentAs,
+        EImport::IndentIngestedName,
+    )
+    .parse(arena, state, min_indent)
+    {
+        Ok((_, out, state)) => (out, state),
+        Err(err) => return Err(err),
+    };
+
+    let item_pos = state.pos();
+    let (item, state) = match parse_lowercase_ident(state) {
+        Ok((_, out, state)) => (out, state),
+        Err(_) => return Err((MadeProgress, EImport::IngestedName(item_pos))),
+    };
+    let item = Loc::pos(item_pos, state.pos(), item);
+
+    let keyword_item = header::KeywordItem { keyword, item };
+    Ok((MadeProgress, keyword_item, state))
 }
 
 #[inline(always)]
@@ -2257,65 +2270,69 @@ fn rest_of_closure<'a>(
 
     // Either pipe shortcut `\|> f` into `\p -> p |> f`,
     // or the rest of BinOp's, e.g. `\+ 1` into `\p -> p + 1`,
-    if let Ok((_, binop, state)) = parse_bin_op(MadeProgress, state.clone()) {
-        let after_binop = state.pos();
+    // Excluding the operators for which the shortcut does not make sense:
+    // Assignment '=', Backpassing '<-', and Type Alias ':', ':='
+    if let Ok((_, op, state)) = parse_operator(EExpr::Start, EExpr::BadOperator, state.clone()) {
+        if let OperatorOrDef::BinOp(binop) = op {
+            let after_binop = state.pos();
 
-        let param = Pattern::Identifier {
-            ident: CLOSURE_SHORTCUT_ARG,
-        };
-        let param = Loc::pos(after_slash, after_binop, param);
-        let mut params = Vec::with_capacity_in(1, arena);
-        params.push(param);
+            let param = Pattern::Identifier {
+                ident: CLOSURE_SHORTCUT_ARG,
+            };
+            let param = Loc::pos(after_slash, after_binop, param);
+            let mut params = Vec::with_capacity_in(1, arena);
+            params.push(param);
 
-        // the closure parameter is the left value of binary operator
-        let expr = Expr::new_var("", CLOSURE_SHORTCUT_ARG);
-        let expr: Loc<Expr<'_>> = Loc::pos(after_slash, after_binop, expr);
+            // the closure parameter is the left value of binary operator
+            let expr = Expr::new_var("", CLOSURE_SHORTCUT_ARG);
+            let expr: Loc<Expr<'_>> = Loc::pos(after_slash, after_binop, expr);
 
-        let expr_state = ExprState {
-            operators: Vec::new_in(arena),
-            arguments: Vec::new_in(arena),
-            expr,
-            spaces_after: &[],
-            end: after_slash,
-        };
-
-        let loc_op = Loc::pos(after_slash, after_binop, binop);
-
-        let min_indent = slash_indent + 1;
-        let (spaces_after_op, state) =
-            match eat_space_check(EExpr::IndentEnd, arena, state, min_indent, false) {
-                Ok((_, out, state)) => (out, state),
-                Err((_, fail)) => {
-                    return Err((MadeProgress, EClosure::Body(arena.alloc(fail), after_binop)))
-                }
+            let expr_state = ExprState {
+                operators: Vec::new_in(arena),
+                arguments: Vec::new_in(arena),
+                expr,
+                spaces_after: &[],
+                end: after_slash,
             };
 
-        let (_, body, state) = parse_after_binop(
-            arena,
-            state,
-            min_indent,
-            min_indent,
-            flags,
-            true,
-            spaces_after_op,
-            expr_state,
-            loc_op,
-        )
-        .map_err(|(_, e)| (MadeProgress, EClosure::Body(arena.alloc(e), after_binop)))?;
+            let loc_op = Loc::pos(after_slash, after_binop, binop);
 
-        let loc_body = Loc::pos(after_binop, state.pos(), body);
+            let min_indent = slash_indent + 1;
+            let (spaces_after_op, state) =
+                match eat_space_check(EExpr::IndentEnd, arena, state, min_indent, false) {
+                    Ok((_, out, state)) => (out, state),
+                    Err((_, fail)) => {
+                        return Err((MadeProgress, EClosure::Body(arena.alloc(fail), after_binop)))
+                    }
+                };
 
-        let closure_shortcut = if format_keeps_shortcut {
-            Some(ClosureShortcut::BinOp)
-        } else {
-            None
-        };
-        let short_closure = Expr::Closure(
-            params.into_bump_slice(),
-            arena.alloc(loc_body),
-            closure_shortcut,
-        );
-        return Ok((MadeProgress, short_closure, state));
+            let (_, body, state) = parse_after_binop(
+                arena,
+                state,
+                min_indent,
+                min_indent,
+                flags,
+                true,
+                spaces_after_op,
+                expr_state,
+                loc_op,
+            )
+            .map_err(|(_, e)| (MadeProgress, EClosure::Body(arena.alloc(e), after_binop)))?;
+
+            let loc_body = Loc::pos(after_binop, state.pos(), body);
+
+            let closure_shortcut = if format_keeps_shortcut {
+                Some(ClosureShortcut::BinOp)
+            } else {
+                None
+            };
+            let short_closure = Expr::Closure(
+                params.into_bump_slice(),
+                arena.alloc(loc_body),
+                closure_shortcut,
+            );
+            return Ok((MadeProgress, short_closure, state));
+        }
     }
 
     // Parse the params, params are comma-separated
@@ -2723,20 +2740,45 @@ fn rest_of_import<'a>(
         Ok((_, vd, state)) => (ValueDef::ModuleImport(vd), state),
         Err((MadeProgress, fail)) => return Err((MadeProgress, EExpr::Import(fail, start))),
         Err(_) => {
-            let import_ingested_file_body = record!(IngestedFileImport {
-                before_path: space0_e(EImport::IndentStart),
-                path: loc(specialize_err(
-                    |_, pos| EImport::IngestedPath(pos),
-                    string_literal::parse_str_literal()
-                )),
-                name: import_ingested_file_as(),
-                annotation: optional(import_ingested_file_annotation())
-            });
+            let inc_indent = min_indent + 1;
 
-            match import_ingested_file_body.parse(arena, state.clone(), min_indent + 1) {
-                Ok((_, vd, state)) => (ValueDef::IngestedFileImport(vd), state),
+            let (before_path, state) =
+                match eat_space_check(EImport::IndentStart, arena, state, inc_indent, false) {
+                    Ok((_, sp, state)) => (sp, state),
+                    Err((_, fail)) => return Err((MadeProgress, EExpr::Import(fail, start))),
+                };
+
+            let path_pos = state.pos();
+            let (path, state) =
+                match string_literal::parse_str_literal().parse(arena, state, inc_indent) {
+                    Ok((_, out, state)) => (out, state),
+                    Err(_) => {
+                        let fail = EImport::IngestedPath(path_pos);
+                        return Err((MadeProgress, EExpr::Import(fail, start)));
+                    }
+                };
+
+            let path = Loc::pos(path_pos, state.pos(), path);
+
+            let (name, state) = match import_ingested_file_as(arena, state, inc_indent) {
+                Ok((_, out, state)) => (out, state),
                 Err((_, fail)) => return Err((MadeProgress, EExpr::Import(fail, start))),
-            }
+            };
+
+            let (annotation, state) =
+                match import_ingested_file_annotation().parse(arena, state.clone(), inc_indent) {
+                    Ok((_, out, state)) => (Some(out), state),
+                    Err((NoProgress, _)) => (None, state),
+                    Err((_, fail)) => return Err((MadeProgress, EExpr::Import(fail, start))),
+                };
+
+            let import = IngestedFileImport {
+                before_path,
+                path,
+                name,
+                annotation,
+            };
+            (ValueDef::IngestedFileImport(import), state)
         }
     };
 
@@ -2748,10 +2790,8 @@ fn rest_of_import<'a>(
         };
 
     if !has_reached_new_line_or_eof && spaces_after.is_empty() {
-        return Err((
-            MadeProgress,
-            EExpr::Import(EImport::EndNewline(state.pos()), start),
-        ));
+        let fail = EImport::EndNewline(state.pos());
+        return Err((MadeProgress, EExpr::Import(fail, start)));
     }
 
     let stmt = Loc::pos(start, state.pos(), Stmt::ValueDef(vd));
