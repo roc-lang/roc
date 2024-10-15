@@ -4,7 +4,7 @@ use crate::abilities::{AbilitiesStore, ImplKey, PendingAbilitiesStore, ResolvedI
 use crate::annotation::{canonicalize_annotation, AnnotationFor};
 use crate::def::{canonicalize_defs, report_unused_imports, Def};
 use crate::desugar::desugar_record_destructures;
-use crate::env::Env;
+use crate::env::{Env, FxMode};
 use crate::expr::{
     ClosureData, DbgLookup, Declarations, ExpectLookup, Expr, Output, PendingDerives,
 };
@@ -226,6 +226,7 @@ pub fn canonicalize_module_defs<'a>(
     symbols_from_requires: &[(Loc<Symbol>, Loc<TypeAnnotation<'a>>)],
     var_store: &mut VarStore,
     opt_shorthand: Option<&'a str>,
+    fx_mode: FxMode,
 ) -> ModuleOutput {
     let mut can_exposed_imports = MutMap::default();
 
@@ -247,6 +248,7 @@ pub fn canonicalize_module_defs<'a>(
         dep_idents,
         qualified_module_ids,
         opt_shorthand,
+        fx_mode,
     );
 
     for (name, alias) in aliases.into_iter() {

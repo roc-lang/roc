@@ -1,6 +1,6 @@
 #![allow(clippy::manual_map)]
 
-use crate::env::Env;
+use crate::env::{Env, FxMode};
 use crate::scope::Scope;
 use crate::suffixed::{apply_try_function, unwrap_suffixed_expression, EUnwrapped};
 use bumpalo::collections::Vec;
@@ -207,8 +207,7 @@ fn desugar_value_def<'a>(
             // _ : {}
             // _ = stmt_expr!
 
-            if !is_expr_suffixed(&stmt_expr.value) {
-                // [purity-inference] TODO: this is ok in purity inference mode
+            if env.fx_mode == FxMode::Task && !is_expr_suffixed(&stmt_expr.value) {
                 env.problems.push(Problem::StmtAfterExpr(stmt_expr.region));
 
                 return ValueDef::StmtAfterExpr;
@@ -410,8 +409,7 @@ pub fn desugar_expr<'a>(
         | Try => loc_expr,
 
         Var { module_name, ident } => {
-            // [purity-inference] TODO: only in Task mode
-            if ident.ends_with('!') {
+            if env.fx_mode == FxMode::Task && ident.ends_with('!') {
                 env.arena.alloc(Loc::at(
                     loc_expr.region,
                     TrySuffix {
