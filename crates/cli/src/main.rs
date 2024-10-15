@@ -221,14 +221,14 @@ fn main() -> io::Result<()> {
 
             match roc_file_path.extension().and_then(OsStr::to_str) {
                 Some("md") => {
-                    // Extract the blocks of roc code, do this smarter!
-                    let f = fs::File::open(roc_file_path.as_path())?;
-                    let markdown_contents = io::BufReader::new(f);
+                    // Extract the blocks of roc code
+                    let file = fs::File::open(roc_file_path.as_path())?;
+                    let markdown_file_reader = io::BufReader::new(file);
                     let mut roc_blocks: Vec<String> = Vec::new();
                     let mut in_roc_block: bool = false;
                     let mut current_block = String::new();
 
-                    for line in markdown_contents.lines() {
+                    for line in markdown_file_reader.lines() {
                         let line = line.unwrap();
                         if line == "```roc" {
                             in_roc_block = true;
