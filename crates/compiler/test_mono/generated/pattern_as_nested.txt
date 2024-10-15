@@ -24,8 +24,8 @@ procedure Test.0 ():
         let Test.13 : {I64, Str} = StructAtIndex 0 Test.5;
         let Test.7 : {I64, Str} = CallByName Test.1;
         let Test.6 : Int1 = CallByName Bool.11 Test.7 Test.13;
-        dec Test.13;
         dec Test.7;
+        dec Test.13;
         ret Test.6;
     else
         dec Test.14;
