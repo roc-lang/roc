@@ -1259,7 +1259,7 @@ fn surgery_macho_help(
             Some((_, size)) => size,
             None => 0,
         };
-        if sec.name().unwrap_or_default().starts_with("__BSS") {
+        if sec.name().unwrap_or_default().starts_with("__bss") {
             // bss sections only modify the virtual size.
             virt_offset += sec.size() as usize;
         } else if section_size != sec.size() {

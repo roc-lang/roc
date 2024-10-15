@@ -1041,14 +1041,13 @@ fn link_macos(
             // "--gc-sections",
             "-arch",
             &arch,
-            // Suppress warnings, because otherwise it prints:
-            //
-            //   ld: warning: -undefined dynamic_lookup may not work with chained fixups
-            //
-            // We can't disable that option without breaking either x64 mac or ARM mac
-            "-w",
             "-macos_version_min",
             &get_macos_version(),
+            // Suppress fixup chains to ease working out dynamic relocs by the
+            // surgical linker. In my experience, working with dyld opcodes is
+            // slightly easier than unpacking compressed info from the __got section
+            // and fixups load command.
+            "-no_fixup_chains",
         ])
         .args(input_paths)
         .args(extra_link_flags());

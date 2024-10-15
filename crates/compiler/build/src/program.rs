@@ -949,6 +949,11 @@ fn build_loaded_file<'a>(
 
     match (linking_strategy, link_type) {
         (LinkingStrategy::Surgical, _) => {
+            if false {
+                let mut f = std::fs::File::create("tmp_roc.o").unwrap();
+                std::io::Write::write_all(&mut f, &roc_app_bytes).unwrap();
+            }
+
             let metadata_file = platform_main_roc_path.with_file_name(target.metadata_file_name());
 
             roc_linker::link_preprocessed_host(
