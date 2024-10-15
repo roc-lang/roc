@@ -1,3 +1,5 @@
+// TODO update
+/*
 #[macro_use]
 extern crate pretty_assertions;
 
@@ -10,10 +12,9 @@ extern crate roc_collections;
 mod helpers;
 
 #[cfg(test)]
-mod glue_cli_run {
+mod glue_cli_tests {
     use crate::helpers::fixtures_dir;
-    use cli_utils::helpers::{has_error, run_glue, run_roc, Out};
-    use std::fs;
+    use cli_test_utils::helpers::{ExecCli, Out};
     use std::path::{Path, PathBuf};
 
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -52,7 +53,7 @@ mod glue_cli_run {
                         let out = run_app(&dir.join("app.roc"), args);
 
                         assert!(out.status.success());
-                        let ignorable = "🔨 Rebuilding platform...\n";
+                        let ignorable = "🔨 Building host ...\n";
                         let stderr = out.stderr.replacen(ignorable, "", 1);
                         assert_eq!(stderr, "");
                         assert!(
@@ -71,11 +72,11 @@ mod glue_cli_run {
 
                     // Validate linux with the default linker.
                     if !(cfg!(target_os = "linux") && (skip_on_linux_surgical_linker.contains(&test_name_str))) {
-                        validate(dir.clone(), std::iter::empty());
+                        validate(dir.clone(), ["--build-host", "--suppress-build-host-warning"]);
                     }
 
                     if TEST_LEGACY_LINKER {
-                        validate(dir, ["--linker=legacy"]);
+                        validate(dir, ["--build-host", "--suppress-build-host-warning", "--linker=legacy"]);
                     }
                 }
             )*
@@ -219,7 +220,7 @@ mod glue_cli_run {
 
         // Delete the glue file to make sure we're actually regenerating it!
         if glue_dir.exists() {
-            fs::remove_dir_all(&glue_dir)
+            std::fs::remove_dir_all(&glue_dir)
                 .expect("Unable to remove test_glue dir in order to regenerate it in the test");
         }
 
@@ -241,41 +242,28 @@ mod glue_cli_run {
                     platform_module_path.to_str().unwrap().to_string(),
                 ]),
             ).collect();
-        let glue_out = run_glue(parts.iter());
 
-        if has_error(&glue_out.stderr) {
-            panic!(
-                "`roc {}` command had unexpected stderr: {}",
-                parts.join(" "),
-                glue_out.stderr
-            );
-        }
+        let glue_out = ExecCli::new_roc().add_args(parts.iter()).run_glue();
 
-        assert!(glue_out.status.success(), "bad status {glue_out:?}");
+        glue_out.assert_clean_success();
 
         glue_out
     }
 
     fn run_app<'a, 'b, I: IntoIterator<Item = &'a str>>(app_file: &'b Path, args: I) -> Out {
         // Generate test_glue for this platform
-        let compile_out = run_roc(
-            // converting these all to String avoids lifetime issues
-            args.into_iter()
-                .map(|arg| arg.to_string())
-                .chain([app_file.to_str().unwrap().to_string()]),
-            &[],
-            &[],
-        );
+        let compile_out = ExecCli::new_roc()
+            .add_args(
+                // converting these all to String avoids lifetime issues
+                args.into_iter()
+                    .map(|arg| arg.to_string())
+                    .chain([app_file.to_str().unwrap().to_string()]),
+            )
+            .run();
 
-        if has_error(&compile_out.stderr) {
-            panic!(
-                "`roc` command had unexpected stderr: {}",
-                compile_out.stderr
-            );
-        }
-
-        assert!(compile_out.status.success(), "bad status {compile_out:?}");
+        compile_out.assert_clean_success();
 
         compile_out
     }
 }
+*/

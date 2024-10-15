@@ -32,11 +32,11 @@ target-x86 = ["roc_build/target-x86", "roc_repl_cli/target-x86"]
 target-x86_64 = ["roc_build/target-x86_64", "roc_repl_cli/target-x86_64"]
 
 target-all = [
-  "target-aarch64",
-  "target-arm",
-  "target-x86",
-  "target-x86_64",
-  "target-wasm32",
+    "target-aarch64",
+    "target-arm",
+    "target-x86",
+    "target-x86_64",
+    "target-wasm32",
 ]
 
 sanitizers = ["roc_build/sanitizers"]
@@ -90,15 +90,14 @@ roc_repl_expect = { path = "../repl_expect" }
 
 
 [dev-dependencies]
-cli_utils = { path = "../cli_utils" }
-roc_test_utils = { path = "../test_utils" }
+cli_test_utils = { path = "../cli_test_utils" }
 roc_command_utils = { path = "../utils/command" }
 
 criterion.workspace = true
 indoc.workspace = true
 parking_lot.workspace = true
 pretty_assertions.workspace = true
-serial_test.workspace = true
+insta.workspace = true
 
 [build-dependencies]
 chrono.workspace = true

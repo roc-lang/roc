@@ -1180,15 +1180,15 @@ fn explicit_builtin_import() {
         indoc!(
             r"
             ── EXPLICIT BUILTIN IMPORT in tmp/explicit_builtin_import/Main.roc ─────────────
-            
+
             The builtin Bool was imported here:
-            
+
             3│  import Bool
                 ^^^^^^^^^^^
-            
+
             Builtins are imported automatically, so you can remove this import.
-            
-            Tip: Learn more about builtins in the tutorial: 
+
+            Tip: Learn more about builtins in the tutorial:
             <https://www.roc-lang.org/tutorial#builtin-modules>
             "
         )
@@ -1215,15 +1215,15 @@ fn explicit_builtin_import_empty_exposing() {
         indoc!(
             r"
             ── EXPLICIT BUILTIN IMPORT in tmp/empty_exposing_builtin_import/Main.roc ───────
-            
+
             The builtin Bool was imported here:
-            
+
             3│  import Bool exposing []
                 ^^^^^^^^^^^^^^^^^^^^^^^
-            
+
             Builtins are imported automatically, so you can remove this import.
-            
-            Tip: Learn more about builtins in the tutorial: 
+
+            Tip: Learn more about builtins in the tutorial:
             <https://www.roc-lang.org/tutorial#builtin-modules>
             "
         )
@@ -1254,16 +1254,16 @@ fn explicit_builtin_type_import() {
         indoc!(
             r"
             ── EXPLICIT BUILTIN IMPORT in tmp/explicit_builtin_type_import/Main.roc ────────
-            
+
             `Dict.Dict` was imported here:
-            
+
             3│  import Dict exposing [Dict, isEmpty]
                                       ^^^^
-            
+
             All types from builtins are automatically exposed, so you can remove
             `Dict` from the exposing list.
-            
-            Tip: Learn more about builtins in the tutorial: 
+
+            Tip: Learn more about builtins in the tutorial:
             <https://www.roc-lang.org/tutorial#builtin-modules>
             "
         )
@@ -2086,7 +2086,7 @@ fn module_cyclic_import_transitive() {
             indoc!(
                 r"
                 module []
-                
+
                 import Age
                 "
             ),
@@ -2151,7 +2151,7 @@ fn roc_file_no_extension() {
         indoc!(
             r#"
             app "helloWorld"
-                packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.15.0/SlwdbJ-3GR7uBWQo6zlmYWNYOxnvo8r6YABXD-45UOw.tar.br" }
+                packages { pf: "generic-test-platform/main.roc" }
                 imports [pf.Stdout]
                 provides [main] to pf
 

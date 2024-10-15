@@ -1,0 +1,11 @@
+---
+source: crates/cli/tests/cli_tests.rs
+expression: cli_test_out.normalize_stdout_and_stderr()
+---
+Compiled in <ignored for test> ms.
+
+Direct.roc:
+    0 failed and 2 passed in <ignored for test> ms.
+
+Transitive.roc:
+    0 failed and 1 passed in <ignored for test> ms.
