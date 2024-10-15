@@ -207,7 +207,9 @@ fn desugar_value_def<'a>(
             // _ : {}
             // _ = stmt_expr!
 
-            if env.fx_mode == FxMode::Task && !is_expr_suffixed(&stmt_expr.value) {
+            let desugared_expr = desugar_expr(env, scope, stmt_expr);
+
+            if env.fx_mode == FxMode::Task && !is_expr_suffixed(&desugared_expr.value) {
                 env.problems.push(Problem::StmtAfterExpr(stmt_expr.region));
 
                 return ValueDef::StmtAfterExpr;
@@ -229,7 +231,7 @@ fn desugar_value_def<'a>(
                 )),
                 lines_between: &[],
                 body_pattern: new_pat,
-                body_expr: desugar_expr(env, scope, stmt_expr),
+                body_expr: desugared_expr,
             }
         }
     }

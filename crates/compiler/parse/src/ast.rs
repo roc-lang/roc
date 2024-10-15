@@ -592,10 +592,7 @@ pub fn is_top_level_suffixed(expr: &Expr) -> bool {
 pub fn is_expr_suffixed(expr: &Expr) -> bool {
     match expr {
         // expression without arguments, `read!`
-        Expr::Var {
-            module_name: _,
-            ident,
-        } => ident.ends_with('!'),
+        Expr::Var { .. } => false,
 
         Expr::TrySuffix { .. } => true,
 
