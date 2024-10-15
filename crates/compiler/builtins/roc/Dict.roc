@@ -512,7 +512,7 @@ removeHelper = \buckets, bucketIndex, distAndFingerprint, data, key ->
 ## alterValue : Result Bool [Missing] -> Result Bool [Missing]
 ## alterValue = \possibleValue ->
 ##     when possibleValue is
-##         Err -> Ok Bool.false
+##         Err Missing -> Ok Bool.false
 ##         Ok value -> if value then Err Missing else Ok Bool.true
 ##
 ## expect Dict.update (Dict.empty {}) "a" alterValue == Dict.single "a" Bool.false
