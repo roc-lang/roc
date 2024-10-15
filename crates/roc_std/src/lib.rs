@@ -289,7 +289,7 @@ impl<T, E> Drop for RocResult<T, E> {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Default)]
 #[repr(C, align(16))]
 pub struct RocDec([u8; 16]);
 
@@ -474,6 +474,18 @@ impl From<i32> for RocDec {
 impl fmt::Display for RocDec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.to_str_helper(&mut ArrayString::new()))
+    }
+}
+
+impl PartialOrd for RocDec {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for RocDec {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.as_i128().cmp(&other.as_i128())
     }
 }
 
