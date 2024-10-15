@@ -591,7 +591,13 @@ pub fn is_top_level_suffixed(expr: &Expr) -> bool {
 pub fn is_expr_suffixed(expr: &Expr) -> bool {
     match expr {
         // expression without arguments, `read!`
-        Expr::Var { .. } => false,
+        Expr::Var {
+            module_name: _,
+            ident,
+        } => {
+            // TODO remove when purity inference fully replaces Task
+            ident.ends_with('!')
+        }
 
         Expr::TrySuffix { .. } => true,
 
