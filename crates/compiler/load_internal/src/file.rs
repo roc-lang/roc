@@ -15,6 +15,7 @@ use parking_lot::Mutex;
 use roc_builtins::roc::module_source;
 use roc_can::abilities::{AbilitiesStore, PendingAbilitiesStore, ResolvedImpl};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints, TypeOrVar};
+use roc_can::env::FxMode;
 use roc_can::expr::{DbgLookup, Declarations, ExpectLookup, PendingDerives};
 use roc_can::module::{
     canonicalize_module_defs, ExposedByModule, ExposedForModule, ExposedModuleTypes, Module,
@@ -318,6 +319,7 @@ fn start_phase<'a>(
                     exposed_module_ids: state.exposed_modules,
                     exec_mode: state.exec_mode,
                     imported_module_params,
+                    fx_mode: state.fx_mode,
                 }
             }
 
@@ -710,6 +712,7 @@ struct State<'a> {
     pub platform_path: PlatformPath<'a>,
     pub target: Target,
     pub(self) function_kind: FunctionKind,
+    pub fx_mode: FxMode,
 
     /// Note: only packages and platforms actually expose any modules;
     /// for all others, this will be empty.
@@ -797,6 +800,7 @@ impl<'a> State<'a> {
             cache_dir,
             target,
             function_kind,
+            fx_mode: FxMode::Task,
             platform_data: None,
             platform_path: PlatformPath::NotSpecified,
             module_cache: ModuleCache::default(),
@@ -900,6 +904,7 @@ enum BuildTask<'a> {
         skip_constraint_gen: bool,
         exec_mode: ExecutionMode,
         imported_module_params: VecMap<ModuleId, ModuleParams>,
+        fx_mode: FxMode,
     },
     Solve {
         module: Module,
@@ -2271,10 +2276,28 @@ fn update<'a>(
                         state.platform_path = PlatformPath::RootIsModule;
                     }
                 }
-                Hosted { .. } => {
+                Hosted { exposes, .. } => {
                     if header.is_root_module {
                         debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
                         state.platform_path = PlatformPath::RootIsHosted;
+                    }
+
+                    if exposes
+                        .iter()
+                        .any(|exposed| exposed.value.is_effectful_fn())
+                    {
+                        if exposes
+                            .iter()
+                            .any(|exposed| !exposed.value.is_effectful_fn())
+                        {
+                            // Temporary error message while we transition platforms
+                            return Err(LoadingProblem::FormattedReport(
+                                "Hosted module must not mix effectful and Task functions"
+                                    .to_string(),
+                            ));
+                        }
+
+                        state.fx_mode = FxMode::PurityInference;
                     }
                 }
             }
@@ -5050,6 +5073,7 @@ fn canonicalize_and_constrain<'a>(
     exposed_module_ids: &[ModuleId],
     exec_mode: ExecutionMode,
     imported_module_params: VecMap<ModuleId, ModuleParams>,
+    fx_mode: FxMode,
 ) -> CanAndCon {
     let canonicalize_start = Instant::now();
 
@@ -5093,6 +5117,7 @@ fn canonicalize_and_constrain<'a>(
         &symbols_from_requires,
         &mut var_store,
         opt_shorthand,
+        fx_mode,
     );
 
     let mut types = Types::new();
@@ -6276,6 +6301,7 @@ fn run_task<'a>(
             exposed_module_ids,
             exec_mode,
             imported_module_params,
+            fx_mode,
         } => {
             let can_and_con = canonicalize_and_constrain(
                 arena,
@@ -6289,6 +6315,7 @@ fn run_task<'a>(
                 exposed_module_ids,
                 exec_mode,
                 imported_module_params,
+                fx_mode,
             );
 
             Ok(Msg::CanonicalizedAndConstrained(can_and_con))

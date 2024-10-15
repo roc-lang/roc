@@ -1132,6 +1132,10 @@ impl<'a> ExposedName<'a> {
     pub fn as_str(&'a self) -> &'a str {
         self.0
     }
+
+    pub fn is_effectful_fn(&self) -> bool {
+        self.0.ends_with('!')
+    }
 }
 
 pub trait Keyword: Copy + Clone + Debug {
@@ -1255,7 +1259,7 @@ pub struct PlatformHeader<'a> {
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum ImportsEntry<'a> {
-    /// e.g. `Hello` or `Hello exposing [hello]` see roc-lang.org/examples/MultipleRocFiles/README.html  
+    /// e.g. `Hello` or `Hello exposing [hello]` see roc-lang.org/examples/MultipleRocFiles/README.html
     Module(
         ModuleName<'a>,
         Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,

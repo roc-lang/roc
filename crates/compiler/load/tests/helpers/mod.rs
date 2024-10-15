@@ -177,6 +177,7 @@ pub fn can_expr_with<'a>(
         &dep_idents,
         &module_ids,
         None,
+        roc_can::env::FxMode::PurityInference,
     );
 
     // Desugar operators (convert them to Apply calls, taking into account

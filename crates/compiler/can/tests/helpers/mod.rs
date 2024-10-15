@@ -62,6 +62,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
         &dep_idents,
         &qualified_module_ids,
         None,
+        roc_can::env::FxMode::PurityInference,
     );
 
     // Desugar operators (convert them to Apply calls, taking into account
