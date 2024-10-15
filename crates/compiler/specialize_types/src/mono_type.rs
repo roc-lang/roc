@@ -1,76 +1,79 @@
-use core::fmt;
+use roc_module::{ident::Lowercase, symbol::Symbol};
+use soa::{Id, Slice, Slice2};
 
-/// A slice into the Vec<T> of MonoTypes
-///
-/// The starting position is a u32 which should be plenty
-/// We limit slices to u16::MAX = 65535 elements
-pub struct MonoSlice<T> {
-    pub start: u32,
-    pub length: u16,
-    _marker: std::marker::PhantomData<T>,
+/// For now, a heap-allocated string. In the future, this will be something else.
+struct RecordFieldName(String);
+
+pub struct MonoTypes {
+    // TODO
 }
 
-impl<T> Copy for MonoSlice<T> {}
+impl MonoTypes {
+    pub fn add_apply(
+        &mut self,
+        symbol: Symbol,
+        args: impl IntoIterator<Item = Id<MonoType>>,
+    ) -> Id<MonoType> {
+        todo!("extend");
+    }
 
-impl<T> Clone for MonoSlice<T> {
-    fn clone(&self) -> Self {
-        *self
+    pub(crate) fn add_function(
+        &self,
+        new_closure: Id<MonoType>,
+        new_ret: Id<MonoType>,
+        new_args: impl IntoIterator<Item = Id<MonoType>>,
+    ) -> Id<MonoType> {
+        todo!("extend")
+    }
+
+    pub(crate) fn add_record(
+        &self,
+        ext: impl Iterator<Item = (Lowercase, Id<MonoType>)>,
+    ) -> Id<MonoType> {
+        todo!("extend")
     }
 }
 
-impl<T> std::fmt::Debug for MonoSlice<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "MonoSlice {{ start: {}, length: {} }}",
-            self.start, self.length
-        )
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-struct Symbol {
-    inner: u64,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct MonoTypeId {
-    inner: u32,
-}
+// TODO: we can make all of this take up a minimal amount of memory as follows:
+// 1. Arrange it so that for each MonoType variant we need at most one length and one start index.
+// 2. Store all MonoType discriminants in one array (there are only 5 of them, so u3 is plenty;
+//    if we discard record field names, can unify record and tuple and use u2 for the 4 variants)
+// 3. Store all the MonoType variant slice lengths in a separate array (u8 should be plenty)
+// 4. Store all the MonoType start indices in a separate array (u32 should be plenty)
 
 #[derive(Clone, Copy, Debug)]
 pub enum MonoType {
-    Apply(Symbol, MonoSlice<MonoTypeId>),
-    Func {
-        args: MonoSlice<MonoTypeId>,
-        ret: MonoTypeId,
+    Apply {
+        // TODO: the symbol can be stored adjacency style immediately before
+        // the first type arg. (This means the args slice must always
+        // have a valid start index even if there are no args.) This will
+        // work regardless of whether the Symbl is 32 or 64 bits, because
+        // its alignment will never be smaller than the alignment of an Index.
+        symbol: Symbol,
+        args: Slice<Id<MonoType>>,
     },
-    Record(RecordFields),
-    Tuple(TupleElems),
-    TagUnion(UnionTags),
-    EmptyRecord,
-    EmptyTuple,
-    EmptyTagUnion,
-}
 
-#[derive(Clone, Copy, Debug)]
-pub struct RecordFields {
-    pub length: u16,
-    pub field_names_start: u32,
-    pub field_type_ids_start: u32,
-    pub field_types_start: u32,
-}
+    Func {
+        /// The first element in this slice is the capture type,
+        /// followed by the return type, and then the rest are the
+        /// function's arg types. These are all stored in one slice
+        /// because having them adjacent is best for cache locality,
+        /// and storing separate Ids for each would make this variant bigger.
+        capture_ret_args: Slice<Id<MonoType>>,
+    },
 
-#[derive(Clone, Copy, Debug)]
-pub struct TupleElems {
-    pub length: u16,
-    pub elem_index_start: u32,
-    pub type_ids_start: u32,
-}
+    /// Slice of (field_name, field_type) pairs.
+    Record(
+        // TODO: since both tuple elements are the same size and alignment,
+        // we can store them as all of the one followed by all of the other,
+        // and therefore store only length and start index.
+        Slice2<Interned<String>, Id<MonoType>>,
+    ),
 
-#[derive(Clone, Copy, Debug)]
-pub struct UnionTags {
-    pub length: u16,
-    pub labels_start: u32,
-    pub values_start: u32,
+    /// Each element in the slice represents a different tuple element.
+    /// The index in the slice corresponds to the index in the tuple.
+    Tuple(Slice<Id<MonoType>>),
+
+    /// Slice of (tag_name, tag_payload_types) pairs
+    TagUnion(Slice2<Interned<String>, Slice<Id<MonoType>>>),
 }

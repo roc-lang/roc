@@ -3,15 +3,18 @@
 /// specializations of that type wherever necessary.
 ///
 /// This only operates at the type level. It does not create new function implementations (for example).
-use bitvec::vec::BitVec;
+use crate::mono_type::{MonoType, MonoTypes};
+use core::iter;
+use roc_collections::{Push, VecMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_types::{
     subs::{
-        Content, FlatType, RecordFields, Subs, TagExt, TupleElems, UnionLabels, UnionTags,
-        Variable, VariableSubsSlice,
+        Content, FlatType, RecordFields, SortedFieldIterator, Subs, TagExt, TupleElems,
+        UnionLabels, UnionTags, Variable,
     },
     types::RecordField,
 };
+use soa::Id;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Problem {
@@ -23,96 +26,74 @@ pub enum Problem {
 
 /// Variables that have already been monomorphized.
 pub struct MonoCache {
-    inner: BitVec,
+    inner: VecMap<Variable, Id<MonoType>>,
 }
 
 impl MonoCache {
     pub fn from_subs(subs: &Subs) -> Self {
         Self {
-            inner: BitVec::repeat(false, subs.len()),
+            inner: VecMap::with_capacity(subs.len()),
         }
-    }
-
-    /// Returns true iff we know this Variable is monomorphic because
-    /// we've visited it before in the monomorphization process
-    /// (and either it was already monomorphic, or we made it so).
-    pub fn is_known_monomorphic(&self, var: Variable) -> bool {
-        match self.inner.get(var.index() as usize) {
-            Some(initialized) => {
-                // false if it has never been set, because we initialized all the bits to 0
-                *initialized
-            }
-            None => false,
-        }
-    }
-
-    /// Records that the given variable is now known to be monomorphic.
-    fn set_monomorphic(&mut self, var: Variable) {
-        self.inner.set(var.index() as usize, true);
     }
 
     pub fn monomorphize_var(
         &mut self,
         subs: &mut Subs,
-        problems: &mut Vec<Problem>,
+        mono_types: &mut MonoTypes,
+        problems: &mut impl Push<Problem>,
         var: Variable,
-    ) {
-        lower_var(self, subs, problems, var);
+    ) -> Id<MonoType> {
+        lower_var(self, subs, mono_types, problems, var)
     }
 }
 
 fn lower_var(
     cache: &mut MonoCache,
     subs: &mut Subs,
-    problems: &mut Vec<Problem>,
+    mono_types: &mut MonoTypes,
+    problems: &mut impl Push<Problem>,
     var: Variable,
-) -> Variable {
+) -> Id<MonoType> {
     let root_var = subs.get_root_key_without_compacting(var);
 
-    if !cache.is_known_monomorphic(root_var) {
-        let content = match *subs.get_content_without_compacting(root_var) {
+    // TODO: we could replace this cache by having Subs store a Content::Monomorphic(Id<MonoType>)
+    // and then overwrite it rather than having a separate cache. That memory is already in cache
+    // for sure, and the lookups should be faster because they're O(1) but don't require hashing.
+    if let Some(mono_id) = cache.inner.get(&root_var) {
+        return *mono_id;
+    }
+
+    let mono_id = match *subs.get_content_without_compacting(root_var) {
             Content::Structure(flat_type) => match flat_type {
                 FlatType::Apply(symbol, args) => {
                     let new_args = args
                         .into_iter()
-                        .map(|var_index| lower_var(cache, subs, problems, subs[var_index]))
-                        .collect::<Vec<Variable>>();
+                        .map(|var_index| lower_var(cache, subs, mono_types, problems, subs[var_index]));
 
-                    Content::Structure(FlatType::Apply(
-                        *symbol,
-                        VariableSubsSlice::insert_into_subs(subs, new_args),
-                    ))
+                    mono_types.add_apply(symbol, new_args)
                 }
                 FlatType::Func(args, closure, ret) => {
                     let new_args = args
                         .into_iter()
-                        .map(|var_index| lower_var(cache, subs, problems, subs[var_index]))
-                        .collect::<Vec<_>>();
-                    let new_closure = lower_var(cache, subs, problems, *closure);
-                    let new_ret = lower_var(cache, subs, problems, *ret);
-                    Content::Structure(FlatType::Func(
-                        VariableSubsSlice::insert_into_subs(subs, new_args),
-                        new_closure,
-                        new_ret,
-                    ))
+                        .map(|var_index| lower_var(cache, subs, mono_types, problems, subs[var_index]));
+
+                    let new_closure = lower_var(cache, subs, mono_types, problems, closure);
+                    let new_ret = lower_var(cache, subs, mono_types, problems, ret);
+
+                    mono_types.add_function(new_closure, new_ret, new_args)
                 }
                 FlatType::Record(fields, ext) => {
-                    let mut fields = resolve_record_ext(subs, problems, *fields, *ext);
-
-                    // Now lower all the fields we gathered. Do this in a separate pass to avoid borrow errors on Subs.
-                    for (_, field) in fields.iter_mut() {
-                        let var = match field {
-                            RecordField::Required(v) | RecordField::Optional(v) | RecordField::Demanded(v) => v,
-                            RecordField::RigidRequired(v) | RecordField::RigidOptional(v) => v,
-                        };
-
-                        *var = lower_var(cache, subs, problems, *var);
-                    }
-
-                    Content::Structure(FlatType::Record(
-                        RecordFields::insert_into_subs(subs, fields),
-                        Variable::EMPTY_RECORD,
-                    ))
+                    let todo = (); // TODO the basic design here is to make an iterator that does what we want,
+                                   // so that it's no_std, doesn't allocate, etc. - just gives modularity.
+                    mono_types.add_record(
+                        LowerRecordIterator {
+                            cache,
+                            subs,
+                            mono_types,
+                            problems,
+                            fields: fields.sorted_iterator(subs, ext),
+                            ext,
+                        })
                 }
                 FlatType::Tuple(elems, ext) => {
                     let mut elems = resolve_tuple_ext(subs, problems, *elems, *ext);
@@ -188,19 +169,16 @@ fn lower_var(
             Content::Error => Content::Error,
         };
 
-        // Update Subs so when we look up this var in the future, it's the monomorphized Content.
-        subs.set_content(root_var, content);
+    // This var is now known to be monomorphic, so we don't repeat this work again later.
+    cache.inner.insert(root_var, mono_id);
 
-        // This var is now known to be monomorphic.
-        cache.set_monomorphic(root_var);
-    }
-
-    root_var
+    mono_id
 }
 
 fn resolve_tag_ext(
     subs: &mut Subs,
-    problems: &mut Vec<Problem>,
+    mono_types: &mut MonoTypes,
+    problems: &mut impl Push<Problem>,
     mut tags: UnionTags,
     mut ext: TagExt,
 ) -> Vec<(TagName, Vec<Variable>)> {
@@ -245,50 +223,69 @@ fn resolve_tag_ext(
     all_tags
 }
 
-fn resolve_record_ext(
-    subs: &mut Subs,
-    problems: &mut Vec<Problem>,
-    mut fields: RecordFields,
-    mut ext: Variable,
-) -> Vec<(Lowercase, RecordField<Variable>)> {
-    let mut all_fields = Vec::new();
+struct LowerRecordIterator<'c, 's, 'm, 'p, 'r, P: Push<Problem>> {
+    cache: &'c mut MonoCache,
+    subs: &'s mut Subs,
+    mono_types: &'m mut MonoTypes,
+    problems: &'p mut P,
+    fields: SortedFieldIterator<'r>,
+    ext: Variable,
+}
 
-    // Collapse (recursively) all the fields in ext into a flat list of fields.
-    loop {
-        for (label, field) in fields.sorted_iterator(subs, ext) {
-            all_fields.push((label.clone(), field));
-        }
+impl<'c, 's, 'm, 'p, 'r, P> Iterator for LowerRecordIterator<'c, 's, 'm, 'p, 'r, P>
+where
+    P: Push<Problem>,
+{
+    type Item = (Lowercase, Id<MonoType>);
 
-        match subs.get_content_without_compacting(ext) {
-            Content::Structure(FlatType::Record(new_fields, new_ext)) => {
-                // Update fields and ext and loop back again to process them.
-                fields = *new_fields;
-                ext = *new_ext;
+    fn next(&mut self) -> Option<Self::Item> {
+        // Collapse (recursively) all the fields in ext into a flat list of fields.
+        loop {
+            if let Some((label, field)) = self.fields.next() {
+                let var = match field {
+                    RecordField::Demanded(var) => var,
+                    RecordField::Required(var) => var,
+                    RecordField::Optional(var) => var,
+                    RecordField::RigidRequired(var) => var,
+                    RecordField::RigidOptional(var) => var,
+                };
+
+                return Some((
+                    label,
+                    lower_var(self.cache, self.subs, self.mono_types, self.problems, var),
+                ));
             }
-            Content::Structure(FlatType::EmptyRecord) => break,
-            Content::FlexVar(_) | Content::FlexAbleVar(_, _) => break,
-            Content::Alias(_, _, real, _) => {
-                // Follow the alias and process it on the next iteration of the loop.
-                ext = *real;
 
-                // We just processed these fields, so don't process them again!
-                fields = RecordFields::empty();
-            }
-            _ => {
-                // This should never happen! If it does, record a Problem and break.
-                problems.push(Problem::RecordExtWasNotRecord);
+            match self.subs.get_content_without_compacting(self.ext) {
+                Content::Structure(FlatType::Record(new_fields, new_ext)) => {
+                    // Update fields and ext and loop back again to process them.
+                    self.fields = new_fields.sorted_iterator(self.subs, self.ext);
+                    self.ext = *new_ext;
+                }
+                Content::Structure(FlatType::EmptyRecord) => return None,
+                Content::FlexVar(_) | Content::FlexAbleVar(_, _) => return None,
+                Content::Alias(_, _, real, _) => {
+                    // Follow the alias and process it on the next iteration of the loop.
+                    self.ext = *real;
 
-                break;
+                    // We just processed these fields, so don't process them again!
+                    self.fields = Box::new(iter::empty());
+                }
+                _ => {
+                    // This should never happen! If it does, record a Problem and break.
+                    self.problems.push(Problem::RecordExtWasNotRecord);
+
+                    return None;
+                }
             }
         }
     }
-
-    all_fields
 }
 
 fn resolve_tuple_ext(
     subs: &mut Subs,
-    problems: &mut Vec<Problem>,
+    mono_types: &mut MonoTypes,
+    problems: &mut impl Push<Problem>,
     mut elems: TupleElems,
     mut ext: Variable,
 ) -> Vec<(usize, Variable)> {
@@ -332,9 +329,10 @@ fn lower_vars<'a>(
     vars: impl Iterator<Item = &'a mut Variable>,
     cache: &mut MonoCache,
     subs: &mut Subs,
-    problems: &mut Vec<Problem>,
+    mono_types: &mut MonoTypes,
+    problems: &mut impl Push<Problem>,
 ) {
     for var in vars {
-        *var = lower_var(cache, subs, problems, *var);
+        *var = lower_var(cache, subs, mono_types, problems, *var);
     }
 }

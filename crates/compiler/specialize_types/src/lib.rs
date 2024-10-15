@@ -14,6 +14,7 @@ use roc_types::{
 };
 
 mod mono_type;
+mod specialize_type;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Problem {

@@ -75,6 +75,7 @@ inkwell = { git = "https://github.com/roc-lang/inkwell", branch = "inkwell-llvm-
     "llvm16-0",
 ] }
 
+soa = { path = "crates/soa" }
 roc_specialize_types = { path = "crates/compiler/specialize_types" }
 
 arrayvec = "0.7.2" # update roc_std/Cargo.toml on change
