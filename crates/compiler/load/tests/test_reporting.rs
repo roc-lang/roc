@@ -14471,40 +14471,6 @@ All branches in an `if` must have the same type!
     "#
     );
 
-    // TODO: add the following tests after built-in Tasks are added
-    // https://github.com/roc-lang/roc/pull/6836
-
-    // test_report!(
-    // suffixed_stmt_invalid_type,
-    //     indoc!(
-    //         r###"
-    //         app "test" provides [main] to "./platform"
-
-    //         main : Task U64 _ -> _
-    //         main = \task ->
-    //             task!
-    //             42
-    //         "###
-    //     ),
-    //     @r""
-    // );
-
-    // test_report!(
-    // suffixed_expr_invalid_type,
-    //     indoc!(
-    //         r###"
-    //         app "test" provides [main] to "./platform"
-
-    //         main : Task U64 _ -> _
-    //         main = \task ->
-    //             result : U32
-    //             result = task!
-    //             result
-    //         "###
-    //     ),
-    //     @r""
-    // );
-
     test_report!(
         issue_6240_1,
         indoc!(
@@ -14528,38 +14494,38 @@ All branches in an `if` must have the same type!
         issue_6240_2,
         indoc!(
             r#"
-            ("", "").abcde
-            "#
+              ("", "").abcde
+              "#
         ),
         @r###"
-    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+      ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
-    This expression is used in an unexpected way:
+      This expression is used in an unexpected way:
 
-    4│      ("", "").abcde
-            ^^^^^^^^^^^^^^
+      4│      ("", "").abcde
+              ^^^^^^^^^^^^^^
 
-    It is a tuple of type:
+      It is a tuple of type:
 
-        (
-            Str,
-            Str,
-        )a
+          (
+              Str,
+              Str,
+          )a
 
-    But you are trying to use it as:
+      But you are trying to use it as:
 
-        { abcde : * }b
-    "###
+          { abcde : * }b
+      "###
     );
 
     test_report!(
         issue_6240_3,
         indoc!(
             r"
-            {}.0
-            "
+              {}.0
+              "
         ),
-        @r###"
+        @r"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression is used in an unexpected way:
@@ -14574,6 +14540,37 @@ All branches in an `if` must have the same type!
     But you are trying to use it as:
 
         (*)b
+    "
+    );
+
+    test_report!(
+        leftover_statement,
+        indoc!(
+            r#"
+            app [main] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main = \{} ->
+                identity {}
+
+                Effect.putLine! "hello"
+
+            identity = \x -> x
+            "#
+        ),
+        @r###"
+    ── LEFTOVER STATEMENT in /code/proj/Main.roc ───────────────────────────────────
+
+    This statement does not produce any effects:
+
+    6│      identity {}
+            ^^^^^^^^^^^
+
+    Standalone statements are only useful if they call effectful
+    functions.
+
+    Did you forget to use its result? If not, feel free to remove it.
     "###
     );
 
