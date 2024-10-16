@@ -777,6 +777,31 @@ fn solve(
                     }
                 }
             }
+            EffectfulStmt(variable, region) => {
+                let content = env.subs.get_content_without_compacting(*variable);
+
+                match content {
+                    Content::Pure | Content::FlexVar(_) => {
+                        let problem = TypeError::PureStmt(*region);
+                        problems.push(problem);
+
+                        state
+                    }
+                    Content::Effectful => state,
+                    Content::RigidVar(_)
+                    | Content::FlexAbleVar(_, _)
+                    | Content::RigidAbleVar(_, _)
+                    | Content::RecursionVar { .. }
+                    | Content::LambdaSet(_)
+                    | Content::ErasedLambda
+                    | Content::Structure(_)
+                    | Content::Alias(_, _, _, _)
+                    | Content::RangedNumber(_)
+                    | Content::Error => {
+                        internal_error!("ExpectEffectful: unexpected content: {:?}", content)
+                    }
+                }
+            }
             Let(index, pool_slice) => {
                 let let_con = &env.constraints.let_constraints[index.index()];
 

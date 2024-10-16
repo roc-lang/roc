@@ -99,7 +99,8 @@ pub fn remove_module_param_arguments(
             | TypeError::IngestedFileUnsupportedType(_, _)
             | TypeError::UnexpectedModuleParams(_, _)
             | TypeError::MissingModuleParams(_, _, _)
-            | TypeError::ModuleParamsMismatch(_, _, _, _) => {}
+            | TypeError::ModuleParamsMismatch(_, _, _, _)
+            | TypeError::PureStmt(_) => {}
         }
     }
 }

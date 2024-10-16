@@ -3433,36 +3433,59 @@ fn constrain_stmt_def(
     body_con: Constraint,
     fx_var: Variable,
 ) -> Constraint {
-    // [purity-inference] TODO: Require fx is effectful
+    let region = def.loc_expr.region;
 
     // Statement expressions must return an empty record
     let empty_record_index = constraints.push_type(types, Types::EMPTY_RECORD);
-    let expected = constraints.push_expected_type(ForReason(
-        Reason::Stmt,
-        empty_record_index,
-        def.loc_expr.region,
-    ));
+    let expect_empty_record =
+        constraints.push_expected_type(ForReason(Reason::Stmt, empty_record_index, region));
 
-    let expr_con = constrain_expr(
-        types,
-        constraints,
-        env,
-        def.loc_expr.region,
-        &def.loc_expr.value,
-        expected,
-    );
+    let expr_con = env.with_enclosing_fx(fx_var, None, |env| {
+        constrain_expr(
+            types,
+            constraints,
+            env,
+            region,
+            &def.loc_expr.value,
+            expect_empty_record,
+        )
+    });
+
     let expr_con = attach_resolution_constraints(constraints, env, expr_con);
 
     let generalizable = Generalizable(is_generalizable_expr(&def.loc_expr.value));
 
-    constraints.let_constraint(
+    let body_con = constraints.let_constraint(
         std::iter::empty(),
         std::iter::empty(),
         std::iter::empty(),
         expr_con,
         body_con,
         generalizable,
-    )
+    );
+
+    // Stmt expr must be effectful, otherwise it's dead code
+    let effectful_constraint = Constraint::EffectfulStmt(fx_var, region);
+
+    // We have to unify the stmt fx with the enclosing fx
+    // since we used the former to constrain the expr.
+    let enclosing_fx_index = match env.enclosing_fx {
+        Some(enclosing_fn) => {
+            let enclosing_fx_index = constraints.push_variable(enclosing_fn.fx_var);
+
+            constraints.push_expected_type(ForReason(Reason::Stmt, enclosing_fx_index, region))
+        }
+        None => constraints.push_expected_type(ForReason(
+            // Statements are not allowed in top-level defs
+            Reason::Stmt,
+            constraints.push_variable(Variable::PURE),
+            region,
+        )),
+    };
+    let enclosing_fx_constraint =
+        constraints.equal_types_var(fx_var, enclosing_fx_index, Category::Unknown, region);
+
+    constraints.and_constraint([body_con, effectful_constraint, enclosing_fx_constraint])
 }
 
 /// Create a let-constraint for a non-recursive def.

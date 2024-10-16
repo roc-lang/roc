@@ -314,6 +314,22 @@ pub fn type_problem<'b>(
                 severity,
             })
         }
+        PureStmt(region) => {
+            let stack = [
+                alloc.reflow("This statement does not produce any effects:"),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.reflow(
+                    "Standalone statements are only useful if they call effectful functions.",
+                ),
+                alloc.reflow("Did you forget to use its result? If not, feel free to remove it."),
+            ];
+            Some(Report {
+                title: "LEFTOVER STATEMENT".to_string(),
+                filename,
+                doc: alloc.stack(stack),
+                severity,
+            })
+        }
     }
 }
 

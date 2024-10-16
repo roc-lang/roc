@@ -596,6 +596,7 @@ impl Constraints {
             | Constraint::Store(..)
             | Constraint::Lookup(..)
             | Constraint::Pattern(..)
+            | Constraint::EffectfulStmt(..)
             | Constraint::True
             | Constraint::IsOpenType(_)
             | Constraint::IncludesTag(_)
@@ -768,6 +769,8 @@ pub enum Constraint {
         Index<PatternCategory>,
         Region,
     ),
+    /// Expect statement to be effectful
+    EffectfulStmt(Variable, Region),
     /// Used for things that always unify, e.g. blanks and runtime errors
     True,
     SaveTheEnvironment,
@@ -855,6 +858,9 @@ impl std::fmt::Debug for Constraint {
             }
             Self::Pattern(arg0, arg1, arg2, arg3) => {
                 write!(f, "Pattern({arg0:?}, {arg1:?}, {arg2:?}, {arg3:?})")
+            }
+            Self::EffectfulStmt(arg0, arg1) => {
+                write!(f, "EffectfulStmt({arg0:?}, {arg1:?})")
             }
             Self::True => write!(f, "True"),
             Self::SaveTheEnvironment => write!(f, "SaveTheEnvironment"),

@@ -39,6 +39,7 @@ pub enum TypeError {
     UnexpectedModuleParams(Region, ModuleId),
     MissingModuleParams(Region, ModuleId, ErrorType),
     ModuleParamsMismatch(Region, ModuleId, ErrorType, ErrorType),
+    PureStmt(Region),
 }
 
 impl TypeError {
@@ -63,6 +64,7 @@ impl TypeError {
             TypeError::ModuleParamsMismatch(..) => RuntimeError,
             TypeError::IngestedFileBadUtf8(..) => Fatal,
             TypeError::IngestedFileUnsupportedType(..) => Fatal,
+            TypeError::PureStmt(..) => Warning,
         }
     }
 
@@ -78,7 +80,8 @@ impl TypeError {
             | TypeError::BadPatternMissingAbility(region, ..)
             | TypeError::UnexpectedModuleParams(region, ..)
             | TypeError::MissingModuleParams(region, ..)
-            | TypeError::ModuleParamsMismatch(region, ..) => Some(*region),
+            | TypeError::ModuleParamsMismatch(region, ..)
+            | TypeError::PureStmt(region) => Some(*region),
             TypeError::UnfulfilledAbility(ab, ..) => ab.region(),
             TypeError::Exhaustive(e) => Some(e.region()),
             TypeError::CircularDef(c) => c.first().map(|ce| ce.symbol_region),
