@@ -3448,7 +3448,7 @@ pub enum Reason {
         foreign_symbol: ForeignSymbol,
         arg_index: HumanIndex,
     },
-    Stmt,
+    Stmt(Option<Symbol>),
     FxInFunction(Option<Region>, FxReason),
     FxInTopLevel(FxReason),
     FloatLiteral,

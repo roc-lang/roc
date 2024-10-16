@@ -1747,7 +1747,38 @@ fn to_expr_report<'b>(
                     severity,
                 }
             }
-            Reason::Stmt => todo!("[purity-inference] Stmt"),
+            Reason::Stmt(opt_name) => {
+                let diff = to_diff(alloc, Parens::Unnecessary, found, expected_type);
+
+                let lines = [
+                    match opt_name {
+                        None => alloc.reflow("The result of this expression is ignored:"),
+                        Some(fn_name) => alloc.concat([
+                            alloc.reflow("The result of this call to "),
+                            alloc.symbol_qualified(fn_name),
+                            alloc.reflow(" is ignored:"),
+                        ]),
+                    },
+                    alloc.region(lines.convert_region(region), severity),
+                    alloc.reflow("Standalone statements are required to produce an empty record, but the type of this one is:"),
+                    alloc.type_block(type_with_able_vars(alloc, diff.left, diff.left_able)),
+                    alloc.concat([
+                        alloc.reflow("If you still want to ignore it, assign it to "),
+                        alloc.keyword("_"),
+                        alloc.reflow(", like this:"),
+                    ]),
+                    alloc
+                        .parser_suggestion("_ = File.delete! \"data.json\"")
+                        .indent(4),
+                ];
+
+                Report {
+                    filename,
+                    title: "IGNORED RESULT".to_string(),
+                    doc: alloc.stack(lines),
+                    severity,
+                }
+            }
         },
     }
 }

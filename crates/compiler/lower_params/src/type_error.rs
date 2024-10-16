@@ -186,7 +186,7 @@ fn remove_for_reason(
         | Reason::CrashArg
         | Reason::FxInFunction(_, _)
         | Reason::FxInTopLevel(_)
-        | Reason::Stmt
+        | Reason::Stmt(_)
         | Reason::ImportParams(_) => {}
     }
 }
