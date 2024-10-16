@@ -269,7 +269,9 @@ mod cli_tests {
 
         /// Build the platform host once for all tests in this module
         fn build_platform_host() {
+            dbg!("Building platform host");
             BUILD_PLATFORM_HOST.call_once(|| {
+                dbg!("call once");
                 let cli_build = ExecCli::new(
                                         CMD_BUILD,
                                         file_from_root("crates/cli/tests/test-projects/test-platform-simple-zig", "app.roc")
@@ -292,33 +294,22 @@ mod cli_tests {
 
         #[test]
         #[cfg_attr(windows, ignore)]
-        fn run_multi_dep_str_unoptimized() {
+        fn run_multi_dep_str() {
             build_platform_host();
 
-            let cli_build = ExecCli::new(
+            let cli_build_unoptimized = ExecCli::new(
                                     CMD_BUILD,
                                     file_from_root("crates/cli/tests/test-projects/fixtures/multi-dep-str", "main.roc")
                 );
             
             let expected_output = "I am Dep2.str2\n";
             
-            cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
-        }
-        
-        #[test]
-        #[cfg_attr(windows, ignore)]
-        fn run_multi_dep_str_optimized() {
-            build_platform_host();
-
-            let cli_build = ExecCli::new(
-                                    CMD_BUILD,
-                                    file_from_root("crates/cli/tests/test-projects/fixtures/multi-dep-str", "main.roc")
-                )
-                .arg(OPTIMIZE_FLAG);
+            cli_build_unoptimized.clone().full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
             
-            let expected_output = "I am Dep2.str2\n";
             
-            cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
+            let cli_build_optimized = cli_build_unoptimized.arg(OPTIMIZE_FLAG);
+            
+            cli_build_optimized.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
         }
         
         /*
