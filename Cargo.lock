@@ -2440,6 +2440,7 @@ dependencies = [
  "im",
  "im-rc",
  "smallvec",
+ "soa",
  "wyhash",
 ]
 
