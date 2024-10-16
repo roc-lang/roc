@@ -1349,7 +1349,6 @@ pub fn can_problem<'b>(
         }
 
         Problem::StmtAfterExpr(region) => {
-            // TODO: Update when [purity-inference] is fully implemented
             doc = alloc.stack([
                 alloc
                     .reflow(r"I just finished parsing an expression with a series of definitions,"),
