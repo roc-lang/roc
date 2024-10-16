@@ -347,6 +347,20 @@ pub fn type_problem<'b>(
                 severity,
             })
         }
+        SuffixedPureFunction(region, _symbol) => {
+            let stack = [
+                alloc.reflow("This function is pure, but its name suggests otherwise:"),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.reflow("Remove the exclamation mark to give an accurate impression of its behavior."),
+            ];
+
+            Some(Report {
+                title: "UNNECESSARY EXCLAMATION".to_string(),
+                filename,
+                doc: alloc.stack(stack),
+                severity,
+            })
+        }
     }
 }
 
