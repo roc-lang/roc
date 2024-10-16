@@ -601,24 +601,6 @@ pub fn constrain_expr(
 
             let category = Category::CallResult(opt_symbol, *called_via);
 
-            let fx_expected_type = match env.enclosing_fx {
-                Some(enclosing_fn) => {
-                    let enclosing_fx_index = constraints.push_variable(enclosing_fn.fx_var);
-
-                    constraints.push_expected_type(ForReason(
-                        Reason::CallInFunction(enclosing_fn.ann_region),
-                        enclosing_fx_index,
-                        region,
-                    ))
-                }
-                None => constraints.push_expected_type(ForReason(
-                    Reason::CallInTopLevelDef,
-                    // top-level defs are only allowed to call pure functions
-                    constraints.push_variable(Variable::PURE),
-                    region,
-                )),
-            };
-
             let and_cons = [
                 fn_con,
                 constraints.equal_types_var(*fn_var, expected_fn_type, category.clone(), fn_region),
@@ -629,7 +611,7 @@ pub fn constrain_expr(
                     category.clone(),
                     region,
                 ),
-                constraints.equal_types_var(*fx_var, fx_expected_type, category, region),
+                constrain_call_fx(env, constraints, region, *fx_var, category),
             ];
 
             let and_constraint = constraints.and_constraint(and_cons);
@@ -1889,6 +1871,34 @@ pub fn constrain_expr(
             constraints.equal_types(trivial_type, expected, Category::Unknown, region)
         }
     }
+}
+
+fn constrain_call_fx(
+    env: &mut Env,
+    constraints: &mut Constraints,
+    region: Region,
+    fx_var: Variable,
+    category: Category,
+) -> Constraint {
+    let fx_expected_type = match env.enclosing_fx {
+        Some(enclosing_fn) => {
+            let enclosing_fx_index = constraints.push_variable(enclosing_fn.fx_var);
+
+            constraints.push_expected_type(ForReason(
+                Reason::CallInFunction(enclosing_fn.ann_region),
+                enclosing_fx_index,
+                region,
+            ))
+        }
+        None => constraints.push_expected_type(ForReason(
+            Reason::CallInTopLevelDef,
+            // top-level defs are only allowed to call pure functions
+            constraints.push_variable(Variable::PURE),
+            region,
+        )),
+    };
+
+    constraints.equal_types_var(fx_var, fx_expected_type, category, region)
 }
 
 fn constrain_function_def(
@@ -3517,21 +3527,8 @@ fn constrain_stmt_def(
 
     // We have to unify the stmt fx with the enclosing fx
     // since we used the former to constrain the expr.
-    let enclosing_fx_index = match env.enclosing_fx {
-        Some(enclosing_fn) => {
-            let enclosing_fx_index = constraints.push_variable(enclosing_fn.fx_var);
-
-            constraints.push_expected_type(ForReason(Reason::Stmt, enclosing_fx_index, region))
-        }
-        None => constraints.push_expected_type(ForReason(
-            // Statements are not allowed in top-level defs
-            Reason::Stmt,
-            constraints.push_variable(Variable::PURE),
-            region,
-        )),
-    };
     let enclosing_fx_constraint =
-        constraints.equal_types_var(fx_var, enclosing_fx_index, Category::Unknown, region);
+        constrain_call_fx(env, constraints, region, fx_var, Category::Unknown);
 
     constraints.and_constraint([body_con, effectful_constraint, enclosing_fx_constraint])
 }

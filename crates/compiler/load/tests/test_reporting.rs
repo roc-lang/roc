@@ -14716,10 +14716,47 @@ All branches in an `if` must have the same type!
     10│      name = Effect.getLine! {}
                     ^^^^^^^^^^^^^^^^^^
 
-    However, the type of the enclosing function indicates it must be pure:
+    However, the type of the enclosing function requires that it's pure:
 
     8│  getCheer : Str -> Str
                    ^^^^^^^^^^
+
+    Tip: Replace `->` with `=>` to annotate it as effectful.
+
+    You can still run the program with this error, which can be helpful
+    when you're debugging.
+    "###
+    );
+
+    test_report!(
+        fx_fn_annotated_as_pure_stmt,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                trim "hello "
+
+            trim : Str -> Str
+            trim = \msg ->
+                Effect.putLine! "Trimming $(msg)"
+                Str.trim msg
+            "#
+        ),
+        @r###"
+    ── EFFECT IN PURE FUNCTION in /code/proj/Main.roc ──────────────────────────────
+
+    This expression calls an effectful function:
+
+    10│      Effect.putLine! "Trimming $(msg)"
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    However, the type of the enclosing function requires that it's pure:
+
+    8│  trim : Str -> Str
+               ^^^^^^^^^^
 
     Tip: Replace `->` with `=>` to annotate it as effectful.
 

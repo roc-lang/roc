@@ -1737,7 +1737,7 @@ fn to_expr_report<'b>(
                     match ann_region {
                         Some(ann_region) => alloc.stack([
                             alloc.reflow(
-                                "However, the type of the enclosing function indicates it must be pure:",
+                                "However, the type of the enclosing function requires that it's pure:",
                             ),
                             alloc.region(lines.convert_region(ann_region), Severity::Warning),
                             alloc.concat([
