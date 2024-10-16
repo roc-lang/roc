@@ -1,16 +1,25 @@
 use std::ffi::OsStr;
 use std::io::Write;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use bumpalo::Bump;
+use roc_can::abilities::{IAbilitiesStore, Resolved};
+use roc_can::expr::{DeclarationTag, Declarations, Expr};
 use roc_error_macros::{internal_error, user_error};
 use roc_fmt::def::fmt_defs;
 use roc_fmt::header::fmt_header;
 use roc_fmt::Buf;
+use roc_load::{ExecutionMode, FunctionKind, LoadConfig, LoadedModule, Threading};
+use roc_module::symbol::{Interns, ModuleId};
+use roc_packaging::cache::{self, RocCacheDir};
 use roc_parse::ast::{FullAst, SpacesBefore};
 use roc_parse::header::parse_module_defs;
 use roc_parse::normalize::Normalize;
 use roc_parse::{header, parser::SyntaxError, state::State};
+use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
+use roc_target::Target;
+use roc_types::subs::{Subs, Variable};
 
 #[derive(Copy, Clone, Debug)]
 pub enum FormatMode {
@@ -254,6 +263,140 @@ fn fmt_all<'a>(buf: &mut Buf<'a>, ast: &'a FullAst) {
     fmt_defs(buf, &ast.defs, 0);
 
     buf.fmt_end_of_file();
+}
+
+pub fn annotate_file(arena: &Bump, file: &PathBuf) -> Result<(), String> {
+    // TODO: do this proper
+    let target = Target::LinuxX64;
+
+    let load_config = LoadConfig {
+        target,
+        function_kind: FunctionKind::from_env(),
+        // TODO: expose this from CLI?
+        render: RenderTarget::ColorTerminal,
+        palette: DEFAULT_PALETTE,
+        threading: Threading::AllAvailable,
+        exec_mode: ExecutionMode::Check,
+    };
+
+    let mut loaded = roc_load::load_and_typecheck(
+        arena,
+        file.clone(),
+        None,
+        RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+        load_config,
+    )
+    .map_err(|e| format!("{:?}", e))?;
+
+    let buf = annotate_module(&mut loaded)?;
+
+    std::fs::write(&file, buf.as_str()).unwrap();
+    Ok(())
+}
+
+fn annotate_module(loaded: &mut LoadedModule) -> Result<String, String> {
+    let (decls, subs, abilities) =
+        if let Some(decls) = loaded.declarations_by_id.get(&loaded.module_id) {
+            let subs = loaded.solved.inner_mut();
+            let abilities = &loaded.abilities_store;
+
+            (decls, subs, abilities)
+        } else if let Some(checked) = loaded.typechecked.get_mut(&loaded.module_id) {
+            let decls = &checked.decls;
+            let subs = checked.solved_subs.inner_mut();
+            let abilities = &checked.abilities_store;
+
+            (decls, subs, abilities)
+        } else {
+            return Err("no module?".to_owned());
+        };
+
+    let src = &loaded.sources.get(&loaded.module_id).ok_or("no src")?.1;
+
+    let annotated_src = annotate(
+        decls,
+        subs,
+        abilities,
+        src,
+        loaded.module_id,
+        &loaded.interns,
+    );
+
+    Ok(annotated_src)
+}
+
+fn annotate(
+    decls: &Declarations,
+    subs: &mut Subs,
+    abilities: &IAbilitiesStore<Resolved>,
+    src: &str,
+    module_id: ModuleId,
+    interns: &Interns,
+) -> String {
+    let mut buffer = String::new();
+    let mut file_progress = 0;
+
+    // TODO: check assumption that this is always in order
+    for (index, tag) in decls.iter_bottom_up() {
+        let var = decls.variables[index];
+        let symbol = decls.symbols[index];
+
+        if decls.annotations[index].is_some()
+            | matches!(decls.expressions[index].value, Expr::ImportParams(..))
+            | abilities.is_specialization_name(symbol.value)
+        {
+            continue;
+        }
+
+        let byte_range = match tag {
+            DeclarationTag::Destructure(i) => {
+                let region = decls.destructs[i.index()].loc_pattern.region;
+                region.start().byte_offset()..region.end().byte_offset()
+            }
+            _ => symbol.byte_range(),
+        };
+
+        let (position, edit) = annotate_edit(src, subs, interns, module_id, var, byte_range);
+
+        buffer.push_str(&src[file_progress..position]);
+        buffer.push_str(&edit);
+
+        file_progress = position;
+    }
+    buffer.push_str(&src[file_progress..]);
+
+    buffer
+}
+
+fn annotate_edit(
+    src: &str,
+    subs: &mut Subs,
+    interns: &Interns,
+    module_id: ModuleId,
+    var: Variable,
+    symbol_range: Range<usize>,
+) -> (usize, String) {
+    let snapshot = subs.snapshot();
+    let signature = roc_types::pretty_print::name_and_print_var(
+        var,
+        subs,
+        module_id,
+        interns,
+        roc_types::pretty_print::DebugPrint::NOTHING,
+    );
+    subs.rollback_to(snapshot);
+
+    let line_start = src[..symbol_range.start]
+        .rfind("\n")
+        .map_or(symbol_range.start, |pos| pos + 1);
+    let indent = src[line_start..]
+        .split_once(|c: char| !c.is_ascii_whitespace())
+        .map_or("", |pair| pair.0);
+
+    let symbol_str = &src[symbol_range.clone()];
+    let edit = format!("{indent}{symbol_str} : {signature}\n");
+
+    (line_start, edit)
 }
 
 #[cfg(test)]
