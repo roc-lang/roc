@@ -14547,11 +14547,11 @@ All branches in an `if` must have the same type!
         leftover_statement,
         indoc!(
             r#"
-            app [main] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
 
             import pf.Effect
 
-            main = \{} ->
+            main! = \{} ->
                 identity {}
 
                 Effect.putLine! "hello"
@@ -14688,5 +14688,67 @@ All branches in an `if` must have the same type!
 
             Num *
         "###
+    );
+
+    test_report!(
+        function_def_fx_no_bang,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                printHello {}
+
+            printHello = \{} ->
+                Effect.putLine! "hello"
+            "#
+        ),
+        @r###"
+    ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
+
+    This function is effectful, but its name does not indicate so:
+
+    8│  printHello = \{} ->
+        ^^^^^^^^^^
+
+    Add an exclamation mark at the end of its name, like:
+
+        printHello!
+
+    This will help readers identify it as a source of effects.
+    "###
+    );
+
+    test_report!(
+        nested_function_def_fx_no_bang,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                printHello = \{} ->
+                    Effect.putLine! "hello"
+
+                printHello {}
+            "#
+        ),
+        @r###"
+    ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
+
+    This function is effectful, but its name does not indicate so:
+
+    6│      printHello = \{} ->
+            ^^^^^^^^^^
+
+    Add an exclamation mark at the end of its name, like:
+
+        printHello!
+
+    This will help readers identify it as a source of effects.
+    "###
     );
 }

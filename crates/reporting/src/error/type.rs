@@ -330,6 +330,23 @@ pub fn type_problem<'b>(
                 severity,
             })
         }
+        UnsuffixedEffectfulFunction(region, symbol) => {
+            let stack = [
+                alloc.reflow("This function is effectful, but its name does not indicate so:"),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.reflow("Add an exclamation mark at the end of its name, like:"),
+                alloc
+                    .string(format!("{}!", symbol.as_str(alloc.interns)))
+                    .indent(4),
+                alloc.reflow("This will help readers identify it as a source of effects."),
+            ];
+            Some(Report {
+                title: "MISSING EXCLAMATION".to_string(),
+                filename,
+                doc: alloc.stack(stack),
+                severity,
+            })
+        }
     }
 }
 

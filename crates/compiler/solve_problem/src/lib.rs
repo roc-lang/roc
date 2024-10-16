@@ -40,6 +40,7 @@ pub enum TypeError {
     MissingModuleParams(Region, ModuleId, ErrorType),
     ModuleParamsMismatch(Region, ModuleId, ErrorType, ErrorType),
     PureStmt(Region),
+    UnsuffixedEffectfulFunction(Region, Symbol),
 }
 
 impl TypeError {
@@ -65,6 +66,7 @@ impl TypeError {
             TypeError::IngestedFileBadUtf8(..) => Fatal,
             TypeError::IngestedFileUnsupportedType(..) => Fatal,
             TypeError::PureStmt(..) => Warning,
+            TypeError::UnsuffixedEffectfulFunction(_, _) => Warning,
         }
     }
 
@@ -81,7 +83,8 @@ impl TypeError {
             | TypeError::UnexpectedModuleParams(region, ..)
             | TypeError::MissingModuleParams(region, ..)
             | TypeError::ModuleParamsMismatch(region, ..)
-            | TypeError::PureStmt(region) => Some(*region),
+            | TypeError::PureStmt(region)
+            | TypeError::UnsuffixedEffectfulFunction(region, _) => Some(*region),
             TypeError::UnfulfilledAbility(ab, ..) => ab.region(),
             TypeError::Exhaustive(e) => Some(e.region()),
             TypeError::CircularDef(c) => c.first().map(|ce| ce.symbol_region),
