@@ -20,8 +20,8 @@ use roc_solve_problem::{
 use roc_std::RocDec;
 use roc_types::pretty_print::{Parens, WILDCARD};
 use roc_types::types::{
-    AbilitySet, AliasKind, Category, ErrorType, IndexOrField, PatternCategory, Polarity, Reason,
-    RecordField, TypeExt,
+    AbilitySet, AliasKind, Category, ErrorType, FxReason, IndexOrField, PatternCategory, Polarity,
+    Reason, RecordField, TypeExt,
 };
 use std::path::PathBuf;
 use ven_pretty::{text, DocAllocator};
@@ -1730,9 +1730,9 @@ fn to_expr_report<'b>(
                 }
             }
 
-            Reason::CallInFunction(ann_region) => {
+            Reason::FxInFunction(ann_region, fx_reason) => {
                 let lines = [
-                    alloc.reflow("This expression calls an effectful function:"),
+                    describe_fx_reason(alloc, fx_reason),
                     alloc.region(lines.convert_region(region), severity),
                     match ann_region {
                         Some(ann_region) => alloc.stack([
@@ -1763,11 +1763,12 @@ fn to_expr_report<'b>(
                     severity,
                 }
             }
-            Reason::CallInTopLevel => {
+
+            Reason::FxInTopLevel(fx_reason) => {
                 let lines = [
-                    alloc.reflow("This top-level expression calls an effectful function:"),
+                    describe_fx_reason(alloc, fx_reason),
                     alloc.region(lines.convert_region(region), severity),
-                    alloc.reflow("However, only functions are allowed to be effectful. This limitation ensures that importing a module never produces a side effect."),
+                    alloc.reflow("However, it appears in a top-level def instead of a function. If we allowed this, importing this module would produce a side effect."),
                     alloc.concat([
                         alloc.tip(),
                         alloc.reflow("If you don't need any arguments, use an empty record:"),
@@ -5416,5 +5417,17 @@ fn pattern_to_doc_help<'b>(
                 }
             }
         }
+    }
+}
+
+fn describe_fx_reason<'b>(alloc: &'b RocDocAllocator<'b>, reason: FxReason) -> RocDocBuilder<'b> {
+    match reason {
+        FxReason::Call(Some(name)) => alloc.concat([
+            alloc.reflow("This call to "),
+            alloc.symbol_qualified(name),
+            alloc.reflow(" might produce an effect:"),
+        ]),
+        FxReason::Call(None) => alloc.reflow("This expression calls an effectful function:"),
+        FxReason::Stmt => alloc.reflow("This statement calls an effectful function:"),
     }
 }

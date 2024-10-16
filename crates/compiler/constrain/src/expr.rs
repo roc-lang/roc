@@ -29,8 +29,8 @@ use roc_region::all::{Loc, Region};
 use roc_types::subs::{IllegalCycleMark, Variable};
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
-    AliasKind, AnnotationSource, Category, IndexOrField, OptAbleType, PReason, Reason, RecordField,
-    TypeExtension, TypeTag, Types,
+    AliasKind, AnnotationSource, Category, FxReason, IndexOrField, OptAbleType, PReason, Reason,
+    RecordField, TypeExtension, TypeTag, Types,
 };
 use soa::{Index, Slice};
 
@@ -611,7 +611,14 @@ pub fn constrain_expr(
                     category.clone(),
                     region,
                 ),
-                constrain_call_fx(env, constraints, region, *fx_var, category),
+                constrain_call_fx(
+                    env,
+                    constraints,
+                    region,
+                    *fx_var,
+                    category,
+                    FxReason::Call(opt_symbol),
+                ),
             ];
 
             let and_constraint = constraints.and_constraint(and_cons);
@@ -1879,19 +1886,20 @@ fn constrain_call_fx(
     region: Region,
     fx_var: Variable,
     category: Category,
+    fx_reason: FxReason,
 ) -> Constraint {
     let fx_expected_type = match env.enclosing_fx {
         Some(enclosing_fn) => {
             let enclosing_fx_index = constraints.push_variable(enclosing_fn.fx_var);
 
             constraints.push_expected_type(ForReason(
-                Reason::CallInFunction(enclosing_fn.ann_region),
+                Reason::FxInFunction(enclosing_fn.ann_region, fx_reason),
                 enclosing_fx_index,
                 region,
             ))
         }
         None => constraints.push_expected_type(ForReason(
-            Reason::CallInTopLevel,
+            Reason::FxInTopLevel(fx_reason),
             // top-level defs are only allowed to call pure functions
             constraints.push_variable(Variable::PURE),
             region,
@@ -3525,10 +3533,30 @@ fn constrain_stmt_def(
     // Stmt expr must be effectful, otherwise it's dead code
     let effectful_constraint = Constraint::EffectfulStmt(fx_var, region);
 
+    // Try to extract the fn name and region if the stmt is a direct call
+    let (fx_reason, call_region) = if let Expr::Call(boxed, _, _) = &def.loc_expr.value {
+        let loc_fn_expr = &boxed.1;
+
+        match loc_fn_expr.value {
+            Var(symbol, _) | ParamsVar { symbol, .. } => {
+                (FxReason::Call(Some(symbol)), loc_fn_expr.region)
+            }
+            _ => (FxReason::Stmt, def.loc_expr.region),
+        }
+    } else {
+        (FxReason::Stmt, def.loc_expr.region)
+    };
+
     // We have to unify the stmt fx with the enclosing fx
     // since we used the former to constrain the expr.
-    let enclosing_fx_constraint =
-        constrain_call_fx(env, constraints, region, fx_var, Category::Unknown);
+    let enclosing_fx_constraint = constrain_call_fx(
+        env,
+        constraints,
+        call_region,
+        fx_var,
+        Category::Unknown,
+        fx_reason,
+    );
 
     constraints.and_constraint([body_con, effectful_constraint, enclosing_fx_constraint])
 }

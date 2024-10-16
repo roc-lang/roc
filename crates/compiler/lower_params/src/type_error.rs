@@ -185,8 +185,8 @@ fn remove_for_reason(
         }
         | Reason::CrashArg
         | Reason::ImportParams(_)
-        | Reason::CallInFunction(_)
-        | Reason::CallInTopLevel
+        | Reason::FxInFunction(_, _)
+        | Reason::FxInTopLevel(_)
         | Reason::Stmt
         | Reason::FunctionOutput => {}
     }

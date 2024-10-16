@@ -14711,7 +14711,7 @@ All branches in an `if` must have the same type!
         @r###"
     ── EFFECT IN PURE FUNCTION in /code/proj/Main.roc ──────────────────────────────
 
-    This expression calls an effectful function:
+    This call to `Effect.getLine!` might produce an effect:
 
     10│      name = Effect.getLine! {}
                     ^^^^^^^^^^^^^^^^^^
@@ -14748,10 +14748,10 @@ All branches in an `if` must have the same type!
         @r###"
     ── EFFECT IN PURE FUNCTION in /code/proj/Main.roc ──────────────────────────────
 
-    This expression calls an effectful function:
+    This call to `Effect.putLine!` might produce an effect:
 
     10│      Effect.putLine! "Trimming $(msg)"
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+             ^^^^^^^^^^^^^^^
 
     However, the type of the enclosing function requires that it's pure:
 
@@ -14843,13 +14843,13 @@ All branches in an `if` must have the same type!
         @r###"
     ── EFFECT IN TOP-LEVEL in /code/proj/Main.roc ──────────────────────────────────
 
-    This top-level expression calls an effectful function:
+    This call to `Effect.putLine!` might produce an effect:
 
     6│      Effect.putLine! "calling hello!"
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+            ^^^^^^^^^^^^^^^
 
-    However, only functions are allowed to be effectful. This limitation
-    ensures that importing a module never produces a side effect.
+    However, it appears in a top-level def instead of a function. If we
+    allowed this, importing this module would produce a side effect.
 
     Tip: If you don't need any arguments, use an empty record:
 
