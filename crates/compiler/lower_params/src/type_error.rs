@@ -187,7 +187,7 @@ fn remove_for_reason(
         | Reason::ImportParams(_)
         | Reason::FxInFunction(_, _)
         | Reason::FxInTopLevel(_)
-        | Reason::Stmt
+        | Reason::Stmt(_)
         | Reason::FunctionOutput => {}
     }
 }

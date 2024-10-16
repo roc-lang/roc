@@ -14797,6 +14797,38 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
+        ignored_result_stmt,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                Effect.getLine! {}
+                {}
+            "#
+        ),
+        @r###"
+    ── IGNORED RESULT in /code/proj/Main.roc ───────────────────────────────────────
+
+    The result of this call to `Effect.getLine!` is ignored:
+
+    6│      Effect.getLine! {}
+            ^^^^^^^^^^^^^^^
+
+    Standalone statements are required to produce an empty record, but the
+    type of this one is:
+
+        Str
+
+    If you still want to ignore it, assign it to `_`, like this:
+
+        _ = File.delete! "data.json"
+    "###
+    );
+
+    test_report!(
         function_def_leftover_bang,
         indoc!(
             r#"

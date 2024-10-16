@@ -3501,10 +3501,25 @@ fn constrain_stmt_def(
 ) -> Constraint {
     let region = def.loc_expr.region;
 
+    // Try to extract the fn name and region if the stmt is a call to a named function
+    let (fn_name, error_region) = if let Expr::Call(boxed, _, _) = &def.loc_expr.value {
+        let loc_fn_expr = &boxed.1;
+
+        match loc_fn_expr.value {
+            Var(symbol, _) | ParamsVar { symbol, .. } => (Some(symbol), loc_fn_expr.region),
+            _ => (None, def.loc_expr.region),
+        }
+    } else {
+        (None, def.loc_expr.region)
+    };
+
     // Statement expressions must return an empty record
     let empty_record_index = constraints.push_type(types, Types::EMPTY_RECORD);
-    let expect_empty_record =
-        constraints.push_expected_type(ForReason(Reason::Stmt, empty_record_index, region));
+    let expect_empty_record = constraints.push_expected_type(ForReason(
+        Reason::Stmt(fn_name),
+        empty_record_index,
+        error_region,
+    ));
 
     let expr_con = env.with_enclosing_fx(fx_var, None, |env| {
         constrain_expr(
@@ -3533,18 +3548,9 @@ fn constrain_stmt_def(
     // Stmt expr must be effectful, otherwise it's dead code
     let effectful_constraint = Constraint::EffectfulStmt(fx_var, region);
 
-    // Try to extract the fn name and region if the stmt is a direct call
-    let (fx_reason, call_region) = if let Expr::Call(boxed, _, _) = &def.loc_expr.value {
-        let loc_fn_expr = &boxed.1;
-
-        match loc_fn_expr.value {
-            Var(symbol, _) | ParamsVar { symbol, .. } => {
-                (FxReason::Call(Some(symbol)), loc_fn_expr.region)
-            }
-            _ => (FxReason::Stmt, def.loc_expr.region),
-        }
-    } else {
-        (FxReason::Stmt, def.loc_expr.region)
+    let fx_reason = match fn_name {
+        None => FxReason::Stmt,
+        Some(name) => FxReason::Call(Some(name)),
     };
 
     // We have to unify the stmt fx with the enclosing fx
@@ -3552,7 +3558,7 @@ fn constrain_stmt_def(
     let enclosing_fx_constraint = constrain_call_fx(
         env,
         constraints,
-        call_region,
+        error_region,
         fx_var,
         Category::Unknown,
         fx_reason,
