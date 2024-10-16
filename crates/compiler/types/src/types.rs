@@ -3450,7 +3450,7 @@ pub enum Reason {
     },
     Stmt,
     CallInFunction(Option<Region>),
-    CallInTopLevelDef,
+    CallInTopLevel,
     FloatLiteral,
     IntLiteral,
     NumLiteral,

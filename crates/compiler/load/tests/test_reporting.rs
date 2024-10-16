@@ -14825,6 +14825,44 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
+        effect_in_top_level_value_def,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            hello =
+                Effect.putLine! "calling hello!"
+                "hello"
+
+            main! = \{} ->
+                Effect.putLine! hello
+            "#
+        ),
+        @r###"
+    ── EFFECT IN TOP-LEVEL in /code/proj/Main.roc ──────────────────────────────────
+
+    This top-level expression calls an effectful function:
+
+    6│      Effect.putLine! "calling hello!"
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    However, only functions are allowed to be effectful. This limitation
+    ensures that importing a module never produces a side effect.
+
+    Tip: If you don't need any arguments, use an empty record:
+
+        askName! : {} => Str
+        askName! = \{} ->
+            Stdout.line! "What's your name?"
+            Stdin.line! {}
+
+    This will allow the caller to control when the effect runs.
+    "###
+    );
+
+    test_report!(
         aliased_fx_fn,
         indoc!(
             r#"
