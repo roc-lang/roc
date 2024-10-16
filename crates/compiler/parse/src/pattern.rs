@@ -6,7 +6,7 @@ use crate::keyword;
 use crate::number_literal::parse_number_base;
 use crate::parser::{at_keyword, Progress::*};
 use crate::parser::{
-    collection_inner, specialize_err_ref, then, zero_or_more, EPattern, PInParens, PList, PRecord,
+    collection_inner, specialize_err_ref, zero_or_more, EPattern, PInParens, PList, PRecord,
     ParseResult, Parser,
 };
 use crate::state::State;
@@ -218,26 +218,21 @@ fn loc_tag_pattern_arg<'a>(
 }
 
 pub fn loc_implements_parser<'a>() -> impl Parser<'a, Loc<Implements<'a>>, EPattern<'a>> {
-    then(
-        loc_tag_pattern_arg(false),
-        |_arena, state, progress, pattern| {
-            if matches!(
-                pattern.value,
-                Pattern::Identifier {
-                    ident: crate::keyword::IMPLEMENTS,
-                    ..
-                }
-            ) {
-                Ok((
-                    progress,
-                    Loc::at(pattern.region, Implements::Implements),
-                    state,
-                ))
-            } else {
-                Err((progress, EPattern::End(state.pos())))
+    move |arena: &'a Bump, state: State<'a>, min_indent: u32| match loc_tag_pattern_arg(false)
+        .parse(arena, state, min_indent)
+    {
+        Ok((p, pattern, state)) => match pattern.value {
+            Pattern::Identifier {
+                ident: crate::keyword::IMPLEMENTS,
+                ..
+            } => {
+                let out = Loc::at(pattern.region, Implements::Implements);
+                Ok((p, out, state))
             }
+            _ => Err((p, EPattern::End(state.pos()))),
         },
-    )
+        Err(err) => Err(err),
+    }
 }
 
 fn rest_of_pattern_in_parens<'a>(

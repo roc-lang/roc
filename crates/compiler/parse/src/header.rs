@@ -13,9 +13,9 @@ use crate::parser::Progress::{self, *};
 use crate::parser::{
     and, backtrackable, byte, collection_inner, collection_trailing_sep_e, increment_min_indent,
     loc, map, map_with_arena, optional, reset_min_indent, skip_first, skip_second, specialize_err,
-    succeed, then, two_bytes, zero_or_more, EExposes, EHeader, EImports, EPackageEntry,
-    EPackageName, EPackages, EParams, EProvides, ERequires, ETypedIdent, Parser, SourceError,
-    SpaceProblem, SyntaxError,
+    succeed, two_bytes, zero_or_more, EExposes, EHeader, EImports, EPackageEntry, EPackageName,
+    EPackages, EParams, EProvides, ERequires, ETypedIdent, Parser, SourceError, SpaceProblem,
+    SyntaxError,
 };
 use crate::pattern::parse_record_pattern_fields;
 use crate::state::State;
@@ -209,11 +209,10 @@ fn hosted_header<'a>() -> impl Parser<'a, HostedHeader<'a>, EHeader<'a>> {
     .trace("hosted_header")
 }
 
-fn chomp_module_name(buffer: &[u8]) -> Result<&str, Progress> {
+pub(crate) fn chomp_module_name(buffer: &[u8]) -> Result<&str, Progress> {
     use encode_unicode::CharExt;
 
     let mut chomped = 0;
-
     if let Ok((first_letter, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
         if first_letter.is_uppercase() {
             chomped += width;
@@ -256,12 +255,10 @@ fn chomp_module_name(buffer: &[u8]) -> Result<&str, Progress> {
 }
 
 #[inline(always)]
-fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>, ()> {
+pub(crate) fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>, ()> {
     |_, mut state: State<'a>, _min_indent: u32| match chomp_module_name(state.bytes()) {
         Ok(name) => {
-            let width = name.len();
-            state = state.advance(width);
-
+            state.advance_mut(name.len());
             Ok((MadeProgress, ModuleName::new(name), state))
         }
         Err(progress) => Err((progress, ())),
@@ -483,7 +480,6 @@ fn provides_to_package<'a>() -> impl Parser<'a, To<'a>, EProvides<'a>> {
     ]
 }
 
-#[inline(always)]
 fn provides_to<'a>() -> impl Parser<'a, ProvidesTo<'a>, EProvides<'a>> {
     record!(ProvidesTo {
         provides_keyword: spaces_around_keyword(
@@ -577,10 +573,17 @@ where
     F: Copy,
     E: 'a,
 {
-    loc(map(
-        specialize_err(move |_, pos| to_expectation(pos), unqualified_ident()),
-        |n| Spaced::Item(ExposedName::new(n)),
-    ))
+    move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
+        let ident_pos = state.pos();
+        match unqualified_ident().parse(arena, state, min_indent) {
+            Ok((p, ident, state)) => {
+                let ident = Spaced::Item(ExposedName::new(ident));
+                let ident = Loc::pos(ident_pos, state.pos(), ident);
+                Ok((p, ident, state))
+            }
+            Err((p, _)) => Err((p, to_expectation(ident_pos))),
+        }
+    }
 }
 
 #[inline(always)]
@@ -667,6 +670,7 @@ fn exposes_list<'a>() -> impl Parser<'a, Collection<'a, Loc<Spaced<'a, ExposedNa
     )
 }
 
+// todo: @wip inline insides
 pub fn spaces_around_keyword<'a, K: Keyword, E>(
     keyword_item: K,
     expectation: fn(Position) -> E,
@@ -841,7 +845,6 @@ where
     specialize_err(move |_, pos| to_expectation(pos), module_name())
 }
 
-#[inline(always)]
 fn imports_entry<'a>() -> impl Parser<'a, Spaced<'a, ImportsEntry<'a>>, EImports> {
     type Temp<'a> = (
         (Option<&'a str>, ModuleName<'a>),
@@ -1353,17 +1356,17 @@ pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPac
 }
 
 pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, EPackageName<'a>> {
-    then(
-        loc(specialize_err(
-            EPackageName::BadPath,
-            string_literal::parse_str_literal(),
-        )),
-        move |_arena, state, progress, text| match text.value {
-            StrLiteral::PlainLine(text) => Ok((progress, PackageName(text), state)),
-            StrLiteral::Line(_) => Err((progress, EPackageName::Escapes(text.region.start()))),
-            StrLiteral::Block(_) => Err((progress, EPackageName::Multiline(text.region.start()))),
-        },
-    )
+    move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
+        let name_pos = state.pos();
+        match string_literal::parse_str_literal().parse(arena, state, min_indent) {
+            Ok((p, name, state)) => match name {
+                StrLiteral::PlainLine(text) => Ok((p, PackageName(text), state)),
+                StrLiteral::Line(_) => Err((p, EPackageName::Escapes(name_pos))),
+                StrLiteral::Block(_) => Err((p, EPackageName::Multiline(name_pos))),
+            },
+            Err((p, fail)) => Err((p, EPackageName::BadPath(fail, name_pos))),
+        }
+    }
 }
 
 impl<'a, K, V> Malformed for KeywordItem<'a, K, V>

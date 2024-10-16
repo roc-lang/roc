@@ -53,7 +53,7 @@ pub enum Ident<'a> {
 }
 
 pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
-    move |_, state: State<'a>, _min_indent: u32| parse_lowercase_ident(state)
+    move |_, state: State<'a>, _: u32| parse_lowercase_ident(state)
 }
 
 /// This could be:
@@ -86,15 +86,15 @@ pub fn uppercase<'a>() -> impl Parser<'a, UppercaseIdent<'a>, ()> {
     }
 }
 
+// todo: @wip
 pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str, ()> {
-    move |_, state: State<'a>, _min_indent: u32| match chomp_anycase_part(state.bytes()) {
+    move |_, state: State<'a>, _: u32| match chomp_anycase_part(state.bytes()) {
         Err(progress) => Err((progress, ())),
         Ok(ident) => {
             if crate::keyword::KEYWORDS.iter().any(|kw| &ident == kw) {
                 Err((MadeProgress, ()))
             } else {
-                let width = ident.len();
-                Ok((MadeProgress, ident, state.advance(width)))
+                Ok((MadeProgress, ident, state.advance(ident.len())))
             }
         }
     }

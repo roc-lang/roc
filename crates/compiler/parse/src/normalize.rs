@@ -1200,7 +1200,6 @@ impl<'a> Normalize<'a> for EPattern<'a> {
 impl<'a> Normalize<'a> for EImport<'a> {
     fn normalize(&self, arena: &'a Bump) -> Self {
         match self {
-            EImport::Import(_) => EImport::Import(Position::zero()),
             EImport::IndentStart(_) => EImport::IndentStart(Position::zero()),
             EImport::PackageShorthand(_) => EImport::PackageShorthand(Position::zero()),
             EImport::PackageShorthandDot(_) => EImport::PackageShorthandDot(Position::zero()),

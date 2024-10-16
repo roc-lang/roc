@@ -507,7 +507,6 @@ pub enum EExpect<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EImport<'a> {
-    Import(Position),
     IndentStart(Position),
     PackageShorthand(Position),
     PackageShorthandDot(Position),
@@ -832,53 +831,6 @@ where
         );
 
         res
-    }
-}
-
-/// Creates a new parser that can change its output based on a function.
-///
-/// # Examples
-/// ```
-/// # #![forbid(unused_imports)]
-/// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, then, word};
-/// # use roc_region::all::Position;
-/// # use bumpalo::Bump;
-/// # #[derive(Debug, PartialEq)]
-/// # enum Problem {
-/// #     NotFound(Position),
-/// #     OddChar(Position),
-/// # }
-/// # let arena = Bump::new();
-/// let parser_inner = word("hello", Problem::NotFound);
-///
-/// let parser = then(parser_inner,
-///     |arena, new_state, progress, output| {
-///         // arbitrary check
-///         if new_state.pos().offset % 2 == 0 {
-///             Ok((progress, output, new_state))
-///         } else {
-///             Err((Progress::NoProgress, Problem::OddChar(new_state.pos())))
-///         }
-///     }
-/// );
-///
-/// let actual = parser.parse(&arena, State::new("hello, world".as_bytes()), 0);
-/// assert!(actual.is_err());
-/// ```
-pub fn then<'a, P1, F, Before, After, E>(parser: P1, transform: F) -> impl Parser<'a, After, E>
-where
-    P1: Parser<'a, Before, E>,
-    After: 'a,
-    E: 'a,
-    F: Fn(&'a Bump, State<'a>, Progress, Before) -> ParseResult<'a, After, E>,
-{
-    move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
-        parser
-            .parse(arena, state, min_indent)
-            .and_then(|(progress, output, next_state)| {
-                transform(arena, next_state, progress, output)
-            })
     }
 }
 
@@ -1628,7 +1580,7 @@ pub fn map<'a, Output, MappedOutput, E: 'a>(
     parser: impl Parser<'a, Output, E>,
     transform: impl Fn(Output) -> MappedOutput,
 ) -> impl Parser<'a, MappedOutput, E> {
-    move |arena, state, min_indent| {
+    move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
         parser
             .parse(arena, state, min_indent)
             .map(|(progress, output, next_state)| (progress, transform(output), next_state))

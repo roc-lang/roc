@@ -1412,7 +1412,6 @@ fn to_import_report<'a>(
     let severity = Severity::RuntimeError;
 
     match parse_problem {
-        Import(_pos) => unreachable!("another branch would be taken"),
         IndentStart(pos)
         | PackageShorthand(pos)
         | PackageShorthandDot(pos)

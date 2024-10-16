@@ -8,17 +8,17 @@ use crate::ast::{
 use crate::blankspace::{
     eat_space, eat_space_check, eat_space_loc_comments, space0_e, spaces_around_help, SpacedBuilder,
 };
-use crate::header::module_name_help;
+use crate::header::{chomp_module_name, ModuleName};
 use crate::ident::{
-    chomp_access_chain, chomp_integer_part, lowercase_ident, malformed_ident, parse_ident,
-    parse_lowercase_ident, unqualified_ident, Accessor, BadIdent, Ident, Suffix,
+    chomp_access_chain, chomp_integer_part, malformed_ident, parse_ident, parse_lowercase_ident,
+    unqualified_ident, Accessor, BadIdent, Ident, Suffix,
 };
 use crate::number_literal::parse_number_base;
 use crate::parser::{
     self, and, at_keyword, backtrackable, byte, collection_inner, collection_trailing_sep_e, loc,
-    map, optional, skip_second, specialize_err, specialize_err_ref, then, EClosure, EExpect, EExpr,
-    EIf, EImport, EImportParams, EInParens, EList, EPattern, ERecord, EType, EWhen, ParseResult,
-    Parser, SpaceProblem,
+    map, skip_second, specialize_err, specialize_err_ref, EClosure, EExpect, EExpr, EIf, EImport,
+    EImportParams, EInParens, EList, EPattern, ERecord, EType, EWhen, ParseResult, Parser,
+    SpaceProblem,
 };
 use crate::pattern::parse_closure_param;
 use crate::state::State;
@@ -954,88 +954,100 @@ fn numeric_negate_expr<'a>(
     Loc::at(region, new_expr).spaced_before(arena, spaces)
 }
 
-fn import_params<'a>() -> impl Parser<'a, ModuleImportParams<'a>, EImportParams<'a>> {
-    move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
-        let (spaces_before, state) =
-            match eat_space_check(EImportParams::Indent, arena, state, min_indent, false) {
-                Ok((_, sp, state)) => (sp, state),
-                Err((_, fail)) => return Err((NoProgress, fail)),
-            };
-
-        let record_pos = state.pos();
-        let (record, state) = match record_help().parse(arena, state, min_indent) {
-            Ok((_, out, state)) => (out, state),
-            Err((p, fail)) => return Err((p, EImportParams::Record(fail, record_pos))),
-        };
-        let record_at = Region::new(record_pos, state.pos());
-
-        if let Some(prefix) = record.prefix {
-            let fail = match prefix {
-                (update, RecordHelpPrefix::Update) => {
-                    EImportParams::RecordUpdateFound(update.region)
-                }
-                (mapper, RecordHelpPrefix::Mapper) => {
-                    EImportParams::RecordBuilderFound(mapper.region)
-                }
-            };
-            return Err((MadeProgress, fail));
-        }
-
-        let params = record.fields.map_items_result(arena, |loc_field| {
-            match loc_field.value.to_assigned_field(arena) {
-                AssignedField::IgnoredValue(_, _, _) => Err((
-                    MadeProgress,
-                    EImportParams::RecordIgnoredFieldFound(loc_field.region),
-                )),
-                field => Ok(Loc::at(loc_field.region, field)),
-            }
-        })?;
-
-        let import_params = ModuleImportParams {
-            before: spaces_before,
-            params: Loc::at(record_at, params),
+fn parse_import_params<'a>(
+    arena: &'a Bump,
+    state: State<'a>,
+    min_indent: u32,
+) -> ParseResult<'a, ModuleImportParams<'a>, EImportParams<'a>> {
+    let (before, state) =
+        match eat_space_check(EImportParams::Indent, arena, state, min_indent, false) {
+            Ok((_, sp, state)) => (sp, state),
+            Err((_, fail)) => return Err((NoProgress, fail)),
         };
 
-        Ok((MadeProgress, import_params, state))
+    let record_pos = state.pos();
+    let (record, state) = match record_help().parse(arena, state, min_indent) {
+        Ok((_, out, state)) => (out, state),
+        Err((p, fail)) => return Err((p, EImportParams::Record(fail, record_pos))),
+    };
+    let record_at = Region::new(record_pos, state.pos());
+
+    if let Some(prefix) = record.prefix {
+        let fail = match prefix {
+            (update, RecordHelpPrefix::Update) => EImportParams::RecordUpdateFound(update.region),
+            (mapper, RecordHelpPrefix::Mapper) => EImportParams::RecordBuilderFound(mapper.region),
+        };
+        return Err((MadeProgress, fail));
     }
+
+    let params = record.fields.map_items_result(arena, |loc_field| {
+        match loc_field.value.to_assigned_field(arena) {
+            AssignedField::IgnoredValue(_, _, _) => Err((
+                MadeProgress,
+                EImportParams::RecordIgnoredFieldFound(loc_field.region),
+            )),
+            field => Ok(Loc::at(loc_field.region, field)),
+        }
+    })?;
+
+    let params = Loc::at(record_at, params);
+    let import_params = ModuleImportParams { before, params };
+    Ok((MadeProgress, import_params, state))
 }
 
-#[inline(always)]
-fn imported_module_name<'a>() -> impl Parser<'a, ImportedModuleName<'a>, EImport<'a>> {
-    record!(ImportedModuleName {
-        package: optional(skip_second(
-            specialize_err(|_, pos| EImport::PackageShorthand(pos), lowercase_ident()),
-            byte(b'.', EImport::PackageShorthandDot)
-        )),
-        name: module_name_help(EImport::ModuleName)
-    })
+fn parse_imported_module_name<'a>(
+    state: State<'a>,
+) -> ParseResult<'a, ImportedModuleName<'a>, EImport<'a>> {
+    let package_pos = state.pos();
+    let (package, state) = match parse_lowercase_ident(state.clone()) {
+        Ok((_, name, state)) => match state.bytes().first() {
+            Some(&b'.') => (Some(name), state.inc()),
+            _ => return Err((MadeProgress, EImport::PackageShorthandDot(package_pos))),
+        },
+        Err((NoProgress, _)) => (None, state),
+        Err(_) => return Err((MadeProgress, EImport::PackageShorthand(package_pos))),
+    };
+
+    let name_pos = state.pos();
+    let (name, state) = match chomp_module_name(state.bytes()) {
+        Ok(name) => (ModuleName::new(name), state.advance(name.len())),
+        Err(p) => return Err((p, EImport::ModuleName(name_pos))),
+    };
+
+    let module_name = ImportedModuleName { package, name };
+    Ok((MadeProgress, module_name, state))
 }
 
-#[inline(always)]
 fn import_as<'a>(
 ) -> impl Parser<'a, header::KeywordItem<'a, ImportAsKeyword, Loc<ImportAlias<'a>>>, EImport<'a>> {
-    record!(header::KeywordItem {
-        keyword: header::spaces_around_keyword(
+    move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
+        let (_, keyword, state) = header::spaces_around_keyword(
             ImportAsKeyword,
             EImport::As,
             EImport::IndentAs,
-            EImport::IndentAlias
-        ),
-        item: then(
-            specialize_err(|_, pos| EImport::Alias(pos), loc(unqualified_ident())),
-            |_arena, state, _progress, loc_ident| {
-                match loc_ident.value.chars().next() {
-                    Some(first) if first.is_uppercase() => Ok((
-                        MadeProgress,
-                        loc_ident.map(|ident| ImportAlias::new(ident)),
-                        state,
-                    )),
-                    Some(_) => Err((MadeProgress, EImport::LowercaseAlias(loc_ident.region))),
-                    None => Err((MadeProgress, EImport::Alias(state.pos()))),
+            EImport::IndentAlias,
+        )
+        .parse(arena, state, min_indent)?;
+
+        let ident_pos = state.pos();
+        let (item, state) = match unqualified_ident().parse(arena, state, min_indent) {
+            Ok((_, ident, state)) => {
+                let ident_at = Region::new(ident_pos, state.pos());
+                match ident.chars().next() {
+                    Some(first) if first.is_uppercase() => {
+                        let ident = Loc::at(ident_at, ImportAlias::new(ident));
+                        (ident, state)
+                    }
+                    Some(_) => return Err((MadeProgress, EImport::LowercaseAlias(ident_at))),
+                    None => return Err((MadeProgress, EImport::Alias(state.pos()))),
                 }
             }
-        )
-    })
+            Err((p, _)) => return Err((p, EImport::Alias(ident_pos))),
+        };
+
+        let keyword = header::KeywordItem { keyword, item };
+        Ok((MadeProgress, keyword, state))
+    }
 }
 
 #[inline(always)]
@@ -1079,17 +1091,13 @@ fn import_ingested_file_as<'a>(
     state: State<'a>,
     min_indent: u32,
 ) -> ParseResult<'a, header::KeywordItem<'a, ImportAsKeyword, Loc<&'a str>>, EImport<'a>> {
-    let (keyword, state) = match header::spaces_around_keyword(
+    let (_, keyword, state) = header::spaces_around_keyword(
         ImportAsKeyword,
         EImport::As,
         EImport::IndentAs,
         EImport::IndentIngestedName,
     )
-    .parse(arena, state, min_indent)
-    {
-        Ok((_, out, state)) => (out, state),
-        Err(err) => return Err(err),
-    };
+    .parse(arena, state, min_indent)?;
 
     let item_pos = state.pos();
     let (item, state) = match parse_lowercase_ident(state) {
@@ -2722,26 +2730,58 @@ fn rest_of_dbg_stmt<'a>(
     }
 }
 
+fn parse_module_import<'a>(
+    arena: &'a Bump,
+    state: State<'a>,
+    min_indent: u32,
+) -> ParseResult<'a, ModuleImport<'a>, EImport<'a>> {
+    let (_, before_name, state) =
+        eat_space_check(EImport::IndentStart, arena, state, min_indent, false)?;
+
+    let name_pos = state.pos();
+    let (_, name, state) = parse_imported_module_name(state)?;
+    let name = Loc::pos(name_pos, state.pos(), name);
+
+    let params_pos = state.pos();
+    let (params, state) = match parse_import_params(arena, state.clone(), min_indent) {
+        Ok((_, out, state)) => (Some(out), state),
+        Err((NoProgress, _)) => (None, state),
+        Err((_, fail)) => return Err((MadeProgress, EImport::Params(fail, params_pos))),
+    };
+
+    let (alias, state) = match import_as().parse(arena, state.clone(), min_indent) {
+        Ok((_, out, state)) => (Some(out), state),
+        Err((NoProgress, _)) => (None, state),
+        Err(err) => return Err(err),
+    };
+
+    let (exposed, state) = match import_exposing().parse(arena, state.clone(), min_indent) {
+        Ok((_, out, state)) => (Some(out), state),
+        Err((NoProgress, _)) => (None, state),
+        Err(err) => return Err(err),
+    };
+
+    let import = ModuleImport {
+        before_name,
+        name,
+        params,
+        alias,
+        exposed,
+    };
+    Ok((MadeProgress, import, state))
+}
+
 fn rest_of_import<'a>(
     start: Position,
     arena: &'a Bump,
     state: State<'a>,
     min_indent: u32,
 ) -> ParseResult<'a, Loc<Stmt<'a>>, EExpr<'a>> {
-    let import_body = record!(ModuleImport {
-        before_name: space0_e(EImport::IndentStart),
-        name: loc(imported_module_name()),
-        params: optional(specialize_err(EImport::Params, import_params())),
-        alias: optional(import_as()),
-        exposed: optional(import_exposing())
-    });
-
-    let (vd, state) = match import_body.parse(arena, state.clone(), min_indent + 1) {
-        Ok((_, vd, state)) => (ValueDef::ModuleImport(vd), state),
+    let inc_indent = min_indent + 1;
+    let (vd, state) = match parse_module_import(arena, state.clone(), inc_indent) {
+        Ok((_, module_import, state)) => (ValueDef::ModuleImport(module_import), state),
         Err((MadeProgress, fail)) => return Err((MadeProgress, EExpr::Import(fail, start))),
         Err(_) => {
-            let inc_indent = min_indent + 1;
-
             let (before_path, state) =
                 match eat_space_check(EImport::IndentStart, arena, state, inc_indent, false) {
                     Ok((_, sp, state)) => (sp, state),
