@@ -1207,6 +1207,7 @@ fn surgery_macho_help(
     let rodata_sections: Vec<Section> = app_obj
         .sections()
         .filter(|sec| sec.kind() == SectionKind::ReadOnlyData)
+        .filter(|sec| sec.name().unwrap_or("") != "__eh_frame") // ignore __eh_frame for now
         .collect();
 
     // bss section is like rodata section, but it has zero file size and non-zero virtual size.
