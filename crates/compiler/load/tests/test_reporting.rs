@@ -14751,4 +14751,32 @@ All branches in an `if` must have the same type!
     This will help readers identify it as a source of effects.
     "###
     );
+
+    test_report!(
+        function_def_leftover_bang,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                Effect.putLine! (hello! {})
+
+            hello! = \{} ->
+                "hello"
+            "#
+        ),
+        @r###"
+    ── UNNECESSARY EXCLAMATION in /code/proj/Main.roc ──────────────────────────────
+
+    This function is pure, but its name suggests otherwise:
+
+    8│  hello! = \{} ->
+        ^^^^^^
+
+    Remove the exclamation mark to give an accurate impression of its
+    behavior.
+    "###
+    );
 }

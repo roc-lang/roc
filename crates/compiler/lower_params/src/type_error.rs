@@ -101,7 +101,8 @@ pub fn remove_module_param_arguments(
             | TypeError::MissingModuleParams(_, _, _)
             | TypeError::ModuleParamsMismatch(_, _, _, _)
             | TypeError::PureStmt(_)
-            | TypeError::UnsuffixedEffectfulFunction(_, _) => {}
+            | TypeError::UnsuffixedEffectfulFunction(_, _)
+            | TypeError::SuffixedPureFunction(_, _) => {}
         }
     }
 }

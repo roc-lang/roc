@@ -1543,7 +1543,17 @@ fn check_symbol_suffix(
             }
         }
         IdentSuffix::Bang => {
-            // [purity-inference] TODO
+            if let Content::Structure(FlatType::Func(_, _, _, fx)) =
+                env.subs.get_content_without_compacting(loc_var.value)
+            {
+                match env.subs.get_content_without_compacting(*fx) {
+                    // [purity-inference] TODO: Should FlexVar actually be a case?
+                    Content::Pure | Content::FlexVar(_) => {
+                        problems.push(TypeError::SuffixedPureFunction(loc_var.region, symbol));
+                    }
+                    _ => {}
+                }
+            }
         }
     }
 }
