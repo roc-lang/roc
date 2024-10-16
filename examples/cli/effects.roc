@@ -1,9 +1,9 @@
-app [main] { pf: platform "effects-platform/main.roc" }
+app [main!] { pf: platform "effects-platform/main.roc" }
 
 import pf.Effect
 
-main : {} => {}
-main = \{} ->
+main! : {} => {}
+main! = \{} ->
     line = Effect.getLine! {}
 
     if line == "secret" then

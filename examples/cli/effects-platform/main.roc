@@ -1,9 +1,9 @@
 platform "effects"
-    requires {} { main : {} => {} }
+    requires {} { main! : {} => {} }
     exposes []
     packages {}
     imports []
-    provides [mainForHost]
+    provides [mainForHost!]
 
-mainForHost : {} => {}
-mainForHost = \{} -> main {}
+mainForHost! : {} => {}
+mainForHost! = \{} -> main! {}
