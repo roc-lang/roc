@@ -19,6 +19,7 @@ use crate::pattern::record_pattern_fields;
 use crate::state::State;
 use crate::string_literal::{self, parse_str_literal};
 use crate::type_annotation;
+use roc_module::ident::IdentSuffix;
 use roc_module::symbol::ModuleId;
 use roc_region::all::{Loc, Position, Region};
 
@@ -1134,7 +1135,7 @@ impl<'a> ExposedName<'a> {
     }
 
     pub fn is_effectful_fn(&self) -> bool {
-        self.0.ends_with('!')
+        IdentSuffix::from_name(self.0).is_bang()
     }
 }
 

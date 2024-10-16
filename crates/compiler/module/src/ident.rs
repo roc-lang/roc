@@ -386,7 +386,14 @@ impl IdentSuffix {
         }
     }
 
-    pub fn is_suffixed(&self) -> bool {
+    pub fn is_none(&self) -> bool {
+        match self {
+            IdentSuffix::None => true,
+            IdentSuffix::Bang => false,
+        }
+    }
+
+    pub fn is_bang(&self) -> bool {
         match self {
             IdentSuffix::None => false,
             IdentSuffix::Bang => true,
