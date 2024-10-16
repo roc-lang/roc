@@ -1224,6 +1224,15 @@ fn surgery_macho_help(
         internal_error!("No text sections found. This application has no code.");
     }
 
+    if verbose {
+        println!();
+        println!("Roc symbol addresses: {:+x?}", md.roc_symbol_vaddresses);
+        println!("App functions: {:?}", md.app_functions);
+        println!("Dynamic symbol indices: {:+x?}", md.dynamic_symbol_indices);
+        println!("PLT addresses: {:+x?}", md.plt_addresses);
+        println!();
+    }
+
     // Calculate addresses and load symbols.
     // Note, it is important the bss sections come after the rodata sections.
     for sec in rodata_sections
@@ -1240,7 +1249,7 @@ fn surgery_macho_help(
                 sec.name().unwrap(),
                 offset,
                 virt_offset
-            )
+            );
         }
         section_offset_map.insert(sec.index(), (offset, virt_offset));
         for sym in symbols.iter() {
@@ -1285,33 +1294,34 @@ fn surgery_macho_help(
     // Move data and deal with relocations.
     for sec in rodata_sections
         .iter()
-        .chain(bss_sections.iter()) // TODO why do we even
-        // include uninitialized
-        // data if it cannot
-        // ever have any
-        // relocations in the
-        // first place?
+        .chain(bss_sections.iter())
+        // TODO why do we even include uninitialized data if it cannot
+        // ever have any relocations in the first place?
         .chain(text_sections.iter())
     {
-        let data = match sec.data() {
-            Ok(data) => data,
-            Err(err) => {
-                internal_error!(
-                    "Failed to load data for section, {:+x?}: {}",
-                    sec.name().unwrap(),
-                    err
-                );
-            }
-        };
+        let data = sec.data().unwrap_or_else(|err| {
+            internal_error!(
+                "Failed to load data for section, {:+x?}: {err}",
+                sec.name().unwrap(),
+            );
+        });
         let (section_offset, section_virtual_offset) =
             section_offset_map.get(&sec.index()).unwrap();
         let (section_offset, section_virtual_offset) = (*section_offset, *section_virtual_offset);
         exec_mmap[section_offset..section_offset + data.len()].copy_from_slice(data);
         // Deal with definitions and relocations for this section.
         if verbose {
+            let segname = sec
+                .segment_name()
+                .expect(
+                    "valid segment
+                    name",
+                )
+                .unwrap();
+            let sectname = sec.name().unwrap();
             println!();
             println!(
-                "Processing Relocations for Section: 0x{sec:+x?} @ {section_offset:+x} (virt: {section_virtual_offset:+x})"
+                "Processing Relocations for Section '{segname},{sectname}': 0x{sec:+x?} @ {section_offset:+x} (virt: {section_virtual_offset:+x})"
             );
         }
 
@@ -1375,7 +1385,7 @@ fn surgery_macho_help(
                                 0
                             }
                             _ => {
-                                println!("Handle other MachO relocs");
+                                println!("Handle other MachO relocs: {value}");
                                 0
                             }
                         },
