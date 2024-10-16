@@ -1,4 +1,4 @@
-use crate::def::Def;
+use crate::def::{Def, DefKind};
 use crate::expr::{AnnotatedMark, ClosureData, Expr, Recursive};
 use crate::pattern::Pattern;
 use crate::scope::Scope;
@@ -207,6 +207,7 @@ pub fn build_host_exposed_def(
         expr_var,
         pattern_vars,
         annotation: Some(def_annotation),
+        kind: DefKind::Let,
     }
 }
 

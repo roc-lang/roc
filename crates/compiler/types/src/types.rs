@@ -3448,6 +3448,7 @@ pub enum Reason {
         foreign_symbol: ForeignSymbol,
         arg_index: HumanIndex,
     },
+    Stmt,
     CallInFunction(Option<Region>),
     CallInTopLevelDef,
     FloatLiteral,

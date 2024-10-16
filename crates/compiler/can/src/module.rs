@@ -2,7 +2,7 @@ use std::path::Path;
 
 use crate::abilities::{AbilitiesStore, ImplKey, PendingAbilitiesStore, ResolvedImpl};
 use crate::annotation::{canonicalize_annotation, AnnotationFor};
-use crate::def::{canonicalize_defs, report_unused_imports, Def};
+use crate::def::{canonicalize_defs, report_unused_imports, Def, DefKind};
 use crate::desugar::desugar_record_destructures;
 use crate::env::{Env, FxMode};
 use crate::expr::{
@@ -651,6 +651,7 @@ pub fn canonicalize_module_defs<'a>(
             expr_var: var_store.fresh(),
             pattern_vars,
             annotation: None,
+            kind: DefKind::Let,
         };
 
         declarations.push_def(def);

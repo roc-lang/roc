@@ -10,7 +10,7 @@ use roc_can::annotation::IntroducedVariables;
 use roc_can::constraint::{
     Constraint, Constraints, ExpectedTypeIndex, Generalizable, OpportunisticResolve, TypeOrVar,
 };
-use roc_can::def::Def;
+use roc_can::def::{Def, DefKind};
 use roc_can::exhaustive::{sketch_pattern_to_rows, sketch_when_branches, ExhaustiveContext};
 use roc_can::expected::Expected::{self, *};
 use roc_can::expected::PExpected;
@@ -1446,7 +1446,12 @@ pub fn constrain_expr(
             );
 
             while let Some(def) = stack.pop() {
-                body_con = constrain_def(types, constraints, env, def, body_con)
+                body_con = match def.kind {
+                    DefKind::Let => constrain_let_def(types, constraints, env, def, body_con),
+                    DefKind::Stmt(fx_var) => {
+                        constrain_stmt_def(types, constraints, env, def, body_con, fx_var)
+                    }
+                };
             }
 
             body_con
@@ -3375,7 +3380,7 @@ fn attach_resolution_constraints(
     constraints.and_constraint([constraint, resolution_constrs])
 }
 
-fn constrain_def(
+fn constrain_let_def(
     types: &mut Types,
     constraints: &mut Constraints,
     env: &mut Env,
@@ -3418,6 +3423,46 @@ fn constrain_def(
             )
         }
     }
+}
+
+fn constrain_stmt_def(
+    types: &mut Types,
+    constraints: &mut Constraints,
+    env: &mut Env,
+    def: &Def,
+    body_con: Constraint,
+    fx_var: Variable,
+) -> Constraint {
+    // [purity-inference] TODO: Require fx is effectful
+
+    // Statement expressions must return an empty record
+    let empty_record_index = constraints.push_type(types, Types::EMPTY_RECORD);
+    let expected = constraints.push_expected_type(ForReason(
+        Reason::Stmt,
+        empty_record_index,
+        def.loc_expr.region,
+    ));
+
+    let expr_con = constrain_expr(
+        types,
+        constraints,
+        env,
+        def.loc_expr.region,
+        &def.loc_expr.value,
+        expected,
+    );
+    let expr_con = attach_resolution_constraints(constraints, env, expr_con);
+
+    let generalizable = Generalizable(is_generalizable_expr(&def.loc_expr.value));
+
+    constraints.let_constraint(
+        std::iter::empty(),
+        std::iter::empty(),
+        std::iter::empty(),
+        expr_con,
+        body_con,
+        generalizable,
+    )
 }
 
 /// Create a let-constraint for a non-recursive def.

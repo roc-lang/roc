@@ -156,13 +156,19 @@ fn desugar_value_def<'a>(
         StmtAfterExpr => internal_error!("unexpected StmtAfterExpr"),
 
         Stmt(stmt_expr) => {
+            if env.fx_mode == FxMode::PurityInference {
+                // In purity inference mode, statements aren't fully desugared here
+                // so we can provide better errors
+                return Stmt(desugar_expr(env, scope, stmt_expr));
+            }
+
             // desugar `stmt_expr!` to
             // _ : {}
             // _ = stmt_expr!
 
             let desugared_expr = desugar_expr(env, scope, stmt_expr);
 
-            if env.fx_mode == FxMode::Task && !is_expr_suffixed(&desugared_expr.value) {
+            if !is_expr_suffixed(&desugared_expr.value) {
                 env.problems.push(Problem::StmtAfterExpr(stmt_expr.region));
 
                 return ValueDef::StmtAfterExpr;
