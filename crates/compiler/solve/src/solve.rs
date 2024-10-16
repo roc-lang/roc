@@ -22,6 +22,7 @@ use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_VERIFY_RIGID_LET_GENERALIZED;
 use roc_error_macros::internal_error;
+use roc_module::ident::IdentSuffix;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_problem::can::CycleEntry;
 use roc_region::all::Loc;
@@ -448,6 +449,8 @@ fn solve(
                     );
 
                     new_scope.insert_symbol_var_if_vacant(*symbol, loc_var.value);
+
+                    check_symbol_suffix(env, problems, *symbol, *loc_var);
                 }
 
                 // Note that this vars_by_symbol is the one returned by the
@@ -1510,6 +1513,31 @@ fn solve(
     }
 
     state
+}
+
+fn check_symbol_suffix(
+    env: &mut InferenceEnv<'_>,
+    problems: &mut Vec<TypeError>,
+    symbol: Symbol,
+    loc_var: Loc<Variable>,
+) {
+    match symbol.suffix() {
+        IdentSuffix::None => {
+            if let Content::Structure(FlatType::Func(_, _, _, fx)) =
+                env.subs.get_content_without_compacting(loc_var.value)
+            {
+                if let Content::Effectful = env.subs.get_content_without_compacting(*fx) {
+                    problems.push(TypeError::UnsuffixedEffectfulFunction(
+                        loc_var.region,
+                        symbol,
+                    ));
+                }
+            }
+        }
+        IdentSuffix::Bang => {
+            // [purity-inference] TODO
+        }
+    }
 }
 
 fn chase_alias_content(subs: &Subs, mut var: Variable) -> (Variable, &Content) {
