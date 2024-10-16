@@ -1626,6 +1626,7 @@ fn get_target_offset(
         app_obj
             .symbol_by_index(index)
             .and_then(|sym| sym.name())
+            .and_then(|name| Ok(name.trim_start_matches('_')))
             .ok()
             .and_then(|name| {
                 md.roc_symbol_vaddresses.get(name).map(|address| {
