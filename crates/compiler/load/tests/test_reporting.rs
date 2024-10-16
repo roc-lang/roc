@@ -14779,4 +14779,34 @@ All branches in an `if` must have the same type!
     behavior.
     "###
     );
+
+    test_report!(
+        aliased_fx_fn,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                printLn "Hello!"
+
+            printLn = Effect.putLine!
+            "#
+        ),
+        @r###"
+    ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
+
+    This function is effectful, but its name does not indicate so:
+
+    8│  printLn = Effect.putLine!
+        ^^^^^^^
+
+    Add an exclamation mark at the end of its name, like:
+
+        printLn!
+
+    This will help readers identify it as a source of effects.
+    "###
+    );
 }
