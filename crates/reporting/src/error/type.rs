@@ -1727,7 +1727,26 @@ fn to_expr_report<'b>(
                     severity,
                 }
             }
-            Reason::CallInTopLevelDef => todo!("[purity-inference] CallInTopLevelDef"),
+            Reason::CallInTopLevel => {
+                let lines = [
+                    alloc.reflow("This top-level expression calls an effectful function:"),
+                    alloc.region(lines.convert_region(region), severity),
+                    alloc.reflow("However, only functions are allowed to be effectful. This limitation ensures that importing a module never produces a side effect."),
+                    alloc.concat([
+                        alloc.tip(),
+                        alloc.reflow("If you don't need any arguments, use an empty record:"),
+                    ]),
+                    alloc.parser_suggestion("    askName! : {} => Str\n    askName! = \\{} ->\n        Stdout.line! \"What's your name?\"\n        Stdin.line! {}"),
+                    alloc.reflow("This will allow the caller to control when the effect runs."),
+                ];
+
+                Report {
+                    filename,
+                    title: "EFFECT IN TOP-LEVEL".to_string(),
+                    doc: alloc.stack(lines),
+                    severity,
+                }
+            }
             Reason::Stmt => todo!("[purity-inference] Stmt"),
         },
     }

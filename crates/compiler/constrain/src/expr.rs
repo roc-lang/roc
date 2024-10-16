@@ -1845,7 +1845,7 @@ fn constrain_call_fx(
             ))
         }
         None => constraints.push_expected_type(ForReason(
-            Reason::CallInTopLevelDef,
+            Reason::CallInTopLevel,
             // top-level defs are only allowed to call pure functions
             constraints.push_variable(Variable::PURE),
             region,
