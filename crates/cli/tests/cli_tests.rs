@@ -312,84 +312,44 @@ mod cli_tests {
             cli_build_optimized.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
         }
         
-        /*
         #[test]
         #[cfg_attr(windows, ignore)]
-        fn run_multi_dep_thunk_unoptimized() {
+        fn run_multi_dep_thunk() {
             build_platform_host();
-
-            let runner = cli_test_utils::helpers::ExecCli::new_roc()
-                .arg(CMD_RUN)
-                .add_arg_if(LEGACY_LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valgrind(ALLOW_VALGRIND)
-                .arg(
-                    file_from_root("crates/cli/tests/fixtures/multi-dep-thunk", "Main.roc")
-                        .as_path(),
+            
+            let cli_build_unoptimized = ExecCli::new(
+                                    CMD_BUILD,
+                                    file_from_root("crates/cli/tests/test-projects/fixtures/multi-dep-thunk", "main.roc")
                 );
+            
+            let expected_output = "I am Dep2.value2\n";
 
-            let out = runner.run();
-            out.assert_clean_success();
-
-            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+            cli_build_unoptimized.clone().full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
+            
+            
+            let cli_build_optimized = cli_build_unoptimized.arg(OPTIMIZE_FLAG);
+            
+            cli_build_optimized.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
         }
 
         #[test]
-        #[cfg_attr(
-            windows,
-            ignore = "Flaky failure: Roc command failed with status ExitStatus(ExitStatus(3221225477))"
-        )]
-        fn run_multi_dep_thunk_optimized() {
+        #[cfg_attr(windows, ignore)]
+        fn run_packages() {
             build_platform_host();
 
-            let runner = cli_test_utils::helpers::ExecCli::new_roc()
-                .arg(CMD_RUN)
-                .arg(OPTIMIZE_FLAG)
-                .add_arg_if(LEGACY_LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valgrind(ALLOW_VALGRIND)
-                .arg(
-                    file_from_root("crates/cli/tests/fixtures/multi-dep-thunk", "Main.roc")
-                        .as_path(),
+            let cli_build_unoptimized = ExecCli::new(
+                                    CMD_BUILD,
+                                    file_from_root("crates/cli/tests/test-projects/fixtures/packages", "main.roc")
                 );
+            
+            let expected_output = "Hello, World! This text came from a package! This text came from a CSV package!\n";
 
-            let out = runner.run();
-            out.assert_clean_success();
-
-            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
-        }
-
-        #[test]
-        #[cfg_attr(windows, ignore)]
-        fn run_packages_unoptimized() {
-            build_platform_host();
-
-            let runner = cli_test_utils::helpers::ExecCli::new_roc()
-                .arg(CMD_RUN)
-                .add_arg_if(LEGACY_LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valgrind(ALLOW_VALGRIND)
-                .arg(file_from_root("crates/cli/tests/fixtures/packages", "app.roc").as_path());
-
-            let out = runner.run();
-            out.assert_clean_success();
-
-            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
-        }
-
-        #[test]
-        #[cfg_attr(windows, ignore)]
-        fn run_packages_optimized() {
-            build_platform_host();
-
-            let runner = cli_test_utils::helpers::ExecCli::new_roc()
-                .arg(CMD_RUN)
-                .arg(OPTIMIZE_FLAG)
-                .add_arg_if(LEGACY_LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valgrind(ALLOW_VALGRIND)
-                .arg(file_from_root("crates/cli/tests/fixtures/packages", "app.roc").as_path());
-
-            let out = runner.run();
-            out.assert_clean_success();
-
-            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+            cli_build_unoptimized.clone().full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
+            
+            
+            let cli_build_optimized = cli_build_unoptimized.arg(OPTIMIZE_FLAG);
+            
+            cli_build_optimized.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
         }
 
         #[test]
@@ -397,124 +357,78 @@ mod cli_tests {
         fn run_transitive_deps_app() {
             build_platform_host();
 
-            let file_path = file_from_root(
-                "crates/cli/tests/fixtures/transitive-deps",
-                "direct-one.roc",
-            );
+            let cli_build = ExecCli::new(
+                                    CMD_BUILD,
+                                    file_from_root("crates/cli/tests/test-projects/fixtures/transitive-deps", "direct-one.roc")
+                );
+            
+            let expected_output = "[One imports Two: From two]\n";
 
-            let runner = cli_test_utils::helpers::ExecCli::new_roc()
-                .arg(CMD_RUN)
-                .add_arg_if(LEGACY_LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valgrind(ALLOW_VALGRIND)
-                .arg(file_path.as_path());
-
-            let out = runner.run();
-            out.assert_clean_success();
-
-            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+            cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
         }
-
+        
         #[test]
         #[cfg_attr(windows, ignore)]
         fn run_transitive_and_direct_dep_app() {
             build_platform_host();
+            
+            let cli_build = ExecCli::new(
+                                    CMD_BUILD,
+                                    file_from_root("crates/cli/tests/test-projects/fixtures/transitive-deps", "direct-one-and-two.roc")
+                );
+            
+            let expected_output = "[One imports Two: From two] | From two\n";
 
-            let file_path = file_from_root(
-                "crates/cli/tests/fixtures/transitive-deps",
-                "direct-one-and-two.roc",
-            );
-
-            let runner = cli_test_utils::helpers::ExecCli::new_roc()
-                .arg(CMD_RUN)
-                .add_arg_if(LEGACY_LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valgrind(ALLOW_VALGRIND)
-                .arg(file_path.as_path());
-
-            let out = runner.run();
-            out.assert_clean_success();
-
-            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+            cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
         }
-
+        
         #[test]
         #[cfg_attr(windows, ignore)]
         fn run_double_transitive_dep_app() {
             build_platform_host();
+            
+            let cli_build = ExecCli::new(
+                                    CMD_BUILD,
+                                    file_from_root("crates/cli/tests/test-projects/fixtures/transitive-deps", "direct-zero.roc")
+                );
+            
+            let expected_output = "[Zero imports One: [One imports Two: From two]]\n";
 
-            let file_path = file_from_root(
-                "crates/cli/tests/fixtures/transitive-deps",
-                "direct-zero.roc",
-            );
-
-            let runner = cli_test_utils::helpers::ExecCli::new_roc()
-                .arg(CMD_RUN)
-                .add_arg_if(LEGACY_LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valgrind(ALLOW_VALGRIND)
-                .arg(file_path.as_path());
-
-            let out = runner.run();
-            out.assert_clean_success();
-
-            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+            cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
         }
-
-        #[test]
-        fn expects_dev() {
-            build_platform_host();
-
-            let runner = cli_test_utils::helpers::ExecCli::new_roc()
-                .arg(CMD_DEV)
-                .add_arg_if(LEGACY_LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valgrind(ALLOW_VALGRIND)
-                .arg(file_from_root("crates/cli/tests/expects", "expects.roc").as_path());
-
-            let out = runner.run();
-
-            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
-        }
-
-        #[test]
-        fn expects_test() {
-            build_platform_host();
-
-            let runner = cli_test_utils::helpers::ExecCli::new_roc()
-                .arg(CMD_TEST)
-                .with_valgrind(ALLOW_VALGRIND)
-                .arg(file_from_root("crates/cli/tests/expects", "expects.roc").as_path());
-
-            let out = runner.run();
-
-            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
-        }
-
+        
         #[test]
         #[cfg_attr(windows, ignore)]
         fn module_params() {
             build_platform_host();
+            
+            let cli_dev = ExecCli::new(
+                                    CMD_DEV,
+                                    file_from_root("crates/cli/tests/test-projects/module_params", "app.roc")
+                );
 
-            let runner = cli_test_utils::helpers::ExecCli::new_roc()
-                .arg(CMD_RUN)
-                .arg(file_from_root("crates/cli/tests/module_params", "app.roc").as_path());
-
-            let out = runner.run();
-
-            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+            let cli_dev_out = cli_dev.run();
+            cli_dev_out.assert_clean_success();
+            
+            insta::assert_snapshot!(cli_dev_out.normalize_stdout_and_stderr());
         }
-
+        
         #[test]
         #[cfg_attr(windows, ignore)]
         fn module_params_arity_mismatch() {
             build_platform_host();
 
-            let runner = cli_test_utils::helpers::ExecCli::new_roc().arg(CMD_DEV).arg(
-                file_from_root("crates/cli/tests/module_params", "arity_mismatch.roc").as_path(),
-            );
+            let cli_dev = ExecCli::new(
+                                    CMD_DEV,
+                                    file_from_root("crates/cli/tests/test-projects/module_params", "arity_mismatch.roc")
+                );
 
-            let out = runner.run();
-
-            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+            let cli_dev_out = cli_dev.run();
+            cli_dev_out.assert_nonzero_exit();
+            
+            insta::assert_snapshot!(cli_dev_out.normalize_stdout_and_stderr());
         }
-
+        /*
         #[test]
         #[cfg_attr(windows, ignore)]
         fn module_params_bad_ann() {
@@ -555,7 +469,39 @@ mod cli_tests {
             let out = runner.run();
 
             insta::assert_snapshot!(out.normalize_stdout_and_stderr());
-        }*/
+        }
+        */
+        /*
+        #[test]
+        fn expects_dev() {
+            build_platform_host();
+
+            let runner = cli_test_utils::helpers::ExecCli::new_roc()
+                .arg(CMD_DEV)
+                .add_arg_if(LEGACY_LINKER_FLAG, TEST_LEGACY_LINKER)
+                .with_valgrind(ALLOW_VALGRIND)
+                .arg(file_from_root("crates/cli/tests/expects", "expects.roc").as_path());
+
+            let out = runner.run();
+
+            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+        }
+
+        #[test]
+        fn expects_test() {
+            build_platform_host();
+
+            let runner = cli_test_utils::helpers::ExecCli::new_roc()
+                .arg(CMD_TEST)
+                .with_valgrind(ALLOW_VALGRIND)
+                .arg(file_from_root("crates/cli/tests/expects", "expects.roc").as_path());
+
+            let out = runner.run();
+
+            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+        }
+
+        */
     }
     /*
     #[test]
