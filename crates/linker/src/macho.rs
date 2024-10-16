@@ -1314,79 +1314,19 @@ fn surgery_macho_help(
                 "Processing Relocations for Section: 0x{sec:+x?} @ {section_offset:+x} (virt: {section_virtual_offset:+x})"
             );
         }
+
+        let mut addend: Option<i64> = None;
+        let mut subtractor: Option<SymbolIndex> = None;
         for rel in sec.relocations() {
             if verbose {
                 println!("\tFound Relocation: {rel:+x?}");
             }
             match rel.1.target() {
                 RelocationTarget::Symbol(index) => {
-                    let target_offset = if let Some(target_offset) = symbol_vaddr_map.get(&index) {
-                        if verbose {
-                            println!("\t\tRelocation targets symbol in app at: {target_offset:+x}");
-                        }
-                        Some(*target_offset as i64)
-                    } else {
-                        app_obj
-                            .symbol_by_index(index)
-                            .and_then(|sym| sym.name())
-                            .ok()
-                            .and_then(|name| {
-                                md.roc_symbol_vaddresses.get(name).map(|address| {
-                                    let vaddr = (*address + md.added_byte_count) as i64;
-                                    if verbose {
-                                        println!(
-                                            "\t\tRelocation targets symbol in host: {name} @ {vaddr:+x}"
-                                        );
-                                    }
-                                    vaddr
-                                })
-                            })
-                    };
-
-                    if let Some(target_offset) = target_offset {
-                        let virt_base = section_virtual_offset + rel.0 as usize;
-                        let base = section_offset + rel.0 as usize;
-                        let target: i64 = match rel.1.kind() {
-                            RelocationKind::Relative | RelocationKind::PltRelative => {
-                                target_offset - virt_base as i64 + rel.1.addend()
-                            }
-                            RelocationKind::MachO { value, relative } => match value {
-                                macho::ARM64_RELOC_SUBTRACTOR => {
-                                    println!("Handle SUB reloc");
-                                    0
-                                }
-                                macho::ARM64_RELOC_UNSIGNED => {
-                                    println!("Handle UNSIGNED reloc");
-                                    0
-                                }
-                                _ => {
-                                    println!("Handle other MachO relocs");
-                                    0
-                                }
-                            },
-                            x => {
-                                internal_error!("Relocation Kind not yet support: {:?}", x);
-                            }
-                        };
-                        if verbose {
-                            println!(
-                                "\t\tRelocation base location: {base:+x} (virt: {virt_base:+x})"
-                            );
-                            println!("\t\tFinal relocation target offset: {target:+x}");
-                        }
-                        match rel.1.size() {
-                            32 => {
-                                let data = (target as i32).to_le_bytes();
-                                exec_mmap[base..base + 4].copy_from_slice(&data);
-                            }
-                            64 => {
-                                let data = target.to_le_bytes();
-                                exec_mmap[base..base + 8].copy_from_slice(&data);
-                            }
-                            x => {
-                                internal_error!("Relocation size not yet supported: {}", x);
-                            }
-                        }
+                    let target_offset = if let Some(target_offset) =
+                        get_target_offset(index, &app_obj, md, &symbol_vaddr_map, verbose)
+                    {
+                        target_offset
                     } else if matches!(app_obj.symbol_by_index(index), Ok(sym) if ["__divti3", "__udivti3", "___divti3", "___udivti3"].contains(&sym.name().unwrap_or_default()))
                     {
                         // Explicitly ignore some symbols that are currently always linked.
@@ -1396,7 +1336,69 @@ fn surgery_macho_help(
                             "Undefined Symbol in relocation, {:+x?}: {:+x?}",
                             rel,
                             app_obj.symbol_by_index(index)
-                        );
+                        )
+                    };
+
+                    let virt_base = section_virtual_offset + rel.0 as usize;
+                    let base = section_offset + rel.0 as usize;
+                    let target: i64 = match rel.1.kind() {
+                        RelocationKind::Relative | RelocationKind::PltRelative => {
+                            target_offset - virt_base as i64 + rel.1.addend()
+                        }
+                        RelocationKind::Absolute => {
+                            target_offset + rel.1.addend()
+                                - subtractor
+                                    .take()
+                                    .map(|index| {
+                                        get_target_offset(
+                                            index,
+                                            &app_obj,
+                                            md,
+                                            &symbol_vaddr_map,
+                                            verbose,
+                                        )
+                                        .unwrap_or(0)
+                                    })
+                                    .unwrap()
+                        }
+                        RelocationKind::MachO { value, relative: _ } => match value {
+                            macho::ARM64_RELOC_SUBTRACTOR => {
+                                if let Some(_) = subtractor {
+                                    internal_error!("Malformed object: SUBTRACTOR must not be followed by SUBTRACTOR");
+                                } else {
+                                    subtractor = Some(index);
+                                }
+                                continue;
+                            }
+                            macho::ARM64_RELOC_UNSIGNED => {
+                                println!("Handle UNSIGNED reloc");
+                                0
+                            }
+                            _ => {
+                                println!("Handle other MachO relocs");
+                                0
+                            }
+                        },
+                        x => {
+                            internal_error!("Relocation Kind not yet support: {:?}", x);
+                        }
+                    };
+                    if verbose {
+                        println!("\t\tRelocation base location: {base:+x} (virt: {virt_base:+x})");
+                        println!("\t\tFinal relocation target offset: {target:+x}");
+                    }
+                    match rel.1.size() {
+                        32 => {
+                            let data = (target as i32).to_le_bytes();
+                            exec_mmap[base..base + 4].copy_from_slice(&data);
+                        }
+                        64 => {
+                            let data = target.to_le_bytes();
+                            exec_mmap[base..base + 8].copy_from_slice(&data);
+                        }
+                        x => {
+                            internal_error!("Relocation size not yet supported: {}", x);
+                        }
                     }
                 }
 
@@ -1596,4 +1598,33 @@ fn surgery_macho_help(
     }
 
     *offset_ref = offset;
+}
+
+fn get_target_offset(
+    index: SymbolIndex,
+    app_obj: &object::File,
+    md: &Metadata,
+    symbol_vaddr_map: &MutMap<SymbolIndex, usize>,
+    verbose: bool,
+) -> Option<i64> {
+    if let Some(target_offset) = symbol_vaddr_map.get(&index) {
+        if verbose {
+            println!("\t\tRelocation targets symbol in app at: {target_offset:+x}");
+        }
+        Some(*target_offset as i64)
+    } else {
+        app_obj
+            .symbol_by_index(index)
+            .and_then(|sym| sym.name())
+            .ok()
+            .and_then(|name| {
+                md.roc_symbol_vaddresses.get(name).map(|address| {
+                    let vaddr = (*address + md.added_byte_count) as i64;
+                    if verbose {
+                        println!("\t\tRelocation targets symbol in host: {name} @ {vaddr:+x}");
+                    }
+                    vaddr
+                })
+            })
+    }
 }
