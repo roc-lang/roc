@@ -34,7 +34,7 @@ use roc_debug_flags::{
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
 use roc_late_solve::{AbilitiesView, WorldAbilities};
-use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
+use roc_module::ident::{Ident, IdentSuffix, ModuleName, QualifiedModuleName};
 use roc_module::symbol::{
     IdentIds, IdentIdsByModule, Interns, ModuleId, ModuleIds, PQModuleName, PackageModuleIds,
     PackageQualified, Symbol,
@@ -2235,6 +2235,7 @@ fn update<'a>(
                     config_shorthand,
                     provides,
                     exposes_ids,
+                    requires,
                     ..
                 } => {
                     work.extend(state.dependencies.notify_package(config_shorthand));
@@ -2269,6 +2270,12 @@ fn update<'a>(
                     if header.is_root_module {
                         state.exposed_modules = exposes_ids;
                     }
+
+                    if requires.iter().any(|requires| {
+                        IdentSuffix::from_name(requires.value.ident.value).is_bang()
+                    }) {
+                        state.fx_mode = FxMode::PurityInference;
+                    }
                 }
                 Builtin { .. } | Module { .. } => {
                     if header.is_root_module {
@@ -2286,17 +2293,6 @@ fn update<'a>(
                         .iter()
                         .any(|exposed| exposed.value.is_effectful_fn())
                     {
-                        if exposes
-                            .iter()
-                            .any(|exposed| !exposed.value.is_effectful_fn())
-                        {
-                            // Temporary error message while we transition platforms
-                            return Err(LoadingProblem::FormattedReport(
-                                "Hosted module must not mix effectful and Task functions"
-                                    .to_string(),
-                            ));
-                        }
-
                         state.fx_mode = FxMode::PurityInference;
                     }
                 }

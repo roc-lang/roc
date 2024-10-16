@@ -1068,7 +1068,7 @@ macro_rules! define_builtins {
                             // or `if false` and will get optimized out.
                             debug_assert_eq!($exposed_apply_type, $ident_name.chars().next().unwrap().is_uppercase());
                             // Types should not be suffixed
-                            debug_assert!(!IdentSuffix::from_name($ident_name).is_suffixed());
+                            debug_assert!(IdentSuffix::from_name($ident_name).is_none());
 
                             if $exposed_apply_type {
                                 scope.insert($ident_name.into(), (Symbol::new(ModuleId::$module_const, IdentId::from_index($ident_id, IdentSuffix::None)), Region::zero()));
