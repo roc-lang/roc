@@ -351,7 +351,9 @@ pub fn type_problem<'b>(
             let stack = [
                 alloc.reflow("This function is pure, but its name suggests otherwise:"),
                 alloc.region(lines.convert_region(region), severity),
-                alloc.reflow("Remove the exclamation mark to give an accurate impression of its behavior."),
+                alloc.reflow(
+                    "Remove the exclamation mark to give an accurate impression of its behavior.",
+                ),
             ];
 
             Some(Report {
@@ -1692,7 +1694,39 @@ fn to_expr_report<'b>(
                 unimplemented!("record default field is not implemented yet")
             }
             Reason::ImportParams(_) => unreachable!(),
-            Reason::CallInFunction(_) => todo!("[purity-inference] CallInFunction"),
+            Reason::CallInFunction(ann_region) => {
+                let lines = [
+                    alloc.reflow("This expression calls an effectful function:"),
+                    alloc.region(lines.convert_region(region), severity),
+                    match ann_region {
+                        Some(ann_region) => alloc.stack([
+                            alloc.reflow(
+                                "However, the type of the enclosing function indicates it must be pure:",
+                            ),
+                            alloc.region(lines.convert_region(ann_region), Severity::Warning),
+                            alloc.concat([
+                                alloc.tip(),
+                                alloc.text("Replace "),
+                                alloc.keyword("->"),
+                                alloc.text(" with "),
+                                alloc.keyword("=>"),
+                                alloc.text(" to annotate it as effectful."),
+                            ]),
+                        ]),
+                        None => {
+                            alloc.reflow("However, the enclosing function is required to be pure.")
+                        }
+                    },
+                    alloc.reflow("You can still run the program with this error, which can be helpful when you're debugging."),
+                ];
+
+                Report {
+                    filename,
+                    title: "EFFECT IN PURE FUNCTION".to_string(),
+                    doc: alloc.stack(lines),
+                    severity,
+                }
+            }
             Reason::CallInTopLevelDef => todo!("[purity-inference] CallInTopLevelDef"),
             Reason::Stmt => todo!("[purity-inference] Stmt"),
         },

@@ -14491,7 +14491,7 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        function_def_fx_no_bang,
+        fx_fn_annotated_as_pure,
         indoc!(
             r#"
             app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
@@ -14499,25 +14499,32 @@ All branches in an `if` must have the same type!
             import pf.Effect
 
             main! = \{} ->
-                printHello {}
+                Effect.putLine! (getCheer "hello")
 
-            printHello = \{} ->
-                Effect.putLine! "hello"
+            getCheer : Str -> Str
+            getCheer = \msg ->
+                name = Effect.getLine! {}
+
+                "$(msg), $(name)!"
             "#
         ),
         @r###"
-    ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
+    ── EFFECT IN PURE FUNCTION in /code/proj/Main.roc ──────────────────────────────
 
-    This function is effectful, but its name does not indicate so:
+    This expression calls an effectful function:
 
-    8│  printHello = \{} ->
-        ^^^^^^^^^^
+    10│      name = Effect.getLine! {}
+                    ^^^^^^^^^^^^^^^^^^
 
-    Add an exclamation mark at the end of its name, like:
+    However, the type of the enclosing function indicates it must be pure:
 
-        printHello!
+    8│  getCheer : Str -> Str
+                   ^^^^^^^^^^
 
-    This will help readers identify it as a source of effects.
+    Tip: Replace `->` with `=>` to annotate it as effectful.
+
+    You can still run the program with this error, which can be helpful
+    when you're debugging.
     "###
     );
 
@@ -14609,4 +14616,6 @@ All branches in an `if` must have the same type!
     This will help readers identify it as a source of effects.
     "###
     );
+
+    // [purity-inference] TODO: check ! in records, tuples, tags, opaques, and arguments
 }
