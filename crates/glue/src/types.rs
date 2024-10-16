@@ -1237,7 +1237,6 @@ impl<'a> Env<'a> {
 
         match self.subs.get_content_without_compacting(var) {
             Content::Structure(FlatType::Func(args, closure_var, ret_var, _fx_var)) => {
-                // [purity-inference] TODO: fx var
                 // this is a toplevel type, so the closure must be empty
                 let is_toplevel = true;
                 add_function_type(

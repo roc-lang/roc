@@ -5323,10 +5323,7 @@ fn is_registered(content: &Content) -> bool {
         | Content::RigidAbleVar(..) => false,
         Content::Structure(FlatType::EmptyRecord | FlatType::EmptyTagUnion) => false,
         Content::ErasedLambda => false,
-        Content::Pure | Content::Effectful => {
-            // [purity-inference] TODO
-            false
-        }
+        Content::Pure | Content::Effectful => false,
 
         Content::Structure(_)
         | Content::RecursionVar { .. }
