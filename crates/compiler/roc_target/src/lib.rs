@@ -245,7 +245,7 @@ impl Target {
             Ok(static_object_path)
         } else {
             Err(format!(
-                "\n    {}\n    {}\n    {}",
+                "Failed to find any legacy linking files; I need one of these three paths to exist:\n    {}\n    {}\n    {}",
                 static_library_path.display(),
                 static_object_path.display(),
                 generic_host_path.display(),
@@ -276,12 +276,24 @@ impl Target {
                 preprocessed_host: surgical_host_path,
             })
         } else {
+            // TODO further improve the error message
+
             Err(format!(
-                "\n    {}\n    {}",
-                surgical_host_path.display(),
+                "Either the generic host files or the surgical host files must exist. \
+                File status: \
+                Generic host ({}): {}, \
+                Generic metadata ({}): {}, \
+                Surgical host ({}): {}, \
+                Surgical metadata ({}): {}",
                 generic_host_path.display(),
-            )
-            .to_string())
+                if generic_host_path.exists() { "present" } else { "missing" },
+                generic_metadata.display(),
+                if generic_metadata.exists() { "present" } else { "missing" },
+                surgical_host_path.display(),
+                if surgical_host_path.exists() { "present" } else { "missing" },
+                surgical_metadata.display(),
+                if surgical_metadata.exists() { "present" } else { "missing" }
+            ))
         }
     }
 }

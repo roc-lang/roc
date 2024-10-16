@@ -845,7 +845,7 @@ fn build_loaded_file<'a>(
     out_path: Option<&Path>,
 ) -> Result<BuiltFile<'a>, BuildFileError<'a>> {
     // get the platform path from the app header
-    let platform_main_roc = match &loaded.entry_point {
+    let platform_main_roc_path = match &loaded.entry_point {
         EntryPoint::Executable { platform_path, .. } => platform_path.to_path_buf(),
         _ => unreachable!(),
     };
@@ -860,116 +860,31 @@ fn build_loaded_file<'a>(
 
     let dll_stub_symbols =
         roc_linker::ExposedSymbols::from_exposed_to_host(&loaded.interns, &loaded.exposed_to_host);
-
-    let legacy_host_path = target.find_legacy_host(&platform_main_roc);
-    let surgical_artifacts = target.find_surgical_host(&platform_main_roc);
-
-    let built_host_path: PrebuiltHost = match (
-        legacy_host_path,
-        surgical_artifacts,
-        build_host_requested,
-        link_type,
-    ) {
-        // The following 4 cases represent the possible valid host states for the compiler once
-        // host rebuilding has been removed.
-        (Ok(host_path), _, false, _) => PrebuiltHost::Legacy(host_path),
-        (_, Ok(artifacts), false, _) => {
-            // Copy preprocessed host to executable location.
-            // The surgical linker will modify that copy in-place.
-            std::fs::copy(&artifacts.preprocessed_host, output_exe_path.as_path()).unwrap();
-
-            PrebuiltHost::Surgical(artifacts)
-        },
-        (Err(_), Err(_), false, LinkType::Dylib) => PrebuiltHost::None,
-        (Err(_), Err(_), false, LinkType::None) => PrebuiltHost::None,
-        (Err(legacy_paths), Err(surgical_paths), false, LinkType::Executable) => {
-            report_missing_prebuilt_host(&format!("{legacy_paths}\n    {surgical_paths}"));
-            std::process::exit(1);
-        }
-
-        // The following 3 cases we currently support for host rebuilding. Emit a deprecation
-        // warning and rebuild the host.
-        (Ok(existing_legacy_host), _, true, LinkType::Executable) => {
-            if !suppress_build_host_warning {
-                report_rebuilding_existing_host(&existing_legacy_host.to_string_lossy());
+    
+    let prebuilt_host = determine_built_host_path(&platform_main_roc_path, target, build_host_requested, link_type, linking_strategy, suppress_build_host_warning);
+    
+    // TODO this should return a new type BuiltHost but PrebuiltHost is widely used in downstream functions
+    let built_host =
+        match  prebuilt_host {
+            PrebuiltHost::None => {
+                build_and_preprocess_host(
+                    code_gen_options,
+                    dll_stub_symbols,
+                    emit_timings,
+                    linking_strategy,
+                    &platform_main_roc_path,
+                    &output_exe_path,
+                    target,
+                ) 
             }
-            build_and_preprocess_host(
-                code_gen_options,
-                dll_stub_symbols,
-                emit_timings,
-                linking_strategy,
-                &platform_main_roc,
-                &output_exe_path,
-                target,
-            )
-        }
-        (
-            _,
-            Ok(SurgicalHostArtifacts {
-                preprocessed_host, ..
-            }),
-            true,
-            LinkType::Executable,
-        ) => {
-            if !suppress_build_host_warning {
-                report_rebuilding_existing_host(&preprocessed_host.to_string_lossy());
+            PrebuiltHost::Surgical(ref surgical_artifacts) => {
+                // Copy preprocessed host to executable location.
+                // The surgical linker will modify that copy in-place.
+                std::fs::copy(&surgical_artifacts.preprocessed_host, output_exe_path.as_path()).unwrap();
+                prebuilt_host
             }
-            build_and_preprocess_host(
-                code_gen_options,
-                dll_stub_symbols,
-                emit_timings,
-                linking_strategy,
-                &platform_main_roc,
-                &output_exe_path,
-                target,
-            )
-        }
-        (Err(legacy_paths), Err(surgical_paths), true, LinkType::Executable) => {
-            if !suppress_build_host_warning {
-                report_rebuilding_missing_host(&format!("{legacy_paths}\n    {surgical_paths}"));
-            }
-            build_and_preprocess_host(
-                code_gen_options,
-                dll_stub_symbols,
-                emit_timings,
-                linking_strategy,
-                &platform_main_roc,
-                &output_exe_path,
-                target,
-            )
-        }
-
-        // We do not support rebuilding these types of hosts because this would be net new
-        // functionality on a deprecated feature.
-        (Ok(host_path), _, true, LinkType::Dylib | LinkType::None) => {
-            report_refusing_to_rebuild_host(&host_path.to_string_lossy());
-            std::process::exit(1);
-        }
-        (
-            _,
-            Ok(SurgicalHostArtifacts {
-                preprocessed_host,
-                metadata,
-            }),
-            true,
-            LinkType::Dylib | LinkType::None,
-        ) => {
-            report_refusing_to_rebuild_host(&format!(
-                "{}\n    {}",
-                preprocessed_host.to_string_lossy(),
-                metadata.to_string_lossy(),
-            ));
-            std::process::exit(1);
-        }
-        (Err(..), Err(..), true, LinkType::Dylib) => {
-            eprintln!("You asked me to build the host, but I don't know how to rebuild a host for a dynamic library.");
-            std::process::exit(1);
-        }
-        (Err(..), Err(..), true, LinkType::None) => {
-            eprintln!("You asked me to build the host, but I don't know how to rebuild a host for an unlinked object.");
-            std::process::exit(1);
-        }
-    };
+            other => other
+        };
 
     let buf = &mut String::with_capacity(1024);
 
@@ -1008,7 +923,7 @@ fn build_loaded_file<'a>(
         &app_module_path,
         target,
         code_gen_options,
-        &built_host_path,
+        &built_host,
         wasm_dev_stack_bytes,
     );
 
@@ -1046,7 +961,7 @@ fn build_loaded_file<'a>(
 
     match (linking_strategy, link_type) {
         (LinkingStrategy::Surgical, _) => {
-            let metadata_file = platform_main_roc.with_file_name(target.metadata_file_name());
+            let metadata_file = platform_main_roc_path.with_file_name(target.metadata_file_name());
 
             roc_linker::link_preprocessed_host(
                 target,
@@ -1080,7 +995,7 @@ fn build_loaded_file<'a>(
             let mut inputs = vec![app_o_file.to_str().unwrap()];
 
             let mut host_path = String::new();
-            if let PrebuiltHost::Legacy(p) = built_host_path {
+            if let PrebuiltHost::Legacy(p) = built_host {
                 host_path.push_str(&p.to_string_lossy());
                 inputs.push(&host_path);
             } else {
@@ -1126,6 +1041,77 @@ fn build_loaded_file<'a>(
         total_time,
         expect_metadata,
     })
+}
+
+fn determine_built_host_path(
+    platform_main_roc_path: &PathBuf,
+    target: Target,
+    build_host_requested: bool,
+    link_type: LinkType,
+    linking_strategy: LinkingStrategy,
+    suppress_build_host_warning : bool,
+) -> PrebuiltHost {
+    if build_host_requested {
+        if !suppress_build_host_warning {
+            // TODO
+            //report_rebuilding_existing_host(&preprocessed_host.to_string_lossy());
+            unimplemented!()
+        }
+        
+        match link_type {
+            LinkType::Executable => {
+                return PrebuiltHost::None;
+            }
+            LinkType::Dylib => {
+                eprintln!("You asked me to build the host, but I don't know how to rebuild a host for a dynamic library.");
+                std::process::exit(1);
+            }
+            LinkType::None => {
+                eprintln!("You asked me to build the host, but I don't know how to rebuild a host for an unlinked object.");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        match linking_strategy {
+            LinkingStrategy::Legacy => {
+                let legacy_host_path_res = target.find_legacy_host(&platform_main_roc_path);
+                
+                match legacy_host_path_res {
+                    Ok(legacy_host_path) => return PrebuiltHost::Legacy(legacy_host_path),
+                    Err(err_msg) => {
+                        eprintln!(
+                            "Legacy linking failed: {}",
+                            err_msg
+                        );
+                        #[cfg(target_os = "linux")]
+                        eprintln!("\n    TIP: Maybe try surgical linking with the flag --linker=surgical");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            LinkingStrategy::Surgical => {
+                let surgical_artifacts = target.find_surgical_host(&platform_main_roc_path);
+                
+                match surgical_artifacts {
+                    Ok(surgical_artifacts) => {
+                        return PrebuiltHost::Surgical(surgical_artifacts);
+                    }
+                    Err(paths_str) => {
+                        // TODO improve error message
+                        eprintln!(
+                            "LinkingStrategy was set to Surgical (default), but \
+                            I tried to find the surgical host at any of these paths {} but it does not exist.",
+                            paths_str
+                        );
+                        std::process::exit(1);
+                    }
+                }
+            }
+            LinkingStrategy::Additive => {
+                unimplemented!()
+            }
+        }
+    }
 }
 
 /// Get outut path for the executable.

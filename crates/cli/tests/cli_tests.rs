@@ -304,27 +304,24 @@ mod cli_tests {
             
             cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
         }
-        /*
+        
         #[test]
         #[cfg_attr(windows, ignore)]
         fn run_multi_dep_str_optimized() {
             build_platform_host();
 
-            let runner = cli_test_utils::helpers::ExecCli::new_roc()
-                .arg(CMD_RUN)
-                .arg(OPTIMIZE_FLAG)
-                .add_arg_if(LEGACY_LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valgrind(ALLOW_VALGRIND)
-                .arg(
-                    file_from_root("crates/cli/tests/fixtures/multi-dep-str", "Main.roc").as_path(),
-                );
-
-            let out = runner.run();
-            out.assert_clean_success();
-
-            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+            let cli_build = ExecCli::new(
+                                    CMD_BUILD,
+                                    file_from_root("crates/cli/tests/test-projects/fixtures/multi-dep-str", "main.roc")
+                )
+                .arg(OPTIMIZE_FLAG);
+            
+            let expected_output = "I am Dep2.str2\n";
+            
+            cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
         }
-
+        
+        /*
         #[test]
         #[cfg_attr(windows, ignore)]
         fn run_multi_dep_thunk_unoptimized() {
