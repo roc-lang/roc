@@ -109,20 +109,19 @@ fn collect_roc_definitions<'a>(object: &object::File<'a, &'a [u8]>) -> MutMap<St
     let mut vaddresses = MutMap::default();
 
     for sym in object.symbols().filter(is_roc_definition) {
-        // remove potentially trailing "@version".
-        let name = sym
-            .name()
-            .unwrap()
-            .trim_start_matches('_')
-            .split('@')
-            .next()
-            .unwrap();
-
+        let name = sym.name().unwrap().trim_start_matches('_');
         let address = sym.address();
 
         // special exceptions for memcpy and memset.
-        if name == "roc_memset" {
-            vaddresses.insert("memset".to_string(), address);
+        let direct_mapping = match name {
+            "roc_memset" => Some("memset"),
+            "roc_memmove" => Some("memmove"),
+
+            _ => None,
+        };
+
+        if let Some(libc_symbol) = direct_mapping {
+            vaddresses.insert(libc_symbol.to_string(), address);
         }
 
         vaddresses.insert(name.to_string(), address);
