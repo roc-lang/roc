@@ -22,6 +22,7 @@ members = [
     "crates/valgrind",
     "crates/tracing",
     "crates/utils/*",
+    "crates/soa",
     "crates/docs",
     "crates/docs_cli",
     "crates/linker",
@@ -74,6 +75,8 @@ version = "0.0.1"
 inkwell = { git = "https://github.com/roc-lang/inkwell", branch = "inkwell-llvm-16", features = [
     "llvm16-0",
 ] }
+
+soa = { path = "crates/soa" }
 
 arrayvec = "0.7.2" # update roc_std/Cargo.toml on change
 backtrace = "0.3.67"

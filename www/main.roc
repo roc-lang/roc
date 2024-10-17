@@ -41,6 +41,7 @@ pageData =
     |> Dict.insert "/plans.html" { title: "Planned Changes | Roc", description: "Planned changes to the Roc programming language." }
     |> Dict.insert "/platforms.html" { title: "Platforms and Apps | Roc", description: "Learn about the platforms and applications architecture in the Roc programming language." }
     |> Dict.insert "/tutorial.html" { title: "Tutorial | Roc", description: "Learn the Roc programming language." }
+    |> Dict.insert "/different-names.html" { title: "Different Names | Roc", description: "Names of things in Roc that differ from other languages." }
     |> Dict.insert "/repl/index.html" { title: "REPL | Roc", description: "Try the Roc programming language in an online REPL." }
     |> Dict.insert "/examples/index.html" { title: "Examples | Roc", description: "All kinds of examples implemented in the Roc programming language." }
     |> Dict.insert "/install/other.html" { title: "Getting started on other systems | Roc", description: "Roc installation guide for other systems" }
