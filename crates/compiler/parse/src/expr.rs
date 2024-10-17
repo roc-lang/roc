@@ -2565,21 +2565,23 @@ mod when {
             }
         }
 
-        let pattern_indent = min_indent.max(pattern_indent.unwrap_or(min_indent));
+        let pat_indent = min_indent.max(pattern_indent.unwrap_or(min_indent));
 
-        let (p1, spaces_before, state) =
-            match eat_space_check(EWhen::IndentPattern, arena, state, pattern_indent, false) {
+        let (sp, spaces_before, state) =
+            match eat_space_check(EWhen::IndentPattern, arena, state, pat_indent, false) {
                 Ok(ok) => ok,
                 Err((_, fail)) => return Err((NoProgress, fail)),
             };
 
         let pattern_pos = state.pos();
-        let (_, pattern, state) = crate::pattern::loc_pattern_help()
-            .parse(arena, state, pattern_indent)
-            .map_err(|(p2, fail)| (p1.or(p2), EWhen::Pattern(fail, pattern_pos)))?;
+        let (pattern, state) =
+            match crate::pattern::loc_pattern_help().parse(arena, state, pat_indent) {
+                Ok((_, out, state)) => (out, state),
+                Err((ep, fail)) => return Err((ep.or(sp), EWhen::Pattern(fail, pattern_pos))),
+            };
 
         let (_, spaces_after, mut state) =
-            eat_space_check(EWhen::IndentPattern, arena, state, pattern_indent, true)?;
+            eat_space_check(EWhen::IndentPattern, arena, state, pat_indent, true)?;
 
         let first_pattern = pattern.spaced_around(arena, spaces_before, spaces_after);
         let mut patterns = Vec::with_capacity_in(1, arena);
@@ -2591,20 +2593,19 @@ mod when {
                 state.advance_mut(1);
 
                 let (_, spaces_before, next_state) =
-                    eat_space_check(EWhen::IndentPattern, arena, state, pattern_indent, true)?;
+                    eat_space_check(EWhen::IndentPattern, arena, state, pat_indent, true)?;
 
                 let pattern_pos = next_state.pos();
-                let (_, pat, next_state) = crate::pattern::loc_pattern_help()
-                    .parse(arena, next_state, pattern_indent)
-                    .map_err(|(_, fail)| (MadeProgress, EWhen::Pattern(fail, pattern_pos)))?;
+                let (pat, next_state) =
+                    match crate::pattern::loc_pattern_help().parse(arena, next_state, pat_indent) {
+                        Ok((_, out, state)) => (out, state),
+                        Err((_, fail)) => {
+                            return Err((MadeProgress, EWhen::Pattern(fail, pattern_pos)))
+                        }
+                    };
 
-                let (_, spaces_after, next_state) = eat_space_check(
-                    EWhen::IndentPattern,
-                    arena,
-                    next_state,
-                    pattern_indent,
-                    true,
-                )?;
+                let (_, spaces_after, next_state) =
+                    eat_space_check(EWhen::IndentPattern, arena, next_state, pat_indent, true)?;
 
                 let pattern = pat.spaced_around(arena, spaces_before, spaces_after);
                 patterns.push(pattern);

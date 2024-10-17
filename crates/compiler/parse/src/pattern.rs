@@ -50,7 +50,10 @@ pub fn parse_closure_param<'a>(
                 // e.g. \(User.UserId userId) -> ...
                 rest_of_pattern_in_parens(start, arena, state.inc())
             }
-            // b'[' => parse_list_pattern(arena, state.clone()), // todo: @wip why not?
+            b'[' => {
+                // todo: @wip why not parse the list pattern?
+                Err((NoProgress, EPattern::Start(state.pos())))
+            }
             _ => parse_ident_pattern(start, true, arena, state, min_indent),
         }
     } else {
@@ -240,14 +243,15 @@ fn rest_of_pattern_in_parens<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
-    let parser = collection_inner(
+    let (pats, state) = match collection_inner(
         specialize_err_ref(PInParens::Pattern, loc_pattern_help()),
         Pattern::SpaceBefore,
-    );
-
-    let (_, pats, state) = parser
-        .parse(arena, state, 0)
-        .map_err(|(_, fail)| (MadeProgress, EPattern::PInParens(fail, start)))?;
+    )
+    .parse(arena, state, 0)
+    {
+        Ok((_, out, state)) => (out, state),
+        Err((_, fail)) => return Err((MadeProgress, EPattern::PInParens(fail, start))),
+    };
 
     if state.bytes().first() != Some(&b')') {
         let fail = PInParens::End(state.pos());

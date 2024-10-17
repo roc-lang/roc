@@ -119,7 +119,7 @@ fn module_params<'a>() -> impl Parser<'a, ModuleParams<'a>, EParams<'a>> {
     move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
         let start = state.pos();
 
-        let (fields, state) = match parse_record_pattern_fields(arena, state) {
+        let (pattern, state) = match parse_record_pattern_fields(arena, state) {
             Ok((_, fields, state)) => (Loc::pos(start, state.pos(), fields), state),
             Err((p, fail)) => {
                 return Err((p, EParams::Pattern(fail, start)));
@@ -137,15 +137,12 @@ fn module_params<'a>() -> impl Parser<'a, ModuleParams<'a>, EParams<'a>> {
         let (_, after_arrow, state) =
             eat_space_check(EParams::AfterArrow, arena, state, min_indent, false)?;
 
-        Ok((
-            MadeProgress,
-            ModuleParams {
-                pattern: fields,
-                before_arrow,
-                after_arrow,
-            },
-            state,
-        ))
+        let params = ModuleParams {
+            pattern,
+            before_arrow,
+            after_arrow,
+        };
+        Ok((MadeProgress, params, state))
     }
 }
 
