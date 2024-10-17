@@ -790,7 +790,7 @@ fn solve(
 
                         state
                     }
-                    Content::Effectful => state,
+                    Content::Effectful | Content::Error => state,
                     Content::RigidVar(_)
                     | Content::FlexAbleVar(_, _)
                     | Content::RigidAbleVar(_, _)
@@ -799,8 +799,7 @@ fn solve(
                     | Content::ErasedLambda
                     | Content::Structure(_)
                     | Content::Alias(_, _, _, _)
-                    | Content::RangedNumber(_)
-                    | Content::Error => {
+                    | Content::RangedNumber(_) => {
                         internal_error!("ExpectEffectful: unexpected content: {:?}", content)
                     }
                 }
