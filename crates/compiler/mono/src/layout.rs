@@ -515,7 +515,7 @@ impl<'a> RawFunctionLayout<'a> {
                 internal_error!("lambda set should only appear under a function, where it's handled independently.");
             }
             ErasedLambda => internal_error!("erased lambda type should only appear under a function, where it's handled independently"),
-            Pure|Effectful => internal_error!("fx vars should not be pure or effectful"),
+            Pure | Effectful => internal_error!("fx vars should only appear under a function"),
             Structure(flat_type) => Self::layout_from_flat_type(env, flat_type),
             RangedNumber(..) => Layout::new_help(env, var, content).then(Self::ZeroArgumentThunk),
 
