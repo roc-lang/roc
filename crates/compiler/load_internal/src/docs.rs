@@ -4,8 +4,8 @@ use roc_can::scope::Scope;
 use roc_collections::VecSet;
 use roc_module::ident::ModuleName;
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
-use roc_parse::ast::AssignedField;
 use roc_parse::ast::{self, ExtractSpaces, TypeHeader};
+use roc_parse::ast::{AssignedField, FunctionArrow};
 use roc_parse::ast::{CommentOrNewline, TypeDef, ValueDef};
 
 // Documentation generation requirements
@@ -53,6 +53,7 @@ pub enum TypeAnnotation {
     },
     Function {
         args: Vec<TypeAnnotation>,
+        arrow: FunctionArrow,
         output: Box<TypeAnnotation>,
     },
     ObscuredTagUnion,
@@ -615,8 +616,7 @@ fn type_to_docs(in_func_type_ann: bool, type_annotation: ast::TypeAnnotation) ->
         ast::TypeAnnotation::SpaceAfter(&sub_type_ann, _) => {
             type_to_docs(in_func_type_ann, sub_type_ann)
         }
-        ast::TypeAnnotation::Function(ast_arg_anns, _arrow, output_ann) => {
-            // [purity-inference] TODO: arrow
+        ast::TypeAnnotation::Function(ast_arg_anns, arrow, output_ann) => {
             let mut doc_arg_anns = Vec::new();
 
             for ast_arg_ann in ast_arg_anns {
@@ -625,6 +625,7 @@ fn type_to_docs(in_func_type_ann: bool, type_annotation: ast::TypeAnnotation) ->
 
             Function {
                 args: doc_arg_anns,
+                arrow,
                 output: Box::new(type_to_docs(true, output_ann.value)),
             }
         }
