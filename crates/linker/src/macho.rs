@@ -1341,6 +1341,28 @@ fn surgery_macho_help(
                     {
                         // Explicitly ignore some symbols that are currently always linked.
                         continue;
+                    } else if matches!(app_obj.symbol_by_index(index), Ok(sym) if ["_longjmp", "_setjmp"].contains(&sym.name().unwrap_or_default()))
+                    {
+                        // These symbols have to stay undefined as we dynamically link them from libSystem.dylib at runtime.
+                        // TODO have a table of all known symbols; perhaps parse and use an Apple provided libSystem.tbd stub file?
+                        let name = app_obj
+                            .symbol_by_index(index)
+                            .and_then(|sym| sym.name())
+                            .ok()
+                            .unwrap();
+                        match rel.1.kind() {
+                            RelocationKind::PltRelative => {
+                                println!("\t\tTODO synthesise __stub entry for {name}")
+                            }
+                            RelocationKind::Got => {
+                                println!("\t\tTODO synthesise __got entry for {name}")
+                            }
+                            _ => internal_error!(
+                                "Invalid relocation for libc symbol, {:+x?}: {name}",
+                                rel
+                            ),
+                        }
+                        continue;
                     } else {
                         internal_error!(
                             "Undefined Symbol in relocation, {:+x?}: {:+x?}",
@@ -1380,12 +1402,8 @@ fn surgery_macho_help(
                                 }
                                 continue;
                             }
-                            macho::ARM64_RELOC_UNSIGNED => {
-                                println!("Handle UNSIGNED reloc");
-                                0
-                            }
                             _ => {
-                                println!("Handle other MachO relocs: {value}");
+                                println!("\t\tHandle other MachO relocs: {value}");
                                 0
                             }
                         },
