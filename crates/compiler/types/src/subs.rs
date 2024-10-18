@@ -1,7 +1,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 use crate::types::{
-    name_type_var, AbilitySet, AliasKind, ErrorType, ExtImplicitOpenness, Polarity, RecordField,
-    RecordFieldsError, TupleElemsError, TypeExt, Uls,
+    name_type_var, AbilitySet, AliasKind, ErrorFunctionFx, ErrorType, ExtImplicitOpenness,
+    Polarity, RecordField, RecordFieldsError, TupleElemsError, TypeExt, Uls,
 };
 use crate::unification_table::{self, UnificationTable};
 use roc_collections::all::{FnvMap, ImMap, ImSet, MutSet, SendMap};
@@ -4206,7 +4206,7 @@ fn flat_type_to_err_type(
             ErrorType::Type(symbol, arg_types)
         }
 
-        Func(arg_vars, closure_var, ret_var, _fx_var) => {
+        Func(arg_vars, closure_var, ret_var, fx_var) => {
             let args = arg_vars
                 .into_iter()
                 .map(|index| {
@@ -4217,9 +4217,23 @@ fn flat_type_to_err_type(
 
             let ret = var_to_err_type(subs, state, ret_var, Polarity::Pos);
             let closure = var_to_err_type(subs, state, closure_var, pol);
+            let fx = match subs.get_content_without_compacting(fx_var) {
+                Content::Pure | Content::FlexVar(_) | Content::Error => ErrorFunctionFx::Pure,
+                Content::Effectful => ErrorFunctionFx::Effectful,
+                Content::RigidVar(_)
+                | Content::FlexAbleVar(_, _)
+                | Content::RigidAbleVar(_, _)
+                | Content::RecursionVar { .. }
+                | Content::LambdaSet(_)
+                | Content::ErasedLambda
+                | Content::Structure(_)
+                | Content::Alias(_, _, _, _)
+                | Content::RangedNumber(_) => {
+                    internal_error!("Unexpected content in fx var")
+                }
+            };
 
-            // [purity-inference] TODO: add fx var to the error type
-            ErrorType::Function(args, Box::new(closure), Box::new(ret))
+            ErrorType::Function(args, Box::new(closure), fx, Box::new(ret))
         }
 
         EmptyRecord => ErrorType::Record(SendMap::default(), TypeExt::Closed),

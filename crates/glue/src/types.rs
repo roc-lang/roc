@@ -1406,7 +1406,6 @@ fn add_type_help<'a>(
             }
         },
         Content::Structure(FlatType::Func(args, closure_var, ret_var, _fx_var)) => {
-            // [purity-inference] TODO: fx var
             let is_toplevel = false; // or in any case, we cannot assume that we are
 
             add_function_type(
