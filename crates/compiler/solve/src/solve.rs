@@ -22,6 +22,7 @@ use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_VERIFY_RIGID_LET_GENERALIZED;
 use roc_error_macros::internal_error;
+use roc_module::ident::IdentSuffix;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_problem::can::CycleEntry;
 use roc_region::all::Loc;
@@ -448,6 +449,8 @@ fn solve(
                     );
 
                     new_scope.insert_symbol_var_if_vacant(*symbol, loc_var.value);
+
+                    check_symbol_suffix(env, problems, *symbol, *loc_var);
                 }
 
                 // Note that this vars_by_symbol is the one returned by the
@@ -774,6 +777,30 @@ fn solve(
                         problems.push(problem);
 
                         state
+                    }
+                }
+            }
+            EffectfulStmt(variable, region) => {
+                let content = env.subs.get_content_without_compacting(*variable);
+
+                match content {
+                    Content::Pure | Content::FlexVar(_) => {
+                        let problem = TypeError::PureStmt(*region);
+                        problems.push(problem);
+
+                        state
+                    }
+                    Content::Effectful | Content::Error => state,
+                    Content::RigidVar(_)
+                    | Content::FlexAbleVar(_, _)
+                    | Content::RigidAbleVar(_, _)
+                    | Content::RecursionVar { .. }
+                    | Content::LambdaSet(_)
+                    | Content::ErasedLambda
+                    | Content::Structure(_)
+                    | Content::Alias(_, _, _, _)
+                    | Content::RangedNumber(_) => {
+                        internal_error!("ExpectEffectful: unexpected content: {:?}", content)
                     }
                 }
             }
@@ -1487,6 +1514,41 @@ fn solve(
     state
 }
 
+fn check_symbol_suffix(
+    env: &mut InferenceEnv<'_>,
+    problems: &mut Vec<TypeError>,
+    symbol: Symbol,
+    loc_var: Loc<Variable>,
+) {
+    match symbol.suffix() {
+        IdentSuffix::None => {
+            if let Content::Structure(FlatType::Func(_, _, _, fx)) =
+                env.subs.get_content_without_compacting(loc_var.value)
+            {
+                if let Content::Effectful = env.subs.get_content_without_compacting(*fx) {
+                    problems.push(TypeError::UnsuffixedEffectfulFunction(
+                        loc_var.region,
+                        symbol,
+                    ));
+                }
+            }
+        }
+        IdentSuffix::Bang => {
+            if let Content::Structure(FlatType::Func(_, _, _, fx)) =
+                env.subs.get_content_without_compacting(loc_var.value)
+            {
+                match env.subs.get_content_without_compacting(*fx) {
+                    // [purity-inference] TODO: Should FlexVar actually be a case?
+                    Content::Pure | Content::FlexVar(_) => {
+                        problems.push(TypeError::SuffixedPureFunction(loc_var.region, symbol));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
 fn chase_alias_content(subs: &Subs, mut var: Variable) -> (Variable, &Content) {
     loop {
         match subs.get_content_without_compacting(var) {
@@ -2158,7 +2220,7 @@ fn adjust_rank_content(
                     rank
                 }
 
-                Func(arg_vars, closure_var, ret_var) => {
+                Func(arg_vars, closure_var, ret_var, _fx_var) => {
                     let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ret_var);
 
                     // TODO investigate further.
@@ -2420,6 +2482,8 @@ fn adjust_rank_content(
         }
 
         ErasedLambda => group_rank,
+
+        Pure | Effectful => group_rank,
 
         RangedNumber(_) => group_rank,
     }

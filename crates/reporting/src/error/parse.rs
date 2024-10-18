@@ -645,39 +645,6 @@ fn to_expr_report<'a>(
                 severity,
             }
         }
-        EExpr::StmtAfterExpr(pos) => {
-            let surroundings = Region::new(start, *pos);
-            let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
-
-            let doc = alloc.stack([
-                alloc
-                    .reflow(r"I just finished parsing an expression with a series of definitions,"),
-                alloc.reflow(
-                    r"and this line is indented as if it's intended to be part of that expression:",
-                ),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
-                alloc.reflow(
-                    "However, I already saw the final expression in that series of definitions."
-                ),
-                alloc.tip().append(
-                    alloc.reflow(
-                        "An expression like `4`, `\"hello\"`, or `functionCall MyThing` is like `return 4` in other programming languages. To me, it seems like you did `return 4` followed by more code in the lines after, that code would never be executed!"
-                    )
-                ),
-                alloc.tip().append(
-                    alloc.reflow(
-                        "If you are working with `Task`, this error can happen if you forgot a `!` somewhere."
-                    )
-                )
-            ]);
-
-            Report {
-                filename,
-                doc,
-                title: "STATEMENT AFTER EXPRESSION".to_string(),
-                severity,
-            }
-        }
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
 }

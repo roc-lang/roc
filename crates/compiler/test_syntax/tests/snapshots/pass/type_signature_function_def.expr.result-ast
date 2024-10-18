@@ -32,6 +32,7 @@ Defs(
                             [],
                         ),
                     ],
+                    Pure,
                     @20-24 Apply(
                         "",
                         "Bool",

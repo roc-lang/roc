@@ -8,7 +8,7 @@ use roc_builtins::bitcode::{
     IntWidth::{self, *},
 };
 use roc_collections::{MutMap, VecMap};
-use roc_error_macros::todo_lambda_erasure;
+use roc_error_macros::{internal_error, todo_lambda_erasure};
 use roc_module::{
     ident::TagName,
     symbol::{Interns, Symbol},
@@ -1236,7 +1236,7 @@ impl<'a> Env<'a> {
             .expect("Something weird ended up in the content");
 
         match self.subs.get_content_without_compacting(var) {
-            Content::Structure(FlatType::Func(args, closure_var, ret_var)) => {
+            Content::Structure(FlatType::Func(args, closure_var, ret_var, _fx_var)) => {
                 // this is a toplevel type, so the closure must be empty
                 let is_toplevel = true;
                 add_function_type(
@@ -1405,7 +1405,7 @@ fn add_type_help<'a>(
                 }
             }
         },
-        Content::Structure(FlatType::Func(args, closure_var, ret_var)) => {
+        Content::Structure(FlatType::Func(args, closure_var, ret_var, _fx_var)) => {
             let is_toplevel = false; // or in any case, we cannot assume that we are
 
             add_function_type(
@@ -1598,6 +1598,7 @@ fn add_type_help<'a>(
             type_id
         }
         Content::ErasedLambda => todo_lambda_erasure!(),
+        Content::Pure | Content::Effectful => internal_error!("fx vars should not appear here"),
         Content::LambdaSet(lambda_set) => {
             let tags = lambda_set.solved;
 

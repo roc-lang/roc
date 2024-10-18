@@ -1,0 +1,4 @@
+launchTheNukes! = \{} ->
+    boom
+
+launchTheNukes! {}

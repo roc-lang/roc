@@ -63,7 +63,7 @@ Defs {
                             Stmt(
                                 @97-111 Apply(
                                     @97-108 TrySuffix {
-                                        target: Task,
+                                        target: Result,
                                         expr: Var {
                                             module_name: "Stdout",
                                             ident: "line",
@@ -82,7 +82,7 @@ Defs {
                     },
                     @141-150 SpaceBefore(
                         TrySuffix {
-                            target: Task,
+                            target: Result,
                             expr: Var {
                                 module_name: "",
                                 ident: "printBar",

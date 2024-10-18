@@ -847,49 +847,6 @@ fn platform_does_not_exist() {
 }
 
 #[test]
-fn platform_parse_error() {
-    let modules = vec![
-        (
-            "platform/main.roc",
-            indoc!(
-                r#"
-                        platform "hello-c"
-                            requires {} { main : Str }
-                            exposes []
-                            packages {}
-                            imports []
-                            provides [mainForHost]
-                            blah 1 2 3 # causing a parse error on purpose
-
-                        mainForHost : Str
-                    "#
-            ),
-        ),
-        (
-            "main.roc",
-            indoc!(
-                r#"
-                        app "hello-world"
-                            packages { pf: "platform/main.roc" }
-                            imports []
-                            provides [main] to pf
-
-                        main = "Hello, World!\n"
-                    "#
-            ),
-        ),
-    ];
-
-    match multiple_modules("platform_parse_error", modules) {
-        Err(report) => {
-            assert!(report.contains("STATEMENT AFTER EXPRESSION"));
-            assert!(report.contains("blah 1 2 3 # causing a parse error on purpose"));
-        }
-        Ok(_) => unreachable!("we expect failure here"),
-    }
-}
-
-#[test]
 // See https://github.com/roc-lang/roc/issues/2413
 fn platform_exposes_main_return_by_pointer_issue() {
     let modules = vec![

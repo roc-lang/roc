@@ -1,6 +1,7 @@
 use crate::ast::{
-    AbilityImpls, AssignedField, CommentOrNewline, Expr, ImplementsAbilities, ImplementsAbility,
-    ImplementsClause, Pattern, Spaceable, Spaced, Tag, TypeAnnotation, TypeHeader,
+    AbilityImpls, AssignedField, CommentOrNewline, Expr, FunctionArrow, ImplementsAbilities,
+    ImplementsAbility, ImplementsClause, Pattern, Spaceable, Spaced, Tag, TypeAnnotation,
+    TypeHeader,
 };
 use crate::blankspace::{
     space0_around_ee, space0_before_e, space0_before_optional_after, space0_e,
@@ -594,16 +595,23 @@ fn expression<'a>(
                 ],
             ))
             .trace("type_annotation:expression:rest_args"),
-            skip_second(
+            and(
                 space0_e(EType::TIndentStart),
-                two_bytes(b'-', b'>', EType::TStart),
+                one_of![
+                    map(two_bytes(b'-', b'>', EType::TStart), |_| {
+                        FunctionArrow::Pure
+                    }),
+                    map(two_bytes(b'=', b'>', EType::TStart), |_| {
+                        FunctionArrow::Effectful
+                    }),
+                ],
             )
             .trace("type_annotation:expression:arrow"),
         )
         .parse(arena, state.clone(), min_indent);
 
         let (progress, annot, state) = match result {
-            Ok((p2, (rest, space_before_arrow), state)) => {
+            Ok((p2, (rest, (space_before_arrow, arrow)), state)) => {
                 let (p3, return_type, state) =
                     space0_before_e(term(stop_at_surface_has), EType::TIndentStart)
                         .parse(arena, state, min_indent)?;
@@ -626,7 +634,7 @@ fn expression<'a>(
 
                 let result = Loc {
                     region,
-                    value: TypeAnnotation::Function(output, arena.alloc(return_type)),
+                    value: TypeAnnotation::Function(output, arrow, arena.alloc(return_type)),
                 };
                 let progress = p1.or(p2).or(p3);
                 (progress, result, state)

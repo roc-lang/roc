@@ -57,8 +57,8 @@ pub fn remove_module_param_arguments(
                 drop_last_argument(expected);
 
                 if let (
-                    ErrorType::Function(found_args, _, _),
-                    ErrorType::Function(expected_args, _, _),
+                    ErrorType::Function(found_args, _, _, _),
+                    ErrorType::Function(expected_args, _, _, _),
                 ) = (found, expected)
                 {
                     if found_args.len() > expected_args.len() {
@@ -99,7 +99,10 @@ pub fn remove_module_param_arguments(
             | TypeError::IngestedFileUnsupportedType(_, _)
             | TypeError::UnexpectedModuleParams(_, _)
             | TypeError::MissingModuleParams(_, _, _)
-            | TypeError::ModuleParamsMismatch(_, _, _, _) => {}
+            | TypeError::ModuleParamsMismatch(_, _, _, _)
+            | TypeError::PureStmt(_)
+            | TypeError::UnsuffixedEffectfulFunction(_, _)
+            | TypeError::SuffixedPureFunction(_, _) => {}
         }
     }
 }
@@ -181,13 +184,16 @@ fn remove_for_reason(
             def_region: _,
         }
         | Reason::CrashArg
+        | Reason::FxInFunction(_, _)
+        | Reason::FxInTopLevel(_)
+        | Reason::Stmt(_)
         | Reason::ImportParams(_) => {}
     }
 }
 
 fn drop_last_argument(err_type: &mut ErrorType) {
     match err_type {
-        ErrorType::Function(arguments, _, _) => {
+        ErrorType::Function(arguments, _, _, _) => {
             arguments.pop();
         }
         // Irrelevant
