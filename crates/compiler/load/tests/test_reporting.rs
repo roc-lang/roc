@@ -5419,9 +5419,9 @@ mod test_reporting {
     6│       2 -> 2
                ^^
 
-    Looks like you are trying to define a function. 
+    Looks like you are trying to define a function.
 
-    In Roc, functions are always written as a lambda, like 
+    In Roc, functions are always written as a lambda, like
 
         increment = \n -> n + 1
     "###

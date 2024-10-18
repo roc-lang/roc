@@ -57,8 +57,8 @@ pub fn remove_module_param_arguments(
                 drop_last_argument(expected);
 
                 if let (
-                    ErrorType::Function(found_args, _, _),
-                    ErrorType::Function(expected_args, _, _),
+                    ErrorType::Function(found_args, _, _, _),
+                    ErrorType::Function(expected_args, _, _, _),
                 ) = (found, expected)
                 {
                     if found_args.len() > expected_args.len() {
@@ -193,7 +193,7 @@ fn remove_for_reason(
 
 fn drop_last_argument(err_type: &mut ErrorType) {
     match err_type {
-        ErrorType::Function(arguments, _, _) => {
+        ErrorType::Function(arguments, _, _, _) => {
             arguments.pop();
         }
         // Irrelevant

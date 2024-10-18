@@ -3678,10 +3678,21 @@ pub enum ErrorType {
         TypeExt,
         Polarity,
     ),
-    Function(Vec<ErrorType>, Box<ErrorType>, Box<ErrorType>),
+    Function(
+        Vec<ErrorType>,
+        Box<ErrorType>,
+        ErrorFunctionFx,
+        Box<ErrorType>,
+    ),
     Alias(Symbol, Vec<ErrorType>, Box<ErrorType>, AliasKind),
     Range(Vec<ErrorType>),
     Error,
+}
+
+#[derive(PartialEq, Eq, Clone, Hash)]
+pub enum ErrorFunctionFx {
+    Pure,
+    Effectful,
 }
 
 impl std::fmt::Debug for ErrorType {
@@ -3729,7 +3740,7 @@ impl ErrorType {
                     .for_each(|(_, ts)| ts.iter().for_each(|t| t.add_names(taken)));
                 ext.add_names(taken);
             }
-            Function(args, capt, ret) => {
+            Function(args, capt, _fx, ret) => {
                 args.iter().for_each(|t| t.add_names(taken));
                 capt.add_names(taken);
                 ret.add_names(taken);
@@ -3815,7 +3826,7 @@ fn write_error_type_help(
                 }
             }
         }
-        Function(arguments, _closure, result) => {
+        Function(arguments, _closure, fx, result) => {
             let write_parens = parens != Parens::Unnecessary;
 
             if write_parens {
@@ -3831,7 +3842,10 @@ fn write_error_type_help(
                 }
             }
 
-            buf.push_str(" -> ");
+            match fx {
+                ErrorFunctionFx::Pure => buf.push_str(" -> "),
+                ErrorFunctionFx::Effectful => buf.push_str(" => "),
+            }
 
             write_error_type_help(interns, *result, buf, Parens::InFn);
 
@@ -3965,7 +3979,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
                 buf.push(')');
             }
         }
-        Function(arguments, _closure, result) => {
+        Function(arguments, _closure, fx, result) => {
             let write_parens = parens != Parens::Unnecessary;
 
             if write_parens {
@@ -3981,7 +3995,10 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
                 }
             }
 
-            buf.push_str(" -> ");
+            match fx {
+                ErrorFunctionFx::Pure => buf.push_str(" -> "),
+                ErrorFunctionFx::Effectful => buf.push_str(" => "),
+            }
 
             write_debug_error_type_help(*result, buf, Parens::InFn);
 

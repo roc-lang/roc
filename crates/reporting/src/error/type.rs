@@ -1809,7 +1809,7 @@ fn describe_wanted_function(tipe: &ErrorType) -> DescribedFunction {
     use ErrorType::*;
 
     match tipe {
-        Function(args, _, _) => DescribedFunction::Arguments(args.len()),
+        Function(args, _, _, _) => DescribedFunction::Arguments(args.len()),
         Alias(_, _, actual, AliasKind::Structural) => describe_wanted_function(actual),
         Alias(_, _, actual, AliasKind::Opaque) => {
             let tag = if matches!(
@@ -2657,12 +2657,13 @@ fn to_doc_help<'b>(
     use ErrorType::*;
 
     match tipe {
-        Function(args, _, ret) => report_text::function(
+        Function(args, _, fx, ret) => report_text::function(
             alloc,
             parens,
             args.into_iter()
                 .map(|arg| to_doc_help(ctx, gen_usages, alloc, Parens::InFn, arg))
                 .collect(),
+            fx,
             to_doc_help(ctx, gen_usages, alloc, Parens::InFn, *ret),
         ),
         Infinite => alloc.text("∞"),
@@ -2899,7 +2900,7 @@ fn count_generated_name_usages<'a>(
                 stack.extend(tags.values().flatten().map(|t| (t, only_unseen)));
                 ext_stack.push((ext, only_unseen));
             }
-            Function(args, _lset, ret) => {
+            Function(args, _lset, _fx, ret) => {
                 stack.extend(args.iter().map(|t| (t, only_unseen)));
                 stack.push((ret, only_unseen));
             }
@@ -3074,7 +3075,7 @@ fn to_diff<'b>(
             }
         }
 
-        (Function(args1, _, ret1), Function(args2, _, ret2)) => {
+        (Function(args1, _, fx1, ret1), Function(args2, _, fx2, ret2)) => {
             if args1.len() == args2.len() {
                 let mut status = Status::Similar;
                 let arg_diff = diff_args(alloc, Parens::InFn, args1, args2);
@@ -3082,8 +3083,8 @@ fn to_diff<'b>(
                 status.merge(arg_diff.status);
                 status.merge(ret_diff.status);
 
-                let left = report_text::function(alloc, parens, arg_diff.left, ret_diff.left);
-                let right = report_text::function(alloc, parens, arg_diff.right, ret_diff.right);
+                let left = report_text::function(alloc, parens, arg_diff.left, fx1, ret_diff.left);
+                let right = report_text::function(alloc, parens, arg_diff.right, fx2, ret_diff.right);
                 let mut left_able = arg_diff.left_able;
                 left_able.extend(ret_diff.left_able);
                 let mut right_able = arg_diff.right_able;
@@ -3672,9 +3673,10 @@ fn should_show_diff(t1: &ErrorType, t2: &ErrorType) -> bool {
                         .any(|(p1, p2)| should_show_diff(p1, p2))
                 })
         }
-        (Function(params1, ret1, l1), Function(params2, ret2, l2)) => {
+        (Function(params1, ret1, fx1, l1), Function(params2, ret2, fx2, l2)) => {
             if params1.len() != params2.len()
                 || should_show_diff(ret1, ret2)
+                || fx1 != fx2
                 || should_show_diff(l1, l2)
             {
                 return true;
@@ -3736,8 +3738,8 @@ fn should_show_diff(t1: &ErrorType, t2: &ErrorType) -> bool {
         | (_, TagUnion(_, _, _))
         | (RecursiveTagUnion(_, _, _, _), _)
         | (_, RecursiveTagUnion(_, _, _, _))
-        | (Function(_, _, _), _)
-        | (_, Function(_, _, _)) => true,
+        | (Function(_, _, _, _), _)
+        | (_, Function(_, _, _, _)) => true,
     }
 }
 
@@ -4195,7 +4197,7 @@ mod report_text {
     use crate::report::{Annotation, RocDocAllocator, RocDocBuilder};
     use roc_module::ident::Lowercase;
     use roc_types::pretty_print::Parens;
-    use roc_types::types::{ErrorType, RecordField, TypeExt};
+    use roc_types::types::{ErrorFunctionFx, ErrorType, RecordField, TypeExt};
     use ven_pretty::DocAllocator;
 
     fn with_parens<'b>(
@@ -4209,11 +4211,15 @@ mod report_text {
         alloc: &'b RocDocAllocator<'b>,
         parens: Parens,
         args: Vec<RocDocBuilder<'b>>,
+        fx: ErrorFunctionFx,
         ret: RocDocBuilder<'b>,
     ) -> RocDocBuilder<'b> {
         let function_doc = alloc.concat([
             alloc.intersperse(args, alloc.reflow(", ")),
-            alloc.reflow(" -> "),
+            match fx {
+                ErrorFunctionFx::Pure => alloc.text(" -> "),
+                ErrorFunctionFx::Effectful => alloc.text(" => "),
+            },
             ret,
         ]);
 
@@ -4779,7 +4785,7 @@ fn type_problem_to_pretty<'b>(
                     rigid_able_vs_different_flex_able(x, abilities, other_abilities)
                 }
                 RigidVar(y) | RigidAbleVar(y, _) => bad_double_rigid(x, y),
-                Function(_, _, _) => rigid_able_vs_concrete(x, alloc.reflow("a function value")),
+                Function(_, _, _, _) => rigid_able_vs_concrete(x, alloc.reflow("a function value")),
                 Record(_, _) => rigid_able_vs_concrete(x, alloc.reflow("a record value")),
                 Tuple(_, _) => rigid_able_vs_concrete(x, alloc.reflow("a tuple value")),
                 TagUnion(_, _, _) | RecursiveTagUnion(_, _, _, _) => {
@@ -4868,7 +4874,7 @@ fn type_problem_to_pretty<'b>(
                     bad_rigid_var(x, msg)
                 }
                 RigidVar(y) | RigidAbleVar(y, _) => bad_double_rigid(x, y),
-                Function(_, _, _) => bad_rigid_var(x, alloc.reflow("a function value")),
+                Function(_, _, _, _) => bad_rigid_var(x, alloc.reflow("a function value")),
                 Record(_, _) => bad_rigid_var(x, alloc.reflow("a record value")),
                 Tuple(_, _) => bad_rigid_var(x, alloc.reflow("a tuple value")),
                 TagUnion(_, _, _) | RecursiveTagUnion(_, _, _, _) => {
