@@ -1,8 +1,8 @@
 ---
 source: crates/cli/tests/cli_tests.rs
-expression: out.normalize_stdout_and_stderr()
+expression: cli_test_out.normalize_stdout_and_stderr()
 ---
-── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
+── EXPECT FAILED in tests/test-projects/expects/expects.roc ────────────────────
 
 This expectation failed:
 
@@ -14,7 +14,7 @@ When it failed, these variables had these values:
 a : Num *
 a = 1
 
-── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
+── EXPECT FAILED in tests/test-projects/expects/expects.roc ────────────────────
 
 This expectation failed:
 
@@ -26,7 +26,7 @@ When it failed, these variables had these values:
 a : Num *
 a = 1
 
-── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
+── EXPECT FAILED in tests/test-projects/expects/expects.roc ────────────────────
 
 This expectation failed:
 

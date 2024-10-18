@@ -153,6 +153,10 @@ fn normalize_for_tests(original_output: &str) -> String {
     // replace file paths with a placeholder
     let filepath_replacement = "[<ignored for tests>:$2]";
     part_normalized = FILEPATH_REGEX.replace_all(&part_normalized, filepath_replacement).into_owned();
+    
+    // replace tip "You can run the program anyway ..." with a placeholder
+    let run_anyway_replacement = "<ignored for tests>";
+    part_normalized = RUN_ANYWAY_REGEX.replace_all(&part_normalized, run_anyway_replacement).into_owned();
 
     // replace error summary timings
     let error_summary_replacement = "$1 error and $2 warning found in <ignored for test> ms";
@@ -165,6 +169,7 @@ fn normalize_for_tests(original_output: &str) -> String {
 lazy_static! {
     static ref TIMING_REGEX: Regex = Regex::new(r" in (\d+) ms\.").expect("Invalid regex pattern");
     static ref FILEPATH_REGEX: Regex = Regex::new(r"\[([^:]+):(\d+)\]").expect("Invalid filepath regex pattern");
+    static ref RUN_ANYWAY_REGEX: Regex = Regex::new(r"the program anyway with\s+.*").expect("Invalid run anyway regex pattern");
     static ref ERROR_SUMMARY_REGEX: Regex = Regex::new(r"(\d+) error(?:s)? and (\d+) warning(?:s)? found in \d+ ms")
         .expect("Invalid error summary regex pattern");
 }

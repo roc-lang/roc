@@ -1,8 +1,10 @@
 ---
 source: crates/cli/tests/cli_tests.rs
-expression: out.normalize_stdout_and_stderr()
+assertion_line: 445
+expression: cli_dev_out.normalize_stdout_and_stderr()
 ---
-── TYPE MISMATCH in tests/module_params/BadAnn.roc ─────────────────────────────
+
+── TYPE MISMATCH in tests/test-projects/module_params/BadAnn.roc ───────────────
 
 Something is off with the body of the fnAnnotatedAsValue definition:
 
@@ -19,7 +21,7 @@ But the type annotation on fnAnnotatedAsValue says it should be:
     Str
 
 
-── TYPE MISMATCH in tests/module_params/BadAnn.roc ─────────────────────────────
+── TYPE MISMATCH in tests/test-projects/module_params/BadAnn.roc ───────────────
 
 Something is off with the body of the missingArg definition:
 
@@ -42,4 +44,5 @@ Tip: It looks like it takes too many arguments. I'm seeing 1 extra.
 2 error and 1 warning found in <ignored for test> ms
 .
 
-You can run the program anyway <ignored for tests>
+You can run <ignored for tests>
+

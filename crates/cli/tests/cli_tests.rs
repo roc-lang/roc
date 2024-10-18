@@ -428,80 +428,84 @@ mod cli_tests {
             
             insta::assert_snapshot!(cli_dev_out.normalize_stdout_and_stderr());
         }
-        /*
+        
         #[test]
         #[cfg_attr(windows, ignore)]
         fn module_params_bad_ann() {
             build_platform_host();
 
-            let runner = cli_test_utils::helpers::ExecCli::new_roc()
-                .arg(CMD_DEV)
-                .arg(file_from_root("crates/cli/tests/module_params", "bad_ann.roc").as_path());
+            let cli_dev = ExecCli::new(
+                                    CMD_DEV,
+                                    file_from_root("crates/cli/tests/test-projects/module_params", "bad_ann.roc")
+                );
 
-            let out = runner.run();
-
-            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+            let cli_dev_out = cli_dev.run();
+            cli_dev_out.assert_nonzero_exit();
+            
+            insta::assert_snapshot!(cli_dev_out.normalize_stdout_and_stderr());
         }
-
+        
         #[test]
         #[cfg_attr(windows, ignore)]
         fn module_params_multiline_pattern() {
             build_platform_host();
-
-            let runner = cli_test_utils::helpers::ExecCli::new_roc().arg(CMD_DEV).arg(
-                file_from_root("crates/cli/tests/module_params", "multiline_params.roc").as_path(),
-            );
-
-            let out = runner.run();
-
-            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+            
+            let cli_dev = ExecCli::new(
+                                    CMD_DEV,
+                                    file_from_root("crates/cli/tests/test-projects/module_params", "multiline_params.roc")
+                );
+    
+            let cli_dev_out = cli_dev.run();
+            cli_dev_out.assert_clean_success();
+            cli_dev_out.assert_stdout_and_stderr_ends_with("hi\n");
         }
-
+        
         #[test]
         #[cfg_attr(windows, ignore)]
         fn module_params_unexpected_fn() {
             build_platform_host();
 
-            let runner = cli_test_utils::helpers::ExecCli::new_roc().arg(CMD_DEV).arg(
-                file_from_root("crates/cli/tests/module_params", "unexpected_fn.roc").as_path(),
-            );
+            let cli_dev = ExecCli::new(
+                                    CMD_DEV,
+                                    file_from_root("crates/cli/tests/test-projects/module_params", "unexpected_fn.roc")
+                );
+    
+            let cli_dev_out = cli_dev.run();
+            cli_dev_out.assert_nonzero_exit();
 
-            let out = runner.run();
-
-            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+            insta::assert_snapshot!(cli_dev_out.normalize_stdout_and_stderr());
         }
-        */
-        /*
+        
         #[test]
-        fn expects_dev() {
+        fn expects_dev_failure() {
             build_platform_host();
 
-            let runner = cli_test_utils::helpers::ExecCli::new_roc()
-                .arg(CMD_DEV)
-                .add_arg_if(LEGACY_LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valgrind(ALLOW_VALGRIND)
-                .arg(file_from_root("crates/cli/tests/expects", "expects.roc").as_path());
+            let cli_dev = ExecCli::new(
+                                    CMD_DEV,
+                                    file_from_root("crates/cli/tests/test-projects/expects", "expects.roc")
+                );
+    
+            let cli_dev_out = cli_dev.run();
+            // TODO enable or delete this based on https://roc.zulipchat.com/#narrow/channel/304641-ideas/topic/roc.20dev.20expect.20failure/near/477682063
+            //cli_dev_out.assert_nonzero_exit();
 
-            let out = runner.run();
-
-            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+            insta::assert_snapshot!(cli_dev_out.normalize_stdout_and_stderr());
         }
 
         #[test]
-        fn expects_test() {
+        fn expects_test_failure() {
             build_platform_host();
-
-            let runner = cli_test_utils::helpers::ExecCli::new_roc()
-                .arg(CMD_TEST)
-                .with_valgrind(ALLOW_VALGRIND)
-                .arg(file_from_root("crates/cli/tests/expects", "expects.roc").as_path());
-
-            let out = runner.run();
-
-            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+            
+            let cli_test = ExecCli::new(
+                                    CMD_TEST,
+                                    file_from_root("crates/cli/tests/test-projects/expects", "expects.roc")
+                );
+    
+            let cli_test_out = cli_test.run();
+            cli_test_out.assert_nonzero_exit();
+            
+            insta::assert_snapshot!(cli_test_out.normalize_stdout_and_stderr());
         }
-
-        */
     }
     /*
     #[test]
