@@ -269,9 +269,7 @@ mod cli_tests {
 
         /// Build the platform host once for all tests in this module
         fn build_platform_host() {
-            dbg!("Building platform host");
             BUILD_PLATFORM_HOST.call_once(|| {
-                dbg!("call once");
                 let cli_build = ExecCli::new(
                                         CMD_BUILD,
                                         file_from_root("crates/cli/tests/test-projects/test-platform-simple-zig", "app.roc")
@@ -507,142 +505,107 @@ mod cli_tests {
             insta::assert_snapshot!(cli_test_out.normalize_stdout_and_stderr());
         }
     }
-    /*
-    #[test]
-    #[cfg_attr(windows, ignore)]
-    fn test_module_imports_unknown_pkg() {
-        let runner = ExecCli::new_roc()
-            .arg(CMD_TEST)
-            .with_valgrind(ALLOW_VALGRIND)
-            .add_args(["--main", "tests/module_imports_pkg/app.roc"])
-            .arg(
-                file_from_root(
-                    "crates/cli/tests/module_imports_pkg",
-                    "ImportsUnknownPkg.roc",
-                )
-                .as_path(),
-            );
-
-        let out = runner.run();
-        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
-    }
-
-    #[test]
-    #[cfg_attr(windows, ignore)]
-    /// this tests that a platform can correctly import a package
-    fn platform_requires_pkg() {
-        let runner = ExecCli::new_roc()
-            .arg(CMD_RUN)
-            .arg(BUILD_HOST_FLAG)
-            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-            .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .arg(file_from_root("crates/cli/tests/platform_requires_pkg", "app.roc").as_path());
-
-        let out = runner.run();
-        out.assert_clean_success();
-        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
-    }
-
+    
     mod test_platform_effects_zig {
         use super::*;
-        use cli_test_utils::helpers::{file_from_root, ExecCli};
-        use roc_cli::{CMD_BUILD, CMD_RUN};
+        use cli_test_utils::helpers::file_from_root;
+        use roc_cli::{CMD_BUILD};
 
         static BUILD_PLATFORM_HOST: std::sync::Once = std::sync::Once::new();
 
         /// Build the platform host once for all tests in this module
         fn build_platform_host() {
             BUILD_PLATFORM_HOST.call_once(|| {
-                let out = ExecCli::new_roc()
-                    .arg(CMD_BUILD)
-                    .arg(BUILD_HOST_FLAG)
-                    .arg(OPTIMIZE_FLAG)
-                    .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-                    .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-                    .arg(
-                        file_from_root("crates/cli/tests/effects/platform/", "app-stub.roc")
-                            .as_path(),
+                let cli_build = ExecCli::new(
+                                        CMD_BUILD,
+                                        file_from_root("crates/cli/tests/test-projects/effects/platform/", "app-stub.roc")
                     )
-                    .run();
-                out.assert_clean_success();
+                    .arg(BUILD_HOST_FLAG)
+                    .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
+                    .arg(OPTIMIZE_FLAG);
+
+                let cli_build_out = cli_build.run();
+                cli_build_out.assert_clean_success();
+                
+                if TEST_LEGACY_LINKER {
+                    let cli_build_legacy = cli_build.arg(LEGACY_LINKER_FLAG);
+                    
+                    let cli_build_legacy_out = cli_build_legacy.run();
+                    cli_build_legacy_out.assert_clean_success();
+                }
             });
         }
-
+        
         #[test]
         #[cfg_attr(windows, ignore)]
         fn interactive_effects() {
             build_platform_host();
-
-            let runner = ExecCli::new_roc()
-                .arg(CMD_RUN)
-                .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valgrind(ALLOW_VALGRIND)
-                .arg(file_from_root("crates/cli/tests/effects", "print-line.roc").as_path())
-                .with_stdin_vals(vec!["hi there!"]);
-
-            let out = runner.run();
-            out.assert_clean_success();
-            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+            
+            let cli_build = ExecCli::new(
+                                    CMD_BUILD,
+                                    file_from_root("crates/cli/tests/test-projects/effects", "print-line.roc")
+                );
+            
+            let expected_output = "You entered: hi there!\nIt is known\n";
+            
+            cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, Some("hi there!"), None);
         }
-
+        
         #[test]
         #[cfg_attr(windows, ignore)]
         fn combine_tasks_with_record_builder() {
             build_platform_host();
-
-            let runner = ExecCli::new_roc()
-                .arg(CMD_RUN)
-                .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-                .arg(file_from_root("crates/cli/tests/effects", "combine-tasks.roc").as_path());
-
-            let out = runner.run();
-            out.assert_clean_success();
-            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+            
+            let cli_build = ExecCli::new(
+                                    CMD_BUILD,
+                                    file_from_root("crates/cli/tests/test-projects/effects", "combine-tasks.roc")
+                );
+            
+            let expected_output = "For multiple tasks: {a: 123, b: \"abc\", c: [123]}\n";
+            
+            cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
         }
-
+        
         #[test]
         #[cfg_attr(windows, ignore)]
         fn inspect_logging() {
             build_platform_host();
-
-            let runner = ExecCli::new_roc()
-                .arg(CMD_RUN)
-                .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valgrind(ALLOW_VALGRIND)
-                .arg(file_from_root("crates/cli/tests/effects", "inspect-logging.roc").as_path());
-
-            let out = runner.run();
-            out.assert_clean_success();
-            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+            
+            let cli_build = ExecCli::new(
+                                    CMD_BUILD,
+                                    file_from_root("crates/cli/tests/test-projects/effects", "inspect-logging.roc")
+                );
+    
+            let expected_output = "(@Community {friends: [{2}, {2}, {0, 1}], people: [(@Person {age: 27, favoriteColor: Blue, firstName: \"John\", hasBeard: Bool.true, lastName: \"Smith\"}), (@Person {age: 47, favoriteColor: Green, firstName: \"Debby\", hasBeard: Bool.false, lastName: \"Johnson\"}), (@Person {age: 33, favoriteColor: (RGB (255, 255, 0)), firstName: \"Jane\", hasBeard: Bool.false, lastName: \"Doe\"})]})\n";
+            
+            cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
         }
-
+        
         #[test]
         #[cfg_attr(windows, ignore)]
         fn module_params_pass_task() {
             build_platform_host();
-
-            let runner = ExecCli::new_roc()
-                .arg(CMD_RUN)
-                .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valgrind(ALLOW_VALGRIND)
-                .arg(file_from_root("crates/cli/tests/module_params", "pass_task.roc").as_path());
-
-            let out = runner.run();
-            out.assert_clean_success();
-
-            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+            
+            let cli_build = ExecCli::new(
+                                    CMD_BUILD,
+                                    file_from_root("crates/cli/tests/test-projects/module_params", "pass_task.roc")
+                );
+            
+            let expected_output = "Hi, Agus!\n";
+            
+            cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);            
         }
     }
 
-    // TODO not sure if this cfg should still be here: #[cfg(not(debug_assertions))]
     // this is for testing the benchmarks, to perform proper benchmarks see crates/cli/benches/README.md
     mod test_benchmarks {
         use super::{
             UseValgrind, ALLOW_VALGRIND, BUILD_HOST_FLAG, OPTIMIZE_FLAG,
-            SUPPRESS_BUILD_HOST_WARNING_FLAG,
+            SUPPRESS_BUILD_HOST_WARNING_FLAG, TEST_LEGACY_LINKER,
         };
-        use cli_test_utils::helpers::{file_from_root, ExecCli};
+        use cli_test_utils::{exec_cli::ExecCli, helpers::file_from_root};
         use roc_cli::CMD_BUILD;
+        use indoc::indoc;
 
         // #[allow(unused_imports)]
         use std::sync::Once;
@@ -652,43 +615,46 @@ mod cli_tests {
         /// Build the platform host once for all tests in this module
         fn build_platform_host() {
             BUILD_PLATFORM_HOST.call_once(|| {
-                let out = ExecCli::new_roc()
-                    .arg(CMD_BUILD)
-                    .arg(BUILD_HOST_FLAG)
-                    .arg(OPTIMIZE_FLAG)
-                    .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-                    .add_arg_if(super::LINKER_FLAG, super::TEST_LEGACY_LINKER)
-                    .arg(
-                        file_from_root("crates/cli/tests/benchmarks/platform", "app.roc").as_path(),
+                let cli_build = ExecCli::new(
+                                        CMD_BUILD,
+                                        file_from_root("crates/cli/tests/test-projects/benchmarks/platform", "app.roc")
                     )
-                    .run();
-                out.assert_clean_success();
+                    .arg(BUILD_HOST_FLAG)
+                    .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
+                    .arg(OPTIMIZE_FLAG);
+    
+                let cli_build_out = cli_build.run();
+                cli_build_out.assert_clean_success();
+                
+                if TEST_LEGACY_LINKER {
+                    let cli_build_legacy = cli_build.arg(super::LEGACY_LINKER_FLAG);
+                    
+                    let cli_build_legacy_out = cli_build_legacy.run();
+                    cli_build_legacy_out.assert_clean_success();
+                }
             });
         }
 
         fn test_benchmark(
-            roc_filename: &str,
-            stdin: Vec<&'static str>,
+            roc_filename: &'static str,
+            expected_output: &'static str,
+            stdin: Option<&'static str>,
             use_valgrind: UseValgrind,
-        ) -> String {
-            let dir_name = "crates/cli/tests/benchmarks";
-            let file_path = file_from_root(dir_name, roc_filename);
+        ) {
+            let dir_name = "crates/cli/tests/test-projects/benchmarks";
+            let roc_file_path = file_from_root(dir_name, roc_filename);
 
             build_platform_host();
 
             #[cfg(all(not(feature = "wasm32-cli-run"), not(feature = "i386-cli-run")))]
-            {
-                let runner = cli_test_utils::helpers::ExecCli::new_roc()
-                    .arg(roc_cli::CMD_RUN)
-                    .add_arg_if(super::LINKER_FLAG, super::TEST_LEGACY_LINKER)
-                    .arg(file_path.as_path())
-                    .with_valgrind(matches!(use_valgrind, UseValgrind::Yes) && ALLOW_VALGRIND)
-                    .with_stdin_vals(stdin);
-
-                let out = runner.run();
-                out.assert_clean_success();
-
-                out.normalize_stdout_and_stderr()
+            {                
+                let cli_build = ExecCli::new(
+                                        CMD_BUILD,
+                                        roc_file_path
+                    );
+                
+                let with_valgrind = matches!(use_valgrind, UseValgrind::Yes) && ALLOW_VALGRIND;
+                cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, with_valgrind, stdin, None);
             }
 
             #[cfg(feature = "wasm32-cli-run")]
@@ -760,60 +726,62 @@ mod cli_tests {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn nqueens() {
-            insta::assert_snapshot!(test_benchmark("nQueens.roc", vec!["6"], UseValgrind::Yes));
+            let expected_output = indoc! {"
+                Please enter an integer
+                4
+            "};
+            test_benchmark("nQueens.roc", expected_output, Some("6"), UseValgrind::Yes);
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn cfold() {
-            insta::assert_snapshot!(test_benchmark("cFold.roc", vec!["3"], UseValgrind::Yes))
+            let expected_output = indoc! {"
+                Please enter an integer
+                11 & 11
+            "};
+            test_benchmark("cFold.roc", expected_output, Some("3"), UseValgrind::Yes);
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn deriv() {
-            insta::assert_snapshot!(test_benchmark("deriv.roc", vec!["2"], UseValgrind::Yes))
+            let expected_output = indoc! {"
+                Please enter an integer
+                1 count: 6
+                2 count: 22
+            "};
+            test_benchmark("deriv.roc", expected_output, Some("2"), UseValgrind::Yes);
         }
-
+        
         #[test]
         #[cfg_attr(windows, ignore)]
         fn rbtree_ck() {
-            insta::assert_snapshot!(test_benchmark(
-                "rBTreeCk.roc",
-                vec!["100"],
-                UseValgrind::Yes
-            ))
+            let expected_output = indoc! {"
+                Please enter an integer
+                10
+            "};
+            test_benchmark("rBTreeCk.roc", expected_output, Some("100"), UseValgrind::Yes);
         }
-
+        
         #[test]
         #[cfg_attr(windows, ignore)]
         fn rbtree_insert() {
-            insta::assert_snapshot!(test_benchmark("rBTreeInsert.roc", vec![], UseValgrind::Yes))
+            let expected_output = "Node Black 0 {} Empty Empty\n";
+            test_benchmark("rBTreeInsert.roc", expected_output, None, UseValgrind::Yes);
         }
-
-        /*
-        // rbtree_del does not work
-        #[test]
-        fn rbtree_del() {
-            test_benchmark(
-                "rBTreeDel.roc",
-                &["420"],
-                "30\n",
-                UseValgrind::Yes,
-            )
-        }
-        */
-
+        
         #[test]
         #[cfg_attr(windows, ignore)]
         fn astar() {
             if cfg!(feature = "wasm32-cli-run") {
                 eprintln!("WARNING: skipping testing benchmark testAStar.roc because it currently does not work on wasm32 due to dictionaries.");
             } else {
-                insta::assert_snapshot!(test_benchmark("testAStar.roc", vec![], UseValgrind::No))
+                let expected_output = "True\n";
+                test_benchmark("testAStar.roc", expected_output, None, UseValgrind::Yes);
             }
         }
-
+        /*
         #[test]
         #[cfg_attr(windows, ignore)]
         fn base64() {
@@ -841,9 +809,9 @@ mod cli_tests {
             //     "todo put the correct quicksort answer here",
             //     UseValgrind::Yes,
             // )
-        }
+        }*/
     }
-
+    /*
     #[test]
     fn known_type_error() {
         let out = ExecCli::new_roc()
@@ -854,6 +822,41 @@ mod cli_tests {
             ))
             .run();
 
+        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+    }
+    
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn test_module_imports_unknown_pkg() {
+        let runner = ExecCli::new_roc()
+            .arg(CMD_TEST)
+            .with_valgrind(ALLOW_VALGRIND)
+            .add_args(["--main", "tests/module_imports_pkg/app.roc"])
+            .arg(
+                file_from_root(
+                    "crates/cli/tests/module_imports_pkg",
+                    "ImportsUnknownPkg.roc",
+                )
+                .as_path(),
+            );
+
+        let out = runner.run();
+        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    /// this tests that a platform can correctly import a package
+    fn platform_requires_pkg() {
+        let runner = ExecCli::new_roc()
+            .arg(CMD_RUN)
+            .arg(BUILD_HOST_FLAG)
+            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
+            .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
+            .arg(file_from_root("crates/cli/tests/platform_requires_pkg", "app.roc").as_path());
+
+        let out = runner.run();
+        out.assert_clean_success();
         insta::assert_snapshot!(out.normalize_stdout_and_stderr());
     }
 
