@@ -80,15 +80,14 @@ pub fn parse_lowercase_ident<'a>(state: State<'a>) -> ParseResult<'a, &'a str, (
 /// * A type name
 /// * A tag
 pub fn uppercase<'a>() -> impl Parser<'a, UppercaseIdent<'a>, ()> {
-    move |_, state: State<'a>, _min_indent: u32| match chomp_uppercase_part(state.bytes()) {
+    move |_, state: State<'a>, _: u32| match chomp_uppercase_part(state.bytes()) {
         Err(progress) => Err((progress, ())),
         Ok(ident) => Ok((MadeProgress, ident.into(), state.advance(ident.len()))),
     }
 }
 
-// todo: @wip
-pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str, ()> {
-    move |_, state: State<'a>, _: u32| match chomp_anycase_part(state.bytes()) {
+pub fn parse_unqualified_ident<'a>(state: State<'a>) -> ParseResult<'a, &'a str, ()> {
+    match chomp_anycase_part(state.bytes()) {
         Err(progress) => Err((progress, ())),
         Ok(ident) => {
             if crate::keyword::KEYWORDS.iter().any(|kw| &ident == kw) {

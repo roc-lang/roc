@@ -7,14 +7,14 @@ use crate::ast::{
 use crate::blankspace::{eat_space_check, space0_e, SpacedBuilder};
 use crate::expr::merge_spaces;
 use crate::ident::{
-    self, lowercase_ident, parse_lowercase_ident, unqualified_ident, UppercaseIdent,
+    self, lowercase_ident, parse_lowercase_ident, parse_unqualified_ident, UppercaseIdent,
 };
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    and, backtrackable, byte, collection_inner, collection_trailing_sep_e, increment_min_indent,
-    loc, map, map_with_arena, optional, reset_min_indent, skip_first, skip_second, specialize_err,
-    succeed, two_bytes, zero_or_more, EExposes, EHeader, EImports, EPackageEntry, EPackageName,
-    EPackages, EParams, EProvides, ERequires, ETypedIdent, Parser, SourceError, SpaceProblem,
+    and, at_keyword, backtrackable, byte, collection_inner, collection_trailing_sep_e, loc, map,
+    map_with_arena, optional, reset_min_indent, skip_first, skip_second, specialize_err, succeed,
+    two_bytes, zero_or_more, EExposes, EHeader, EImports, EPackageEntry, EPackageName, EPackages,
+    EParams, EProvides, ERequires, ETypedIdent, ParseResult, Parser, SourceError, SpaceProblem,
     SyntaxError,
 };
 use crate::pattern::parse_record_pattern_fields;
@@ -45,74 +45,101 @@ pub fn parse_header<'a>(
     arena: &'a bumpalo::Bump,
     state: State<'a>,
 ) -> Result<(SpacesBefore<'a, Header<'a>>, State<'a>), SourceError<'a, EHeader<'a>>> {
-    let min_indent = 0;
-    match header().parse(arena, state.clone(), min_indent) {
+    match header().parse(arena, state.clone(), 0) {
         Ok((_, module, state)) => Ok((module, state)),
         Err((_, fail)) => Err(SourceError::new(fail, &state)),
     }
 }
 
 pub fn header<'a>() -> impl Parser<'a, SpacesBefore<'a, Header<'a>>, EHeader<'a>> {
-    use crate::parser::keyword;
+    move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
+        let (_, before, state) =
+            eat_space_check(EHeader::IndentStart, arena, state, min_indent, false)?;
 
-    record!(SpacesBefore {
-        before: space0_e(EHeader::IndentStart),
-        item: one_of![
-            map(
-                skip_first(
-                    keyword("module", EHeader::Start),
-                    increment_min_indent(module_header())
-                ),
-                Header::Module
-            ),
-            map(
-                skip_first(
-                    keyword("interface", EHeader::Start),
-                    increment_min_indent(interface_header())
-                ),
-                Header::Module
-            ),
-            map(
-                skip_first(
-                    keyword("app", EHeader::Start),
-                    increment_min_indent(one_of![app_header(), old_app_header()])
-                ),
-                Header::App
-            ),
-            map(
-                skip_first(
-                    keyword("package", EHeader::Start),
-                    increment_min_indent(one_of![package_header(), old_package_header()])
-                ),
-                Header::Package
-            ),
-            map(
-                skip_first(
-                    keyword("platform", EHeader::Start),
-                    increment_min_indent(platform_header())
-                ),
-                Header::Platform
-            ),
-            map(
-                skip_first(
-                    keyword("hosted", EHeader::Start),
-                    increment_min_indent(hosted_header())
-                ),
-                Header::Hosted
-            ),
-        ]
-    })
+        let inc_indent = min_indent + 1;
+
+        if at_keyword("module", &state) {
+            let state = state.advance("module".len());
+            let (_, out, state) = parse_module_header(arena, state, inc_indent)?;
+            let item = Header::Module(out);
+            return Ok((MadeProgress, SpacesBefore { before, item }, state));
+        }
+
+        if at_keyword("interface", &state) {
+            let state = state.advance("interface".len());
+            let (_, out, state) = interface_header().parse(arena, state, inc_indent)?;
+            let item = Header::Module(out);
+            return Ok((MadeProgress, SpacesBefore { before, item }, state));
+        }
+
+        if at_keyword("app", &state) {
+            let state = state.advance("app".len());
+            let (_, out, state) = match app_header().parse(arena, state.clone(), inc_indent) {
+                Ok(ok) => ok,
+                Err((MadeProgress, fail)) => return Err((MadeProgress, fail)),
+                Err((NoProgress, _)) => old_app_header().parse(arena, state, inc_indent)?,
+            };
+            let item = Header::App(out);
+            return Ok((MadeProgress, SpacesBefore { before, item }, state));
+        }
+
+        if at_keyword("package", &state) {
+            let state = state.advance("package".len());
+            let (_, out, state) = match package_header().parse(arena, state.clone(), inc_indent) {
+                Ok(ok) => ok,
+                Err((MadeProgress, fail)) => return Err((MadeProgress, fail)),
+                Err((NoProgress, _)) => old_package_header().parse(arena, state, inc_indent)?,
+            };
+            let item = Header::Package(out);
+            return Ok((MadeProgress, SpacesBefore { before, item }, state));
+        }
+
+        if at_keyword("platform", &state) {
+            let state = state.advance("platform".len());
+            let (_, out, state) = platform_header().parse(arena, state, inc_indent)?;
+            let item = Header::Platform(out);
+            return Ok((MadeProgress, SpacesBefore { before, item }, state));
+        }
+
+        if at_keyword("hosted", &state) {
+            let state = state.advance("hosted".len());
+            let (_, out, state) = hosted_header().parse(arena, state, inc_indent)?;
+            let item = Header::Hosted(out);
+            return Ok((MadeProgress, SpacesBefore { before, item }, state));
+        }
+
+        Err((NoProgress, EHeader::Start(state.pos())))
+    }
 }
 
-#[inline(always)]
-fn module_header<'a>() -> impl Parser<'a, ModuleHeader<'a>, EHeader<'a>> {
-    record!(ModuleHeader {
-        after_keyword: space0_e(EHeader::IndentStart),
-        params: optional(specialize_err(EHeader::Params, module_params())),
-        exposes: specialize_err(EHeader::Exposes, exposes_list()),
-        interface_imports: succeed(None)
-    })
-    .trace("module_header")
+fn parse_module_header<'a>(
+    arena: &'a bumpalo::Bump,
+    state: State<'a>,
+    min_indent: u32,
+) -> ParseResult<'a, ModuleHeader<'a>, EHeader<'a>> {
+    let (_, after_keyword, state) =
+        eat_space_check(EHeader::IndentStart, arena, state, min_indent, false)?;
+
+    let params_pos = state.pos();
+    let (params, state) = match module_params().parse(arena, state.clone(), min_indent) {
+        Ok((_, out, state)) => (Some(out), state),
+        Err((NoProgress, _)) => (None, state),
+        Err((p, fail)) => return Err((p, EHeader::Params(fail, params_pos))),
+    };
+
+    let exposes_pos = state.pos();
+    let (exposes, state) = match exposes_list().parse(arena, state, min_indent) {
+        Ok((_, out, state)) => (out, state),
+        Err((p, fail)) => return Err((p, EHeader::Exposes(fail, exposes_pos))),
+    };
+
+    let header = ModuleHeader {
+        after_keyword,
+        params,
+        exposes,
+        interface_imports: None,
+    };
+    Ok((MadeProgress, header, state))
 }
 
 fn module_params<'a>() -> impl Parser<'a, ModuleParams<'a>, EParams<'a>> {
@@ -468,13 +495,17 @@ fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, EHeader<'a>> {
 }
 
 fn provides_to_package<'a>() -> impl Parser<'a, To<'a>, EProvides<'a>> {
-    one_of![
-        specialize_err(
-            |_, pos| EProvides::Identifier(pos),
-            map(lowercase_ident(), To::ExistingPackage)
-        ),
-        specialize_err(EProvides::Package, map(package_name(), To::NewPackage))
-    ]
+    move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
+        let pos = state.pos();
+        match parse_lowercase_ident(state.clone()) {
+            Ok((p, out, state)) => Ok((p, To::ExistingPackage(out), state)),
+            Err((MadeProgress, _)) => Err((MadeProgress, EProvides::Identifier(pos))),
+            Err(_) => match package_name().parse(arena, state, min_indent) {
+                Ok((p, out, state)) => Ok((p, To::NewPackage(out), state)),
+                Err((p, fail)) => Err((p, EProvides::Package(fail, pos))),
+            },
+        }
+    }
 }
 
 fn provides_to<'a>() -> impl Parser<'a, ProvidesTo<'a>, EProvides<'a>> {
@@ -570,9 +601,9 @@ where
     F: Copy,
     E: 'a,
 {
-    move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
+    move |_: &'a bumpalo::Bump, state: State<'a>, _: u32| {
         let ident_pos = state.pos();
-        match unqualified_ident().parse(arena, state, min_indent) {
+        match parse_unqualified_ident(state) {
             Ok((p, ident, state)) => {
                 let ident = Spaced::Item(ExposedName::new(ident));
                 let ident = Loc::pos(ident_pos, state.pos(), ident);
@@ -656,18 +687,31 @@ fn exposes_kw<'a>() -> impl Parser<'a, Spaces<'a, ExposesKeyword>, EExposes> {
     )
 }
 
-#[inline(always)]
 fn exposes_list<'a>() -> impl Parser<'a, Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>, EExposes>
 {
-    collection_trailing_sep_e(
-        byte(b'[', EExposes::ListStart),
-        exposes_entry(EExposes::Identifier),
-        byte(b']', EExposes::ListEnd),
-        Spaced::SpaceBefore,
-    )
+    move |arena: &'a bumpalo::Bump, state: State<'a>, _: u32| {
+        if state.bytes().first() != Some(&b'[') {
+            return Err((NoProgress, EExposes::ListStart(state.pos())));
+        }
+        let state = state.inc();
+
+        let (entries, state) =
+            match collection_inner(exposes_entry(EExposes::Identifier), Spaced::SpaceBefore)
+                .parse(arena, state, 0)
+            {
+                Ok((_, out, state)) => (out, state),
+                Err((_, fail)) => return Err((MadeProgress, fail)),
+            };
+
+        if state.bytes().first() != Some(&b']') {
+            return Err((MadeProgress, EExposes::ListEnd(state.pos())));
+        }
+        let state = state.inc();
+
+        Ok((MadeProgress, entries, state))
+    }
 }
 
-// todo: @wip inline insides
 pub fn spaces_around_keyword<'a, K: Keyword, E>(
     keyword_item: K,
     expectation: fn(Position) -> E,
@@ -677,23 +721,27 @@ pub fn spaces_around_keyword<'a, K: Keyword, E>(
 where
     E: 'a + SpaceProblem,
 {
-    map(
-        and(
-            skip_second(
-                // parse any leading space before the keyword
-                backtrackable(space0_e(indent_problem1)),
-                // parse the keyword
-                crate::parser::keyword(K::KEYWORD, expectation),
-            ),
-            // parse the trailing space
-            space0_e(indent_problem2),
-        ),
-        move |(before, after)| Spaces {
+    move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
+        let (before, state) =
+            match eat_space_check(indent_problem1, arena, state, min_indent, false) {
+                Ok((_, sp, state)) => (sp, state),
+                Err((_, fail)) => return Err((NoProgress, fail)),
+            };
+
+        if !at_keyword(K::KEYWORD, &state) {
+            return Err((NoProgress, expectation(state.pos())));
+        }
+        let state = state.advance(K::KEYWORD.len());
+
+        let (_, after, state) = eat_space_check(indent_problem2, arena, state, min_indent, false)?;
+
+        let spaced_keyword = Spaces {
             before,
             item: keyword_item,
             after,
-        },
-    )
+        };
+        Ok((MadeProgress, spaced_keyword, state))
+    }
 }
 
 #[inline(always)]
@@ -843,34 +891,17 @@ where
 }
 
 fn imports_entry<'a>() -> impl Parser<'a, Spaced<'a, ImportsEntry<'a>>, EImports> {
-    type Temp<'a> = (
-        (Option<&'a str>, ModuleName<'a>),
-        Option<Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>>,
-    );
-
-    let spaced_import = |((opt_shortname, module_name), opt_values): Temp<'a>| {
-        let exposed_values = opt_values.unwrap_or_else(Collection::empty);
-
-        let entry = match opt_shortname {
-            Some(shortname) => ImportsEntry::Package(shortname, module_name, exposed_values),
-
-            None => ImportsEntry::Module(module_name, exposed_values),
-        };
-
-        Spaced::Item(entry)
-    };
-
-    one_of!(
-        map(
+    move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
+        match map(
             and(
                 and(
                     // e.g. `pf.`
                     optional(backtrackable(skip_second(
                         shortname(),
-                        byte(b'.', EImports::ShorthandDot)
+                        byte(b'.', EImports::ShorthandDot),
                     ))),
                     // e.g. `Task`
-                    module_name_help(EImports::ModuleName)
+                    module_name_help(EImports::ModuleName),
                 ),
                 // e.g. `.{ Task, after}`
                 optional(skip_first(
@@ -879,13 +910,28 @@ fn imports_entry<'a>() -> impl Parser<'a, Spaced<'a, ImportsEntry<'a>>, EImports
                         byte(b'{', EImports::SetStart),
                         exposes_entry(EImports::Identifier),
                         byte(b'}', EImports::SetEnd),
-                        Spaced::SpaceBefore
-                    )
-                ))
+                        Spaced::SpaceBefore,
+                    ),
+                )),
             ),
-            spaced_import
+            |((opt_shortname, module_name), opt_values)| {
+                let exposed_values = opt_values.unwrap_or_else(Collection::empty);
+                let entry = match opt_shortname {
+                    Some(shortname) => {
+                        ImportsEntry::Package(shortname, module_name, exposed_values)
+                    }
+                    None => ImportsEntry::Module(module_name, exposed_values),
+                };
+                Spaced::Item(entry)
+            },
         )
-        .trace("normal_import"),
+        .trace("normal_import")
+        .parse(arena, state.clone(), min_indent)
+        {
+            Err((NoProgress, _)) => {}
+            res => return res,
+        };
+
         map(
             and(
                 and(
@@ -896,22 +942,22 @@ fn imports_entry<'a>() -> impl Parser<'a, Spaced<'a, ImportsEntry<'a>>, EImports
                     and(
                         and(
                             space0_e(EImports::AsKeyword),
-                            two_bytes(b'a', b's', EImports::AsKeyword)
+                            two_bytes(b'a', b's', EImports::AsKeyword),
                         ),
-                        space0_e(EImports::AsKeyword)
-                    )
+                        space0_e(EImports::AsKeyword),
+                    ),
                 ),
                 // e.g. file : Str
-                specialize_err(|_, pos| EImports::TypedIdent(pos), typed_ident())
+                specialize_err(|_, pos| EImports::TypedIdent(pos), typed_ident()),
             ),
             |((file_name, _), typed_ident)| {
                 // TODO: look at blacking block strings during parsing.
                 Spaced::Item(ImportsEntry::IngestedFile(file_name, typed_ident))
-            }
+            },
         )
         .trace("ingest_file_import")
-    )
-    .trace("imports_entry")
+        .parse(arena, state, min_indent)
+    }
 }
 
 impl<'a> HeaderType<'a> {

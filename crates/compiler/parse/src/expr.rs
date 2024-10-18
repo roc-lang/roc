@@ -11,14 +11,13 @@ use crate::blankspace::{
 use crate::header::{chomp_module_name, ModuleName};
 use crate::ident::{
     chomp_access_chain, chomp_integer_part, malformed_ident, parse_ident, parse_lowercase_ident,
-    unqualified_ident, Accessor, BadIdent, Ident, Suffix,
+    parse_unqualified_ident, Accessor, BadIdent, Ident, Suffix,
 };
 use crate::number_literal::parse_number_base;
 use crate::parser::{
-    self, and, at_keyword, backtrackable, byte, collection_inner, collection_trailing_sep_e, loc,
-    map, skip_second, specialize_err, specialize_err_ref, EClosure, EExpect, EExpr, EIf, EImport,
-    EImportParams, EInParens, EList, EPattern, ERecord, EType, EWhen, ParseResult, Parser,
-    SpaceProblem,
+    self, and, at_keyword, backtrackable, byte, collection_inner, loc, skip_second, specialize_err,
+    specialize_err_ref, EClosure, EExpect, EExpr, EIf, EImport, EImportParams, EInParens, EList,
+    EPattern, ERecord, EType, EWhen, ParseResult, Parser, SpaceProblem,
 };
 use crate::pattern::parse_closure_param;
 use crate::state::State;
@@ -1030,7 +1029,7 @@ fn import_as<'a>(
         .parse(arena, state, min_indent)?;
 
         let ident_pos = state.pos();
-        let (item, state) = match unqualified_ident().parse(arena, state, min_indent) {
+        let (item, state) = match parse_unqualified_ident(state) {
             Ok((_, ident, state)) => {
                 let ident_at = Region::new(ident_pos, state.pos());
                 match ident.chars().next() {
@@ -1060,29 +1059,47 @@ fn import_exposing<'a>() -> impl Parser<
     >,
     EImport<'a>,
 > {
-    record!(header::KeywordItem {
-        keyword: header::spaces_around_keyword(
+    move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
+        let (_, keyword, state) = header::spaces_around_keyword(
             ImportExposingKeyword,
             EImport::Exposing,
             EImport::IndentExposing,
             EImport::ExposingListStart,
-        ),
-        item: collection_trailing_sep_e(
-            byte(b'[', EImport::ExposingListStart),
-            loc(import_exposed_name()),
-            byte(b']', EImport::ExposingListEnd),
-            Spaced::SpaceBefore
         )
-    })
-}
+        .parse(arena, state, min_indent)?;
 
-#[inline(always)]
-fn import_exposed_name<'a>(
-) -> impl Parser<'a, crate::ast::Spaced<'a, crate::header::ExposedName<'a>>, EImport<'a>> {
-    map(
-        specialize_err(|_, pos| EImport::ExposedName(pos), unqualified_ident()),
-        |n| Spaced::Item(crate::header::ExposedName::new(n)),
-    )
+        if state.bytes().first() != Some(&b'[') {
+            return Err((NoProgress, EImport::ExposingListStart(state.pos())));
+        }
+        let state = state.inc();
+
+        let (item, state) = match collection_inner(
+            move |_: &'a Bump, state: State<'a>, _: u32| {
+                let pos: Position = state.pos();
+                match parse_unqualified_ident(state) {
+                    Ok((p, ident, state)) => {
+                        let ident = Spaced::Item(crate::header::ExposedName::new(ident));
+                        Ok((p, Loc::pos(pos, state.pos(), ident), state))
+                    }
+                    Err((p, _)) => Err((p, EImport::ExposedName(pos))),
+                }
+            },
+            Spaced::SpaceBefore,
+        )
+        .parse(arena, state, 0)
+        {
+            Ok((_, out, state)) => (out, state),
+            Err((_, fail)) => return Err((MadeProgress, fail)),
+        };
+
+        if state.bytes().first() != Some(&b']') {
+            return Err((MadeProgress, EImport::ExposingListEnd(state.pos())));
+        }
+        let state = state.inc();
+
+        let keyword = header::KeywordItem { keyword, item };
+        Ok((MadeProgress, keyword, state))
+    }
 }
 
 #[inline(always)]

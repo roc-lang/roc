@@ -968,7 +968,7 @@ where
 pub fn loc<'a, Output, E: 'a>(
     parser: impl Parser<'a, Output, E>,
 ) -> impl Parser<'a, Loc<Output>, E> {
-    move |arena, state: crate::state::State<'a>, min_indent: u32| {
+    move |arena: &'a Bump, state: crate::state::State<'a>, min_indent: u32| {
         let start = state.pos();
         match parser.parse(arena, state, min_indent) {
             Ok((progress, value, state)) => {
@@ -1227,78 +1227,11 @@ macro_rules! record {
     };
 }
 
-/// Returns the result of the first parser that makes progress, even if it failed.
-/// If no parsers make progress, the last parser's result is returned.
-///
-/// # Examples
-/// ```
-/// # #![forbid(unused_imports)]
-/// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, word, byte};
-/// # use roc_region::all::Position;
-/// # use roc_parse::one_of;
-/// # use bumpalo::Bump;
-/// # #[derive(Debug, PartialEq)]
-/// # enum Problem {
-/// #     NotFound(Position),
-/// # }
-/// # let arena = Bump::new();
-/// # fn foo<'a>(arena: &'a Bump) {
-/// let parser1 = one_of!(
-///     word("hello", Problem::NotFound),
-///     byte(b'h', Problem::NotFound)
-/// );
-/// let (progress, output, state) = parser1.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
-/// assert_eq!(progress, Progress::MadeProgress);
-/// assert_eq!(output, ());
-/// assert_eq!(state.pos().offset, 5);
-///
-/// let parser2 = one_of!(
-///     // swapped the order of the parsers
-///     byte(b'h', Problem::NotFound),
-///     word("hello", Problem::NotFound)
-/// );
-/// let (progress, output, state) = parser2.parse(&arena, State::new("hello! world".as_bytes()), 0).unwrap();
-/// assert_eq!(progress, Progress::MadeProgress);
-/// assert_eq!(output, ());
-/// assert_eq!(state.pos().offset, 1);
-/// # }
-/// # foo(&arena);
-/// ```
-#[macro_export]
-macro_rules! one_of {
-    ($p1:expr, $p2:expr) => {
-        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, min_indent: u32| {
-            let original_state = state.clone();
-
-            match $p1.parse(arena, state, min_indent) {
-                valid @ Ok(_) => valid,
-                Err((NoProgress, _)) => $p2.parse(arena, original_state, min_indent),
-                Err(err) => Err(err),
-            }
-        }
-    };
-
-    ($p1:expr, $($others:expr),+) => {
-        one_of!($p1, one_of!($($others),+))
-    };
-    ($p1:expr, $($others:expr),+ $(,)?) => {
-        one_of!($p1, $($others),+)
-    };
-}
-
 pub fn reset_min_indent<'a, P, T, X: 'a>(parser: P) -> impl Parser<'a, T, X>
 where
     P: Parser<'a, T, X>,
 {
     move |arena, state, _min_indent| parser.parse(arena, state, 0)
-}
-
-pub fn increment_min_indent<'a, P, T, X: 'a>(parser: P) -> impl Parser<'a, T, X>
-where
-    P: Parser<'a, T, X>,
-{
-    move |arena, state, min_indent| parser.parse(arena, state, min_indent + 1)
 }
 
 pub fn line_min_indent<'a, P, T, X: 'a>(parser: P) -> impl Parser<'a, T, X>
