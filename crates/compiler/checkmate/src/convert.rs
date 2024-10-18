@@ -77,8 +77,8 @@ impl AsSchema<Content> for subs::Content {
             } => B::Recursive(opt_name.as_schema(subs), structure.as_schema(subs)),
             A::LambdaSet(lambda_set) => lambda_set.as_schema(subs),
             A::ErasedLambda => B::ErasedLambda(),
-            A::Pure => todo!("[purity-inference] checkmate"),
-            A::Effectful => todo!("[purity-inference] checkmate"),
+            A::Pure => B::Pure(),
+            A::Effectful => B::Effectful(),
             A::Structure(flat_type) => flat_type.as_schema(subs),
             A::Alias(name, type_vars, real_var, kind) => B::Alias(
                 name.as_schema(subs),
@@ -98,11 +98,11 @@ impl AsSchema<Content> for subs::FlatType {
             subs::FlatType::Apply(symbol, variables) => {
                 Content::Apply(symbol.as_schema(subs), variables.as_schema(subs))
             }
-            subs::FlatType::Func(arguments, closure, ret, _fx) => Content::Function(
+            subs::FlatType::Func(arguments, closure, ret, fx) => Content::Function(
                 arguments.as_schema(subs),
                 closure.as_schema(subs),
                 ret.as_schema(subs),
-                // [purity-inference] TODO: checkmate
+                fx.as_schema(subs),
             ),
             subs::FlatType::Record(fields, ext) => {
                 Content::Record(fields.as_schema(subs), ext.as_schema(subs))
