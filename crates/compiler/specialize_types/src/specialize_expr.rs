@@ -1,8 +1,8 @@
 use crate::expr::{self, Declarations, Expr, FunctionDef};
 use crate::specialize_type::{MonoCache, Problem};
-use crate::subs::{Subs, Variable};
-use crate::symbol::Symbol;
 use roc_collections::VecMap;
+use roc_module::symbol::Symbol;
+use roc_types::subs::{Subs, Variable};
 
 struct Context {
     symbols: Symbol,

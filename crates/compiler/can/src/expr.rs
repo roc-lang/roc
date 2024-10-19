@@ -84,6 +84,54 @@ impl Display for IntValue {
     }
 }
 
+impl IntValue {
+    pub fn as_u8(self) -> u8 {
+        self.as_u128() as u8
+    }
+
+    pub fn as_i8(self) -> i8 {
+        self.as_i128() as i8
+    }
+
+    pub fn as_u16(self) -> u16 {
+        self.as_u128() as u16
+    }
+
+    pub fn as_i16(self) -> i16 {
+        self.as_i128() as i16
+    }
+
+    pub fn as_u32(self) -> u32 {
+        self.as_u128() as u32
+    }
+
+    pub fn as_i32(self) -> i32 {
+        self.as_i128() as i32
+    }
+
+    pub fn as_u64(self) -> u64 {
+        self.as_u128() as u64
+    }
+
+    pub fn as_i64(self) -> i64 {
+        self.as_i128() as i64
+    }
+
+    pub fn as_u128(self) -> u128 {
+        match self {
+            IntValue::I128(i128) => i128::from_ne_bytes(i128) as u128,
+            IntValue::U128(u128) => u128::from_ne_bytes(u128),
+        }
+    }
+
+    pub fn as_i128(self) -> i128 {
+        match self {
+            IntValue::I128(i128) => i128::from_ne_bytes(i128),
+            IntValue::U128(u128) => u128::from_ne_bytes(u128) as i128,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Expr {
     // Literals
@@ -103,7 +151,7 @@ pub enum Expr {
         loc_elems: Vec<Loc<Expr>>,
     },
 
-    // An ingested files, it's bytes, and the type variable.
+    // An ingested files, its bytes, and the type variable.
     IngestedFile(Box<PathBuf>, Arc<Vec<u8>>, Variable),
 
     // Lookups
@@ -130,7 +178,7 @@ pub enum Expr {
         /// The actual condition of the when expression.
         loc_cond: Box<Loc<Expr>>,
         cond_var: Variable,
-        /// Result type produced by the branches.
+        /// Type of each branch (and therefore the type of the entire `when` expression)
         expr_var: Variable,
         region: Region,
         /// The branches of the when, and the type of the condition that they expect to be matched

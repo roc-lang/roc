@@ -207,6 +207,7 @@ pub struct ListPatterns {
     ///   [ .., A, B ] -> patterns = [A, B], rest = 0
     ///   [ A, .., B ] -> patterns = [A, B], rest = 1
     ///   [ A, B, .. ] -> patterns = [A, B], rest = 2
+    /// Optionally, the rest pattern can be named - e.g. `[ A, B, ..others ]`
     pub opt_rest: Option<(usize, Option<Loc<Symbol>>)>,
 }
 

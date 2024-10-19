@@ -201,6 +201,9 @@ winapi = { version = "0.3.9", features = ["memoryapi"] }
 winit = "0.26.1"
 wyhash = "0.5.0"
 
+# Testing
+test_compile = { path = "crates/test_compile" }
+
 # Optimizations based on https://deterministic.space/high-performance-rust.html
 [profile.release]
 codegen-units = 1

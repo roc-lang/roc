@@ -2,28 +2,31 @@ use core::{fmt, marker::PhantomData};
 
 use crate::{soa_index::Index, soa_slice::Slice};
 
-/// Two slices of the same length, each based on a different
+/// Three slices of the same length, each based on a different
 /// offset into the same array (rather than a pointer).
 ///
 /// Unlike a Rust slice, this is a u32 offset
 /// rather than a pointer, and the length is u16.
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
-pub struct Slice2<T, U> {
+pub struct Slice3<T, U, V> {
     pub start1: u32,
     pub start2: u32,
+    pub start3: u32,
     pub length: u16,
-    pub _marker: core::marker::PhantomData<(T, U)>,
+    pub _marker: core::marker::PhantomData<(T, U, V)>,
 }
 
-impl<T, U> fmt::Debug for Slice2<T, U> {
+impl<T, U, V> fmt::Debug for Slice3<T, U, V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "Slice2<{}, {}> {{ start1: {}, start2: {}, length: {} }}",
+            "Slice3<{}, {}, {}> {{ start1: {}, start2: {}, start3: {}, length: {} }}",
             core::any::type_name::<T>(),
             core::any::type_name::<U>(),
+            core::any::type_name::<V>(),
             self.start1,
             self.start2,
+            self.start3,
             self.length
         )
     }
@@ -31,25 +34,26 @@ impl<T, U> fmt::Debug for Slice2<T, U> {
 
 // derive of copy and clone does not play well with PhantomData
 
-impl<T, U> Copy for Slice2<T, U> {}
+impl<T, U, V> Copy for Slice3<T, U, V> {}
 
-impl<T, U> Clone for Slice2<T, U> {
+impl<T, U, V> Clone for Slice3<T, U, V> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T, U> Default for Slice2<T, U> {
+impl<T, U, V> Default for Slice3<T, U, V> {
     fn default() -> Self {
         Self::empty()
     }
 }
 
-impl<T, U> Slice2<T, U> {
+impl<T, U, V> Slice3<T, U, V> {
     pub const fn empty() -> Self {
         Self {
             start1: 0,
             start2: 0,
+            start3: 0,
             length: 0,
             _marker: PhantomData,
         }
@@ -71,6 +75,14 @@ impl<T, U> Slice2<T, U> {
         }
     }
 
+    pub const fn slice_third(self) -> Slice<U> {
+        Slice {
+            start: self.start3,
+            length: self.length,
+            _marker: PhantomData,
+        }
+    }
+
     pub const fn len(&self) -> usize {
         self.length as usize
     }
@@ -79,19 +91,20 @@ impl<T, U> Slice2<T, U> {
         self.len() == 0
     }
 
-    pub const fn new(start1: u32, start2: u32, length: u16) -> Self {
+    pub const fn new(start1: u32, start2: u32, start3: u32, length: u16) -> Self {
         Self {
             start1,
             start2,
+            start3,
             length,
             _marker: PhantomData,
         }
     }
 }
 
-impl<T, U> IntoIterator for Slice2<T, U> {
+impl<T, U, V> IntoIterator for Slice3<T, U, V> {
     type Item = (Index<T>, Index<U>);
-    type IntoIter = SliceIterator<T, U>;
+    type IntoIter = SliceIterator<T, U, V>;
 
     fn into_iter(self) -> Self::IntoIter {
         SliceIterator {
@@ -101,12 +114,12 @@ impl<T, U> IntoIterator for Slice2<T, U> {
     }
 }
 
-pub struct SliceIterator<T, U> {
-    slice: Slice2<T, U>,
+pub struct SliceIterator<T, U, V> {
+    slice: Slice3<T, U, V>,
     offset: u32,
 }
 
-impl<T, U> Iterator for SliceIterator<T, U> {
+impl<T, U, V> Iterator for SliceIterator<T, U, V> {
     type Item = (Index<T>, Index<U>);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -136,4 +149,4 @@ impl<T, U> Iterator for SliceIterator<T, U> {
     }
 }
 
-impl<T, U> ExactSizeIterator for SliceIterator<T, U> {}
+impl<T, U, V> ExactSizeIterator for SliceIterator<T, U, V> {}

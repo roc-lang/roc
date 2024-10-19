@@ -1,0 +1,20 @@
+[package]
+name = "test_compile"
+description = "Utility functions for starting from strings of code and compiling various IRs."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dev-dependencies]
+roc_builtins = { path = "../builtins" }
+roc_derive = { path = "../derive", features = ["debug-derived-symbols"] }
+roc_load = { path = "../load" }
+roc_parse = { path = "../parse" }
+roc_problem = { path = "../problem" }
+roc_reporting = { path = "../../reporting" }
+roc_target = { path = "../roc_target" }
+roc_solve = { path = "../solve" }
+test_solve_helpers = { path = "../test_solve_helpers" }
+pretty_assertions.workspace = true

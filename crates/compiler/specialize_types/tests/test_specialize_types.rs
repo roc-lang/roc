@@ -9,7 +9,7 @@ extern crate bumpalo;
 mod specialize_types {
     use roc_load::LoadedModule;
     use roc_solve::FunctionKind;
-    use roc_specialize_types::MonoCache;
+    use roc_specialize_types::{DebugInfo, MonoCache, MonoTypes, RecordFieldIds, TupleElemIds};
     use test_solve_helpers::{format_problems, run_load_and_infer};
 
     use roc_types::pretty_print::{name_and_print_var, DebugPrint};
@@ -54,9 +54,21 @@ mod specialize_types {
         debug_assert!(exposed_to_host.len() == 1, "{exposed_to_host:?}");
         let (_symbol, variable) = exposed_to_host.into_iter().next().unwrap();
         let mut mono_cache = MonoCache::from_subs(subs);
+        let mut mono_types = MonoTypes::new();
+        let debug_info = DebugInfo::new();
+        let mut record_field_ids = RecordFieldIds::new();
+        let mut tuple_elem_ids = TupleElemIds::new();
         let mut problems = Vec::new();
 
-        mono_cache.monomorphize_var(subs, &mut problems, variable);
+        mono_cache.monomorphize_var(
+            subs,
+            &mut mono_types,
+            &mut record_field_ids,
+            &mut tuple_elem_ids,
+            &mut problems,
+            &mut Some(debug_info),
+            variable,
+        );
 
         assert_eq!(problems, Vec::new());
 
