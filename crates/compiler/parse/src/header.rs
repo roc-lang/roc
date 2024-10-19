@@ -11,11 +11,10 @@ use crate::ident::{
 };
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    and, at_keyword, backtrackable, byte, collection_inner, collection_trailing_sep_e, loc, map,
-    map_with_arena, optional, reset_min_indent, skip_first, skip_second, specialize_err, succeed,
-    two_bytes, zero_or_more, EExposes, EHeader, EImports, EPackageEntry, EPackageName, EPackages,
-    EParams, EProvides, ERequires, ETypedIdent, ParseResult, Parser, SourceError, SpaceProblem,
-    SyntaxError,
+    and, at_keyword, byte, collection_inner, collection_trailing_sep_e, loc, map, map_with_arena,
+    optional, reset_min_indent, skip_first, skip_second, specialize_err, succeed, two_bytes,
+    zero_or_more, EExposes, EHeader, EImports, EPackageEntry, EPackageName, EPackages, EParams,
+    EProvides, ERequires, ETypedIdent, ParseResult, Parser, SourceError, SpaceProblem, SyntaxError,
 };
 use crate::pattern::parse_record_pattern_fields;
 use crate::state::State;
@@ -509,27 +508,48 @@ fn provides_to_package<'a>() -> impl Parser<'a, To<'a>, EProvides<'a>> {
 }
 
 fn provides_to<'a>() -> impl Parser<'a, ProvidesTo<'a>, EProvides<'a>> {
-    record!(ProvidesTo {
-        provides_keyword: spaces_around_keyword(
+    (move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
+        let (_, provides_keyword, state) = spaces_around_keyword(
             ProvidesKeyword,
             EProvides::Provides,
             EProvides::IndentProvides,
-            EProvides::IndentListStart
-        ),
-        entries: collection_trailing_sep_e(
+            EProvides::IndentListStart,
+        )
+        .parse(arena, state, min_indent)?;
+
+        let (_, entries, state) = collection_trailing_sep_e(
             byte(b'[', EProvides::ListStart),
             exposes_entry(EProvides::Identifier),
             byte(b']', EProvides::ListEnd),
-            Spaced::SpaceBefore
-        ),
-        types: optional(backtrackable(provides_types())),
-        to_keyword: spaces_around_keyword(
+            Spaced::SpaceBefore,
+        )
+        .parse(arena, state, min_indent)?;
+
+        let (types, state) = match provides_types().parse(arena, state.clone(), min_indent) {
+            Ok((_, out, state)) => (Some(out), state),
+            _ => (None, state),
+        };
+
+        let (_, to_keyword, state) = spaces_around_keyword(
             ToKeyword,
             EProvides::To,
             EProvides::IndentTo,
-            EProvides::IndentListStart
-        ),
-        to: loc(provides_to_package()),
+            EProvides::IndentListStart,
+        )
+        .parse(arena, state, min_indent)?;
+
+        let to_pos = state.pos();
+        let (_, to, state) = provides_to_package().parse(arena, state, min_indent)?;
+        let to = Loc::pos(to_pos, state.pos(), to);
+
+        let provides_to = ProvidesTo {
+            provides_keyword,
+            entries,
+            types,
+            to_keyword,
+            to,
+        };
+        Ok((MadeProgress, provides_to, state))
     })
     .trace("provides_to")
 }
@@ -892,29 +912,40 @@ where
 
 fn imports_entry<'a>() -> impl Parser<'a, Spaced<'a, ImportsEntry<'a>>, EImports> {
     move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
-        match map(
-            and(
-                and(
-                    // e.g. `pf.`
-                    optional(backtrackable(skip_second(
-                        shortname(),
-                        byte(b'.', EImports::ShorthandDot),
-                    ))),
-                    // e.g. `Task`
-                    module_name_help(EImports::ModuleName),
+        match and(
+            move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
+                let (name, state) = match skip_second(
+                    shortname(),
+                    byte(b'.', EImports::ShorthandDot),
+                )
+                .parse(arena, state.clone(), min_indent)
+                {
+                    Ok((_, out, state)) => (Some(out), state),
+                    Err(_) => (None, state),
+                };
+
+                match module_name_help(EImports::ModuleName).parse(arena, state, min_indent) {
+                    Ok((p, module_name, state)) => Ok((p, (name, module_name), state)),
+                    Err(err) => Err(err),
+                }
+            },
+            // e.g. `.{ Task, after}`
+            optional(skip_first(
+                byte(b'.', EImports::ExposingDot),
+                collection_trailing_sep_e(
+                    byte(b'{', EImports::SetStart),
+                    exposes_entry(EImports::Identifier),
+                    byte(b'}', EImports::SetEnd),
+                    Spaced::SpaceBefore,
                 ),
-                // e.g. `.{ Task, after}`
-                optional(skip_first(
-                    byte(b'.', EImports::ExposingDot),
-                    collection_trailing_sep_e(
-                        byte(b'{', EImports::SetStart),
-                        exposes_entry(EImports::Identifier),
-                        byte(b'}', EImports::SetEnd),
-                        Spaced::SpaceBefore,
-                    ),
-                )),
-            ),
-            |((opt_shortname, module_name), opt_values)| {
+            )),
+        )
+        .trace("normal_import")
+        .parse(arena, state.clone(), min_indent)
+        {
+            Err((NoProgress, _)) => {}
+            Err(err) => return Err(err),
+            Ok((p, ((opt_shortname, module_name), opt_values), state)) => {
                 let exposed_values = opt_values.unwrap_or_else(Collection::empty);
                 let entry = match opt_shortname {
                     Some(shortname) => {
@@ -922,14 +953,9 @@ fn imports_entry<'a>() -> impl Parser<'a, Spaced<'a, ImportsEntry<'a>>, EImports
                     }
                     None => ImportsEntry::Module(module_name, exposed_values),
                 };
-                Spaced::Item(entry)
-            },
-        )
-        .trace("normal_import")
-        .parse(arena, state.clone(), min_indent)
-        {
-            Err((NoProgress, _)) => {}
-            res => return res,
+                let entry = Spaced::Item(entry);
+                return Ok((p, entry, state));
+            }
         };
 
         map(

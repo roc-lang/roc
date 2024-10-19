@@ -15,9 +15,9 @@ use crate::ident::{
 };
 use crate::number_literal::parse_number_base;
 use crate::parser::{
-    self, and, at_keyword, backtrackable, byte, collection_inner, loc, skip_second, specialize_err,
-    specialize_err_ref, EClosure, EExpect, EExpr, EIf, EImport, EImportParams, EInParens, EList,
-    EPattern, ERecord, EType, EWhen, ParseResult, Parser, SpaceProblem,
+    self, and, at_keyword, collection_inner, loc, specialize_err_ref, EClosure, EExpect, EExpr,
+    EIf, EImport, EImportParams, EInParens, EList, EPattern, ERecord, EType, EWhen, ParseResult,
+    Parser, SpaceProblem,
 };
 use crate::pattern::parse_closure_param;
 use crate::state::State;
@@ -1130,16 +1130,31 @@ fn import_ingested_file_as<'a>(
 #[inline(always)]
 fn import_ingested_file_annotation<'a>() -> impl Parser<'a, IngestedFileAnnotation<'a>, EImport<'a>>
 {
-    record!(IngestedFileAnnotation {
-        before_colon: skip_second(
-            backtrackable(space0_e(EImport::IndentColon)),
-            byte(b':', EImport::Colon)
-        ),
-        annotation: specialize_err(
-            EImport::Annotation,
-            type_annotation::type_expr(NO_TYPE_EXPR_FLAGS)
-        )
-    })
+    move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
+        let (before_colon, state) =
+            match eat_space_check(EImport::IndentColon, arena, state, min_indent, false) {
+                Ok((_, sp, state)) => (sp, state),
+                Err((_, fail)) => return Err((NoProgress, fail)),
+            };
+
+        if state.bytes().first() != Some(&b':') {
+            return Err((NoProgress, EImport::Colon(state.pos())));
+        }
+        let state = state.inc();
+
+        let ann_pos = state.pos();
+        let (annotation, state) =
+            match type_annotation::type_expr(NO_TYPE_EXPR_FLAGS).parse(arena, state, min_indent) {
+                Ok((_, out, state)) => (out, state),
+                Err((p, fail)) => return Err((p, EImport::Annotation(fail, ann_pos))),
+            };
+
+        let ann = IngestedFileAnnotation {
+            before_colon,
+            annotation,
+        };
+        Ok((MadeProgress, ann, state))
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
