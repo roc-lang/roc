@@ -1,6 +1,0 @@
----
-source: crates/cli/tests/cli_tests.rs
-expression: "test_benchmark(\"testBase64.roc\", vec![], UseValgrind::Yes)"
----
-encoded: SGVsbG8gV29ybGQ=
-decoded: Hello World

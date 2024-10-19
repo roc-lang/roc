@@ -1,6 +1,0 @@
----
-source: crates/cli/tests/cli_tests.rs
-expression: "test_benchmark(\"cFold.roc\", vec![\"3\"], UseValgrind::Yes)"
----
-Please enter an integer
-11 & 11

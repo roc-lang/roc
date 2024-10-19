@@ -1,5 +1,0 @@
----
-source: crates/cli/tests/cli_tests.rs
-expression: "test_benchmark(\"rBTreeInsert.roc\", vec![], UseValgrind::Yes)"
----
-Node Black 0 {} Empty Empty

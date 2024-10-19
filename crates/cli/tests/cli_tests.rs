@@ -658,69 +658,77 @@ mod cli_tests {
             }
 
             #[cfg(feature = "wasm32-cli-run")]
-            check_output_wasm(file_path.as_path(), stdin);
+            run_wasm_check_output(roc_file_path.as_path(), expected_output, stdin);
 
             #[cfg(feature = "i386-cli-run")]
-            check_output_i386(file_path.as_path(), stdin);
+            check_output_i386(roc_file_path.as_path(), expected_output, stdin);
         }
 
         #[cfg(feature = "wasm32-cli-run")]
-        fn check_output_wasm(file_name: &std::path::Path, stdin: Vec<&str>) {
+        fn run_wasm_check_output(roc_file_path: &std::path::Path, expected_output: &'static str, stdin_opt: Option<&'static str>) {
+            use super::{concatcp, TARGET_FLAG};
             // Check with and without optimizations
-            check_wasm_output_with_stdin(file_name, stdin.clone(), &[]);
+            run_wasm_check_output_with_flags(roc_file_path, expected_output, stdin_opt.clone(), &[]);
 
-            check_wasm_output_with_stdin(file_name, stdin, &[OPTIMIZE_FLAG]);
+            run_wasm_check_output_with_flags(roc_file_path, expected_output, stdin_opt, &[OPTIMIZE_FLAG]);
         }
-
+        
         #[cfg(feature = "wasm32-cli-run")]
-        fn check_wasm_output_with_stdin(file: &std::path::Path, stdin: Vec<&str>, flags: &[&str]) {
+        fn run_wasm_check_output_with_flags(roc_file_path: &std::path::Path, expected_output: &'static str, stdin_opt: Option<&'static str>, flags: &[&str]) {
             use super::{concatcp, TARGET_FLAG};
 
             let mut flags = flags.to_vec();
             flags.push(concatcp!(TARGET_FLAG, "=wasm32"));
 
-            let out = ExecCli::new_roc()
-                .arg(CMD_BUILD)
-                .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-                .arg(file)
-                .add_args(flags)
-                .run();
+            let cli_build = ExecCli::new(
+                                CMD_BUILD,
+                                roc_file_path.to_path_buf()
+                            ).add_args(flags);
+            
+            let cli_build_out = cli_build.run();
+            cli_build_out.assert_clean_success();
 
-            out.assert_clean_success();
+            // wasm can't take stdin, so we pass it as an arg
+            let wasm_args =
+                if let Some(stdin) = stdin_opt {
+                    vec![stdin]
+                } else {
+                    vec![]
+                };
+                
+            let wasm_run_out = crate::run_wasm(&roc_file_path.with_extension("wasm"), wasm_args);
 
-            let stdout = crate::run_wasm(&file.with_extension("wasm"), stdin);
+            assert_eq!(wasm_run_out, expected_output);
+            
+            if TEST_LEGACY_LINKER {
+                let cli_build_legacy = cli_build.arg(super::LEGACY_LINKER_FLAG);
+                
+                let cli_build_legacy_out = cli_build_legacy.run();
+                cli_build_legacy_out.assert_clean_success();
 
-            insta::assert_snapshot!(stdout);
+                let wasm_run_out_legacy = crate::run_wasm(&roc_file_path.with_extension("wasm"), wasm_args);
+
+                assert_eq!(wasm_run_out_legacy, expected_output);
+            }
         }
 
         #[cfg(feature = "i386-cli-run")]
-        fn check_output_i386(file_path: &std::path::Path, stdin: Vec<&'static str>) {
+        fn check_output_i386(roc_file_path: &std::path::Path, expected_output: &'static str, stdin_opt: Option<&'static str>) {
             use super::{concatcp, TARGET_FLAG};
 
             let i386_target_arg = concatcp!(TARGET_FLAG, "=x86_32");
+            
+            let cli_build = ExecCli::new(
+                                    CMD_BUILD,
+                                    roc_file_path.to_path_buf()
+                ).arg(i386_target_arg);
 
-            let runner = ExecCli::new_roc()
-                .arg(CMD_RUN)
-                .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-                .arg(i386_target_arg)
-                .arg(file_path)
-                .with_stdin_vals(stdin.clone());
+            cli_build.clone().full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, false, stdin_opt, None);
 
-            let out = runner.run();
-            out.assert_clean_success();
-            insta::assert_snapshot!(out.normalize_stdout_and_stderr());
-
-            let run_optimized = ExecCli::new_roc()
-                .arg(CMD_RUN)
-                .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-                .arg(i386_target_arg)
-                .arg(OPTIMIZE_FLAG)
-                .arg(file_path)
-                .with_stdin_vals(stdin.clone());
-
-            let out_optimized = run_optimized.run();
-            out_optimized.assert_clean_success();
-            insta::assert_snapshot!(out_optimized.normalize_stdout_and_stderr());
+            // also test optimized build
+            let cli_build_optimized = cli_build.arg(OPTIMIZE_FLAG);
+            
+            cli_build_optimized.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, false, stdin_opt, None);
         }
 
         #[test]
@@ -781,35 +789,36 @@ mod cli_tests {
                 test_benchmark("testAStar.roc", expected_output, None, UseValgrind::Yes);
             }
         }
-        /*
+        
         #[test]
         #[cfg_attr(windows, ignore)]
         fn base64() {
-            insta::assert_snapshot!(test_benchmark("testBase64.roc", vec![], UseValgrind::Yes))
+            let expected_output = indoc! {"
+                encoded: SGVsbG8gV29ybGQ=
+                decoded: Hello World
+            "};
+            test_benchmark("testBase64.roc", expected_output, None, UseValgrind::Yes);
         }
-
+        
         #[test]
         #[cfg_attr(windows, ignore)]
         fn closure() {
-            insta::assert_snapshot!(test_benchmark("closure.roc", vec![], UseValgrind::No))
+            let expected_output = "";
+            test_benchmark("closure.roc", expected_output, None, UseValgrind::Yes);
         }
-
+        
         #[test]
         #[cfg_attr(windows, ignore)]
         fn issue2279() {
-            insta::assert_snapshot!(test_benchmark("issue2279.roc", vec![], UseValgrind::Yes))
+            let expected_output = "Hello, world!\n";
+            test_benchmark("issue2279.roc", expected_output, None, UseValgrind::Yes);
         }
-
+        
         #[test]
         fn quicksort_app() {
-            eprintln!("WARNING: skipping testing benchmark quicksortApp.roc because the test is broken right now!");
-            // test_benchmark(
-            //     "quicksortApp.roc",
-            //     vec![],
-            //     "todo put the correct quicksort answer here",
-            //     UseValgrind::Yes,
-            // )
-        }*/
+            let expected_output = "Please enter an integer\n[0, 1, 1, 2, 2, 2, 3, 3, 3, 3, 3, 4, 4, 4, 4, 5, 6, 6, 8, 9]\n";
+            test_benchmark("quicksortApp.roc", expected_output, Some("0"), UseValgrind::Yes);
+        }
     }
     /*
     #[test]
