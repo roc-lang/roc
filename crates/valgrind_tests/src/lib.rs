@@ -1,7 +1,6 @@
-// TODO update
-/*#![cfg(test)]
+#![cfg(test)]
 
-use std::io::Read;
+use std::process::Command;
 
 use indoc::indoc;
 
@@ -154,87 +153,27 @@ fn valgrind_test_linux(source: &str) {
 
 #[allow(unused)]
 fn run_with_valgrind(binary_path: &std::path::Path) {
-    use cli_test_utils::helpers::{extract_valgrind_errors, ValgrindError, ValgrindErrorXWhat};
+    use cli_test_utils::command::run_command;
 
     // If possible, report the generated executable name relative to the current dir.
-    let generated_filename = binary_path
+    let binary_filename_only = binary_path
         .strip_prefix(std::env::current_dir().unwrap())
         .unwrap_or(binary_path)
         .to_str()
         .unwrap();
 
-    let valgrind_out = cli_test_utils::helpers::ExecCli::new_roc()
-        .arg(generated_filename)
-        .run_with_valgrind();
+    let mut valgrind_command = Command::new("valgrind");
 
-    if valgrind_out.status.success() {
-        let mut raw_xml = String::new();
-
-        valgrind_out
-            .valgrind_xml
-            .as_ref()
-            .unwrap()
-            .read_to_string(&mut raw_xml)
-            .unwrap();
-
-        let memory_errors = extract_valgrind_errors(&raw_xml).unwrap_or_else(|err| {
-            panic!(
-                indoc!(
-                    r"
-                    failed to parse the `valgrind` xml output:
-
-                        Error was:
-
-                            {:?}
-
-                        valgrind xml was:
-
-                            {}
-
-                        valgrind stdout was:
-
-                            {}
-
-                        valgrind stderr was:
-
-                            {}
-                    "
-                ),
-                err, raw_xml, valgrind_out.stdout, valgrind_out.stderr
-            );
-        });
-
-        if !memory_errors.is_empty() {
-            for error in memory_errors {
-                let ValgrindError {
-                    kind,
-                    what: _,
-                    xwhat,
-                } = error;
-                println!("Valgrind Error: {kind}\n");
-
-                if let Some(ValgrindErrorXWhat {
-                    text,
-                    leakedbytes: _,
-                    leakedblocks: _,
-                }) = xwhat
-                {
-                    println!("    {text}");
-                }
-            }
-            panic!("Valgrind found memory errors");
-        }
-    } else {
-        let exit_code = match valgrind_out.status.code() {
-            Some(code) => format!("exit code {code}"),
-            None => "no exit code".to_string(),
-        };
-
-        panic!(
-            "`valgrind` exited with {}. valgrind stdout was: \"{}\"\n\nvalgrind stderr was: \"{}\"",
-            exit_code, valgrind_out.stdout, valgrind_out.stderr
-        );
-    }
+    valgrind_command.args(&[
+        "--leak-check=full",
+        "--error-exitcode=1",
+        "--errors-for-leak-kinds=definite,possible",
+        binary_filename_only,
+    ]);
+    
+    let valgrind_out = run_command(valgrind_command, None);
+    
+    valgrind_out.assert_clean_success();
 }
 
 #[test]
@@ -616,4 +555,3 @@ fn joinpoint_that_owns() {
         "#
     ));
 }
-*/
