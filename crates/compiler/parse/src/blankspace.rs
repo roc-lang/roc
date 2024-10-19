@@ -25,23 +25,6 @@ where
     loc.spaced_around(&arena, spaces_after, spaces_before)
 }
 
-pub fn space0_before_e<'a, P, S, E>(
-    parser: P,
-    indent_problem: fn(Position) -> E,
-) -> impl Parser<'a, Loc<S>, E>
-where
-    S: 'a + Spaceable<'a>,
-    P: 'a + Parser<'a, Loc<S>, E>,
-    E: 'a + SpaceProblem,
-{
-    parser::map_with_arena(
-        and(space0_e(indent_problem), parser),
-        |arena: &'a Bump, (space_list, loc_expr): (&'a [CommentOrNewline<'a>], Loc<S>)| {
-            loc_expr.spaced_before(arena, space_list)
-        },
-    )
-}
-
 pub trait SpacedBuilder<'a, T: 'a + Spaceable<'a>> {
     fn spaced_before(self, arena: &'a Bump, spaces: &'a [CommentOrNewline]) -> Self;
 

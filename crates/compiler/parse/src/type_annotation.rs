@@ -189,7 +189,7 @@ fn parse_term<'a>(
 }
 
 // todo: @wip @dup unify the same code with `parse_term`
-fn parse_applied_arg<'a>(
+fn _parse_applied_arg<'a>(
     stop_at_first_impl: bool,
     arena: &'a Bump,
     state: State<'a>,
@@ -231,6 +231,7 @@ fn parse_applied_arg<'a>(
                 Some(b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_')
             ) =>
             {
+                // The `_` indicating an inferred type, e.g. in (List _)
                 let out = Loc::pos(start, start.next(), TypeAnnotation::Inferred);
                 (out, state.inc())
             }
@@ -267,6 +268,80 @@ fn parse_applied_arg<'a>(
     };
 
     let type_ann = type_ann.spaced_before(arena, spaces_before);
+    Ok((MadeProgress, type_ann, state))
+}
+
+fn parse_applied_arg<'a>(
+    stop_at_first_impl: bool,
+    arena: &'a Bump,
+    state: State<'a>,
+    min_indent: u32,
+) -> ParseResult<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
+    let start = state.pos();
+    let (type_ann, state) = match state.bytes().first() {
+        Some(b) => match b {
+            b'(' => {
+                let state = state.inc();
+                match rest_of_type_in_parens(start, stop_at_first_impl, arena, state, min_indent) {
+                    Ok((_, out, state)) => (out, state),
+                    Err((p, fail)) => return Err((p, EType::TInParens(fail, start))),
+                }
+            }
+            b'{' => match rest_of_record_type(stop_at_first_impl, arena, state.inc(), min_indent) {
+                Ok((_, out, state)) => (Loc::pos(start, state.pos(), out), state),
+                Err((p, fail)) => return Err((p, EType::TRecord(fail, start))),
+            },
+            b'[' => {
+                match rest_of_tag_union_type(stop_at_first_impl, arena, state.inc(), min_indent) {
+                    Ok((_, out, state)) => (Loc::pos(start, state.pos(), out), state),
+                    Err((p, fail)) => return Err((p, EType::TTagUnion(fail, start))),
+                }
+            }
+            b'*' => {
+                // The `*` type variable, e.g. in (List *)
+                let out = Loc::pos(start, start.next(), TypeAnnotation::Wildcard);
+                (out, state.inc())
+            }
+            b'_' if !matches!(
+                state.bytes().get(1),
+                Some(b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_')
+            ) =>
+            {
+                // The `_` indicating an inferred type, e.g. in (List _)
+                let out = Loc::pos(start, start.next(), TypeAnnotation::Inferred);
+                (out, state.inc())
+            }
+            _ => {
+                let ident_res = match parse_lowercase_ident(state.clone()) {
+                    Ok((_, name, state)) => {
+                        if name == keyword::WHERE
+                            || (stop_at_first_impl && name == keyword::IMPLEMENTS)
+                        {
+                            None
+                        } else {
+                            let type_ann = TypeAnnotation::BoundVariable(name);
+                            let type_ann = Loc::pos(start, state.pos(), type_ann);
+                            Some((type_ann, state))
+                        }
+                    }
+                    Err((MadeProgress, _)) => {
+                        return Err((MadeProgress, EType::TBadTypeVariable(start)))
+                    }
+                    Err(_) => None,
+                };
+
+                match ident_res {
+                    Some(ok) => ok,
+                    None => match parse_concrete_type(state) {
+                        Ok((_, out, state)) => (Loc::pos(start, state.pos(), out), state),
+                        Err((NoProgress, _)) => return Err((NoProgress, EType::TStart(start))),
+                        Err((_, fail)) => return Err((MadeProgress, EType::TApply(fail, start))),
+                    },
+                }
+            }
+        },
+        _ => return Err((NoProgress, EType::TStart(start))),
+    };
     Ok((MadeProgress, type_ann, state))
 }
 
@@ -332,10 +407,21 @@ fn tag_type<'a>() -> impl Parser<'a, Loc<Tag<'a>>, ETypeTagUnion<'a>> {
         let mut args = Vec::with_capacity_in(1, arena);
         loop {
             let prev_state = state.clone();
-            match parse_applied_arg(false, arena, state, min_indent) {
-                Ok((_, arg, next_state)) => {
+
+            let (spaces_before, next_state) =
+                match eat_space_check(EType::TIndentStart, arena, state, min_indent, false) {
+                    Ok((_, sp, st)) => (sp, st),
+                    Err(_) => {
+                        state = prev_state;
+                        break;
+                    }
+                };
+
+            match parse_applied_arg(false, arena, next_state, min_indent) {
+                Ok((_, type_ann, next_state)) => {
+                    let type_ann = type_ann.spaced_before(arena, spaces_before);
+                    args.push(type_ann);
                     state = next_state;
-                    args.push(arg);
                 }
                 Err((NoProgress, _)) => {
                     state = prev_state;
@@ -483,10 +569,21 @@ fn parse_applied_type<'a>(
     let mut args = Vec::with_capacity_in(1, arena);
     loop {
         let prev_state = state.clone();
-        match parse_applied_arg(stop_at_first_impl, arena, state, inc_indent) {
-            Ok((_, next_arg, next_state)) => {
+
+        let (spaces_before, next_state) =
+            match eat_space_check(EType::TIndentStart, arena, state, inc_indent, false) {
+                Ok((_, sp, st)) => (sp, st),
+                Err(_) => {
+                    state = prev_state;
+                    break;
+                }
+            };
+
+        match parse_applied_arg(stop_at_first_impl, arena, next_state, inc_indent) {
+            Ok((_, type_ann, next_state)) => {
+                let type_ann = type_ann.spaced_before(arena, spaces_before);
+                args.push(type_ann);
                 state = next_state;
-                args.push(next_arg);
             }
             Err((NoProgress, _)) => {
                 state = prev_state;
