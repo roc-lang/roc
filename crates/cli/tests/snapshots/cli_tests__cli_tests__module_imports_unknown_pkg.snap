@@ -1,8 +1,8 @@
 ---
 source: crates/cli/tests/cli_tests.rs
-expression: out.normalize_stdout_and_stderr()
+expression: cli_test_out.normalize_stdout_and_stderr()
 ---
-── UNRECOGNIZED PACKAGE in tests/module_imports_pkg/ImportsUnknownPkg.roc ──────
+── UNRECOGNIZED PACKAGE in ...rojects/module_imports_pkg/ImportsUnknownPkg.roc ─
 
 This module is trying to import from `cli`:
 
@@ -16,6 +16,6 @@ this one. Did you mean one of these?
 
 Note: I'm using the following module to resolve package shorthands:
 
-    tests/module_imports_pkg/app.roc
+    tests/test-projects/module_imports_pkg/app.roc
 
 You can specify a different one with the --main flag.

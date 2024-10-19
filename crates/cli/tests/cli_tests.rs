@@ -696,7 +696,7 @@ mod cli_tests {
                     vec![]
                 };
                 
-            let wasm_run_out = crate::run_wasm(&roc_file_path.with_extension("wasm"), wasm_args);
+            let wasm_run_out = crate::run_wasm(&roc_file_path.with_extension("wasm"), wasm_args.clone());
 
             assert_eq!(wasm_run_out, expected_output);
             
@@ -820,128 +820,137 @@ mod cli_tests {
             test_benchmark("quicksortApp.roc", expected_output, Some("0"), UseValgrind::Yes);
         }
     }
-    /*
+    
     #[test]
     fn known_type_error() {
-        let out = ExecCli::new_roc()
-            .arg(CMD_CHECK)
-            .arg(file_from_root(
-                "crates/cli/tests/known_bad",
+        let cli_check = ExecCli::new(
+            CMD_CHECK,
+            file_from_root(
+                "crates/cli/tests/test-projects/known_bad",
                 "TypeError.roc",
-            ))
-            .run();
+            )
+        );
+        
+        let cli_check_out = cli_check.run();
+        cli_check_out.assert_nonzero_exit();
 
-        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+        insta::assert_snapshot!(cli_check_out.normalize_stdout_and_stderr());
     }
     
     #[test]
     #[cfg_attr(windows, ignore)]
-    fn test_module_imports_unknown_pkg() {
-        let runner = ExecCli::new_roc()
-            .arg(CMD_TEST)
-            .with_valgrind(ALLOW_VALGRIND)
-            .add_args(["--main", "tests/module_imports_pkg/app.roc"])
-            .arg(
-                file_from_root(
-                    "crates/cli/tests/module_imports_pkg",
-                    "ImportsUnknownPkg.roc",
-                )
-                .as_path(),
-            );
+    fn test_module_imports_unknown_pkg() {        
+        let cli_test = ExecCli::new(
+                                CMD_TEST,
+                                file_from_root("crates/cli/tests/test-projects/module_imports_pkg", "ImportsUnknownPkg.roc")
+            ).add_args(["--main", "tests/test-projects/module_imports_pkg/app.roc"]);
 
-        let out = runner.run();
-        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+        let cli_test_out = cli_test.run();
+        cli_test_out.assert_nonzero_exit();
+        
+        insta::assert_snapshot!(cli_test_out.normalize_stdout_and_stderr());
     }
-
+    
     #[test]
     #[cfg_attr(windows, ignore)]
     /// this tests that a platform can correctly import a package
     fn platform_requires_pkg() {
-        let runner = ExecCli::new_roc()
-            .arg(CMD_RUN)
+        let cli_build = ExecCli::new(
+                                CMD_BUILD,
+                                file_from_root("crates/cli/tests/test-projects/platform_requires_pkg", "app.roc")
+            )
             .arg(BUILD_HOST_FLAG)
-            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-            .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .arg(file_from_root("crates/cli/tests/platform_requires_pkg", "app.roc").as_path());
+            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
 
-        let out = runner.run();
-        out.assert_clean_success();
-        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
+        let expected_output = "from app from package";
+        
+        cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
     }
-
+    
     #[test]
     fn known_type_error_with_long_path() {
-        let out = ExecCli::new_roc()
-            .arg(CMD_CHECK)
-            .arg(file_from_root(
-                "crates/cli/tests/known_bad",
+        let cli_check = ExecCli::new(
+            CMD_CHECK,
+            file_from_root(
+                "crates/cli/tests/test-projects/known_bad",
                 "UnusedImportButWithALongFileNameForTesting.roc",
-            ))
-            .run();
-        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
-    }
+            )
+        );
+        
+        let cli_check_out = cli_check.run();
+        cli_check_out.assert_nonzero_exit();
 
+        insta::assert_snapshot!(cli_check_out.normalize_stdout_and_stderr());
+    }
+    
     #[test]
     fn exposed_not_defined() {
-        let out = ExecCli::new_roc()
-            .arg(CMD_CHECK)
-            .arg(file_from_root(
-                "crates/cli/tests/known_bad",
+        let cli_check = ExecCli::new(
+            CMD_CHECK,
+            file_from_root(
+                "crates/cli/tests/test-projects/known_bad",
                 "ExposedNotDefined.roc",
-            ))
-            .run();
-        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
-    }
+            )
+        );
+        
+        let cli_check_out = cli_check.run();
+        cli_check_out.assert_nonzero_exit();
 
+        insta::assert_snapshot!(cli_check_out.normalize_stdout_and_stderr());
+    }
+    
     #[test]
     fn unused_import() {
-        let out = ExecCli::new_roc()
-            .arg(CMD_CHECK)
-            .arg(file_from_root(
-                "crates/cli/tests/known_bad",
+        let cli_check = ExecCli::new(
+            CMD_CHECK,
+            file_from_root(
+                "crates/cli/tests/test-projects/known_bad",
                 "UnusedImport.roc",
-            ))
-            .run();
-        insta::assert_snapshot!(out.normalize_stdout_and_stderr());
-    }
+            )
+        );
+        
+        let cli_check_out = cli_check.run();
+        cli_check_out.assert_nonzero_exit();
 
+        insta::assert_snapshot!(cli_check_out.normalize_stdout_and_stderr());
+    }
+    
     #[test]
     fn format_check_good() {
-        ExecCli::new_roc()
-            .arg(CMD_FORMAT)
-            .arg(CHECK_FLAG)
-            .arg(file_from_root("crates/cli/tests/fixtures/format", "Formatted.roc").as_path())
-            .run()
-            .assert_clean_success();
+        ExecCli::new(
+            CMD_FORMAT,
+            file_from_root("crates/cli/tests/test-projects/fixtures/format", "formatted.roc")
+        ).arg(CHECK_FLAG)
+        .run()
+        .assert_clean_success();
     }
-
+    
     #[test]
     fn format_check_reformatting_needed() {
-        ExecCli::new_roc()
-            .arg(CMD_FORMAT)
-            .arg(CHECK_FLAG)
-            .arg(file_from_root("crates/cli/tests/fixtures/format", "NotFormatted.roc").as_path())
-            .run()
-            .assert_nonzero_exit();
+        ExecCli::new(
+            CMD_FORMAT,
+            file_from_root("crates/cli/tests/test-projects/fixtures/format", "not-formatted.roc")
+        ).arg(CHECK_FLAG)
+        .run()
+        .assert_nonzero_exit();
     }
-
+    
     #[test]
     fn format_check_folders() {
-        // This fails, because "NotFormatted.roc" is present in this folder
-        ExecCli::new_roc()
-            .arg(CMD_FORMAT)
-            .arg(CHECK_FLAG)
-            .arg(dir_from_root("crates/cli/tests/fixtures/format").as_path())
-            .run()
-            .assert_nonzero_exit();
+        // This fails, because "not-formatted.roc" is present in this folder
+        ExecCli::new(
+            CMD_FORMAT,
+            dir_from_root("crates/cli/tests/test-projects/fixtures/format")
+        ).arg(CHECK_FLAG)
+        .run()
+        .assert_nonzero_exit();
 
-        // This doesn't fail, since only "Formatted.roc" and non-roc files are present in this folder
-        ExecCli::new_roc()
-            .arg(CMD_FORMAT)
-            .arg(CHECK_FLAG)
-            .arg(dir_from_root("crates/cli/tests/fixtures/format/formatted_directory").as_path())
-            .run()
-            .assert_clean_success();
+        // This doesn't fail, since only "formatted.roc" and non-roc files are present in this folder
+        ExecCli::new(
+            CMD_FORMAT,
+            dir_from_root("crates/cli/tests/test-projects/fixtures/format/formatted_directory")
+        ).run()
+        .assert_clean_success();
     }
 }
 
@@ -989,5 +998,5 @@ fn run_wasm(wasm_path: &std::path::Path, stdin: Vec<&str>) -> String {
         Err(e) => {
             format!("WASI error {}", e)
         }
-    }*/
+    }
 }

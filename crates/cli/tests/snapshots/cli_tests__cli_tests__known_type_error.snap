@@ -1,8 +1,10 @@
 ---
 source: crates/cli/tests/cli_tests.rs
-expression: out.normalize_stdout_and_stderr()
+assertion_line: 837
+expression: cli_check_out.normalize_stdout_and_stderr()
 ---
-── TYPE MISMATCH in tests/known_bad/TypeError.roc ──────────────────────────────
+
+── TYPE MISMATCH in tests/test-projects/known_bad/TypeError.roc ────────────────
 
 Something is off with the body of the main definition:
 
@@ -25,3 +27,4 @@ this out.
 ────────────────────────────────────────────────────────────────────────────────
 
 1 error and 0 warning found in <ignored for test> ms
+

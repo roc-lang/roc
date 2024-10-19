@@ -1,6 +1,0 @@
----
-source: crates/cli/tests/cli_tests.rs
-expression: out.normalize_stdout_and_stderr()
----
-55
-3628800🔨 Building host ...

@@ -1,5 +1,0 @@
----
-source: crates/cli/tests/cli_tests.rs
-expression: out.normalize_stdout_and_stderr()
----
-[One imports Two: From two] | From two

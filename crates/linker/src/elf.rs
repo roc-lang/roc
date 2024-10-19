@@ -1211,72 +1211,12 @@ fn surgery_elf_help(
     }
     let exec_header = load_struct_inplace::<elf::FileHeader64<LE>>(exec_mmap, 0);
 
-    let ph_offset = {
-        let val = exec_header.e_phoff.get(LE);
-        std::fs::OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open("log.txt")
-            .unwrap()
-            .write_all(format!("ph_offset = {:?}\n", val).as_bytes())
-            .unwrap();
-        val
-    };
-    let ph_ent_size = {
-        let val = exec_header.e_phentsize.get(LE);
-        std::fs::OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open("log.txt")
-            .unwrap()
-            .write_all(format!("ph_ent_size = {:?}\n", val).as_bytes())
-            .unwrap();
-        val
-    };
-    let ph_num = {
-        let val = exec_header.e_phnum.get(LE);
-        std::fs::OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open("log.txt")
-            .unwrap()
-            .write_all(format!("ph_num = {:?}\n", val).as_bytes())
-            .unwrap();
-        val
-    };
-    let sh_offset = {
-        let val = exec_header.e_shoff.get(LE);
-        std::fs::OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open("log.txt")
-            .unwrap()
-            .write_all(format!("sh_offset = {:?}\n", val).as_bytes())
-            .unwrap();
-        val
-    };
-    let sh_ent_size = {
-        let val = exec_header.e_shentsize.get(LE);
-        std::fs::OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open("log.txt")
-            .unwrap()
-            .write_all(format!("sh_ent_size = {:?}\n", val).as_bytes())
-            .unwrap();
-        val
-    };
-    let sh_num = {
-        let val = exec_header.e_shnum.get(LE);
-        std::fs::OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open("log.txt")
-            .unwrap()
-            .write_all(format!("sh_num = {:?}\n", val).as_bytes())
-            .unwrap();
-        val
-    };
+    let ph_offset = exec_header.e_phoff.get(LE);
+    let ph_ent_size = exec_header.e_phentsize.get(LE);
+    let ph_num = exec_header.e_phnum.get(LE);
+    let sh_offset = exec_header.e_shoff.get(LE);
+    let sh_ent_size = exec_header.e_shentsize.get(LE);
+    let sh_num = exec_header.e_shnum.get(LE);
 
     if verbose {
         println!();
