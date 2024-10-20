@@ -5,9 +5,7 @@ use crate::ast::{
     ModuleImport, ModuleImportParams, Pattern, Spaceable, Spaced, Spaces, SpacesBefore, TryTarget,
     TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
-use crate::blankspace::{
-    eat_space, eat_space_check, eat_space_loc_comments, space0_e, spaces_around_help, SpacedBuilder,
-};
+use crate::blankspace::{eat_space, eat_space_check, eat_space_loc_comments, SpacedBuilder};
 use crate::header::{chomp_module_name, ModuleName};
 use crate::ident::{
     chomp_access_chain, chomp_integer_part, malformed_ident, parse_ident, parse_lowercase_ident,
@@ -15,9 +13,9 @@ use crate::ident::{
 };
 use crate::number_literal::parse_number_base;
 use crate::parser::{
-    self, and, at_keyword, collection_inner, loc, specialize_err_ref, EClosure, EExpect, EExpr,
-    EIf, EImport, EImportParams, EInParens, EList, EPattern, ERecord, EType, EWhen, ParseResult,
-    Parser, SpaceProblem,
+    at_keyword, collection_inner, loc, specialize_err_ref, EClosure, EExpect, EExpr, EIf, EImport,
+    EImportParams, EInParens, EList, EPattern, ERecord, EType, EWhen, ParseResult, Parser,
+    SpaceProblem,
 };
 use crate::pattern::parse_closure_param;
 use crate::state::State;
@@ -717,9 +715,9 @@ fn parse_stmt_operator_chain<'a>(
                     Err((NoProgress, _)) => {
                         if flags.is_set(ACCEPT_MULTI_BACKPASSING) && state.bytes().starts_with(b",")
                         {
-                            state = state.advance(1);
+                            state = state.inc();
                             parse_stmt_multi_backpassing(
-                                expr_state, arena, state, min_indent, flags,
+                                expr_state, flags, arena, state, min_indent,
                             )
                         } else if flags.is_set(CHECK_FOR_ARROW) && state.bytes().starts_with(b"->")
                         {
@@ -1655,25 +1653,34 @@ fn parse_after_binop<'a>(
 /// Parse the rest of the statement.
 fn parse_stmt_multi_backpassing<'a>(
     mut expr_state: ExprState<'a>,
+    flags: ExprParseFlags,
     arena: &'a Bump,
     state: State<'a>,
     min_indent: u32,
-    flags: ExprParseFlags,
 ) -> ParseResult<'a, Stmt<'a>, EExpr<'a>> {
     // called after parsing the first , in `a, b <- c` (e.g.)
+
+    let parser = move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
+        let (sp, sp_before, state) =
+            eat_space_check(EPattern::Start, arena, state, min_indent, false)?;
+
+        let (pat, state) = match crate::pattern::loc_pattern_help().parse(arena, state, min_indent)
+        {
+            Ok((_, out, state)) => (out, state),
+            Err((p, fail)) => return Err((p.or(sp), fail)),
+        };
+
+        let (sp_after, state) =
+            match eat_space_check(EPattern::IndentEnd, arena, state, min_indent, false) {
+                Ok((_, out, state)) => (out, state),
+                Err((_, fail)) => return Err((MadeProgress, fail)),
+            };
+
+        let pat = pat.spaced_around(arena, sp_before, sp_after);
+        Ok((MadeProgress, pat, state))
+    };
+
     let start = state.pos();
-
-    let parser = parser::map_with_arena(
-        and(
-            space0_e(EPattern::Start),
-            and(
-                crate::pattern::loc_pattern_help(),
-                space0_e(EPattern::IndentEnd),
-            ),
-        ),
-        spaces_around_help,
-    );
-
     let original_state = state.clone();
     let start_bytes_len = state.bytes().len();
 

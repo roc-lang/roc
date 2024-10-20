@@ -326,7 +326,7 @@ fn list_element_pattern<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PList<'a>> {
             res => return res,
         }
 
-        match loc_pattern_help().parse(arena, state.clone(), min_indent) {
+        match loc_pattern_help().parse(arena, state, min_indent) {
             Ok(ok) => Ok(ok),
             Err((p, fail)) => Err((p, PList::Pattern(arena.alloc(fail), start))),
         }

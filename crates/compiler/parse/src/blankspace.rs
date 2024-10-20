@@ -3,27 +3,13 @@ use crate::ast::Spaceable;
 use crate::parser::ParseResult;
 use crate::parser::Progress;
 use crate::parser::SpaceProblem;
-use crate::parser::{self, and, BadInputError, Parser, Progress::*};
+use crate::parser::{BadInputError, Parser, Progress::*};
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_region::all::Loc;
 use roc_region::all::Position;
 use roc_region::all::Region;
-
-pub fn spaces_around_help<'a, S>(
-    arena: &'a Bump,
-    tuples: (
-        &'a [CommentOrNewline<'a>],
-        (Loc<S>, &'a [CommentOrNewline<'a>]),
-    ),
-) -> Loc<S>
-where
-    S: 'a + Spaceable<'a>,
-{
-    let (spaces_before, (loc, spaces_after)) = tuples;
-    loc.spaced_around(&arena, spaces_after, spaces_before)
-}
 
 pub trait SpacedBuilder<'a, T: 'a + Spaceable<'a>> {
     fn spaced_before(self, arena: &'a Bump, spaces: &'a [CommentOrNewline]) -> Self;
