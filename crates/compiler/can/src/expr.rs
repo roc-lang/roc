@@ -286,6 +286,11 @@ pub enum Expr {
         symbol: Symbol,
     },
 
+    Return {
+        return_value: Box<Loc<Expr>>,
+        return_var: Variable,
+    },
+
     /// Rendered as empty box in editor
     TypedHole(Variable),
 
@@ -360,6 +365,7 @@ impl Expr {
             Self::Expect { .. } => Category::Expect,
             Self::ExpectFx { .. } => Category::Expect,
             Self::Crash { .. } => Category::Crash,
+            Self::Return { .. } => Category::Return,
 
             Self::Dbg { .. } => Category::Expect,
 
@@ -400,6 +406,7 @@ pub struct ClosureData {
     pub function_type: Variable,
     pub closure_type: Variable,
     pub return_type: Variable,
+    pub early_returns: Vec<(Variable, Region)>,
     pub name: Symbol,
     pub captured_symbols: Vec<(Symbol, Variable)>,
     pub recursive: Recursive,
@@ -476,6 +483,7 @@ impl StructAccessorData {
             function_type: function_var,
             closure_type: closure_var,
             return_type: field_var,
+            early_returns: vec![],
             name,
             captured_symbols: vec![],
             recursive: Recursive::NotRecursive,
@@ -549,6 +557,7 @@ impl OpaqueWrapFunctionData {
             function_type: function_var,
             closure_type: closure_var,
             return_type: opaque_var,
+            early_returns: vec![],
             name: function_name,
             captured_symbols: vec![],
             recursive: Recursive::NotRecursive,
@@ -1008,7 +1017,7 @@ pub fn canonicalize_expr<'a>(
         }
         ast::Expr::Defs(loc_defs, loc_ret) => {
             // The body expression gets a new scope for canonicalization,
-            scope.inner_scope(|inner_scope| {
+            scope.inner_scope(false, |inner_scope| {
                 let defs: Defs = (*loc_defs).clone();
                 can_defs_with_return(env, var_store, inner_scope, env.arena.alloc(defs), loc_ret)
             })
@@ -1040,16 +1049,17 @@ pub fn canonicalize_expr<'a>(
             let mut can_branches = Vec::with_capacity(branches.len());
 
             for branch in branches.iter() {
-                let (can_when_branch, branch_references) = scope.inner_scope(|inner_scope| {
-                    canonicalize_when_branch(
-                        env,
-                        var_store,
-                        inner_scope,
-                        region,
-                        branch,
-                        &mut output,
-                    )
-                });
+                let (can_when_branch, branch_references) =
+                    scope.inner_scope(false, |inner_scope| {
+                        canonicalize_when_branch(
+                            env,
+                            var_store,
+                            inner_scope,
+                            region,
+                            branch,
+                            &mut output,
+                        )
+                    });
 
                 output.references.union_mut(&branch_references);
 
@@ -1254,6 +1264,37 @@ pub fn canonicalize_expr<'a>(
                     loc_continuation: Box::new(loc_continuation),
                     variable: var_store.fresh(),
                     symbol,
+                },
+                output,
+            )
+        }
+        ast::Expr::Return(return_expr, after_return) => {
+            let mut output = Output::default();
+
+            let (loc_return_expr, output1) = canonicalize_expr(
+                env,
+                var_store,
+                scope,
+                return_expr.region,
+                &return_expr.value,
+            );
+
+            if let Some(after_return) = after_return {
+                env.problem(Problem::StatementsAfterReturn {
+                    region: after_return.region,
+                });
+            }
+
+            output.union(output1);
+
+            let return_var = var_store.fresh();
+
+            scope.early_returns.push((return_var, return_expr.region));
+
+            (
+                Return {
+                    return_value: Box::new(loc_return_expr),
+                    return_var,
                 },
                 output,
             )
@@ -1493,7 +1534,7 @@ pub fn canonicalize_closure<'a>(
     loc_body_expr: &'a Loc<ast::Expr<'a>>,
     opt_def_name: Option<Symbol>,
 ) -> (ClosureData, Output) {
-    scope.inner_scope(|inner_scope| {
+    scope.inner_scope(true, |inner_scope| {
         canonicalize_closure_body(
             env,
             var_store,
@@ -1621,10 +1662,13 @@ fn canonicalize_closure_body<'a>(
         output.non_closures.insert(symbol);
     }
 
+    let return_type_var = var_store.fresh();
+
     let closure_data = ClosureData {
         function_type: var_store.fresh(),
         closure_type: var_store.fresh(),
-        return_type: var_store.fresh(),
+        return_type: return_type_var,
+        early_returns: scope.early_returns.clone(),
         name: symbol,
         captured_symbols,
         recursive: Recursive::NotRecursive,
@@ -2027,7 +2071,8 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
         | other @ TypedHole { .. }
         | other @ ForeignCall { .. }
         | other @ OpaqueWrapFunction(_)
-        | other @ Crash { .. } => other,
+        | other @ Crash { .. }
+        | other @ Return { .. } => other,
 
         List {
             elem_var,
@@ -2253,6 +2298,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
             function_type,
             closure_type,
             return_type,
+            early_returns,
             recursive,
             name,
             captured_symbols,
@@ -2269,6 +2315,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
                 function_type,
                 closure_type,
                 return_type,
+                early_returns,
                 recursive,
                 name,
                 captured_symbols,
@@ -2495,6 +2542,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         ast::Expr::DbgStmt(_, _)
         | ast::Expr::LowLevelDbg(_, _, _)
         | ast::Expr::Expect(_, _)
+        | ast::Expr::Return(_, _)
         | ast::Expr::When(_, _)
         | ast::Expr::Backpassing(_, _, _)
         | ast::Expr::SpaceBefore(_, _)
@@ -2795,6 +2843,7 @@ impl Declarations {
     pub fn new() -> Self {
         Self::with_capacity(0)
     }
+
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             declarations: Vec::with_capacity(capacity),
@@ -2841,6 +2890,7 @@ impl Declarations {
         let function_def = FunctionDef {
             closure_type: loc_closure_data.value.closure_type,
             return_type: loc_closure_data.value.return_type,
+            early_returns: loc_closure_data.value.early_returns,
             captured_symbols: loc_closure_data.value.captured_symbols,
             arguments: loc_closure_data.value.arguments,
         };
@@ -2892,6 +2942,7 @@ impl Declarations {
         let function_def = FunctionDef {
             closure_type: loc_closure_data.value.closure_type,
             return_type: loc_closure_data.value.return_type,
+            early_returns: loc_closure_data.value.early_returns,
             captured_symbols: loc_closure_data.value.captured_symbols,
             arguments: loc_closure_data.value.arguments,
         };
@@ -3072,6 +3123,7 @@ impl Declarations {
                 let function_def = FunctionDef {
                     closure_type: closure_data.closure_type,
                     return_type: closure_data.return_type,
+                    early_returns: closure_data.early_returns,
                     captured_symbols: closure_data.captured_symbols,
                     arguments: closure_data.arguments,
                 };
@@ -3112,6 +3164,7 @@ impl Declarations {
                     function_type: var_store.fresh(),
                     closure_type: var_store.fresh(),
                     return_type: var_store.fresh(),
+                    early_returns: vec![],
                     name: self.symbols[index].value,
                     captured_symbols: vec![],
                     recursive: Recursive::NotRecursive,
@@ -3124,6 +3177,7 @@ impl Declarations {
                 let function_def = FunctionDef {
                     closure_type: loc_closure_data.value.closure_type,
                     return_type: loc_closure_data.value.return_type,
+                    early_returns: loc_closure_data.value.early_returns,
                     captured_symbols: loc_closure_data.value.captured_symbols,
                     arguments: loc_closure_data.value.arguments,
                 };
@@ -3258,6 +3312,7 @@ impl DeclarationTag {
 pub struct FunctionDef {
     pub closure_type: Variable,
     pub return_type: Variable,
+    pub early_returns: Vec<(Variable, Region)>,
     pub captured_symbols: Vec<(Symbol, Variable)>,
     pub arguments: Vec<(Variable, AnnotatedMark, Loc<Pattern>)>,
 }
@@ -3401,6 +3456,9 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
 
                 // Intentionally ignore the lookups in the nested `expect` condition itself,
                 // because they couldn't possibly influence the outcome of this `expect`!
+            }
+            Expr::Return { return_value, .. } => {
+                stack.push(&return_value.value);
             }
             Expr::Crash { msg, .. } => stack.push(&msg.value),
             Expr::Num(_, _, _, _)

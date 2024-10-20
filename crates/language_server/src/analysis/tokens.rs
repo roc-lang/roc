@@ -641,6 +641,7 @@ impl IterTokens for ValueDef<'_> {
                 onetoken(Token::Import, import.name.item.region, arena)
             }
             ValueDef::Stmt(loc_expr) => loc_expr.iter_tokens(arena),
+            ValueDef::Return(loc_expr) => loc_expr.iter_tokens(arena),
         }
     }
 }
@@ -717,6 +718,11 @@ impl IterTokens for Loc<Expr<'_>> {
                 .collect_in(arena),
             Expr::When(e, branches) => (e.iter_tokens(arena).into_iter())
                 .chain(branches.iter_tokens(arena))
+                .collect_in(arena),
+            Expr::Return(ret_expr, after_ret) => ret_expr
+                .iter_tokens(arena)
+                .into_iter()
+                .chain(after_ret.iter_tokens(arena))
                 .collect_in(arena),
             Expr::SpaceBefore(e, _) | Expr::SpaceAfter(e, _) => {
                 Loc::at(region, *e).iter_tokens(arena)

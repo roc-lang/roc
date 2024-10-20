@@ -3,6 +3,7 @@ use bumpalo::Bump;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
 
+use crate::parser::EReturn;
 use crate::{
     ast::{
         AbilityImpls, AbilityMember, AssignedField, Collection, Defs, Expr, FullAst, Header,
@@ -439,6 +440,7 @@ impl<'a> Normalize<'a> for ValueDef<'a> {
                 IngestedFileImport(ingested_file_import.normalize(arena))
             }
             Stmt(loc_expr) => Stmt(arena.alloc(loc_expr.normalize(arena))),
+            Return(loc_expr) => Return(arena.alloc(loc_expr.normalize(arena))),
         }
     }
 }
@@ -756,6 +758,10 @@ impl<'a> Normalize<'a> for Expr<'a> {
                 arena.alloc(a.normalize(arena)),
                 arena.alloc(b.normalize(arena)),
             ),
+            Expr::Return(a, b) => Expr::Return(
+                arena.alloc(a.normalize(arena)),
+                b.map(|loc_b| &*arena.alloc(loc_b.normalize(arena))),
+            ),
             Expr::Apply(a, b, c) => {
                 Expr::Apply(arena.alloc(a.normalize(arena)), b.normalize(arena), c)
             }
@@ -1037,6 +1043,9 @@ impl<'a> Normalize<'a> for EExpr<'a> {
             EExpr::If(inner_err, _pos) => EExpr::If(inner_err.normalize(arena), Position::zero()),
             EExpr::Expect(inner_err, _pos) => {
                 EExpr::Expect(inner_err.normalize(arena), Position::zero())
+            }
+            EExpr::Return(inner_err, _pos) => {
+                EExpr::Return(inner_err.normalize(arena), Position::zero())
             }
             EExpr::Dbg(inner_err, _pos) => EExpr::Dbg(inner_err.normalize(arena), Position::zero()),
             EExpr::Import(inner_err, _pos) => {
@@ -1472,6 +1481,20 @@ impl<'a> Normalize<'a> for EExpect<'a> {
         }
     }
 }
+
+impl<'a> Normalize<'a> for EReturn<'a> {
+    fn normalize(&self, arena: &'a Bump) -> Self {
+        match self {
+            EReturn::Space(inner_err, _) => EReturn::Space(*inner_err, Position::zero()),
+            EReturn::Return(_) => EReturn::Return(Position::zero()),
+            EReturn::ReturnValue(inner_err, _) => {
+                EReturn::ReturnValue(arena.alloc(inner_err.normalize(arena)), Position::zero())
+            }
+            EReturn::IndentReturnValue(_) => EReturn::IndentReturnValue(Position::zero()),
+        }
+    }
+}
+
 impl<'a> Normalize<'a> for EIf<'a> {
     fn normalize(&self, arena: &'a Bump) -> Self {
         match self {

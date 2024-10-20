@@ -3425,6 +3425,7 @@ pub enum Reason {
     },
     CrashArg,
     ImportParams(ModuleId),
+    Return,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -3474,6 +3475,7 @@ pub enum Category {
 
     Expect,
     Dbg,
+    Return,
     Unknown,
 }
 

@@ -1346,6 +1346,32 @@ pub fn can_problem<'b>(
             doc = report.doc;
             title = report.title;
         }
+
+        Problem::ReturnOutsideOfFunction { region } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This "),
+                    alloc.keyword("return"),
+                    alloc.reflow(" statement doesn't belong to a function:"),
+                ]),
+                alloc.region(lines.convert_region(region), severity),
+            ]);
+
+            title = "RETURN OUTSIDE OF FUNCTION".to_string();
+        }
+
+        Problem::StatementsAfterReturn { region } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This code won't run because it follows a "),
+                    alloc.keyword("return"),
+                    alloc.reflow(" statement:"),
+                ]),
+                alloc.region(lines.convert_region(region), severity),
+            ]);
+
+            title = "UNREACHABLE CODE".to_string();
+        }
     };
 
     Report {
@@ -2521,6 +2547,18 @@ fn pretty_runtime_error<'b>(
             ]);
 
             title = "OPTIONAL FIELD IN RECORD BUILDER";
+        }
+        RuntimeError::ReturnOutsideOfFunction(region) => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("The "),
+                    alloc.keyword("return"),
+                    alloc.reflow(" keyword can only be used in functions."),
+                ]),
+                alloc.region(lines.convert_region(region), severity),
+            ]);
+
+            title = "RETURN OUTSIDE OF FUNCTION";
         }
     }
 

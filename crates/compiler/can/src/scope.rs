@@ -48,6 +48,8 @@ pub struct Scope {
     /// Ignored variables (variables that start with an underscore).
     /// We won't intern them because they're only used during canonicalization for error reporting.
     ignored_locals: VecMap<String, Region>,
+
+    pub early_returns: Vec<(Variable, Region)>,
 }
 
 impl Scope {
@@ -73,6 +75,7 @@ impl Scope {
             modules: ScopeModules::new(home, module_name),
             imported_symbols: default_imports,
             ignored_locals: VecMap::default(),
+            early_returns: Vec::default(),
         }
     }
 
@@ -429,7 +432,7 @@ impl Scope {
         self.aliases.contains_key(&name)
     }
 
-    pub fn inner_scope<F, T>(&mut self, f: F) -> T
+    pub fn inner_scope<F, T>(&mut self, entering_function: bool, f: F) -> T
     where
         F: FnOnce(&mut Scope) -> T,
     {
@@ -446,6 +449,11 @@ impl Scope {
         let locals_snapshot = self.locals.in_scope.len();
         let imported_symbols_snapshot = self.imported_symbols.len();
         let imported_modules_snapshot = self.modules.len();
+        let early_returns_snapshot = if entering_function {
+            std::mem::replace(&mut self.early_returns, Vec::new())
+        } else {
+            Vec::new()
+        };
 
         let result = f(self);
 
@@ -453,6 +461,9 @@ impl Scope {
         self.ignored_locals.truncate(ignored_locals_count);
         self.imported_symbols.truncate(imported_symbols_snapshot);
         self.modules.truncate(imported_modules_snapshot);
+        if entering_function {
+            self.early_returns = early_returns_snapshot;
+        }
 
         // anything added in the inner scope is no longer in scope now
         for i in locals_snapshot..self.locals.in_scope.len() {
@@ -882,7 +893,7 @@ mod test {
 
         assert!(scope.lookup(&ident, region).is_err());
 
-        scope.inner_scope(|inner| {
+        scope.inner_scope(false, |inner| {
             assert!(inner.introduce(ident.clone(), region).is_ok());
         });
 
@@ -943,7 +954,7 @@ mod test {
             &[ident1.clone(), ident2.clone(), ident3.clone(),]
         );
 
-        scope.inner_scope(|inner| {
+        scope.inner_scope(false, |inner| {
             let ident4 = Ident::from("Ångström");
             let ident5 = Ident::from("Sirály");
 

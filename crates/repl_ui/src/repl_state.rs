@@ -199,6 +199,9 @@ impl ReplState {
                                 ValueDef::ExpectFx { .. } => {
                                     todo!("handle receiving an `expect-fx` - what should the repl do for that?")
                                 }
+                                ValueDef::Return(_) => {
+                                    todo!("handle receiving an `return` - what should the repl do for that?")
+                                }
                                 ValueDef::ModuleImport(import) => match import.name.value.package {
                                     Some(_) => {
                                         todo!("handle importing a module from a package")

@@ -177,6 +177,12 @@ fn desugar_value_def<'a>(
                 body_expr: desugar_expr(env, scope, stmt_expr),
             }
         }
+
+        Return(return_expr) => {
+            let desugared_return_expr = &*env.arena.alloc(desugar_expr(env, scope, return_expr));
+
+            Return(&desugared_return_expr)
+        }
     }
 }
 
@@ -315,9 +321,15 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
             }
         },
 
-        // TODO support desugaring of Dbg, Expect, and ExpectFx
+        // TODO support desugaring of Dbg and ExpectFx
         Dbg { .. } | ExpectFx { .. } => value_def,
         ModuleImport { .. } | IngestedFileImport(_) => value_def,
+        Return(ret_expr) => match unwrap_suffixed_expression(arena, ret_expr, None) {
+            Ok(new_ret_expr) => ValueDef::Return(new_ret_expr),
+            Err(..) => {
+                internal_error!("Unable to desugar the suffix inside a Return value def");
+            }
+        },
 
         Stmt(..) => {
             internal_error!(
@@ -1008,6 +1020,7 @@ pub fn desugar_expr<'a>(
         Expect(condition, continuation) => {
             let desugared_condition = &*env.arena.alloc(desugar_expr(env, scope, condition));
             let desugared_continuation = &*env.arena.alloc(desugar_expr(env, scope, continuation));
+
             env.arena.alloc(Loc {
                 value: Expect(desugared_condition, desugared_continuation),
                 region: loc_expr.region,
@@ -1019,11 +1032,20 @@ pub fn desugar_expr<'a>(
         }
         DbgStmt(condition, continuation) => {
             let desugared_condition = &*env.arena.alloc(desugar_expr(env, scope, condition));
-
             let desugared_continuation = &*env.arena.alloc(desugar_expr(env, scope, continuation));
 
             env.arena.alloc(Loc {
                 value: *desugar_dbg_stmt(env, desugared_condition, desugared_continuation),
+                region: loc_expr.region,
+            })
+        }
+        Return(return_value, after_return) => {
+            let desugared_return_value = &*env.arena.alloc(desugar_expr(env, scope, return_value));
+            let desugared_after_return =
+                after_return.map(|ar| *env.arena.alloc(desugar_expr(env, scope, ar)));
+
+            env.arena.alloc(Loc {
+                value: Return(desugared_return_value, desugared_after_return),
                 region: loc_expr.region,
             })
         }

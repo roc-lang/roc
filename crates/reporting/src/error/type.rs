@@ -918,7 +918,6 @@ fn to_expr_report<'b>(
                         alloc.reflow("But I need every "),
                         alloc.keyword("expect"),
                         alloc.reflow(" condition to evaluate to a "),
-                        alloc.type_str("Bool"),
                         alloc.reflow("—either "),
                         alloc.tag("Bool.true".into()),
                         alloc.reflow(" or "),
@@ -958,7 +957,6 @@ fn to_expr_report<'b>(
                         alloc.reflow("But I need every "),
                         alloc.keyword("if"),
                         alloc.reflow(" condition to evaluate to a "),
-                        alloc.type_str("Bool"),
                         alloc.reflow("—either "),
                         alloc.tag("Bool.true".into()),
                         alloc.reflow(" or "),
@@ -997,7 +995,6 @@ fn to_expr_report<'b>(
                         alloc.reflow("But I need every "),
                         alloc.keyword("if"),
                         alloc.reflow(" guard condition to evaluate to a "),
-                        alloc.type_str("Bool"),
                         alloc.reflow("—either "),
                         alloc.tag("Bool.true".into()),
                         alloc.reflow(" or "),
@@ -1645,6 +1642,44 @@ fn to_expr_report<'b>(
                 unimplemented!("record default field is not implemented yet")
             }
             Reason::ImportParams(_) => unreachable!(),
+            Reason::Return => {
+                let problem = alloc.concat([
+                    alloc.text("This "),
+                    alloc.keyword("return"),
+                    alloc.reflow(
+                        " statement doesn't match the return type of its enclosing function:",
+                    ),
+                ]);
+
+                let comparison = type_comparison(
+                    alloc,
+                    found,
+                    expected_type,
+                    ExpectationContext::Arbitrary,
+                    add_category(alloc, alloc.text("It is"), &category),
+                    alloc.concat([
+                        alloc.reflow("But I need every "),
+                        alloc.keyword("return"),
+                        alloc.reflow(" statement in that function to return:"),
+                    ]),
+                    None,
+                );
+
+                Report {
+                    title: "TYPE MISMATCH".to_string(),
+                    filename,
+                    doc: alloc.stack([
+                        problem,
+                        alloc.region_with_subregion(
+                            lines.convert_region(region),
+                            lines.convert_region(expr_region),
+                            severity,
+                        ),
+                        comparison,
+                    ]),
+                    severity,
+                }
+            }
         },
     }
 }
@@ -1981,6 +2016,15 @@ fn format_category<'b>(
         ),
         Dbg => (
             alloc.concat([this_is, alloc.text(" a dbg statement")]),
+            alloc.text(" of type:"),
+        ),
+        Return => (
+            alloc.concat([
+                this_is,
+                alloc.reflow(" a "),
+                alloc.keyword("return"),
+                alloc.reflow(" statement"),
+            ]),
             alloc.text(" of type:"),
         ),
     }

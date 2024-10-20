@@ -19,7 +19,7 @@ use crate::parser::{
     map_with_arena, optional, reset_min_indent, sep_by1, sep_by1_e, set_min_indent, skip_first,
     skip_second, specialize_err, specialize_err_ref, then, two_bytes, zero_or_more, EClosure,
     EExpect, EExpr, EIf, EImport, EImportParams, EInParens, EList, ENumber, EPattern, ERecord,
-    EString, EType, EWhen, Either, ParseResult, Parser, SpaceProblem,
+    EReturn, EString, EType, EWhen, Either, ParseResult, Parser, SpaceProblem,
 };
 use crate::pattern::closure_param;
 use crate::state::State;
@@ -546,6 +546,7 @@ fn stmt_start<'a>(
             EExpr::Dbg,
             dbg_stmt_help(options, preceding_comment)
         )),
+        loc(specialize_err(EExpr::Return, return_help(options))),
         loc(specialize_err(EExpr::Import, map(import(), Stmt::ValueDef))),
         map(
             loc(specialize_err(EExpr::Closure, closure_help(options))),
@@ -1443,6 +1444,7 @@ fn parse_stmt_operator<'a>(
     let op_start = loc_op.region.start();
     let op_end = loc_op.region.end();
     let new_start = state.pos();
+
     match op {
         OperatorOrDef::BinOp(BinOp::Minus) if expr_state.end != op_start && op_end == new_start => {
             parse_negated_term(
@@ -2172,6 +2174,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::Dbg
         | Expr::DbgStmt(_, _)
         | Expr::LowLevelDbg(_, _, _)
+        | Expr::Return(_, _)
         | Expr::MalformedClosure
         | Expr::MalformedSuffixed(..)
         | Expr::PrecedenceConflict { .. }
@@ -2644,6 +2647,32 @@ fn expect_help<'a>(
     }
 }
 
+fn return_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Stmt<'a>, EReturn<'a>> {
+    (move |arena: &'a Bump, state: State<'a>, min_indent| {
+        let (_, return_kw, state) = loc(parser::keyword(keyword::RETURN, EReturn::Return))
+            .parse(arena, state, min_indent)?;
+
+        let (_, return_value, state) = parse_block(
+            options,
+            arena,
+            state,
+            true,
+            EReturn::IndentReturnValue,
+            EReturn::ReturnValue,
+        )
+        .map_err(|(_, f)| (MadeProgress, f))?;
+
+        let region = Region::span_across(&return_kw.region, &return_value.region);
+
+        let stmt = Stmt::ValueDef(ValueDef::Return(
+            arena.alloc(Loc::at(region, return_value.value)),
+        ));
+
+        Ok((MadeProgress, stmt, state))
+    })
+    .trace("return_help")
+}
+
 fn dbg_stmt_help<'a>(
     options: ExprParseOptions,
     preceding_comment: Region,
@@ -3028,6 +3057,7 @@ fn stmts_to_expr<'a>(
                     CalledVia::Space,
                 )
             }
+            Stmt::ValueDef(ValueDef::Return(return_value)) => Expr::Return(return_value, None),
             Stmt::ValueDef(ValueDef::Expect { .. }) => {
                 return Err(EExpr::Expect(
                     EExpect::Continuation(
@@ -3081,6 +3111,20 @@ fn stmts_to_defs<'a>(
 
                     last_expr = Some(sp_stmt.item.with_value(e));
                 }
+            }
+            Stmt::ValueDef(ValueDef::Return(return_value)) => {
+                if i == stmts.len() - 1 {
+                    last_expr = Some(Loc::at_zero(Expr::Return(return_value, None)));
+                } else {
+                    let rest = stmts_to_expr(&stmts[i + 1..], arena)?;
+                    last_expr = Some(Loc::at_zero(Expr::Return(
+                        return_value,
+                        Some(arena.alloc(rest)),
+                    )));
+                }
+
+                // don't re-process the rest of the statements, they got consumed by the early return
+                break;
             }
             Stmt::Backpassing(pats, call) => {
                 if last_expr.is_some() {
