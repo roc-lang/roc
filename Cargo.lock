@@ -3804,6 +3804,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "test_compile"
+version = "0.0.1"
+dependencies = [
+ "bumpalo",
+ "pretty_assertions",
+ "roc_builtins",
+ "roc_can",
+ "roc_derive",
+ "roc_load",
+ "roc_parse",
+ "roc_problem",
+ "roc_region",
+ "roc_reporting",
+ "roc_solve",
+ "roc_target",
+ "test_solve_helpers",
+]
+
+[[package]]
 name = "test_derive"
 version = "0.0.1"
 dependencies = [
