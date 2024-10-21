@@ -918,7 +918,7 @@ fn to_expr_report<'b>(
                         alloc.reflow("But I need every "),
                         alloc.keyword("expect"),
                         alloc.reflow(" condition to evaluate to a "),
-                        alloc.reflow("—either "),
+                        alloc.reflow("Bool—either "),
                         alloc.tag("Bool.true".into()),
                         alloc.reflow(" or "),
                         alloc.tag("Bool.false".into()),
@@ -1642,7 +1642,7 @@ fn to_expr_report<'b>(
                 unimplemented!("record default field is not implemented yet")
             }
             Reason::ImportParams(_) => unreachable!(),
-            Reason::Return => {
+            Reason::FunctionOutput => {
                 let problem = alloc.concat([
                     alloc.text("This "),
                     alloc.keyword("return"),

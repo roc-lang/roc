@@ -1017,7 +1017,7 @@ pub fn canonicalize_expr<'a>(
         }
         ast::Expr::Defs(loc_defs, loc_ret) => {
             // The body expression gets a new scope for canonicalization,
-            scope.inner_scope(false, |inner_scope| {
+            scope.inner_def_scope(|inner_scope| {
                 let defs: Defs = (*loc_defs).clone();
                 can_defs_with_return(env, var_store, inner_scope, env.arena.alloc(defs), loc_ret)
             })
@@ -1049,17 +1049,16 @@ pub fn canonicalize_expr<'a>(
             let mut can_branches = Vec::with_capacity(branches.len());
 
             for branch in branches.iter() {
-                let (can_when_branch, branch_references) =
-                    scope.inner_scope(false, |inner_scope| {
-                        canonicalize_when_branch(
-                            env,
-                            var_store,
-                            inner_scope,
-                            region,
-                            branch,
-                            &mut output,
-                        )
-                    });
+                let (can_when_branch, branch_references) = scope.inner_def_scope(|inner_scope| {
+                    canonicalize_when_branch(
+                        env,
+                        var_store,
+                        inner_scope,
+                        region,
+                        branch,
+                        &mut output,
+                    )
+                });
 
                 output.references.union_mut(&branch_references);
 
@@ -1534,7 +1533,7 @@ pub fn canonicalize_closure<'a>(
     loc_body_expr: &'a Loc<ast::Expr<'a>>,
     opt_def_name: Option<Symbol>,
 ) -> (ClosureData, Output) {
-    scope.inner_scope(true, |inner_scope| {
+    scope.inner_function_scope(|inner_scope| {
         canonicalize_closure_body(
             env,
             var_store,

@@ -2640,7 +2640,13 @@ fn canonicalize_pending_body<'a>(
 
                 // The closure is self tail recursive iff it tail calls itself (by defined name).
                 let is_recursive = match can_output.tail_call {
-                    Some(tail_symbol) if tail_symbol == *defined_symbol => Recursive::TailRecursive,
+                    Some(tail_symbol) if tail_symbol == *defined_symbol => {
+                        if closure_data.early_returns.is_empty() {
+                            Recursive::TailRecursive
+                        } else {
+                            Recursive::Recursive
+                        }
+                    }
                     _ => Recursive::NotRecursive,
                 };
 

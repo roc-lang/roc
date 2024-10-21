@@ -1085,7 +1085,13 @@ fn fmt_return<'a>(
 
     buf.spaces(1);
 
-    return_value.format(buf, indent);
+    let return_indent = if return_value.is_multiline() {
+        indent + INDENT
+    } else {
+        indent
+    };
+
+    return_value.format(buf, return_indent);
 
     if let Some(after_return) = after_return {
         after_return.format_with_options(buf, parens, newlines, indent);

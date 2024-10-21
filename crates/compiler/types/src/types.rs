@@ -3425,7 +3425,7 @@ pub enum Reason {
     },
     CrashArg,
     ImportParams(ModuleId),
-    Return,
+    FunctionOutput,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]

@@ -136,7 +136,7 @@ fn constrain_untyped_closure(
     vars.push(fn_var);
 
     let body_type = constraints.push_expected_type(ForReason(
-        Reason::Return,
+        Reason::FunctionOutput,
         return_type_index,
         loc_body_expr.region,
     ));
@@ -1409,7 +1409,7 @@ pub fn constrain_expr(
             let return_type_index = constraints.push_variable(*return_var);
 
             let expected_return_value = constraints.push_expected_type(ForReason(
-                Reason::Return,
+                Reason::FunctionOutput,
                 return_type_index,
                 return_value.region,
             ));
