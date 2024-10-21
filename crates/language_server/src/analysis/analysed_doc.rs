@@ -1,11 +1,17 @@
 use log::{debug, info};
+use roc_can::{
+    def::Def,
+    expr::Expr,
+    traverse::{DeclarationInfo, FoundDeclaration},
+};
+use roc_cli::annotation_edit;
 use std::collections::HashMap;
 
 use bumpalo::Bump;
 
 use roc_module::symbol::{ModuleId, Symbol};
 
-use roc_region::all::LineInfo;
+use roc_region::all::{LineColumn, LineInfo};
 
 use tower_lsp::lsp_types::{
     CompletionItem, Diagnostic, GotoDefinitionResponse, Hover, HoverContents, LanguageString,
@@ -14,7 +20,7 @@ use tower_lsp::lsp_types::{
 
 use crate::{
     analysis::completion::{field_completion, get_completion_items, get_module_completion_items},
-    convert::{ToRange, ToRocPosition},
+    convert::{ToRange, ToRegion, ToRocPosition},
 };
 
 use super::{
@@ -307,5 +313,67 @@ impl AnalyzedDocument {
                 Some(completions)
             }
         }
+    }
+
+    pub fn decl_signature(&self, range: Range, latest_doc: &DocInfo) -> Option<TextEdit> {
+        let line_info = self.line_info();
+        let region = range.to_region(line_info);
+
+        let AnalyzedModule {
+            subs,
+            declarations,
+            module_id,
+            interns,
+            ..
+        } = self.module()?;
+
+        let found_decl = roc_can::traverse::find_declaration_at(region, declarations)?;
+
+        let signature = format_var_type(found_decl.var(), &mut subs.clone(), module_id, interns);
+
+        use DeclarationInfo as DI;
+        let symbol_range = match found_decl {
+            FoundDeclaration::Decl(DI::Value { loc_symbol, .. }) => loc_symbol.byte_range(),
+            FoundDeclaration::Decl(DI::Function { loc_symbol, .. }) => loc_symbol.byte_range(),
+            FoundDeclaration::Decl(DI::Destructure { loc_pattern, .. }) => loc_pattern.byte_range(),
+            FoundDeclaration::Def(Def { loc_pattern, .. }) => loc_pattern.byte_range(),
+            _ => return None,
+        };
+
+        let expr = match found_decl {
+            FoundDeclaration::Decl(DI::Value { loc_expr, .. }) => &loc_expr.value,
+            FoundDeclaration::Decl(DI::Function { loc_body, .. }) => &loc_body.value,
+            FoundDeclaration::Decl(DI::Destructure { loc_expr, .. }) => &loc_expr.value,
+            FoundDeclaration::Def(Def { loc_expr, .. }) => &loc_expr.value,
+            _ => return None,
+        };
+
+        let annotation = match found_decl {
+            FoundDeclaration::Decl(DI::Value { annotation, .. }) => annotation,
+            FoundDeclaration::Decl(DI::Function { annotation, .. }) => annotation,
+            FoundDeclaration::Decl(DI::Destructure { annotation, .. }) => annotation,
+            FoundDeclaration::Def(Def { annotation, .. }) => annotation.as_ref(),
+            _ => return None,
+        };
+
+        if annotation.is_some() | matches!(expr, Expr::ImportParams(..)) {
+            return None;
+        }
+
+        let (offset, new_text) = annotation_edit(
+            &self.doc_info.source,
+            &mut subs.clone(),
+            interns,
+            *module_id,
+            found_decl.var(),
+            symbol_range,
+        );
+
+        let LineColumn { line, column } = line_info.convert_offset(offset as u32);
+        let position = Position::new(line, column);
+        let range = Range::new(position, position);
+
+        let edit = TextEdit { range, new_text };
+        Some(edit)
     }
 }
