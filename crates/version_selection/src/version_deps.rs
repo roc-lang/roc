@@ -1,18 +1,32 @@
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::hash::Hash;
 pub struct Deps<Pkg, Ver> {
-    exact_versions: HashMap<Pkg, (Ver, Option<Ver>)>,
+    exact_versions: HashMap<Pkg, Ver>,
     indirect_deps: HashMap<(Pkg, Ver), HashMap<Pkg, Ver>>,
+    exclusions: HashMap<Pkg, HashSet<Ver>>,
 }
 
-impl<Pkg: Clone + Copy + Eq + Hash, Ver: Ord + Clone + Copy + Eq + Hash> Deps<Pkg, Ver> {
+impl<Pkg: Ord + Clone + Copy + Eq + Hash, Ver: Ord + Clone + Copy + Eq + Hash> Deps<Pkg, Ver> {
     /// Root modules always require exact versions for all their dependencies.
-    pub fn from_root(root_deps: impl IntoIterator<Item = (Pkg, Ver)>) -> Self {
+    pub fn from_root(
+        root_deps: impl IntoIterator<Item = (Pkg, Ver)>,
+        exclusions: impl IntoIterator<Item = (Pkg, Ver)>,
+    ) -> Self {
+        let exact_versions = root_deps.into_iter().collect();
+        let mut exclusion_map = HashMap::default();
+
+        for (pkg, version) in exclusions {
+            exclusion_map
+                .entry(pkg)
+                .and_modify(|set: &mut HashSet<Ver>| {
+                    set.insert(version);
+                })
+                .or_insert_with(|| std::iter::once(version).collect());
+        }
+
         Self {
-            exact_versions: root_deps
-                .into_iter()
-                .map(|(pkg, ver)| (pkg, (ver, None)))
-                .collect(),
+            exact_versions,
+            exclusions: exclusion_map,
             indirect_deps: HashMap::default(),
         }
     }
@@ -87,16 +101,15 @@ mod tests {
 
     #[test]
     fn test_from_root() {
-        let root_deps = [("a", 1), ("b", 2)];
-        let deps = Deps::from_root(root_deps);
+        let deps = Deps::from_root([("a", 1), ("b", 2)], []);
         assert_eq!(deps.exact_versions.len(), 2);
-        assert_eq!(deps.exact_versions["a"], (1, None));
-        assert_eq!(deps.exact_versions["b"], (2, None));
+        assert_eq!(deps.exact_versions["a"], 1);
+        assert_eq!(deps.exact_versions["b"], 2);
     }
 
     #[test]
     fn test_pkg_depends_on() {
-        let mut deps = Deps::from_root([("a", 1)]);
+        let mut deps = Deps::from_root([("a", 1)], []);
         deps.pkg_depends_on("a", 1, [("b", 2), ("c", 3)]);
         deps.pkg_depends_on("b", 2, [("d", 4)]);
 
@@ -107,43 +120,38 @@ mod tests {
 
     #[test]
     fn test_select_versions_simple() {
-        let mut deps = Deps::from_root([("a", 1)]);
+        let mut deps = Deps::from_root([("a", 1)], []);
         deps.pkg_depends_on("a", 1, [("b", 2)]);
-        let result = deps.select_versions();
+        let result = deps.select_versions().unwrap();
 
         assert_eq!(result.len(), 2);
-        assert_eq!(result["a"], (1, None));
-        assert_eq!(result["b"], (2, None));
+        assert_eq!(result["a"], 1);
+        assert_eq!(result["b"], 2);
     }
 
     #[test]
-    fn test_select_versions_higher_version() {
-        let mut deps = Deps::from_root([("a", 1), ("b", 2)]);
+    fn test_select_versions_incompatible() {
+        let mut deps = Deps::from_root([("a", 1), ("b", 2)], []);
         deps.pkg_depends_on("a", 1, [("b", 3)]);
-        let result = deps.select_versions();
+        let bad_pkgs = deps.select_versions().unwrap_err();
 
-        assert_eq!(result["a"], (1, None));
-        assert_eq!(result["b"], (2, Some(3)));
-        assert_eq!(result.len(), 2);
+        assert_eq!(bad_pkgs, std::iter::once("b").collect());
     }
 
     #[test]
-    fn test_select_versions_multiple_higher_versions() {
-        let mut deps = Deps::from_root([("a", 1), ("b", 2)]);
-        deps.pkg_depends_on("a", 1, [("b", 3)]);
+    fn test_select_versions_multiple_incompatibilities() {
+        let mut deps = Deps::from_root([("a", 1), ("b", 2), ("c", 3)], []);
+        deps.pkg_depends_on("a", 1, [("b", 3), ("c", 4)]);
         deps.pkg_depends_on("b", 2, [("c", 1)]);
-        deps.pkg_depends_on("b", 3, [("c", 2)]);
-        let result = deps.select_versions();
+        deps.pkg_depends_on("c", 3, [("d", 4)]);
+        let bad_pkgs = deps.select_versions().unwrap_err();
 
-        assert_eq!(result["a"], (1, None));
-        assert_eq!(result["b"], (2, Some(3)));
-        assert_eq!(result["c"], (2, None));
-        assert_eq!(result.len(), 3);
+        assert_eq!(bad_pkgs, ["b", "c"].into_iter().collect())
     }
 
     #[test]
     fn test_select_versions_complex_scenario() {
-        let mut deps = Deps::from_root([("a", 1), ("b", 1)]);
+        let mut deps = Deps::from_root([("a", 1), ("b", 1)], []);
         deps.pkg_depends_on("a", 1, [("c", 2), ("d", 1)]);
         deps.pkg_depends_on("b", 1, [("c", 3), ("e", 1)]); // means we'll select c@3
         deps.pkg_depends_on("c", 2, [("f", 4)]); // won't be selected bc we select c@3
@@ -155,57 +163,57 @@ mod tests {
         deps.pkg_depends_on("g", 1, []); // will be selected bc c@3 depends on it
         deps.pkg_depends_on("h", 1, []); // won't be selected bc d@1 depends on it but e@1 depends on v2
         deps.pkg_depends_on("h", 2, []); // will be selected bc e@1 depends on it
-        let result = deps.select_versions();
+        let result = deps.select_versions().unwrap();
 
-        assert_eq!(result["a"], (1, None));
-        assert_eq!(result["b"], (1, None));
-        assert_eq!(result["c"], (3, None));
-        assert_eq!(result["d"], (1, None));
-        assert_eq!(result["e"], (1, None));
-        assert_eq!(result["f"], (2, None));
-        assert_eq!(result["g"], (1, None));
-        assert_eq!(result["h"], (2, None));
+        assert_eq!(result["a"], 1);
+        assert_eq!(result["b"], 1);
+        assert_eq!(result["c"], 3);
+        assert_eq!(result["d"], 1);
+        assert_eq!(result["e"], 1);
+        assert_eq!(result["f"], 2);
+        assert_eq!(result["g"], 1);
+        assert_eq!(result["h"], 2);
         assert_eq!(result.len(), 8);
     }
 
     #[test]
     fn test_select_versions_with_multiple_paths() {
-        let mut deps = Deps::from_root([("a", 1)]);
+        let mut deps = Deps::from_root([("a", 1)], []);
         deps.pkg_depends_on("a", 1, [("b", 1), ("c", 1)]);
         deps.pkg_depends_on("b", 1, [("d", 2)]);
         deps.pkg_depends_on("c", 1, [("d", 3)]);
-        let result = deps.select_versions();
+        let result = deps.select_versions().unwrap();
 
-        assert_eq!(result["a"], (1, None));
-        assert_eq!(result["b"], (1, None));
-        assert_eq!(result["c"], (1, None));
-        assert_eq!(result["d"], (3, None));
+        assert_eq!(result["a"], 1);
+        assert_eq!(result["b"], 1);
+        assert_eq!(result["c"], 1);
+        assert_eq!(result["d"], 3);
         assert_eq!(result.len(), 4);
     }
 
     #[test]
     fn test_select_versions_circular_dependency() {
-        let mut deps = Deps::from_root([("a", 1)]);
+        let mut deps = Deps::from_root([("a", 1)], []);
         deps.pkg_depends_on("a", 1, [("b", 1)]);
         deps.pkg_depends_on("b", 1, [("a", 1)]);
-        let result = deps.select_versions();
+        let result = deps.select_versions().unwrap();
 
-        assert_eq!(result["a"], (1, None));
-        assert_eq!(result["b"], (1, None));
+        assert_eq!(result["a"], 1);
+        assert_eq!(result["b"], 1);
         assert_eq!(result.len(), 2);
     }
 
     #[test]
     fn test_select_versions_empty() {
-        let deps: Deps<&'static str, i32> = Deps::from_root([]);
-        let result = deps.select_versions();
+        let deps: Deps<&'static str, i32> = Deps::from_root([], []);
+        let result = deps.select_versions().unwrap();
 
         assert_eq!(result.len(), 0);
     }
 
     #[test]
     fn test_backtracking() {
-        let mut deps = Deps::from_root([("foo", 1), ("bar", 1)]);
+        let mut deps = Deps::from_root([("foo", 1), ("bar", 1)], []);
         // Here, our `foo` dependency leads us to select v2 of baz.
         deps.pkg_depends_on("foo", 1, [("baz", 2)]);
         // If we only consider `foo`, we would select v2 of baz, and therefore v3 of `other`.
@@ -214,38 +222,38 @@ mod tests {
         deps.pkg_depends_on("baz", 3, [("other", 1)]);
         // Here, our `bar` dependency leads us to select v3 of baz.
         deps.pkg_depends_on("bar", 1, [("baz", 3)]);
-        let result = deps.select_versions();
+        let result = deps.select_versions().unwrap();
 
-        assert_eq!(result["foo"], (1, None));
-        assert_eq!(result["bar"], (1, None));
-        assert_eq!(result["baz"], (3, None));
-        assert_eq!(result["other"], (1, None));
+        assert_eq!(result["foo"], 1);
+        assert_eq!(result["bar"], 1);
+        assert_eq!(result["baz"], 3);
+        assert_eq!(result["other"], 1);
         assert_eq!(result.len(), 4);
     }
 
     #[test]
     fn test_consistent_higher_version_selection() {
-        let mut deps = Deps::from_root([("a", 1), ("b", 1)]);
+        let mut deps = Deps::from_root([("a", 1), ("b", 1)], []);
         deps.pkg_depends_on("a", 1, [("c", 2)]);
         deps.pkg_depends_on("b", 1, [("c", 3)]);
-        let result = deps.select_versions();
+        let result = deps.select_versions().unwrap();
 
-        assert_eq!(result["a"], (1, None));
-        assert_eq!(result["b"], (1, None));
-        assert_eq!(result["c"], (3, None));
+        assert_eq!(result["a"], 1);
+        assert_eq!(result["b"], 1);
+        assert_eq!(result["c"], 3);
     }
 
     #[test]
     fn test_multiple_higher_versions_consistency() {
-        let mut deps = Deps::from_root([("a", 1), ("b", 1), ("c", 1)]);
+        let mut deps = Deps::from_root([("a", 1), ("b", 1), ("c", 1)], []);
         deps.pkg_depends_on("a", 1, [("d", 2)]);
         deps.pkg_depends_on("b", 1, [("d", 3)]);
         deps.pkg_depends_on("c", 1, [("d", 4)]);
-        let result = deps.select_versions();
+        let result = deps.select_versions().unwrap();
 
-        assert_eq!(result["a"], (1, None));
-        assert_eq!(result["b"], (1, None));
-        assert_eq!(result["c"], (1, None));
-        assert_eq!(result["d"], (4, None));
+        assert_eq!(result["a"], 1);
+        assert_eq!(result["b"], 1);
+        assert_eq!(result["c"], 1);
+        assert_eq!(result["d"], 4);
     }
 }
