@@ -22,6 +22,10 @@ pub enum DeclarationInfo<'a> {
         pattern: Pattern,
         annotation: Option<&'a Annotation>,
     },
+    Return {
+        loc_expr: &'a Loc<Expr>,
+        expr_var: Variable,
+    },
     Expectation {
         loc_condition: &'a Loc<Expr>,
     },
@@ -50,6 +54,7 @@ impl<'a> DeclarationInfo<'a> {
                 loc_expr,
                 ..
             } => Region::span_across(&loc_symbol.region, &loc_expr.region),
+            Return { loc_expr, .. } => loc_expr.region,
             Expectation { loc_condition } => loc_condition.region,
             Function {
                 loc_symbol,
@@ -67,6 +72,7 @@ impl<'a> DeclarationInfo<'a> {
     fn var(&self) -> Variable {
         match self {
             DeclarationInfo::Value { expr_var, .. } => *expr_var,
+            DeclarationInfo::Return { expr_var, .. } => *expr_var,
             DeclarationInfo::Expectation { .. } => Variable::BOOL,
             DeclarationInfo::Function { expr_var, .. } => *expr_var,
             DeclarationInfo::Destructure { expr_var, .. } => *expr_var,
@@ -184,6 +190,9 @@ pub fn walk_decl<V: Visitor>(visitor: &mut V, decl: DeclarationInfo<'_>) {
         }
         Expectation { loc_condition } => {
             visitor.visit_expr(&loc_condition.value, loc_condition.region, Variable::BOOL);
+        }
+        Return { loc_expr, expr_var } => {
+            visitor.visit_expr(&loc_expr.value, loc_expr.region, expr_var);
         }
         Function {
             loc_symbol,
@@ -402,6 +411,12 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
                 loc_continuation.region,
                 Variable::NULL,
             );
+        }
+        Expr::Return {
+            return_value,
+            return_var,
+        } => {
+            visitor.visit_expr(&return_value.value, return_value.region, *return_var);
         }
         Expr::TypedHole(_) => { /* terminal */ }
         Expr::RuntimeError(..) => { /* terminal */ }

@@ -446,6 +446,7 @@ fn defn_help(
         function_type: var_store.fresh(),
         closure_type: var_store.fresh(),
         return_type: ret_var,
+        early_returns: vec![],
         name: fn_name,
         captured_symbols: Vec::new(),
         recursive: Recursive::NotRecursive,

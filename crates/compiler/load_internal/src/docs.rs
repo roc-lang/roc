@@ -281,6 +281,9 @@ fn generate_entry_docs(
                 ValueDef::IngestedFileImport { .. } => {
                     // Don't generate docs for ingested file imports
                 }
+                ValueDef::Return { .. } => {
+                    // Don't generate docs for `return`s
+                }
 
                 ValueDef::Stmt(loc_expr) => {
                     if let roc_parse::ast::Expr::Var {

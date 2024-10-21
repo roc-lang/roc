@@ -519,6 +519,13 @@ pub enum Expr<'a> {
         &'a [&'a WhenBranch<'a>],
     ),
 
+    Return(
+        /// The return value
+        &'a Loc<Expr<'a>>,
+        /// The unused code after the return statement
+        Option<&'a Loc<Expr<'a>>>,
+    ),
+
     // Blank Space (e.g. comments, spaces, newlines) before or after an expression.
     // We preserve this for the formatter; canonicalization ignores it.
     SpaceBefore(&'a Expr<'a>, &'a [CommentOrNewline<'a>]),
@@ -667,6 +674,9 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::UnaryOp(a, _) => is_expr_suffixed(&a.value),
         Expr::When(cond, branches) => {
             is_expr_suffixed(&cond.value) || branches.iter().any(|x| is_when_branch_suffixed(x))
+        }
+        Expr::Return(a, b) => {
+            is_expr_suffixed(&a.value) || b.is_some_and(|loc_b| is_expr_suffixed(&loc_b.value))
         }
         Expr::SpaceBefore(a, _) => is_expr_suffixed(a),
         Expr::SpaceAfter(a, _) => is_expr_suffixed(a),
@@ -826,6 +836,8 @@ pub enum ValueDef<'a> {
     IngestedFileImport(IngestedFileImport<'a>),
 
     Stmt(&'a Loc<Expr<'a>>),
+
+    Return(&'a Loc<Expr<'a>>),
 }
 
 impl<'a> ValueDef<'a> {
@@ -936,6 +948,16 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                     expr_stack.reserve(2);
                     expr_stack.push(&condition.value);
                     expr_stack.push(&cont.value);
+                }
+                Return(return_value, after_return) => {
+                    if let Some(after_return) = after_return {
+                        expr_stack.reserve(2);
+                        expr_stack.push(&return_value.value);
+                        expr_stack.push(&after_return.value);
+                    } else {
+                        expr_stack.reserve(1);
+                        expr_stack.push(&return_value.value);
+                    }
                 }
                 Apply(fun, args, _) => {
                     expr_stack.reserve(args.len() + 1);
@@ -1068,6 +1090,7 @@ impl<'a, 'b> Iterator for RecursiveValueDefIter<'a, 'b> {
                             }
                         }
                         ValueDef::Stmt(loc_expr) => self.push_pending_from_expr(&loc_expr.value),
+                        ValueDef::Return(loc_expr) => self.push_pending_from_expr(&loc_expr.value),
                         ValueDef::Annotation(_, _) | ValueDef::IngestedFileImport(_) => {}
                     }
 
@@ -2463,6 +2486,7 @@ impl<'a> Malformed for Expr<'a> {
             Dbg => false,
             DbgStmt(condition, continuation) => condition.is_malformed() || continuation.is_malformed(),
             LowLevelDbg(_, condition, continuation) => condition.is_malformed() || continuation.is_malformed(),
+            Return(return_value, after_return) => return_value.is_malformed() || after_return.is_some_and(|ar| ar.is_malformed()),
             Apply(func, args, _) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
             BinOps(firsts, last) => firsts.iter().any(|(expr, _)| expr.is_malformed()) || last.is_malformed(),
             UnaryOp(expr, _) => expr.is_malformed(),
@@ -2713,6 +2737,7 @@ impl<'a> Malformed for ValueDef<'a> {
                 annotation,
             }) => path.is_malformed() || annotation.is_malformed(),
             ValueDef::Stmt(loc_expr) => loc_expr.is_malformed(),
+            ValueDef::Return(loc_expr) => loc_expr.is_malformed(),
         }
     }
 }

@@ -242,6 +242,12 @@ pub enum Problem {
         one_occurrence: Region,
         kind: AliasKind,
     },
+    ReturnOutsideOfFunction {
+        region: Region,
+    },
+    StatementsAfterReturn {
+        region: Region,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -323,6 +329,8 @@ impl Problem {
             Problem::OverAppliedDbg { .. } => RuntimeError,
             Problem::DefsOnlyUsedInRecursion(_, _) => Warning,
             Problem::FileProblem { .. } => Fatal,
+            Problem::ReturnOutsideOfFunction { .. } => Warning,
+            Problem::StatementsAfterReturn { .. } => Warning,
         }
     }
 
@@ -434,6 +442,7 @@ impl Problem {
                 field: region,
             })
             | Problem::RuntimeError(RuntimeError::ReadIngestedFileError { region, .. })
+            | Problem::RuntimeError(RuntimeError::ReturnOutsideOfFunction(region))
             | Problem::InvalidAliasRigid { region, .. }
             | Problem::InvalidInterpolation(region)
             | Problem::InvalidHexadecimal(region)
@@ -485,7 +494,9 @@ impl Problem {
             | Problem::UnappliedCrash { region }
             | Problem::OverAppliedDbg { region }
             | Problem::UnappliedDbg { region }
-            | Problem::DefsOnlyUsedInRecursion(_, region) => Some(*region),
+            | Problem::DefsOnlyUsedInRecursion(_, region)
+            | Problem::ReturnOutsideOfFunction { region }
+            | Problem::StatementsAfterReturn { region } => Some(*region),
             Problem::RuntimeError(RuntimeError::CircularDef(cycle_entries))
             | Problem::BadRecursion(cycle_entries) => {
                 cycle_entries.first().map(|entry| entry.expr_region)
@@ -692,6 +703,8 @@ pub enum RuntimeError {
     },
 
     MalformedSuffixed(Region),
+
+    ReturnOutsideOfFunction(Region),
 }
 
 impl RuntimeError {
@@ -740,7 +753,8 @@ impl RuntimeError {
                 record: _,
                 field: region,
             }
-            | RuntimeError::ReadIngestedFileError { region, .. } => *region,
+            | RuntimeError::ReadIngestedFileError { region, .. }
+            | RuntimeError::ReturnOutsideOfFunction(region) => *region,
             RuntimeError::InvalidUnicodeCodePt(region) => *region,
             RuntimeError::UnresolvedTypeVar | RuntimeError::ErroneousType => Region::zero(),
             RuntimeError::LookupNotInScope { loc_name, .. } => loc_name.region,
