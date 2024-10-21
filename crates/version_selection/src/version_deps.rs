@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::Hash;
 
 pub struct Deps<Pkg, Ver> {
@@ -56,74 +56,75 @@ impl<Pkg: Ord + Clone + Copy + Eq + Hash, Ver: Ord + Clone + Copy + Eq + Hash> D
     /// If solving fails, this returns a Set of the packages that couldn't be solved.
     /// (Detecting dependency cycles should be done separately.)
     pub fn select_versions(self) -> Result<HashMap<Pkg, Ver>, HashSet<Pkg>> {
-        use std::collections::{BTreeMap, BTreeSet, VecDeque};
+        // Map of package to its required version
+        let mut required_versions: BTreeMap<Pkg, Ver> = BTreeMap::new();
 
-        // Use BTreeMap and BTreeSet for deterministic behavior
-        let mut selected_versions: BTreeMap<Pkg, Ver> = BTreeMap::new();
-        let mut failed_pkgs: BTreeSet<Pkg> = BTreeSet::new();
-
-        // Initialize the pending queue with the exact_versions
-        let mut pending: VecDeque<(Pkg, Ver)> = VecDeque::new();
-
-        for (pkg, ver) in &self.exact_versions {
-            selected_versions.insert(pkg.clone(), ver.clone());
-            pending.push_back((pkg.clone(), ver.clone()));
+        // Initialize required_versions with exact_versions
+        for (pkg, ver) in self.exact_versions.iter() {
+            required_versions.insert(pkg.clone(), ver.clone());
         }
 
-        let mut processed: BTreeSet<(Pkg, Ver)> = BTreeSet::new();
+        // Packages to process, using BTreeSet for deterministic ordering
+        let mut packages_to_process: BTreeSet<Pkg> = required_versions.keys().cloned().collect();
 
-        while let Some((pkg, ver)) = pending.pop_front() {
+        // Keep track of whether we've updated a package's version
+        let mut updated_packages: BTreeSet<Pkg> = BTreeSet::new();
+
+        while !packages_to_process.is_empty() {
+            // Pop package with lowest key (deterministic order)
+            let pkg = packages_to_process.iter().next().unwrap().clone();
+            packages_to_process.remove(&pkg);
+            let ver = required_versions[&pkg];
+
             // Check for exclusions
             if let Some(excluded_versions) = self.exclusions.get(&pkg) {
                 if excluded_versions.contains(&ver) {
-                    failed_pkgs.insert(pkg.clone());
-                    continue;
+                    // Package version is excluded
+                    return Err(std::iter::once(pkg.clone()).collect());
                 }
             }
 
-            // Mark this (pkg, ver) as processed
-            if !processed.insert((pkg.clone(), ver.clone())) {
-                continue;
-            }
-
-            // Get dependencies of (pkg, ver)
+            // Get dependencies of this package-version
             if let Some(deps) = self.indirect_deps.get(&(pkg.clone(), ver.clone())) {
-                for (dep_pkg, dep_ver) in deps {
+                for (dep_pkg, dep_ver) in deps.iter() {
                     // Check for exclusions
                     if let Some(excluded_versions) = self.exclusions.get(dep_pkg) {
                         if excluded_versions.contains(dep_ver) {
-                            failed_pkgs.insert(dep_pkg.clone());
-                            continue;
+                            return Err(std::iter::once(dep_pkg.clone()).collect());
                         }
                     }
 
-                    let selected_ver = selected_versions.get(dep_pkg);
-                    if let Some(selected_ver) = selected_ver {
-                        if dep_ver > selected_ver {
+                    // See if dep_pkg is in required_versions
+                    if let Some(existing_ver) = required_versions.get(dep_pkg) {
+                        if dep_ver > existing_ver {
                             // Update to higher version
-                            selected_versions.insert(dep_pkg.clone(), dep_ver.clone());
-                            pending.push_back((dep_pkg.clone(), dep_ver.clone()));
+                            required_versions.insert(dep_pkg.clone(), dep_ver.clone());
+                            packages_to_process.insert(dep_pkg.clone());
+                            updated_packages.insert(dep_pkg.clone());
                         }
+                        // Else, existing version is higher or equal, do nothing
                     } else {
-                        // Select this version
-                        selected_versions.insert(dep_pkg.clone(), dep_ver.clone());
-                        pending.push_back((dep_pkg.clone(), dep_ver.clone()));
+                        // First time we see dep_pkg
+                        required_versions.insert(dep_pkg.clone(), dep_ver.clone());
+                        packages_to_process.insert(dep_pkg.clone());
+                        updated_packages.insert(dep_pkg.clone());
                     }
                 }
             }
         }
 
-        // Check if selected_versions satisfy exact_versions
-        for (pkg, ver) in &self.exact_versions {
-            if selected_versions.get(pkg) != Some(ver) {
+        // After processing, check if required_versions satisfy the exact_versions
+        let mut failed_pkgs = HashSet::new();
+        for (pkg, ver) in self.exact_versions.iter() {
+            if required_versions.get(pkg) != Some(ver) {
                 failed_pkgs.insert(pkg.clone());
             }
         }
 
         if failed_pkgs.is_empty() {
-            Ok(selected_versions.into_iter().collect())
+            Ok(required_versions.into_iter().collect())
         } else {
-            Err(failed_pkgs.into_iter().collect())
+            Err(failed_pkgs)
         }
     }
 }
