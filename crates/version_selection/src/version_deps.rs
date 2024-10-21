@@ -1,12 +1,13 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::hash::Hash;
 
 use roc_collections::{VecMap, VecSet};
 
 pub struct Deps<Pkg, Ver> {
     exact_versions: VecMap<Pkg, Ver>,
-    indirect_deps: HashMap<(Pkg, Ver), HashMap<Pkg, Ver>>,
-    exclusions: HashMap<Pkg, HashSet<Ver>>,
+    versions: HashMap<Pkg, BTreeSet<Ver>>,
+    indirect_deps: HashMap<(Pkg, Ver), VecMap<Pkg, Ver>>,
+    exclusions: VecSet<(Pkg, Ver)>,
 }
 
 impl<Pkg: Ord + Clone + Copy + Eq + Hash, Ver: Ord + Clone + Copy + Eq + Hash> Deps<Pkg, Ver> {
@@ -14,24 +15,37 @@ impl<Pkg: Ord + Clone + Copy + Eq + Hash, Ver: Ord + Clone + Copy + Eq + Hash> D
     pub fn from_root(
         root_deps: impl IntoIterator<Item = (Pkg, Ver)>,
         exclusions: impl IntoIterator<Item = (Pkg, Ver)>,
-    ) -> Self {
-        let exact_versions = root_deps.into_iter().collect();
-        let mut exclusion_map = HashMap::default();
+    ) -> Result<Self, VecSet<Pkg>> {
+        let exclusions: VecSet<(Pkg, Ver)> = exclusions.into_iter().collect();
+        let root_deps = root_deps.into_iter();
+        let mut exact_versions = VecMap::with_capacity(root_deps.size_hint().0);
 
-        for (pkg, version) in exclusions {
-            exclusion_map
-                .entry(pkg)
-                .and_modify(|set: &mut HashSet<Ver>| {
-                    set.insert(version);
-                })
-                .or_insert_with(|| std::iter::once(version).collect());
+        // Verify that no package-versions are both required and excluded.
+        // If any are, error out before attempting anything else.
+        let mut excluded_direct_deps = VecSet::default();
+
+        for (pkg, ver) in root_deps {
+            if exclusions.contains(&(pkg, ver)) {
+                // Package version is excluded; we're going to return early.
+                excluded_direct_deps.insert(pkg);
+            } else {
+                exact_versions.insert(pkg, ver);
+            }
         }
 
-        Self {
-            exact_versions,
-            exclusions: exclusion_map,
-            indirect_deps: HashMap::default(),
+        if excluded_direct_deps.is_empty() {
+            Ok(Self {
+                exact_versions,
+                exclusions,
+                indirect_deps: HashMap::default(),
+            })
+        } else {
+            Err(excluded_direct_deps)
         }
+    }
+
+    fn is_excluded(&self, pkg: Pkg, ver: Ver) -> bool {
+        self.exclusions.contains(&(pkg, ver))
     }
 
     /// Record that a package depends on (at least) these versions of other packages.
@@ -43,9 +57,12 @@ impl<Pkg: Ord + Clone + Copy + Eq + Hash, Ver: Ord + Clone + Copy + Eq + Hash> D
         ver: Ver,
         deps: impl IntoIterator<Item = (Pkg, Ver)>,
     ) {
-        self.indirect_deps
-            .entry((pkg, ver))
-            .or_insert_with(|| deps.into_iter().collect());
+        // Excluded package/version combinations don't even get recorded. It's like they don't exist!
+        if !self.is_excluded(pkg, ver) {
+            self.indirect_deps
+                .entry((pkg, ver))
+                .or_insert_with(|| deps.into_iter().collect());
+        }
     }
 
     /// Consume this and return an exact version to use for each package in the dep tree.
@@ -57,7 +74,7 @@ impl<Pkg: Ord + Clone + Copy + Eq + Hash, Ver: Ord + Clone + Copy + Eq + Hash> D
     ///
     /// If solving fails, this returns a Set of the packages that couldn't be solved.
     /// (Detecting dependency cycles should be done separately.)
-    pub fn select_versions(self) -> Result<HashMap<Pkg, Ver>, HashSet<Pkg>> {
+    pub fn select_versions(self) -> Result<VecMap<Pkg, Ver>, VecSet<Pkg>> {
         // Map of package to its required version. Use VecMap for deterministic ordering.
         // Initialize required_versions with exact_versions
         let mut required_versions: VecMap<Pkg, Ver> = self.exact_versions.clone();
@@ -68,46 +85,50 @@ impl<Pkg: Ord + Clone + Copy + Eq + Hash, Ver: Ord + Clone + Copy + Eq + Hash> D
         // Keep track of whether we've updated a package's version
         let mut updated_packages: VecSet<Pkg> = VecSet::default();
 
-        while !packages_to_process.is_empty() {
-            // Pop package with lowest key (deterministic order)
-            let pkg = packages_to_process.iter().next().unwrap().clone();
-            packages_to_process.remove(&pkg);
-            let ver = required_versions.get(&pkg).unwrap();
+        // First, go through and delete all the unreachable dependencies.
+        // For example, if `foo@1` depends on `bar@2`, but `bar@2` is excluded,
+        // see if we can find a `bar@3` to use instead, etc. If we ultimately
+        // find a version of `bar` that `foo@1` can depend on, update `foo@1` to
+        // depend on that one. Otherwise, remove `foo@1` from the deps, because
+        // we can't use it, and then go recursively do this to everyone who depends
+        // on `foo@1` because we can't use them either unless they can find a `foo@2`
+        // or something to depend on.
+        let todo = ();
 
-            // Check for exclusions
-            if let Some(excluded_versions) = self.exclusions.get(&pkg) {
-                if excluded_versions.contains(&ver) {
-                    // Package version is excluded
-                    return Err(std::iter::once(pkg.clone()).collect());
-                }
-            }
+        while let Some(pkg) = packages_to_process.pop() {
+            let ver = *required_versions.get(&pkg).unwrap();
 
             // Get dependencies of this package-version
-            if let Some(deps) = self.indirect_deps.get(&(pkg.clone(), ver.clone())) {
-                for (dep_pkg, dep_ver) in deps.iter() {
-                    // Check for exclusions
-                    if let Some(excluded_versions) = self.exclusions.get(dep_pkg) {
-                        if excluded_versions.contains(dep_ver) {
-                            return Err(std::iter::once(dep_pkg.clone()).collect());
-                        }
+            if let Some(deps) = self.indirect_deps.get(&(pkg, ver)) {
+                for (&dep_pkg, &dep_ver) in deps.iter() {
+                    // This package-version is excluded. Try to find a higher one that isn't!
+                    if self.is_excluded(dep_pkg, dep_ver) {
+                        let todo = ();
+                        // TODO if it was excluded, go find in our versions list the next version
+                        // of this package that isn't excluded. (We can pre-prune that one to not
+                        // include excluded ones.)
+                        // If we can't find one, that means this
                     }
 
                     // See if dep_pkg is in required_versions
-                    if let Some(existing_ver) = required_versions.get(dep_pkg) {
+                    if let Some(&existing_ver) = required_versions.get(&dep_pkg) {
                         if dep_ver > existing_ver {
-                            // Update to higher version
-                            required_versions.insert(dep_pkg.clone(), dep_ver.clone());
-                            packages_to_process.insert(dep_pkg.clone());
-                            updated_packages.insert(dep_pkg.clone());
+                            // Use the higher version
+                            required_versions.insert(dep_pkg, dep_ver);
+                            packages_to_process.insert(dep_pkg);
+                            updated_packages.insert(dep_pkg);
                         }
-                        // Else, existing version is higher or equal, do nothing
+
+                        // (If the existing version was already higher or equal, do nothing.)
                     } else {
                         // First time we see dep_pkg
-                        required_versions.insert(dep_pkg.clone(), dep_ver.clone());
-                        packages_to_process.insert(dep_pkg.clone());
-                        updated_packages.insert(dep_pkg.clone());
+                        required_versions.insert(dep_pkg, dep_ver);
+                        packages_to_process.insert(dep_pkg);
+                        updated_packages.insert(dep_pkg);
                     }
                 }
+            } else {
+                // We couldnd't find an entry in indirect_deps for this
             }
         }
 
