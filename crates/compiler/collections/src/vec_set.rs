@@ -86,6 +86,11 @@ impl<T: PartialEq> VecSet<T> {
         }
     }
 
+    /// Removes the last element of the set, if there was one, and returns it.
+    pub fn pop(&mut self) -> Option<T> {
+        self.elements.pop()
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.elements.iter()
     }
