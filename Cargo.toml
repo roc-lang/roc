@@ -9,6 +9,7 @@ members = [
     "crates/highlight",
     "crates/error_macros",
     "crates/reporting",
+    "crates/version_selection",
     "crates/packaging",
     "crates/repl_cli",
     "crates/repl_eval",
@@ -77,6 +78,7 @@ inkwell = { git = "https://github.com/roc-lang/inkwell", branch = "inkwell-llvm-
 ] }
 
 soa = { path = "crates/soa" }
+version_selection = { path = "crates/version_selection" }
 
 arrayvec = "0.7.2" # update roc_std/Cargo.toml on change
 backtrace = "0.3.67"
