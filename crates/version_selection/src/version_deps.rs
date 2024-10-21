@@ -4,7 +4,7 @@ use std::hash::Hash;
 use roc_collections::{VecMap, VecSet};
 
 pub struct Deps<Pkg, Ver> {
-    exact_versions: HashMap<Pkg, Ver>,
+    exact_versions: VecMap<Pkg, Ver>,
     indirect_deps: HashMap<(Pkg, Ver), HashMap<Pkg, Ver>>,
     exclusions: HashMap<Pkg, HashSet<Ver>>,
 }
@@ -59,15 +59,11 @@ impl<Pkg: Ord + Clone + Copy + Eq + Hash, Ver: Ord + Clone + Copy + Eq + Hash> D
     /// (Detecting dependency cycles should be done separately.)
     pub fn select_versions(self) -> Result<HashMap<Pkg, Ver>, HashSet<Pkg>> {
         // Map of package to its required version. Use VecMap for deterministic ordering.
-        let mut required_versions: VecMap<Pkg, Ver> = VecMap::new();
-
         // Initialize required_versions with exact_versions
-        for (pkg, ver) in self.exact_versions.iter() {
-            required_versions.insert(pkg.clone(), ver.clone());
-        }
+        let mut required_versions: VecMap<Pkg, Ver> = self.exact_versions.clone();
 
         // Packages to process, using VecSet for deterministic ordering
-        let mut packages_to_process: VecSet<Pkg> = required_versions.keys().cloned().collect();
+        let mut packages_to_process: VecSet<Pkg> = required_versions.keys().copied().collect();
 
         // Keep track of whether we've updated a package's version
         let mut updated_packages: VecSet<Pkg> = VecSet::default();
@@ -139,8 +135,8 @@ mod tests {
     fn test_from_root() {
         let deps = Deps::from_root([("a", 1), ("b", 2)], []);
         assert_eq!(deps.exact_versions.len(), 2);
-        assert_eq!(deps.exact_versions["a"], 1);
-        assert_eq!(deps.exact_versions["b"], 2);
+        assert_eq!(deps.exact_versions.get(&"a"), Some(&1));
+        assert_eq!(deps.exact_versions.get(&"b"), Some(&2));
     }
 
     #[test]
