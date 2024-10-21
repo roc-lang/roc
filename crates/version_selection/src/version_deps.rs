@@ -1,5 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
+
+use roc_collections::{VecMap, VecSet};
 
 pub struct Deps<Pkg, Ver> {
     exact_versions: HashMap<Pkg, Ver>,
@@ -56,25 +58,25 @@ impl<Pkg: Ord + Clone + Copy + Eq + Hash, Ver: Ord + Clone + Copy + Eq + Hash> D
     /// If solving fails, this returns a Set of the packages that couldn't be solved.
     /// (Detecting dependency cycles should be done separately.)
     pub fn select_versions(self) -> Result<HashMap<Pkg, Ver>, HashSet<Pkg>> {
-        // Map of package to its required version
-        let mut required_versions: BTreeMap<Pkg, Ver> = BTreeMap::new();
+        // Map of package to its required version. Use VecMap for deterministic ordering.
+        let mut required_versions: VecMap<Pkg, Ver> = VecMap::new();
 
         // Initialize required_versions with exact_versions
         for (pkg, ver) in self.exact_versions.iter() {
             required_versions.insert(pkg.clone(), ver.clone());
         }
 
-        // Packages to process, using BTreeSet for deterministic ordering
-        let mut packages_to_process: BTreeSet<Pkg> = required_versions.keys().cloned().collect();
+        // Packages to process, using VecSet for deterministic ordering
+        let mut packages_to_process: VecSet<Pkg> = required_versions.keys().cloned().collect();
 
         // Keep track of whether we've updated a package's version
-        let mut updated_packages: BTreeSet<Pkg> = BTreeSet::new();
+        let mut updated_packages: VecSet<Pkg> = VecSet::default();
 
         while !packages_to_process.is_empty() {
             // Pop package with lowest key (deterministic order)
             let pkg = packages_to_process.iter().next().unwrap().clone();
             packages_to_process.remove(&pkg);
-            let ver = required_versions[&pkg];
+            let ver = required_versions.get(&pkg).unwrap();
 
             // Check for exclusions
             if let Some(excluded_versions) = self.exclusions.get(&pkg) {
