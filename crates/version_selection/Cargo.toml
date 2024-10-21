@@ -1,0 +1,12 @@
+[package]
+name = "version_selection"
+description = "Given dependencies, select versions for each package."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
