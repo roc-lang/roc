@@ -726,11 +726,12 @@ trait DerivableVisitor {
                             push_var_slice!(vars)
                         }
                     }
-                    Func(args, _clos, ret) => {
+                    Func(args, _clos, ret, fx) => {
                         let descend = Self::visit_func(var)?;
                         if descend.0 {
                             push_var_slice!(args);
                             stack.push(ret);
+                            stack.push(fx);
                         }
                     }
                     Record(fields, ext) => {
@@ -833,6 +834,12 @@ trait DerivableVisitor {
                     })
                 }
                 ErasedLambda => {
+                    return Err(NotDerivable {
+                        var,
+                        context: NotDerivableContext::NoContext,
+                    })
+                }
+                Pure | Effectful => {
                     return Err(NotDerivable {
                         var,
                         context: NotDerivableContext::NoContext,

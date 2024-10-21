@@ -246,6 +246,7 @@ impl ReplState {
                                     return ReplAction::Nothing;
                                 }
                                 ValueDef::Stmt(_) => todo!(),
+                                ValueDef::StmtAfterExpr => todo!("effects in repl"),
                             }
                         }
                     }

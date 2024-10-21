@@ -302,7 +302,6 @@ pub enum EExpr<'a> {
     Start(Position),
     End(Position),
     BadExprEnd(Position),
-    StmtAfterExpr(Position),
     Space(BadInputError, Position),
 
     Dot(Position),

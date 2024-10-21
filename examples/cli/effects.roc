@@ -1,11 +1,16 @@
-app [main] { pf: platform "effects-platform/main.roc" }
+app [main!] { pf: platform "effects-platform/main.roc" }
 
-import pf.PlatformTasks
+import pf.Effect
 
-main : Task {} []
-main =
-    line = PlatformTasks.getLine!
-    PlatformTasks.putLine! "You entered: $(line)"
-    PlatformTasks.putLine! "It is known"
+main! : {} => {}
+main! = \{} ->
+    line = Effect.getLine! {}
 
-    Task.ok {}
+    if line == "secret" then
+        Effect.putLine! "You found the secret"
+        Effect.putLine! "Congratulations!"
+    else
+        {}
+
+    Effect.putLine! "You entered: $(line)"
+    Effect.putLine! "It is known"

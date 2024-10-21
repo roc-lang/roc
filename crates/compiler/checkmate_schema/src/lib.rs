@@ -73,6 +73,7 @@ impl_content! {
         arguments: Vec<Variable>,
         lambda_type: Variable,
         ret: Variable,
+        fx: Variable,
     },
     Record {
         fields: HashMap<String, RecordField>,
@@ -102,6 +103,8 @@ impl_content! {
     RangedNumber {
         range: NumericRange,
     },
+    Pure {},
+    Effectful {},
     Error {},
 }
 

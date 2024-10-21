@@ -4,8 +4,8 @@ use roc_can::scope::Scope;
 use roc_collections::VecSet;
 use roc_module::ident::ModuleName;
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
-use roc_parse::ast::AssignedField;
 use roc_parse::ast::{self, ExtractSpaces, TypeHeader};
+use roc_parse::ast::{AssignedField, FunctionArrow};
 use roc_parse::ast::{CommentOrNewline, TypeDef, ValueDef};
 
 // Documentation generation requirements
@@ -53,6 +53,7 @@ pub enum TypeAnnotation {
     },
     Function {
         args: Vec<TypeAnnotation>,
+        arrow: FunctionArrow,
         output: Box<TypeAnnotation>,
     },
     ObscuredTagUnion,
@@ -282,6 +283,10 @@ fn generate_entry_docs(
                     // Don't generate docs for ingested file imports
                 }
 
+                ValueDef::StmtAfterExpr { .. } => {
+                    // Ignore. Canonicalization will produce an error.
+                }
+
                 ValueDef::Stmt(loc_expr) => {
                     if let roc_parse::ast::Expr::Var {
                         ident: identifier, ..
@@ -443,7 +448,7 @@ fn contains_unexposed_type(
 
         Malformed(_) | Inferred | Wildcard | BoundVariable(_) => false,
 
-        Function(loc_args, loc_ret) => {
+        Function(loc_args, _arrow, loc_ret) => {
             let loc_args_contains_unexposed_type = loc_args.iter().any(|loc_arg| {
                 contains_unexposed_type(&loc_arg.value, exposed_module_ids, module_ids)
             });
@@ -611,7 +616,7 @@ fn type_to_docs(in_func_type_ann: bool, type_annotation: ast::TypeAnnotation) ->
         ast::TypeAnnotation::SpaceAfter(&sub_type_ann, _) => {
             type_to_docs(in_func_type_ann, sub_type_ann)
         }
-        ast::TypeAnnotation::Function(ast_arg_anns, output_ann) => {
+        ast::TypeAnnotation::Function(ast_arg_anns, arrow, output_ann) => {
             let mut doc_arg_anns = Vec::new();
 
             for ast_arg_ann in ast_arg_anns {
@@ -620,6 +625,7 @@ fn type_to_docs(in_func_type_ann: bool, type_annotation: ast::TypeAnnotation) ->
 
             Function {
                 args: doc_arg_anns,
+                arrow,
                 output: Box::new(type_to_docs(true, output_ann.value)),
             }
         }
