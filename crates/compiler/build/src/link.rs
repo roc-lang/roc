@@ -1378,9 +1378,11 @@ pub fn preprocess_host_wasm32(host_input_path: &Path, host_output_path: &Path) {
 fn run_build_command(mut command: Command, file_to_build: &str, flaky_fail_counter: usize) {
     let command_string = stringify_command(&command, false);
     let cmd_str = &command_string;
+
     roc_debug_flags::dbg_do!(roc_debug_flags::ROC_PRINT_BUILD_COMMANDS, {
         print_command_str(cmd_str);
     });
+    
     let cmd_output = command.output().unwrap();
     let max_flaky_fail_count = 10;
 

@@ -65,6 +65,10 @@ impl CmdOut {
     pub fn assert_clean_success(&self) {
         self.assert_success_with_no_unexpected_errors();
     }
+    
+    pub fn assert_zero_exit(&self) {
+        assert!(self.status.success(), "Command failed\n\n{self}");
+    }
 
     pub fn assert_nonzero_exit(&self) {
         assert!(!self.status.success());

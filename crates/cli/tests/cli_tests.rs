@@ -281,6 +281,7 @@ mod cli_tests {
                 let cli_build_out = cli_build.run();
                 cli_build_out.assert_clean_success();
                 
+                
                 if TEST_LEGACY_LINKER {
                     let cli_build_legacy = cli_build.arg(LEGACY_LINKER_FLAG);
                     
