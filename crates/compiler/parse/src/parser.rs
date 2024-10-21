@@ -1364,8 +1364,7 @@ where
 
     move |_arena: &'a Bump, state: State<'a>, _min_indent: u32| {
         if state.bytes().starts_with(word.as_bytes()) {
-            let state = state.advance(word.len());
-            Ok((MadeProgress, (), state))
+            Ok((MadeProgress, (), state.advance(word.len())))
         } else {
             Err((NoProgress, to_error(state.pos())))
         }

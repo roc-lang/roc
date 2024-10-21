@@ -363,7 +363,7 @@ pub fn rest_of_str_like<'a>(
                         // Parse the hex digits, surrounded by parens, then
                         // give a canonicalization error if the digits form
                         // an invalid unicode code point.
-                        let (_progress, loc_digits, new_state) = skip_first(
+                        let (_, loc_digits, new_state) = skip_first(
                             byte(b'(', EString::CodePtOpen),
                             skip_second(loc(ascii_hex_digits()), byte(b')', EString::CodePtEnd)),
                         )

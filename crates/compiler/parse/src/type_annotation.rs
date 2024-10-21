@@ -18,7 +18,7 @@ use bumpalo::Bump;
 use roc_region::all::{Loc, Position, Region};
 
 fn rest_of_tag_union_type<'a>(
-    stop_at_first_impl: bool,
+    flags: TypeExprFlags,
     arena: &'a Bump,
     state: State<'a>,
     min_indent: u32,
@@ -36,7 +36,7 @@ fn rest_of_tag_union_type<'a>(
 
     // This could be an open tag union, e.g. `[Foo, Bar]a`
     let ext_pos = state.pos();
-    let (ext, state) = match parse_term(stop_at_first_impl, arena, state.clone(), min_indent) {
+    let (ext, state) = match parse_term(flags, arena, state.clone(), min_indent) {
         Ok((_, out, state)) => (Some(&*arena.alloc(out)), state),
         Err((NoProgress, _)) => (None, state),
         Err((_, fail)) => {
@@ -53,6 +53,7 @@ fn check_type_alias<'a>(
     arena: &'a Bump,
     annot: Loc<TypeAnnotation<'a>>,
 ) -> Result<TypeHeader<'a>, ETypeInlineAlias> {
+    let start = annot.region.start();
     match annot.value {
         TypeAnnotation::Apply("", tag_name, vars) => {
             let mut var_names: Vec<'_, Loc<Pattern<'_>>> = Vec::new_in(arena);
@@ -65,48 +66,40 @@ fn check_type_alias<'a>(
                 }
             }
 
-            let name_start = annot.region.start();
-            let name_region =
-                Region::between(name_start, name_start.bump_column(tag_name.len() as u32));
-
-            let header = TypeHeader {
-                name: Loc::at(name_region, tag_name),
-                vars: var_names.into_bump_slice(),
-            };
-
-            Ok(header)
+            let name_at = Region::between(start, start.bump_column(tag_name.len() as u32));
+            let name = Loc::at(name_at, tag_name);
+            let vars = var_names.into_bump_slice();
+            Ok(TypeHeader { name, vars })
         }
-        TypeAnnotation::Apply(_, _, _) => Err(ETypeInlineAlias::Qualified(annot.region.start())),
-        _ => Err(ETypeInlineAlias::NotAnAlias(annot.region.start())),
+        TypeAnnotation::Apply(_, _, _) => Err(ETypeInlineAlias::Qualified(start)),
+        _ => Err(ETypeInlineAlias::NotAnAlias(start)),
     }
 }
 
 fn parse_term<'a>(
-    stop_at_first_impl: bool,
+    flags: TypeExprFlags,
     arena: &'a Bump,
     state: State<'a>,
     min_indent: u32,
 ) -> ParseResult<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
+    let parse_applied_arg = flags.is_set(PARSE_APPLIED_ARG);
+    let flags = flags.without(PARSE_APPLIED_ARG);
+
     let start = state.pos();
     let (type_ann, state) = match state.bytes().first() {
         Some(b) => match b {
-            b'(' => {
-                let state = state.inc();
-                match rest_of_type_in_parens(start, stop_at_first_impl, arena, state, min_indent) {
-                    Ok((_, out, state)) => (out, state),
-                    Err((p, fail)) => return Err((p, EType::TInParens(fail, start))),
-                }
-            }
-            b'{' => match rest_of_record_type(stop_at_first_impl, arena, state.inc(), min_indent) {
+            b'(' => match rest_of_type_in_parens(start, flags, arena, state.inc(), min_indent) {
+                Ok((_, out, state)) => (out, state),
+                Err((p, fail)) => return Err((p, EType::TInParens(fail, start))),
+            },
+            b'{' => match rest_of_record_type(flags, arena, state.inc(), min_indent) {
                 Ok((_, out, state)) => (Loc::pos(start, state.pos(), out), state),
                 Err((p, fail)) => return Err((p, EType::TRecord(fail, start))),
             },
-            b'[' => {
-                match rest_of_tag_union_type(stop_at_first_impl, arena, state.inc(), min_indent) {
-                    Ok((_, out, state)) => (Loc::pos(start, state.pos(), out), state),
-                    Err((p, fail)) => return Err((p, EType::TTagUnion(fail, start))),
-                }
-            }
+            b'[' => match rest_of_tag_union_type(flags, arena, state.inc(), min_indent) {
+                Ok((_, out, state)) => (Loc::pos(start, state.pos(), out), state),
+                Err((p, fail)) => return Err((p, EType::TTagUnion(fail, start))),
+            },
             b'*' => {
                 // The `*` type variable, e.g. in (List *)
                 let out = Loc::pos(start, start.next(), TypeAnnotation::Wildcard);
@@ -125,7 +118,7 @@ fn parse_term<'a>(
                 let ident_res = match parse_lowercase_ident(state.clone()) {
                     Ok((_, name, state)) => {
                         if name == keyword::WHERE
-                            || (stop_at_first_impl && name == keyword::IMPLEMENTS)
+                            || (flags.is_set(STOP_AT_FIRST_IMPL) && name == keyword::IMPLEMENTS)
                         {
                             None
                         } else {
@@ -142,16 +135,36 @@ fn parse_term<'a>(
 
                 match ident_res {
                     Some(ok) => ok,
-                    None => match parse_applied_type(stop_at_first_impl, arena, state) {
-                        Ok((_, ann, state)) => (Loc::pos(start, state.pos(), ann), state),
-                        Err((NoProgress, _)) => return Err((NoProgress, EType::TStart(start))),
-                        Err(err) => return Err(err),
-                    },
+                    None => {
+                        if parse_applied_arg {
+                            match parse_concrete_type(state) {
+                                Ok((_, out, state)) => (Loc::pos(start, state.pos(), out), state),
+                                Err((NoProgress, _)) => {
+                                    return Err((NoProgress, EType::TStart(start)))
+                                }
+                                Err((_, fail)) => {
+                                    return Err((MadeProgress, EType::TApply(fail, start)))
+                                }
+                            }
+                        } else {
+                            match parse_applied_type(flags, arena, state) {
+                                Ok((_, ann, state)) => (Loc::pos(start, state.pos(), ann), state),
+                                Err((NoProgress, _)) => {
+                                    return Err((NoProgress, EType::TStart(start)))
+                                }
+                                Err(err) => return Err(err),
+                            }
+                        }
+                    }
                 }
             }
         },
         _ => return Err((NoProgress, EType::TStart(start))),
     };
+
+    if parse_applied_arg {
+        return Ok((MadeProgress, type_ann, state));
+    }
 
     let type_ann_state = state.clone();
     let (spaces_before_as, state) =
@@ -168,7 +181,7 @@ fn parse_term<'a>(
     let (sp, spaces_after_as, state) =
         eat_space_check(EType::TAsIndentStart, arena, state, min_indent, false)?;
 
-    let (mut alias_ann, state) = match parse_term(false, arena, state, min_indent) {
+    let (mut alias_ann, state) = match parse_term(NO_TYPE_EXPR_FLAGS, arena, state, min_indent) {
         Ok((_, out, state)) => (out, state),
         Err((ep, fail)) => return Err((ep.or(sp), fail)),
     };
@@ -188,166 +201,9 @@ fn parse_term<'a>(
     Ok((MadeProgress, Loc { region, value }, state))
 }
 
-// todo: @wip @dup unify the same code with `parse_term`
-fn _parse_applied_arg<'a>(
-    stop_at_first_impl: bool,
-    arena: &'a Bump,
-    state: State<'a>,
-    min_indent: u32,
-) -> ParseResult<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
-    let (spaces_before, state) =
-        match eat_space_check(EType::TIndentStart, arena, state, min_indent, false) {
-            Ok((_, sp, state)) => (sp, state),
-            Err((_, fail)) => return Err((NoProgress, fail)),
-        };
-
-    let start = state.pos();
-    let (type_ann, state) = match state.bytes().first() {
-        Some(b) => match b {
-            b'(' => {
-                let state = state.inc();
-                match rest_of_type_in_parens(start, stop_at_first_impl, arena, state, min_indent) {
-                    Ok((_, out, state)) => (out, state),
-                    Err((p, fail)) => return Err((p, EType::TInParens(fail, start))),
-                }
-            }
-            b'{' => match rest_of_record_type(stop_at_first_impl, arena, state.inc(), min_indent) {
-                Ok((_, out, state)) => (Loc::pos(start, state.pos(), out), state),
-                Err((p, fail)) => return Err((p, EType::TRecord(fail, start))),
-            },
-            b'[' => {
-                match rest_of_tag_union_type(stop_at_first_impl, arena, state.inc(), min_indent) {
-                    Ok((_, out, state)) => (Loc::pos(start, state.pos(), out), state),
-                    Err((p, fail)) => return Err((p, EType::TTagUnion(fail, start))),
-                }
-            }
-            b'*' => {
-                // The `*` type variable, e.g. in (List *)
-                let out = Loc::pos(start, start.next(), TypeAnnotation::Wildcard);
-                (out, state.inc())
-            }
-            b'_' if !matches!(
-                state.bytes().get(1),
-                Some(b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_')
-            ) =>
-            {
-                // The `_` indicating an inferred type, e.g. in (List _)
-                let out = Loc::pos(start, start.next(), TypeAnnotation::Inferred);
-                (out, state.inc())
-            }
-            _ => {
-                let ident_res = match parse_lowercase_ident(state.clone()) {
-                    Ok((_, name, state)) => {
-                        if name == keyword::WHERE
-                            || (stop_at_first_impl && name == keyword::IMPLEMENTS)
-                        {
-                            None
-                        } else {
-                            let type_ann = TypeAnnotation::BoundVariable(name);
-                            let type_ann = Loc::pos(start, state.pos(), type_ann);
-                            Some((type_ann, state))
-                        }
-                    }
-                    Err((MadeProgress, _)) => {
-                        return Err((MadeProgress, EType::TBadTypeVariable(start)))
-                    }
-                    Err(_) => None,
-                };
-
-                match ident_res {
-                    Some(ok) => ok,
-                    None => match parse_concrete_type(state) {
-                        Ok((_, out, state)) => (Loc::pos(start, state.pos(), out), state),
-                        Err((NoProgress, _)) => return Err((NoProgress, EType::TStart(start))),
-                        Err((_, fail)) => return Err((MadeProgress, EType::TApply(fail, start))),
-                    },
-                }
-            }
-        },
-        _ => return Err((NoProgress, EType::TStart(start))),
-    };
-
-    let type_ann = type_ann.spaced_before(arena, spaces_before);
-    Ok((MadeProgress, type_ann, state))
-}
-
-fn parse_applied_arg<'a>(
-    stop_at_first_impl: bool,
-    arena: &'a Bump,
-    state: State<'a>,
-    min_indent: u32,
-) -> ParseResult<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
-    let start = state.pos();
-    let (type_ann, state) = match state.bytes().first() {
-        Some(b) => match b {
-            b'(' => {
-                let state = state.inc();
-                match rest_of_type_in_parens(start, stop_at_first_impl, arena, state, min_indent) {
-                    Ok((_, out, state)) => (out, state),
-                    Err((p, fail)) => return Err((p, EType::TInParens(fail, start))),
-                }
-            }
-            b'{' => match rest_of_record_type(stop_at_first_impl, arena, state.inc(), min_indent) {
-                Ok((_, out, state)) => (Loc::pos(start, state.pos(), out), state),
-                Err((p, fail)) => return Err((p, EType::TRecord(fail, start))),
-            },
-            b'[' => {
-                match rest_of_tag_union_type(stop_at_first_impl, arena, state.inc(), min_indent) {
-                    Ok((_, out, state)) => (Loc::pos(start, state.pos(), out), state),
-                    Err((p, fail)) => return Err((p, EType::TTagUnion(fail, start))),
-                }
-            }
-            b'*' => {
-                // The `*` type variable, e.g. in (List *)
-                let out = Loc::pos(start, start.next(), TypeAnnotation::Wildcard);
-                (out, state.inc())
-            }
-            b'_' if !matches!(
-                state.bytes().get(1),
-                Some(b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_')
-            ) =>
-            {
-                // The `_` indicating an inferred type, e.g. in (List _)
-                let out = Loc::pos(start, start.next(), TypeAnnotation::Inferred);
-                (out, state.inc())
-            }
-            _ => {
-                let ident_res = match parse_lowercase_ident(state.clone()) {
-                    Ok((_, name, state)) => {
-                        if name == keyword::WHERE
-                            || (stop_at_first_impl && name == keyword::IMPLEMENTS)
-                        {
-                            None
-                        } else {
-                            let type_ann = TypeAnnotation::BoundVariable(name);
-                            let type_ann = Loc::pos(start, state.pos(), type_ann);
-                            Some((type_ann, state))
-                        }
-                    }
-                    Err((MadeProgress, _)) => {
-                        return Err((MadeProgress, EType::TBadTypeVariable(start)))
-                    }
-                    Err(_) => None,
-                };
-
-                match ident_res {
-                    Some(ok) => ok,
-                    None => match parse_concrete_type(state) {
-                        Ok((_, out, state)) => (Loc::pos(start, state.pos(), out), state),
-                        Err((NoProgress, _)) => return Err((NoProgress, EType::TStart(start))),
-                        Err((_, fail)) => return Err((MadeProgress, EType::TApply(fail, start))),
-                    },
-                }
-            }
-        },
-        _ => return Err((NoProgress, EType::TStart(start))),
-    };
-    Ok((MadeProgress, type_ann, state))
-}
-
 fn rest_of_type_in_parens<'a>(
     start: Position,
-    stop_at_first_impl: bool,
+    flags: TypeExprFlags,
     arena: &'a Bump,
     state: State<'a>,
     min_indent: u32,
@@ -371,7 +227,7 @@ fn rest_of_type_in_parens<'a>(
     let state = state.inc();
 
     let ext_pos = state.pos();
-    let (ext, state) = match parse_term(stop_at_first_impl, arena, state.clone(), min_indent) {
+    let (ext, state) = match parse_term(flags, arena, state.clone(), min_indent) {
         Ok((_, out, state)) => (Some(&*arena.alloc(out)), state),
         Err((NoProgress, _)) => (None, state),
         Err((_, fail)) => {
@@ -417,7 +273,7 @@ fn tag_type<'a>() -> impl Parser<'a, Loc<Tag<'a>>, ETypeTagUnion<'a>> {
                     }
                 };
 
-            match parse_applied_arg(false, arena, next_state, min_indent) {
+            match parse_term(PARSE_APPLIED_ARG, arena, next_state, min_indent) {
                 Ok((_, type_ann, next_state)) => {
                     let type_ann = type_ann.spaced_before(arena, spaces_before);
                     args.push(type_ann);
@@ -518,7 +374,7 @@ fn record_type_field<'a>() -> impl Parser<'a, AssignedField<'a, TypeAnnotation<'
 }
 
 fn rest_of_record_type<'a>(
-    stop_at_first_impl: bool,
+    flags: TypeExprFlags,
     arena: &'a Bump,
     state: State<'a>,
     min_indent: u32,
@@ -537,7 +393,7 @@ fn rest_of_record_type<'a>(
     let state = state.inc();
 
     let ext_pos = state.pos();
-    let (ext, state) = match parse_term(stop_at_first_impl, arena, state.clone(), min_indent) {
+    let (ext, state) = match parse_term(flags, arena, state.clone(), min_indent) {
         Ok((_, ext, state)) => (Some(&*arena.alloc(ext)), state),
         Err((NoProgress, _)) => (None, state),
         Err((_, fail)) => {
@@ -551,7 +407,7 @@ fn rest_of_record_type<'a>(
 }
 
 fn parse_applied_type<'a>(
-    stop_at_first_impl: bool,
+    flags: TypeExprFlags,
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, TypeAnnotation<'a>, EType<'a>> {
@@ -579,7 +435,7 @@ fn parse_applied_type<'a>(
                 }
             };
 
-        match parse_applied_arg(stop_at_first_impl, arena, next_state, inc_indent) {
+        match parse_term(flags | PARSE_APPLIED_ARG, arena, next_state, inc_indent) {
             Ok((_, type_ann, next_state)) => {
                 let type_ann = type_ann.spaced_before(arena, spaces_before);
                 args.push(type_ann);
@@ -800,16 +656,22 @@ fn ability_impl_field<'a>() -> impl Parser<'a, Loc<AssignedField<'a, Expr<'a>>>,
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TypeExprFlags(u8);
 
 pub const NO_TYPE_EXPR_FLAGS: TypeExprFlags = TypeExprFlags(0);
 pub const TRAILING_COMMA_VALID: TypeExprFlags = TypeExprFlags(1);
 pub const STOP_AT_FIRST_IMPL: TypeExprFlags = TypeExprFlags(1 << 1);
 pub const SKIP_PARSING_SPACES_BEFORE: TypeExprFlags = TypeExprFlags(1 << 2);
+pub const PARSE_APPLIED_ARG: TypeExprFlags = TypeExprFlags(1 << 3);
 
 impl TypeExprFlags {
     pub const fn is_set(&self, flag: Self) -> bool {
         (self.0 & flag.0) != 0
+    }
+
+    pub const fn without(&self, flag: Self) -> Self {
+        Self(self.0 & !flag.0)
     }
 }
 
@@ -825,20 +687,17 @@ pub(crate) fn type_expr<'a>(
     flags: TypeExprFlags,
 ) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
     move |arena, state: State<'a>, min_indent: u32| {
-        let stop_at_first_impl = flags.is_set(STOP_AT_FIRST_IMPL);
-
         let (first_type, state) = if flags.is_set(SKIP_PARSING_SPACES_BEFORE) {
-            let (_, first_type, state) = parse_term(stop_at_first_impl, arena, state, min_indent)?;
+            let (_, first_type, state) = parse_term(flags, arena, state, min_indent)?;
             (first_type, state)
         } else {
             let (sp_p, spaces_before, state) =
                 eat_space_check(EType::TIndentStart, arena, state, min_indent, false)?;
 
-            let (_, first_type, state) =
-                match parse_term(stop_at_first_impl, arena, state, min_indent) {
-                    Ok(ok) => ok,
-                    Err((p, fail)) => return Err((p.or(sp_p), fail)),
-                };
+            let (_, first_type, state) = match parse_term(flags, arena, state, min_indent) {
+                Ok(ok) => ok,
+                Err((p, fail)) => return Err((p.or(sp_p), fail)),
+            };
 
             (first_type.spaced_before(arena, spaces_before), state)
         };
@@ -878,7 +737,7 @@ pub(crate) fn type_expr<'a>(
                 };
 
             let arg_pos = news.pos();
-            let (_, arg, news) = match parse_term(stop_at_first_impl, arena, news, min_indent) {
+            let (_, arg, news) = match parse_term(flags, arena, news, min_indent) {
                 Ok(ok) => ok,
                 Err((NoProgress, _)) => {
                     break Err((MadeProgress, EType::TFunctionArgument(arg_pos)))
@@ -902,11 +761,10 @@ pub(crate) fn type_expr<'a>(
                 let (p, spaces_before_ret, state) =
                     eat_space_check(EType::TIndentStart, arena, state, min_indent, false)?;
 
-                let (_, return_type, state) =
-                    match parse_term(stop_at_first_impl, arena, state, min_indent) {
-                        Ok(ok) => ok,
-                        Err((ep, fail)) => return Err((ep.or(p), fail)),
-                    };
+                let (_, return_type, state) = match parse_term(flags, arena, state, min_indent) {
+                    Ok(ok) => ok,
+                    Err((ep, fail)) => return Err((ep.or(p), fail)),
+                };
 
                 let return_type = return_type.spaced_before(arena, spaces_before_ret);
                 let region = Region::span_across(&first_type.region, &return_type.region);
