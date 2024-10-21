@@ -527,7 +527,6 @@ pub enum Expr<'a> {
 
     // Problems
     MalformedIdent(&'a str, crate::ident::BadIdent),
-    MalformedClosure,
     MalformedSuffixed(&'a Loc<Expr<'a>>),
     // Both operators were non-associative, e.g. (True == False == False).
     // We should tell the author to disambiguate by grouping them with parens.
@@ -671,7 +670,6 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::SpaceBefore(a, _) => is_expr_suffixed(a),
         Expr::SpaceAfter(a, _) => is_expr_suffixed(a),
         Expr::MalformedIdent(_, _) => false,
-        Expr::MalformedClosure => false,
         Expr::MalformedSuffixed(_) => false,
         Expr::PrecedenceConflict(_) => false,
         Expr::EmptyRecordBuilder(_) => false,
@@ -697,7 +695,6 @@ fn is_assigned_value_suffixed<'a>(value: &AssignedField<'a, Expr<'a>>) -> bool {
         AssignedField::SpaceBefore(a, _) | AssignedField::SpaceAfter(a, _) => {
             is_assigned_value_suffixed(a)
         }
-        AssignedField::Malformed(_) => false,
     }
 }
 
@@ -871,7 +868,7 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                             | OptionalValue(_, _, loc_val)
                             | IgnoredValue(_, _, loc_val) => break expr_stack.push(&loc_val.value),
                             SpaceBefore(next, _) | SpaceAfter(next, _) => current = *next,
-                            LabelOnly(_) | Malformed(_) => break,
+                            LabelOnly(_) => break,
                         }
                     }
                 }
@@ -1010,7 +1007,6 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                 | Tag(_)
                 | OpaqueRef(_)
                 | MalformedIdent(_, _)
-                | MalformedClosure
                 | PrecedenceConflict(_)
                 | MalformedSuffixed(_) => { /* terminal */ }
             }
@@ -1597,9 +1593,6 @@ pub enum AssignedField<'a, Val> {
     // We preserve this for the formatter; canonicalization ignores it.
     SpaceBefore(&'a AssignedField<'a, Val>, &'a [CommentOrNewline<'a>]),
     SpaceAfter(&'a AssignedField<'a, Val>, &'a [CommentOrNewline<'a>]),
-
-    /// A malformed assigned field, which will code gen to a runtime error
-    Malformed(&'a str),
 }
 
 impl<'a, Val> AssignedField<'a, Val> {
@@ -1611,7 +1604,7 @@ impl<'a, Val> AssignedField<'a, Val> {
                 Self::RequiredValue(_, _, val)
                 | Self::OptionalValue(_, _, val)
                 | Self::IgnoredValue(_, _, val) => break Some(val),
-                Self::LabelOnly(_) | Self::Malformed(_) => break None,
+                Self::LabelOnly(_) => break None,
                 Self::SpaceBefore(next, _) | Self::SpaceAfter(next, _) => current = *next,
             }
         }
@@ -2474,7 +2467,6 @@ impl<'a> Malformed for Expr<'a> {
             ParensAround(expr) => expr.is_malformed(),
 
             MalformedIdent(_, _) |
-            MalformedClosure |
             MalformedSuffixed(..) |
             PrecedenceConflict(_) |
             EmptyRecordBuilder(_) |
@@ -2549,7 +2541,6 @@ impl<'a, T: Malformed> Malformed for AssignedField<'a, T> {
             AssignedField::SpaceBefore(field, _) | AssignedField::SpaceAfter(field, _) => {
                 field.is_malformed()
             }
-            AssignedField::Malformed(_) => true,
         }
     }
 }

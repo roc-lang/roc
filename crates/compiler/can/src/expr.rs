@@ -1337,10 +1337,6 @@ pub fn canonicalize_expr<'a>(
                 Output::default(),
             )
         }
-        ast::Expr::MalformedClosure => {
-            use roc_problem::can::RuntimeError::*;
-            (RuntimeError(MalformedClosure(region)), Output::default())
-        }
         ast::Expr::MalformedIdent(name, bad_ident) => {
             use roc_problem::can::RuntimeError::*;
 
@@ -1906,10 +1902,6 @@ fn canonicalize_field<'a>(
 
         SpaceBefore(sub_field, _) | SpaceAfter(sub_field, _) => {
             canonicalize_field(env, var_store, scope, sub_field)
-        }
-
-        Malformed(_string) => {
-            internal_error!("TODO canonicalize malformed record field");
         }
     }
 }
@@ -2489,8 +2481,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         | ast::Expr::Underscore(_)
         | ast::Expr::MalformedIdent(_, _)
         | ast::Expr::Tag(_)
-        | ast::Expr::OpaqueRef(_)
-        | ast::Expr::MalformedClosure => true,
+        | ast::Expr::OpaqueRef(_) => true,
         // Newlines are disallowed inside interpolation, and these all require newlines
         ast::Expr::DbgStmt(_, _)
         | ast::Expr::LowLevelDbg(_, _, _)
@@ -2524,7 +2515,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
             | ast::AssignedField::IgnoredValue(_label, loc_comments, loc_val) => {
                 loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
             }
-            ast::AssignedField::Malformed(_) | ast::AssignedField::LabelOnly(_) => true,
+            ast::AssignedField::LabelOnly(_) => true,
             ast::AssignedField::SpaceBefore(_, _) | ast::AssignedField::SpaceAfter(_, _) => false,
         }),
         ast::Expr::Tuple(fields) => fields
@@ -2575,7 +2566,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
                     | ast::AssignedField::IgnoredValue(_label, loc_comments, loc_val) => {
                         loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
                     }
-                    ast::AssignedField::Malformed(_) | ast::AssignedField::LabelOnly(_) => true,
+                    ast::AssignedField::LabelOnly(_) => true,
                     ast::AssignedField::SpaceBefore(_, _)
                     | ast::AssignedField::SpaceAfter(_, _) => false,
                 })
@@ -2588,7 +2579,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
                     | ast::AssignedField::IgnoredValue(_label, loc_comments, loc_val) => {
                         loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
                     }
-                    ast::AssignedField::Malformed(_) | ast::AssignedField::LabelOnly(_) => true,
+                    ast::AssignedField::LabelOnly(_) => true,
                     ast::AssignedField::SpaceBefore(_, _)
                     | ast::AssignedField::SpaceAfter(_, _) => false,
                 })

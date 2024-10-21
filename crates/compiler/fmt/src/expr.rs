@@ -43,7 +43,6 @@ impl<'a> Formattable for Expr<'a> {
             | Var { .. }
             | Underscore { .. }
             | MalformedIdent(_, _)
-            | MalformedClosure
             | Tag(_)
             | OpaqueRef(_)
             | Crash
@@ -545,7 +544,6 @@ impl<'a> Formattable for Expr<'a> {
                 buf.indent(indent);
                 loc_expr.format_with_options(buf, parens, newlines, indent);
             }
-            MalformedClosure => {}
             PrecedenceConflict { .. } => {}
             EmptyRecordBuilder { .. } => {}
             SingleFieldRecordBuilder { .. } => {}
@@ -1606,9 +1604,6 @@ fn format_assigned_field_multiline<T>(
             // ```
             format_assigned_field_multiline(buf, sub_field, indent, separator_prefix);
             fmt_comments_only(buf, spaces.iter(), NewlineAt::Top, indent);
-        }
-        Malformed(raw) => {
-            buf.push_str(raw);
         }
     }
 }

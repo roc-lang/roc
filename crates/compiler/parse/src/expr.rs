@@ -2172,7 +2172,6 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::Dbg
         | Expr::DbgStmt(_, _)
         | Expr::LowLevelDbg(_, _, _)
-        | Expr::MalformedClosure
         | Expr::MalformedSuffixed(..)
         | Expr::PrecedenceConflict { .. }
         | Expr::EmptyRecordBuilder(_)
@@ -2246,7 +2245,6 @@ fn assigned_expr_field_to_pattern_help<'a>(
             arena.alloc(assigned_expr_field_to_pattern_help(arena, nested)?),
             spaces,
         ),
-        AssignedField::Malformed(string) => Pattern::Malformed(string),
         AssignedField::IgnoredValue(_, _, _) => return Err(()),
     })
 }

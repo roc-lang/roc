@@ -22,7 +22,7 @@ pub struct ReplOutput {
 
 pub fn format_answer<'a>(arena: &'a Bump, answer: Expr<'_>) -> &'a str {
     match answer {
-        Expr::Closure(_, _) | Expr::MalformedClosure => "<function>",
+        Expr::Closure(_, _) => "<function>",
         _ => {
             let mut expr = roc_fmt::Buf::new_in(arena);
 

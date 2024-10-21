@@ -480,7 +480,6 @@ pub fn find_type_def_symbols(
                         AssignedField::LabelOnly(_) => {}
                         AssignedField::SpaceBefore(inner, _)
                         | AssignedField::SpaceAfter(inner, _) => inner_stack.push(inner),
-                        AssignedField::Malformed(_) => {}
                     }
                 }
 
@@ -1348,7 +1347,7 @@ fn can_assigned_fields<'a>(
     // field names we've seen so far in this record
     let mut seen = std::collections::HashMap::with_capacity(fields.len());
 
-    'outer: for loc_field in fields.iter() {
+    for loc_field in fields.iter() {
         let mut field = &loc_field.value;
 
         // use this inner loop to unwrap the SpaceAfter/SpaceBefore
@@ -1418,12 +1417,6 @@ fn can_assigned_fields<'a>(
                     // check the nested field instead
                     field = nested;
                     continue 'inner;
-                }
-                Malformed(string) => {
-                    malformed(env, region, string);
-
-                    // completely skip this element, advance to the next tag
-                    continue 'outer;
                 }
             }
         };
