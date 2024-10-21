@@ -70,7 +70,6 @@ impl<Pkg: Ord + Clone + Copy + Eq + Hash, Ver: Ord + Clone + Copy + Eq + Hash> D
         // depends on `bar@2` means we can't use `foo@1`, so remove it from the deps,
         // and then go recursively do this to everyone who depends on `foo@1` because
         // we can't use them either unless they can find a `foo@2` or something to depend on.
-        // Initialize a set to keep track of package-versions to remove
         {
             let mut unusable: VecSet<(Pkg, Ver)> = VecSet::default();
             let mut changed = true;
@@ -154,6 +153,7 @@ impl<Pkg: Ord + Clone + Copy + Eq + Hash, Ver: Ord + Clone + Copy + Eq + Hash> D
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::fmt::Debug;
 
     #[test]
     fn test_from_root() {
@@ -181,8 +181,8 @@ mod tests {
         let result = deps.select_versions().unwrap();
 
         assert_eq!(result.len(), 2);
-        assert_eq!(result.get(&"a").copied(), Some(1));
-        assert_eq!(result.get(&"b").copied(), Some(2));
+        assert_selected(&result, "a", 1);
+        assert_selected(&result, "b", 2);
     }
 
     #[test]
@@ -221,14 +221,14 @@ mod tests {
         deps.pkg_depends_on("h", 2, []); // will be selected bc e@1 depends on it
         let result = deps.select_versions().unwrap();
 
-        assert_eq!(result.get(&"a").copied(), Some(1));
-        assert_eq!(result.get(&"b").copied(), Some(1));
-        assert_eq!(result.get(&"c").copied(), Some(3));
-        assert_eq!(result.get(&"d").copied(), Some(1));
-        assert_eq!(result.get(&"e").copied(), Some(1));
-        assert_eq!(result.get(&"f").copied(), Some(2));
-        assert_eq!(result.get(&"g").copied(), Some(1));
-        assert_eq!(result.get(&"h").copied(), Some(2));
+        assert_selected(&result, "a", 1);
+        assert_selected(&result, "b", 1);
+        assert_selected(&result, "c", 3);
+        assert_selected(&result, "d", 1);
+        assert_selected(&result, "e", 1);
+        assert_selected(&result, "f", 2);
+        assert_selected(&result, "g", 1);
+        assert_selected(&result, "h", 2);
         assert_eq!(result.len(), 8);
     }
 
@@ -240,10 +240,10 @@ mod tests {
         deps.pkg_depends_on("c", 1, [("d", 3)]);
         let result = deps.select_versions().unwrap();
 
-        assert_eq!(result.get(&"a").copied(), Some(1));
-        assert_eq!(result.get(&"b").copied(), Some(1));
-        assert_eq!(result.get(&"c").copied(), Some(1));
-        assert_eq!(result.get(&"d").copied(), Some(3));
+        assert_selected(&result, "a", 1);
+        assert_selected(&result, "b", 1);
+        assert_selected(&result, "c", 1);
+        assert_selected(&result, "d", 3);
         assert_eq!(result.len(), 4);
     }
 
@@ -254,8 +254,8 @@ mod tests {
         deps.pkg_depends_on("b", 1, [("a", 1)]);
         let result = deps.select_versions().unwrap();
 
-        assert_eq!(result.get(&"a").copied(), Some(1));
-        assert_eq!(result.get(&"b").copied(), Some(1));
+        assert_selected(&result, "a", 1);
+        assert_selected(&result, "b", 1);
         assert_eq!(result.len(), 2);
     }
 
@@ -280,10 +280,10 @@ mod tests {
         deps.pkg_depends_on("bar", 1, [("baz", 3)]);
         let result = deps.select_versions().unwrap();
 
-        assert_eq!(result.get(&"foo").copied(), Some(1));
-        assert_eq!(result.get(&"bar").copied(), Some(1));
-        assert_eq!(result.get(&"baz").copied(), Some(3));
-        assert_eq!(result.get(&"other").copied(), Some(1));
+        assert_selected(&result, "foo", 1);
+        assert_selected(&result, "bar", 1);
+        assert_selected(&result, "baz", 3);
+        assert_selected(&result, "other", 1);
         assert_eq!(result.len(), 4);
     }
 
@@ -294,9 +294,9 @@ mod tests {
         deps.pkg_depends_on("b", 1, [("c", 3)]);
         let result = deps.select_versions().unwrap();
 
-        assert_eq!(result.get(&"a").copied(), Some(1));
-        assert_eq!(result.get(&"b").copied(), Some(1));
-        assert_eq!(result.get(&"c").copied(), Some(3));
+        assert_selected(&result, "a", 1);
+        assert_selected(&result, "b", 1);
+        assert_selected(&result, "c", 3);
     }
 
     #[test]
@@ -305,11 +305,19 @@ mod tests {
         deps.pkg_depends_on("a", 1, [("d", 2)]);
         deps.pkg_depends_on("b", 1, [("d", 3)]);
         deps.pkg_depends_on("c", 1, [("d", 4)]);
-        let result = deps.select_versions().unwrap();
+        let result = deps.select_versions().unwrap(); // TODO maybe the tests are wrong now?
 
-        assert_eq!(result.get(&"a").copied(), Some(1));
-        assert_eq!(result.get(&"b").copied(), Some(1));
-        assert_eq!(result.get(&"c").copied(), Some(1));
-        assert_eq!(result.get(&"d").copied(), Some(4));
+        assert_selected(&result, "a", 1);
+        assert_selected(&result, "b", 1);
+        assert_selected(&result, "c", 1);
+        assert_selected(&result, "d", 4);
+    }
+
+    fn assert_selected<Pkg: Eq + Hash, Ver: Debug + Copy + Eq>(
+        selected: &VecMap<Pkg, Ver>,
+        pkg: Pkg,
+        ver: Ver,
+    ) {
+        assert_eq!(selected.get(&pkg).copied(), Some(ver));
     }
 }
