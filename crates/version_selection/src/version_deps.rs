@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::hash::Hash;
+
 pub struct Deps<Pkg, Ver> {
     exact_versions: HashMap<Pkg, Ver>,
     indirect_deps: HashMap<(Pkg, Ver), HashMap<Pkg, Ver>>,
@@ -47,51 +48,83 @@ impl<Pkg: Ord + Clone + Copy + Eq + Hash, Ver: Ord + Clone + Copy + Eq + Hash> D
 
     /// Consume this and return an exact version to use for each package in the dep tree.
     ///
-    /// Note that some packages may return multiple versions. This can happen when a
-    /// dependency requires a higher version of another package than the version the
-    /// root requires exactly.
+    /// Solving can fail, because the root's direct dependencies must solve to exactly those
+    /// versions. This can cause conflicts with indirect dependencies, which may also require
+    /// those same packages, but higher versions than what the root wants. Excluded package
+    /// versions can also lead solving to fail.
     ///
-    /// For example, let's say the root depends on package `foo` version (exactly) 1.2,
-    /// but another package the root indirectly depends on needs at least `foo` 1.3,
-    /// and a third such package needs `foo` 1.4. In that case, we would select
-    /// 1.2 as the "root version" and 1.4 as the "higher version." (So, the tuple
-    /// associated with the `foo` package would be (1.2, Some(1.4)).)
-    ///
-    /// This would mean that all packages which depend on a version of `foo` greater
-    /// than 1.2 would get 1.4, and all other packages would get `foo` 1.2.
-    ///
-    /// This means that builds always successfully solve.
-    pub fn select_versions(self) -> HashMap<Pkg, (Ver, Option<Ver>)> {
-        let mut answer = self.exact_versions;
-        let mut to_process: Vec<(Pkg, Ver)> =
-            answer.iter().map(|(pkg, (ver, _))| (*pkg, *ver)).collect();
+    /// If solving fails, this returns a Set of the packages that couldn't be solved.
+    /// (Detecting dependency cycles should be done separately.)
+    pub fn select_versions(self) -> Result<HashMap<Pkg, Ver>, HashSet<Pkg>> {
+        use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-        while let Some((pkg, ver)) = to_process.pop() {
-            if let Some(deps) = self.indirect_deps.get(&(pkg, ver)) {
+        // Use BTreeMap and BTreeSet for deterministic behavior
+        let mut selected_versions: BTreeMap<Pkg, Ver> = BTreeMap::new();
+        let mut failed_pkgs: BTreeSet<Pkg> = BTreeSet::new();
+
+        // Initialize the pending queue with the exact_versions
+        let mut pending: VecDeque<(Pkg, Ver)> = VecDeque::new();
+
+        for (pkg, ver) in &self.exact_versions {
+            selected_versions.insert(pkg.clone(), ver.clone());
+            pending.push_back((pkg.clone(), ver.clone()));
+        }
+
+        let mut processed: BTreeSet<(Pkg, Ver)> = BTreeSet::new();
+
+        while let Some((pkg, ver)) = pending.pop_front() {
+            // Check for exclusions
+            if let Some(excluded_versions) = self.exclusions.get(&pkg) {
+                if excluded_versions.contains(&ver) {
+                    failed_pkgs.insert(pkg.clone());
+                    continue;
+                }
+            }
+
+            // Mark this (pkg, ver) as processed
+            if !processed.insert((pkg.clone(), ver.clone())) {
+                continue;
+            }
+
+            // Get dependencies of (pkg, ver)
+            if let Some(deps) = self.indirect_deps.get(&(pkg.clone(), ver.clone())) {
                 for (dep_pkg, dep_ver) in deps {
-                    let dep_ver = *dep_ver;
-                    match answer.entry(dep_pkg.clone()) {
-                        Entry::Vacant(e) => {
-                            e.insert((dep_ver, None));
-                            to_process.push((dep_pkg.clone(), dep_ver));
+                    // Check for exclusions
+                    if let Some(excluded_versions) = self.exclusions.get(dep_pkg) {
+                        if excluded_versions.contains(dep_ver) {
+                            failed_pkgs.insert(dep_pkg.clone());
+                            continue;
                         }
-                        Entry::Occupied(mut e) => {
-                            let (root_ver, higher_ver) = e.get_mut();
-                            if dep_ver > *root_ver {
-                                match higher_ver {
-                                    Some(hv) if dep_ver > *hv => *hv = dep_ver,
-                                    None => *higher_ver = Some(dep_ver),
-                                    _ => {}
-                                }
-                                to_process.push((dep_pkg.clone(), dep_ver));
-                            }
+                    }
+
+                    let selected_ver = selected_versions.get(dep_pkg);
+                    if let Some(selected_ver) = selected_ver {
+                        if dep_ver > selected_ver {
+                            // Update to higher version
+                            selected_versions.insert(dep_pkg.clone(), dep_ver.clone());
+                            pending.push_back((dep_pkg.clone(), dep_ver.clone()));
                         }
+                    } else {
+                        // Select this version
+                        selected_versions.insert(dep_pkg.clone(), dep_ver.clone());
+                        pending.push_back((dep_pkg.clone(), dep_ver.clone()));
                     }
                 }
             }
         }
 
-        answer
+        // Check if selected_versions satisfy exact_versions
+        for (pkg, ver) in &self.exact_versions {
+            if selected_versions.get(pkg) != Some(ver) {
+                failed_pkgs.insert(pkg.clone());
+            }
+        }
+
+        if failed_pkgs.is_empty() {
+            Ok(selected_versions.into_iter().collect())
+        } else {
+            Err(failed_pkgs.into_iter().collect())
+        }
     }
 }
 
