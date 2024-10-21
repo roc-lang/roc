@@ -335,7 +335,7 @@ fn number_lambda_sets(subs: &Subs, initial: Variable) -> Vec<Variable> {
                     stack.push(ext.var());
 
                     for slice_index in tags.variables() {
-                        let slice = subs.variable_slices[slice_index.index as usize];
+                        let slice = subs.variable_slices[slice_index.index()];
                         stack.extend(var_slice!(slice));
                     }
                 }
@@ -351,7 +351,7 @@ fn number_lambda_sets(subs: &Subs, initial: Variable) -> Vec<Variable> {
                     stack.push(ext.var());
 
                     for slice_index in tags.variables() {
-                        let slice = subs.variable_slices[slice_index.index as usize];
+                        let slice = subs.variable_slices[slice_index.index()];
                         stack.extend(var_slice!(slice));
                     }
 
@@ -373,7 +373,7 @@ fn number_lambda_sets(subs: &Subs, initial: Variable) -> Vec<Variable> {
                 ambient_function: _,
             }) => {
                 for slice_index in solved.variables() {
-                    let slice = subs.variable_slices[slice_index.index as usize];
+                    let slice = subs.variable_slices[slice_index.index()];
                     stack.extend(var_slice!(slice));
                 }
 

@@ -683,7 +683,7 @@ impl IAbilitiesStore<Pending> {
 }
 
 mod serialize {
-    use roc_collections::{MutMap, VecMap};
+    use roc_collections::{soa::slice_extend_new, MutMap, VecMap};
     use roc_module::symbol::Symbol;
     use roc_region::all::Region;
     use roc_serialize::bytes;
@@ -1034,11 +1034,11 @@ mod serialize {
                     specialization_lambda_sets,
                 } in spec_info
                 {
-                    let regions = SubsSlice::extend_new(
+                    let regions = slice_extend_new(
                         &mut spec_lambda_sets_regions,
                         specialization_lambda_sets.keys().copied(),
                     );
-                    let vars = SubsSlice::extend_new(
+                    let vars = slice_extend_new(
                         &mut spec_lambda_sets_vars,
                         specialization_lambda_sets.values().copied(),
                     );
@@ -1168,11 +1168,11 @@ mod serialize {
                             symbol,
                             specialization_lambda_sets,
                         }) => {
-                            let regions = SubsSlice::extend_new(
+                            let regions = slice_extend_new(
                                 &mut spec_lambda_sets_regions,
                                 specialization_lambda_sets.keys().copied(),
                             );
-                            let vars = SubsSlice::extend_new(
+                            let vars = slice_extend_new(
                                 &mut spec_lambda_sets_vars,
                                 specialization_lambda_sets.values().copied(),
                             );
