@@ -237,9 +237,6 @@ fn index_var(
                     };
                     return Ok(std::iter::repeat(Variable::NULL).take(num_fields).collect());
                 }
-                FlatType::EmptyTuple => {
-                    return Ok(std::iter::repeat(Variable::NULL).take(0).collect());
-                }
                 FlatType::EmptyTagUnion => {
                     internal_error!("empty tag unions are not indexable")
                 }
