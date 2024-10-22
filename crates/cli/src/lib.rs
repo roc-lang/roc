@@ -986,7 +986,15 @@ pub fn build(
                     // ManuallyDrop will leak the bytes because we don't drop manually
                     let bytes = &ManuallyDrop::new(std::fs::read(&binary_path).unwrap());
 
-                    roc_run(&arena, opt_level, target, args, bytes, expect_metadata)
+                    roc_run(
+                        &arena,
+                        path,
+                        opt_level,
+                        target,
+                        args,
+                        bytes,
+                        expect_metadata,
+                    )
                 }
                 BuildAndRunIfNoErrors => {
                     if problems.fatally_errored {
@@ -1021,7 +1029,15 @@ pub fn build(
                     // ManuallyDrop will leak the bytes because we don't drop manually
                     let bytes = &ManuallyDrop::new(std::fs::read(&binary_path).unwrap());
 
-                    roc_run(&arena, opt_level, target, args, bytes, expect_metadata)
+                    roc_run(
+                        &arena,
+                        path,
+                        opt_level,
+                        target,
+                        args,
+                        bytes,
+                        expect_metadata,
+                    )
                 }
             }
         }
@@ -1034,6 +1050,7 @@ pub fn build(
 
 fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
     arena: &Bump,
+    script_path: &Path,
     opt_level: OptLevel,
     target: Target,
     args: I,
@@ -1073,7 +1090,14 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
 
             Ok(0)
         }
-        _ => roc_run_native(arena, opt_level, args, binary_bytes, expect_metadata),
+        _ => roc_run_native(
+            arena,
+            script_path,
+            opt_level,
+            args,
+            binary_bytes,
+            expect_metadata,
+        ),
     }
 }
 
@@ -1090,7 +1114,7 @@ fn os_str_as_utf8_bytes(os_str: &OsStr) -> &[u8] {
 
 fn make_argv_envp<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     arena: &'a Bump,
-    executable: &ExecutableFile,
+    script_path: &Path,
     args: I,
 ) -> (
     bumpalo::collections::Vec<'a, CString>,
@@ -1098,8 +1122,7 @@ fn make_argv_envp<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
 ) {
     use bumpalo::collections::CollectIn;
 
-    let path = executable.as_path();
-    let path_cstring = CString::new(os_str_as_utf8_bytes(path.as_os_str())).unwrap();
+    let path_cstring = CString::new(os_str_as_utf8_bytes(script_path.as_os_str())).unwrap();
 
     // argv is an array of pointers to strings passed to the new program
     // as its command-line arguments.  By convention, the first of these
@@ -1137,6 +1160,7 @@ fn make_argv_envp<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
 #[cfg(target_family = "unix")]
 fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     arena: &Bump,
+    script_path: &Path,
     opt_level: OptLevel,
     args: I,
     binary_bytes: &[u8],
@@ -1145,7 +1169,7 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     use bumpalo::collections::CollectIn;
 
     let executable = roc_run_executable_file_path(binary_bytes)?;
-    let (argv_cstrings, envp_cstrings) = make_argv_envp(arena, &executable, args);
+    let (argv_cstrings, envp_cstrings) = make_argv_envp(arena, script_path, args);
 
     let argv: bumpalo::collections::Vec<*const c_char> = argv_cstrings
         .iter()
@@ -1400,6 +1424,7 @@ fn roc_run_executable_file_path(binary_bytes: &[u8]) -> std::io::Result<Executab
 #[cfg(not(target_family = "unix"))]
 fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     arena: &Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
+    script_path: &Path,
     opt_level: OptLevel,
     args: I,
     binary_bytes: &[u8],
@@ -1411,7 +1436,7 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
         let executable = roc_run_executable_file_path(binary_bytes)?;
 
         // TODO forward the arguments
-        let (argv_cstrings, envp_cstrings) = make_argv_envp(&arena, &executable, args);
+        let (argv_cstrings, envp_cstrings) = make_argv_envp(&arena, script_path, args);
 
         let argv: bumpalo::collections::Vec<*const c_char> = argv_cstrings
             .iter()
