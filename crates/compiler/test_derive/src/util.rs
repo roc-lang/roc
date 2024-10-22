@@ -4,7 +4,7 @@ use roc_solve::{
     module::{SolveConfig, SolveOutput},
     FunctionKind,
 };
-use std::fmt::Write as _; // import without risk of name clashing
+use std::fmt::Write as _;
 use std::path::PathBuf;
 use ven_pretty::DocAllocator;
 
