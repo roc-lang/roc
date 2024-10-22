@@ -5419,9 +5419,9 @@ mod test_reporting {
     6│       2 -> 2
                ^^
 
-    Looks like you are trying to define a function.
+    Looks like you are trying to define a function. 
 
-    In Roc, functions are always written as a lambda, like
+    In Roc, functions are always written as a lambda, like 
 
         increment = \n -> n + 1
     "###
@@ -14562,6 +14562,16 @@ All branches in an `if` must have the same type!
 
     You can still run the program with this error, which can be helpful
     when you're debugging.
+
+    ── UNNECESSARY EXCLAMATION in /code/proj/Main.roc ──────────────────────────────
+
+    This function is pure, but its name suggests otherwise:
+
+    5│  main! = \{} ->
+        ^^^^^
+
+    Remove the exclamation mark to give an accurate impression of its
+    behavior.
     "###
     );
 
@@ -14703,7 +14713,7 @@ All branches in an `if` must have the same type!
             import pf.Effect
 
             main! = \{} ->
-                printLn "Hello!"
+                printLn "Hello"
 
             printLn = Effect.putLine!
             "#
