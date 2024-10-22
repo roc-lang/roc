@@ -14426,4 +14426,76 @@ All branches in an `if` must have the same type!
     //     ),
     //     @r""
     // );
+
+    test_report!(
+        issue_6240_1,
+        indoc!(
+            r"
+            {}.abcde
+            "
+        ),
+        @r###"
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+    
+    This record doesn’t have a `abcde` field:
+    
+    4│      {}.abcde
+            ^^^^^^^^
+    
+    In fact, it’s a record with no fields at all!
+    "###
+    );
+
+    test_report!(
+        issue_6240_2,
+        indoc!(
+            r#"
+            ("", "").abcde
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+    
+    This expression is used in an unexpected way:
+    
+    4│      ("", "").abcde
+            ^^^^^^^^^^^^^^
+    
+    It is a tuple of type:
+    
+        (
+            Str,
+            Str,
+        )a
+    
+    But you are trying to use it as:
+    
+        { abcde : * }b
+    "###
+    );
+
+    test_report!(
+        issue_6240_3,
+        indoc!(
+            r"
+            {}.0
+            "
+        ),
+        @r###"
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+
+    This expression is used in an unexpected way:
+    
+    4│      {}.0
+            ^^^^
+    
+    It is a record of type:
+    
+        {}
+    
+    But you are trying to use it as:
+    
+        (*)b
+    "###
+    );
 }
