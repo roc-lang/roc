@@ -51,8 +51,6 @@ impl<T> Slice<T> {
         }
     }
 
-    /// This is unsafe because it doesn't verify that the start index being returned is being used with the original
-    /// slice it was created with. Self::get_in is the safe alternative to this.
     pub const fn start(self) -> u32 {
         self.start
     }
