@@ -56,7 +56,7 @@ fn constrain_params(
         home,
         rigids: MutMap::default(),
         resolutions_to_make: vec![],
-        enclosing_fx: None,
+        fx_expectation: None,
     };
 
     let index = constraints.push_variable(module_params.whole_var);
@@ -115,7 +115,7 @@ fn constrain_symbols_from_requires(
                     home,
                     rigids,
                     resolutions_to_make: vec![],
-                    enclosing_fx: None,
+                    fx_expectation: None,
                 };
                 let pattern = Loc::at_zero(roc_can::pattern::Pattern::Identifier(loc_symbol.value));
 
@@ -183,7 +183,7 @@ pub fn frontload_ability_constraints(
                 home,
                 rigids,
                 resolutions_to_make: vec![],
-                enclosing_fx: None,
+                fx_expectation: None,
             };
             let pattern = Loc::at_zero(roc_can::pattern::Pattern::Identifier(*member_name));
 

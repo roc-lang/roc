@@ -14,7 +14,7 @@ use crate::Aliases;
 use bumpalo::Bump;
 use roc_can::abilities::{AbilitiesStore, MemberSpecializationInfo};
 use roc_can::constraint::Constraint::{self, *};
-use roc_can::constraint::{Cycle, LetConstraint, OpportunisticResolve};
+use roc_can::constraint::{Cycle, FxCallConstraint, LetConstraint, OpportunisticResolve};
 use roc_can::expected::{Expected, PExpected};
 use roc_can::module::ModuleParams;
 use roc_collections::VecMap;
@@ -777,6 +777,53 @@ fn solve(
                         problems.push(problem);
 
                         state
+                    }
+                }
+            }
+            FxCall(index) => {
+                let FxCallConstraint {
+                    call_fx_var,
+                    call_kind,
+                    call_region,
+                    expectation,
+                } = &env.constraints.fx_call_constraints[index.index()];
+
+                let actual_desc = env.subs.get(*call_fx_var);
+
+                match (actual_desc.content, expectation) {
+                    (Content::Pure, _) | (Content::FlexVar(_), _) | (Content::Error, _) => state,
+                    (Content::Effectful, None) => {
+                        let problem = TypeError::FxInTopLevel(*call_region, *call_kind);
+                        problems.push(problem);
+                        state
+                    }
+                    (Content::Effectful, Some(expectation)) => {
+                        match env.subs.get_content_without_compacting(expectation.fx_var) {
+                            Content::Effectful | Content::Error => state,
+                            Content::FlexVar(_) => {
+                                env.subs
+                                    .union(expectation.fx_var, *call_fx_var, actual_desc);
+                                state
+                            }
+                            Content::Pure => {
+                                let problem = TypeError::FxInPureFunction(
+                                    *call_region,
+                                    *call_kind,
+                                    expectation.ann_region,
+                                );
+                                problems.push(problem);
+                                state
+                            }
+                            expected_content => {
+                                internal_error!(
+                                    "CallFx: unexpected content: {:?}",
+                                    expected_content
+                                )
+                            }
+                        }
+                    }
+                    actual_content => {
+                        internal_error!("CallFx: unexpected content: {:?}", actual_content)
                     }
                 }
             }

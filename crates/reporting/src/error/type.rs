@@ -4,6 +4,7 @@ use crate::error::canonicalize::{to_circular_def_doc, CIRCULAR_DEF};
 use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder};
 use itertools::EitherOrBoth;
 use itertools::Itertools;
+use roc_can::constraint::FxCallKind;
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{HumanIndex, MutSet, SendMap};
 use roc_collections::VecMap;
@@ -20,8 +21,8 @@ use roc_solve_problem::{
 use roc_std::RocDec;
 use roc_types::pretty_print::{Parens, WILDCARD};
 use roc_types::types::{
-    AbilitySet, AliasKind, Category, ErrorType, FxReason, IndexOrField, PatternCategory, Polarity,
-    Reason, RecordField, TypeExt,
+    AbilitySet, AliasKind, Category, ErrorType, IndexOrField, PatternCategory, Polarity, Reason,
+    RecordField, TypeExt,
 };
 use std::path::PathBuf;
 use ven_pretty::{text, DocAllocator};
@@ -311,6 +312,59 @@ pub fn type_problem<'b>(
                 title: "MODULE PARAMS MISMATCH".to_string(),
                 filename,
                 doc: alloc.stack(stack),
+                severity,
+            })
+        }
+        FxInPureFunction(fx_call_region, fx_call_kind, ann_region) => {
+            let lines = [
+                describe_fx_call_kind(alloc, fx_call_kind),
+                alloc.region(lines.convert_region(fx_call_region), severity),
+                match ann_region {
+                    Some(ann_region) => alloc.stack([
+                        alloc.reflow(
+                            "However, the type of the enclosing function requires that it's pure:",
+                        ),
+                        alloc.region(lines.convert_region(ann_region), Severity::Warning),
+                        alloc.concat([
+                            alloc.tip(),
+                            alloc.text("Replace "),
+                            alloc.keyword("->"),
+                            alloc.text(" with "),
+                            alloc.keyword("=>"),
+                            alloc.text(" to annotate it as effectful."),
+                        ]),
+                    ]),
+                    None => {
+                        alloc.reflow("However, the enclosing function is required to be pure.")
+                    }
+                },
+                alloc.reflow("You can still run the program with this error, which can be helpful when you're debugging."),
+            ];
+
+            Some(Report {
+                filename,
+                title: "EFFECT IN PURE FUNCTION".to_string(),
+                doc: alloc.stack(lines),
+                severity,
+            })
+        }
+        FxInTopLevel(call_region, fx_call_kind) => {
+            let lines = [
+                describe_fx_call_kind(alloc, fx_call_kind),
+                alloc.region(lines.convert_region(call_region), severity),
+                alloc.reflow("However, it appears in a top-level def instead of a function. If we allowed this, importing this module would produce a side effect."),
+                alloc.concat([
+                    alloc.tip(),
+                    alloc.reflow("If you don't need any arguments, use an empty record:"),
+                ]),
+                alloc.parser_suggestion("    askName! : {} => Str\n    askName! = \\{} ->\n        Stdout.line! \"What's your name?\"\n        Stdin.line! {}"),
+                alloc.reflow("This will allow the caller to control when the effect runs."),
+            ];
+
+            Some(Report {
+                filename,
+                title: "EFFECT IN TOP-LEVEL".to_string(),
+                doc: alloc.stack(lines),
                 severity,
             })
         }
@@ -1730,60 +1784,6 @@ fn to_expr_report<'b>(
                 }
             }
 
-            Reason::FxInFunction(ann_region, fx_reason) => {
-                let lines = [
-                    describe_fx_reason(alloc, fx_reason),
-                    alloc.region(lines.convert_region(region), severity),
-                    match ann_region {
-                        Some(ann_region) => alloc.stack([
-                            alloc.reflow(
-                                "However, the type of the enclosing function requires that it's pure:",
-                            ),
-                            alloc.region(lines.convert_region(ann_region), Severity::Warning),
-                            alloc.concat([
-                                alloc.tip(),
-                                alloc.text("Replace "),
-                                alloc.keyword("->"),
-                                alloc.text(" with "),
-                                alloc.keyword("=>"),
-                                alloc.text(" to annotate it as effectful."),
-                            ]),
-                        ]),
-                        None => {
-                            alloc.reflow("However, the enclosing function is required to be pure.")
-                        }
-                    },
-                    alloc.reflow("You can still run the program with this error, which can be helpful when you're debugging."),
-                ];
-
-                Report {
-                    filename,
-                    title: "EFFECT IN PURE FUNCTION".to_string(),
-                    doc: alloc.stack(lines),
-                    severity,
-                }
-            }
-
-            Reason::FxInTopLevel(fx_reason) => {
-                let lines = [
-                    describe_fx_reason(alloc, fx_reason),
-                    alloc.region(lines.convert_region(region), severity),
-                    alloc.reflow("However, it appears in a top-level def instead of a function. If we allowed this, importing this module would produce a side effect."),
-                    alloc.concat([
-                        alloc.tip(),
-                        alloc.reflow("If you don't need any arguments, use an empty record:"),
-                    ]),
-                    alloc.parser_suggestion("    askName! : {} => Str\n    askName! = \\{} ->\n        Stdout.line! \"What's your name?\"\n        Stdin.line! {}"),
-                    alloc.reflow("This will allow the caller to control when the effect runs."),
-                ];
-
-                Report {
-                    filename,
-                    title: "EFFECT IN TOP-LEVEL".to_string(),
-                    doc: alloc.stack(lines),
-                    severity,
-                }
-            }
             Reason::Stmt(opt_name) => {
                 let diff = to_diff(alloc, Parens::Unnecessary, found, expected_type);
 
@@ -5457,14 +5457,17 @@ fn pattern_to_doc_help<'b>(
     }
 }
 
-fn describe_fx_reason<'b>(alloc: &'b RocDocAllocator<'b>, reason: FxReason) -> RocDocBuilder<'b> {
-    match reason {
-        FxReason::Call(Some(name)) => alloc.concat([
+fn describe_fx_call_kind<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    kind: FxCallKind,
+) -> RocDocBuilder<'b> {
+    match kind {
+        FxCallKind::Call(Some(name)) => alloc.concat([
             alloc.reflow("This call to "),
             alloc.symbol_qualified(name),
             alloc.reflow(" might produce an effect:"),
         ]),
-        FxReason::Call(None) => alloc.reflow("This expression calls an effectful function:"),
-        FxReason::Stmt => alloc.reflow("This statement calls an effectful function:"),
+        FxCallKind::Call(None) => alloc.reflow("This expression calls an effectful function:"),
+        FxCallKind::Stmt => alloc.reflow("This statement calls an effectful function:"),
     }
 }

@@ -8,7 +8,8 @@ use crate::builtins::{
 use crate::pattern::{constrain_pattern, PatternState};
 use roc_can::annotation::IntroducedVariables;
 use roc_can::constraint::{
-    Constraint, Constraints, ExpectedTypeIndex, Generalizable, OpportunisticResolve, TypeOrVar,
+    Constraint, Constraints, ExpectedTypeIndex, FxCallKind, FxExpectation, Generalizable,
+    OpportunisticResolve, TypeOrVar,
 };
 use roc_can::def::{Def, DefKind};
 use roc_can::exhaustive::{sketch_pattern_to_rows, sketch_when_branches, ExhaustiveContext};
@@ -29,8 +30,8 @@ use roc_region::all::{Loc, Region};
 use roc_types::subs::{IllegalCycleMark, Variable};
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
-    AliasKind, AnnotationSource, Category, FxReason, IndexOrField, OptAbleType, PReason, Reason,
-    RecordField, TypeExtension, TypeTag, Types,
+    AliasKind, AnnotationSource, Category, IndexOrField, OptAbleType, PReason, Reason, RecordField,
+    TypeExtension, TypeTag, Types,
 };
 use soa::{Index, Slice};
 
@@ -59,17 +60,11 @@ pub struct Env {
     pub resolutions_to_make: Vec<OpportunisticResolve>,
     pub home: ModuleId,
     /// The enclosing function's fx var to be unified with inner calls
-    pub enclosing_fx: Option<EnclosingFx>,
-}
-
-#[derive(Clone, Copy)]
-pub struct EnclosingFx {
-    pub fx_var: Variable,
-    pub ann_region: Option<Region>,
+    pub fx_expectation: Option<FxExpectation>,
 }
 
 impl Env {
-    pub fn with_enclosing_fx<F, T>(
+    pub fn with_fx_expectation<F, T>(
         &mut self,
         fx_var: Variable,
         ann_region: Option<Region>,
@@ -78,13 +73,13 @@ impl Env {
     where
         F: FnOnce(&mut Env) -> T,
     {
-        let prev = self.enclosing_fx.take();
+        let prev = self.fx_expectation.take();
 
-        self.enclosing_fx = Some(EnclosingFx { fx_var, ann_region });
+        self.fx_expectation = Some(FxExpectation { fx_var, ann_region });
 
         let result = f(self);
 
-        self.enclosing_fx = prev;
+        self.fx_expectation = prev;
 
         result
     }
@@ -179,7 +174,7 @@ fn constrain_untyped_closure(
         loc_body_expr.region,
     ));
 
-    let ret_constraint = env.with_enclosing_fx(fx_var, None, |env| {
+    let ret_constraint = env.with_fx_expectation(fx_var, None, |env| {
         constrain_expr(
             types,
             constraints,
@@ -611,13 +606,11 @@ pub fn constrain_expr(
                     category.clone(),
                     region,
                 ),
-                constrain_call_fx(
-                    env,
-                    constraints,
-                    region,
+                constraints.fx_call(
                     *fx_var,
-                    category,
-                    FxReason::Call(opt_symbol),
+                    FxCallKind::Call(opt_symbol),
+                    region,
+                    env.fx_expectation,
                 ),
             ];
 
@@ -1880,35 +1873,6 @@ pub fn constrain_expr(
     }
 }
 
-fn constrain_call_fx(
-    env: &mut Env,
-    constraints: &mut Constraints,
-    region: Region,
-    fx_var: Variable,
-    category: Category,
-    fx_reason: FxReason,
-) -> Constraint {
-    let fx_expected_type = match env.enclosing_fx {
-        Some(enclosing_fn) => {
-            let enclosing_fx_index = constraints.push_variable(enclosing_fn.fx_var);
-
-            constraints.push_expected_type(ForReason(
-                Reason::FxInFunction(enclosing_fn.ann_region, fx_reason),
-                enclosing_fx_index,
-                region,
-            ))
-        }
-        None => constraints.push_expected_type(ForReason(
-            Reason::FxInTopLevel(fx_reason),
-            // top-level defs are only allowed to call pure functions
-            constraints.push_variable(Variable::PURE),
-            region,
-        )),
-    };
-
-    constraints.equal_types_var(fx_var, fx_expected_type, category, region)
-}
-
 fn constrain_function_def(
     types: &mut Types,
     constraints: &mut Constraints,
@@ -2047,7 +2011,7 @@ fn constrain_function_def(
                 home: env.home,
                 rigids: ftv,
                 resolutions_to_make: vec![],
-                enclosing_fx: Some(EnclosingFx {
+                fx_expectation: Some(FxExpectation {
                     fx_var: function_def.fx_type,
                     ann_region: Some(annotation.region),
                 }),
@@ -2303,7 +2267,7 @@ fn constrain_destructure_def(
                 home: env.home,
                 rigids: ftv,
                 resolutions_to_make: vec![],
-                enclosing_fx: env.enclosing_fx,
+                fx_expectation: env.fx_expectation,
             };
 
             let signature_index = constraints.push_type(types, signature);
@@ -2406,7 +2370,7 @@ fn constrain_value_def(
                 home: env.home,
                 rigids: ftv,
                 resolutions_to_make: vec![],
-                enclosing_fx: env.enclosing_fx,
+                fx_expectation: env.fx_expectation,
             };
 
             let loc_pattern = Loc::at(loc_symbol.region, Pattern::Identifier(loc_symbol.value));
@@ -2694,7 +2658,7 @@ pub fn constrain_decls(
         home,
         rigids: MutMap::default(),
         resolutions_to_make: vec![],
-        enclosing_fx: None,
+        fx_expectation: None,
     };
 
     debug_assert_eq!(declarations.declarations.len(), declarations.symbols.len());
@@ -2926,7 +2890,7 @@ fn constrain_typed_def(
         home: env.home,
         resolutions_to_make: vec![],
         rigids: ftv,
-        enclosing_fx: env.enclosing_fx,
+        fx_expectation: env.fx_expectation,
     };
 
     let signature_index = constraints.push_type(types, signature);
@@ -3035,7 +2999,7 @@ fn constrain_typed_def(
                 ret_type_index,
             ));
 
-            let ret_constraint = env.with_enclosing_fx(fx_var, Some(annotation.region), |env| {
+            let ret_constraint = env.with_fx_expectation(fx_var, Some(annotation.region), |env| {
                 constrain_expr(
                     types,
                     constraints,
@@ -3067,7 +3031,6 @@ fn constrain_typed_def(
                 // when we check that the solved function type matches the annotation, we can
                 // display the fully inferred return variable.
                 constraints.store(ret_type_index, ret_var, std::file!(), std::line!()),
-                constraints.store(fx_type_index, fx_var, std::file!(), std::line!()),
                 // Now, check the solved function type matches the annotation.
                 constraints.equal_types(
                     solved_fn_type,
@@ -3521,7 +3484,7 @@ fn constrain_stmt_def(
         error_region,
     ));
 
-    let expr_con = env.with_enclosing_fx(fx_var, None, |env| {
+    let expr_con = env.with_fx_expectation(fx_var, None, |env| {
         constrain_expr(
             types,
             constraints,
@@ -3548,21 +3511,15 @@ fn constrain_stmt_def(
     // Stmt expr must be effectful, otherwise it's dead code
     let effectful_constraint = Constraint::EffectfulStmt(fx_var, region);
 
-    let fx_reason = match fn_name {
-        None => FxReason::Stmt,
-        Some(name) => FxReason::Call(Some(name)),
+    let fx_call_kind = match fn_name {
+        None => FxCallKind::Stmt,
+        Some(name) => FxCallKind::Call(Some(name)),
     };
 
     // We have to unify the stmt fx with the enclosing fx
     // since we used the former to constrain the expr.
-    let enclosing_fx_constraint = constrain_call_fx(
-        env,
-        constraints,
-        error_region,
-        fx_var,
-        Category::Unknown,
-        fx_reason,
-    );
+    let enclosing_fx_constraint =
+        constraints.fx_call(fx_var, fx_call_kind, error_region, env.fx_expectation);
 
     constraints.and_constraint([body_con, effectful_constraint, enclosing_fx_constraint])
 }
@@ -4032,7 +3989,7 @@ fn constraint_recursive_function(
                 constraints.push_type(types, typ)
             };
 
-            let expr_con = env.with_enclosing_fx(fx_var, Some(annotation.region), |env| {
+            let expr_con = env.with_fx_expectation(fx_var, Some(annotation.region), |env| {
                 let expected = constraints.push_expected_type(NoExpectation(ret_type_index));
                 constrain_expr(
                     types,
@@ -4049,6 +4006,7 @@ fn constraint_recursive_function(
 
             let state_constraints = constraints.and_constraint(argument_pattern_state.constraints);
             let cons = [
+                constraints.store(fx_type_index, fx_var, std::file!(), std::line!()),
                 constraints.let_constraint(
                     [],
                     argument_pattern_state.vars,
@@ -4063,7 +4021,6 @@ fn constraint_recursive_function(
                 // Store type into AST vars. We use Store so errors aren't reported twice
                 constraints.store(signature_index, expr_var, std::file!(), std::line!()),
                 constraints.store(ret_type_index, ret_var, std::file!(), std::line!()),
-                constraints.store(fx_type_index, fx_var, std::file!(), std::line!()),
                 closure_constraint,
             ];
 
@@ -4582,7 +4539,7 @@ fn rec_defs_help(
                             constraints.push_type(types, typ)
                         };
                         let expr_con =
-                            env.with_enclosing_fx(fx_var, Some(annotation.region), |env| {
+                            env.with_fx_expectation(fx_var, Some(annotation.region), |env| {
                                 let body_type =
                                     constraints.push_expected_type(NoExpectation(ret_type_index));
 
@@ -4630,7 +4587,6 @@ fn rec_defs_help(
                                 std::line!(),
                             ),
                             constraints.store(ret_type_index, ret_var, std::file!(), std::line!()),
-                            constraints.store(fx_type_index, fx_var, std::file!(), std::line!()),
                             closure_constraint,
                         ];
 

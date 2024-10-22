@@ -29,6 +29,7 @@ pub struct Constraints {
     pub eq: Vec<Eq>,
     pub pattern_eq: Vec<PatternEq>,
     pub cycles: Vec<Cycle>,
+    pub fx_call_constraints: Vec<FxCallConstraint>,
 }
 
 impl std::fmt::Debug for Constraints {
@@ -50,6 +51,7 @@ impl std::fmt::Debug for Constraints {
             .field("eq", &self.eq)
             .field("pattern_eq", &self.pattern_eq)
             .field("cycles", &self.cycles)
+            .field("fx_call_constraints", &self.fx_call_constraints)
             .finish()
     }
 }
@@ -81,6 +83,7 @@ impl Constraints {
         let eq = Vec::new();
         let pattern_eq = Vec::new();
         let cycles = Vec::new();
+        let fx_call_constraints = Vec::with_capacity(16);
 
         categories.extend([
             Category::Record,
@@ -130,6 +133,7 @@ impl Constraints {
             eq,
             pattern_eq,
             cycles,
+            fx_call_constraints,
         }
     }
 
@@ -574,6 +578,25 @@ impl Constraints {
         Constraint::Lookup(symbol, expected_index, region)
     }
 
+    pub fn fx_call(
+        &mut self,
+        call_fx_var: Variable,
+        call_kind: FxCallKind,
+        call_region: Region,
+        expectation: Option<FxExpectation>,
+    ) -> Constraint {
+        let constraint = FxCallConstraint {
+            call_fx_var,
+            call_kind,
+            call_region,
+            expectation,
+        };
+
+        let constraint_index = index_push_new(&mut self.fx_call_constraints, constraint);
+
+        Constraint::FxCall(constraint_index)
+    }
+
     pub fn contains_save_the_environment(&self, constraint: &Constraint) -> bool {
         match constraint {
             Constraint::SaveTheEnvironment => true,
@@ -599,6 +622,7 @@ impl Constraints {
             | Constraint::Lookup(..)
             | Constraint::Pattern(..)
             | Constraint::EffectfulStmt(..)
+            | Constraint::FxCall(_)
             | Constraint::True
             | Constraint::IsOpenType(_)
             | Constraint::IncludesTag(_)
@@ -771,6 +795,8 @@ pub enum Constraint {
         Index<PatternCategory>,
         Region,
     ),
+    /// Check call fx against enclosing function fx
+    FxCall(Index<FxCallConstraint>),
     /// Expect statement to be effectful
     EffectfulStmt(Variable, Region),
     /// Used for things that always unify, e.g. blanks and runtime errors
@@ -845,6 +871,26 @@ pub struct Cycle {
     pub expr_regions: Slice<Region>,
 }
 
+#[derive(Debug)]
+pub struct FxCallConstraint {
+    pub call_fx_var: Variable,
+    pub call_kind: FxCallKind,
+    pub call_region: Region,
+    pub expectation: Option<FxExpectation>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct FxExpectation {
+    pub fx_var: Variable,
+    pub ann_region: Option<Region>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum FxCallKind {
+    Call(Option<Symbol>),
+    Stmt,
+}
+
 /// Custom impl to limit vertical space used by the debug output
 impl std::fmt::Debug for Constraint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -860,6 +906,9 @@ impl std::fmt::Debug for Constraint {
             }
             Self::Pattern(arg0, arg1, arg2, arg3) => {
                 write!(f, "Pattern({arg0:?}, {arg1:?}, {arg2:?}, {arg3:?})")
+            }
+            Self::FxCall(arg0) => {
+                write!(f, "CallFx({arg0:?})")
             }
             Self::EffectfulStmt(arg0, arg1) => {
                 write!(f, "EffectfulStmt({arg0:?}, {arg1:?})")
