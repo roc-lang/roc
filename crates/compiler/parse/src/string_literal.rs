@@ -2,9 +2,7 @@ use crate::ast::{EscapedChar, SingleQuoteLiteral, StrLiteral, StrSegment};
 use crate::blankspace::{eat_space, SpacedBuilder};
 use crate::expr::{parse_expr_start, ACCEPT_MULTI_BACKPASSING, CHECK_FOR_ARROW};
 use crate::parser::Progress::{self, *};
-use crate::parser::{
-    byte, loc, skip_first, skip_second, BadInputError, ESingleQuote, EString, ParseResult, Parser,
-};
+use crate::parser::{BadInputError, ESingleQuote, EString, ParseResult, Parser};
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
@@ -363,11 +361,29 @@ pub fn rest_of_str_like<'a>(
                         // Parse the hex digits, surrounded by parens, then
                         // give a canonicalization error if the digits form
                         // an invalid unicode code point.
-                        let (_, loc_digits, new_state) = skip_first(
-                            byte(b'(', EString::CodePtOpen),
-                            skip_second(loc(ascii_hex_digits()), byte(b')', EString::CodePtEnd)),
-                        )
-                        .parse(arena, state, min_indent)?;
+                        if state.bytes().first() != Some(&b'(') {
+                            return Err((NoProgress, EString::CodePtOpen(state.pos())));
+                        }
+                        let new_state = state.inc();
+
+                        let digits_pos = new_state.pos();
+                        let (digits, new_state) =
+                            match ascii_hex_digits().parse(arena, new_state, min_indent) {
+                                Ok((_, out, state)) => (out, state),
+                                Err((_, fail)) => return Err((MadeProgress, fail)),
+                            };
+                        let loc_digits = Loc::pos(digits_pos, new_state.pos(), digits);
+
+                        if new_state.bytes().first() != Some(&b')') {
+                            return Err((MadeProgress, EString::CodePtEnd(new_state.pos())));
+                        }
+                        let new_state = new_state.inc();
+
+                        // let (_, loc_digits, new_state) = skip_first(
+                        //     byte(b'(', EString::CodePtOpen),
+                        //     skip_second(loc(ascii_hex_digits()), byte(b')', EString::CodePtEnd)),
+                        // )
+                        // .parse(arena, state, min_indent)?;
 
                         // Advance the iterator past the expr we just parsed.
                         for _ in 0..(original_byte_count - new_state.bytes().len()) {

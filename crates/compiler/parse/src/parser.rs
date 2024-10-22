@@ -1318,7 +1318,7 @@ where
     Y: 'a,
     X: 'a,
 {
-    move |a, state: State<'a>, min_indent| {
+    move |a: &'a Bump, state: State<'a>, min_indent: u32| {
         let original_pos = state.pos();
         match parser.parse(a, state, min_indent) {
             Ok(t) => Ok(t),

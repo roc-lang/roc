@@ -9,8 +9,8 @@ use crate::ident::{
 };
 use crate::keyword;
 use crate::parser::{
-    at_keyword, collection_inner, loc, specialize_err_ref, ERecord, EType, ETypeApply,
-    ETypeInParens, ETypeInlineAlias, ETypeRecord, ETypeTagUnion, ParseResult, Parser, Progress::*,
+    at_keyword, collection_inner, loc, ERecord, EType, ETypeApply, ETypeInParens, ETypeInlineAlias,
+    ETypeRecord, ETypeTagUnion, ParseResult, Parser, Progress::*,
 };
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
@@ -209,10 +209,15 @@ fn rest_of_type_in_parens<'a>(
     min_indent: u32,
 ) -> ParseResult<'a, Loc<TypeAnnotation<'a>>, ETypeInParens<'a>> {
     let (fields, state) = match collection_inner(
-        specialize_err_ref(
-            ETypeInParens::Type,
-            type_expr(TRAILING_COMMA_VALID | SKIP_PARSING_SPACES_BEFORE),
-        ),
+        move |a: &'a Bump, state: State<'a>, min_indent: u32| {
+            let type_pos = state.pos();
+            match type_expr(TRAILING_COMMA_VALID | SKIP_PARSING_SPACES_BEFORE)
+                .parse(a, state, min_indent)
+            {
+                Ok(ok) => Ok(ok),
+                Err((p, fail)) => Err((p, ETypeInParens::Type(a.alloc(fail), type_pos))),
+            }
+        },
         TypeAnnotation::SpaceBefore,
     )
     .parse(arena, state, 0)
@@ -296,8 +301,8 @@ fn tag_type<'a>() -> impl Parser<'a, Loc<Tag<'a>>, ETypeTagUnion<'a>> {
     }
 }
 
-fn record_type_field<'a>() -> impl Parser<'a, AssignedField<'a, TypeAnnotation<'a>>, ETypeRecord<'a>>
-{
+fn record_type_field<'a>(
+) -> impl Parser<'a, Loc<AssignedField<'a, TypeAnnotation<'a>>>, ETypeRecord<'a>> {
     use AssignedField::*;
     move |arena, state: State<'a>, min_indent: u32| {
         // You must have a field name, e.g. "email"
@@ -337,8 +342,8 @@ fn record_type_field<'a>() -> impl Parser<'a, AssignedField<'a, TypeAnnotation<'
                 };
 
             let loc_val = loc_val.spaced_before(arena, spaces_before);
-
             let req_val = RequiredValue(loc_label, spaces, arena.alloc(loc_val));
+            let req_val = Loc::pos(start, state.pos(), req_val);
             Ok((MadeProgress, req_val, state))
         } else if state.bytes().first() == Some(&b'?') {
             let state = state.inc();
@@ -358,6 +363,7 @@ fn record_type_field<'a>() -> impl Parser<'a, AssignedField<'a, TypeAnnotation<'
             let loc_val = loc_val.spaced_before(arena, spaces_before);
 
             let opt_val = OptionalValue(loc_label, spaces, arena.alloc(loc_val));
+            let opt_val = Loc::pos(start, state.pos(), opt_val);
             Ok((MadeProgress, opt_val, state))
         } else {
             // If no value was provided, record it as a Var.
@@ -368,6 +374,7 @@ fn record_type_field<'a>() -> impl Parser<'a, AssignedField<'a, TypeAnnotation<'
                 LabelOnly(loc_label)
             };
 
+            let value = Loc::pos(start, state.pos(), value);
             Ok((MadeProgress, value, state))
         }
     }
@@ -379,13 +386,12 @@ fn rest_of_record_type<'a>(
     state: State<'a>,
     min_indent: u32,
 ) -> ParseResult<'a, TypeAnnotation<'a>, ETypeRecord<'a>> {
-    let (fields, state) =
-        match collection_inner(loc(record_type_field()), AssignedField::SpaceBefore)
-            .parse(arena, state, 0)
-        {
-            Ok((_, out, state)) => (out, state),
-            Err((_, fail)) => return Err((MadeProgress, fail)),
-        };
+    let (fields, state) = match collection_inner(record_type_field(), AssignedField::SpaceBefore)
+        .parse(arena, state, 0)
+    {
+        Ok((_, out, state)) => (out, state),
+        Err((_, fail)) => return Err((MadeProgress, fail)),
+    };
 
     if state.bytes().first() != Some(&b'}') {
         return Err((MadeProgress, ETypeRecord::End(state.pos())));

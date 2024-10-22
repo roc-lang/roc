@@ -120,7 +120,7 @@ fn parse_module_header<'a>(
         eat_space_check(EHeader::IndentStart, arena, state, min_indent, false)?;
 
     let params_pos = state.pos();
-    let (params, state) = match module_params().parse(arena, state.clone(), min_indent) {
+    let (params, state) = match parse_module_params(arena, state.clone(), min_indent) {
         Ok((_, out, state)) => (Some(out), state),
         Err((NoProgress, _)) => (None, state),
         Err((p, fail)) => return Err((p, EHeader::Params(fail, params_pos))),
@@ -141,35 +141,37 @@ fn parse_module_header<'a>(
     Ok((MadeProgress, header, state))
 }
 
-fn module_params<'a>() -> impl Parser<'a, ModuleParams<'a>, EParams<'a>> {
-    move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
-        let start = state.pos();
+fn parse_module_params<'a>(
+    arena: &'a bumpalo::Bump,
+    state: State<'a>,
+    min_indent: u32,
+) -> ParseResult<'a, ModuleParams<'a>, EParams<'a>> {
+    let start = state.pos();
 
-        let (pattern, state) = match parse_record_pattern_fields(arena, state) {
-            Ok((_, fields, state)) => (Loc::pos(start, state.pos(), fields), state),
-            Err((p, fail)) => {
-                return Err((p, EParams::Pattern(fail, start)));
-            }
-        };
-
-        let (_, before_arrow, state) =
-            eat_space_check(EParams::BeforeArrow, arena, state, min_indent, false)?;
-
-        if !state.bytes().starts_with(b"->") {
-            return Err((MadeProgress, EParams::Arrow(state.pos())));
+    let (pattern, state) = match parse_record_pattern_fields(arena, state) {
+        Ok((_, fields, state)) => (Loc::pos(start, state.pos(), fields), state),
+        Err((p, fail)) => {
+            return Err((p, EParams::Pattern(fail, start)));
         }
-        let state = state.advance(2);
+    };
 
-        let (_, after_arrow, state) =
-            eat_space_check(EParams::AfterArrow, arena, state, min_indent, false)?;
+    let (_, before_arrow, state) =
+        eat_space_check(EParams::BeforeArrow, arena, state, min_indent, false)?;
 
-        let params = ModuleParams {
-            pattern,
-            before_arrow,
-            after_arrow,
-        };
-        Ok((MadeProgress, params, state))
+    if !state.bytes().starts_with(b"->") {
+        return Err((MadeProgress, EParams::Arrow(state.pos())));
     }
+    let state = state.advance(2);
+
+    let (_, after_arrow, state) =
+        eat_space_check(EParams::AfterArrow, arena, state, min_indent, false)?;
+
+    let params = ModuleParams {
+        pattern,
+        before_arrow,
+        after_arrow,
+    };
+    Ok((MadeProgress, params, state))
 }
 
 // TODO does this need to be a macro?
@@ -462,6 +464,7 @@ fn old_package_header<'a>() -> impl Parser<'a, PackageHeader<'a>, EHeader<'a>> {
                 old.exposes.keyword.before,
                 old.exposes.keyword.after
             );
+        
             let before_packages = merge_spaces(
                 arena,
                 old.packages.value.keyword.before,
