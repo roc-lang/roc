@@ -18,10 +18,8 @@ impl<T> fmt::Debug for Slice<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "Slice<{}> {{ start: {}, length: {} }}",
-            core::any::type_name::<T>(),
-            self.start,
-            self.length
+            "Slice {{ start: {}, length: {} }}",
+            self.start, self.length
         )
     }
 }

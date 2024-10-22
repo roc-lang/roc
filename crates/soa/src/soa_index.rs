@@ -40,7 +40,7 @@ impl<T> Ord for Index<T> {
 
 impl<T> fmt::Debug for Index<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "Index<{}>({})", any::type_name::<T>(), self.index)
+        write!(f, "Index({})", self.index)
     }
 }
 
