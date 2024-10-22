@@ -420,9 +420,16 @@ pub fn type_problem<'b>(
                 severity,
             })
         }
-        SuffixedPureFunction(region, SuffixErrorKind::Let(_)) => {
+        SuffixedPureFunction(region, kind) => {
             let stack = [
-                alloc.reflow("This function is pure, but its name suggests otherwise:"),
+                match kind {
+                    SuffixErrorKind::Let(_) => {
+                        alloc.reflow("This function is pure, but its name suggests otherwise:")
+                    }
+                    SuffixErrorKind::RecordField => {
+                        alloc.reflow("This field's value is a pure function, but its name suggests otherwise:")
+                    }
+                },
                 alloc.region(lines.convert_region(region), severity),
                 alloc.reflow(
                     "Remove the exclamation mark to give an accurate impression of its behavior.",
@@ -435,9 +442,6 @@ pub fn type_problem<'b>(
                 doc: alloc.stack(stack),
                 severity,
             })
-        }
-        SuffixedPureFunction(region, SuffixErrorKind::RecordField) => {
-            todo!("[purity-inference]");
         }
     }
 }
