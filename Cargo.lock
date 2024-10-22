@@ -2440,6 +2440,7 @@ dependencies = [
  "im",
  "im-rc",
  "smallvec",
+ "soa",
  "wyhash",
 ]
 
@@ -2460,6 +2461,7 @@ dependencies = [
  "roc_problem",
  "roc_region",
  "roc_types",
+ "soa",
 ]
 
 [[package]]
@@ -2900,6 +2902,7 @@ dependencies = [
  "roc_error_macros",
  "roc_module",
  "roc_region",
+ "soa",
  "tempfile",
 ]
 
@@ -3112,6 +3115,7 @@ dependencies = [
  "roc_target",
  "roc_types",
  "roc_unify",
+ "soa",
  "tempfile",
  "test_solve_helpers",
 ]

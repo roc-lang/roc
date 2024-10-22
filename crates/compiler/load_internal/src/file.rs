@@ -20,6 +20,7 @@ use roc_can::module::{
     canonicalize_module_defs, ExposedByModule, ExposedForModule, ExposedModuleTypes, Module,
     ModuleParams, ResolvedImplementations, TypeState,
 };
+use roc_collections::soa::slice_extend_new;
 use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecMap, VecSet};
 use roc_constrain::module::constrain_module;
 use roc_debug_flags::dbg_do;
@@ -4369,7 +4370,7 @@ fn synth_list_len_type(subs: &mut Subs) -> Variable {
 
     // List.len : List a -> U64
     let a = synth_import(subs, Content::FlexVar(None));
-    let a_slice = SubsSlice::extend_new(&mut subs.variables, [a]);
+    let a_slice = slice_extend_new(&mut subs.variables, [a]);
     let list_a = synth_import(
         subs,
         Content::Structure(FlatType::Apply(Symbol::LIST_LIST, a_slice)),
@@ -4385,7 +4386,7 @@ fn synth_list_len_type(subs: &mut Subs) -> Variable {
             ambient_function: fn_var,
         }),
     );
-    let fn_args_slice = SubsSlice::extend_new(&mut subs.variables, [list_a]);
+    let fn_args_slice = slice_extend_new(&mut subs.variables, [list_a]);
     subs.set_content(
         fn_var,
         Content::Structure(FlatType::Func(fn_args_slice, clos_list_len, Variable::U64)),

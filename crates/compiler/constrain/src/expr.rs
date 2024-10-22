@@ -22,7 +22,6 @@ use roc_can::expr::{
 use roc_can::pattern::Pattern;
 use roc_can::traverse::symbols_introduced_from_pattern;
 use roc_collections::all::{HumanIndex, MutMap, SendMap};
-use roc_collections::soa::{Index, Slice};
 use roc_collections::VecMap;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::{ModuleId, Symbol};
@@ -33,6 +32,7 @@ use roc_types::types::{
     AliasKind, AnnotationSource, Category, IndexOrField, OptAbleType, PReason, Reason, RecordField,
     TypeExtension, TypeTag, Types,
 };
+use soa::{Index, Slice};
 
 /// This is for constraining Defs
 #[derive(Default, Debug)]
@@ -2969,7 +2969,7 @@ fn constrain_typed_function_arguments(
         None
     };
 
-    let it = arguments.iter().zip(arg_types.into_iter()).enumerate();
+    let it = arguments.iter().zip(arg_types).enumerate();
     for (index, ((pattern_var, annotated_mark, loc_pattern), ann)) in it {
         let pattern_var_index = constraints.push_variable(*pattern_var);
         let ann_index = constraints.push_type(types, ann);
@@ -3123,7 +3123,7 @@ fn constrain_typed_function_arguments_simple(
     arguments: &[(Variable, AnnotatedMark, Loc<Pattern>)],
     arg_types: Slice<TypeTag>,
 ) {
-    let it = arguments.iter().zip(arg_types.into_iter()).enumerate();
+    let it = arguments.iter().zip(arg_types).enumerate();
     for (index, ((pattern_var, annotated_mark, loc_pattern), ann)) in it {
         let pattern_var_index = constraints.push_variable(*pattern_var);
         let ann_index = constraints.push_type(types, ann);

@@ -4,20 +4,20 @@ expression: snapshot
 ---
 Defs {
     tags: [
-        Index(2147483648),
-        Index(2147483649),
+        EitherIndex(2147483648),
+        EitherIndex(2147483649),
     ],
     regions: [
         @0-54,
         @56-98,
     ],
     space_before: [
-        Slice(start = 0, length = 0),
-        Slice(start = 0, length = 2),
+        Slice { start: 0, length: 0 },
+        Slice { start: 0, length: 2 },
     ],
     space_after: [
-        Slice(start = 0, length = 0),
-        Slice(start = 2, length = 1),
+        Slice { start: 0, length: 0 },
+        Slice { start: 2, length: 1 },
     ],
     spaces: [
         Newline,
@@ -33,16 +33,16 @@ Defs {
             @11-54 Defs(
                 Defs {
                     tags: [
-                        Index(2147483648),
+                        EitherIndex(2147483648),
                     ],
                     regions: [
                         @15-20,
                     ],
                     space_before: [
-                        Slice(start = 0, length = 0),
+                        Slice { start: 0, length: 0 },
                     ],
                     space_after: [
-                        Slice(start = 0, length = 0),
+                        Slice { start: 0, length: 0 },
                     ],
                     spaces: [],
                     type_defs: [],
@@ -68,16 +68,16 @@ Defs {
                         @25-39 Defs(
                             Defs {
                                 tags: [
-                                    Index(2147483648),
+                                    EitherIndex(2147483648),
                                 ],
                                 regions: [
                                     @25-39,
                                 ],
                                 space_before: [
-                                    Slice(start = 0, length = 0),
+                                    Slice { start: 0, length: 0 },
                                 ],
                                 space_after: [
-                                    Slice(start = 0, length = 0),
+                                    Slice { start: 0, length: 0 },
                                 ],
                                 spaces: [],
                                 type_defs: [],
@@ -145,16 +145,16 @@ Defs {
             @71-98 Defs(
                 Defs {
                     tags: [
-                        Index(2147483648),
+                        EitherIndex(2147483648),
                     ],
                     regions: [
                         @75-80,
                     ],
                     space_before: [
-                        Slice(start = 0, length = 0),
+                        Slice { start: 0, length: 0 },
                     ],
                     space_after: [
-                        Slice(start = 0, length = 0),
+                        Slice { start: 0, length: 0 },
                     ],
                     spaces: [],
                     type_defs: [],
