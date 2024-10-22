@@ -42,7 +42,7 @@ impl<T, U> EitherIndex<T, U> {
 
         Self {
             index: input.index | Self::MASK,
-            _marker: std::marker::PhantomData,
+            _marker: PhantomData,
         }
     }
 
