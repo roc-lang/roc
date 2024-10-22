@@ -59,9 +59,6 @@ impl<Pkg: Ord + Clone + Copy + Eq + Hash, Ver: Ord + Clone + Copy + Eq + Hash> D
         // Packages to process, using VecSet for deterministic ordering
         let mut packages_to_process: VecSet<Pkg> = required_versions.keys().copied().collect();
 
-        // Keep track of whether we've updated a package's version
-        let mut updated_packages: VecSet<Pkg> = VecSet::default();
-
         // First, go through and delete all the unreachable dependencies.
         // For example, if `foo@1` depends on `bar@2`, but `bar` is required
         // to be exactly 3 because of the root, then update bar to depend on 3.
@@ -108,38 +105,34 @@ impl<Pkg: Ord + Clone + Copy + Eq + Hash, Ver: Ord + Clone + Copy + Eq + Hash> D
         while let Some(pkg) = packages_to_process.pop() {
             let ver = *required_versions.get(&pkg).unwrap();
 
-            // Get dependencies of this package-version
-            match indirect_deps.get(&(pkg, ver)) {
-                Some(deps) => {
-                    for (&dep_pkg, &dep_ver) in deps.iter() {
-                        // See if dep_pkg is in required_versions
-                        match required_versions.get(&dep_pkg) {
-                            Some(&existing_ver) => {
-                                if dep_ver > existing_ver {
-                                    // Use the higher version
-                                    required_versions.insert(dep_pkg, dep_ver);
-                                    packages_to_process.insert(dep_pkg);
-                                    updated_packages.insert(dep_pkg);
-                                }
+            if let Some(deps) = indirect_deps.get(&(pkg, ver)) {
+                for (&dep_pkg, &dep_ver) in deps.iter() {
+                    if let Some(&req_ver) = self.exact_versions.get(&dep_pkg) {
+                        if dep_ver != req_ver {
+                            // Conflict with exact required version
+                            failed_pkgs.insert(dep_pkg);
+                            continue;
+                        }
+                    }
 
-                                // (If the existing version was already higher or equal, do nothing.)
-                            }
-                            None => {
-                                // First time we see dep_pkg
+                    match required_versions.get(&dep_pkg) {
+                        Some(&existing_ver) => {
+                            if dep_ver > existing_ver {
+                                // Use the higher version
                                 required_versions.insert(dep_pkg, dep_ver);
                                 packages_to_process.insert(dep_pkg);
-                                updated_packages.insert(dep_pkg);
                             }
+                            // (If the existing version was already higher or equal, do nothing.)
+                        }
+                        None => {
+                            // First time we see dep_pkg
+                            required_versions.insert(dep_pkg, dep_ver);
+                            packages_to_process.insert(dep_pkg);
                         }
                     }
                 }
-                None => {
-                    // We couldn't find an entry in indirect_deps for this. This means it must have been
-                    // removed from the tree as erroneous (because it depended on a conflicting version
-                    // of something due to the root), so we must error out!
-                    failed_pkgs.insert(pkg);
-                }
             }
+            // If no dependencies are listed, assume the package has no dependencies and proceed.
         }
 
         if failed_pkgs.is_empty() {
@@ -165,7 +158,55 @@ mod tests {
 
     #[test]
     fn test_pkg_depends_on() {
-        let mut deps = Deps::from_iter([("a", 1)]);
+        // Initialize a set to keep track of package-versions that cannot be used
+        let mut unusable_packages = VecSet::default(); // VecSet<(Pkg, Ver)>
+        let mut changed = true;
+
+        // Propagate unusable packages due to conflicts with exact versions or dependencies on unusable packages
+        while changed {
+            changed = false;
+            for (&(pkg, ver), deps) in self.indirect_deps.iter() {
+                if unusable_packages.contains(&(pkg, ver)) {
+                    continue;
+                }
+                for (&dep_pkg, &dep_ver) in deps.iter() {
+                    if let Some(&req_ver) = self.exact_versions.get(&dep_pkg) {
+                        if dep_ver != req_ver {
+                            // Conflict between dep_ver and required exact version
+                            unusable_packages.insert((pkg, ver));
+                            changed = true;
+                            break;
+                        }
+                    }
+                    if unusable_packages.contains(&(dep_pkg, dep_ver)) {
+                        // Dependency on an unusable package-version
+                        unusable_packages.insert((pkg, ver));
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Remove the unusable packages from indirect_deps
+        for &(pkg, ver) in &unusable_packages {
+            self.indirect_deps.remove(&(pkg, ver));
+        }
+
+        // Additionally, remove any packages from required_versions that have become unusable (and report them as failed)
+        required_versions.retain(|&pkg, &mut ver| {
+            if !self.indirect_deps.contains_key(&(pkg, ver))
+                && !self.exact_versions.contains_key(&pkg)
+            {
+                failed_pkgs.insert(pkg);
+                false
+            } else {
+                true
+            }
+        });
+
+        // Re-initialize packages_to_process since required_versions may have changed
+        packages_to_process = required_versions.keys().copied().collect();
         deps.pkg_depends_on("a", 1, [("b", 2), ("c", 3)]);
         deps.pkg_depends_on("b", 2, [("d", 4)]);
 
