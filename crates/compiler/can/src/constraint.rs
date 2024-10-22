@@ -6,7 +6,7 @@ use crate::abilities::SpecializationId;
 use crate::exhaustive::{ExhaustiveContext, SketchedRows};
 use crate::expected::{Expected, PExpected};
 use roc_collections::soa::{index_push_new, slice_extend_new};
-use roc_module::ident::TagName;
+use roc_module::ident::{IdentSuffix, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{ExhaustiveMark, IllegalCycleMark, Variable};
@@ -590,9 +590,18 @@ impl Constraints {
             expectation,
         };
 
-        let constraint_index = Index::push_new(&mut self.fx_call_constraints, constraint);
+        let constraint_index = index_push_new(&mut self.fx_call_constraints, constraint);
 
         Constraint::FxCall(constraint_index)
+    }
+
+    pub fn check_record_field_fx(
+        &self,
+        suffix: IdentSuffix,
+        variable: Variable,
+        region: Region,
+    ) -> Constraint {
+        Constraint::CheckRecordFieldFx(suffix, variable, region)
     }
 
     pub fn contains_save_the_environment(&self, constraint: &Constraint) -> bool {
@@ -621,6 +630,7 @@ impl Constraints {
             | Constraint::Pattern(..)
             | Constraint::EffectfulStmt(..)
             | Constraint::FxCall(_)
+            | Constraint::CheckRecordFieldFx(_, _, _)
             | Constraint::FlexToPure(_)
             | Constraint::True
             | Constraint::IsOpenType(_)
@@ -796,10 +806,12 @@ pub enum Constraint {
     ),
     /// Check call fx against enclosing function fx
     FxCall(Index<FxCallConstraint>),
-    /// Mark a function that doesn't call any effectful functions as pure
+    /// Set an fx var as pure if flex (no effectful functions were called)
     FlexToPure(Variable),
     /// Expect statement to be effectful
     EffectfulStmt(Variable, Region),
+    /// Require field name to be accurately suffixed
+    CheckRecordFieldFx(IdentSuffix, Variable, Region),
     /// Used for things that always unify, e.g. blanks and runtime errors
     True,
     SaveTheEnvironment,
@@ -916,6 +928,9 @@ impl std::fmt::Debug for Constraint {
             }
             Self::FlexToPure(arg0) => {
                 write!(f, "FlexToPure({arg0:?})")
+            }
+            Self::CheckRecordFieldFx(arg0, arg1, arg2) => {
+                write!(f, "CheckRecordFieldFx({arg0:?}, {arg1:?}, {arg2:?})")
             }
             Self::True => write!(f, "True"),
             Self::SaveTheEnvironment => write!(f, "SaveTheEnvironment"),

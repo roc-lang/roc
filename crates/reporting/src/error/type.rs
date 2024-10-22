@@ -16,7 +16,7 @@ use roc_module::symbol::Symbol;
 use roc_problem::Severity;
 use roc_region::all::{LineInfo, Region};
 use roc_solve_problem::{
-    NotDerivableContext, NotDerivableEq, TypeError, UnderivableReason, Unfulfilled,
+    NotDerivableContext, NotDerivableEq, SuffixErrorKind, TypeError, UnderivableReason, Unfulfilled,
 };
 use roc_std::RocDec;
 use roc_types::pretty_print::{Parens, WILDCARD};
@@ -384,7 +384,7 @@ pub fn type_problem<'b>(
                 severity,
             })
         }
-        UnsuffixedEffectfulFunction(region, symbol) => {
+        UnsuffixedEffectfulFunction(region, SuffixErrorKind::Let(symbol)) => {
             let stack = [
                 alloc.reflow("This function is effectful, but its name does not indicate so:"),
                 alloc.region(lines.convert_region(region), severity),
@@ -401,7 +401,26 @@ pub fn type_problem<'b>(
                 severity,
             })
         }
-        SuffixedPureFunction(region, _symbol) => {
+        UnsuffixedEffectfulFunction(region, SuffixErrorKind::RecordField) => {
+            let stack = [
+                alloc.reflow(
+                    "This field's value is an effectful function, but its name does not indicate so:",
+                ),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.reflow("Add an exclamation mark at the end of its name, like:"),
+                alloc
+                    .parser_suggestion("{ readFile! : File.read! }")
+                    .indent(4),
+                alloc.reflow("This will help readers identify it as a source of effects."),
+            ];
+            Some(Report {
+                title: "MISSING EXCLAMATION".to_string(),
+                filename,
+                doc: alloc.stack(stack),
+                severity,
+            })
+        }
+        SuffixedPureFunction(region, SuffixErrorKind::Let(_)) => {
             let stack = [
                 alloc.reflow("This function is pure, but its name suggests otherwise:"),
                 alloc.region(lines.convert_region(region), severity),
@@ -416,6 +435,9 @@ pub fn type_problem<'b>(
                 doc: alloc.stack(stack),
                 severity,
             })
+        }
+        SuffixedPureFunction(region, SuffixErrorKind::RecordField) => {
+            todo!("[purity-inference]");
         }
     }
 }
