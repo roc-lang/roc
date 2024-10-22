@@ -1,8 +1,5 @@
 use roc_can::abilities::AbilitiesStore;
-use roc_collections::{
-    soa::{slice_extend_new, Index},
-    MutMap,
-};
+use roc_collections::{soa::slice_extend_new, MutMap};
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_solve_problem::TypeError;
@@ -10,6 +7,7 @@ use roc_types::{
     subs::{AliasVariables, Content, FlatType, Rank, Subs, SubsSlice, TagExt, UnionTags, Variable},
     types::{Alias, AliasKind, OptAbleVar, Type, TypeTag, Types},
 };
+use soa::Index;
 
 use crate::to_var::type_to_var_help;
 use crate::{ability::ObligationCache, env::InferenceEnv};

@@ -8,11 +8,12 @@ use crate::ident::Accessor;
 use crate::parser::ESingleQuote;
 use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
-use roc_collections::soa::{index_push_new, slice_extend_new, EitherIndex, Slice};
+use roc_collections::soa::{index_push_new, slice_extend_new};
 use roc_error_macros::internal_error;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
 use roc_module::ident::QualifiedModuleName;
 use roc_region::all::{Loc, Position, Region};
+use soa::{EitherIndex, Slice};
 
 #[derive(Debug, Clone)]
 pub struct FullAst<'a> {

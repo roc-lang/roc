@@ -1,12 +1,3 @@
-#[deprecated(note = "use soa::Index instead")]
-pub type Index<T> = soa::Index<T>;
-
-#[deprecated(note = "use soa::Slice instead")]
-pub type Slice<T> = soa::Slice<T>;
-
-#[deprecated(note = "use soa::EitherIndex instead")]
-pub type EitherIndex<T, U> = soa::EitherIndex<T, U>;
-
 /// Push to a std::vec::Vec<T> and then return an index to that new element's
 /// position in the Vec.
 ///

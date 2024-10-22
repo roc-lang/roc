@@ -5,12 +5,13 @@ use std::sync::Arc;
 use crate::abilities::SpecializationId;
 use crate::exhaustive::{ExhaustiveContext, SketchedRows};
 use crate::expected::{Expected, PExpected};
-use roc_collections::soa::{index_push_new, slice_extend_new, EitherIndex, Index, Slice};
+use roc_collections::soa::{index_push_new, slice_extend_new};
 use roc_module::ident::TagName;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{ExhaustiveMark, IllegalCycleMark, Variable};
 use roc_types::types::{Category, PatternCategory, TypeTag, Types};
+use soa::{EitherIndex, Index, Slice};
 
 pub struct Constraints {
     pub constraints: Vec<Constraint>,

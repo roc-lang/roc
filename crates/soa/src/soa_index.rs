@@ -1,5 +1,4 @@
 use core::{
-    any,
     cmp::Ordering,
     fmt::{self, Formatter},
     hash::{Hash, Hasher},

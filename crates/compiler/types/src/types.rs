@@ -5,7 +5,7 @@ use crate::subs::{
     VariableSubsSlice,
 };
 use roc_collections::all::{HumanIndex, ImMap, ImSet, MutMap, MutSet, SendMap};
-use roc_collections::soa::{index_push_new, slice_extend_new, Index, Slice};
+use roc_collections::soa::{index_push_new, slice_extend_new};
 use roc_collections::VecMap;
 use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
@@ -13,6 +13,7 @@ use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
+use soa::{Index, Slice};
 use std::fmt;
 use std::fmt::Write;
 use std::path::PathBuf;
@@ -1280,8 +1281,8 @@ mod debug_types {
     };
 
     use super::{TypeTag, Types};
-    use roc_collections::soa::{Index, Slice};
     use roc_module::ident::TagName;
+    use soa::{Index, Slice};
     use ven_pretty::{text, Arena, DocAllocator, DocBuilder};
 
     pub struct DebugTag<'a>(pub &'a Types, pub Index<TypeTag>);
@@ -1482,19 +1483,19 @@ mod debug_types {
         ext_slice: Slice<TypeTag>,
     ) -> DocBuilder<'a, Arena<'a>> {
         let (tags, payload_slices) = types.union_tag_slices(tags);
-        let fmt_tags =
-            tags.into_iter()
-                .zip(payload_slices)
-                .map(|(tag, payload_slice_index)| {
-                    let payload_slice = types[payload_slice_index];
-                    let fmt_payloads = payload_slice
-                        .into_iter()
-                        .map(|p| typ(types, f, TPrec::Arg, p));
-                    let iter = Some(f.text(types[tag].0.to_string()))
-                        .into_iter()
-                        .chain(fmt_payloads);
-                    f.intersperse(iter, f.text(" "))
-                });
+        let fmt_tags = tags
+            .into_iter()
+            .zip(payload_slices)
+            .map(|(tag, payload_slice_index)| {
+                let payload_slice = types[payload_slice_index];
+                let fmt_payloads = payload_slice
+                    .into_iter()
+                    .map(|p| typ(types, f, TPrec::Arg, p));
+                let iter = Some(f.text(types[tag].0.to_string()))
+                    .into_iter()
+                    .chain(fmt_payloads);
+                f.intersperse(iter, f.text(" "))
+            });
 
         prefix.append(f.text("[")).append(
             f.intersperse(fmt_tags, f.reflow(", "))
