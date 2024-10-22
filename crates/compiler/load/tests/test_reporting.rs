@@ -14966,5 +14966,34 @@ All branches in an `if` must have the same type!
     "###
     );
 
+    test_report!(
+        suffixed_pure_in_record,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                notFx = {
+                    trim!: Str.trim
+                }
+                Effect.putLine! (notFx.trim! " hello ")
+            "#
+        ),
+        @r###"
+    ── UNNECESSARY EXCLAMATION in /code/proj/Main.roc ──────────────────────────────
+
+    This field's value is a pure function, but its name suggests
+    otherwise:
+
+    7│          trim!: Str.trim
+                ^^^^^^^^^^^^^^^
+
+    Remove the exclamation mark to give an accurate impression of its
+    behavior.
+    "###
+    );
+
     // [purity-inference] TODO: check ! in records, tuples, tags, opaques, and arguments
 }
