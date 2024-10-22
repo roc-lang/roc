@@ -14913,7 +14913,7 @@ All branches in an `if` must have the same type!
             import pf.Effect
 
             main! = \{} ->
-                printLn "Hello!"
+                printLn "Hello"
 
             printLn = Effect.putLine!
             "#
