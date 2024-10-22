@@ -12,12 +12,12 @@ Defs {
         @56-98,
     ],
     space_before: [
-        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
-        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 2 },
+        Slice { start: 0, length: 0 },
+        Slice { start: 0, length: 2 },
     ],
     space_after: [
-        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
-        Slice<roc_parse::ast::CommentOrNewline> { start: 2, length: 1 },
+        Slice { start: 0, length: 0 },
+        Slice { start: 2, length: 1 },
     ],
     spaces: [
         Newline,
@@ -39,10 +39,10 @@ Defs {
                         @15-20,
                     ],
                     space_before: [
-                        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                        Slice { start: 0, length: 0 },
                     ],
                     space_after: [
-                        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                        Slice { start: 0, length: 0 },
                     ],
                     spaces: [],
                     type_defs: [],
@@ -74,10 +74,10 @@ Defs {
                                     @25-39,
                                 ],
                                 space_before: [
-                                    Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                                    Slice { start: 0, length: 0 },
                                 ],
                                 space_after: [
-                                    Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                                    Slice { start: 0, length: 0 },
                                 ],
                                 spaces: [],
                                 type_defs: [],
@@ -151,10 +151,10 @@ Defs {
                         @75-80,
                     ],
                     space_before: [
-                        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                        Slice { start: 0, length: 0 },
                     ],
                     space_after: [
-                        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                        Slice { start: 0, length: 0 },
                     ],
                     spaces: [],
                     type_defs: [],

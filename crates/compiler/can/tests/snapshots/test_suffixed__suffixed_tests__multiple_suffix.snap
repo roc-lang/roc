@@ -10,10 +10,10 @@ Defs {
         @0-24,
     ],
     space_before: [
-        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        Slice { start: 0, length: 0 },
     ],
     space_after: [
-        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
+        Slice { start: 0, length: 1 },
     ],
     spaces: [
         Newline,
@@ -39,10 +39,10 @@ Defs {
                                 @11-16,
                             ],
                             space_before: [
-                                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                                Slice { start: 0, length: 0 },
                             ],
                             space_after: [
-                                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                                Slice { start: 0, length: 0 },
                             ],
                             spaces: [],
                             type_defs: [],
