@@ -851,6 +851,30 @@ fn solve(
                     }
                 }
             }
+            FlexToPure(variable) => {
+                let content = env.subs.get_content_without_compacting(*variable);
+
+                match content {
+                    Content::FlexVar(_) => {
+                        let desc = env.subs.get(Variable::PURE);
+                        env.subs.union(*variable, Variable::PURE, desc);
+
+                        state
+                    }
+                    Content::Pure | Content::Effectful | Content::Error => state,
+                    Content::RigidVar(_)
+                    | Content::FlexAbleVar(_, _)
+                    | Content::RigidAbleVar(_, _)
+                    | Content::RecursionVar { .. }
+                    | Content::LambdaSet(_)
+                    | Content::ErasedLambda
+                    | Content::Structure(_)
+                    | Content::Alias(_, _, _, _)
+                    | Content::RangedNumber(_) => {
+                        internal_error!("FlexToPure: unexpected content: {:?}", content)
+                    }
+                }
+            }
             Let(index, pool_slice) => {
                 let let_con = &env.constraints.let_constraints[index.index()];
 

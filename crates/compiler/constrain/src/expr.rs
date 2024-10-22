@@ -222,6 +222,7 @@ fn constrain_untyped_closure(
             fn_var,
         ),
         closure_constraint,
+        Constraint::FlexToPure(fx_var),
     ];
 
     constraints.exists_many(vars, cons)
@@ -2994,6 +2995,7 @@ fn constrain_typed_def(
                 constraints.store(signature_index, *fn_var, std::file!(), std::line!()),
                 constraints.store(signature_index, expr_var, std::file!(), std::line!()),
                 closure_constraint,
+                Constraint::FlexToPure(fx_var),
             ];
 
             let expr_con = constraints.exists_many(vars, cons);
@@ -3973,6 +3975,7 @@ fn constraint_recursive_function(
                 constraints.store(signature_index, expr_var, std::file!(), std::line!()),
                 constraints.store(ret_type_index, ret_var, std::file!(), std::line!()),
                 closure_constraint,
+                Constraint::FlexToPure(fx_var),
             ];
 
             let and_constraint = constraints.and_constraint(cons);
