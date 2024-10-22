@@ -1,4 +1,4 @@
-/// DEPRECATED - use soa::Index directly instead!
+#[deprecated(note = "use soa::Index instead")]
 pub type Index<T> = soa::Index<T>;
 
 /// DEPRECATED - use soa::Slice directly instead!
