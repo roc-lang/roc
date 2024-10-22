@@ -1,8 +1,8 @@
 use crate::ast::{
-    is_expr_suffixed, AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces,
-    Implements, ImplementsAbilities, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
-    ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport,
-    ModuleImportParams, Pattern, Spaceable, Spaced, Spaces, SpacesBefore, TryTarget,
+    is_expr_suffixed, AssignedField, Collection, CommentOrNewline, Defs, EmptyBlockParent, Expr,
+    ExtractSpaces, Implements, ImplementsAbilities, ImportAlias, ImportAsKeyword,
+    ImportExposingKeyword, ImportedModuleName, IngestedFileAnnotation, IngestedFileImport,
+    ModuleImport, ModuleImportParams, Pattern, Spaceable, Spaced, Spaces, SpacesBefore, TryTarget,
     TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use crate::blankspace::{
@@ -15,7 +15,7 @@ use crate::ident::{
 };
 use crate::parser::{
     self, and, backtrackable, between, byte, byte_indent, collection_inner,
-    collection_trailing_sep_e, either, increment_min_indent, indented_seq_skip_first, loc, map,
+    collection_trailing_sep_e, either, increment_min_indent, indented_seq, loc, map,
     map_with_arena, optional, reset_min_indent, sep_by1, sep_by1_e, set_min_indent, skip_first,
     skip_second, specialize_err, specialize_err_ref, then, two_bytes, zero_or_more, EClosure,
     EExpect, EExpr, EIf, EImport, EImportParams, EInParens, EList, ENumber, EPattern, ERecord,
@@ -1746,7 +1746,8 @@ fn parse_stmt_assignment<'a>(
     let (value_def, state) = {
         match expr_to_pattern_help(arena, &call.value) {
             Ok(good) => {
-                let (_, body, state) = parse_block_inner(
+                let prior_state = state.clone();
+                let (body, state) = match parse_block_inner(
                     options,
                     arena,
                     state,
@@ -1755,7 +1756,20 @@ fn parse_stmt_assignment<'a>(
                     |a, _| a.clone(),
                     spaces_after_operator,
                     !spaces_after_operator.value.is_empty(),
-                )?;
+                ) {
+                    Ok((_, body, state)) => (body, state),
+                    Err((NoProgress, _parse_err)) => {
+                        let empty_block_region = Region::span_across(&call.region, &loc_op.region);
+                        let empty_body = Loc::at(
+                            empty_block_region,
+                            Expr::EmptyBlock(EmptyBlockParent::Definition),
+                        );
+
+                        (empty_body, prior_state)
+                    }
+
+                    Err((MadeProgress, parse_err)) => return Err((MadeProgress, parse_err)),
+                };
 
                 let alias =
                     ValueDef::Body(arena.alloc(Loc::at(call.region, good)), arena.alloc(body));
@@ -2172,6 +2186,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::Dbg
         | Expr::DbgStmt(_, _)
         | Expr::LowLevelDbg(_, _, _)
+        | Expr::EmptyBlock { .. }
         | Expr::MalformedClosure
         | Expr::MalformedSuffixed(..)
         | Expr::PrecedenceConflict { .. }
@@ -2301,9 +2316,9 @@ fn closure_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EClo
     // closure_help_help(options)
     map_with_arena(
         // After the first token, all other tokens must be indented past the start of the line
-        indented_seq_skip_first(
+        indented_seq(
             // All closures start with a '\' - e.g. (\x -> x + 1)
-            byte_indent(b'\\', EClosure::Start),
+            loc(byte_indent(b'\\', EClosure::Start)),
             // Once we see the '\', we're committed to parsing this as a closure.
             // It may turn out to be malformed, but it is definitely a closure.
             and(
@@ -2318,17 +2333,28 @@ fn closure_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EClo
                     ),
                     EClosure::Arg,
                 ),
-                skip_first(
+                and(
                     // Parse the -> which separates params from body
-                    two_bytes(b'-', b'>', EClosure::Arrow),
+                    loc(two_bytes(b'-', b'>', EClosure::Arrow)),
                     // Parse the body
-                    block(options, true, EClosure::IndentBody, EClosure::Body),
+                    optional(block(options, true, EClosure::IndentBody, EClosure::Body)),
                 ),
             ),
         ),
-        |arena: &'a Bump, (params, body)| {
+        |arena: &'a Bump, (closure_symbol, (params, (arrow, maybe_body)))| {
             let params: Vec<'a, Loc<Pattern<'a>>> = params;
             let params: &'a [Loc<Pattern<'a>>] = params.into_bump_slice();
+
+            let body = maybe_body.unwrap_or_else(|| {
+                let empty_closure_region =
+                    Region::span_across(&closure_symbol.region, &arrow.region);
+
+                Loc {
+                    region: empty_closure_region,
+                    value: Expr::EmptyBlock(EmptyBlockParent::Closure),
+                }
+            });
+
             Expr::Closure(params, arena.alloc(body))
         },
     )
@@ -2576,35 +2602,45 @@ mod when {
     }
 }
 
-fn if_branch<'a>() -> impl Parser<'a, (Loc<Expr<'a>>, Loc<Expr<'a>>), EIf<'a>> {
+struct IfBranch<'a> {
+    then_region: Region,
+    condition: Loc<Expr<'a>>,
+    body: Option<Loc<Expr<'a>>>,
+}
+
+fn if_branch<'a>() -> impl Parser<'a, IfBranch<'a>, EIf<'a>> {
     let options = ExprParseOptions {
         accept_multi_backpassing: true,
         check_for_arrow: true,
     };
-    skip_second(
-        and(
-            skip_second(
-                space0_around_ee(
-                    specialize_err_ref(EIf::Condition, loc_expr(true)),
-                    EIf::IndentCondition,
-                    EIf::IndentThenToken,
+    map_with_arena(
+        skip_second(
+            and(
+                and(
+                    space0_around_ee(
+                        specialize_err_ref(EIf::Condition, loc_expr(true)),
+                        EIf::IndentCondition,
+                        EIf::IndentThenToken,
+                    ),
+                    loc(parser::keyword(keyword::THEN, EIf::Then)),
                 ),
-                parser::keyword(keyword::THEN, EIf::Then),
-            ),
-            map_with_arena(
-                space0_after_e(
+                optional(space0_after_e(
                     block(options, false, EIf::IndentThenBranch, EIf::ThenBranch),
                     EIf::IndentElseToken,
-                ),
-                |arena: &'a Bump, block: Loc<Expr<'a>>| match block.value {
-                    Expr::SpaceAfter(&Expr::SpaceBefore(x, before), after) => block.with_value(
-                        Expr::SpaceBefore(arena.alloc(Expr::SpaceAfter(x, after)), before),
-                    ),
-                    _ => block,
-                },
+                )),
             ),
+            parser::keyword(keyword::ELSE, EIf::Else),
         ),
-        parser::keyword(keyword::ELSE, EIf::Else),
+        |arena: &'a Bump, ((condition, then_keyword), maybe_block)| IfBranch {
+            then_region: then_keyword.region,
+            condition,
+            body: maybe_block.map(|block| match block.value {
+                Expr::SpaceAfter(&Expr::SpaceBefore(x, before), after) => block.with_value(
+                    Expr::SpaceBefore(arena.alloc(Expr::SpaceAfter(x, after)), before),
+                ),
+                _ => block,
+            }),
+        },
     )
 }
 
@@ -2694,8 +2730,8 @@ fn import<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>> {
 
 fn if_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EIf<'a>> {
     move |arena: &'a Bump, state, min_indent| {
-        let (_, _, state) =
-            parser::keyword(keyword::IF, EIf::If).parse(arena, state, min_indent)?;
+        let (_, if_keyword, state) =
+            loc(parser::keyword(keyword::IF, EIf::If)).parse(arena, state, min_indent)?;
 
         let if_indent = state.line_indent();
 
@@ -2704,10 +2740,19 @@ fn if_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EIf<
         let mut loop_state = state;
 
         let state_final_else = loop {
-            let (_, (cond, then_branch), state) =
-                if_branch().parse(arena, loop_state, min_indent)?;
+            let (_, if_branch_data, state) = if_branch().parse(arena, loop_state, min_indent)?;
 
-            branches.push((cond, then_branch));
+            let then_branch = if_branch_data.body.unwrap_or_else(|| {
+                let missing_branch_region =
+                    Region::span_across(&if_keyword.region, &if_branch_data.then_region);
+
+                Loc {
+                    region: missing_branch_region,
+                    value: Expr::EmptyBlock(EmptyBlockParent::IfBranch),
+                }
+            });
+
+            branches.push((if_branch_data.condition, then_branch));
 
             // try to parse another `if`
             // NOTE this drops spaces between the `else` and the `if`
@@ -2965,6 +3010,7 @@ fn parse_stmt_seq<'a, E: SpaceProblem + 'a>(
             }
         };
     }
+
     Ok((MadeProgress, stmts, state))
 }
 

@@ -342,6 +342,7 @@ pub fn desugar_expr<'a>(
         | AccessorFunction(_)
         | Var { .. }
         | Underscore { .. }
+        | EmptyBlock(_)
         | MalformedIdent(_, _)
         | MalformedClosure
         | MalformedSuffixed(..)

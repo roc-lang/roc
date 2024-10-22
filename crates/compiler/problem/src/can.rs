@@ -5,7 +5,7 @@ use roc_collections::all::MutSet;
 use roc_module::called_via::BinOp;
 use roc_module::ident::{Ident, Lowercase, ModuleName, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
-use roc_parse::ast::Base;
+use roc_parse::ast::{Base, EmptyBlockParent};
 use roc_parse::pattern::PatternType;
 use roc_region::all::{Loc, Region};
 use roc_types::types::AliasKind;
@@ -434,6 +434,7 @@ impl Problem {
                 field: region,
             })
             | Problem::RuntimeError(RuntimeError::ReadIngestedFileError { region, .. })
+            | Problem::RuntimeError(RuntimeError::EmptyBlock(_, region))
             | Problem::InvalidAliasRigid { region, .. }
             | Problem::InvalidInterpolation(region)
             | Problem::InvalidHexadecimal(region)
@@ -662,6 +663,8 @@ pub enum RuntimeError {
 
     NonExhaustivePattern,
 
+    EmptyBlock(EmptyBlockParent, Region),
+
     InvalidInterpolation(Region),
     InvalidHexadecimal(Region),
     InvalidUnicodeCodePt(Region),
@@ -740,7 +743,8 @@ impl RuntimeError {
                 record: _,
                 field: region,
             }
-            | RuntimeError::ReadIngestedFileError { region, .. } => *region,
+            | RuntimeError::ReadIngestedFileError { region, .. }
+            | RuntimeError::EmptyBlock(_, region) => *region,
             RuntimeError::InvalidUnicodeCodePt(region) => *region,
             RuntimeError::UnresolvedTypeVar | RuntimeError::ErroneousType => Region::zero(),
             RuntimeError::LookupNotInScope { loc_name, .. } => loc_name.region,
