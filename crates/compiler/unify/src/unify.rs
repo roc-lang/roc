@@ -1149,9 +1149,8 @@ fn unify_erased_lambda<M: MetaCollector>(
 #[must_use]
 fn unify_pure<M: MetaCollector>(env: &mut Env, ctx: &Context, other: &Content) -> Outcome<M> {
     match other {
-        Pure => merge(env, ctx, Pure),
+        Pure | FlexVar(_) => merge(env, ctx, Pure),
         Effectful => merge(env, ctx, Effectful),
-        FlexVar(_) => merge(env, ctx, *other),
         RigidVar(_)
         | FlexAbleVar(_, _)
         | RigidAbleVar(_, _)

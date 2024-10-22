@@ -100,6 +100,8 @@ pub fn remove_module_param_arguments(
             | TypeError::UnexpectedModuleParams(_, _)
             | TypeError::MissingModuleParams(_, _, _)
             | TypeError::ModuleParamsMismatch(_, _, _, _)
+            | TypeError::FxInPureFunction(_, _, _)
+            | TypeError::FxInTopLevel(_, _)
             | TypeError::PureStmt(_)
             | TypeError::UnsuffixedEffectfulFunction(_, _)
             | TypeError::SuffixedPureFunction(_, _) => {}
@@ -184,8 +186,6 @@ fn remove_for_reason(
             def_region: _,
         }
         | Reason::CrashArg
-        | Reason::FxInFunction(_, _)
-        | Reason::FxInTopLevel(_)
         | Reason::Stmt(_)
         | Reason::ImportParams(_) => {}
     }

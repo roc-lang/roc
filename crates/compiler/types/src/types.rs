@@ -3449,8 +3449,6 @@ pub enum Reason {
         arg_index: HumanIndex,
     },
     Stmt(Option<Symbol>),
-    FxInFunction(Option<Region>, FxReason),
-    FxInTopLevel(FxReason),
     FloatLiteral,
     IntLiteral,
     NumLiteral,
@@ -3484,12 +3482,6 @@ pub enum Reason {
     },
     CrashArg,
     ImportParams(ModuleId),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FxReason {
-    Call(Option<Symbol>),
-    Stmt,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]

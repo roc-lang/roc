@@ -1,7 +1,10 @@
 //! Provides types to describe problems that can occur during solving.
 use std::{path::PathBuf, str::Utf8Error};
 
-use roc_can::expected::{Expected, PExpected};
+use roc_can::{
+    constraint::FxCallKind,
+    expected::{Expected, PExpected},
+};
 use roc_module::{
     ident::Lowercase,
     symbol::{ModuleId, Symbol},
@@ -39,6 +42,8 @@ pub enum TypeError {
     UnexpectedModuleParams(Region, ModuleId),
     MissingModuleParams(Region, ModuleId, ErrorType),
     ModuleParamsMismatch(Region, ModuleId, ErrorType, ErrorType),
+    FxInPureFunction(Region, FxCallKind, Option<Region>),
+    FxInTopLevel(Region, FxCallKind),
     PureStmt(Region),
     UnsuffixedEffectfulFunction(Region, Symbol),
     SuffixedPureFunction(Region, Symbol),
@@ -67,6 +72,8 @@ impl TypeError {
             TypeError::IngestedFileBadUtf8(..) => Fatal,
             TypeError::IngestedFileUnsupportedType(..) => Fatal,
             TypeError::PureStmt(..) => Warning,
+            TypeError::FxInPureFunction(_, _, _) => Warning,
+            TypeError::FxInTopLevel(_, _) => Warning,
             TypeError::UnsuffixedEffectfulFunction(_, _) => Warning,
             TypeError::SuffixedPureFunction(_, _) => Warning,
         }
@@ -85,6 +92,8 @@ impl TypeError {
             | TypeError::UnexpectedModuleParams(region, ..)
             | TypeError::MissingModuleParams(region, ..)
             | TypeError::ModuleParamsMismatch(region, ..)
+            | TypeError::FxInPureFunction(region, _, _)
+            | TypeError::FxInTopLevel(region, _)
             | TypeError::PureStmt(region)
             | TypeError::UnsuffixedEffectfulFunction(region, _)
             | TypeError::SuffixedPureFunction(region, _) => Some(*region),

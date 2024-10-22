@@ -204,7 +204,7 @@ pub fn can_expr_with<'a>(
             rigids: MutMap::default(),
             home,
             resolutions_to_make: vec![],
-            enclosing_fx: None,
+            fx_expectation: None,
         },
         loc_expr.region,
         &loc_expr.value,
