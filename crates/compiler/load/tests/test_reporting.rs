@@ -14934,5 +14934,37 @@ All branches in an `if` must have the same type!
     "###
     );
 
+    test_report!(
+        unsuffixed_fx_in_record,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                fx = {
+                    putLine: Effect.putLine!
+                }
+                fx.putLine "hello world!"
+            "#
+        ),
+        @r###"
+    ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
+
+    This field's value is an effectful function, but its name does not
+    indicate so:
+
+    7│          putLine: Effect.putLine!
+                ^^^^^^^^^^^^^^^^^^^^^^^^
+
+    Add an exclamation mark at the end of its name, like:
+
+        { readFile! : File.read! }
+
+    This will help readers identify it as a source of effects.
+    "###
+    );
+
     // [purity-inference] TODO: check ! in records, tuples, tags, opaques, and arguments
 }

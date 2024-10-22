@@ -236,6 +236,10 @@ impl Lowercase {
     pub fn as_str(&self) -> &str {
         self.0.as_str()
     }
+
+    pub fn suffix(&self) -> IdentSuffix {
+        IdentSuffix::from_name(self.0.as_str())
+    }
 }
 
 impl From<Lowercase> for String {

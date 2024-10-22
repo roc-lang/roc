@@ -45,8 +45,14 @@ pub enum TypeError {
     FxInPureFunction(Region, FxCallKind, Option<Region>),
     FxInTopLevel(Region, FxCallKind),
     PureStmt(Region),
-    UnsuffixedEffectfulFunction(Region, Symbol),
-    SuffixedPureFunction(Region, Symbol),
+    UnsuffixedEffectfulFunction(Region, SuffixErrorKind),
+    SuffixedPureFunction(Region, SuffixErrorKind),
+}
+
+#[derive(Debug, Clone)]
+pub enum SuffixErrorKind {
+    Let(Symbol),
+    RecordField,
 }
 
 impl TypeError {

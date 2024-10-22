@@ -25,8 +25,8 @@ use roc_error_macros::internal_error;
 use roc_module::ident::IdentSuffix;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_problem::can::CycleEntry;
-use roc_region::all::Loc;
-use roc_solve_problem::TypeError;
+use roc_region::all::{Loc, Region};
+use roc_solve_problem::{SuffixErrorKind, TypeError};
 use roc_solve_schema::UnificationMode;
 use roc_types::subs::{
     self, Content, FlatType, GetSubsSlice, Mark, OptVariable, Rank, Subs, TagExt, UlsOfVar,
@@ -450,7 +450,14 @@ fn solve(
 
                     new_scope.insert_symbol_var_if_vacant(*symbol, loc_var.value);
 
-                    check_symbol_suffix(env, problems, *symbol, *loc_var);
+                    check_ident_suffix(
+                        env,
+                        problems,
+                        symbol.suffix(),
+                        loc_var.value,
+                        &loc_var.region,
+                        SuffixErrorKind::Let(*symbol),
+                    );
                 }
 
                 // Note that this vars_by_symbol is the one returned by the
@@ -874,6 +881,17 @@ fn solve(
                         internal_error!("FlexToPure: unexpected content: {:?}", content)
                     }
                 }
+            }
+            CheckRecordFieldFx(suffix, field_var, region) => {
+                check_ident_suffix(
+                    env,
+                    problems,
+                    *suffix,
+                    *field_var,
+                    region,
+                    SuffixErrorKind::RecordField,
+                );
+                state
             }
             Let(index, pool_slice) => {
                 let let_con = &env.constraints.let_constraints[index.index()];
@@ -1593,31 +1611,30 @@ fn solve(
     state
 }
 
-fn check_symbol_suffix(
+fn check_ident_suffix(
     env: &mut InferenceEnv<'_>,
     problems: &mut Vec<TypeError>,
-    symbol: Symbol,
-    loc_var: Loc<Variable>,
+    suffix: IdentSuffix,
+    variable: Variable,
+    region: &Region,
+    kind: SuffixErrorKind,
 ) {
-    match symbol.suffix() {
+    match suffix {
         IdentSuffix::None => {
             if let Content::Structure(FlatType::Func(_, _, _, fx)) =
-                env.subs.get_content_without_compacting(loc_var.value)
+                env.subs.get_content_without_compacting(variable)
             {
                 if let Content::Effectful = env.subs.get_content_without_compacting(*fx) {
-                    problems.push(TypeError::UnsuffixedEffectfulFunction(
-                        loc_var.region,
-                        symbol,
-                    ));
+                    problems.push(TypeError::UnsuffixedEffectfulFunction(*region, kind));
                 }
             }
         }
         IdentSuffix::Bang => {
             if let Content::Structure(FlatType::Func(_, _, _, fx)) =
-                env.subs.get_content_without_compacting(loc_var.value)
+                env.subs.get_content_without_compacting(variable)
             {
                 if let Content::Pure = env.subs.get_content_without_compacting(*fx) {
-                    problems.push(TypeError::SuffixedPureFunction(loc_var.region, symbol));
+                    problems.push(TypeError::SuffixedPureFunction(*region, kind));
                 }
             }
         }
