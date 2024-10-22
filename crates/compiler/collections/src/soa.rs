@@ -1,7 +1,7 @@
 #[deprecated(note = "use soa::Index instead")]
 pub type Index<T> = soa::Index<T>;
 
-/// DEPRECATED - use soa::Slice directly instead!
+#[deprecated(note = "use soa::Slice instead")]
 pub type Slice<T> = soa::Slice<T>;
 
 /// DEPRECATED - use soa::EitherIndex directly instead!
