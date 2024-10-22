@@ -623,6 +623,7 @@ impl Constraints {
             | Constraint::Pattern(..)
             | Constraint::EffectfulStmt(..)
             | Constraint::FxCall(_)
+            | Constraint::FlexToPure(_)
             | Constraint::True
             | Constraint::IsOpenType(_)
             | Constraint::IncludesTag(_)
@@ -797,6 +798,8 @@ pub enum Constraint {
     ),
     /// Check call fx against enclosing function fx
     FxCall(Index<FxCallConstraint>),
+    /// Mark a function that doesn't call any effectful functions as pure
+    FlexToPure(Variable),
     /// Expect statement to be effectful
     EffectfulStmt(Variable, Region),
     /// Used for things that always unify, e.g. blanks and runtime errors
@@ -912,6 +915,9 @@ impl std::fmt::Debug for Constraint {
             }
             Self::EffectfulStmt(arg0, arg1) => {
                 write!(f, "EffectfulStmt({arg0:?}, {arg1:?})")
+            }
+            Self::FlexToPure(arg0) => {
+                write!(f, "FlexToPure({arg0:?})")
             }
             Self::True => write!(f, "True"),
             Self::SaveTheEnvironment => write!(f, "SaveTheEnvironment"),
