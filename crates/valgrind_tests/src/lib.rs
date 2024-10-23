@@ -76,7 +76,7 @@ fn get_platform_main_roc_path() -> std::path::PathBuf {
     
     assert!(
         zig_platform_dir.exists(),
-        "zig-platform directory does not exist: {:?}\n\tDid you change it's name?",
+        "zig-platform directory does not exist: {:?}\n\tDid you change its name?",
         zig_platform_dir
     );
     
