@@ -1,70 +1,133 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>uftrace Diff Tool</title>
+    <meta charset="UTF-8">
+    <title>Function Trace Diff Tool</title>
     <style>
-        /* This uftrace diff tool ignores differences in `{`,`}` and `;`.*/
-        /* CSS styles */
         body {
-            font-family: Arial, sans-serif;
-            margin: 20px;
+            font-family: monospace;
+            padding: 20px;
+            background-color: #f5f5f5;
+            max-width: 1200px;
+            margin: 0 auto;
         }
-
+        
         h1 {
             text-align: center;
+            color: #333;
         }
 
-        #input-area, #result-area {
-            display: flex;
+        #input-area {
             margin-bottom: 20px;
         }
 
         #input-area textarea {
-            width: 50%;
-            height: 200px;
-            margin: 5px;
+            width: 100%;
+            height: 150px;
+            margin-bottom: 10px;
+            font-family: monospace;
             padding: 10px;
-            font-family: monospace;
         }
 
-        /* Targeting only direct child divs */
-        #result-area > div {
-            width: 50%;
-            margin: 5px;
-            border: 1px solid #ccc;
-            /* Quadrupled the height from 300px to 1200px */
-            height: 1200px;
-            overflow-y: scroll;
-            white-space: pre-wrap;
-            font-family: monospace;
+        button {
+            padding: 8px 16px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-bottom: 20px;
         }
 
-        /* Styles for each line in the results */
-        #result1 div, #result2 div {
-            padding: 2px 5px;
-            border-bottom: 1px solid #eee;
-        }   
+        button:hover {
+            background-color: #45a049;
+        }
+
+        #result-area {
+            display: flex;
+            gap: 20px;
+        }
+
+        #result1, #result2 {
+            flex: 1;
+            background-color: white;
+            padding: 5px;
+            padding-left: 15px;
+            border-radius: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            white-space: pre;
+            overflow-x: auto;
+        }
+
+        .function-block {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            margin-left: 0 !important;
+        }
+
+        .function-header {
+            display: flex;
+            align-items: flex-start;
+            cursor: pointer;
+        }
+
+        .function-header:hover {
+            background-color: #f0f0f0;
+        }
+
+        .toggle-btn {
+            position: absolute;
+            left: -10px;
+            width: 10px;
+            cursor: pointer;
+            color: #666;
+            user-select: none;
+        }
+
+        .function-name {
+            flex-grow: 1;
+        }
+
+        .function-content {
+            margin-left: 20px;
+        }
+
+        .line {
+            margin-left: 0px;
+        }
+
+        .function-end {
+            margin-left: 0;
+            color: #666;
+        }
+
+        .collapsed .function-content {
+            display: none;
+        }
+
+        .collapsed .function-end {
+            display: none;
+        }
+
+        .collapsed .function-header::after {
+            content: " ... }";
+            color: #666;
+        }
 
         .highlight {
-            background-color: yellow;
+            background-color: #fff3b0;
         }
-
-        #compare-btn {
-            display: block;
-            margin: 0 auto;
-            padding: 10px 20px;
-            font-size: 16px;
-        }
-
     </style>
 </head>
 <body>
     <h1>Text Comparison Tool</h1>
+
     <div id="input-area">
-        <textarea id="text1" placeholder="Enter Text 1"></textarea>
-        <textarea id="text2" placeholder="Enter Text 2"></textarea>
+        <textarea id="input1" placeholder="Enter first trace..."></textarea>
+        <textarea id="input2" placeholder="Enter second trace..."></textarea>
+        <button onclick="compareTraces()">Compare</button>
     </div>
-    <button id="compare-btn">Compare</button>
 
     <div id="result-area">
         <div id="result1"></div>
@@ -72,63 +135,81 @@
     </div>
 
     <script>
-        document.getElementById('compare-btn').addEventListener('click', function() {
-            // Get text from textareas
-            let text1 = document.getElementById('text1').value;
-            let text2 = document.getElementById('text2').value;
+        function processTrace(trace, otherTrace, resultId) {
+            const lines = trace.trim().split('\n');
+            const otherLines = otherTrace.trim().split('\n');
+            let html = '';
+            let indentLevel = 0;
+            let blockStartLine = -1;
+            
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim();
+                const shouldHighlight = !otherLines.some(otherLine => otherLine.trim() === line);
+                const highlightClass = shouldHighlight ? 'highlight' : '';
 
-            // Function to process lines: remove { }, ; then trim
-            function processLine(line) {
-                return line.replace(/[{};]/g, '').trim();
-            }
-
-            // Split texts into lines and process them
-            let rawLines1 = text1.split(/\r?\n/);
-            let rawLines2 = text2.split(/\r?\n/);
-
-            let lines1 = rawLines1.map(processLine);
-            let lines2 = rawLines2.map(processLine);
-
-            // Find common lines
-            let set1 = new Set(lines1);
-            let set2 = new Set(lines2);
-            let commonLines = new Set([...set1].filter(line => line && set2.has(line)));
-
-            // Display texts with highlighting
-            let result1 = document.getElementById('result1');
-            let result2 = document.getElementById('result2');
-
-            result1.innerHTML = '';
-            result2.innerHTML = '';
-
-            // Display lines for Text 1
-            for (let i = 0; i < rawLines1.length; i++) {
-                let originalLine = rawLines1[i];
-                let processedLine = lines1[i];
-
-                let div = document.createElement('div');
-                div.textContent = originalLine;
-
-                if (!commonLines.has(processedLine)) {
-                    div.classList.add('highlight');
+                // Check if this line is the start of a block that has content
+                const isBlockStart = line.endsWith('{') && i < lines.length - 1;
+                
+                if (isBlockStart) {
+                    blockStartLine = i;
+                    // Start of a function block with content
+                    const functionName = line;
+                    html += `<div class="function-block" style="margin-left: ${indentLevel * 20}px">
+                        <div class="function-header ${highlightClass}">
+                            <span class="toggle-btn">▼</span>
+                            <span class="function-name">${functionName}</span>
+                        </div>
+                        <div class="function-content">`;
+                    indentLevel++;
+                } else if (line.includes('}')) {
+                    // End of a block
+                    if (indentLevel > 0) {
+                        indentLevel--;
+                        html += `</div><span class="function-end ${highlightClass}">${line}</span></div>`;
+                    } else {
+                        html += `<div class="line ${highlightClass}">${line}</div>`;
+                    }
+                } else {
+                    // Regular line or a line ending with { at the end of input
+                    const isLastLineBlock = line.endsWith('{') && i === lines.length - 1;
+                    if (isLastLineBlock) {
+                        html += `<div class="line ${highlightClass}">${line}</div>`;
+                    } else {
+                        html += `<div class="line ${highlightClass}">${line}</div>`;
+                    }
                 }
-                result1.appendChild(div);
             }
+            
+            return html;
+        }
 
-            // Display lines for Text 2
-            for (let i = 0; i < rawLines2.length; i++) {
-                let originalLine = rawLines2[i];
-                let processedLine = lines2[i];
+        function initializeCollapsible(containerId) {
+            const container = document.getElementById(containerId);
+            const functionBlocks = container.querySelectorAll('.function-block');
+            
+            functionBlocks.forEach(block => {
+                const header = block.querySelector('.function-header');
+                const toggleBtn = block.querySelector('.toggle-btn');
+                
+                header.addEventListener('click', (e) => {
+                    block.classList.toggle('collapsed');
+                    toggleBtn.textContent = block.classList.contains('collapsed') ? '▶' : '▼';
+                });
+            });
+        }
 
-                let div = document.createElement('div');
-                div.textContent = originalLine;
+        function compareTraces() {
+            const trace1 = document.getElementById('input1').value;
+            const trace2 = document.getElementById('input2').value;
 
-                if (!commonLines.has(processedLine)) {
-                    div.classList.add('highlight');
-                }
-                result2.appendChild(div);
-            }
-        });
+            document.getElementById('result1').innerHTML = processTrace(trace1, trace2, 'result1');
+            document.getElementById('result2').innerHTML = processTrace(trace2, trace1, 'result2');
+
+            initializeCollapsible('result1');
+            initializeCollapsible('result2');
+        }
+
+        compareTraces();
     </script>
 </body>
 </html>
