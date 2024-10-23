@@ -15214,5 +15214,65 @@ All branches in an `if` must have the same type!
     "###
     );
 
-    // [purity-inference] TODO: check ! in records, tuples, tags, opaques, and arguments
+    test_report!(
+        unsuffixed_opaque_fx_field,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            PutLine := Str => {}
+
+            main! = \{} ->
+                @PutLine put = @PutLine Effect.putLine!
+
+                put "Hi!"
+            "#
+        ),
+        @r###"
+    ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
+
+    This function is effectful, but its name does not indicate so:
+
+    8│      @PutLine put = @PutLine Effect.putLine!
+                     ^^^
+
+    Add an exclamation mark at the end, like:
+
+        put!
+
+    This will help readers identify it as a source of effects.
+    "###
+    );
+
+    test_report!(
+        suffixed_opaque_pure_field,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            Trim := Str -> Str
+
+            main! = \{} ->
+                @Trim trim! = @Trim Str.trim
+
+                Effect.putLine! (trim! " hi ")
+            "#
+        ),
+        @r###"
+    ── UNNECESSARY EXCLAMATION in /code/proj/Main.roc ──────────────────────────────
+
+    This function is pure, but its name suggests otherwise:
+
+    8│      @Trim trim! = @Trim Str.trim
+                  ^^^^^
+
+    The exclamation mark at the end is reserved for effectful functions.
+
+    Hint: Did you forget to run an effect? Is the type annotation wrong?
+    "###
+    );
 }
