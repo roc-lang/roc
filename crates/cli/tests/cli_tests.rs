@@ -28,6 +28,7 @@ mod cli_tests {
     #[derive(Debug, Clone, Copy)]
     enum UseValgrind {
         Yes,
+        #[allow(dead_code)] // We still want to be able to easily switch to No if needed
         No,
     }
 
@@ -263,7 +264,7 @@ mod cli_tests {
     
     mod test_platform_simple_zig {
         use super::*;
-        use roc_cli::{CMD_BUILD, CMD_DEV, CMD_RUN, CMD_TEST};
+        use roc_cli::{CMD_BUILD, CMD_DEV, CMD_TEST};
 
         static BUILD_PLATFORM_HOST: std::sync::Once = std::sync::Once::new();
 
