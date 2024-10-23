@@ -8,11 +8,12 @@ use crate::ident::Accessor;
 use crate::parser::ESingleQuote;
 use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
-use roc_collections::soa::{EitherIndex, Index, Slice};
+use roc_collections::soa::{index_push_new, slice_extend_new};
 use roc_error_macros::internal_error;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
 use roc_module::ident::QualifiedModuleName;
 use roc_region::all::{Loc, Position, Region};
+use soa::{EitherIndex, Slice};
 
 #[derive(Debug, Clone)]
 pub struct FullAst<'a> {
@@ -281,11 +282,10 @@ pub struct WhenPattern<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum StrSegment<'a> {
-    Plaintext(&'a str),       // e.g. "foo"
-    Unicode(Loc<&'a str>),    // e.g. "00A0" in "\u(00A0)"
-    EscapedChar(EscapedChar), // e.g. '\n' in "Hello!\n"
-    Interpolated(Loc<&'a Expr<'a>>),
-    DeprecatedInterpolated(Loc<&'a Expr<'a>>), // The old "$(...)" syntax - will be removed someday
+    Plaintext(&'a str),              // e.g. "foo"
+    Unicode(Loc<&'a str>),           // e.g. "00A0" in "\u(00A0)"
+    EscapedChar(EscapedChar),        // e.g. '\n' in "Hello!\n"
+    Interpolated(Loc<&'a Expr<'a>>), // e.g. "$(expr)"
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -379,7 +379,6 @@ impl<'a> TryFrom<StrSegment<'a>> for SingleQuoteSegment<'a> {
             StrSegment::Unicode(s) => Ok(SingleQuoteSegment::Unicode(s)),
             StrSegment::EscapedChar(s) => Ok(SingleQuoteSegment::EscapedChar(s)),
             StrSegment::Interpolated(_) => Err(ESingleQuote::InterpolationNotAllowed),
-            StrSegment::DeprecatedInterpolated(_) => Err(ESingleQuote::InterpolationNotAllowed),
         }
     }
 }
@@ -1313,10 +1312,10 @@ impl<'a> Defs<'a> {
 
         self.regions.push(region);
 
-        let before = Slice::extend_new(&mut self.spaces, spaces_before.iter().copied());
+        let before = slice_extend_new(&mut self.spaces, spaces_before.iter().copied());
         self.space_before.push(before);
 
-        let after = Slice::extend_new(&mut self.spaces, spaces_after.iter().copied());
+        let after = slice_extend_new(&mut self.spaces, spaces_after.iter().copied());
         self.space_after.push(after);
     }
 
@@ -1327,7 +1326,7 @@ impl<'a> Defs<'a> {
         spaces_before: &[CommentOrNewline<'a>],
         spaces_after: &[CommentOrNewline<'a>],
     ) {
-        let value_def_index = Index::push_new(&mut self.value_defs, value_def);
+        let value_def_index = index_push_new(&mut self.value_defs, value_def);
         let tag = EitherIndex::from_right(value_def_index);
         self.push_def_help(tag, region, spaces_before, spaces_after)
     }
@@ -1361,7 +1360,7 @@ impl<'a> Defs<'a> {
         spaces_before: &[CommentOrNewline<'a>],
         spaces_after: &[CommentOrNewline<'a>],
     ) {
-        let type_def_index = Index::push_new(&mut self.type_defs, type_def);
+        let type_def_index = index_push_new(&mut self.type_defs, type_def);
         let tag = EitherIndex::from_left(type_def_index);
         self.push_def_help(tag, region, spaces_before, spaces_after)
     }
@@ -1376,13 +1375,13 @@ impl<'a> Defs<'a> {
         for (tag_index, tag) in self.tags.iter().enumerate() {
             let region = self.regions[tag_index];
             let space_before = {
-                let start = self.space_before[tag_index].start();
+                let start = self.space_before[tag_index].start() as usize;
                 let len = self.space_before[tag_index].len();
 
                 &self.spaces[start..(start + len)]
             };
             let space_after = {
-                let start = self.space_after[tag_index].start();
+                let start = self.space_after[tag_index].start() as usize;
                 let len = self.space_after[tag_index].len();
 
                 &self.spaces[start..(start + len)]
@@ -1395,13 +1394,13 @@ impl<'a> Defs<'a> {
                     match tag_index.cmp(&target) {
                         std::cmp::Ordering::Less => {
                             // before
-                            let type_def_index = Index::push_new(&mut before.type_defs, type_def);
+                            let type_def_index = index_push_new(&mut before.type_defs, type_def);
                             let tag = EitherIndex::from_left(type_def_index);
                             before.push_def_help(tag, region, space_before, space_after);
                         }
                         std::cmp::Ordering::Greater => {
                             // after
-                            let type_def_index = Index::push_new(&mut after.type_defs, type_def);
+                            let type_def_index = index_push_new(&mut after.type_defs, type_def);
                             let tag = EitherIndex::from_left(type_def_index);
                             after.push_def_help(tag, region, space_before, space_after);
                         }
@@ -1417,14 +1416,14 @@ impl<'a> Defs<'a> {
                         std::cmp::Ordering::Less => {
                             // before
                             let new_value_def_index =
-                                Index::push_new(&mut before.value_defs, value_def);
+                                index_push_new(&mut before.value_defs, value_def);
                             let tag = EitherIndex::from_right(new_value_def_index);
                             before.push_def_help(tag, region, space_before, space_after);
                         }
                         std::cmp::Ordering::Greater => {
                             // after
                             let new_value_def_index =
-                                Index::push_new(&mut after.value_defs, value_def);
+                                index_push_new(&mut after.value_defs, value_def);
                             let tag = EitherIndex::from_right(new_value_def_index);
                             after.push_def_help(tag, region, space_before, space_after);
                         }
@@ -2516,9 +2515,7 @@ impl<'a> Malformed for StrSegment<'a> {
     fn is_malformed(&self) -> bool {
         match self {
             StrSegment::Plaintext(_) | StrSegment::Unicode(_) | StrSegment::EscapedChar(_) => false,
-            StrSegment::Interpolated(expr) | StrSegment::DeprecatedInterpolated(expr) => {
-                expr.is_malformed()
-            }
+            StrSegment::Interpolated(expr) => expr.is_malformed(),
         }
     }
 }

@@ -38,20 +38,20 @@ Full(
         },
         defs: Defs {
             tags: [
-                Index(2147483648),
-                Index(2147483649),
+                EitherIndex(2147483648),
+                EitherIndex(2147483649),
             ],
             regions: [
                 @57-74,
                 @76-220,
             ],
             space_before: [
-                Slice(start = 0, length = 2),
-                Slice(start = 2, length = 2),
+                Slice { start: 0, length: 2 },
+                Slice { start: 2, length: 2 },
             ],
             space_after: [
-                Slice(start = 2, length = 0),
-                Slice(start = 4, length = 2),
+                Slice { start: 2, length: 0 },
+                Slice { start: 4, length: 2 },
             ],
             spaces: [
                 Newline,
@@ -87,20 +87,20 @@ Full(
                         Defs(
                             Defs {
                                 tags: [
-                                    Index(2147483648),
-                                    Index(2147483649),
+                                    EitherIndex(2147483648),
+                                    EitherIndex(2147483649),
                                 ],
                                 regions: [
                                     @120-133,
                                     @162-205,
                                 ],
                                 space_before: [
-                                    Slice(start = 0, length = 0),
-                                    Slice(start = 0, length = 3),
+                                    Slice { start: 0, length: 0 },
+                                    Slice { start: 0, length: 3 },
                                 ],
                                 space_after: [
-                                    Slice(start = 0, length = 0),
-                                    Slice(start = 3, length = 0),
+                                    Slice { start: 0, length: 0 },
+                                    Slice { start: 3, length: 0 },
                                 ],
                                 spaces: [
                                     Newline,

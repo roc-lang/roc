@@ -4,16 +4,16 @@ expression: snapshot
 ---
 Defs {
     tags: [
-        Index(2147483648),
+        EitherIndex(2147483648),
     ],
     regions: [
         @0-33,
     ],
     space_before: [
-        Slice(start = 0, length = 0),
+        Slice { start: 0, length: 0 },
     ],
     space_after: [
-        Slice(start = 0, length = 1),
+        Slice { start: 0, length: 1 },
     ],
     spaces: [
         Newline,
@@ -33,16 +33,16 @@ Defs {
                     @11-15 Defs(
                         Defs {
                             tags: [
-                                Index(2147483648),
+                                EitherIndex(2147483648),
                             ],
                             regions: [
                                 @11-15,
                             ],
                             space_before: [
-                                Slice(start = 0, length = 0),
+                                Slice { start: 0, length: 0 },
                             ],
                             space_after: [
-                                Slice(start = 0, length = 0),
+                                Slice { start: 0, length: 0 },
                             ],
                             spaces: [],
                             type_defs: [],
@@ -93,16 +93,16 @@ Defs {
                                 @20-24 Defs(
                                     Defs {
                                         tags: [
-                                            Index(2147483648),
+                                            EitherIndex(2147483648),
                                         ],
                                         regions: [
                                             @20-24,
                                         ],
                                         space_before: [
-                                            Slice(start = 0, length = 0),
+                                            Slice { start: 0, length: 0 },
                                         ],
                                         space_after: [
-                                            Slice(start = 0, length = 0),
+                                            Slice { start: 0, length: 0 },
                                         ],
                                         spaces: [],
                                         type_defs: [],

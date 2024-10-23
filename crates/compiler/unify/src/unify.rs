@@ -1,3 +1,4 @@
+use roc_collections::soa::slice_extend_new;
 use roc_collections::VecMap;
 use roc_debug_flags::{dbg_do, dbg_set};
 #[cfg(debug_assertions)]
@@ -1787,7 +1788,7 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
     );
 
     Ok((
-        SubsSlice::extend_new(&mut env.unspecialized_lambda_sets, merged_uls),
+        slice_extend_new(&mut env.unspecialized_lambda_sets, merged_uls),
         whole_outcome,
     ))
 }
@@ -3242,7 +3243,7 @@ fn unify_flat_type<M: MetaCollector>(
             let mut outcome = unify_zip_slices(env, pool, *l_args, *r_args, ctx.mode);
 
             if outcome.mismatches.is_empty() {
-                let chosen_args = SubsSlice::reserve_into_subs(env, l_args.len());
+                let chosen_args = env.reserve_into_vars(l_args.len());
                 for ((store, var1), var2) in chosen_args
                     .into_iter()
                     .zip(l_args.into_iter())
@@ -3325,7 +3326,7 @@ fn unify_flat_type<M: MetaCollector>(
             *ext2,
         ),
         (TagUnion(tags1, ext1), FunctionOrTagUnion(tag_names, _, ext2)) => {
-            let empty_tag_var_slices = SubsSlice::extend_new(
+            let empty_tag_var_slices = slice_extend_new(
                 &mut env.variable_slices,
                 std::iter::repeat(Default::default()).take(tag_names.len()),
             );
@@ -3334,7 +3335,7 @@ fn unify_flat_type<M: MetaCollector>(
             unify_tag_unions(env, pool, ctx, *tags1, *ext1, tags2, *ext2)
         }
         (FunctionOrTagUnion(tag_names, _, ext1), TagUnion(tags2, ext2)) => {
-            let empty_tag_var_slices = SubsSlice::extend_new(
+            let empty_tag_var_slices = slice_extend_new(
                 &mut env.variable_slices,
                 std::iter::repeat(Default::default()).take(tag_names.len()),
             );
@@ -3347,7 +3348,7 @@ fn unify_flat_type<M: MetaCollector>(
             // this never happens in type-correct programs, but may happen if there is a type error
             debug_assert!(is_recursion_var(env, *recursion_var));
 
-            let empty_tag_var_slices = SubsSlice::extend_new(
+            let empty_tag_var_slices = slice_extend_new(
                 &mut env.variable_slices,
                 std::iter::repeat(Default::default()).take(tag_names.len()),
             );
@@ -3359,7 +3360,7 @@ fn unify_flat_type<M: MetaCollector>(
         (FunctionOrTagUnion(tag_names, _, ext1), RecursiveTagUnion(recursion_var, tags2, ext2)) => {
             debug_assert!(is_recursion_var(env, *recursion_var));
 
-            let empty_tag_var_slices = SubsSlice::extend_new(
+            let empty_tag_var_slices = slice_extend_new(
                 &mut env.variable_slices,
                 std::iter::repeat(Default::default()).take(tag_names.len()),
             );
@@ -3587,7 +3588,7 @@ pub fn merged_ability_slices(
     let merged = merge_sorted_keys(left.iter().copied(), right.iter().copied());
 
     // TODO: check if there's an existing run in subs rather than re-inserting
-    SubsSlice::extend_new(&mut subs.symbol_names, merged)
+    slice_extend_new(&mut subs.symbol_names, merged)
 }
 
 #[inline(always)]
@@ -3888,8 +3889,8 @@ fn unify_function_or_tag_union_and_func<M: MetaCollector>(
 
     {
         let lambda_names = env.get_subs_slice(tag_fn_lambdas).to_vec();
-        let new_lambda_names = SubsSlice::extend_new(&mut env.symbol_names, lambda_names);
-        let empty_captures_slices = SubsSlice::extend_new(
+        let new_lambda_names = slice_extend_new(&mut env.symbol_names, lambda_names);
+        let empty_captures_slices = slice_extend_new(
             &mut env.variable_slices,
             std::iter::repeat(Default::default()).take(new_lambda_names.len()),
         );
@@ -3955,7 +3956,7 @@ fn unify_two_function_or_tag_unions<M: MetaCollector>(
             .collect();
         all_tags.sort();
         all_tags.dedup();
-        SubsSlice::extend_new(&mut env.tag_names, all_tags)
+        slice_extend_new(&mut env.tag_names, all_tags)
     };
     let merged_lambdas = {
         let mut all_lambdas: Vec<_> = (env.get_subs_slice(tag_symbols_1).iter())
@@ -3964,7 +3965,7 @@ fn unify_two_function_or_tag_unions<M: MetaCollector>(
             .collect();
         all_lambdas.sort();
         all_lambdas.dedup();
-        SubsSlice::extend_new(&mut env.symbol_names, all_lambdas)
+        slice_extend_new(&mut env.symbol_names, all_lambdas)
     };
 
     let mut outcome = unify_pool(env, pool, ext1.var(), ext2.var(), ctx.mode);

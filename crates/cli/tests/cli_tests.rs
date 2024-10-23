@@ -8,8 +8,8 @@ extern crate roc_module;
 
 #[cfg(test)]
 mod cli_tests {
-    use cli_test_utils::helpers::{dir_from_root, file_from_root};
     use cli_test_utils::exec_cli::ExecCli;
+    use cli_test_utils::helpers::{dir_from_root, file_from_root};
     use const_format::concatcp;
     use roc_cli::{CMD_BUILD, CMD_CHECK, CMD_FORMAT, CMD_TEST};
 
@@ -53,45 +53,57 @@ mod cli_tests {
     #[cfg_attr(windows, ignore)]
     fn platform_switching_rust() {
         let cli_build = ExecCli::new(
-                                CMD_BUILD,
-                                file_from_root("examples/platform-switching", "rocLovesRust.roc")
-            )
-            .arg(BUILD_HOST_FLAG)
-            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
-        
+            CMD_BUILD,
+            file_from_root("examples/platform-switching", "rocLovesRust.roc"),
+        )
+        .arg(BUILD_HOST_FLAG)
+        .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
+
         let expected_output = "Roc <3 Rust!\n";
-        
-        cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
+
+        cli_build.full_check_build_and_run(
+            expected_output,
+            TEST_LEGACY_LINKER,
+            ALLOW_VALGRIND,
+            None,
+            None,
+        );
     }
-    
+
     #[test]
     #[cfg_attr(windows, ignore)]
     fn platform_switching_zig() {
         let cli_build = ExecCli::new(
-                                CMD_BUILD,
-                                file_from_root("examples/platform-switching", "rocLovesZig.roc")
-            )
-            .arg(BUILD_HOST_FLAG)
-            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
-        
+            CMD_BUILD,
+            file_from_root("examples/platform-switching", "rocLovesZig.roc"),
+        )
+        .arg(BUILD_HOST_FLAG)
+        .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
+
         let expected_output = "Roc <3 Zig!\n";
-        
-        cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
+
+        cli_build.full_check_build_and_run(
+            expected_output,
+            TEST_LEGACY_LINKER,
+            ALLOW_VALGRIND,
+            None,
+            None,
+        );
     }
-    
+
     #[test]
     fn platform_switching_wasm() {
         // this is a web assembly example, but we don't test with JS at the moment
         // so let's just check it for now
         let cli_check = ExecCli::new(
-                                CMD_CHECK,
-                                file_from_root("examples/platform-switching", "rocLovesWebAssembly.roc")
-            );
+            CMD_CHECK,
+            file_from_root("examples/platform-switching", "rocLovesWebAssembly.roc"),
+        );
 
         let cli_check_out = cli_check.run();
         cli_check_out.assert_clean_success();
     }
-    
+
     #[test]
     #[cfg_attr(
         windows,
@@ -99,76 +111,94 @@ mod cli_tests {
     )]
     fn fibonacci() {
         let cli_build = ExecCli::new(
-                                CMD_BUILD,
-                                file_from_root("crates/cli/tests/test-projects/algorithms", "fibonacci.roc")
-            )
-            .arg(BUILD_HOST_FLAG)
-            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
-        
+            CMD_BUILD,
+            file_from_root("crates/cli/tests/test-projects/algorithms", "fibonacci.roc"),
+        )
+        .arg(BUILD_HOST_FLAG)
+        .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
+
         let expected_output = "55\n";
-        
-        cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
+
+        cli_build.full_check_build_and_run(
+            expected_output,
+            TEST_LEGACY_LINKER,
+            ALLOW_VALGRIND,
+            None,
+            None,
+        );
     }
-    
+
     #[test]
     #[cfg_attr(windows, ignore)]
     fn quicksort() {
         let cli_build = ExecCli::new(
-                                CMD_BUILD,
-                                file_from_root("crates/cli/tests/test-projects/algorithms", "quicksort.roc")
-            )
-            .arg(BUILD_HOST_FLAG)
-            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
-        
+            CMD_BUILD,
+            file_from_root("crates/cli/tests/test-projects/algorithms", "quicksort.roc"),
+        )
+        .arg(BUILD_HOST_FLAG)
+        .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
+
         let expected_output = "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n";
-        
-        cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
+
+        cli_build.full_check_build_and_run(
+            expected_output,
+            TEST_LEGACY_LINKER,
+            ALLOW_VALGRIND,
+            None,
+            None,
+        );
     }
-    
+
     // TODO: write a new test once mono bugs are resolved in investigation
     // Encountering this TODO years later, I presume the new test should test the execution, not just roc check.
     #[test]
     #[cfg(not(debug_assertions))] // https://github.com/roc-lang/roc/issues/4806 - later observation: this issue is closed but the tests still hangs in debug mode
-    fn check_virtual_dom_server() {        
+    fn check_virtual_dom_server() {
         let cli_check = ExecCli::new(
-                                CMD_CHECK,
-                                file_from_root("examples/virtual-dom-wip", "example-server.roc")
-            );
+            CMD_CHECK,
+            file_from_root("examples/virtual-dom-wip", "example-server.roc"),
+        );
 
         let cli_check_out = cli_check.run();
         cli_check_out.assert_clean_success();
     }
-    
+
     // TODO: write a new test once mono bugs are resolved in investigation
     // Encountering this TODO years later, I presume the new test should test the execution, not just roc check.
     #[test]
     #[cfg(not(debug_assertions))] // https://github.com/roc-lang/roc/issues/4806 - later observation: this issue is closed but the tests still hangs in debug mode
     fn check_virtual_dom_client() {
         let cli_check = ExecCli::new(
-                                CMD_CHECK,
-                                file_from_root("examples/virtual-dom-wip", "example-client.roc")
-            );
+            CMD_CHECK,
+            file_from_root("examples/virtual-dom-wip", "example-client.roc"),
+        );
 
         let cli_check_out = cli_check.run();
         cli_check_out.assert_clean_success();
     }
-    
+
     #[test]
     #[cfg_attr(windows, ignore)]
     // tea = The Elm Architecture
     fn terminal_ui_tea() {
         let cli_build = ExecCli::new(
-                                CMD_BUILD,
-                                file_from_root("crates/cli/tests/test-projects/tui", "main.roc")
-            )
-            .arg(BUILD_HOST_FLAG)
-            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
-        
+            CMD_BUILD,
+            file_from_root("crates/cli/tests/test-projects/tui", "main.roc"),
+        )
+        .arg(BUILD_HOST_FLAG)
+        .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
+
         let expected_output = "Hello World!\nHello Worldfoo!\n";
-        
-        cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, Some("foo\n"), None);
+
+        cli_build.full_check_build_and_run(
+            expected_output,
+            TEST_LEGACY_LINKER,
+            ALLOW_VALGRIND,
+            Some("foo\n"),
+            None,
+        );
     }
-    
+
     // TODO re-enable before merging
     // TODO check this out, there's more that's going wrong than a segfault
     //#[test]
@@ -184,84 +214,111 @@ mod cli_tests {
             )
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
-        
+
         let sqrt_false_path_buf = file_from_root("crates/cli/tests/test-projects/false-interpreter/examples", "sqrt.false");
-        
+
         let app_args = ["--",
                         sqrt_false_path_buf
                             .as_path()
                             .to_str()
                             .unwrap()];
-        
+
         cli_build.full_check_build_and_run("1414", TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, Some(&app_args));
     }*/
-    
+
     #[test]
     #[cfg_attr(windows, ignore)]
     fn transitive_expects() {
         let cli_test = ExecCli::new(
-                                CMD_TEST,
-                                file_from_root("crates/cli/tests/test-projects/expects_transitive", "main.roc")
-            );
+            CMD_TEST,
+            file_from_root(
+                "crates/cli/tests/test-projects/expects_transitive",
+                "main.roc",
+            ),
+        );
 
         let cli_test_out = cli_test.run();
         cli_test_out.assert_clean_success();
-        cli_test_out.assert_stdout_and_stderr_ends_with("0 failed and 3 passed in <ignored for test> ms.\n");
+        cli_test_out.assert_stdout_and_stderr_ends_with(
+            "0 failed and 3 passed in <ignored for test> ms.\n",
+        );
     }
-    
+
     #[test]
     #[cfg_attr(windows, ignore)]
     fn transitive_expects_verbose() {
         let cli_test = ExecCli::new(
-                                CMD_TEST,
-                                file_from_root("crates/cli/tests/test-projects/expects_transitive", "main.roc")
-            ).arg("--verbose");
+            CMD_TEST,
+            file_from_root(
+                "crates/cli/tests/test-projects/expects_transitive",
+                "main.roc",
+            ),
+        )
+        .arg("--verbose");
 
         let cli_test_out = cli_test.run();
         cli_test_out.assert_clean_success();
         insta::assert_snapshot!(cli_test_out.normalize_stdout_and_stderr());
     }
-    
+
     #[test]
     #[cfg_attr(windows, ignore)]
     fn multiple_exposed() {
         let cli_build = ExecCli::new(
-                                CMD_BUILD,
-                                file_from_root("crates/cli/tests/test-projects/multiple_exposed", "main.roc")
-            )
-            .arg(BUILD_HOST_FLAG)
-            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
-        
+            CMD_BUILD,
+            file_from_root(
+                "crates/cli/tests/test-projects/multiple_exposed",
+                "main.roc",
+            ),
+        )
+        .arg(BUILD_HOST_FLAG)
+        .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
+
         let expected_output = "55\n3628800\n";
-        
-        cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
+
+        cli_build.full_check_build_and_run(
+            expected_output,
+            TEST_LEGACY_LINKER,
+            ALLOW_VALGRIND,
+            None,
+            None,
+        );
     }
-    
+
     #[test]
     #[cfg_attr(windows, ignore)]
     fn test_module_imports_pkg_w_flag() {
         let cli_test = ExecCli::new(
-                                CMD_TEST,
-                                file_from_root("crates/cli/tests/test-projects/module_imports_pkg", "Module.roc")
-            ).add_args(["--main", "tests/test-projects/module_imports_pkg/app.roc"]);
+            CMD_TEST,
+            file_from_root(
+                "crates/cli/tests/test-projects/module_imports_pkg",
+                "Module.roc",
+            ),
+        )
+        .add_args(["--main", "tests/test-projects/module_imports_pkg/app.roc"]);
 
         let cli_test_out = cli_test.run();
         cli_test_out.assert_clean_success();
-        cli_test_out.assert_stdout_and_stderr_ends_with("0 failed and 1 passed in <ignored for test> ms.\n");
+        cli_test_out.assert_stdout_and_stderr_ends_with(
+            "0 failed and 1 passed in <ignored for test> ms.\n",
+        );
     }
-    
+
     #[test]
     #[cfg_attr(windows, ignore)]
     fn test_module_imports_pkg_no_flag() {
         let cli_test = ExecCli::new(
-                                CMD_TEST,
-                                file_from_root("crates/cli/tests/test-projects/module_imports_pkg", "Module.roc")
-            );
+            CMD_TEST,
+            file_from_root(
+                "crates/cli/tests/test-projects/module_imports_pkg",
+                "Module.roc",
+            ),
+        );
 
         let cli_test_out = cli_test.run();
         insta::assert_snapshot!(cli_test_out.normalize_stdout_and_stderr());
     }
-    
+
     mod test_platform_simple_zig {
         use super::*;
         use roc_cli::{CMD_BUILD, CMD_DEV, CMD_TEST};
@@ -272,20 +329,22 @@ mod cli_tests {
         fn build_platform_host() {
             BUILD_PLATFORM_HOST.call_once(|| {
                 let cli_build = ExecCli::new(
-                                        CMD_BUILD,
-                                        file_from_root("crates/cli/tests/test-projects/test-platform-simple-zig", "app.roc")
-                    )
-                    .arg(BUILD_HOST_FLAG)
-                    .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-                    .arg(OPTIMIZE_FLAG);
+                    CMD_BUILD,
+                    file_from_root(
+                        "crates/cli/tests/test-projects/test-platform-simple-zig",
+                        "app.roc",
+                    ),
+                )
+                .arg(BUILD_HOST_FLAG)
+                .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
+                .arg(OPTIMIZE_FLAG);
 
                 let cli_build_out = cli_build.run();
                 cli_build_out.assert_clean_success();
-                
-                
+
                 if TEST_LEGACY_LINKER {
                     let cli_build_legacy = cli_build.arg(LEGACY_LINKER_FLAG);
-                    
+
                     let cli_build_legacy_out = cli_build_legacy.run();
                     cli_build_legacy_out.assert_clean_success();
                 }
@@ -298,38 +357,66 @@ mod cli_tests {
             build_platform_host();
 
             let cli_build_unoptimized = ExecCli::new(
-                                    CMD_BUILD,
-                                    file_from_root("crates/cli/tests/test-projects/fixtures/multi-dep-str", "main.roc")
-                );
-            
+                CMD_BUILD,
+                file_from_root(
+                    "crates/cli/tests/test-projects/fixtures/multi-dep-str",
+                    "main.roc",
+                ),
+            );
+
             let expected_output = "I am Dep2.str2\n";
-            
-            cli_build_unoptimized.clone().full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
-            
-            
+
+            cli_build_unoptimized.clone().full_check_build_and_run(
+                expected_output,
+                TEST_LEGACY_LINKER,
+                ALLOW_VALGRIND,
+                None,
+                None,
+            );
+
             let cli_build_optimized = cli_build_unoptimized.arg(OPTIMIZE_FLAG);
-            
-            cli_build_optimized.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
+
+            cli_build_optimized.full_check_build_and_run(
+                expected_output,
+                TEST_LEGACY_LINKER,
+                ALLOW_VALGRIND,
+                None,
+                None,
+            );
         }
-        
+
         #[test]
         #[cfg_attr(windows, ignore)]
         fn run_multi_dep_thunk() {
             build_platform_host();
-            
+
             let cli_build_unoptimized = ExecCli::new(
-                                    CMD_BUILD,
-                                    file_from_root("crates/cli/tests/test-projects/fixtures/multi-dep-thunk", "main.roc")
-                );
-            
+                CMD_BUILD,
+                file_from_root(
+                    "crates/cli/tests/test-projects/fixtures/multi-dep-thunk",
+                    "main.roc",
+                ),
+            );
+
             let expected_output = "I am Dep2.value2\n";
 
-            cli_build_unoptimized.clone().full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
-            
-            
+            cli_build_unoptimized.clone().full_check_build_and_run(
+                expected_output,
+                TEST_LEGACY_LINKER,
+                ALLOW_VALGRIND,
+                None,
+                None,
+            );
+
             let cli_build_optimized = cli_build_unoptimized.arg(OPTIMIZE_FLAG);
-            
-            cli_build_optimized.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
+
+            cli_build_optimized.full_check_build_and_run(
+                expected_output,
+                TEST_LEGACY_LINKER,
+                ALLOW_VALGRIND,
+                None,
+                None,
+            );
         }
 
         #[test]
@@ -338,18 +425,33 @@ mod cli_tests {
             build_platform_host();
 
             let cli_build_unoptimized = ExecCli::new(
-                                    CMD_BUILD,
-                                    file_from_root("crates/cli/tests/test-projects/fixtures/packages", "main.roc")
-                );
-            
-            let expected_output = "Hello, World! This text came from a package! This text came from a CSV package!\n";
+                CMD_BUILD,
+                file_from_root(
+                    "crates/cli/tests/test-projects/fixtures/packages",
+                    "main.roc",
+                ),
+            );
 
-            cli_build_unoptimized.clone().full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
-            
-            
+            let expected_output =
+                "Hello, World! This text came from a package! This text came from a CSV package!\n";
+
+            cli_build_unoptimized.clone().full_check_build_and_run(
+                expected_output,
+                TEST_LEGACY_LINKER,
+                ALLOW_VALGRIND,
+                None,
+                None,
+            );
+
             let cli_build_optimized = cli_build_unoptimized.arg(OPTIMIZE_FLAG);
-            
-            cli_build_optimized.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
+
+            cli_build_optimized.full_check_build_and_run(
+                expected_output,
+                TEST_LEGACY_LINKER,
+                ALLOW_VALGRIND,
+                None,
+                None,
+            );
         }
 
         #[test]
@@ -358,133 +460,172 @@ mod cli_tests {
             build_platform_host();
 
             let cli_build = ExecCli::new(
-                                    CMD_BUILD,
-                                    file_from_root("crates/cli/tests/test-projects/fixtures/transitive-deps", "direct-one.roc")
-                );
-            
+                CMD_BUILD,
+                file_from_root(
+                    "crates/cli/tests/test-projects/fixtures/transitive-deps",
+                    "direct-one.roc",
+                ),
+            );
+
             let expected_output = "[One imports Two: From two]\n";
 
-            cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
+            cli_build.full_check_build_and_run(
+                expected_output,
+                TEST_LEGACY_LINKER,
+                ALLOW_VALGRIND,
+                None,
+                None,
+            );
         }
-        
+
         #[test]
         #[cfg_attr(windows, ignore)]
         fn run_transitive_and_direct_dep_app() {
             build_platform_host();
-            
+
             let cli_build = ExecCli::new(
-                                    CMD_BUILD,
-                                    file_from_root("crates/cli/tests/test-projects/fixtures/transitive-deps", "direct-one-and-two.roc")
-                );
-            
+                CMD_BUILD,
+                file_from_root(
+                    "crates/cli/tests/test-projects/fixtures/transitive-deps",
+                    "direct-one-and-two.roc",
+                ),
+            );
+
             let expected_output = "[One imports Two: From two] | From two\n";
 
-            cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
+            cli_build.full_check_build_and_run(
+                expected_output,
+                TEST_LEGACY_LINKER,
+                ALLOW_VALGRIND,
+                None,
+                None,
+            );
         }
-        
+
         #[test]
         #[cfg_attr(windows, ignore)]
         fn run_double_transitive_dep_app() {
             build_platform_host();
-            
+
             let cli_build = ExecCli::new(
-                                    CMD_BUILD,
-                                    file_from_root("crates/cli/tests/test-projects/fixtures/transitive-deps", "direct-zero.roc")
-                );
-            
+                CMD_BUILD,
+                file_from_root(
+                    "crates/cli/tests/test-projects/fixtures/transitive-deps",
+                    "direct-zero.roc",
+                ),
+            );
+
             let expected_output = "[Zero imports One: [One imports Two: From two]]\n";
 
-            cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
+            cli_build.full_check_build_and_run(
+                expected_output,
+                TEST_LEGACY_LINKER,
+                ALLOW_VALGRIND,
+                None,
+                None,
+            );
         }
-        
+
         #[test]
         #[cfg_attr(windows, ignore)]
         fn module_params() {
             build_platform_host();
-            
+
             let cli_dev = ExecCli::new(
-                                    CMD_DEV,
-                                    file_from_root("crates/cli/tests/test-projects/module_params", "app.roc")
-                );
+                CMD_DEV,
+                file_from_root("crates/cli/tests/test-projects/module_params", "app.roc"),
+            );
 
             let cli_dev_out = cli_dev.run();
             cli_dev_out.assert_clean_success();
-            
+
             insta::assert_snapshot!(cli_dev_out.normalize_stdout_and_stderr());
         }
-        
+
         #[test]
         #[cfg_attr(windows, ignore)]
         fn module_params_arity_mismatch() {
             build_platform_host();
 
             let cli_dev = ExecCli::new(
-                                    CMD_DEV,
-                                    file_from_root("crates/cli/tests/test-projects/module_params", "arity_mismatch.roc")
-                );
+                CMD_DEV,
+                file_from_root(
+                    "crates/cli/tests/test-projects/module_params",
+                    "arity_mismatch.roc",
+                ),
+            );
 
             let cli_dev_out = cli_dev.run();
             cli_dev_out.assert_nonzero_exit();
-            
+
             insta::assert_snapshot!(cli_dev_out.normalize_stdout_and_stderr());
         }
-        
+
         #[test]
         #[cfg_attr(windows, ignore)]
         fn module_params_bad_ann() {
             build_platform_host();
 
             let cli_dev = ExecCli::new(
-                                    CMD_DEV,
-                                    file_from_root("crates/cli/tests/test-projects/module_params", "bad_ann.roc")
-                );
+                CMD_DEV,
+                file_from_root(
+                    "crates/cli/tests/test-projects/module_params",
+                    "bad_ann.roc",
+                ),
+            );
 
             let cli_dev_out = cli_dev.run();
             cli_dev_out.assert_nonzero_exit();
-            
+
             insta::assert_snapshot!(cli_dev_out.normalize_stdout_and_stderr());
         }
-        
+
         #[test]
         #[cfg_attr(windows, ignore)]
         fn module_params_multiline_pattern() {
             build_platform_host();
-            
+
             let cli_dev = ExecCli::new(
-                                    CMD_DEV,
-                                    file_from_root("crates/cli/tests/test-projects/module_params", "multiline_params.roc")
-                );
-    
+                CMD_DEV,
+                file_from_root(
+                    "crates/cli/tests/test-projects/module_params",
+                    "multiline_params.roc",
+                ),
+            );
+
             let cli_dev_out = cli_dev.run();
             cli_dev_out.assert_clean_success();
             cli_dev_out.assert_stdout_and_stderr_ends_with("hi\n");
         }
-        
+
         #[test]
         #[cfg_attr(windows, ignore)]
         fn module_params_unexpected_fn() {
             build_platform_host();
 
             let cli_dev = ExecCli::new(
-                                    CMD_DEV,
-                                    file_from_root("crates/cli/tests/test-projects/module_params", "unexpected_fn.roc")
-                );
-    
+                CMD_DEV,
+                file_from_root(
+                    "crates/cli/tests/test-projects/module_params",
+                    "unexpected_fn.roc",
+                ),
+            );
+
             let cli_dev_out = cli_dev.run();
             cli_dev_out.assert_nonzero_exit();
 
             insta::assert_snapshot!(cli_dev_out.normalize_stdout_and_stderr());
         }
-        
+
         #[test]
         fn expects_dev_failure() {
             build_platform_host();
 
             let cli_dev = ExecCli::new(
-                                    CMD_DEV,
-                                    file_from_root("crates/cli/tests/test-projects/expects", "expects.roc")
-                );
-    
+                CMD_DEV,
+                file_from_root("crates/cli/tests/test-projects/expects", "expects.roc"),
+            );
+
             let cli_dev_out = cli_dev.run();
             // TODO enable or delete this based on https://roc.zulipchat.com/#narrow/channel/304641-ideas/topic/roc.20dev.20expect.20failure/near/477682063
             //cli_dev_out.assert_nonzero_exit();
@@ -495,23 +636,23 @@ mod cli_tests {
         #[test]
         fn expects_test_failure() {
             build_platform_host();
-            
+
             let cli_test = ExecCli::new(
-                                    CMD_TEST,
-                                    file_from_root("crates/cli/tests/test-projects/expects", "expects.roc")
-                );
-    
+                CMD_TEST,
+                file_from_root("crates/cli/tests/test-projects/expects", "expects.roc"),
+            );
+
             let cli_test_out = cli_test.run();
             cli_test_out.assert_nonzero_exit();
-            
+
             insta::assert_snapshot!(cli_test_out.normalize_stdout_and_stderr());
         }
     }
-    
+
     mod test_platform_effects_zig {
         use super::*;
         use cli_test_utils::helpers::file_from_root;
-        use roc_cli::{CMD_BUILD};
+        use roc_cli::CMD_BUILD;
 
         static BUILD_PLATFORM_HOST: std::sync::Once = std::sync::Once::new();
 
@@ -519,83 +660,135 @@ mod cli_tests {
         fn build_platform_host() {
             BUILD_PLATFORM_HOST.call_once(|| {
                 let cli_build = ExecCli::new(
-                                        CMD_BUILD,
-                                        file_from_root("crates/cli/tests/test-projects/effects/platform/", "app-stub.roc")
-                    )
-                    .arg(BUILD_HOST_FLAG)
-                    .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-                    .arg(OPTIMIZE_FLAG);
+                    CMD_BUILD,
+                    file_from_root(
+                        "crates/cli/tests/test-projects/effects/platform/",
+                        "app-stub.roc",
+                    ),
+                )
+                .arg(BUILD_HOST_FLAG)
+                .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
+                .arg(OPTIMIZE_FLAG);
 
                 let cli_build_out = cli_build.run();
                 cli_build_out.assert_clean_success();
-                
+
                 if TEST_LEGACY_LINKER {
                     let cli_build_legacy = cli_build.arg(LEGACY_LINKER_FLAG);
-                    
+
                     let cli_build_legacy_out = cli_build_legacy.run();
                     cli_build_legacy_out.assert_clean_success();
                 }
             });
         }
-        
+
         #[test]
         #[cfg_attr(windows, ignore)]
         fn interactive_effects() {
             build_platform_host();
-            
+
             let cli_build = ExecCli::new(
-                                    CMD_BUILD,
-                                    file_from_root("crates/cli/tests/test-projects/effects", "print-line.roc")
-                );
-            
+                CMD_BUILD,
+                file_from_root("crates/cli/tests/test-projects/effects", "print-line.roc"),
+            );
+
             let expected_output = "You entered: hi there!\nIt is known\n";
-            
-            cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, Some("hi there!"), None);
+
+            cli_build.full_check_build_and_run(
+                expected_output,
+                TEST_LEGACY_LINKER,
+                ALLOW_VALGRIND,
+                Some("hi there!"),
+                None,
+            );
         }
-        
+
         #[test]
         #[cfg_attr(windows, ignore)]
         fn combine_tasks_with_record_builder() {
             build_platform_host();
-            
+
             let cli_build = ExecCli::new(
-                                    CMD_BUILD,
-                                    file_from_root("crates/cli/tests/test-projects/effects", "combine-tasks.roc")
-                );
-            
+                CMD_BUILD,
+                file_from_root(
+                    "crates/cli/tests/test-projects/effects",
+                    "combine-tasks.roc",
+                ),
+            );
+
             let expected_output = "For multiple tasks: {a: 123, b: \"abc\", c: [123]}\n";
-            
-            cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
+
+            cli_build.full_check_build_and_run(
+                expected_output,
+                TEST_LEGACY_LINKER,
+                ALLOW_VALGRIND,
+                None,
+                None,
+            );
         }
-        
+
         #[test]
         #[cfg_attr(windows, ignore)]
         fn inspect_logging() {
             build_platform_host();
-            
+
             let cli_build = ExecCli::new(
-                                    CMD_BUILD,
-                                    file_from_root("crates/cli/tests/test-projects/effects", "inspect-logging.roc")
-                );
-    
+                CMD_BUILD,
+                file_from_root(
+                    "crates/cli/tests/test-projects/effects",
+                    "inspect-logging.roc",
+                ),
+            );
+
             let expected_output = "(@Community {friends: [{2}, {2}, {0, 1}], people: [(@Person {age: 27, favoriteColor: Blue, firstName: \"John\", hasBeard: Bool.true, lastName: \"Smith\"}), (@Person {age: 47, favoriteColor: Green, firstName: \"Debby\", hasBeard: Bool.false, lastName: \"Johnson\"}), (@Person {age: 33, favoriteColor: (RGB (255, 255, 0)), firstName: \"Jane\", hasBeard: Bool.false, lastName: \"Doe\"})]})\n";
-            
-            cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
+
+            cli_build.full_check_build_and_run(
+                expected_output,
+                TEST_LEGACY_LINKER,
+                ALLOW_VALGRIND,
+                None,
+                None,
+            );
         }
-        
+
         #[test]
         #[cfg_attr(windows, ignore)]
         fn module_params_pass_task() {
             build_platform_host();
-            
+
             let cli_build = ExecCli::new(
-                                    CMD_BUILD,
-                                    file_from_root("crates/cli/tests/test-projects/module_params", "pass_task.roc")
-                );
-            
+                CMD_BUILD,
+                file_from_root(
+                    "crates/cli/tests/test-projects/module_params",
+                    "pass_task.roc",
+                ),
+            );
+
             let expected_output = "Hi, Agus!\n";
-            
-            cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);            
+
+            cli_build.full_check_build_and_run(
+                expected_output,
+                TEST_LEGACY_LINKER,
+                ALLOW_VALGRIND,
+                None,
+                None,
+            );
+        }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        fn roc_check_markdown_docs() {
+            build_platform_host();
+
+            let cli_build = ExecCli::new(
+                CMD_CHECK,
+                file_from_root("crates/cli/tests/markdown", "form.md"),
+            );
+
+            let expected_out =
+                "0 error and 0 warning found in <ignored for test> ms\n0 error and 0 warning found in <ignored for test> ms\n";
+
+            cli_build.run().assert_clean_stdout(expected_out);
         }
     }
 
@@ -606,8 +799,8 @@ mod cli_tests {
             SUPPRESS_BUILD_HOST_WARNING_FLAG, TEST_LEGACY_LINKER,
         };
         use cli_test_utils::{exec_cli::ExecCli, helpers::file_from_root};
-        use roc_cli::CMD_BUILD;
         use indoc::indoc;
+        use roc_cli::CMD_BUILD;
 
         // #[allow(unused_imports)]
         use std::sync::Once;
@@ -618,19 +811,22 @@ mod cli_tests {
         fn build_platform_host() {
             BUILD_PLATFORM_HOST.call_once(|| {
                 let cli_build = ExecCli::new(
-                                        CMD_BUILD,
-                                        file_from_root("crates/cli/tests/test-projects/benchmarks/platform", "app.roc")
-                    )
-                    .arg(BUILD_HOST_FLAG)
-                    .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-                    .arg(OPTIMIZE_FLAG);
-    
+                    CMD_BUILD,
+                    file_from_root(
+                        "crates/cli/tests/test-projects/benchmarks/platform",
+                        "app.roc",
+                    ),
+                )
+                .arg(BUILD_HOST_FLAG)
+                .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
+                .arg(OPTIMIZE_FLAG);
+
                 let cli_build_out = cli_build.run();
                 cli_build_out.assert_clean_success();
-                
+
                 if TEST_LEGACY_LINKER {
                     let cli_build_legacy = cli_build.arg(super::LEGACY_LINKER_FLAG);
-                    
+
                     let cli_build_legacy_out = cli_build_legacy.run();
                     cli_build_legacy_out.assert_clean_success();
                 }
@@ -649,14 +845,17 @@ mod cli_tests {
             build_platform_host();
 
             #[cfg(all(not(feature = "wasm32-cli-run"), not(feature = "i386-cli-run")))]
-            {                
-                let cli_build = ExecCli::new(
-                                        CMD_BUILD,
-                                        roc_file_path
-                    );
-                
+            {
+                let cli_build = ExecCli::new(CMD_BUILD, roc_file_path);
+
                 let with_valgrind = matches!(use_valgrind, UseValgrind::Yes) && ALLOW_VALGRIND;
-                cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, with_valgrind, stdin, None);
+                cli_build.full_check_build_and_run(
+                    expected_output,
+                    TEST_LEGACY_LINKER,
+                    with_valgrind,
+                    stdin,
+                    None,
+                );
             }
 
             #[cfg(feature = "wasm32-cli-run")]
@@ -667,70 +866,101 @@ mod cli_tests {
         }
 
         #[cfg(feature = "wasm32-cli-run")]
-        fn run_wasm_check_output(roc_file_path: &std::path::Path, expected_output: &'static str, stdin_opt: Option<&'static str>) {
+        fn run_wasm_check_output(
+            roc_file_path: &std::path::Path,
+            expected_output: &'static str,
+            stdin_opt: Option<&'static str>,
+        ) {
             use super::{concatcp, TARGET_FLAG};
             // Check with and without optimizations
-            run_wasm_check_output_with_flags(roc_file_path, expected_output, stdin_opt.clone(), &[]);
+            run_wasm_check_output_with_flags(
+                roc_file_path,
+                expected_output,
+                stdin_opt.clone(),
+                &[],
+            );
 
-            run_wasm_check_output_with_flags(roc_file_path, expected_output, stdin_opt, &[OPTIMIZE_FLAG]);
+            run_wasm_check_output_with_flags(
+                roc_file_path,
+                expected_output,
+                stdin_opt,
+                &[OPTIMIZE_FLAG],
+            );
         }
-        
+
         #[cfg(feature = "wasm32-cli-run")]
-        fn run_wasm_check_output_with_flags(roc_file_path: &std::path::Path, expected_output: &'static str, stdin_opt: Option<&'static str>, flags: &[&str]) {
+        fn run_wasm_check_output_with_flags(
+            roc_file_path: &std::path::Path,
+            expected_output: &'static str,
+            stdin_opt: Option<&'static str>,
+            flags: &[&str],
+        ) {
             use super::{concatcp, TARGET_FLAG};
 
             let mut flags = flags.to_vec();
             flags.push(concatcp!(TARGET_FLAG, "=wasm32"));
 
-            let cli_build = ExecCli::new(
-                                CMD_BUILD,
-                                roc_file_path.to_path_buf()
-                            ).add_args(flags);
-            
+            let cli_build = ExecCli::new(CMD_BUILD, roc_file_path.to_path_buf()).add_args(flags);
+
             let cli_build_out = cli_build.run();
             cli_build_out.assert_clean_success();
 
             // wasm can't take stdin, so we pass it as an arg
-            let wasm_args =
-                if let Some(stdin) = stdin_opt {
-                    vec![stdin]
-                } else {
-                    vec![]
-                };
-                
-            let wasm_run_out = crate::run_wasm(&roc_file_path.with_extension("wasm"), wasm_args.clone());
+            let wasm_args = if let Some(stdin) = stdin_opt {
+                vec![stdin]
+            } else {
+                vec![]
+            };
+
+            let wasm_run_out =
+                crate::run_wasm(&roc_file_path.with_extension("wasm"), wasm_args.clone());
 
             assert_eq!(wasm_run_out, expected_output);
-            
+
             if TEST_LEGACY_LINKER {
                 let cli_build_legacy = cli_build.arg(super::LEGACY_LINKER_FLAG);
-                
+
                 let cli_build_legacy_out = cli_build_legacy.run();
                 cli_build_legacy_out.assert_clean_success();
 
-                let wasm_run_out_legacy = crate::run_wasm(&roc_file_path.with_extension("wasm"), wasm_args);
+                let wasm_run_out_legacy =
+                    crate::run_wasm(&roc_file_path.with_extension("wasm"), wasm_args);
 
                 assert_eq!(wasm_run_out_legacy, expected_output);
             }
         }
 
         #[cfg(feature = "i386-cli-run")]
-        fn check_output_i386(roc_file_path: &std::path::Path, expected_output: &'static str, stdin_opt: Option<&'static str>) {
+        fn check_output_i386(
+            roc_file_path: &std::path::Path,
+            expected_output: &'static str,
+            stdin_opt: Option<&'static str>,
+        ) {
             use super::{concatcp, TARGET_FLAG};
 
             let i386_target_arg = concatcp!(TARGET_FLAG, "=x86_32");
-            
-            let cli_build = ExecCli::new(
-                                    CMD_BUILD,
-                                    roc_file_path.to_path_buf()
-                ).arg(i386_target_arg);
 
-            cli_build.clone().full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, false, stdin_opt, None);
+            let cli_build =
+                ExecCli::new(CMD_BUILD, roc_file_path.to_path_buf()).arg(i386_target_arg);
+
+            cli_build.clone().full_check_build_and_run(
+                expected_output,
+                TEST_LEGACY_LINKER,
+                false,
+                stdin_opt,
+                None,
+            );
 
             // also test optimized build
             let cli_build_optimized = cli_build.arg(OPTIMIZE_FLAG);
-            
-            cli_build_optimized.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, false, stdin_opt, None);
+
+            cli_build_optimized.full_check_build_and_run(
+                expected_output,
+                TEST_LEGACY_LINKER,
+                false,
+                stdin_opt,
+                None,
+            );
         }
 
         #[test]
@@ -763,7 +993,7 @@ mod cli_tests {
             "};
             test_benchmark("deriv.roc", expected_output, Some("2"), UseValgrind::Yes);
         }
-        
+
         #[test]
         #[cfg_attr(windows, ignore)]
         fn rbtree_ck() {
@@ -771,16 +1001,21 @@ mod cli_tests {
                 Please enter an integer
                 10
             "};
-            test_benchmark("rBTreeCk.roc", expected_output, Some("100"), UseValgrind::Yes);
+            test_benchmark(
+                "rBTreeCk.roc",
+                expected_output,
+                Some("100"),
+                UseValgrind::Yes,
+            );
         }
-        
+
         #[test]
         #[cfg_attr(windows, ignore)]
         fn rbtree_insert() {
             let expected_output = "Node Black 0 {} Empty Empty\n";
             test_benchmark("rBTreeInsert.roc", expected_output, None, UseValgrind::Yes);
         }
-        
+
         #[test]
         #[cfg_attr(windows, ignore)]
         fn astar() {
@@ -791,7 +1026,7 @@ mod cli_tests {
                 test_benchmark("testAStar.roc", expected_output, None, UseValgrind::Yes);
             }
         }
-        
+
         #[test]
         #[cfg_attr(windows, ignore)]
         fn base64() {
@@ -801,74 +1036,89 @@ mod cli_tests {
             "};
             test_benchmark("testBase64.roc", expected_output, None, UseValgrind::Yes);
         }
-        
+
         #[test]
         #[cfg_attr(windows, ignore)]
         fn closure() {
             let expected_output = "";
             test_benchmark("closure.roc", expected_output, None, UseValgrind::Yes);
         }
-        
+
         #[test]
         #[cfg_attr(windows, ignore)]
         fn issue2279() {
             let expected_output = "Hello, world!\n";
             test_benchmark("issue2279.roc", expected_output, None, UseValgrind::Yes);
         }
-        
+
         #[test]
         fn quicksort_app() {
             let expected_output = "Please enter an integer\n[0, 1, 1, 2, 2, 2, 3, 3, 3, 3, 3, 4, 4, 4, 4, 5, 6, 6, 8, 9]\n";
-            test_benchmark("quicksortApp.roc", expected_output, Some("0"), UseValgrind::Yes);
+            test_benchmark(
+                "quicksortApp.roc",
+                expected_output,
+                Some("0"),
+                UseValgrind::Yes,
+            );
         }
     }
-    
+
     #[test]
     fn known_type_error() {
         let cli_check = ExecCli::new(
             CMD_CHECK,
-            file_from_root(
-                "crates/cli/tests/test-projects/known_bad",
-                "TypeError.roc",
-            )
+            file_from_root("crates/cli/tests/test-projects/known_bad", "TypeError.roc"),
         );
-        
+
         let cli_check_out = cli_check.run();
         cli_check_out.assert_nonzero_exit();
 
         insta::assert_snapshot!(cli_check_out.normalize_stdout_and_stderr());
     }
-    
+
     #[test]
     #[cfg_attr(windows, ignore)]
-    fn test_module_imports_unknown_pkg() {        
+    fn test_module_imports_unknown_pkg() {
         let cli_test = ExecCli::new(
-                                CMD_TEST,
-                                file_from_root("crates/cli/tests/test-projects/module_imports_pkg", "ImportsUnknownPkg.roc")
-            ).add_args(["--main", "tests/test-projects/module_imports_pkg/app.roc"]);
+            CMD_TEST,
+            file_from_root(
+                "crates/cli/tests/test-projects/module_imports_pkg",
+                "ImportsUnknownPkg.roc",
+            ),
+        )
+        .add_args(["--main", "tests/test-projects/module_imports_pkg/app.roc"]);
 
         let cli_test_out = cli_test.run();
         cli_test_out.assert_nonzero_exit();
-        
+
         insta::assert_snapshot!(cli_test_out.normalize_stdout_and_stderr());
     }
-    
+
     #[test]
     #[cfg_attr(windows, ignore)]
     /// this tests that a platform can correctly import a package
     fn platform_requires_pkg() {
         let cli_build = ExecCli::new(
-                                CMD_BUILD,
-                                file_from_root("crates/cli/tests/test-projects/platform_requires_pkg", "app.roc")
-            )
-            .arg(BUILD_HOST_FLAG)
-            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
+            CMD_BUILD,
+            file_from_root(
+                "crates/cli/tests/test-projects/platform_requires_pkg",
+                "app.roc",
+            ),
+        )
+        .arg(BUILD_HOST_FLAG)
+        .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
 
         let expected_output = "from app from package";
-        
-        cli_build.full_check_build_and_run(expected_output, TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, None);
+
+        cli_build.full_check_build_and_run(
+            expected_output,
+            TEST_LEGACY_LINKER,
+            ALLOW_VALGRIND,
+            None,
+            None,
+        );
     }
-    
+
     #[test]
     fn known_type_error_with_long_path() {
         let cli_check = ExecCli::new(
@@ -876,15 +1126,15 @@ mod cli_tests {
             file_from_root(
                 "crates/cli/tests/test-projects/known_bad",
                 "UnusedImportButWithALongFileNameForTesting.roc",
-            )
+            ),
         );
-        
+
         let cli_check_out = cli_check.run();
         cli_check_out.assert_nonzero_exit();
 
         insta::assert_snapshot!(cli_check_out.normalize_stdout_and_stderr());
     }
-    
+
     #[test]
     fn exposed_not_defined() {
         let cli_check = ExecCli::new(
@@ -892,15 +1142,15 @@ mod cli_tests {
             file_from_root(
                 "crates/cli/tests/test-projects/known_bad",
                 "ExposedNotDefined.roc",
-            )
+            ),
         );
-        
+
         let cli_check_out = cli_check.run();
         cli_check_out.assert_nonzero_exit();
 
         insta::assert_snapshot!(cli_check_out.normalize_stdout_and_stderr());
     }
-    
+
     #[test]
     fn unused_import() {
         let cli_check = ExecCli::new(
@@ -908,50 +1158,60 @@ mod cli_tests {
             file_from_root(
                 "crates/cli/tests/test-projects/known_bad",
                 "UnusedImport.roc",
-            )
+            ),
         );
-        
+
         let cli_check_out = cli_check.run();
         cli_check_out.assert_nonzero_exit();
 
         insta::assert_snapshot!(cli_check_out.normalize_stdout_and_stderr());
     }
-    
+
     #[test]
     fn format_check_good() {
         ExecCli::new(
             CMD_FORMAT,
-            file_from_root("crates/cli/tests/test-projects/fixtures/format", "formatted.roc")
-        ).arg(CHECK_FLAG)
+            file_from_root(
+                "crates/cli/tests/test-projects/fixtures/format",
+                "formatted.roc",
+            ),
+        )
+        .arg(CHECK_FLAG)
         .run()
         .assert_clean_success();
     }
-    
+
     #[test]
     fn format_check_reformatting_needed() {
         ExecCli::new(
             CMD_FORMAT,
-            file_from_root("crates/cli/tests/test-projects/fixtures/format", "not-formatted.roc")
-        ).arg(CHECK_FLAG)
+            file_from_root(
+                "crates/cli/tests/test-projects/fixtures/format",
+                "not-formatted.roc",
+            ),
+        )
+        .arg(CHECK_FLAG)
         .run()
         .assert_nonzero_exit();
     }
-    
+
     #[test]
     fn format_check_folders() {
         // This fails, because "not-formatted.roc" is present in this folder
         ExecCli::new(
             CMD_FORMAT,
-            dir_from_root("crates/cli/tests/test-projects/fixtures/format")
-        ).arg(CHECK_FLAG)
+            dir_from_root("crates/cli/tests/test-projects/fixtures/format"),
+        )
+        .arg(CHECK_FLAG)
         .run()
         .assert_nonzero_exit();
 
         // This doesn't fail, since only "formatted.roc" and non-roc files are present in this folder
         ExecCli::new(
             CMD_FORMAT,
-            dir_from_root("crates/cli/tests/test-projects/fixtures/format/formatted_directory")
-        ).run()
+            dir_from_root("crates/cli/tests/test-projects/fixtures/format/formatted_directory"),
+        )
+        .run()
         .assert_clean_success();
     }
 }

@@ -17,7 +17,10 @@ roc_can = { path = "../can" }
 roc_collections = { path = "../collections" }
 roc_constrain = { path = "../constrain" }
 roc_debug_flags = { path = "../debug_flags" }
-roc_derive = { path = "../derive", features = ["debug-derived-symbols", "open-extension-vars"] }
+roc_derive = { path = "../derive", features = [
+    "debug-derived-symbols",
+    "open-extension-vars",
+] }
 roc_derive_key = { path = "../derive_key" }
 roc_load_internal = { path = "../load_internal" }
 roc_module = { path = "../module" }

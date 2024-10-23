@@ -2353,6 +2353,7 @@ dependencies = [
  "roc_region",
  "roc_serialize",
  "roc_types",
+ "soa",
  "static_assertions",
  "ven_pretty",
 ]
@@ -2441,6 +2442,7 @@ dependencies = [
  "im",
  "im-rc",
  "smallvec",
+ "soa",
  "wyhash",
 ]
 
@@ -2461,6 +2463,7 @@ dependencies = [
  "roc_problem",
  "roc_region",
  "roc_types",
+ "soa",
 ]
 
 [[package]]
@@ -2901,6 +2904,7 @@ dependencies = [
  "roc_error_macros",
  "roc_module",
  "roc_region",
+ "soa",
  "tempfile",
 ]
 
@@ -3113,6 +3117,7 @@ dependencies = [
  "roc_target",
  "roc_types",
  "roc_unify",
+ "soa",
  "tempfile",
  "test_solve_helpers",
 ]
@@ -3204,6 +3209,7 @@ dependencies = [
  "roc_parse",
  "roc_region",
  "roc_serialize",
+ "soa",
  "static_assertions",
  "ven_pretty",
 ]
@@ -3608,6 +3614,10 @@ name = "smallvec"
 version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "942b4a808e05215192e39f4ab80813e599068285906cc91aa64f923db842bd5a"
+
+[[package]]
+name = "soa"
+version = "0.0.1"
 
 [[package]]
 name = "socket2"

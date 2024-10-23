@@ -5657,7 +5657,7 @@ mod test_reporting {
     test_report!(
         weird_escape,
         r#""abc\qdef""#,
-        @r###"
+        @r#"
     ── WEIRD ESCAPE in tmp/weird_escape/Test.roc ───────────────────────────────────
 
     I was partway through parsing a  string literal, but I got stuck here:
@@ -5674,8 +5674,7 @@ mod test_reporting {
         - An escaped quote: \"
         - An escaped backslash: \\
         - A unicode code point: \u(00FF)
-        - An interpolated string: $(myVariable)
-    "###
+    "#
     );
 
     test_report!(

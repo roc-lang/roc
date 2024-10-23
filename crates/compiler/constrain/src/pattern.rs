@@ -5,7 +5,6 @@ use roc_can::expected::{Expected, PExpected};
 use roc_can::pattern::Pattern::{self, *};
 use roc_can::pattern::{DestructType, ListPatterns, RecordDestruct, TupleDestruct};
 use roc_collections::all::{HumanIndex, SendMap};
-use roc_collections::soa::Index;
 use roc_collections::VecMap;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
@@ -15,6 +14,7 @@ use roc_types::types::{
     AliasKind, AliasShared, Category, OptAbleType, PReason, PatternCategory, Reason, RecordField,
     Type, TypeExtension, TypeTag, Types,
 };
+use soa::Index;
 
 #[derive(Default, Debug)]
 pub struct PatternState {
@@ -171,8 +171,10 @@ fn headers_from_annotation_help(
                             return false;
                         }
 
-                        arguments.iter().zip(arg_types_slice.into_iter()).all(
-                            |(arg_pattern, arg_type)| {
+                        arguments
+                            .iter()
+                            .zip(arg_types_slice)
+                            .all(|(arg_pattern, arg_type)| {
                                 headers_from_annotation_help(
                                     types,
                                     constraints,
@@ -180,8 +182,7 @@ fn headers_from_annotation_help(
                                     &Loc::at(annotation.region, arg_type),
                                     headers,
                                 )
-                            },
-                        )
+                            })
                     } else {
                         false
                     }
