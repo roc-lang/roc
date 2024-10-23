@@ -87,7 +87,7 @@ pub enum Target {
     Wasm32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct SurgicalHostArtifacts {
     pub metadata: PathBuf,
     pub preprocessed_host: PathBuf,

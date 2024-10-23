@@ -11,7 +11,7 @@ mod cli_tests {
     use cli_test_utils::helpers::{dir_from_root, file_from_root};
     use cli_test_utils::exec_cli::ExecCli;
     use const_format::concatcp;
-    use roc_cli::{CMD_BUILD, CMD_CHECK, CMD_FORMAT, CMD_RUN, CMD_TEST};
+    use roc_cli::{CMD_BUILD, CMD_CHECK, CMD_FORMAT, CMD_TEST};
 
     #[cfg(all(unix, not(target_os = "macos")))]
     const ALLOW_VALGRIND: bool = true;

@@ -96,7 +96,7 @@ pub fn gen_from_mono_module<'a>(
     roc_file_path: &Path,
     target: Target,
     code_gen_options: CodeGenOptions,
-    preprocessed_host_path: &PrebuiltHost,
+    built_host_opt: &BuiltHostOpt,
     wasm_dev_stack_bytes: Option<u32>,
 ) -> GenFromMono<'a> {
     let path = roc_file_path;
@@ -106,22 +106,28 @@ pub fn gen_from_mono_module<'a>(
     let opt = code_gen_options.opt_level;
 
     match code_gen_options.backend {
-        CodeGenBackend::Wasm => gen_from_mono_module_dev(
-            arena,
-            loaded,
-            target,
-            preprocessed_host_path,
-            wasm_dev_stack_bytes,
-            AssemblyBackendMode::Binary, // dummy value, unused in practice
-        ),
-        CodeGenBackend::Assembly(backend_mode) => gen_from_mono_module_dev(
-            arena,
-            loaded,
-            target,
-            preprocessed_host_path,
-            wasm_dev_stack_bytes,
-            backend_mode,
-        ),
+        CodeGenBackend::Wasm => {
+            assert_ne!(*built_host_opt, BuiltHostOpt::None, "Wasm backend needs a built host.");
+            
+            gen_from_mono_module_dev(
+                arena,
+                loaded,
+                target,
+                built_host_opt,
+                wasm_dev_stack_bytes,
+                AssemblyBackendMode::Binary, // dummy value, unused in practice
+            )
+        },
+        CodeGenBackend::Assembly(backend_mode) => {
+            gen_from_mono_module_dev(
+                arena,
+                loaded,
+                target,
+                built_host_opt,
+                wasm_dev_stack_bytes,
+                backend_mode,
+            )
+        },
         CodeGenBackend::Llvm(backend_mode) => gen_from_mono_module_llvm(
             arena,
             loaded,
@@ -433,13 +439,12 @@ fn gen_from_mono_module_dev<'a>(
     arena: &'a bumpalo::Bump,
     loaded: MonomorphizedModule<'a>,
     target: Target,
-    preprocessed_host_path: &PrebuiltHost,
+    built_host_opt: &BuiltHostOpt,
     wasm_dev_stack_bytes: Option<u32>,
-
     #[allow(unused_variables)] backend_mode: AssemblyBackendMode,
 ) -> GenFromMono<'a> {
-    match (preprocessed_host_path, target.architecture()) {
-        (PrebuiltHost::Additive(host_path), Architecture::Wasm32) => {
+    match (built_host_opt, target.architecture()) {
+        (BuiltHostOpt::Additive(host_path), Architecture::Wasm32) => {
             #[cfg(feature = "target-wasm32")]
             {
                 gen_from_mono_module_dev_wasm32(arena, loaded, host_path, wasm_dev_stack_bytes)
@@ -450,15 +455,15 @@ fn gen_from_mono_module_dev<'a>(
                 internal_error!();
             }
         }
-        (PrebuiltHost::None, Architecture::Wasm32) => {
+        (BuiltHostOpt::None, Architecture::Wasm32) => {
             internal_error!("Cannot compile wasm32 without a host on the dev compiler backend")
         }
-        (PrebuiltHost::Legacy(host_path), Architecture::Wasm32) => internal_error!(
+        (BuiltHostOpt::Legacy(host_path), Architecture::Wasm32) => internal_error!(
             "Unsupported host files found for use with wasm32 dev compiler backend\n    {}",
             host_path.display()
         ),
         (
-            PrebuiltHost::Surgical(SurgicalHostArtifacts {
+            BuiltHostOpt::Surgical(SurgicalHostArtifacts {
                 preprocessed_host, ..
             }),
             Architecture::Wasm32,
@@ -490,7 +495,7 @@ fn gen_from_mono_module_dev<'a>(
 fn gen_from_mono_module_dev_wasm32<'a>(
     arena: &'a bumpalo::Bump,
     loaded: MonomorphizedModule<'a>,
-    preprocessed_host_path: &Path,
+    built_host_path: &Path,
     wasm_dev_stack_bytes: Option<u32>,
 ) -> GenFromMono<'a> {
     let all_code_gen_start = Instant::now();
@@ -516,17 +521,17 @@ fn gen_from_mono_module_dev_wasm32<'a>(
         stack_bytes: wasm_dev_stack_bytes.unwrap_or(roc_gen_wasm::Env::DEFAULT_STACK_BYTES),
     };
 
-    let host_bytes = std::fs::read(preprocessed_host_path).unwrap_or_else(|_| {
+    let host_bytes = std::fs::read(built_host_path).unwrap_or_else(|_| {
         internal_error!(
             "Failed to read host object file {}! Try omitting --prebuilt-platform",
-            preprocessed_host_path.display()
+            built_host_path.display()
         )
     });
 
     let host_module = roc_gen_wasm::parse_host(arena, &host_bytes).unwrap_or_else(|e| {
         internal_error!(
             "I ran into a problem with the host object file, {} at offset 0x{:x}:\n{}",
-            preprocessed_host_path.display(),
+            built_host_path.display(),
             e.offset,
             e.message
         )
@@ -772,11 +777,13 @@ pub fn build_file<'a>(
     )
 }
 
-#[derive(Debug)]
-pub enum PrebuiltHost {
+#[derive(Debug, PartialEq, Eq)]
+/// Opt because of possible None value
+// Advice: do not try to wrap this in an Option, that would require cloning in build_loaded_file.
+pub enum BuiltHostOpt {
     Additive(PathBuf),
     Legacy(PathBuf),
-    //       metadata, preprocessed_host
+    // SurgicalHostArtifacts contains metadata, preprocessed_host
     Surgical(SurgicalHostArtifacts),
     None,
 }
@@ -789,7 +796,7 @@ fn build_and_preprocess_host(
     platform_main_roc: &Path,
     preprocessed_host_path: &Path,
     target: Target,
-) -> PrebuiltHost {
+) -> BuiltHostOpt {
     let rebuild_thread = match linking_strategy {
         LinkingStrategy::Additive => spawn_wasm32_host_build_thread(
             code_gen_options.opt_level,
@@ -861,29 +868,34 @@ fn build_loaded_file<'a>(
     let dll_stub_symbols =
         roc_linker::ExposedSymbols::from_exposed_to_host(&loaded.interns, &loaded.exposed_to_host);
     
-    let prebuilt_host = determine_built_host_path(&platform_main_roc_path, target, build_host_requested, link_type, linking_strategy, suppress_build_host_warning);
-    
-    // TODO this should return a new type BuiltHost but PrebuiltHost is widely used in downstream functions
-    let built_host =
-        match  prebuilt_host {
-            PrebuiltHost::None => {
-                build_and_preprocess_host(
-                    code_gen_options,
-                    dll_stub_symbols,
-                    emit_timings,
-                    linking_strategy,
-                    &platform_main_roc_path,
-                    &output_exe_path,
-                    target,
-                ) 
+    let built_host_opt =
+        // Not sure if this is correct for all calls with LinkType::Dylib...
+        if link_type != LinkType::Dylib {
+            let prebuilt_host = determine_built_host_path(&platform_main_roc_path, target, build_host_requested, link_type, linking_strategy, suppress_build_host_warning);
+            
+
+            match prebuilt_host {
+                BuiltHostOpt::None => {
+                    build_and_preprocess_host(
+                        code_gen_options,
+                        dll_stub_symbols,
+                        emit_timings,
+                        linking_strategy,
+                        &platform_main_roc_path,
+                        &output_exe_path,
+                        target,
+                    ) 
+                }
+                BuiltHostOpt::Surgical(ref surgical_artifacts) => {
+                    // Copy preprocessed host to executable location.
+                    // The surgical linker will modify that copy in-place.
+                    std::fs::copy(&surgical_artifacts.preprocessed_host, output_exe_path.as_path()).unwrap();
+                    prebuilt_host
+                }
+                other => other
             }
-            PrebuiltHost::Surgical(ref surgical_artifacts) => {
-                // Copy preprocessed host to executable location.
-                // The surgical linker will modify that copy in-place.
-                std::fs::copy(&surgical_artifacts.preprocessed_host, output_exe_path.as_path()).unwrap();
-                prebuilt_host
-            }
-            other => other
+        } else {
+            BuiltHostOpt::None
         };
 
     let buf = &mut String::with_capacity(1024);
@@ -923,7 +935,7 @@ fn build_loaded_file<'a>(
         &app_module_path,
         target,
         code_gen_options,
-        &built_host,
+        &built_host_opt,
         wasm_dev_stack_bytes,
     );
 
@@ -995,7 +1007,7 @@ fn build_loaded_file<'a>(
             let mut inputs = vec![app_o_file.to_str().unwrap()];
 
             let mut host_path = String::new();
-            if let PrebuiltHost::Legacy(p) = built_host {
+            if let BuiltHostOpt::Legacy(p) = built_host_opt {
                 host_path.push_str(&p.to_string_lossy());
                 inputs.push(&host_path);
             } else {
@@ -1050,7 +1062,7 @@ fn determine_built_host_path(
     link_type: LinkType,
     linking_strategy: LinkingStrategy,
     suppress_build_host_warning : bool,
-) -> PrebuiltHost {
+) -> BuiltHostOpt {
     if build_host_requested {
         if !suppress_build_host_warning {
             // TODO
@@ -1060,7 +1072,7 @@ fn determine_built_host_path(
         
         match link_type {
             LinkType::Executable => {
-                return PrebuiltHost::None;
+                return BuiltHostOpt::None;
             }
             LinkType::Dylib => {
                 eprintln!("You asked me to build the host, but I don't know how to rebuild a host for a dynamic library.");
@@ -1077,7 +1089,7 @@ fn determine_built_host_path(
                 let legacy_host_path_res = target.find_legacy_host(&platform_main_roc_path);
                 
                 match legacy_host_path_res {
-                    Ok(legacy_host_path) => return PrebuiltHost::Legacy(legacy_host_path),
+                    Ok(legacy_host_path) => return BuiltHostOpt::Legacy(legacy_host_path),
                     Err(err_msg) => {
                         eprintln!(
                             "Legacy linking failed: {}",
@@ -1094,7 +1106,7 @@ fn determine_built_host_path(
                 
                 match surgical_artifacts {
                     Ok(surgical_artifacts) => {
-                        return PrebuiltHost::Surgical(surgical_artifacts);
+                        return BuiltHostOpt::Surgical(surgical_artifacts);
                     }
                     Err(paths_str) => {
                         // TODO improve error message
@@ -1233,7 +1245,7 @@ fn spawn_wasm32_host_build_thread(
     target: Target,
     platform_main_roc: PathBuf,
     output_path: PathBuf,
-) -> std::thread::JoinHandle<(u128, PrebuiltHost)> {
+) -> std::thread::JoinHandle<(u128, BuiltHostOpt)> {
     std::thread::spawn(move || {
         // Printing to stderr because we want stdout to contain only the output of the roc program.
         // We are aware of the trade-offs.
@@ -1248,7 +1260,7 @@ fn spawn_wasm32_host_build_thread(
 
         (
             start.elapsed().as_millis(),
-            PrebuiltHost::Additive(output_path),
+            BuiltHostOpt::Additive(output_path),
         )
     })
 }
@@ -1263,7 +1275,7 @@ fn spawn_surgical_host_build_thread(
     preprocessed_path: PathBuf,
     output_exe_path: PathBuf,
     metadata_path: PathBuf,
-) -> std::thread::JoinHandle<(u128, PrebuiltHost)> {
+) -> std::thread::JoinHandle<(u128, BuiltHostOpt)> {
     std::thread::spawn(move || {
         // Printing to stderr because we want stdout to contain only the output of the roc program.
         // We are aware of the trade-offs.
@@ -1303,7 +1315,7 @@ fn spawn_surgical_host_build_thread(
 
         (
             start.elapsed().as_millis(),
-            PrebuiltHost::Surgical(SurgicalHostArtifacts {
+            BuiltHostOpt::Surgical(SurgicalHostArtifacts {
                 metadata: metadata_path,
                 preprocessed_host: preprocessed_path,
             }),
@@ -1316,7 +1328,7 @@ fn spawn_legacy_host_build_thread(
     opt_level: OptLevel,
     target: Target,
     platform_main_roc: PathBuf,
-) -> std::thread::JoinHandle<(u128, PrebuiltHost)> {
+) -> std::thread::JoinHandle<(u128, BuiltHostOpt)> {
     std::thread::spawn(move || {
         // Printing to stderr because we want stdout to contain only the output of the roc program.
         // We are aware of the trade-offs.
@@ -1327,7 +1339,7 @@ fn spawn_legacy_host_build_thread(
 
         let host_dest = rebuild_host(opt_level, target, platform_main_roc.as_path(), None);
 
-        (start.elapsed().as_millis(), PrebuiltHost::Legacy(host_dest))
+        (start.elapsed().as_millis(), BuiltHostOpt::Legacy(host_dest))
     })
 }
 

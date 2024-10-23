@@ -42,7 +42,7 @@ pub fn generate(
     backend: CodeGenBackend,
 ) -> io::Result<i32> {
     let target = Triple::host().into();
-    // TODO: Add verification around the paths. Make sure they heav the correct file extension and what not.
+    // TODO: Add verification around the paths. Make sure they have the correct file extension and what not.
     match load_types(
         input_path.to_path_buf(),
         Threading::AllAvailable,

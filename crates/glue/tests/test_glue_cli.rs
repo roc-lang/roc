@@ -1,5 +1,3 @@
-// TODO update
-/*
 #[macro_use]
 extern crate pretty_assertions;
 
@@ -13,8 +11,9 @@ mod helpers;
 
 #[cfg(test)]
 mod glue_cli_tests {
+    use cli_test_utils::{command::CmdOut, exec_cli::ExecCli};
+
     use crate::helpers::fixtures_dir;
-    use cli_test_utils::helpers::{ExecCli, Out};
     use std::path::{Path, PathBuf};
 
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -49,7 +48,7 @@ mod glue_cli_tests {
 
                     generate_glue_for(&dir, std::iter::empty());
 
-                    fn validate<'a, I: IntoIterator<Item = &'a str>>(dir: PathBuf, args: I) {
+                    fn validate<'a, I: IntoIterator<Item = &'a str> + std::fmt::Debug>(dir: PathBuf, args: I) {
                         let out = run_app(&dir.join("app.roc"), args);
 
                         assert!(out.status.success());
@@ -202,7 +201,7 @@ mod glue_cli_tests {
     fn generate_glue_for<'a, I: IntoIterator<Item = &'a str>>(
         platform_dir: &'a Path,
         args: I,
-    ) -> Out {
+    ) -> CmdOut {
         let platform_module_path = platform_dir.join("platform.roc");
         let glue_dir = platform_dir.join("test_glue");
         let fixture_templates_dir = platform_dir
@@ -233,37 +232,31 @@ mod glue_cli_tests {
             .join("RustGlue.roc");
 
         // Generate a fresh test_glue for this platform
-        let parts : Vec<_> =
+        let all_args : Vec<_> =
             // converting these all to String avoids lifetime issues
-            std::iter::once("glue".to_string()).chain(
-                args.into_iter().map(|arg| arg.to_string()).chain([
-                    rust_glue_spec.to_str().unwrap().to_string(),
-                    glue_dir.to_str().unwrap().to_string(),
-                    platform_module_path.to_str().unwrap().to_string(),
-                ]),
-            ).collect();
+            args.into_iter().map(|arg| arg.to_string()).chain([
+                glue_dir.to_str().unwrap().to_string(),
+                platform_module_path.to_str().unwrap().to_string(),
+            ]).collect();
 
-        let glue_out = ExecCli::new_roc().add_args(parts.iter()).run_glue();
+        let glue_cmd = ExecCli::new("glue", rust_glue_spec).add_args(all_args);
+        let glue_cmd_out = glue_cmd.run();
 
-        glue_out.assert_clean_success();
+        glue_cmd_out.assert_clean_success();
 
-        glue_out
+        glue_cmd_out
     }
 
-    fn run_app<'a, 'b, I: IntoIterator<Item = &'a str>>(app_file: &'b Path, args: I) -> Out {
-        // Generate test_glue for this platform
-        let compile_out = ExecCli::new_roc()
-            .add_args(
-                // converting these all to String avoids lifetime issues
-                args.into_iter()
-                    .map(|arg| arg.to_string())
-                    .chain([app_file.to_str().unwrap().to_string()]),
-            )
-            .run();
+    fn run_app<'a, 'b, I: IntoIterator<Item = &'a str> + std::fmt::Debug>(app_file_path: &'b Path, args: I) -> CmdOut {
+        let dev_cmd = ExecCli::new(
+            "dev", // can't import CMD_DEV from roc_cli, that would create a cycle
+            app_file_path.to_path_buf()
+        ).add_args(args);
+        
+        let dev_cmd_out = dev_cmd.run();
 
-        compile_out.assert_clean_success();
+        dev_cmd_out.assert_clean_success();
 
-        compile_out
+        dev_cmd_out
     }
 }
-*/
