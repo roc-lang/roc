@@ -15070,5 +15070,77 @@ All branches in an `if` must have the same type!
     "###
     );
 
+    test_report!(
+        unsuffixed_tuple_fx_field,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                (get, put) = (Effect.getLine!, Effect.putLine!)
+
+                name = get {}
+                put "Hi, $(name)"
+            "#
+        ),
+        @r###"
+    ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
+
+    This function is effectful, but its name does not indicate so:
+
+    6│      (get, put) = (Effect.getLine!, Effect.putLine!)
+             ^^^
+
+    Add an exclamation mark at the end, like:
+
+        get!
+
+    This will help readers identify it as a source of effects.
+
+    ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
+
+    This function is effectful, but its name does not indicate so:
+
+    6│      (get, put) = (Effect.getLine!, Effect.putLine!)
+                  ^^^
+
+    Add an exclamation mark at the end, like:
+
+        put!
+
+    This will help readers identify it as a source of effects.
+    "###
+    );
+
+    test_report!(
+        suffixed_tuple_pure_field,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                (msg, trim!) = (" hi ", Str.trim)
+
+                Effect.putLine! (trim! msg)
+            "#
+        ),
+        @r###"
+    ── UNNECESSARY EXCLAMATION in /code/proj/Main.roc ──────────────────────────────
+
+    This function is pure, but its name suggests otherwise:
+
+    6│      (msg, trim!) = (" hi ", Str.trim)
+                  ^^^^^
+
+    The exclamation mark at the end is reserved for effectful functions.
+
+    Hint: Did you forget to run an effect? Is the type annotation wrong?
+    "###
+    );
+
     // [purity-inference] TODO: check ! in records, tuples, tags, opaques, and arguments
 }
