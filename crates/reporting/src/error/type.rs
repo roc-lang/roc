@@ -4,7 +4,7 @@ use crate::error::canonicalize::{to_circular_def_doc, CIRCULAR_DEF};
 use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder};
 use itertools::EitherOrBoth;
 use itertools::Itertools;
-use roc_can::constraint::FxCallKind;
+use roc_can::constraint::{FxCallKind, FxSuffixKind};
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{HumanIndex, MutSet, SendMap};
 use roc_collections::VecMap;
@@ -16,7 +16,7 @@ use roc_module::symbol::Symbol;
 use roc_problem::Severity;
 use roc_region::all::{LineInfo, Region};
 use roc_solve_problem::{
-    NotDerivableContext, NotDerivableEq, SuffixErrorKind, TypeError, UnderivableReason, Unfulfilled,
+    NotDerivableContext, NotDerivableEq, TypeError, UnderivableReason, Unfulfilled,
 };
 use roc_std::RocDec;
 use roc_types::pretty_print::{Parens, WILDCARD};
@@ -384,11 +384,23 @@ pub fn type_problem<'b>(
                 severity,
             })
         }
-        UnsuffixedEffectfulFunction(region, SuffixErrorKind::Let(symbol)) => {
+        UnsuffixedEffectfulFunction(
+            region,
+            kind @ (FxSuffixKind::Let(symbol) | FxSuffixKind::Pattern(symbol)),
+        ) => {
             let stack = [
-                alloc.reflow("This function is effectful, but its name does not indicate so:"),
+                match kind {
+                    FxSuffixKind::Let(_) => alloc
+                        .reflow("This function is effectful, but its name does not indicate so:"),
+                    FxSuffixKind::Pattern(_) => alloc.reflow(
+                        "This matches an effectful function, but its name does not indicate so:",
+                    ),
+                    FxSuffixKind::RecordField(_) => {
+                        unreachable!()
+                    }
+                },
                 alloc.region(lines.convert_region(region), severity),
-                alloc.reflow("Add an exclamation mark at the end of its name, like:"),
+                alloc.reflow("Add an exclamation mark at the end, like:"),
                 alloc
                     .string(format!("{}!", symbol.as_str(alloc.interns)))
                     .indent(4),
@@ -401,13 +413,13 @@ pub fn type_problem<'b>(
                 severity,
             })
         }
-        UnsuffixedEffectfulFunction(region, SuffixErrorKind::RecordField) => {
+        UnsuffixedEffectfulFunction(region, FxSuffixKind::RecordField(_)) => {
             let stack = [
                 alloc.reflow(
                     "This field's value is an effectful function, but its name does not indicate so:",
                 ),
                 alloc.region(lines.convert_region(region), severity),
-                alloc.reflow("Add an exclamation mark at the end of its name, like:"),
+                alloc.reflow("Add an exclamation mark at the end, like:"),
                 alloc
                     .parser_suggestion("{ readFile! : File.read! }")
                     .indent(4),
@@ -423,17 +435,19 @@ pub fn type_problem<'b>(
         SuffixedPureFunction(region, kind) => {
             let stack = [
                 match kind {
-                    SuffixErrorKind::Let(_) => {
+                    FxSuffixKind::Let(_) => {
                         alloc.reflow("This function is pure, but its name suggests otherwise:")
                     }
-                    SuffixErrorKind::RecordField => {
-                        alloc.reflow("This field's value is a pure function, but its name suggests otherwise:")
-                    }
+                    FxSuffixKind::Pattern(_) => alloc
+                        .reflow("This matches a pure function, but the name suggests otherwise:"),
+                    FxSuffixKind::RecordField(_) => alloc.reflow(
+                        "This field's value is a pure function, but its name suggests otherwise:",
+                    ),
                 },
                 alloc.region(lines.convert_region(region), severity),
-                alloc.reflow(
-                    "Remove the exclamation mark to give an accurate impression of its behavior.",
-                ),
+                alloc
+                    .reflow("The exclamation mark at the end is reserved for effectful functions."),
+                alloc.hint("Did you forget to run an effect? Is the type annotation wrong?"),
             ];
 
             Some(Report {

@@ -14770,8 +14770,9 @@ All branches in an `if` must have the same type!
     5│  main! = \{} ->
         ^^^^^
 
-    Remove the exclamation mark to give an accurate impression of its
-    behavior.
+    The exclamation mark at the end is reserved for effectful functions.
+
+    Hint: Did you forget to run an effect? Is the type annotation wrong?
     "###
     );
 
@@ -14798,7 +14799,7 @@ All branches in an `if` must have the same type!
     6│      printHello = \{} ->
             ^^^^^^^^^^
 
-    Add an exclamation mark at the end of its name, like:
+    Add an exclamation mark at the end, like:
 
         printHello!
 
@@ -14861,8 +14862,9 @@ All branches in an `if` must have the same type!
     8│  hello! = \{} ->
         ^^^^^^
 
-    Remove the exclamation mark to give an accurate impression of its
-    behavior.
+    The exclamation mark at the end is reserved for effectful functions.
+
+    Hint: Did you forget to run an effect? Is the type annotation wrong?
     "###
     );
 
@@ -14926,7 +14928,7 @@ All branches in an `if` must have the same type!
     8│  printLn = Effect.putLine!
         ^^^^^^^
 
-    Add an exclamation mark at the end of its name, like:
+    Add an exclamation mark at the end, like:
 
         printLn!
 
@@ -14958,7 +14960,7 @@ All branches in an `if` must have the same type!
     7│          putLine: Effect.putLine!
                 ^^^^^^^^^^^^^^^^^^^^^^^^
 
-    Add an exclamation mark at the end of its name, like:
+    Add an exclamation mark at the end, like:
 
         { readFile! : File.read! }
 
@@ -14990,8 +14992,81 @@ All branches in an `if` must have the same type!
     7│          trim!: Str.trim
                 ^^^^^^^^^^^^^^^
 
-    Remove the exclamation mark to give an accurate impression of its
-    behavior.
+    The exclamation mark at the end is reserved for effectful functions.
+
+    Hint: Did you forget to run an effect? Is the type annotation wrong?
+    "###
+    );
+
+    test_report!(
+        unsuffixed_fx_arg,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                ["Hello", "world!"]
+                |> forEach! Effect.putLine!
+
+            forEach! : List a, (a => {}) => {}
+            forEach! = \l, f ->
+                when l is
+                    [] -> {}
+                    [x, .. as xs] ->
+                        f x
+                        forEach! xs f
+            "#
+        ),
+        @r###"
+    ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
+
+    This matches an effectful function, but its name does not indicate so:
+
+    10│  forEach! = \l, f ->
+                        ^
+
+    Add an exclamation mark at the end, like:
+
+        f!
+
+    This will help readers identify it as a source of effects.
+    "###
+    );
+
+    test_report!(
+        suffixed_pure_arg,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                Ok " hi "
+                |> mapOk  Str.trim
+                |> Result.withDefault ""
+                |> Effect.putLine!
+
+            mapOk : Result a err, (a -> b) -> Result b err
+            mapOk = \result, fn! ->
+                when result is
+                    Ok x -> Ok (fn! x)
+                    Err e -> Err e
+            "#
+        ),
+        @r###"
+    ── UNNECESSARY EXCLAMATION in /code/proj/Main.roc ──────────────────────────────
+
+    This matches a pure function, but the name suggests otherwise:
+
+    12│  mapOk = \result, fn! ->
+                          ^^^
+
+    The exclamation mark at the end is reserved for effectful functions.
+
+    Hint: Did you forget to run an effect? Is the type annotation wrong?
     "###
     );
 

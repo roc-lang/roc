@@ -14,7 +14,9 @@ use crate::Aliases;
 use bumpalo::Bump;
 use roc_can::abilities::{AbilitiesStore, MemberSpecializationInfo};
 use roc_can::constraint::Constraint::{self, *};
-use roc_can::constraint::{Cycle, FxCallConstraint, LetConstraint, OpportunisticResolve};
+use roc_can::constraint::{
+    Cycle, FxCallConstraint, FxSuffixConstraint, FxSuffixKind, LetConstraint, OpportunisticResolve,
+};
 use roc_can::expected::{Expected, PExpected};
 use roc_can::module::ModuleParams;
 use roc_collections::VecMap;
@@ -26,7 +28,7 @@ use roc_module::ident::IdentSuffix;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_problem::can::CycleEntry;
 use roc_region::all::{Loc, Region};
-use roc_solve_problem::{SuffixErrorKind, TypeError};
+use roc_solve_problem::TypeError;
 use roc_solve_schema::UnificationMode;
 use roc_types::subs::{
     self, Content, FlatType, GetSubsSlice, Mark, OptVariable, Rank, Subs, TagExt, UlsOfVar,
@@ -453,10 +455,9 @@ fn solve(
                     check_ident_suffix(
                         env,
                         problems,
-                        symbol.suffix(),
+                        FxSuffixKind::Let(*symbol),
                         loc_var.value,
                         &loc_var.region,
-                        SuffixErrorKind::Let(*symbol),
                     );
                 }
 
@@ -834,6 +835,27 @@ fn solve(
                     }
                 }
             }
+            FxSuffix(constraint_index) => {
+                let FxSuffixConstraint {
+                    type_index,
+                    kind,
+                    region,
+                } = &env.constraints.fx_suffix_constraints[constraint_index.index()];
+
+                let actual = either_type_index_to_var(
+                    env,
+                    rank,
+                    problems,
+                    abilities_store,
+                    obligation_cache,
+                    &mut can_types,
+                    aliases,
+                    *type_index,
+                );
+
+                check_ident_suffix(env, problems, *kind, actual, region);
+                state
+            }
             EffectfulStmt(variable, region) => {
                 let content = env.subs.get_content_without_compacting(*variable);
 
@@ -881,17 +903,6 @@ fn solve(
                         internal_error!("FlexToPure: unexpected content: {:?}", content)
                     }
                 }
-            }
-            CheckRecordFieldFx(suffix, field_var, region) => {
-                check_ident_suffix(
-                    env,
-                    problems,
-                    *suffix,
-                    *field_var,
-                    region,
-                    SuffixErrorKind::RecordField,
-                );
-                state
             }
             Let(index, pool_slice) => {
                 let let_con = &env.constraints.let_constraints[index.index()];
@@ -1614,12 +1625,11 @@ fn solve(
 fn check_ident_suffix(
     env: &mut InferenceEnv<'_>,
     problems: &mut Vec<TypeError>,
-    suffix: IdentSuffix,
+    kind: FxSuffixKind,
     variable: Variable,
     region: &Region,
-    kind: SuffixErrorKind,
 ) {
-    match suffix {
+    match kind.suffix() {
         IdentSuffix::None => {
             if let Content::Structure(FlatType::Func(_, _, _, fx)) =
                 env.subs.get_content_without_compacting(variable)

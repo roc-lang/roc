@@ -30,6 +30,7 @@ pub struct Constraints {
     pub pattern_eq: Vec<PatternEq>,
     pub cycles: Vec<Cycle>,
     pub fx_call_constraints: Vec<FxCallConstraint>,
+    pub fx_suffix_constraints: Vec<FxSuffixConstraint>,
 }
 
 impl std::fmt::Debug for Constraints {
@@ -84,6 +85,7 @@ impl Constraints {
         let pattern_eq = Vec::new();
         let cycles = Vec::new();
         let fx_call_constraints = Vec::with_capacity(16);
+        let fx_suffix_constraints = Vec::new();
 
         categories.extend([
             Category::Record,
@@ -134,6 +136,7 @@ impl Constraints {
             pattern_eq,
             cycles,
             fx_call_constraints,
+            fx_suffix_constraints,
         }
     }
 
@@ -597,13 +600,39 @@ impl Constraints {
         Constraint::FxCall(constraint_index)
     }
 
-    pub fn check_record_field_fx(
-        &self,
+    pub fn fx_pattern_suffix(
+        &mut self,
+        symbol: Symbol,
+        type_index: TypeOrVar,
+        region: Region,
+    ) -> Constraint {
+        let constraint = FxSuffixConstraint {
+            kind: FxSuffixKind::Pattern(symbol),
+            type_index,
+            region,
+        };
+
+        let constraint_index = index_push_new(&mut self.fx_suffix_constraints, constraint);
+
+        Constraint::FxSuffix(constraint_index)
+    }
+
+    pub fn fx_record_field_suffix(
+        &mut self,
         suffix: IdentSuffix,
         variable: Variable,
         region: Region,
     ) -> Constraint {
-        Constraint::CheckRecordFieldFx(suffix, variable, region)
+        let type_index = Self::push_type_variable(variable);
+        let constraint = FxSuffixConstraint {
+            kind: FxSuffixKind::RecordField(suffix),
+            type_index,
+            region,
+        };
+
+        let constraint_index = index_push_new(&mut self.fx_suffix_constraints, constraint);
+
+        Constraint::FxSuffix(constraint_index)
     }
 
     pub fn contains_save_the_environment(&self, constraint: &Constraint) -> bool {
@@ -632,7 +661,7 @@ impl Constraints {
             | Constraint::Pattern(..)
             | Constraint::EffectfulStmt(..)
             | Constraint::FxCall(_)
-            | Constraint::CheckRecordFieldFx(_, _, _)
+            | Constraint::FxSuffix(_)
             | Constraint::FlexToPure(_)
             | Constraint::True
             | Constraint::IsOpenType(_)
@@ -808,12 +837,12 @@ pub enum Constraint {
     ),
     /// Check call fx against enclosing function fx
     FxCall(Index<FxCallConstraint>),
+    /// Require idents to be accurately suffixed
+    FxSuffix(Index<FxSuffixConstraint>),
     /// Set an fx var as pure if flex (no effectful functions were called)
     FlexToPure(Variable),
     /// Expect statement to be effectful
     EffectfulStmt(Variable, Region),
-    /// Require field name to be accurately suffixed
-    CheckRecordFieldFx(IdentSuffix, Variable, Region),
     /// Used for things that always unify, e.g. blanks and runtime errors
     True,
     SaveTheEnvironment,
@@ -906,6 +935,29 @@ pub enum FxCallKind {
     Stmt,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct FxSuffixConstraint {
+    pub type_index: TypeOrVar,
+    pub kind: FxSuffixKind,
+    pub region: Region,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum FxSuffixKind {
+    Let(Symbol),
+    Pattern(Symbol),
+    RecordField(IdentSuffix),
+}
+
+impl FxSuffixKind {
+    pub fn suffix(&self) -> IdentSuffix {
+        match self {
+            Self::Let(symbol) | Self::Pattern(symbol) => symbol.suffix(),
+            Self::RecordField(suffix) => *suffix,
+        }
+    }
+}
+
 /// Custom impl to limit vertical space used by the debug output
 impl std::fmt::Debug for Constraint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -923,16 +975,16 @@ impl std::fmt::Debug for Constraint {
                 write!(f, "Pattern({arg0:?}, {arg1:?}, {arg2:?}, {arg3:?})")
             }
             Self::FxCall(arg0) => {
-                write!(f, "CallFx({arg0:?})")
+                write!(f, "FxCall({arg0:?})")
+            }
+            Self::FxSuffix(arg0) => {
+                write!(f, "FxSuffix({arg0:?})")
             }
             Self::EffectfulStmt(arg0, arg1) => {
                 write!(f, "EffectfulStmt({arg0:?}, {arg1:?})")
             }
             Self::FlexToPure(arg0) => {
                 write!(f, "FlexToPure({arg0:?})")
-            }
-            Self::CheckRecordFieldFx(arg0, arg1, arg2) => {
-                write!(f, "CheckRecordFieldFx({arg0:?}, {arg1:?}, {arg2:?})")
             }
             Self::True => write!(f, "True"),
             Self::SaveTheEnvironment => write!(f, "SaveTheEnvironment"),

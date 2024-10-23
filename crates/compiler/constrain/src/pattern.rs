@@ -276,6 +276,10 @@ pub fn constrain_pattern(
                     .push(constraints.is_open_type(type_index));
             }
 
+            state
+                .constraints
+                .push(constraints.fx_pattern_suffix(*symbol, type_index, region));
+
             state.headers.insert(
                 *symbol,
                 Loc {

@@ -1,6 +1,7 @@
 //! Provides types to describe problems that can occur during solving.
 use std::{path::PathBuf, str::Utf8Error};
 
+use roc_can::constraint::FxSuffixKind;
 use roc_can::{
     constraint::FxCallKind,
     expected::{Expected, PExpected},
@@ -45,14 +46,8 @@ pub enum TypeError {
     FxInPureFunction(Region, FxCallKind, Option<Region>),
     FxInTopLevel(Region, FxCallKind),
     PureStmt(Region),
-    UnsuffixedEffectfulFunction(Region, SuffixErrorKind),
-    SuffixedPureFunction(Region, SuffixErrorKind),
-}
-
-#[derive(Debug, Clone)]
-pub enum SuffixErrorKind {
-    Let(Symbol),
-    RecordField,
+    UnsuffixedEffectfulFunction(Region, FxSuffixKind),
+    SuffixedPureFunction(Region, FxSuffixKind),
 }
 
 impl TypeError {
