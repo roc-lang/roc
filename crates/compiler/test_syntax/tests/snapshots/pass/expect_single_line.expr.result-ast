@@ -2,9 +2,9 @@ SpaceAfter(
     Defs(
         Defs {
             tags: [
-                Index(2147483648),
-                Index(2147483649),
-                Index(2147483650),
+                EitherIndex(2147483648),
+                EitherIndex(2147483649),
+                EitherIndex(2147483650),
             ],
             regions: [
                 @0-5,
@@ -12,14 +12,14 @@ SpaceAfter(
                 @22-35,
             ],
             space_before: [
-                Slice(start = 0, length = 0),
-                Slice(start = 0, length = 2),
-                Slice(start = 2, length = 2),
+                Slice { start: 0, length: 0 },
+                Slice { start: 0, length: 2 },
+                Slice { start: 2, length: 2 },
             ],
             space_after: [
-                Slice(start = 0, length = 0),
-                Slice(start = 2, length = 0),
-                Slice(start = 4, length = 0),
+                Slice { start: 0, length: 0 },
+                Slice { start: 2, length: 0 },
+                Slice { start: 4, length: 0 },
             ],
             spaces: [
                 Newline,

@@ -329,7 +329,7 @@ fn to_inspector_record(
         .map(|(field_name_index, field_var_index, _)| {
             let field_name = env.subs[field_name_index].clone();
             let field_var = env.subs[field_var_index];
-            let field_var_slice = VariableSubsSlice::new(field_var_index.index, 1);
+            let field_var_slice = VariableSubsSlice::new(field_var_index.index() as u32, 1);
 
             // key: "a"
             let key_field = Field {
@@ -539,7 +539,7 @@ fn to_inspector_tuple(
         .map(|(elem_index, elem_var_index)| {
             let index = env.subs[elem_index];
             let elem_var = env.subs[elem_var_index];
-            let elem_var_slice = VariableSubsSlice::new(elem_var_index.index, 1);
+            let elem_var_slice = VariableSubsSlice::new(elem_var_index.index() as u32, 1);
 
             // tup.0
             let tuple_access = TupleAccess {
