@@ -188,7 +188,7 @@ fn run_with_valgrind(binary_path: &std::path::Path) {
 
     let mut valgrind_command = Command::new("valgrind");
 
-    valgrind_command.args(&[
+    valgrind_command.args([
         "--leak-check=full",
         "--error-exitcode=1",
         "--errors-for-leak-kinds=definite,possible",
