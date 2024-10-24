@@ -156,6 +156,10 @@ impl Symbol {
             })
     }
 
+    pub fn as_unsuffixed_str(self, interns: &Interns) -> &str {
+        self.as_str(interns).trim_end_matches('!')
+    }
+
     pub const fn as_u64(self) -> u64 {
         u64::from_ne_bytes(self.to_ne_bytes())
     }

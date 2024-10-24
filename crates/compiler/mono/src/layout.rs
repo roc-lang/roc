@@ -4648,7 +4648,7 @@ impl LayoutId {
     // Returns something like "#UserApp_foo_1" when given a symbol that interns to "foo"
     // and a LayoutId of 1.
     pub fn to_symbol_string(self, symbol: Symbol, interns: &Interns) -> String {
-        let ident_string = symbol.as_str(interns).trim_end_matches('!');
+        let ident_string = symbol.as_unsuffixed_str(interns);
         let module_string = interns.module_ids.get_name(symbol.module_id()).unwrap();
         format!("{}_{}_{}", module_string, ident_string, self.0)
     }
@@ -4656,12 +4656,12 @@ impl LayoutId {
     // Returns something like "roc__foo_1_exposed" when given a symbol that interns to "foo"
     // and a LayoutId of 1.
     pub fn to_exposed_symbol_string(self, symbol: Symbol, interns: &Interns) -> String {
-        let ident_string = symbol.as_str(interns).trim_end_matches('!');
+        let ident_string = symbol.as_unsuffixed_str(interns);
         format!("roc__{}_{}_exposed", ident_string, self.0)
     }
 
     pub fn to_exposed_generic_symbol_string(self, symbol: Symbol, interns: &Interns) -> String {
-        let ident_string = symbol.as_str(interns).trim_end_matches('!');
+        let ident_string = symbol.as_unsuffixed_str(interns);
         format!("roc__{}_{}_exposed_generic", ident_string, self.0)
     }
 }
