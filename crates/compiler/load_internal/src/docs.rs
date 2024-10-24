@@ -471,7 +471,7 @@ fn contains_unexposed_type(
                             return true;
                         }
                     }
-                    AssignedField::Malformed(_) | AssignedField::LabelOnly(_) => {
+                    AssignedField::LabelOnly(_) => {
                         // contains no unexposed types, so continue
                     }
                     AssignedField::SpaceBefore(field, _) | AssignedField::SpaceAfter(field, _) => {
@@ -722,7 +722,7 @@ fn record_field_to_doc(
         AssignedField::LabelOnly(label) => Some(RecordField::LabelOnly {
             name: label.value.to_string(),
         }),
-        AssignedField::Malformed(_) | AssignedField::IgnoredValue(_, _, _) => None,
+        AssignedField::IgnoredValue(_, _, _) => None,
     }
 }
 
