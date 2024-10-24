@@ -97,6 +97,7 @@ impl Constraints {
             Category::List,
             Category::Str,
             Category::Character,
+            Category::Return,
         ]);
 
         pattern_categories.extend([
@@ -150,6 +151,7 @@ impl Constraints {
     pub const CATEGORY_LIST: Index<Category> = Index::new(11);
     pub const CATEGORY_STR: Index<Category> = Index::new(12);
     pub const CATEGORY_CHARACTER: Index<Category> = Index::new(13);
+    pub const CATEGORY_RETURN: Index<Category> = Index::new(14);
 
     pub const PCATEGORY_RECORD: Index<PatternCategory> = Index::new(0);
     pub const PCATEGORY_EMPTYRECORD: Index<PatternCategory> = Index::new(1);

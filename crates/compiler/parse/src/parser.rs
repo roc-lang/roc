@@ -97,6 +97,7 @@ impl_space_problem! {
     EPattern<'a>,
     EProvides<'a>,
     ERecord<'a>,
+    EReturn<'a>,
     ERequires<'a>,
     EString<'a>,
     EType<'a>,
@@ -337,6 +338,7 @@ pub enum EExpr<'a> {
     Expect(EExpect<'a>, Position),
     Dbg(EExpect<'a>, Position),
     Import(EImport<'a>, Position),
+    Return(EReturn<'a>, Position),
 
     Closure(EClosure<'a>, Position),
     Underscore(Position),
@@ -511,6 +513,14 @@ pub enum EExpect<'a> {
     Condition(&'a EExpr<'a>, Position),
     Continuation(&'a EExpr<'a>, Position),
     IndentCondition(Position),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EReturn<'a> {
+    Space(BadInputError, Position),
+    Return(Position),
+    ReturnValue(&'a EExpr<'a>, Position),
+    IndentReturnValue(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -5888,6 +5888,28 @@ pub fn with_hole<'a>(
                 }
             }
         }
+        Return {
+            return_value,
+            return_var,
+        } => {
+            let return_symbol = possible_reuse_symbol_or_specialize(
+                env,
+                procs,
+                layout_cache,
+                &return_value.value,
+                return_var,
+            );
+
+            assign_to_symbol(
+                env,
+                procs,
+                layout_cache,
+                return_var,
+                *return_value,
+                return_symbol,
+                Stmt::Ret(return_symbol),
+            )
+        }
         TypedHole(_) => runtime_error(env, "Hit a blank"),
         RuntimeError(e) => runtime_error(env, env.arena.alloc(e.runtime_message())),
         Crash { msg, ret_var: _ } => {
