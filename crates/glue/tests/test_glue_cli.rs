@@ -10,10 +10,10 @@ extern crate roc_collections;
 mod helpers;
 
 #[cfg(test)]
-mod glue_cli_run {
+mod glue_cli_tests {
+    use cli_test_utils::{command::CmdOut, exec_cli::ExecCli};
+
     use crate::helpers::fixtures_dir;
-    use cli_utils::helpers::{has_error, run_glue, run_roc, Out};
-    use std::fs;
     use std::path::{Path, PathBuf};
 
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -48,11 +48,11 @@ mod glue_cli_run {
 
                     generate_glue_for(&dir, std::iter::empty());
 
-                    fn validate<'a, I: IntoIterator<Item = &'a str>>(dir: PathBuf, args: I) {
+                    fn validate<'a, I: IntoIterator<Item = &'a str> + std::fmt::Debug>(dir: PathBuf, args: I) {
                         let out = run_app(&dir.join("app.roc"), args);
 
                         assert!(out.status.success());
-                        let ignorable = "🔨 Rebuilding platform...\n";
+                        let ignorable = "🔨 Building host ...\n";
                         let stderr = out.stderr.replacen(ignorable, "", 1);
                         assert_eq!(stderr, "");
                         assert!(
@@ -71,11 +71,11 @@ mod glue_cli_run {
 
                     // Validate linux with the default linker.
                     if !(cfg!(target_os = "linux") && (skip_on_linux_surgical_linker.contains(&test_name_str))) {
-                        validate(dir.clone(), std::iter::empty());
+                        validate(dir.clone(), ["--build-host", "--suppress-build-host-warning"]);
                     }
 
                     if TEST_LEGACY_LINKER {
-                        validate(dir, ["--linker=legacy"]);
+                        validate(dir, ["--build-host", "--suppress-build-host-warning", "--linker=legacy"]);
                     }
                 }
             )*
@@ -201,7 +201,7 @@ mod glue_cli_run {
     fn generate_glue_for<'a, I: IntoIterator<Item = &'a str>>(
         platform_dir: &'a Path,
         args: I,
-    ) -> Out {
+    ) -> CmdOut {
         let platform_module_path = platform_dir.join("platform.roc");
         let glue_dir = platform_dir.join("test_glue");
         let fixture_templates_dir = platform_dir
@@ -219,7 +219,7 @@ mod glue_cli_run {
 
         // Delete the glue file to make sure we're actually regenerating it!
         if glue_dir.exists() {
-            fs::remove_dir_all(&glue_dir)
+            std::fs::remove_dir_all(&glue_dir)
                 .expect("Unable to remove test_glue dir in order to regenerate it in the test");
         }
 
@@ -232,50 +232,35 @@ mod glue_cli_run {
             .join("RustGlue.roc");
 
         // Generate a fresh test_glue for this platform
-        let parts : Vec<_> =
+        let all_args : Vec<_> =
             // converting these all to String avoids lifetime issues
-            std::iter::once("glue".to_string()).chain(
-                args.into_iter().map(|arg| arg.to_string()).chain([
-                    rust_glue_spec.to_str().unwrap().to_string(),
-                    glue_dir.to_str().unwrap().to_string(),
-                    platform_module_path.to_str().unwrap().to_string(),
-                ]),
-            ).collect();
-        let glue_out = run_glue(parts.iter());
+            args.into_iter().map(|arg| arg.to_string()).chain([
+                glue_dir.to_str().unwrap().to_string(),
+                platform_module_path.to_str().unwrap().to_string(),
+            ]).collect();
 
-        if has_error(&glue_out.stderr) {
-            panic!(
-                "`roc {}` command had unexpected stderr: {}",
-                parts.join(" "),
-                glue_out.stderr
-            );
-        }
+        let glue_cmd = ExecCli::new("glue", rust_glue_spec).add_args(all_args);
+        let glue_cmd_out = glue_cmd.run();
 
-        assert!(glue_out.status.success(), "bad status {glue_out:?}");
+        glue_cmd_out.assert_clean_success();
 
-        glue_out
+        glue_cmd_out
     }
 
-    fn run_app<'a, 'b, I: IntoIterator<Item = &'a str>>(app_file: &'b Path, args: I) -> Out {
-        // Generate test_glue for this platform
-        let compile_out = run_roc(
-            // converting these all to String avoids lifetime issues
-            args.into_iter()
-                .map(|arg| arg.to_string())
-                .chain([app_file.to_str().unwrap().to_string()]),
-            &[],
-            &[],
-        );
+    fn run_app<'a, 'b, I: IntoIterator<Item = &'a str> + std::fmt::Debug>(
+        app_file_path: &'b Path,
+        args: I,
+    ) -> CmdOut {
+        let dev_cmd = ExecCli::new(
+            "dev", // can't import CMD_DEV from roc_cli, that would create a cycle
+            app_file_path.to_path_buf(),
+        )
+        .add_args(args);
 
-        if has_error(&compile_out.stderr) {
-            panic!(
-                "`roc` command had unexpected stderr: {}",
-                compile_out.stderr
-            );
-        }
+        let dev_cmd_out = dev_cmd.run();
 
-        assert!(compile_out.status.success(), "bad status {compile_out:?}");
+        dev_cmd_out.assert_clean_success();
 
-        compile_out
+        dev_cmd_out
     }
 }

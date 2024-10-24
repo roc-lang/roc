@@ -1,0 +1,48 @@
+---
+source: crates/cli/tests/cli_tests.rs
+assertion_line: 445
+expression: cli_dev_out.normalize_stdout_and_stderr()
+---
+
+── TYPE MISMATCH in tests/test-projects/module_params/BadAnn.roc ───────────────
+
+Something is off with the body of the fnAnnotatedAsValue definition:
+
+3│   fnAnnotatedAsValue : Str
+4│>  fnAnnotatedAsValue = \postId, commentId ->
+5│>      "/posts/$(postId)/comments/$(Num.toStr commentId)"
+
+The body is an anonymous function of type:
+
+    Str, Num * -> Str
+
+But the type annotation on fnAnnotatedAsValue says it should be:
+
+    Str
+
+
+── TYPE MISMATCH in tests/test-projects/module_params/BadAnn.roc ───────────────
+
+Something is off with the body of the missingArg definition:
+
+7│   missingArg : Str -> Str
+8│>  missingArg = \postId, _ ->
+9│>      "/posts/$(postId)/comments"
+
+The body is an anonymous function of type:
+
+    (Str, ? -> Str)
+
+But the type annotation on missingArg says it should be:
+
+    (Str -> Str)
+
+Tip: It looks like it takes too many arguments. I'm seeing 1 extra.
+
+────────────────────────────────────────────────────────────────────────────────
+
+2 error and 1 warning found in <ignored for test> ms
+.
+
+You can run <ignored for tests>
+

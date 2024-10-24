@@ -1,0 +1,21 @@
+---
+source: crates/cli/tests/cli_tests.rs
+expression: cli_test_out.normalize_stdout_and_stderr()
+---
+── UNRECOGNIZED PACKAGE in ...rojects/module_imports_pkg/ImportsUnknownPkg.roc ─
+
+This module is trying to import from `cli`:
+
+3│  import cli.Foo
+           ^^^^^^^
+
+A lowercase name indicates a package shorthand, but I don't recognize
+this one. Did you mean one of these?
+
+    pkg
+
+Note: I'm using the following module to resolve package shorthands:
+
+    tests/test-projects/module_imports_pkg/app.roc
+
+You can specify a different one with the --main flag.

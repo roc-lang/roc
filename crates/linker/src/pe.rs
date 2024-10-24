@@ -1435,11 +1435,9 @@ const ___CHKSTK_MS: [u8; 48] = [
 mod test {
     const PE_DYNHOST: &[u8] = include_bytes!("../dynhost_benchmarks_windows.exe") as &[_];
 
+    use indoc::indoc;
     use object::read::pe::PeFile64;
     use object::{pe, LittleEndian as LE, Object};
-
-    use crate::preprocessed_host_filename;
-    use indoc::indoc;
     use serial_test::serial;
     use target_lexicon::Triple;
 
@@ -1792,8 +1790,8 @@ mod test {
             panic!("zig build-exe failed: {command_str}");
         }
 
-        let preprocessed_host_filename =
-            dir.join(preprocessed_host_filename(Triple::host().into()));
+        let target: roc_target::Target = Triple::host().into();
+        let preprocessed_host_filename = dir.join(target.prebuilt_surgical_host());
 
         preprocess_windows(
             &dir.join("host.exe"),
