@@ -129,7 +129,8 @@ pub fn build_host_exposed_def(
                     linked_symbol_arguments.push((arg_var, Expr::Var(arg_symbol, arg_var)));
                 }
 
-                let foreign_symbol_name = format!("roc_fx_{ident}");
+                let ident_without_bang = ident.trim_end_matches('!');
+                let foreign_symbol_name = format!("roc_fx_{ident_without_bang}");
                 let foreign_call = Expr::ForeignCall {
                     foreign_symbol: foreign_symbol_name.into(),
                     args: linked_symbol_arguments,
