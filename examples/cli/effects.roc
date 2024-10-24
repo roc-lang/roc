@@ -4,6 +4,6 @@ import pf.Effect
 
 main : {} => {}
 main = \{} ->
-    line = Effect.getLine {}
-    _ = Effect.putLine "You entered: $(line)"
-    Effect.putLine "It is known"
+    line = Effect.getLine! {}
+    _ = Effect.putLine! "You entered: $(line)"
+    Effect.putLine! "It is known"

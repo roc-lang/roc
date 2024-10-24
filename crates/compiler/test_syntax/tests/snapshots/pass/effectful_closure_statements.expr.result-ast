@@ -9,9 +9,9 @@ SpaceAfter(
             Defs(
                 Defs {
                     tags: [
-                        Index(2147483648),
-                        Index(2147483649),
-                        Index(2147483650),
+                        EitherIndex(2147483648),
+                        EitherIndex(2147483649),
+                        EitherIndex(2147483650),
                     ],
                     regions: [
                         @11-37,
@@ -19,14 +19,14 @@ SpaceAfter(
                         @61-154,
                     ],
                     space_before: [
-                        Slice(start = 0, length = 0),
-                        Slice(start = 0, length = 1),
-                        Slice(start = 1, length = 2),
+                        Slice { start: 0, length: 0 },
+                        Slice { start: 0, length: 1 },
+                        Slice { start: 1, length: 2 },
                     ],
                     space_after: [
-                        Slice(start = 0, length = 0),
-                        Slice(start = 1, length = 0),
-                        Slice(start = 3, length = 0),
+                        Slice { start: 0, length: 0 },
+                        Slice { start: 1, length: 0 },
+                        Slice { start: 3, length: 0 },
                     ],
                     spaces: [
                         Newline,
@@ -83,16 +83,16 @@ SpaceAfter(
                                                 Defs(
                                                     Defs {
                                                         tags: [
-                                                            Index(2147483648),
+                                                            EitherIndex(2147483648),
                                                         ],
                                                         regions: [
                                                             @86-119,
                                                         ],
                                                         space_before: [
-                                                            Slice(start = 0, length = 0),
+                                                            Slice { start: 0, length: 0 },
                                                         ],
                                                         space_after: [
-                                                            Slice(start = 0, length = 0),
+                                                            Slice { start: 0, length: 0 },
                                                         ],
                                                         spaces: [],
                                                         type_defs: [],

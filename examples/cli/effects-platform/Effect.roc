@@ -1,7 +1,7 @@
 hosted Effect
-    exposes [putLine, getLine]
+    exposes [putLine!, getLine!]
     imports []
 
-putLine : Str => {}
+putLine! : Str => {}
 
-getLine : {} => Str
+getLine! : {} => Str
