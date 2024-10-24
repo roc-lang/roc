@@ -247,12 +247,16 @@ mod glue_cli_tests {
         glue_cmd_out
     }
 
-    fn run_app<'a, 'b, I: IntoIterator<Item = &'a str> + std::fmt::Debug>(app_file_path: &'b Path, args: I) -> CmdOut {
+    fn run_app<'a, 'b, I: IntoIterator<Item = &'a str> + std::fmt::Debug>(
+        app_file_path: &'b Path,
+        args: I,
+    ) -> CmdOut {
         let dev_cmd = ExecCli::new(
             "dev", // can't import CMD_DEV from roc_cli, that would create a cycle
-            app_file_path.to_path_buf()
-        ).add_args(args);
-        
+            app_file_path.to_path_buf(),
+        )
+        .add_args(args);
+
         let dev_cmd_out = dev_cmd.run();
 
         dev_cmd_out.assert_clean_success();

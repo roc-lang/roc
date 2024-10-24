@@ -1457,6 +1457,8 @@ pub fn load<'a>(
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     enum Threads {
         Single,
+
+        #[allow(dead_code)]
         Many(usize),
     }
 

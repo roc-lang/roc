@@ -226,7 +226,7 @@ fn main() -> io::Result<()> {
                             current_block = String::new();
                         } else if in_roc_block {
                             current_block.push_str(&line);
-                            current_block.push_str("\n");
+                            current_block.push('\n');
                         }
                     }
 

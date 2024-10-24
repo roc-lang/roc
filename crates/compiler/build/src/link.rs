@@ -1382,7 +1382,7 @@ fn run_build_command(mut command: Command, file_to_build: &str, flaky_fail_count
     roc_debug_flags::dbg_do!(roc_debug_flags::ROC_PRINT_BUILD_COMMANDS, {
         print_command_str(cmd_str);
     });
-    
+
     let cmd_output = command.output().unwrap();
     let max_flaky_fail_count = 10;
 

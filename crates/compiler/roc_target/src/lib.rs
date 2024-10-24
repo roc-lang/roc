@@ -286,13 +286,29 @@ impl Target {
                 Surgical host ({}): {}, \
                 Surgical metadata ({}): {}",
                 generic_host_path.display(),
-                if generic_host_path.exists() { "present" } else { "missing" },
+                if generic_host_path.exists() {
+                    "present"
+                } else {
+                    "missing"
+                },
                 generic_metadata.display(),
-                if generic_metadata.exists() { "present" } else { "missing" },
+                if generic_metadata.exists() {
+                    "present"
+                } else {
+                    "missing"
+                },
                 surgical_host_path.display(),
-                if surgical_host_path.exists() { "present" } else { "missing" },
+                if surgical_host_path.exists() {
+                    "present"
+                } else {
+                    "missing"
+                },
                 surgical_metadata.display(),
-                if surgical_metadata.exists() { "present" } else { "missing" }
+                if surgical_metadata.exists() {
+                    "present"
+                } else {
+                    "missing"
+                }
             ))
         }
     }

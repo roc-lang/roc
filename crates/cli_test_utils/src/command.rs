@@ -1,6 +1,8 @@
-
-use std::{ffi::OsString, process::{Command, ExitStatus, Stdio}};
 use std::io::Write;
+use std::{
+    ffi::OsString,
+    process::{Command, ExitStatus, Stdio},
+};
 
 use regex::Regex;
 use roc_command_utils::pretty_command_string;
@@ -21,11 +23,11 @@ pub fn run_command(mut cmd: Command, stdin_opt: Option<&str>) -> CmdOut {
     let stdin = roc_cmd_child.stdin.as_mut().expect("Failed to open stdin");
 
     if let Some(stdin_str) = stdin_opt {
-        stdin
-            .write_all(stdin_str.as_bytes())
-            .unwrap_or_else(|err| {
-                panic!("Failed to write to stdin for command\n\n  {cmd_str:?}\n\nwith error:\n\n  {err}")
-            });
+        stdin.write_all(stdin_str.as_bytes()).unwrap_or_else(|err| {
+            panic!(
+                "Failed to write to stdin for command\n\n  {cmd_str:?}\n\nwith error:\n\n  {err}"
+            )
+        });
     }
     let roc_cmd_output = roc_cmd_child.wait_with_output().unwrap_or_else(|err| {
         panic!("Failed to get output for command\n\n  {cmd_str:?}\n\nwith error:\n\n  {err}")
@@ -65,7 +67,7 @@ impl CmdOut {
     pub fn assert_clean_success(&self) {
         self.assert_success_with_no_unexpected_errors();
     }
-    
+
     pub fn assert_zero_exit(&self) {
         assert!(self.status.success(), "Command failed\n\n{self}");
     }
@@ -80,12 +82,12 @@ impl CmdOut {
         assert!(self.status.success(), "Command failed\n\n{self}");
         assert_no_unexpected_error(&self.stderr);
     }
-    
+
     pub fn assert_clean_stdout(&self, expected_out: &str) {
         self.assert_clean_success();
-        
+
         let normalised_output = normalize_for_tests(&self.stdout);
-        
+
         assert_eq!(normalised_output, expected_out);
     }
 
@@ -108,7 +110,7 @@ impl CmdOut {
             ANSI_STYLE_CODES.reset,
         );
     }
-    
+
     pub fn normalize_stdout_and_stderr(&self) -> String {
         format!(
             "{}{}",
@@ -119,20 +121,19 @@ impl CmdOut {
 }
 
 pub fn assert_no_unexpected_error(stderr: &str) {
-    
     let mut stderr_part_clean = String::from(stderr);
-    
+
     let expected_errors = [
         "🔨 Building host ...\n",
         "ld: warning: -undefined dynamic_lookup may not work with chained fixups",
         "warning: ignoring debug info with an invalid version (0) in app\r\n",
     ];
     for expected_error in expected_errors {
-        stderr_part_clean = stderr_part_clean.replacen(&expected_error, "", 1);
+        stderr_part_clean = stderr_part_clean.replacen(expected_error, "", 1);
     }
-    
+
     let clean_stderr = stderr_part_clean.trim();
-    
+
     assert!(
         clean_stderr.is_empty(),
         "Unexpected error:\n{}",
@@ -152,15 +153,21 @@ fn normalize_for_tests(original_output: &str) -> String {
 
     // replace timings with a placeholder
     let replacement = " in <ignored for test> ms.";
-    part_normalized = TIMING_REGEX.replace_all(&part_normalized, replacement).into_owned();
+    part_normalized = TIMING_REGEX
+        .replace_all(&part_normalized, replacement)
+        .into_owned();
 
     // replace file paths with a placeholder
     let filepath_replacement = "[<ignored for tests>:$2]";
-    part_normalized = FILEPATH_REGEX.replace_all(&part_normalized, filepath_replacement).into_owned();
-    
+    part_normalized = FILEPATH_REGEX
+        .replace_all(&part_normalized, filepath_replacement)
+        .into_owned();
+
     // replace tip "You can run the program anyway ..." with a placeholder
     let run_anyway_replacement = "<ignored for tests>";
-    part_normalized = RUN_ANYWAY_REGEX.replace_all(&part_normalized, run_anyway_replacement).into_owned();
+    part_normalized = RUN_ANYWAY_REGEX
+        .replace_all(&part_normalized, run_anyway_replacement)
+        .into_owned();
 
     // replace error summary timings
     let error_summary_replacement = "$1 error and $2 warning found in <ignored for test> ms";
@@ -172,8 +179,11 @@ fn normalize_for_tests(original_output: &str) -> String {
 // Used by ^normalize_for_tests^
 lazy_static! {
     static ref TIMING_REGEX: Regex = Regex::new(r" in (\d+) ms\.").expect("Invalid regex pattern");
-    static ref FILEPATH_REGEX: Regex = Regex::new(r"\[([^:]+):(\d+)\]").expect("Invalid filepath regex pattern");
-    static ref RUN_ANYWAY_REGEX: Regex = Regex::new(r"the program anyway with\s+.*").expect("Invalid run anyway regex pattern");
-    static ref ERROR_SUMMARY_REGEX: Regex = Regex::new(r"(\d+) error(?:s)? and (\d+) warning(?:s)? found in \d+ ms")
-        .expect("Invalid error summary regex pattern");
+    static ref FILEPATH_REGEX: Regex =
+        Regex::new(r"\[([^:]+):(\d+)\]").expect("Invalid filepath regex pattern");
+    static ref RUN_ANYWAY_REGEX: Regex =
+        Regex::new(r"the program anyway with\s+.*").expect("Invalid run anyway regex pattern");
+    static ref ERROR_SUMMARY_REGEX: Regex =
+        Regex::new(r"(\d+) error(?:s)? and (\d+) warning(?:s)? found in \d+ ms")
+            .expect("Invalid error summary regex pattern");
 }

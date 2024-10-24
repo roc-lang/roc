@@ -7,6 +7,7 @@ use indoc::indoc;
 #[cfg(target_os = "linux")]
 static BUILD_ONCE: std::sync::Once = std::sync::Once::new();
 
+#[allow(dead_code)]
 const ZIG_PLATFORM_DIR: &str = "crates/valgrind_tests/zig-platform";
 
 #[cfg(target_os = "linux")]
@@ -71,19 +72,25 @@ fn valgrind_test(source: &str) {
     }
 }
 
+// used in linux valgrind tests
+#[allow(dead_code)]
 fn get_platform_main_roc_path() -> std::path::PathBuf {
     let zig_platform_dir = roc_command_utils::root_dir().join(ZIG_PLATFORM_DIR);
-    
+
     assert!(
         zig_platform_dir.exists(),
         "zig-platform directory does not exist: {:?}\n\tDid you change its name?",
         zig_platform_dir
     );
-    
+
     let pf_main_roc_path = zig_platform_dir.join("main.roc");
 
-    assert!(pf_main_roc_path.exists(), "Cannot find platform main.roc at {:?}", &pf_main_roc_path);
-    
+    assert!(
+        pf_main_roc_path.exists(),
+        "Cannot find platform main.roc at {:?}",
+        &pf_main_roc_path
+    );
+
     pf_main_roc_path
 }
 
@@ -125,8 +132,10 @@ fn valgrind_test_linux(source: &str) {
     }
 
     if !concat_header {
-        app_module_source =
-            app_module_source.replace("replace_me_platform_path", &pf_main_roc_path.display().to_string());
+        app_module_source = app_module_source.replace(
+            "replace_me_platform_path",
+            &pf_main_roc_path.display().to_string(),
+        );
     }
 
     let temp_dir = tempfile::tempdir().unwrap();
@@ -185,9 +194,9 @@ fn run_with_valgrind(binary_path: &std::path::Path) {
         "--errors-for-leak-kinds=definite,possible",
         binary_filename_only,
     ]);
-    
+
     let valgrind_out = run_command(valgrind_command, None);
-    
+
     valgrind_out.assert_zero_exit();
 }
 

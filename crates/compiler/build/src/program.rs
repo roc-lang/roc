@@ -107,8 +107,12 @@ pub fn gen_from_mono_module<'a>(
 
     match code_gen_options.backend {
         CodeGenBackend::Wasm => {
-            assert_ne!(*built_host_opt, BuiltHostOpt::None, "Wasm backend needs a built host.");
-            
+            assert_ne!(
+                *built_host_opt,
+                BuiltHostOpt::None,
+                "Wasm backend needs a built host."
+            );
+
             gen_from_mono_module_dev(
                 arena,
                 loaded,
@@ -117,17 +121,15 @@ pub fn gen_from_mono_module<'a>(
                 wasm_dev_stack_bytes,
                 AssemblyBackendMode::Binary, // dummy value, unused in practice
             )
-        },
-        CodeGenBackend::Assembly(backend_mode) => {
-            gen_from_mono_module_dev(
-                arena,
-                loaded,
-                target,
-                built_host_opt,
-                wasm_dev_stack_bytes,
-                backend_mode,
-            )
-        },
+        }
+        CodeGenBackend::Assembly(backend_mode) => gen_from_mono_module_dev(
+            arena,
+            loaded,
+            target,
+            built_host_opt,
+            wasm_dev_stack_bytes,
+            backend_mode,
+        ),
         CodeGenBackend::Llvm(backend_mode) => gen_from_mono_module_llvm(
             arena,
             loaded,
@@ -867,12 +869,11 @@ fn build_loaded_file<'a>(
 
     let dll_stub_symbols =
         roc_linker::ExposedSymbols::from_exposed_to_host(&loaded.interns, &loaded.exposed_to_host);
-    
+
     let built_host_opt =
         // Not sure if this is correct for all calls with LinkType::Dylib...
         if link_type != LinkType::Dylib {
             let prebuilt_host = determine_built_host_path(&platform_main_roc_path, target, build_host_requested, link_type, linking_strategy, suppress_build_host_warning);
-            
 
             match prebuilt_host {
                 BuiltHostOpt::None => {
@@ -884,7 +885,7 @@ fn build_loaded_file<'a>(
                         &platform_main_roc_path,
                         &output_exe_path,
                         target,
-                    ) 
+                    )
                 }
                 BuiltHostOpt::Surgical(ref surgical_artifacts) => {
                     // Copy preprocessed host to executable location.
@@ -1056,12 +1057,12 @@ fn build_loaded_file<'a>(
 }
 
 fn determine_built_host_path(
-    platform_main_roc_path: &PathBuf,
+    platform_main_roc_path: &Path,
     target: Target,
     build_host_requested: bool,
     link_type: LinkType,
     linking_strategy: LinkingStrategy,
-    suppress_build_host_warning : bool,
+    suppress_build_host_warning: bool,
 ) -> BuiltHostOpt {
     if build_host_requested {
         if !suppress_build_host_warning {
@@ -1069,11 +1070,9 @@ fn determine_built_host_path(
             //report_rebuilding_existing_host(&preprocessed_host.to_string_lossy());
             unimplemented!()
         }
-        
+
         match link_type {
-            LinkType::Executable => {
-                return BuiltHostOpt::None;
-            }
+            LinkType::Executable => BuiltHostOpt::None,
             LinkType::Dylib => {
                 eprintln!("You asked me to build the host, but I don't know how to rebuild a host for a dynamic library.");
                 std::process::exit(1);
@@ -1086,28 +1085,25 @@ fn determine_built_host_path(
     } else {
         match linking_strategy {
             LinkingStrategy::Legacy => {
-                let legacy_host_path_res = target.find_legacy_host(&platform_main_roc_path);
-                
+                let legacy_host_path_res = target.find_legacy_host(platform_main_roc_path);
+
                 match legacy_host_path_res {
-                    Ok(legacy_host_path) => return BuiltHostOpt::Legacy(legacy_host_path),
+                    Ok(legacy_host_path) => BuiltHostOpt::Legacy(legacy_host_path),
                     Err(err_msg) => {
-                        eprintln!(
-                            "Legacy linking failed: {}",
-                            err_msg
-                        );
+                        eprintln!("Legacy linking failed: {}", err_msg);
                         #[cfg(target_os = "linux")]
-                        eprintln!("\n    TIP: Maybe try surgical linking with the flag --linker=surgical");
+                        eprintln!(
+                            "\n    TIP: Maybe try surgical linking with the flag --linker=surgical"
+                        );
                         std::process::exit(1);
                     }
                 }
             }
             LinkingStrategy::Surgical => {
-                let surgical_artifacts = target.find_surgical_host(&platform_main_roc_path);
-                
+                let surgical_artifacts = target.find_surgical_host(platform_main_roc_path);
+
                 match surgical_artifacts {
-                    Ok(surgical_artifacts) => {
-                        return BuiltHostOpt::Surgical(surgical_artifacts);
-                    }
+                    Ok(surgical_artifacts) => BuiltHostOpt::Surgical(surgical_artifacts),
                     Err(paths_str) => {
                         // TODO improve error message
                         eprintln!(
@@ -1172,6 +1168,7 @@ fn get_exe_path(
     }
 }
 
+#[allow(dead_code)]
 fn report_rebuilding_existing_host(host_path: &str) {
     eprintln!(
         indoc::indoc!(
@@ -1190,6 +1187,7 @@ fn report_rebuilding_existing_host(host_path: &str) {
     );
 }
 
+#[allow(dead_code)]
 fn report_rebuilding_missing_host(host_path: &str) {
     eprintln!(
         indoc::indoc!(
@@ -1207,6 +1205,7 @@ fn report_rebuilding_missing_host(host_path: &str) {
     );
 }
 
+#[allow(dead_code)]
 fn report_missing_prebuilt_host(msg: &str) {
     eprintln!(
         indoc::indoc!(
@@ -1224,6 +1223,7 @@ fn report_missing_prebuilt_host(msg: &str) {
     );
 }
 
+#[allow(dead_code)]
 fn report_refusing_to_rebuild_host(host_path: &str) {
     eprintln!(
         indoc::indoc!(
