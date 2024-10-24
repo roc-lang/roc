@@ -635,6 +635,10 @@ impl Constraints {
         Constraint::FxSuffix(constraint_index)
     }
 
+    pub fn flex_to_pure(&mut self, fx_var: Variable) -> Constraint {
+        Constraint::FlexToPure(fx_var)
+    }
+
     pub fn contains_save_the_environment(&self, constraint: &Constraint) -> bool {
         match constraint {
             Constraint::SaveTheEnvironment => true,

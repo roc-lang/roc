@@ -234,6 +234,7 @@ fn constrain_untyped_closure(
             ret_constraint,
             Generalizable(true),
         ),
+        constraints.and_constraint(pattern_state.delayed_fx_suffix_constraints),
         constraints.equal_types_with_storage(
             function_type,
             expected,
@@ -243,7 +244,7 @@ fn constrain_untyped_closure(
         ),
         early_returns_constraint,
         closure_constraint,
-        Constraint::FlexToPure(fx_var),
+        constraints.flex_to_pure(fx_var),
     ];
 
     constraints.exists_many(vars, cons)
@@ -2029,6 +2030,7 @@ fn constrain_function_def(
                 vars: Vec::with_capacity(function_def.arguments.len()),
                 constraints: Vec::with_capacity(1),
                 delayed_is_open_constraints: vec![],
+                delayed_fx_suffix_constraints: Vec::with_capacity(function_def.arguments.len()),
             };
             let mut vars = Vec::with_capacity(argument_pattern_state.vars.capacity() + 1);
             let closure_var = function_def.closure_type;
@@ -2171,9 +2173,12 @@ fn constrain_function_def(
                     Category::Lambda,
                     region,
                 ),
+                // Check argument suffixes against usage
+                constraints.and_constraint(argument_pattern_state.delayed_fx_suffix_constraints),
                 // Finally put the solved closure type into the dedicated def expr variable.
                 constraints.store(signature_index, expr_var, std::file!(), std::line!()),
                 closure_constraint,
+                constraints.flex_to_pure(function_def.fx_type),
             ];
 
             let expr_con = constraints.exists_many(vars, cons);
@@ -2488,6 +2493,7 @@ fn constrain_when_branch_help(
         vars: Vec::with_capacity(2),
         constraints: Vec::with_capacity(2),
         delayed_is_open_constraints: Vec::new(),
+        delayed_fx_suffix_constraints: Vec::new(),
     };
 
     for (i, loc_pattern) in when_branch.patterns.iter().enumerate() {
@@ -2512,6 +2518,9 @@ fn constrain_when_branch_help(
         state
             .delayed_is_open_constraints
             .extend(partial_state.delayed_is_open_constraints);
+        state
+            .delayed_fx_suffix_constraints
+            .extend(partial_state.delayed_fx_suffix_constraints);
 
         if i == 0 {
             state.headers.extend(partial_state.headers);
@@ -2840,6 +2849,7 @@ pub(crate) fn constrain_def_pattern(
         vars: Vec::with_capacity(1),
         constraints: Vec::with_capacity(1),
         delayed_is_open_constraints: vec![],
+        delayed_fx_suffix_constraints: vec![],
     };
 
     constrain_pattern(
@@ -2949,6 +2959,7 @@ fn constrain_typed_def(
                 vars: Vec::with_capacity(arguments.len()),
                 constraints: Vec::with_capacity(1),
                 delayed_is_open_constraints: vec![],
+                delayed_fx_suffix_constraints: Vec::with_capacity(arguments.len()),
             };
             let mut vars = Vec::with_capacity(argument_pattern_state.vars.capacity() + 1);
             let ret_var = *ret_var;
@@ -3032,6 +3043,8 @@ fn constrain_typed_def(
                     // This is a syntactic function, it can be generalized
                     Generalizable(true),
                 ),
+                // Check argument suffixes against usage
+                constraints.and_constraint(argument_pattern_state.delayed_fx_suffix_constraints),
                 // Store the inferred ret var into the function type now, so that
                 // when we check that the solved function type matches the annotation, we can
                 // display the fully inferred return variable.
@@ -3047,7 +3060,7 @@ fn constrain_typed_def(
                 constraints.store(signature_index, *fn_var, std::file!(), std::line!()),
                 constraints.store(signature_index, expr_var, std::file!(), std::line!()),
                 closure_constraint,
-                Constraint::FlexToPure(fx_var),
+                constraints.flex_to_pure(fx_var),
             ];
 
             let expr_con = constraints.exists_many(vars, cons);
@@ -3933,6 +3946,7 @@ fn constraint_recursive_function(
                 vars: Vec::with_capacity(function_def.arguments.len()),
                 constraints: Vec::with_capacity(1),
                 delayed_is_open_constraints: vec![],
+                delayed_fx_suffix_constraints: Vec::with_capacity(function_def.arguments.len()),
             };
             let mut vars = Vec::with_capacity(argument_pattern_state.vars.capacity() + 1);
             let ret_var = function_def.return_type;
@@ -4022,13 +4036,15 @@ fn constraint_recursive_function(
                     // Syntactic function can be generalized
                     Generalizable(true),
                 ),
+                // Check argument suffixes against usage
+                constraints.and_constraint(argument_pattern_state.delayed_fx_suffix_constraints),
                 constraints.equal_types(fn_type, annotation_expected, Category::Lambda, region),
                 // "fn_var is equal to the closure's type" - fn_var is used in code gen
                 // Store type into AST vars. We use Store so errors aren't reported twice
                 constraints.store(signature_index, expr_var, std::file!(), std::line!()),
                 constraints.store(ret_type_index, ret_var, std::file!(), std::line!()),
                 closure_constraint,
-                Constraint::FlexToPure(fx_var),
+                constraints.flex_to_pure(fx_var),
             ];
 
             let and_constraint = constraints.and_constraint(cons);
@@ -4502,6 +4518,7 @@ fn rec_defs_help(
                             vars: Vec::with_capacity(arguments.len()),
                             constraints: Vec::with_capacity(1),
                             delayed_is_open_constraints: vec![],
+                            delayed_fx_suffix_constraints: Vec::with_capacity(arguments.len()),
                         };
                         let mut vars =
                             Vec::with_capacity(argument_pattern_state.vars.capacity() + 1);
@@ -4578,6 +4595,10 @@ fn rec_defs_help(
                                 expr_con,
                                 generalizable,
                             ),
+                            // Check argument suffixes against usage
+                            constraints.and_constraint(
+                                argument_pattern_state.delayed_fx_suffix_constraints,
+                            ),
                             constraints.equal_types(
                                 fn_type_index,
                                 expected_index,
@@ -4595,6 +4616,7 @@ fn rec_defs_help(
                             ),
                             constraints.store(ret_type_index, ret_var, std::file!(), std::line!()),
                             closure_constraint,
+                            constraints.flex_to_pure(fx_var),
                         ];
 
                         let and_constraint = constraints.and_constraint(cons);

@@ -452,7 +452,7 @@ fn solve(
 
                     new_scope.insert_symbol_var_if_vacant(*symbol, loc_var.value);
 
-                    check_ident_suffix(
+                    solve_suffix_fx(
                         env,
                         problems,
                         FxSuffixKind::Let(*symbol),
@@ -853,7 +853,7 @@ fn solve(
                     *type_index,
                 );
 
-                check_ident_suffix(env, problems, *kind, actual, region);
+                solve_suffix_fx(env, problems, *kind, actual, region);
                 state
             }
             EffectfulStmt(variable, region) => {
@@ -1622,7 +1622,7 @@ fn solve(
     state
 }
 
-fn check_ident_suffix(
+fn solve_suffix_fx(
     env: &mut InferenceEnv<'_>,
     problems: &mut Vec<TypeError>,
     kind: FxSuffixKind,
@@ -1634,20 +1634,36 @@ fn check_ident_suffix(
             if let Content::Structure(FlatType::Func(_, _, _, fx)) =
                 env.subs.get_content_without_compacting(variable)
             {
-                if let Content::Effectful = env.subs.get_content_without_compacting(*fx) {
-                    problems.push(TypeError::UnsuffixedEffectfulFunction(*region, kind));
+                let fx = *fx;
+                match env.subs.get_content_without_compacting(fx) {
+                    Content::Effectful => {
+                        problems.push(TypeError::UnsuffixedEffectfulFunction(*region, kind));
+                    }
+                    Content::FlexVar(_) => {
+                        env.subs.set_content(fx, Content::Pure);
+                    }
+                    _ => {}
                 }
             }
         }
-        IdentSuffix::Bang => {
-            if let Content::Structure(FlatType::Func(_, _, _, fx)) =
-                env.subs.get_content_without_compacting(variable)
-            {
-                if let Content::Pure = env.subs.get_content_without_compacting(*fx) {
-                    problems.push(TypeError::SuffixedPureFunction(*region, kind));
+        IdentSuffix::Bang => match env.subs.get_content_without_compacting(variable) {
+            Content::Structure(FlatType::Func(_, _, _, fx)) => {
+                let fx = *fx;
+                match env.subs.get_content_without_compacting(fx) {
+                    Content::Pure => {
+                        problems.push(TypeError::SuffixedPureFunction(*region, kind));
+                    }
+                    Content::FlexVar(_) => {
+                        env.subs.set_content(fx, Content::Effectful);
+                    }
+                    _ => {}
                 }
             }
-        }
+            Content::FlexVar(_) => {
+                // [purity-inference] TODO: Require effectful fn
+            }
+            _ => {}
+        },
     }
 }
 

@@ -15275,4 +15275,91 @@ All branches in an `if` must have the same type!
     Hint: Did you forget to run an effect? Is the type annotation wrong?
     "###
     );
+
+    test_report!(
+        fx_passed_to_untyped_pure_hof,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                pureHigherOrder Effect.putLine! "hi"
+
+            pureHigherOrder = \f, x -> f x
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+
+    This 1st argument to `pureHigherOrder` has an unexpected type:
+
+    6│      pureHigherOrder Effect.putLine! "hi"
+                            ^^^^^^^^^^^^^^^
+
+    This `Effect.putLine!` value is a:
+
+        Str => {}
+
+    But `pureHigherOrder` needs its 1st argument to be:
+
+        Str -> {}
+
+    ── UNNECESSARY EXCLAMATION in /code/proj/Main.roc ──────────────────────────────
+
+    This function is pure, but its name suggests otherwise:
+
+    5│  main! = \{} ->
+        ^^^^^
+
+    The exclamation mark at the end is reserved for effectful functions.
+
+    Hint: Did you forget to run an effect? Is the type annotation wrong?
+    "###
+    );
+
+    test_report!(
+        fx_passed_to_partially_inferred_pure_hof,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                pureHigherOrder Effect.putLine! "hi"
+
+            pureHigherOrder : _, _ -> _
+            pureHigherOrder = \f, x -> f x
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+
+    This 1st argument to `pureHigherOrder` has an unexpected type:
+
+    6│      pureHigherOrder Effect.putLine! "hi"
+                            ^^^^^^^^^^^^^^^
+
+    This `Effect.putLine!` value is a:
+
+        Str => {}
+
+    But `pureHigherOrder` needs its 1st argument to be:
+
+        Str -> {}
+
+    ── UNNECESSARY EXCLAMATION in /code/proj/Main.roc ──────────────────────────────
+
+    This function is pure, but its name suggests otherwise:
+
+    5│  main! = \{} ->
+        ^^^^^
+
+    The exclamation mark at the end is reserved for effectful functions.
+
+    Hint: Did you forget to run an effect? Is the type annotation wrong?
+    "###
+    );
 }
