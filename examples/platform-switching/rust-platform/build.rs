@@ -30,8 +30,8 @@ fn main() {
     // copy the dylib to the output build cache
     std::fs::copy(lib_app, out_path).unwrap();
 
-    // Search for static libraries in the cache directory
-    println!("cargo:rustc-link-search=native={out_dir}");
+    // Search for the dylib in the cache directory
+    println!("cargo:rustc-link-search={out_dir}");
 }
 
 pub fn workspace_root() -> PathBuf {
