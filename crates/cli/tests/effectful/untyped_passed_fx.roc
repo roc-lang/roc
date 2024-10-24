@@ -6,7 +6,6 @@ main! : {} => {}
 main! = \{} ->
     logged! "hello" (\{} -> Effect.putLine! "Hello, World!")
 
-
 logged! = \name, fx! ->
     Effect.putLine! "Before $(name)"
     fx! {}
