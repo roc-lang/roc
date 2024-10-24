@@ -112,6 +112,7 @@ fn def<'a>(c: &Ctx, f: &'a Arena<'a>, d: &'a Def) -> DocBuilder<'a, Arena<'a>> {
 
     match kind {
         DefKind::Let => def_help(c, f, &loc_pattern.value, &loc_expr.value),
+        DefKind::Ignored(_) => def_help(c, f, &loc_pattern.value, &loc_expr.value),
         DefKind::Stmt(_) => expr(c, EPrec::Free, f, &loc_expr.value),
     }
 }

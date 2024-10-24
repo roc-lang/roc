@@ -8,8 +8,8 @@ use crate::builtins::{
 use crate::pattern::{constrain_pattern, PatternState};
 use roc_can::annotation::IntroducedVariables;
 use roc_can::constraint::{
-    Constraint, Constraints, ExpectedTypeIndex, FxCallKind, FxExpectation, Generalizable,
-    OpportunisticResolve, TypeOrVar,
+    Constraint, Constraints, ExpectEffectfulReason, ExpectedTypeIndex, FxCallKind, FxExpectation,
+    Generalizable, OpportunisticResolve, TypeOrVar,
 };
 use roc_can::def::{Def, DefKind};
 use roc_can::exhaustive::{sketch_pattern_to_rows, sketch_when_branches, ExhaustiveContext};
@@ -1458,9 +1458,12 @@ pub fn constrain_expr(
 
             while let Some(def) = stack.pop() {
                 body_con = match def.kind {
-                    DefKind::Let => constrain_let_def(types, constraints, env, def, body_con),
+                    DefKind::Let => constrain_let_def(types, constraints, env, def, body_con, None),
                     DefKind::Stmt(fx_var) => {
                         constrain_stmt_def(types, constraints, env, def, body_con, fx_var)
+                    }
+                    DefKind::Ignored(fx_var) => {
+                        constrain_let_def(types, constraints, env, def, body_con, Some(fx_var))
                     }
                 };
             }
@@ -3434,6 +3437,7 @@ fn constrain_let_def(
     env: &mut Env,
     def: &Def,
     body_con: Constraint,
+    ignored_fx_var: Option<Variable>,
 ) -> Constraint {
     match &def.annotation {
         Some(annotation) => constrain_typed_def(types, constraints, env, def, body_con, annotation),
@@ -3448,14 +3452,49 @@ fn constrain_let_def(
             // no annotation, so no extra work with rigids
 
             let expected = constraints.push_expected_type(NoExpectation(expr_type_index));
-            let expr_con = constrain_expr(
-                types,
-                constraints,
-                env,
-                def.loc_expr.region,
-                &def.loc_expr.value,
-                expected,
-            );
+
+            let expr_con = match ignored_fx_var {
+                None => constrain_expr(
+                    types,
+                    constraints,
+                    env,
+                    def.loc_expr.region,
+                    &def.loc_expr.value,
+                    expected,
+                ),
+                Some(fx_var) => {
+                    let expr_con = env.with_fx_expectation(fx_var, None, |env| {
+                        constrain_expr(
+                            types,
+                            constraints,
+                            env,
+                            def.loc_expr.region,
+                            &def.loc_expr.value,
+                            expected,
+                        )
+                    });
+
+                    // Ignored def must be effectful, otherwise it's dead code
+                    let effectful_constraint = Constraint::ExpectEffectful(
+                        fx_var,
+                        ExpectEffectfulReason::Ignored,
+                        def.loc_pattern.region,
+                    );
+
+                    let enclosing_fx_constraint = constraints.fx_call(
+                        fx_var,
+                        FxCallKind::Ignored,
+                        def.loc_pattern.region,
+                        env.fx_expectation,
+                    );
+
+                    constraints.and_constraint([
+                        expr_con,
+                        enclosing_fx_constraint,
+                        effectful_constraint,
+                    ])
+                }
+            };
             let expr_con = attach_resolution_constraints(constraints, env, expr_con);
 
             let generalizable = Generalizable(is_generalizable_expr(&def.loc_expr.value));
@@ -3528,7 +3567,8 @@ fn constrain_stmt_def(
     );
 
     // Stmt expr must be effectful, otherwise it's dead code
-    let effectful_constraint = Constraint::EffectfulStmt(fx_var, region);
+    let effectful_constraint =
+        Constraint::ExpectEffectful(fx_var, ExpectEffectfulReason::Stmt, region);
 
     let fx_call_kind = match fn_name {
         None => FxCallKind::Stmt,

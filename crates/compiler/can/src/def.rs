@@ -97,6 +97,8 @@ pub enum DefKind {
     Let,
     /// A standalone statement with an fx variable
     Stmt(Variable),
+    /// Ignored result, must be effectful
+    Ignored(Variable),
 }
 
 impl DefKind {
@@ -104,6 +106,19 @@ impl DefKind {
         match self {
             DefKind::Let => DefKind::Let,
             DefKind::Stmt(v) => DefKind::Stmt(f(v)),
+            DefKind::Ignored(v) => DefKind::Ignored(f(v)),
+        }
+    }
+
+    pub fn from_pattern(var_store: &mut VarStore, pattern: &Loc<Pattern>) -> Self {
+        if BindingsFromPattern::new(pattern)
+            .peekable()
+            .peek()
+            .is_none()
+        {
+            DefKind::Ignored(var_store.fresh())
+        } else {
+            DefKind::Let
         }
     }
 }
@@ -1212,11 +1227,7 @@ fn canonicalize_value_defs<'a>(
 
     for (def_index, pending_def) in pending_value_defs.iter().enumerate() {
         if let Some(loc_pattern) = pending_def.loc_pattern() {
-            let mut new_bindings = BindingsFromPattern::new(loc_pattern).peekable();
-
-            if new_bindings.peek().is_none() {
-                env.problem(Problem::NoIdentifiersIntroduced(loc_pattern.region));
-            }
+            let new_bindings = BindingsFromPattern::new(loc_pattern).peekable();
 
             for (s, r) in new_bindings {
                 // store the top-level defs, used to ensure that closures won't capture them
@@ -2439,6 +2450,8 @@ fn canonicalize_pending_value_def<'a>(
         }
         Body(loc_can_pattern, loc_expr) => {
             //
+            let def_kind = DefKind::from_pattern(var_store, &loc_can_pattern);
+
             canonicalize_pending_body(
                 env,
                 output,
@@ -2447,7 +2460,7 @@ fn canonicalize_pending_value_def<'a>(
                 loc_can_pattern,
                 loc_expr,
                 None,
-                DefKind::Let,
+                def_kind,
             )
         }
         Stmt(loc_expr) => {

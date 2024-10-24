@@ -4,7 +4,7 @@ use crate::error::canonicalize::{to_circular_def_doc, CIRCULAR_DEF};
 use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder};
 use itertools::EitherOrBoth;
 use itertools::Itertools;
-use roc_can::constraint::{FxCallKind, FxSuffixKind};
+use roc_can::constraint::{ExpectEffectfulReason, FxCallKind, FxSuffixKind};
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{HumanIndex, MutSet, SendMap};
 use roc_collections::VecMap;
@@ -368,7 +368,7 @@ pub fn type_problem<'b>(
                 severity,
             })
         }
-        PureStmt(region) => {
+        ExpectedEffectful(region, ExpectEffectfulReason::Stmt) => {
             let stack = [
                 alloc.reflow("This statement does not produce any effects:"),
                 alloc.region(lines.convert_region(region), severity),
@@ -379,6 +379,20 @@ pub fn type_problem<'b>(
             ];
             Some(Report {
                 title: "LEFTOVER STATEMENT".to_string(),
+                filename,
+                doc: alloc.stack(stack),
+                severity,
+            })
+        }
+        ExpectedEffectful(region, ExpectEffectfulReason::Ignored) => {
+            let stack = [
+                alloc.reflow("This assignment doesn't introduce any new variables:"),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.reflow("Since it doesn't call any effectful functions, this assignment cannot affect the program's behavior. If you don't need to use the value on the right-hand-side, consider removing the assignment.")
+            ];
+
+            Some(Report {
+                title: "UNNECESSARY DEFINITION".to_string(),
                 filename,
                 doc: alloc.stack(stack),
                 severity,
@@ -5522,5 +5536,6 @@ fn describe_fx_call_kind<'b>(
         ]),
         FxCallKind::Call(None) => alloc.reflow("This expression calls an effectful function:"),
         FxCallKind::Stmt => alloc.reflow("This statement calls an effectful function:"),
+        FxCallKind::Ignored => alloc.reflow("This ignored def calls an effectful function:"),
     }
 }
