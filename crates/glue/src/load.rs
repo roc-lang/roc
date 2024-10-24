@@ -10,7 +10,7 @@ use roc_build::{
     },
 };
 use roc_collections::MutMap;
-use roc_error_macros::todo_lambda_erasure;
+use roc_error_macros::{internal_error, todo_lambda_erasure};
 use roc_gen_llvm::run_roc::RocCallResult;
 use roc_load::{ExecutionMode, FunctionKind, LoadConfig, LoadedModule, LoadingProblem, Threading};
 use roc_mono::ir::{generate_glue_procs, CrashTag, GlueProc, OptLevel};
@@ -324,6 +324,7 @@ fn number_lambda_sets(subs: &Subs, initial: Variable) -> Vec<Variable> {
 
                 EmptyRecord => (),
                 EmptyTagUnion => (),
+                EffectfulFunc => internal_error!(),
 
                 Record(fields, ext) => {
                     let fields = *fields;

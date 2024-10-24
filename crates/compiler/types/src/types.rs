@@ -3660,6 +3660,7 @@ pub enum ErrorType {
     /// If the name was auto-generated, it will start with a `#`.
     FlexVar(Lowercase),
     RigidVar(Lowercase),
+    EffectfulFunc,
     /// If the name was auto-generated, it will start with a `#`.
     FlexAbleVar(Lowercase, AbilitySet),
     RigidAbleVar(Lowercase, AbilitySet),
@@ -3750,6 +3751,7 @@ impl ErrorType {
                     t.add_names(taken);
                 });
             }
+            EffectfulFunc => {}
             Error => {}
         }
     }
@@ -3902,6 +3904,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
                 buf.push(')');
             }
         }
+        EffectfulFunc => buf.push_str("EffectfulFunc"),
         Type(symbol, arguments) => {
             let write_parens = parens == Parens::InTypeParam && !arguments.is_empty();
 

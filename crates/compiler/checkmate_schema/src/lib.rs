@@ -99,6 +99,7 @@ impl_content! {
     },
     EmptyRecord {},
     EmptyTagUnion {},
+    EffectfulFunc {},
     RangedNumber {
         range: NumericRange,
     },

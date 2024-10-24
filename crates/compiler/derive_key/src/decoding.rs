@@ -81,7 +81,7 @@ impl FlatDecodable {
                     Err(Underivable) // yet
                 }
                 //
-                FlatType::Func(..) => Err(Underivable),
+                FlatType::Func(..) | FlatType::EffectfulFunc => Err(Underivable),
             },
             Content::Alias(sym, _, real_var, _) => match from_builtin_symbol(sym) {
                 Some(lambda) => lambda,

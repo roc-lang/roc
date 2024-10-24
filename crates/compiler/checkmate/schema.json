@@ -517,6 +517,20 @@
         {
           "type": "object",
           "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "EffectfulFunc"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
             "range",
             "type"
           ],

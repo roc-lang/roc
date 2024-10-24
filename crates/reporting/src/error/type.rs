@@ -2767,6 +2767,8 @@ fn to_doc_help<'b>(
             alloc.type_variable(lowercase)
         }
 
+        EffectfulFunc => alloc.text("effectful function"),
+
         Type(symbol, args) => report_text::apply(
             alloc,
             parens,
@@ -2961,6 +2963,7 @@ fn count_generated_name_usages<'a>(
             RigidVar(name) | RigidAbleVar(name, _) => {
                 debug_assert!(!is_generated_name(name));
             }
+            EffectfulFunc => {}
             Type(_, tys) => {
                 stack.extend(tys.iter().map(|t| (t, only_unseen)));
             }
@@ -3820,7 +3823,9 @@ fn should_show_diff(t1: &ErrorType, t2: &ErrorType) -> bool {
         | (RecursiveTagUnion(_, _, _, _), _)
         | (_, RecursiveTagUnion(_, _, _, _))
         | (Function(_, _, _, _), _)
-        | (_, Function(_, _, _, _)) => true,
+        | (_, Function(_, _, _, _))
+        | (EffectfulFunc, _)
+        | (_, EffectfulFunc) => true,
     }
 }
 
@@ -4861,7 +4866,7 @@ fn type_problem_to_pretty<'b>(
             };
 
             match tipe {
-                Infinite | Error | FlexVar(_) => alloc.nil(),
+                Infinite | Error | FlexVar(_) | EffectfulFunc => alloc.nil(),
                 FlexAbleVar(_, other_abilities) => {
                     rigid_able_vs_different_flex_able(x, abilities, other_abilities)
                 }
@@ -4954,6 +4959,7 @@ fn type_problem_to_pretty<'b>(
                     };
                     bad_rigid_var(x, msg)
                 }
+                EffectfulFunc => alloc.reflow("an effectful function"),
                 RigidVar(y) | RigidAbleVar(y, _) => bad_double_rigid(x, y),
                 Function(_, _, _, _) => bad_rigid_var(x, alloc.reflow("a function value")),
                 Record(_, _) => bad_rigid_var(x, alloc.reflow("a record value")),

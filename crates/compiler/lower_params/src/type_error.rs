@@ -210,6 +210,7 @@ fn drop_last_argument(err_type: &mut ErrorType) {
         | ErrorType::RecursiveTagUnion(_, _, _, _)
         | ErrorType::Alias(_, _, _, _)
         | ErrorType::Range(_)
-        | ErrorType::Error => {}
+        | ErrorType::Error
+        | ErrorType::EffectfulFunc => {}
     }
 }

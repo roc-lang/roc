@@ -3334,6 +3334,17 @@ fn unify_flat_type<M: MetaCollector>(
 
             outcome
         }
+        (EffectfulFunc, Func(args, closure, ret, fx)) => {
+            let mut outcome = unify_pool(env, pool, Variable::EFFECTFUL, *fx, ctx.mode);
+
+            outcome.union(merge(
+                env,
+                ctx,
+                Structure(Func(*args, *closure, *ret, Variable::EFFECTFUL)),
+            ));
+
+            outcome
+        }
         (FunctionOrTagUnion(tag_names, tag_symbols, ext), Func(args, closure, ret, fx)) => {
             unify_function_or_tag_union_and_func(
                 env,

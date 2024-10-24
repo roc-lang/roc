@@ -15,6 +15,7 @@ use roc_module::symbol::{Interns, ModuleId, Symbol};
 pub static WILDCARD: &str = "*";
 static EMPTY_RECORD: &str = "{}";
 static EMPTY_TAG_UNION: &str = "[]";
+static EFFECTFUL_FUNC: &str = "! : ... => ?";
 
 /// Requirements for parentheses.
 ///
@@ -217,6 +218,7 @@ fn find_names_needed(
                 find_under_alias,
             );
         }
+        Structure(EffectfulFunc) => {}
         Structure(Record(sorted_fields, ext_var)) => {
             for index in sorted_fields.iter_variables() {
                 let var = subs[index];
@@ -1139,6 +1141,7 @@ fn write_flat_type<'a>(
             parens,
             pol,
         ),
+        EffectfulFunc => buf.push_str(EFFECTFUL_FUNC),
         Record(fields, ext_var) => {
             use crate::types::{gather_fields, RecordStructure};
 

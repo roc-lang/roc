@@ -1340,7 +1340,8 @@ fn add_type_help<'a>(
         Content::FlexVar(_)
         | Content::RigidVar(_)
         | Content::FlexAbleVar(_, _)
-        | Content::RigidAbleVar(_, _) => {
+        | Content::RigidAbleVar(_, _)
+        | Content::Structure(FlatType::EffectfulFunc) => {
             todo!("TODO give a nice error message for a non-concrete type being passed to the host")
         }
         Content::Structure(FlatType::Tuple(..)) => {

@@ -127,6 +127,7 @@ impl AsSchema<Content> for subs::FlatType {
             ),
             subs::FlatType::EmptyRecord => Content::EmptyRecord(),
             subs::FlatType::EmptyTagUnion => Content::EmptyTagUnion(),
+            subs::FlatType::EffectfulFunc => Content::EffectfulFunc(),
         }
     }
 }
