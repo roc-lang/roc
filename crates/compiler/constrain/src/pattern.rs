@@ -6,7 +6,7 @@ use roc_can::pattern::Pattern::{self, *};
 use roc_can::pattern::{DestructType, ListPatterns, RecordDestruct, TupleDestruct};
 use roc_collections::all::{HumanIndex, SendMap};
 use roc_collections::VecMap;
-use roc_module::ident::Lowercase;
+use roc_module::ident::{IdentSuffix, Lowercase};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
@@ -299,12 +299,25 @@ pub fn constrain_pattern_help(
                     .push(constraints.is_open_type(type_index));
             }
 
+            // Identifiers introduced in nested patterns get let constraints
+            // and therefore don't need fx_pattern_suffix constraints.
             if is_shallow {
-                // Identifiers introduced in nested patterns get let constraints
-                // and therefore don't need fx_pattern_suffix constraints.
-                state
-                    .delayed_fx_suffix_constraints
-                    .push(constraints.fx_pattern_suffix(*symbol, type_index, region));
+                match symbol.suffix() {
+                    IdentSuffix::None => {
+                        // Unsuffixed identifiers should be constrained after we know if they're functions
+                        state
+                            .delayed_fx_suffix_constraints
+                            .push(constraints.fx_pattern_suffix(*symbol, type_index, region));
+                    }
+                    IdentSuffix::Bang => {
+                        // Bang suffixed identifiers are always required to be functions
+                        // We constrain this before the function's body,
+                        // so that we don't think it's pure and complain about leftover statements
+                        state
+                            .constraints
+                            .push(constraints.fx_pattern_suffix(*symbol, type_index, region));
+                    }
+                }
             }
 
             state.headers.insert(

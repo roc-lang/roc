@@ -131,7 +131,10 @@ impl FlatInspectable {
                 FlatType::Func(..) => {
                     Immediate(Symbol::INSPECT_FUNCTION)
                 }
-                FlatType::EmptyTuple => unreachable!("Somehow Inspect derivation got an expression that's an empty tuple, which shouldn't be possible!"),
+                FlatType::EmptyTuple=> unreachable!("Somehow Inspect derivation got an expression that's an empty tuple, which shouldn't be possible!"),
+                FlatType::EffectfulFunc => {
+                    unreachable!("There must have been a bug in the solver, because we're trying to derive Inspect on a non-concrete type.");
+                },
             },
             Content::Alias(sym, _, real_var, kind) => match Self::from_builtin_alias(sym) {
                 Some(lambda) => lambda,

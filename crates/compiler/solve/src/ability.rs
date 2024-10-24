@@ -789,6 +789,12 @@ trait DerivableVisitor {
                     EmptyRecord => Self::visit_empty_record(var)?,
                     EmptyTuple => Self::visit_empty_tuple(var)?,
                     EmptyTagUnion => Self::visit_empty_tag_union(var)?,
+                    EffectfulFunc => {
+                        return Err(NotDerivable {
+                            var,
+                            context: NotDerivableContext::NoContext,
+                        })
+                    }
                 },
                 Alias(
                     Symbol::NUM_NUM | Symbol::NUM_INTEGER,

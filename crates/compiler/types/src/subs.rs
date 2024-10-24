@@ -834,6 +834,7 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
         FlatType::EmptyRecord => write!(f, "EmptyRecord"),
         FlatType::EmptyTuple => write!(f, "EmptyTuple"),
         FlatType::EmptyTagUnion => write!(f, "EmptyTagUnion"),
+        FlatType::EffectfulFunc => write!(f, "EffectfulFunc"),
     }
 }
 
@@ -2585,6 +2586,8 @@ impl TagExt {
 pub enum FlatType {
     Apply(Symbol, VariableSubsSlice),
     Func(VariableSubsSlice, Variable, Variable, Variable),
+    /// A function that we know nothing about yet except that it's effectful
+    EffectfulFunc,
     Record(RecordFields, Variable),
     Tuple(TupleElems, Variable),
     TagUnion(UnionTags, TagExt),
@@ -3494,7 +3497,7 @@ fn occurs(
 
                     short_circuit_help(subs, root_var, ctx, ext_var)
                 }
-                EmptyRecord | EmptyTuple | EmptyTagUnion => Ok(()),
+                EmptyRecord | EmptyTuple | EmptyTagUnion | EffectfulFunc => Ok(()),
             },
             Alias(_, args, _, _) => {
                 // THEORY: we only need to explore the args, as that is the surface of all
@@ -3688,7 +3691,7 @@ fn explicit_substitute(
                         subs.set_content(in_var, Structure(Tuple(vars_by_elem, new_ext)));
                     }
 
-                    EmptyRecord | EmptyTuple | EmptyTagUnion => {}
+                    EmptyRecord | EmptyTuple | EmptyTagUnion | EffectfulFunc => {}
                 }
 
                 in_var
@@ -3874,9 +3877,10 @@ fn get_var_names(
                     accum
                 }
 
-                FlatType::EmptyRecord | FlatType::EmptyTuple | FlatType::EmptyTagUnion => {
-                    taken_names
-                }
+                FlatType::EmptyRecord
+                | FlatType::EmptyTuple
+                | FlatType::EmptyTagUnion
+                | FlatType::EffectfulFunc => taken_names,
 
                 FlatType::Record(vars_by_field, ext) => {
                     let mut accum = get_var_names(subs, ext, taken_names);
@@ -4240,6 +4244,7 @@ fn flat_type_to_err_type(
             ErrorType::Function(args, Box::new(closure), fx, Box::new(ret))
         }
 
+        EffectfulFunc => ErrorType::EffectfulFunc,
         EmptyRecord => ErrorType::Record(SendMap::default(), TypeExt::Closed),
         EmptyTuple => ErrorType::Tuple(Vec::default(), TypeExt::Closed),
         EmptyTagUnion => ErrorType::TagUnion(SendMap::default(), TypeExt::Closed, pol),
@@ -4700,6 +4705,7 @@ impl StorageSubs {
             FlatType::EmptyRecord => FlatType::EmptyRecord,
             FlatType::EmptyTuple => FlatType::EmptyTuple,
             FlatType::EmptyTagUnion => FlatType::EmptyTagUnion,
+            FlatType::EffectfulFunc => FlatType::EffectfulFunc,
         }
     }
 
@@ -5090,6 +5096,8 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
 
                     RecursiveTagUnion(new_rec_var, union_tags, new_ext)
                 }
+
+                EffectfulFunc => EffectfulFunc,
             };
 
             env.target
@@ -5558,6 +5566,7 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
 
                     RecursiveTagUnion(new_rec_var, union_tags, new_ext)
                 }
+                EffectfulFunc => EffectfulFunc,
             };
 
             env.target
@@ -5896,6 +5905,8 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
                     stack.push(ext.var());
                     stack.push(rec_var);
                 }
+
+                EffectfulFunc => {}
             },
             Alias(_, args, var, _) => {
                 let var = *var;
@@ -6003,7 +6014,10 @@ pub fn get_member_lambda_sets_at_region(subs: &Subs, var: Variable, target_regio
                     );
                     stack.push(ext.var());
                 }
-                FlatType::EmptyRecord | FlatType::EmptyTuple | FlatType::EmptyTagUnion => {}
+                FlatType::EffectfulFunc
+                | FlatType::EmptyRecord
+                | FlatType::EmptyTuple
+                | FlatType::EmptyTagUnion => {}
             },
             Content::Alias(_, _, real_var, _) => {
                 stack.push(*real_var);
@@ -6079,6 +6093,7 @@ fn is_inhabited(subs: &Subs, var: Variable) -> bool {
                         return false;
                     }
                 }
+                FlatType::EffectfulFunc => {}
                 FlatType::FunctionOrTagUnion(_, _, _) => {}
                 FlatType::EmptyRecord => {}
                 FlatType::EmptyTuple => {}

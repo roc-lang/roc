@@ -971,7 +971,7 @@ fn deep_copy_type_vars<C: CopyEnv>(
 
             // Everything else is a mechanical descent.
             Structure(flat_type) => match flat_type {
-                EmptyRecord | EmptyTuple | EmptyTagUnion => Structure(flat_type),
+                EmptyRecord | EmptyTuple | EmptyTagUnion | EffectfulFunc => Structure(flat_type),
                 Apply(symbol, arguments) => {
                     descend_slice!(arguments);
 

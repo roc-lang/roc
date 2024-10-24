@@ -1652,7 +1652,8 @@ fn solve_suffix_fx(
                 }
             }
             Content::FlexVar(_) => {
-                // [purity-inference] TODO: Require effectful fn
+                env.subs
+                    .set_content(variable, Content::Structure(FlatType::EffectfulFunc));
             }
             _ => {}
         },
@@ -2370,6 +2371,8 @@ fn adjust_rank_content(
 
                 // THEORY: an empty tag never needs to get generalized
                 EmptyTagUnion => Rank::toplevel(),
+
+                EffectfulFunc => Rank::toplevel(),
 
                 Record(fields, ext_var) => {
                     let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);

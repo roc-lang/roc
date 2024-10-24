@@ -115,7 +115,7 @@ impl FlatHash {
                 FlatType::EmptyTuple => todo!(),
                 FlatType::EmptyTagUnion => Ok(Key(FlatHashKey::TagUnion(vec![]))),
                 //
-                FlatType::Func(..) => Err(Underivable),
+                FlatType::Func(..) | FlatType::EffectfulFunc => Err(Underivable),
             },
             Content::Alias(sym, _, real_var, _) => match builtin_symbol_to_hash_lambda(sym) {
                 Some(lambda) => Ok(lambda),

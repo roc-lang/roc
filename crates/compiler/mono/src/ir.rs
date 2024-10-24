@@ -10156,6 +10156,7 @@ fn find_lambda_sets_help(
                 FlatType::EmptyRecord => {}
                 FlatType::EmptyTuple => {}
                 FlatType::EmptyTagUnion => {}
+                FlatType::EffectfulFunc => {}
             },
             Content::Alias(_, _, actual, _) => {
                 stack.push(*actual);
