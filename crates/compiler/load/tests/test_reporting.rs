@@ -14840,6 +14840,48 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
+        ignored_stmt_forgot_to_call,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                Effect.getLine!
+                Effect.putLine! "hi"
+            "#
+        ),
+        @r###"
+    ── IGNORED RESULT in /code/proj/Main.roc ───────────────────────────────────────
+
+    The result of this expression is ignored:
+
+    6│      Effect.getLine!
+            ^^^^^^^^^^^^^^^
+
+    Standalone statements are required to produce an empty record, but the
+    type of this one is:
+
+        {} => Str
+
+    Hint: Did you forget to call the function?
+
+    ── LEFTOVER STATEMENT in /code/proj/Main.roc ───────────────────────────────────
+
+    This statement does not produce any effects:
+
+    6│      Effect.getLine!
+            ^^^^^^^^^^^^^^^
+
+    Standalone statements are only useful if they call effectful
+    functions.
+
+    Did you forget to use its result? If not, feel free to remove it.
+    "###
+    );
+
+    test_report!(
         function_def_leftover_bang,
         indoc!(
             r#"

@@ -1825,7 +1825,7 @@ fn to_expr_report<'b>(
             }
 
             Reason::Stmt(opt_name) => {
-                let diff = to_diff(alloc, Parens::Unnecessary, found, expected_type);
+                let diff = to_diff(alloc, Parens::Unnecessary, found.clone(), expected_type);
 
                 let lines = [
                     match opt_name {
@@ -1839,14 +1839,21 @@ fn to_expr_report<'b>(
                     alloc.region(lines.convert_region(region), severity),
                     alloc.reflow("Standalone statements are required to produce an empty record, but the type of this one is:"),
                     alloc.type_block(type_with_able_vars(alloc, diff.left, diff.left_able)),
-                    alloc.concat([
-                        alloc.reflow("If you still want to ignore it, assign it to "),
-                        alloc.keyword("_"),
-                        alloc.reflow(", like this:"),
-                    ]),
-                    alloc
-                        .parser_suggestion("_ = File.delete! \"data.json\"")
-                        .indent(4),
+                    match found {
+                        ErrorType::EffectfulFunc | ErrorType::Function(_, _, _, _) => {
+                            alloc.hint("Did you forget to call the function?")
+                        }
+                        _ => alloc.stack([
+                            alloc.concat([
+                                alloc.reflow("If you still want to ignore it, assign it to "),
+                                alloc.keyword("_"),
+                                alloc.reflow(", like this:"),
+                            ]),
+                            alloc
+                                .parser_suggestion("_ = File.delete! \"data.json\"")
+                                .indent(4),
+                        ])
+                    },
                 ];
 
                 Report {
