@@ -102,7 +102,7 @@ pub fn remove_module_param_arguments(
             | TypeError::ModuleParamsMismatch(_, _, _, _)
             | TypeError::FxInPureFunction(_, _, _)
             | TypeError::FxInTopLevel(_, _)
-            | TypeError::PureStmt(_)
+            | TypeError::ExpectedEffectful(_, _)
             | TypeError::UnsuffixedEffectfulFunction(_, _)
             | TypeError::SuffixedPureFunction(_, _) => {}
         }

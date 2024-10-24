@@ -390,6 +390,7 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
                         kind: match kind {
                             DefKind::Let => DefKind::Let,
                             DefKind::Stmt(v) => DefKind::Stmt(sub!(*v)),
+                            DefKind::Ignored(v) => DefKind::Ignored(sub!(*v)),
                         },
                     },
                 )

@@ -856,12 +856,12 @@ fn solve(
                 solve_suffix_fx(env, problems, *kind, actual, region);
                 state
             }
-            EffectfulStmt(variable, region) => {
+            ExpectEffectful(variable, reason, region) => {
                 let content = env.subs.get_content_without_compacting(*variable);
 
                 match content {
                     Content::Pure | Content::FlexVar(_) => {
-                        let problem = TypeError::PureStmt(*region);
+                        let problem = TypeError::ExpectedEffectful(*region, *reason);
                         problems.push(problem);
 
                         state

@@ -661,7 +661,7 @@ impl Constraints {
             | Constraint::Store(..)
             | Constraint::Lookup(..)
             | Constraint::Pattern(..)
-            | Constraint::EffectfulStmt(..)
+            | Constraint::ExpectEffectful(..)
             | Constraint::FxCall(_)
             | Constraint::FxSuffix(_)
             | Constraint::FlexToPure(_)
@@ -843,8 +843,8 @@ pub enum Constraint {
     FxSuffix(Index<FxSuffixConstraint>),
     /// Set an fx var as pure if flex (no effectful functions were called)
     FlexToPure(Variable),
-    /// Expect statement to be effectful
-    EffectfulStmt(Variable, Region),
+    /// Expect statement or ignored def to be effectful
+    ExpectEffectful(Variable, ExpectEffectfulReason, Region),
     /// Used for things that always unify, e.g. blanks and runtime errors
     True,
     SaveTheEnvironment,
@@ -935,6 +935,7 @@ pub struct FxExpectation {
 pub enum FxCallKind {
     Call(Option<Symbol>),
     Stmt,
+    Ignored,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -960,6 +961,12 @@ impl FxSuffixKind {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum ExpectEffectfulReason {
+    Stmt,
+    Ignored,
+}
+
 /// Custom impl to limit vertical space used by the debug output
 impl std::fmt::Debug for Constraint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -982,8 +989,8 @@ impl std::fmt::Debug for Constraint {
             Self::FxSuffix(arg0) => {
                 write!(f, "FxSuffix({arg0:?})")
             }
-            Self::EffectfulStmt(arg0, arg1) => {
-                write!(f, "EffectfulStmt({arg0:?}, {arg1:?})")
+            Self::ExpectEffectful(arg0, arg1, arg2) => {
+                write!(f, "EffectfulStmt({arg0:?}, {arg1:?}, {arg2:?})")
             }
             Self::FlexToPure(arg0) => {
                 write!(f, "FlexToPure({arg0:?})")

@@ -1,7 +1,7 @@
 //! Provides types to describe problems that can occur during solving.
 use std::{path::PathBuf, str::Utf8Error};
 
-use roc_can::constraint::FxSuffixKind;
+use roc_can::constraint::{ExpectEffectfulReason, FxSuffixKind};
 use roc_can::{
     constraint::FxCallKind,
     expected::{Expected, PExpected},
@@ -45,7 +45,7 @@ pub enum TypeError {
     ModuleParamsMismatch(Region, ModuleId, ErrorType, ErrorType),
     FxInPureFunction(Region, FxCallKind, Option<Region>),
     FxInTopLevel(Region, FxCallKind),
-    PureStmt(Region),
+    ExpectedEffectful(Region, ExpectEffectfulReason),
     UnsuffixedEffectfulFunction(Region, FxSuffixKind),
     SuffixedPureFunction(Region, FxSuffixKind),
 }
@@ -72,7 +72,7 @@ impl TypeError {
             TypeError::ModuleParamsMismatch(..) => RuntimeError,
             TypeError::IngestedFileBadUtf8(..) => Fatal,
             TypeError::IngestedFileUnsupportedType(..) => Fatal,
-            TypeError::PureStmt(..) => Warning,
+            TypeError::ExpectedEffectful(..) => Warning,
             TypeError::FxInPureFunction(_, _, _) => Warning,
             TypeError::FxInTopLevel(_, _) => Warning,
             TypeError::UnsuffixedEffectfulFunction(_, _) => Warning,
@@ -95,7 +95,7 @@ impl TypeError {
             | TypeError::ModuleParamsMismatch(region, ..)
             | TypeError::FxInPureFunction(region, _, _)
             | TypeError::FxInTopLevel(region, _)
-            | TypeError::PureStmt(region)
+            | TypeError::ExpectedEffectful(region, _)
             | TypeError::UnsuffixedEffectfulFunction(region, _)
             | TypeError::SuffixedPureFunction(region, _) => Some(*region),
             TypeError::UnfulfilledAbility(ab, ..) => ab.region(),
