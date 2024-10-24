@@ -383,7 +383,7 @@ impl IdentSuffix {
 
         debug_assert!(len > 0, "Ident name must not be empty");
 
-        if bytes[len - 1] == ('!' as u8) {
+        if bytes[len - 1] == b'!' {
             IdentSuffix::Bang
         } else {
             IdentSuffix::None
