@@ -943,6 +943,77 @@ mod cli_run {
 
     #[test]
     #[cfg_attr(windows, ignore)]
+    fn effectful_hello() {
+        test_roc_app(
+            "crates/cli/tests/effectful",
+            "hello.roc",
+            &[],
+            &[],
+            &[],
+            indoc!(
+                r#"
+                    I'm an effect 👻
+                    "#
+            ),
+            UseValgrind::No,
+            TestCliCommands::Dev,
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn effectful_form() {
+        test_roc_app(
+            "crates/cli/tests/effectful",
+            "form.roc",
+            &["Agus\n", "Zubiaga\n", "27\n"],
+            &[],
+            &[],
+            indoc!(
+                r#"
+                What's your first name?
+                What's your last name?
+
+                Hi, Agus Zubiaga!
+
+                How old are you?
+
+                Nice! You can vote!
+
+                Bye! 👋
+                "#
+            ),
+            UseValgrind::No,
+            TestCliCommands::Dev,
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn effectful_loops() {
+        test_roc_app(
+            "crates/cli/tests/effectful",
+            "loops.roc",
+            &[],
+            &[],
+            &[],
+            indoc!(
+                r#"
+                    Lu
+                    Marce
+                    Joaquin
+                    Chloé
+                    Mati
+                    Pedro
+                    "#
+            ),
+            UseValgrind::No,
+            TestCliCommands::Dev,
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
     fn effectful_untyped_passed_fx() {
         test_roc_app(
             "crates/cli/tests/effectful",
@@ -955,6 +1026,25 @@ mod cli_run {
                 Before hello
                 Hello, World!
                 After hello
+                "#
+            ),
+            UseValgrind::No,
+            TestCliCommands::Dev,
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn effectful_ignore_result() {
+        test_roc_app(
+            "crates/cli/tests/effectful",
+            "ignore_result.roc",
+            &[],
+            &[],
+            &[],
+            indoc!(
+                r#"
+                I asked for input and I ignored it. Deal with it! 😎
                 "#
             ),
             UseValgrind::No,
