@@ -261,6 +261,7 @@ pub fn constrain_pattern(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn constrain_pattern_help(
     types: &mut Types,
     constraints: &mut Constraints,

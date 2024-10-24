@@ -56,6 +56,7 @@ pub struct Env<'a> {
 }
 
 impl<'a> Env<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         arena: &'a Bump,
         src: &'a str,
