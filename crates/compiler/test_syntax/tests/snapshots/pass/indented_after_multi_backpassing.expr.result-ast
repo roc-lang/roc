@@ -2,16 +2,16 @@ SpaceAfter(
     Defs(
         Defs {
             tags: [
-                Index(2147483648),
+                EitherIndex(2147483648),
             ],
             regions: [
                 @0-288,
             ],
             space_before: [
-                Slice(start = 0, length = 0),
+                Slice { start: 0, length: 0 },
             ],
             space_after: [
-                Slice(start = 0, length = 0),
+                Slice { start: 0, length: 0 },
             ],
             spaces: [],
             type_defs: [],
@@ -72,16 +72,16 @@ SpaceAfter(
                                 @123-288 Defs(
                                     Defs {
                                         tags: [
-                                            Index(2147483648),
+                                            EitherIndex(2147483648),
                                         ],
                                         regions: [
                                             @123-192,
                                         ],
                                         space_before: [
-                                            Slice(start = 0, length = 1),
+                                            Slice { start: 0, length: 1 },
                                         ],
                                         space_after: [
-                                            Slice(start = 1, length = 0),
+                                            Slice { start: 1, length: 0 },
                                         ],
                                         spaces: [
                                             Newline,

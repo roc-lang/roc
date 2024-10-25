@@ -1,5 +1,4 @@
-use core::fmt;
-use core::iter::Map;
+use core::{fmt, marker::PhantomData, ops::Range};
 
 use crate::soa_index::Index;
 
@@ -8,60 +7,66 @@ use crate::soa_index::Index;
 ///
 /// Unlike a Rust slice, this is a u32 offset
 /// rather than a pointer, and the length is u16.
-pub struct Slice<Array, Elem> {
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+pub struct Slice<T> {
     pub start: u32,
     pub length: u16,
-    _marker: core::marker::PhantomData<(Array, Elem)>,
+    pub _marker: core::marker::PhantomData<T>,
 }
 
-impl<T, U> fmt::Debug for Slice<T, U> {
+impl<T> fmt::Debug for Slice<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "Slice<{}, {}> {{ start: {}, length: {} }}",
-            core::any::type_name::<T>(),
-            core::any::type_name::<U>(),
-            self.start,
-            self.length
+            "Slice {{ start: {}, length: {} }}",
+            self.start, self.length
         )
     }
 }
 
 // derive of copy and clone does not play well with PhantomData
 
-impl<T, U> Copy for Slice<T, U> {}
+impl<T> Copy for Slice<T> {}
 
-impl<T, U> Clone for Slice<T, U> {
+impl<T> Clone for Slice<T> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T, U> Default for Slice<T, U> {
+impl<T> Default for Slice<T> {
     fn default() -> Self {
         Self::empty()
     }
 }
 
-impl<Array, Elem> Slice<Array, Elem> {
-    pub fn empty() -> Self {
+impl<T> Slice<T> {
+    pub const fn empty() -> Self {
         Self {
             start: 0,
             length: 0,
-            _marker: Default::default(),
+            _marker: PhantomData,
         }
     }
 
-    pub fn get_slice<'a>(&self, slice: &'a [Elem]) -> &'a [Elem] {
-        &slice[self.indices()]
+    pub const fn start(self) -> u32 {
+        self.start
     }
 
-    pub fn get_slice_mut<'a>(&self, slice: &'a mut [Elem]) -> &'a mut [Elem] {
-        &mut slice[self.indices()]
+    pub fn advance(&mut self, amount: u32) {
+        self.start += amount
+    }
+
+    pub fn get_slice<'a>(&self, elems: &'a [T]) -> &'a [T] {
+        &elems[self.indices()]
+    }
+
+    pub fn get_slice_mut<'a>(&self, elems: &'a mut [T]) -> &'a mut [T] {
+        &mut elems[self.indices()]
     }
 
     #[inline(always)]
-    pub fn indices(&self) -> core::ops::Range<usize> {
+    pub const fn indices(&self) -> Range<usize> {
         self.start as usize..(self.start as usize + self.length as usize)
     }
 
@@ -73,43 +78,72 @@ impl<Array, Elem> Slice<Array, Elem> {
         self.len() == 0
     }
 
+    pub fn at_start(&self) -> Index<T> {
+        Index {
+            index: self.start,
+            _marker: PhantomData,
+        }
+    }
+
+    pub fn at(&self, i: usize) -> Index<T> {
+        Index {
+            index: self.start + i as u32,
+            _marker: PhantomData,
+        }
+    }
+
     pub const fn new(start: u32, length: u16) -> Self {
         Self {
             start,
             length,
-            _marker: std::marker::PhantomData,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<T> IntoIterator for Slice<T> {
+    type Item = Index<T>;
+    type IntoIter = SliceIterator<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        SliceIterator {
+            slice: self,
+            current: self.start,
+        }
+    }
+}
+
+pub struct SliceIterator<T> {
+    slice: Slice<T>,
+    current: u32,
+}
+
+impl<T> Iterator for SliceIterator<T> {
+    type Item = Index<T>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current < self.slice.start + self.slice.length as u32 {
+            let index = Index {
+                index: self.current,
+                _marker: PhantomData,
+            };
+
+            self.current += 1;
+
+            Some(index)
+        } else {
+            None
         }
     }
 
-    pub fn extend_new(vec: &mut Vec<Elem>, it: impl IntoIterator<Item = Elem>) -> Self {
-        let start = vec.len();
-
-        vec.extend(it);
-
-        let end = vec.len();
-
-        Self::new(start as u32, (end - start) as u16)
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = (self.slice.start + self.slice.length as u32 - self.current) as usize;
+        (remaining, Some(remaining))
     }
 }
 
-impl<Array, Elem> IntoIterator for Slice<Array, Elem> {
-    type Item = Index<Array, Elem>;
+impl<T> ExactSizeIterator for SliceIterator<T> {}
 
-    #[allow(clippy::type_complexity)]
-    type IntoIter = Map<core::ops::Range<u32>, fn(u32) -> Self::Item>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        (self.start..(self.start + self.length as u32)).map(u32_to_index)
-    }
-}
-
-fn u32_to_index<T, U>(i: u32) -> Index<T, U> {
-    Index {
-        index: i,
-        _marker: core::marker::PhantomData,
-    }
-}
-
-pub trait GetSlice<Array, Elem> {
-    fn get_slice(&self, slice: Slice<Array, Elem>) -> &[Elem];
+pub trait GetSlice<T> {
+    fn get_slice(&self, slice: Slice<T>) -> &[T];
 }

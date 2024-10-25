@@ -28,7 +28,7 @@ use crate::type_annotation;
 use crate::{header, keyword};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_collections::soa::Slice;
+use roc_collections::soa::slice_extend_new;
 use roc_error_macros::internal_error;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
@@ -2289,7 +2289,7 @@ pub fn parse_top_level_defs<'a>(
     }
 
     if output.tags.len() > existing_len {
-        let after = Slice::extend_new(&mut output.spaces, last_space.iter().copied());
+        let after = slice_extend_new(&mut output.spaces, last_space.iter().copied());
         let last = output.tags.len() - 1;
         debug_assert!(output.space_after[last].is_empty() || after.is_empty());
         output.space_after[last] = after;

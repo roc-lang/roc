@@ -12,7 +12,7 @@ use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern, PermitS
 use crate::procedure::{QualifiedReference, References};
 use crate::scope::{Scope, SymbolLookup};
 use crate::traverse::{walk_expr, Visitor};
-use roc_collections::soa::Index;
+use roc_collections::soa::index_push_new;
 use roc_collections::{SendMap, VecMap, VecSet};
 use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
@@ -27,6 +27,7 @@ use roc_region::all::{Loc, Region};
 use roc_types::num::SingleQuoteBound;
 use roc_types::subs::{ExhaustiveMark, IllegalCycleMark, RedundantMark, VarStore, Variable};
 use roc_types::types::{Alias, Category, IndexOrField, LambdaSet, OptAbleVar, Type};
+use soa::Index;
 use std::fmt::{Debug, Display};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -2899,7 +2900,7 @@ impl Declarations {
 
         let loc_function_def = Loc::at(loc_closure_data.region, function_def);
 
-        let function_def_index = Index::push_new(&mut self.function_bodies, loc_function_def);
+        let function_def_index = index_push_new(&mut self.function_bodies, loc_function_def);
 
         let tag = match loc_closure_data.value.recursive {
             Recursive::NotRecursive | Recursive::Recursive => {
@@ -2951,7 +2952,7 @@ impl Declarations {
 
         let loc_function_def = Loc::at(loc_closure_data.region, function_def);
 
-        let function_def_index = Index::push_new(&mut self.function_bodies, loc_function_def);
+        let function_def_index = index_push_new(&mut self.function_bodies, loc_function_def);
 
         if let Some(annotation) = host_annotation {
             self.host_exposed_annotations
@@ -3057,7 +3058,7 @@ impl Declarations {
             pattern_vars,
         };
 
-        let destructure_def_index = Index::push_new(&mut self.destructs, destruct_def);
+        let destructure_def_index = index_push_new(&mut self.destructs, destruct_def);
 
         self.declarations
             .push(DeclarationTag::Destructure(destructure_def_index));
@@ -3130,7 +3131,7 @@ impl Declarations {
                 let loc_function_def = Loc::at(def.loc_expr.region, function_def);
 
                 let function_def_index =
-                    Index::push_new(&mut self.function_bodies, loc_function_def);
+                    index_push_new(&mut self.function_bodies, loc_function_def);
 
                 self.declarations[index] = DeclarationTag::Function(function_def_index);
                 self.expressions[index] = *closure_data.loc_body;
@@ -3184,7 +3185,7 @@ impl Declarations {
                 let loc_function_def = Loc::at(region, function_def);
 
                 let function_def_index =
-                    Index::push_new(&mut self.function_bodies, loc_function_def);
+                    index_push_new(&mut self.function_bodies, loc_function_def);
 
                 if let Some(annotation) = &mut self.annotations[index] {
                     annotation.convert_to_fn(new_args_len, var_store);

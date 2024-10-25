@@ -305,7 +305,7 @@ mod cli_run {
                 }
             };
 
-            let self_path = file.display().to_string();
+            let self_path = file.parent().unwrap().display().to_string();
 
             let actual_cmd_stdout = ignore_test_timings(&strip_colors(&cmd_output.stdout))
                 .replace(&self_path, "<ignored for tests>");
@@ -573,12 +573,12 @@ mod cli_run {
                 words : List Str
                 words = ["this", "will", "for", "sure", "be", "a", "large", "string", "so", "when", "we", "split", "it", "it", "will", "use", "seamless", "slices", "which", "affect", "printing"]
 
-                [<ignored for tests>:31] x = 42
-                [<ignored for tests>:33] "Fjoer en ferdjer frieten oan dyn geve lea" = "Fjoer en ferdjer frieten oan dyn geve lea"
-                [<ignored for tests>:35] "this is line 24" = "this is line 24"
-                [<ignored for tests>:21] x = "abc"
-                [<ignored for tests>:21] x = 10
-                [<ignored for tests>:21] x = (A (B C))
+                [<ignored for tests>/expects.roc:31] x = 42
+                [<ignored for tests>/expects.roc:33] "Fjoer en ferdjer frieten oan dyn geve lea" = "Fjoer en ferdjer frieten oan dyn geve lea"
+                [<ignored for tests>/expects.roc:35] "this is line 24" = "this is line 24"
+                [<ignored for tests>/expects.roc:21] x = "abc"
+                [<ignored for tests>/expects.roc:21] x = 10
+                [<ignored for tests>/expects.roc:21] x = (A (B C))
                 Program finished!
                 "#
             ),
@@ -1078,7 +1078,15 @@ mod cli_run {
     fn cli_form_check() {
         let path = file_path_from_root("crates/cli/tests/cli", "form.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
-        dbg!(out.stdout, out.stderr);
+        assert_valid_roc_check_status(out.status);
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    #[serial(cli_platform)]
+    fn cli_form_markdown_check() {
+        let path = file_path_from_root("crates/cli/tests/cli", "form.md");
+        let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert_valid_roc_check_status(out.status);
     }
 
@@ -1190,6 +1198,23 @@ mod cli_run {
             &[],
             &[],
             "For multiple tasks: {a: 123, b: \"abc\", c: [123]}\n",
+            UseValgrind::No,
+            TestCliCommands::Run,
+        )
+    }
+
+    #[test]
+    #[serial(cli_platform)]
+    #[cfg_attr(windows, ignore)]
+    #[ignore = "broken because of a bug in basic-cli: https://github.com/roc-lang/basic-cli/issues/82"]
+    fn argv0() {
+        test_roc_app(
+            "crates/cli/tests/cli",
+            "argv0.roc",
+            &[],
+            &[],
+            &[],
+            "<ignored for tests>/argv0.roc\n",
             UseValgrind::No,
             TestCliCommands::Run,
         )

@@ -30,16 +30,16 @@ Full(
         },
         defs: Defs {
             tags: [
-                Index(2147483648),
+                EitherIndex(2147483648),
             ],
             regions: [
                 @39-65,
             ],
             space_before: [
-                Slice(start = 0, length = 2),
+                Slice { start: 0, length: 2 },
             ],
             space_after: [
-                Slice(start = 2, length = 1),
+                Slice { start: 2, length: 1 },
             ],
             spaces: [
                 Newline,
