@@ -957,7 +957,7 @@ fn to_expr_report<'b>(
                         alloc.reflow("But I need every "),
                         alloc.keyword("if"),
                         alloc.reflow(" condition to evaluate to a "),
-                        alloc.reflow("—either "),
+                        alloc.reflow("Bool—either "),
                         alloc.tag("Bool.true".into()),
                         alloc.reflow(" or "),
                         alloc.tag("Bool.false".into()),
