@@ -14,7 +14,7 @@ const LINKER_FLAG: &str = concatcp!("--", roc_cli::FLAG_LINKER, "=", "legacy");
 #[derive(Debug, Clone)]
 pub struct ExecCli {
     sub_command: &'static str, // build, dev, test...
-    roc_file_path: PathBuf,
+    pub roc_file_path: PathBuf,
     args: Vec<OsString>,
 }
 
@@ -73,7 +73,7 @@ impl ExecCli {
         }
     }
 
-    fn check_build_and_run(
+    pub fn check_build_and_run(
         &self,
         expected_output: &'static str,
         with_valgrind: bool,
@@ -100,7 +100,7 @@ impl ExecCli {
     }
 
     // run executable produced by e.g. `roc build`
-    fn run_executable(
+    pub fn run_executable(
         &self,
         with_valgrind: bool,
         app_stdin_opt: Option<&str>,

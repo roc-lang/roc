@@ -812,10 +812,7 @@ mod cli_tests {
             BUILD_PLATFORM_HOST.call_once(|| {
                 let cli_build = ExecCli::new(
                     CMD_BUILD,
-                    file_from_root(
-                        "crates/cli/tests/test-projects/benchmarks/platform",
-                        "app.roc",
-                    ),
+                    file_from_root("crates/cli/tests/benchmarks/platform", "app.roc"),
                 )
                 .arg(BUILD_HOST_FLAG)
                 .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
@@ -839,7 +836,7 @@ mod cli_tests {
             stdin: Option<&'static str>,
             use_valgrind: UseValgrind,
         ) {
-            let dir_name = "crates/cli/tests/test-projects/benchmarks";
+            let dir_name = "crates/cli/tests/benchmarks";
             let roc_file_path = file_from_root(dir_name, roc_filename);
 
             build_platform_host();
