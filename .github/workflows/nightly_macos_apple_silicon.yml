@@ -1,5 +1,5 @@
 on:
-  #pull_request:
+  pull_request:
   workflow_dispatch:
   schedule:
     - cron:  '0 9 * * *'
@@ -45,6 +45,9 @@ jobs:
         run: ./ci/write_version.sh
 
       - name: build nightly release
+        env:
+            # For if zstd was installed with MacPorts
+            RUSTFLAGS: -C link-arg=-Wl,-rpath,/opt/local/lib
         run: cargo build --locked --profile=release-with-lto --bin roc --bin roc_language_server
 
       - name: package release
