@@ -955,7 +955,6 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                         expr_stack.push(&return_value.value);
                         expr_stack.push(&after_return.value);
                     } else {
-                        expr_stack.reserve(1);
                         expr_stack.push(&return_value.value);
                     }
                 }
