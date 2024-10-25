@@ -2800,7 +2800,7 @@ pub fn report_unused_imports(
     }
 }
 
-fn decl_to_let_or_return<'a>(
+fn decl_to_let_or_return(
     decl: Declaration,
     loc_ret: Loc<Expr>,
     var_store: &mut VarStore,

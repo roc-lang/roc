@@ -181,7 +181,7 @@ fn desugar_value_def<'a>(
         Return(return_expr) => {
             let desugared_return_expr = &*env.arena.alloc(desugar_expr(env, scope, return_expr));
 
-            Return(&desugared_return_expr)
+            Return(desugared_return_expr)
         }
     }
 }

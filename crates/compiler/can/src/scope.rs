@@ -471,7 +471,7 @@ impl Scope {
     where
         F: FnOnce(&mut Scope) -> T,
     {
-        let early_returns_snapshot = std::mem::replace(&mut self.early_returns, Vec::new());
+        let early_returns_snapshot = std::mem::take(&mut self.early_returns);
 
         let result = self.inner_def_scope(f);
 

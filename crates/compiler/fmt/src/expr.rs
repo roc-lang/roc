@@ -457,7 +457,7 @@ impl<'a> Formattable for Expr<'a> {
                 "LowLevelDbg should only exist after desugaring, not during formatting"
             ),
             Return(return_value, after_return) => {
-                fmt_return(buf, return_value, &after_return, parens, newlines, indent);
+                fmt_return(buf, return_value, after_return, parens, newlines, indent);
             }
             If {
                 if_thens: branches,
