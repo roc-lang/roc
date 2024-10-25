@@ -28,6 +28,7 @@ SpaceAfter(
                                         "a",
                                     ),
                                 ],
+                                Pure,
                                 @9-12 Apply(
                                     "",
                                     "U64",

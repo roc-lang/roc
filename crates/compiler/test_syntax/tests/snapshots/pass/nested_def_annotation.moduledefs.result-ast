@@ -51,6 +51,7 @@ Defs {
                                             "a",
                                         ),
                                     ],
+                                    Pure,
                                     @34-38 Apply(
                                         "",
                                         "Bool",

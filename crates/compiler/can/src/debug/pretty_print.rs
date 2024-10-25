@@ -1,6 +1,6 @@
 //! Pretty-prints the canonical AST back to check our work - do things look reasonable?
 
-use crate::def::Def;
+use crate::def::{Def, DefKind};
 use crate::expr::Expr::{self, *};
 use crate::expr::{
     ClosureData, DeclarationTag, Declarations, FunctionDef, OpaqueWrapFunctionData,
@@ -107,9 +107,14 @@ fn def<'a>(c: &Ctx, f: &'a Arena<'a>, d: &'a Def) -> DocBuilder<'a, Arena<'a>> {
         expr_var: _,
         pattern_vars: _,
         annotation: _,
+        kind,
     } = d;
 
-    def_help(c, f, &loc_pattern.value, &loc_expr.value)
+    match kind {
+        DefKind::Let => def_help(c, f, &loc_pattern.value, &loc_expr.value),
+        DefKind::Ignored(_) => def_help(c, f, &loc_pattern.value, &loc_expr.value),
+        DefKind::Stmt(_) => expr(c, EPrec::Free, f, &loc_expr.value),
+    }
 }
 
 fn def_symbol_help<'a>(
@@ -267,7 +272,7 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
             .append(expr(c, Free, f, &body.value))
             .group(),
         Call(fun, args, _) => {
-            let (_, fun, _, _) = &**fun;
+            let (_, fun, _, _, _) = &**fun;
             maybe_paren!(
                 Free,
                 p,

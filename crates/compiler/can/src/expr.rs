@@ -1,7 +1,7 @@
 use crate::abilities::SpecializationId;
 use crate::annotation::{freshen_opaque_def, IntroducedVariables};
 use crate::builtins::builtin_defs_map;
-use crate::def::{can_defs_with_return, Annotation, Def};
+use crate::def::{can_defs_with_return, Annotation, Def, DefKind};
 use crate::env::Env;
 use crate::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_num, float_expr_from_result,
@@ -155,7 +155,7 @@ pub enum Expr {
     /// This is *only* for calling functions, not for tag application.
     /// The Tag variant contains any applied values inside it.
     Call(
-        Box<(Variable, Loc<Expr>, Variable, Variable)>,
+        Box<(Variable, Loc<Expr>, Variable, Variable, Variable)>,
         Vec<(Variable, Loc<Expr>)>,
         CalledVia,
     ),
@@ -401,6 +401,7 @@ pub struct ClosureData {
     pub function_type: Variable,
     pub closure_type: Variable,
     pub return_type: Variable,
+    pub fx_type: Variable,
     pub name: Symbol,
     pub captured_symbols: Vec<(Symbol, Variable)>,
     pub recursive: Recursive,
@@ -477,6 +478,7 @@ impl StructAccessorData {
             function_type: function_var,
             closure_type: closure_var,
             return_type: field_var,
+            fx_type: Variable::PURE,
             name,
             captured_symbols: vec![],
             recursive: Recursive::NotRecursive,
@@ -550,6 +552,7 @@ impl OpaqueWrapFunctionData {
             function_type: function_var,
             closure_type: closure_var,
             return_type: opaque_var,
+            fx_type: Variable::PURE,
             name: function_name,
             captured_symbols: vec![],
             recursive: Recursive::NotRecursive,
@@ -918,6 +921,7 @@ pub fn canonicalize_expr<'a>(
                                 fn_expr,
                                 var_store.fresh(),
                                 var_store.fresh(),
+                                var_store.fresh(),
                             )),
                             args,
                             *application_style,
@@ -955,6 +959,7 @@ pub fn canonicalize_expr<'a>(
                             Box::new((
                                 var_store.fresh(),
                                 fn_expr,
+                                var_store.fresh(),
                                 var_store.fresh(),
                                 var_store.fresh(),
                             )),
@@ -1626,6 +1631,7 @@ fn canonicalize_closure_body<'a>(
         function_type: var_store.fresh(),
         closure_type: var_store.fresh(),
         return_type: var_store.fresh(),
+        fx_type: var_store.fresh(),
         name: symbol,
         captured_symbols,
         recursive: Recursive::NotRecursive,
@@ -2219,6 +2225,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
                     expr_var: def.expr_var,
                     pattern_vars: def.pattern_vars,
                     annotation: def.annotation,
+                    kind: def.kind,
                 });
             }
 
@@ -2240,6 +2247,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
                 expr_var: def.expr_var,
                 pattern_vars: def.pattern_vars,
                 annotation: def.annotation,
+                kind: def.kind,
             };
 
             let loc_expr = Loc {
@@ -2254,6 +2262,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
             function_type,
             closure_type,
             return_type,
+            fx_type: effect_type,
             recursive,
             name,
             captured_symbols,
@@ -2270,6 +2279,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
                 function_type,
                 closure_type,
                 return_type,
+                fx_type: effect_type,
                 recursive,
                 name,
                 captured_symbols,
@@ -2377,10 +2387,11 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
         }
 
         Call(boxed_tuple, args, called_via) => {
-            let (fn_var, loc_expr, closure_var, expr_var) = *boxed_tuple;
+            let (fn_var, loc_expr, closure_var, expr_var, fx_var) = *boxed_tuple;
 
             match loc_expr.value {
                 Var(symbol, _) if symbol.is_builtin() => {
+                    // NOTE: This assumes builtins are not effectful!
                     match builtin_defs_map(symbol, var_store) {
                         Some(Def {
                             loc_expr:
@@ -2424,6 +2435,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
                                     expr_var,
                                     pattern_vars,
                                     annotation: None,
+                                    kind: DefKind::Let,
                                 };
 
                                 loc_answer = Loc {
@@ -2448,7 +2460,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
                 _ => {
                     // For now, we only inline calls to builtins. Leave this alone!
                     Call(
-                        Box::new((fn_var, loc_expr, closure_var, expr_var)),
+                        Box::new((fn_var, loc_expr, closure_var, expr_var, fx_var)),
                         args,
                         called_via,
                     )
@@ -2714,6 +2726,7 @@ fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> 
                         fn_expr,
                         var_store.fresh(),
                         var_store.fresh(),
+                        var_store.fresh(),
                     )),
                     vec![
                         (var_store.fresh(), empty_string),
@@ -2748,6 +2761,7 @@ fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> 
             Box::new((
                 var_store.fresh(),
                 fn_expr,
+                var_store.fresh(),
                 var_store.fresh(),
                 var_store.fresh(),
             )),
@@ -2842,6 +2856,7 @@ impl Declarations {
         let function_def = FunctionDef {
             closure_type: loc_closure_data.value.closure_type,
             return_type: loc_closure_data.value.return_type,
+            fx_type: loc_closure_data.value.fx_type,
             captured_symbols: loc_closure_data.value.captured_symbols,
             arguments: loc_closure_data.value.arguments,
         };
@@ -2893,6 +2908,7 @@ impl Declarations {
         let function_def = FunctionDef {
             closure_type: loc_closure_data.value.closure_type,
             return_type: loc_closure_data.value.return_type,
+            fx_type: loc_closure_data.value.fx_type,
             captured_symbols: loc_closure_data.value.captured_symbols,
             arguments: loc_closure_data.value.arguments,
         };
@@ -3073,6 +3089,7 @@ impl Declarations {
                 let function_def = FunctionDef {
                     closure_type: closure_data.closure_type,
                     return_type: closure_data.return_type,
+                    fx_type: closure_data.fx_type,
                     captured_symbols: closure_data.captured_symbols,
                     arguments: closure_data.arguments,
                 };
@@ -3113,6 +3130,7 @@ impl Declarations {
                     function_type: var_store.fresh(),
                     closure_type: var_store.fresh(),
                     return_type: var_store.fresh(),
+                    fx_type: var_store.fresh(),
                     name: self.symbols[index].value,
                     captured_symbols: vec![],
                     recursive: Recursive::NotRecursive,
@@ -3125,6 +3143,7 @@ impl Declarations {
                 let function_def = FunctionDef {
                     closure_type: loc_closure_data.value.closure_type,
                     return_type: loc_closure_data.value.return_type,
+                    fx_type: loc_closure_data.value.fx_type,
                     captured_symbols: loc_closure_data.value.captured_symbols,
                     arguments: loc_closure_data.value.arguments,
                 };
@@ -3259,6 +3278,7 @@ impl DeclarationTag {
 pub struct FunctionDef {
     pub closure_type: Variable,
     pub return_type: Variable,
+    pub fx_type: Variable,
     pub captured_symbols: Vec<(Symbol, Variable)>,
     pub arguments: Vec<(Variable, AnnotatedMark, Loc<Pattern>)>,
 }

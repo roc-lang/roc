@@ -177,6 +177,7 @@ pub fn can_expr_with<'a>(
         &dep_idents,
         &module_ids,
         None,
+        roc_can::env::FxMode::PurityInference,
     );
 
     // Desugar operators (convert them to Apply calls, taking into account
@@ -203,6 +204,7 @@ pub fn can_expr_with<'a>(
             rigids: MutMap::default(),
             home,
             resolutions_to_make: vec![],
+            fx_expectation: None,
         },
         loc_expr.region,
         &loc_expr.value,

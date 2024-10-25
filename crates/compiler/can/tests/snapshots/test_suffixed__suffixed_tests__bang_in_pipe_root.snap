@@ -30,13 +30,13 @@ Defs {
                     ident: "await",
                 },
                 [
-                    @15-16 Var {
+                    @15-17 Var {
                         module_name: "",
                         ident: "a",
                     },
                     @15-22 Closure(
                         [
-                            @15-16 Identifier {
+                            @15-17 Identifier {
                                 ident: "#!0_arg",
                             },
                         ],
@@ -67,7 +67,7 @@ Defs {
                                                 ident: "b",
                                             },
                                             [
-                                                @15-16 Var {
+                                                @15-17 Var {
                                                     module_name: "",
                                                     ident: "#!0_arg",
                                                 },

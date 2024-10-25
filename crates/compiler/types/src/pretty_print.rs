@@ -15,6 +15,7 @@ use roc_module::symbol::{Interns, ModuleId, Symbol};
 pub static WILDCARD: &str = "*";
 static EMPTY_RECORD: &str = "{}";
 static EMPTY_TAG_UNION: &str = "[]";
+static EFFECTFUL_FUNC: &str = "! : ... => ?";
 
 // TODO: since we technically don't support empty tuples at the source level, this should probably be removed
 static EMPTY_TUPLE: &str = "()";
@@ -180,7 +181,7 @@ fn find_names_needed(
                 );
             }
         }
-        Structure(Func(arg_vars, closure_var, ret_var)) => {
+        Structure(Func(arg_vars, closure_var, ret_var, fx_var)) => {
             for index in arg_vars.into_iter() {
                 let var = subs[index];
                 find_names_needed(
@@ -210,7 +211,17 @@ fn find_names_needed(
                 names_taken,
                 find_under_alias,
             );
+
+            find_names_needed(
+                *fx_var,
+                subs,
+                roots,
+                root_appearances,
+                names_taken,
+                find_under_alias,
+            );
         }
+        Structure(EffectfulFunc) => {}
         Structure(Record(sorted_fields, ext_var)) => {
             for index in sorted_fields.iter_variables() {
                 let var = subs[index];
@@ -406,6 +417,8 @@ fn find_names_needed(
         | Structure(EmptyRecord)
         | Structure(EmptyTuple)
         | Structure(EmptyTagUnion)
+        | Pure
+        | Effectful
         | ErasedLambda => {
             // Errors and empty records don't need names.
         }
@@ -876,6 +889,12 @@ fn write_content<'a>(
             // Easy mode 🤠
             buf.push('?');
         }
+        Pure => {
+            buf.push_str("->");
+        }
+        Effectful => {
+            buf.push_str("=>");
+        }
         RangedNumber(range) => {
             buf.push_str("Range(");
             for (i, &var) in range.variable_slice().iter().enumerate() {
@@ -1115,17 +1134,19 @@ fn write_flat_type<'a>(
         EmptyRecord => buf.push_str(EMPTY_RECORD),
         EmptyTuple => buf.push_str(EMPTY_TUPLE),
         EmptyTagUnion => buf.push_str(EMPTY_TAG_UNION),
-        Func(args, closure, ret) => write_fn(
+        Func(args, closure, ret, fx) => write_fn(
             env,
             ctx,
             subs.get_subs_slice(*args),
             *closure,
             *ret,
+            *fx,
             subs,
             buf,
             parens,
             pol,
         ),
+        EffectfulFunc => buf.push_str(EFFECTFUL_FUNC),
         Record(fields, ext_var) => {
             use crate::types::{gather_fields, RecordStructure};
 
@@ -1460,6 +1481,7 @@ fn write_fn<'a>(
     args: &[Variable],
     closure: Variable,
     ret: Variable,
+    fx: Variable,
     subs: &'a Subs,
     buf: &mut String,
     parens: Parens,
@@ -1483,11 +1505,14 @@ fn write_fn<'a>(
     }
 
     if !env.debug.print_lambda_sets {
-        buf.push_str(" -> ");
+        buf.push(' ');
+        write_content(env, ctx, fx, subs, buf, Parens::Unnecessary, Polarity::Neg);
+        buf.push(' ');
     } else {
         buf.push_str(" -");
         write_content(env, ctx, closure, subs, buf, parens, pol);
-        buf.push_str("-> ");
+        write_content(env, ctx, fx, subs, buf, Parens::Unnecessary, Polarity::Neg);
+        buf.push(' ');
     }
 
     write_content(env, ctx, ret, subs, buf, Parens::InFn, Polarity::Pos);

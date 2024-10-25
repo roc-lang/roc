@@ -46,6 +46,7 @@ Defs(
                             ext: None,
                         },
                     ],
+                    Pure,
                     @39-44 Apply(
                         "",
                         "Table",

@@ -195,7 +195,6 @@ pub enum Problem {
         unbound_symbol: Symbol,
         region: Region,
     },
-    NoIdentifiersIntroduced(Region),
     OverloadedSpecialization {
         overload: Region,
         original_opaque: Symbol,
@@ -242,6 +241,7 @@ pub enum Problem {
         one_occurrence: Region,
         kind: AliasKind,
     },
+    StmtAfterExpr(Region),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -308,7 +308,6 @@ impl Problem {
             Problem::ImplementsNonRequired { .. } => Warning,
             Problem::DoesNotImplementAbility { .. } => RuntimeError,
             Problem::NotBoundInAllPatterns { .. } => RuntimeError,
-            Problem::NoIdentifiersIntroduced(_) => Warning,
             Problem::OverloadedSpecialization { .. } => Warning, // Ideally, will compile
             Problem::UnnecessaryOutputWildcard { .. } => Warning,
             // TODO: sometimes this can just be a warning, e.g. if you have [1, .., .., 2] but we
@@ -323,6 +322,7 @@ impl Problem {
             Problem::OverAppliedDbg { .. } => RuntimeError,
             Problem::DefsOnlyUsedInRecursion(_, _) => Warning,
             Problem::FileProblem { .. } => Fatal,
+            Problem::StmtAfterExpr(_) => Fatal,
         }
     }
 
@@ -469,7 +469,6 @@ impl Problem {
             | Problem::NotAnAbility(region)
             | Problem::ImplementsNonRequired { region, .. }
             | Problem::DoesNotImplementAbility { region, .. }
-            | Problem::NoIdentifiersIntroduced(region)
             | Problem::OverloadedSpecialization {
                 overload: region, ..
             }
@@ -490,6 +489,7 @@ impl Problem {
             | Problem::BadRecursion(cycle_entries) => {
                 cycle_entries.first().map(|entry| entry.expr_region)
             }
+            Problem::StmtAfterExpr(region) => Some(*region),
             Problem::RuntimeError(RuntimeError::UnresolvedTypeVar)
             | Problem::RuntimeError(RuntimeError::ErroneousType)
             | Problem::RuntimeError(RuntimeError::NonExhaustivePattern)
