@@ -73,9 +73,7 @@ impl FlatEncodable {
                     let (elems_iter, ext) = elems.sorted_iterator_and_ext(subs, ext);
 
                     // TODO someday we can put #[cfg(debug_assertions)] around this, but for now let's always do it.
-                    check_derivable_ext_var(subs, ext, |ext| {
-                        matches!(ext, Content::Structure(FlatType::EmptyTuple))
-                    })?;
+                    check_derivable_ext_var(subs, ext, |_| false)?;
 
                     Ok(Key(FlatEncodableKey::Tuple(elems_iter.count() as _)))
                 }
@@ -120,7 +118,6 @@ impl FlatEncodable {
                 FlatType::EmptyRecord => Ok(Key(FlatEncodableKey::Record(vec![]))),
                 FlatType::EmptyTagUnion => Ok(Key(FlatEncodableKey::TagUnion(vec![]))),
                 FlatType::Func(..) => Err(Underivable),
-                FlatType::EmptyTuple => unreachable!("Somehow Encoding derivation got an expression that's an empty tuple, which shouldn't be possible!"),
             },
             Content::Alias(sym, _, real_var, _) => match from_builtin_symbol(sym) {
                 Some(lambda) => lambda,

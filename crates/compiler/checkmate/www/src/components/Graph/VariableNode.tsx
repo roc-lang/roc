@@ -251,7 +251,6 @@ function VariableNodeContent(
       return {};
     }
     case "EmptyRecord":
-    case "EmptyTuple":
     case "EmptyTagUnion":
     case "Error": {
       return {};

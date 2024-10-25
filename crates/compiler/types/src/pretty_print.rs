@@ -16,9 +16,6 @@ pub static WILDCARD: &str = "*";
 static EMPTY_RECORD: &str = "{}";
 static EMPTY_TAG_UNION: &str = "[]";
 
-// TODO: since we technically don't support empty tuples at the source level, this should probably be removed
-static EMPTY_TUPLE: &str = "()";
-
 /// Requirements for parentheses.
 ///
 /// If we're inside a function (that is, this is either an argument or a return
@@ -402,11 +399,7 @@ fn find_names_needed(
                 find_under_alias,
             );
         }
-        Error
-        | Structure(EmptyRecord)
-        | Structure(EmptyTuple)
-        | Structure(EmptyTagUnion)
-        | ErasedLambda => {
+        Error | Structure(EmptyRecord) | Structure(EmptyTagUnion) | ErasedLambda => {
             // Errors and empty records don't need names.
         }
     }
@@ -1113,7 +1106,6 @@ fn write_flat_type<'a>(
             pol,
         ),
         EmptyRecord => buf.push_str(EMPTY_RECORD),
-        EmptyTuple => buf.push_str(EMPTY_TUPLE),
         EmptyTagUnion => buf.push_str(EMPTY_TAG_UNION),
         Func(args, closure, ret) => write_fn(
             env,
@@ -1220,19 +1212,12 @@ fn write_flat_type<'a>(
 
             buf.push_str(" )");
 
-            match subs.get_content_without_compacting(ext_var) {
-                Content::Structure(EmptyTuple) => {
-                    // This is a closed tuple. We're done!
-                }
-                _ => {
-                    // This is an open tuple, so print the variable
-                    // right after the ')'
-                    //
-                    // e.g. the "*" at the end of `( I64, I64 )*`
-                    // or the "r" at the end of `( I64, I64 )r`
-                    write_content(env, ctx, ext_var, subs, buf, parens, pol)
-                }
-            }
+            // This is an open tuple, so print the variable
+            // right after the ')'
+            //
+            // e.g. the "*" at the end of `( I64, I64 )*`
+            // or the "r" at the end of `( I64, I64 )r`
+            write_content(env, ctx, ext_var, subs, buf, parens, pol)
         }
         TagUnion(tags, ext_var) => {
             buf.push('[');

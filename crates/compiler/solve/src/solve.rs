@@ -2184,7 +2184,7 @@ fn adjust_rank_content(
                     rank
                 }
 
-                EmptyRecord | EmptyTuple => {
+                EmptyRecord => {
                     // from elm-compiler: THEORY: an empty record never needs to get generalized
                     //
                     // But for us, that theory does not hold, because there might be type variables hidden

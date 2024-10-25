@@ -318,7 +318,6 @@ fn number_lambda_sets(subs: &Subs, initial: Variable) -> Vec<Variable> {
 
                 EmptyRecord => (),
                 EmptyTagUnion => (),
-                EmptyTuple => (),
 
                 Record(fields, ext) => {
                     let fields = *fields;
