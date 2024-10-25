@@ -10149,7 +10149,6 @@ fn find_lambda_sets_help(
                     }
                 }
                 FlatType::EmptyRecord => {}
-                FlatType::EmptyTuple => {}
                 FlatType::EmptyTagUnion => {}
             },
             Content::Alias(_, _, actual, _) => {
