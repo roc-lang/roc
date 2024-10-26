@@ -17,6 +17,7 @@ use crate::expr::ClosureData;
 use crate::expr::Declarations;
 use crate::expr::Expr::{self, *};
 use crate::expr::StructAccessorData;
+use crate::expr::TailCall;
 use crate::expr::{canonicalize_expr, Output, Recursive};
 use crate::pattern::{canonicalize_def_header_pattern, BindingsFromPattern, Pattern};
 use crate::procedure::QualifiedReference;
@@ -134,31 +135,31 @@ impl Annotation {
 #[derive(Debug)]
 pub(crate) struct CanDefs {
     defs: Vec<Option<Def>>,
-    dbgs: OrderDependentStatements,
-    expects: OrderDependentStatements,
-    expects_fx: OrderDependentStatements,
+    dbgs: ExpectsOrDbgs,
+    expects: ExpectsOrDbgs,
+    expects_fx: ExpectsOrDbgs,
     def_ordering: DefOrdering,
     aliases: VecMap<Symbol, Alias>,
 }
 
 #[derive(Clone, Debug)]
-pub struct OrderDependentStatements {
-    pub expressions: Vec<Expr>,
+pub struct ExpectsOrDbgs {
+    pub conditions: Vec<Expr>,
     pub regions: Vec<Region>,
     pub preceding_comment: Vec<Region>,
 }
 
-impl OrderDependentStatements {
+impl ExpectsOrDbgs {
     fn with_capacity(capacity: usize) -> Self {
         Self {
-            expressions: Vec::with_capacity(capacity),
+            conditions: Vec::with_capacity(capacity),
             regions: Vec::with_capacity(capacity),
             preceding_comment: Vec::with_capacity(capacity),
         }
     }
 
     fn push(&mut self, loc_can_condition: Loc<Expr>, preceding_comment: Region) {
-        self.expressions.push(loc_can_condition.value);
+        self.conditions.push(loc_can_condition.value);
         self.regions.push(loc_can_condition.region);
         self.preceding_comment.push(preceding_comment);
     }
@@ -304,8 +305,8 @@ pub enum Declaration {
     Declare(Def),
     DeclareRec(Vec<Def>, IllegalCycleMark),
     Builtin(Def),
-    Expects(OrderDependentStatements),
-    ExpectsFx(OrderDependentStatements),
+    Expects(ExpectsOrDbgs),
+    ExpectsFx(ExpectsOrDbgs),
     /// If we know a cycle is illegal during canonicalization.
     /// Otherwise we will try to detect this during solving; see [`IllegalCycleMark`].
     InvalidCycle(Vec<CycleEntry>),
@@ -1235,9 +1236,9 @@ fn canonicalize_value_defs<'a>(
         def_ordering.insert_symbol_references(def_id as u32, &temp_output.references)
     }
 
-    let mut dbgs = OrderDependentStatements::with_capacity(pending_dbgs.len());
-    let mut expects = OrderDependentStatements::with_capacity(pending_expects.len());
-    let mut expects_fx = OrderDependentStatements::with_capacity(pending_expects.len());
+    let mut dbgs = ExpectsOrDbgs::with_capacity(pending_dbgs.len());
+    let mut expects = ExpectsOrDbgs::with_capacity(pending_expects.len());
+    let mut expects_fx = ExpectsOrDbgs::with_capacity(pending_expects.len());
 
     for pending in pending_dbgs {
         let (loc_can_condition, can_output) = canonicalize_expr(
@@ -1712,7 +1713,7 @@ pub(crate) fn sort_top_level_can_defs(
     // because of the ordering of declarations, expects should come first because they are
     // independent, but can rely on all other top-level symbols in the module
     let it = expects
-        .expressions
+        .conditions
         .into_iter()
         .zip(expects.regions)
         .zip(expects.preceding_comment);
@@ -1725,7 +1726,7 @@ pub(crate) fn sort_top_level_can_defs(
     }
 
     let it = expects_fx
-        .expressions
+        .conditions
         .into_iter()
         .zip(expects_fx.regions)
         .zip(expects_fx.preceding_comment);
@@ -2100,15 +2101,15 @@ pub(crate) fn sort_can_defs(
         }
     }
 
-    if !dbgs.expressions.is_empty() {
+    if !dbgs.conditions.is_empty() {
         declarations.push(Declaration::Expects(dbgs));
     }
 
-    if !expects.expressions.is_empty() {
+    if !expects.conditions.is_empty() {
         declarations.push(Declaration::Expects(expects));
     }
 
-    if !expects_fx.expressions.is_empty() {
+    if !expects_fx.conditions.is_empty() {
         declarations.push(Declaration::ExpectsFx(expects_fx));
     }
 
@@ -2606,14 +2607,15 @@ fn canonicalize_pending_body<'a>(
 
                 // The closure is self tail recursive iff it tail calls itself (by defined name).
                 let is_recursive = match can_output.tail_call {
-                    Some(tail_symbol) if tail_symbol == *defined_symbol => {
-                        if closure_data.early_returns.is_empty() {
+                    TailCall::NoneMade => Recursive::NotRecursive,
+                    TailCall::Inconsistent => Recursive::Recursive,
+                    TailCall::CallsTo(tail_symbol) => {
+                        if tail_symbol == *defined_symbol {
                             Recursive::TailRecursive
                         } else {
                             Recursive::Recursive
                         }
                     }
-                    _ => Recursive::NotRecursive,
                 };
 
                 closure_data.recursive = is_recursive;
@@ -2766,7 +2768,7 @@ pub fn report_unused_imports(
     }
 }
 
-fn decl_to_let<'a>(decl: Declaration, loc_ret: Loc<Expr>) -> Loc<Expr> {
+fn decl_to_let(decl: Declaration, loc_ret: Loc<Expr>) -> Loc<Expr> {
     match decl {
         Declaration::Declare(def) => {
             let region = Region::span_across(&def.loc_pattern.region, &loc_ret.region);
@@ -2788,7 +2790,7 @@ fn decl_to_let<'a>(decl: Declaration, loc_ret: Loc<Expr>) -> Loc<Expr> {
         Declaration::Expects(expects) => {
             let mut loc_ret = loc_ret;
 
-            let conditions = expects.expressions.into_iter().rev();
+            let conditions = expects.conditions.into_iter().rev();
             let condition_regions = expects.regions.into_iter().rev();
             let expect_regions = expects.preceding_comment.into_iter().rev();
 

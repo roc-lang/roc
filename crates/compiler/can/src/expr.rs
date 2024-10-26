@@ -39,20 +39,64 @@ pub type PendingDerives = VecMap<Symbol, (Type, Vec<Loc<Symbol>>)>;
 #[derive(Clone, Default, Debug)]
 pub struct Output {
     pub references: References,
-    pub tail_call: Option<Symbol>,
+    pub tail_call: TailCall,
     pub introduced_variables: IntroducedVariables,
     pub aliases: VecMap<Symbol, Alias>,
     pub non_closures: VecSet<Symbol>,
     pub pending_derives: PendingDerives,
 }
 
+#[derive(Clone, Copy, Default, Debug)]
+pub enum TailCall {
+    #[default]
+    NoneMade,
+    CallsTo(Symbol),
+    Inconsistent,
+}
+
+impl TailCall {
+    pub fn for_expr(expr: &Expr) -> Self {
+        match expr {
+            Expr::Call(fn_expr, _, _) => match **fn_expr {
+                (
+                    _,
+                    Loc {
+                        value: Expr::Var(symbol, _),
+                        ..
+                    },
+                    _,
+                    _,
+                ) => Self::CallsTo(symbol),
+                _ => Self::NoneMade,
+            },
+            _ => Self::NoneMade,
+        }
+    }
+
+    pub fn merge(self, other: Self) -> Self {
+        match self {
+            TailCall::NoneMade => other,
+            TailCall::Inconsistent => TailCall::Inconsistent,
+            TailCall::CallsTo(our_symbol) => match other {
+                TailCall::NoneMade => TailCall::CallsTo(our_symbol),
+                TailCall::Inconsistent => TailCall::Inconsistent,
+                TailCall::CallsTo(other_symbol) => {
+                    if our_symbol == other_symbol {
+                        TailCall::CallsTo(our_symbol)
+                    } else {
+                        TailCall::Inconsistent
+                    }
+                }
+            },
+        }
+    }
+}
+
 impl Output {
     pub fn union(&mut self, other: Self) {
         self.references.union_mut(&other.references);
 
-        if let (None, Some(later)) = (self.tail_call, other.tail_call) {
-            self.tail_call = Some(later);
-        }
+        self.tail_call = self.tail_call.merge(other.tail_call);
 
         self.introduced_variables
             .union_owned(other.introduced_variables);
@@ -724,7 +768,7 @@ pub fn canonicalize_expr<'a>(
 
             let output = Output {
                 references,
-                tail_call: None,
+                tail_call: TailCall::NoneMade,
                 ..Default::default()
             };
 
@@ -792,7 +836,7 @@ pub fn canonicalize_expr<'a>(
 
                 let output = Output {
                     references,
-                    tail_call: None,
+                    tail_call: TailCall::NoneMade,
                     ..Default::default()
                 };
 
@@ -908,18 +952,13 @@ pub fn canonicalize_expr<'a>(
 
                 output.union(fn_expr_output);
 
-                // Default: We're not tail-calling a symbol (by name), we're tail-calling a function value.
-                output.tail_call = None;
+                output.tail_call = TailCall::NoneMade;
 
                 let expr = match fn_expr.value {
                     Var(symbol, _) => {
                         output.references.insert_call(symbol);
 
-                        // we're tail-calling a symbol by name, check if it's the tail-callable symbol
-                        output.tail_call = match &env.tailcallable_symbol {
-                            Some(tc_sym) if *tc_sym == symbol => Some(symbol),
-                            Some(_) | None => None,
-                        };
+                        output.tail_call = TailCall::CallsTo(symbol);
 
                         Call(
                             Box::new((
@@ -1045,7 +1084,7 @@ pub fn canonicalize_expr<'a>(
                 canonicalize_expr(env, var_store, scope, loc_cond.region, &loc_cond.value);
 
             // the condition can never be a tail-call
-            output.tail_call = None;
+            output.tail_call = TailCall::NoneMade;
 
             let mut can_branches = Vec::with_capacity(branches.len());
 
@@ -1070,7 +1109,7 @@ pub fn canonicalize_expr<'a>(
             // if code gen mistakenly thinks this is a tail call just because its condition
             // happened to be one. (The condition gave us our initial output value.)
             if branches.is_empty() {
-                output.tail_call = None;
+                output.tail_call = TailCall::NoneMade;
             }
 
             // Incorporate all three expressions into a combined Output value.
@@ -1271,14 +1310,6 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::Return(return_expr, after_return) => {
             let mut output = Output::default();
 
-            let (loc_return_expr, output1) = canonicalize_expr(
-                env,
-                var_store,
-                scope,
-                return_expr.region,
-                &return_expr.value,
-            );
-
             if let Some(after_return) = after_return {
                 let region_with_return =
                     Region::span_across(&return_expr.region, &after_return.region);
@@ -1288,7 +1319,17 @@ pub fn canonicalize_expr<'a>(
                 });
             }
 
+            let (loc_return_expr, output1) = canonicalize_expr(
+                env,
+                var_store,
+                scope,
+                return_expr.region,
+                &return_expr.value,
+            );
+
             output.union(output1);
+
+            output.tail_call = TailCall::for_expr(&loc_return_expr.value);
 
             let return_var = var_store.fresh();
 

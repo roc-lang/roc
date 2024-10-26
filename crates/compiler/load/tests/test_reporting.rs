@@ -14498,4 +14498,121 @@ All branches in an `if` must have the same type!
         (*)b
     "###
     );
+
+    test_report!(
+        return_outside_of_function,
+        indoc!(
+            r"
+            someVal =
+                if 10 > 5 then
+                    x = 5
+                    return x
+                else
+                    6
+
+            someVal + 2
+            "
+        ),
+        @r###"
+        ── RETURN OUTSIDE OF FUNCTION in /code/proj/Main.roc ───────────────────────────
+        
+        This `return` statement doesn't belong to a function:
+        
+        7│              return x
+                        ^^^^^^^^
+        
+        I wouldn't know where to return to if I used it!
+        "###
+    );
+
+    test_report!(
+        statements_after_return,
+        indoc!(
+            r#"
+            myFunction = \x ->
+                if x == 2 then
+                    return x
+
+                    log! "someData"
+                    useX x 123
+                else
+                    x + 5
+
+            myFunction 2
+            "#
+        ),
+        @r###"
+        ── UNREACHABLE CODE in /code/proj/Main.roc ─────────────────────────────────────
+        
+        This code won't run because it follows a `return` statement:
+        
+        6│>              return x
+        7│>
+        8│>              log! "someData"
+        9│>              useX x 123
+        
+        Hint: you can move the `return` statement below this block to make the
+        block run.
+        "###
+    );
+
+    test_report!(
+        return_at_end_of_function,
+        indoc!(
+            r#"
+            myFunction = \x ->
+                y = Num.toStr x
+
+                return y
+
+            myFunction 3
+            "#
+        ),
+        @r###"
+        ── UNNECESSARY RETURN in /code/proj/Main.roc ───────────────────────────────────
+        
+        This `return` statement should be an expression instead:
+        
+        7│          return y
+                    ^^^^^^^^
+        
+        In expression-based languages like Roc, the last expression in a
+        function is treated like a `return` statement. Even though `return` would
+        work here, just writing an expression is more elegant.
+        "###
+    );
+
+    test_report!(
+        mismatch_early_return_with_function_output,
+        indoc!(
+            r#"
+            myFunction = \x ->
+                if x == 5 then
+                    return "abc"
+                else
+                    x
+
+            myFunction 3
+            "#
+        ),
+        @r###"
+        ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+        
+        This `return` statement doesn't match the return type of its enclosing
+        function:
+        
+        5│           if x == 5 then
+        6│>              return "abc"
+        7│           else
+        8│               x
+        
+        It is a `return` statement of type:
+        
+            Str
+        
+        But I need every `return` statement in that function to return:
+        
+            Num *
+        "###
+    );
 }

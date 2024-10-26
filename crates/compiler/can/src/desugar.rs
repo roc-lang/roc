@@ -1029,11 +1029,10 @@ pub fn desugar_expr<'a>(
         }
         Return(return_value, after_return) => {
             let desugared_return_value = &*env.arena.alloc(desugar_expr(env, scope, return_value));
-            let desugared_after_return =
-                after_return.map(|ar| *env.arena.alloc(desugar_expr(env, scope, ar)));
 
             env.arena.alloc(Loc {
-                value: Return(desugared_return_value, desugared_after_return),
+                // Do not desugar after_return since it isn't run anyway
+                value: Return(desugared_return_value, after_return.clone()),
                 region: loc_expr.region,
             })
         }
