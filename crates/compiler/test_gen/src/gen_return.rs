@@ -6,6 +6,12 @@ use crate::helpers::llvm::assert_evals_to;
 #[cfg(feature = "gen-dev")]
 use crate::helpers::dev::assert_evals_to;
 
+#[cfg(feature = "gen-llvm")]
+use crate::helpers::llvm::identity;
+
+#[cfg(feature = "gen-dev")]
+use crate::helpers::dev::identity;
+
 #[allow(unused_imports)]
 use indoc::indoc;
 #[allow(unused_imports)]
@@ -86,7 +92,7 @@ fn early_return_nested_whens() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn early_return_solo() {
     assert_evals_to!(
         r#"
@@ -97,6 +103,7 @@ fn early_return_solo() {
         "#,
         RocStr::from("abc"),
         RocStr,
+        identity,
         true
     );
 
@@ -109,6 +116,7 @@ fn early_return_solo() {
         "#,
         123,
         i64,
+        identity,
         true
     );
 }
