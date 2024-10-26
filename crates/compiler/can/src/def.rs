@@ -17,7 +17,6 @@ use crate::expr::ClosureData;
 use crate::expr::Declarations;
 use crate::expr::Expr::{self, *};
 use crate::expr::StructAccessorData;
-use crate::expr::TailCall;
 use crate::expr::{canonicalize_expr, Output, Recursive};
 use crate::pattern::{canonicalize_def_header_pattern, BindingsFromPattern, Pattern};
 use crate::procedure::QualifiedReference;
@@ -2606,16 +2605,17 @@ fn canonicalize_pending_body<'a>(
                 env.tailcallable_symbol = outer_tailcallable;
 
                 // The closure is self tail recursive iff it tail calls itself (by defined name).
-                let is_recursive = match can_output.tail_call {
-                    TailCall::NoneMade => Recursive::NotRecursive,
-                    TailCall::Inconsistent => Recursive::Recursive,
-                    TailCall::CallsTo(tail_symbol) => {
-                        if tail_symbol == *defined_symbol {
-                            Recursive::TailRecursive
-                        } else {
-                            Recursive::Recursive
-                        }
-                    }
+                let is_recursive = if can_output
+                    .early_tail_calls
+                    .iter()
+                    .chain(std::iter::once(&can_output.final_tail_call))
+                    .all(|tail_call| {
+                        matches!(tail_call, Some(tail_symbol) if tail_symbol == defined_symbol)
+                    })
+                {
+                    Recursive::TailRecursive
+                } else {
+                    Recursive::NotRecursive
                 };
 
                 closure_data.recursive = is_recursive;

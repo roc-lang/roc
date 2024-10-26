@@ -96,7 +96,8 @@ fn early_return_solo() {
         identity "abc"
         "#,
         RocStr::from("abc"),
-        RocStr
+        RocStr,
+        true
     );
 
     assert_evals_to!(
@@ -107,6 +108,7 @@ fn early_return_solo() {
         identity 123
         "#,
         123,
-        i64
+        i64,
+        true
     );
 }
