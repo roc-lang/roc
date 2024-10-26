@@ -1032,7 +1032,7 @@ pub fn desugar_expr<'a>(
 
             env.arena.alloc(Loc {
                 // Do not desugar after_return since it isn't run anyway
-                value: Return(desugared_return_value, after_return.clone()),
+                value: Return(desugared_return_value, *after_return),
                 region: loc_expr.region,
             })
         }
