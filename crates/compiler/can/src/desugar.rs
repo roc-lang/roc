@@ -177,12 +177,6 @@ fn desugar_value_def<'a>(
                 body_expr: desugar_expr(env, scope, stmt_expr),
             }
         }
-
-        Return(return_expr) => {
-            let desugared_return_expr = &*env.arena.alloc(desugar_expr(env, scope, return_expr));
-
-            Return(desugared_return_expr)
-        }
     }
 }
 
@@ -324,12 +318,6 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
         // TODO support desugaring of Dbg and ExpectFx
         Dbg { .. } | ExpectFx { .. } => value_def,
         ModuleImport { .. } | IngestedFileImport(_) => value_def,
-        Return(ret_expr) => match unwrap_suffixed_expression(arena, ret_expr, None) {
-            Ok(new_ret_expr) => ValueDef::Return(new_ret_expr),
-            Err(..) => {
-                internal_error!("Unable to desugar the suffix inside a Return value def");
-            }
-        },
 
         Stmt(..) => {
             internal_error!(

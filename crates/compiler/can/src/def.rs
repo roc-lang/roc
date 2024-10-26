@@ -137,7 +137,6 @@ pub(crate) struct CanDefs {
     dbgs: OrderDependentStatements,
     expects: OrderDependentStatements,
     expects_fx: OrderDependentStatements,
-    returns: OrderDependentStatements,
     def_ordering: DefOrdering,
     aliases: VecMap<Symbol, Alias>,
 }
@@ -304,7 +303,6 @@ impl PendingTypeDef<'_> {
 pub enum Declaration {
     Declare(Def),
     DeclareRec(Vec<Def>, IllegalCycleMark),
-    Return(Expr, Region),
     Builtin(Def),
     Expects(OrderDependentStatements),
     ExpectsFx(OrderDependentStatements),
@@ -319,7 +317,6 @@ impl Declaration {
         match self {
             Declare(_) => 1,
             DeclareRec(defs, _) => defs.len(),
-            Return(_, _) => 0,
             InvalidCycle { .. } => 0,
             Builtin(_) => 0,
             Expects(_) => 0,
@@ -343,7 +340,6 @@ impl Declaration {
                 expects.regions.first().unwrap(),
                 expects.regions.last().unwrap(),
             ),
-            Declaration::Return(_return_expr, return_region) => *return_region,
         }
     }
 }
@@ -1141,7 +1137,6 @@ fn canonicalize_value_defs<'a>(
     let mut pending_dbgs = Vec::with_capacity(value_defs.len());
     let mut pending_expects = Vec::with_capacity(value_defs.len());
     let mut pending_expect_fx = Vec::with_capacity(value_defs.len());
-    let mut pending_returns = Vec::with_capacity(value_defs.len());
 
     let mut imports_introduced = Vec::with_capacity(value_defs.len());
 
@@ -1163,9 +1158,6 @@ fn canonicalize_value_defs<'a>(
             }
             PendingValue::ExpectFx(pending_expect) => {
                 pending_expect_fx.push(pending_expect);
-            }
-            PendingValue::Return(pending_return) => {
-                pending_returns.push(pending_return);
             }
             PendingValue::ModuleImport(PendingModuleImport {
                 module_id,
@@ -1246,7 +1238,6 @@ fn canonicalize_value_defs<'a>(
     let mut dbgs = OrderDependentStatements::with_capacity(pending_dbgs.len());
     let mut expects = OrderDependentStatements::with_capacity(pending_expects.len());
     let mut expects_fx = OrderDependentStatements::with_capacity(pending_expects.len());
-    let mut returns = OrderDependentStatements::with_capacity(pending_returns.len());
 
     for pending in pending_dbgs {
         let (loc_can_condition, can_output) = canonicalize_expr(
@@ -1290,21 +1281,11 @@ fn canonicalize_value_defs<'a>(
         output.union(can_output);
     }
 
-    for pending in pending_returns {
-        let (loc_return_expr, can_output) =
-            canonicalize_expr(env, var_store, scope, pending.region, &pending.value);
-
-        returns.push(loc_return_expr, Region::zero());
-
-        output.union(can_output);
-    }
-
     let can_defs = CanDefs {
         defs,
         dbgs,
         expects,
         expects_fx,
-        returns,
         def_ordering,
         aliases,
     };
@@ -1713,16 +1694,9 @@ pub(crate) fn sort_top_level_can_defs(
         dbgs: _,
         expects,
         expects_fx,
-        returns,
         def_ordering,
         aliases,
     } = defs;
-
-    for return_region in returns.regions {
-        env.problem(Problem::ReturnOutsideOfFunction {
-            region: return_region,
-        });
-    }
 
     // TODO: inefficient, but I want to make this what CanDefs contains in the future
     let mut defs: Vec<_> = defs.into_iter().map(|x| x.unwrap()).collect();
@@ -1855,7 +1829,6 @@ pub(crate) fn sort_top_level_can_defs(
                                         None,
                                     );
                                 }
-                                // TODO: do I need to handle returns here?
                                 _ => {
                                     declarations.push_value_def(
                                         Loc::at(def.loc_pattern.region, symbol),
@@ -2002,7 +1975,6 @@ pub(crate) fn sort_can_defs(
         dbgs,
         expects,
         expects_fx,
-        returns,
         def_ordering,
         aliases,
     } = defs;
@@ -2138,12 +2110,6 @@ pub(crate) fn sort_can_defs(
 
     if !expects_fx.expressions.is_empty() {
         declarations.push(Declaration::ExpectsFx(expects_fx));
-    }
-
-    if !returns.expressions.is_empty() {
-        for (return_expr, return_region) in returns.expressions.into_iter().zip(returns.regions) {
-            declarations.push(Declaration::Return(return_expr, return_region));
-        }
     }
 
     (declarations, output)
@@ -2773,7 +2739,7 @@ pub fn can_defs_with_return<'a>(
     let mut loc_expr: Loc<Expr> = ret_expr;
 
     for declaration in declarations.into_iter().rev() {
-        loc_expr = decl_to_let_or_return(declaration, loc_expr, var_store);
+        loc_expr = decl_to_let(declaration, loc_expr);
     }
 
     (loc_expr.value, output)
@@ -2800,11 +2766,7 @@ pub fn report_unused_imports(
     }
 }
 
-fn decl_to_let_or_return(
-    decl: Declaration,
-    loc_ret: Loc<Expr>,
-    var_store: &mut VarStore,
-) -> Loc<Expr> {
+fn decl_to_let<'a>(decl: Declaration, loc_ret: Loc<Expr>) -> Loc<Expr> {
     match decl {
         Declaration::Declare(def) => {
             let region = Region::span_across(&def.loc_pattern.region, &loc_ret.region);
@@ -2814,17 +2776,6 @@ fn decl_to_let_or_return(
         Declaration::DeclareRec(defs, cycle_mark) => {
             let region = Region::span_across(&defs[0].loc_pattern.region, &loc_ret.region);
             let expr = Expr::LetRec(defs, Box::new(loc_ret), cycle_mark);
-            Loc::at(region, expr)
-        }
-        Declaration::Return(return_expr, return_region) => {
-            let region = Region::span_across(&return_region, &loc_ret.region);
-
-            let return_var = var_store.fresh();
-            let expr = Expr::Return {
-                return_value: Box::new(Loc::at(return_region, return_expr)),
-                return_var,
-            };
-
             Loc::at(region, expr)
         }
         Declaration::InvalidCycle(entries) => {
@@ -3062,7 +3013,6 @@ enum PendingValue<'a> {
     Dbg(PendingExpectOrDbg<'a>),
     Expect(PendingExpectOrDbg<'a>),
     ExpectFx(PendingExpectOrDbg<'a>),
-    Return(&'a Loc<ast::Expr<'a>>),
     ModuleImport(PendingModuleImport<'a>),
     SignatureDefMismatch,
     InvalidIngestedFile,
@@ -3211,8 +3161,6 @@ fn to_pending_value_def<'a>(
             condition,
             preceding_comment: *preceding_comment,
         }),
-
-        Return(return_expr) => PendingValue::Return(return_expr),
 
         ModuleImport(module_import) => {
             let qualified_module_name: QualifiedModuleName = module_import.name.value.into();

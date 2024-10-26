@@ -440,7 +440,6 @@ impl<'a> Normalize<'a> for ValueDef<'a> {
                 IngestedFileImport(ingested_file_import.normalize(arena))
             }
             Stmt(loc_expr) => Stmt(arena.alloc(loc_expr.normalize(arena))),
-            Return(loc_expr) => Return(arena.alloc(loc_expr.normalize(arena))),
         }
     }
 }

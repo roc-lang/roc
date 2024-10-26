@@ -423,7 +423,6 @@ impl<'a> Formattable for ValueDef<'a> {
             ModuleImport(module_import) => module_import.is_multiline(),
             IngestedFileImport(ingested_file_import) => ingested_file_import.is_multiline(),
             Stmt(loc_expr) => loc_expr.is_multiline(),
-            Return(loc_expr) => loc_expr.is_multiline(),
         }
     }
 
@@ -465,7 +464,6 @@ impl<'a> Formattable for ValueDef<'a> {
             ModuleImport(module_import) => module_import.format(buf, indent),
             IngestedFileImport(ingested_file_import) => ingested_file_import.format(buf, indent),
             Stmt(loc_expr) => loc_expr.format_with_options(buf, parens, newlines, indent),
-            Return(loc_expr) => loc_expr.format_with_options(buf, parens, newlines, indent),
         }
     }
 }

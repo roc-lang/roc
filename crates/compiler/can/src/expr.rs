@@ -1280,8 +1280,11 @@ pub fn canonicalize_expr<'a>(
             );
 
             if let Some(after_return) = after_return {
+                let region_with_return =
+                    Region::span_across(&return_expr.region, &after_return.region);
+
                 env.problem(Problem::StatementsAfterReturn {
-                    region: after_return.region,
+                    region: region_with_return,
                 });
             }
 
@@ -1647,6 +1650,17 @@ fn canonicalize_closure_body<'a>(
             // references the (nonexistent) local variable x!
             output.references.remove_value_lookup(&sub_symbol);
         }
+    }
+
+    let final_expr = match &loc_body_expr.value {
+        Expr::LetRec(_, final_expr, _) | Expr::LetNonRec(_, final_expr) => &final_expr.value,
+        _ => &loc_body_expr.value,
+    };
+
+    if let Expr::Return { return_value, .. } = final_expr {
+        env.problem(Problem::ReturnAtEndOfFunction {
+            region: return_value.region,
+        });
     }
 
     // store the references of this function in the Env. This information is used

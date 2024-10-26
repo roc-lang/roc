@@ -2664,8 +2664,9 @@ fn return_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Stmt<'a>, ERetu
 
         let region = Region::span_across(&return_kw.region, &return_value.region);
 
-        let stmt = Stmt::ValueDef(ValueDef::Return(
+        let stmt = Stmt::Expr(Expr::Return(
             arena.alloc(Loc::at(region, return_value.value)),
+            None,
         ));
 
         Ok((MadeProgress, stmt, state))
@@ -3057,7 +3058,6 @@ fn stmts_to_expr<'a>(
                     CalledVia::Space,
                 )
             }
-            Stmt::ValueDef(ValueDef::Return(return_value)) => Expr::Return(return_value, None),
             Stmt::ValueDef(ValueDef::Expect { .. }) => {
                 return Err(EExpr::Expect(
                     EExpect::Continuation(
@@ -3090,6 +3090,20 @@ fn stmts_to_defs<'a>(
     while i < stmts.len() {
         let sp_stmt = stmts[i];
         match sp_stmt.item.value {
+            Stmt::Expr(Expr::Return(return_value, _after_return)) => {
+                if i == stmts.len() - 1 {
+                    last_expr = Some(Loc::at_zero(Expr::Return(return_value, None)));
+                } else {
+                    let rest = stmts_to_expr(&stmts[i + 1..], arena)?;
+                    last_expr = Some(Loc::at_zero(Expr::Return(
+                        return_value,
+                        Some(arena.alloc(rest)),
+                    )));
+                }
+
+                // don't re-process the rest of the statements, they got consumed by the early return
+                break;
+            }
             Stmt::Expr(e) => {
                 if is_expr_suffixed(&e) && i + 1 < stmts.len() {
                     defs.push_value_def(
@@ -3111,20 +3125,6 @@ fn stmts_to_defs<'a>(
 
                     last_expr = Some(sp_stmt.item.with_value(e));
                 }
-            }
-            Stmt::ValueDef(ValueDef::Return(return_value)) => {
-                if i == stmts.len() - 1 {
-                    last_expr = Some(Loc::at_zero(Expr::Return(return_value, None)));
-                } else {
-                    let rest = stmts_to_expr(&stmts[i + 1..], arena)?;
-                    last_expr = Some(Loc::at_zero(Expr::Return(
-                        return_value,
-                        Some(arena.alloc(rest)),
-                    )));
-                }
-
-                // don't re-process the rest of the statements, they got consumed by the early return
-                break;
             }
             Stmt::Backpassing(pats, call) => {
                 if last_expr.is_some() {

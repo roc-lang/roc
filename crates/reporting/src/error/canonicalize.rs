@@ -1355,6 +1355,7 @@ pub fn can_problem<'b>(
                     alloc.reflow(" statement doesn't belong to a function:"),
                 ]),
                 alloc.region(lines.convert_region(region), severity),
+                alloc.reflow("I wouldn't know where to return to if I used it!"),
             ]);
 
             title = "RETURN OUTSIDE OF FUNCTION".to_string();
@@ -1368,9 +1369,34 @@ pub fn can_problem<'b>(
                     alloc.reflow(" statement:"),
                 ]),
                 alloc.region(lines.convert_region(region), severity),
+                alloc.concat([
+                    alloc.hint("you can move the "),
+                    alloc.keyword("return"),
+                    alloc.reflow(" statement below this block to make the block run."),
+                ]),
             ]);
 
             title = "UNREACHABLE CODE".to_string();
+        }
+
+        Problem::ReturnAtEndOfFunction { region } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This "),
+                    alloc.keyword("return"),
+                    alloc.reflow(" statement should be an expression instead:"),
+                ]),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.concat([
+                    alloc.reflow("In expression-based languages like Roc, the last expression in a function is treated like a "),
+                    alloc.keyword("return"),
+                    alloc.reflow(" statement. Even though "),
+                    alloc.keyword("return"),
+                    alloc.reflow(" would work here, just writing an expression is more elegant."),
+                ]),
+            ]);
+
+            title = "UNNECESSARY RETURN".to_string();
         }
     };
 
@@ -2547,18 +2573,6 @@ fn pretty_runtime_error<'b>(
             ]);
 
             title = "OPTIONAL FIELD IN RECORD BUILDER";
-        }
-        RuntimeError::ReturnOutsideOfFunction(region) => {
-            doc = alloc.stack([
-                alloc.concat([
-                    alloc.reflow("The "),
-                    alloc.keyword("return"),
-                    alloc.reflow(" keyword can only be used in functions."),
-                ]),
-                alloc.region(lines.convert_region(region), severity),
-            ]);
-
-            title = "RETURN OUTSIDE OF FUNCTION";
         }
     }
 
