@@ -149,10 +149,6 @@ export type Content =
       [k: string]: unknown;
     }
   | {
-      type: "EmptyTuple";
-      [k: string]: unknown;
-    }
-  | {
       type: "EmptyTagUnion";
       [k: string]: unknown;
     }
