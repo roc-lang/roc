@@ -872,7 +872,9 @@ fn build_loaded_file<'a>(
 
     let built_host_opt =
         // Not sure if this is correct for all calls with LinkType::Dylib...
-        if link_type != LinkType::Dylib {
+        if link_type == LinkType::Dylib || target == Target::Wasm32 {
+            BuiltHostOpt::None
+        } else {
             let prebuilt_host = determine_built_host_path(&platform_main_roc_path, target, build_host_requested, link_type, linking_strategy, suppress_build_host_warning);
 
             match prebuilt_host {
@@ -895,8 +897,6 @@ fn build_loaded_file<'a>(
                 }
                 other => other
             }
-        } else {
-            BuiltHostOpt::None
         };
 
     let buf = &mut String::with_capacity(1024);
@@ -1008,12 +1008,31 @@ fn build_loaded_file<'a>(
             let mut inputs = vec![app_o_file.to_str().unwrap()];
 
             let mut host_path = String::new();
-            if let BuiltHostOpt::Legacy(p) = built_host_opt {
-                host_path.push_str(&p.to_string_lossy());
-                inputs.push(&host_path);
-            } else {
-                // we may be compiling a Dylib, which doesn't have a host
-                // for example, we could be generating glue using `roc glue`
+            
+            match built_host_opt {
+                BuiltHostOpt::Legacy(p) => {
+                    host_path.push_str(&p.to_string_lossy());
+                    inputs.push(&host_path);
+                }
+                BuiltHostOpt::None => {
+                    // In case of link_type == LinkType::Dylib or target == Target::Wasm32
+                    // When compiling a Dylib there is no host, such as when generating glue using `roc glue`.
+                    if target == Target::Wasm32 {
+                        let wasm_host_zig:PathBuf = platform_main_roc_path.with_file_name("host.zig");
+                        
+                        assert!(
+                            wasm_host_zig.exists(),
+                            "No host.zig file found at {} when building wasm32 target.", 
+                            wasm_host_zig.display()
+                        );
+                        
+                        host_path.push_str(&wasm_host_zig.to_string_lossy());
+                        inputs.push(&host_path);
+                    }
+                }
+                other => {
+                    panic!("Unexpected variant of built_host_opt in combination with `LinkingStrategy::Legacy`: {:?}", other);
+                }
             }
 
             let builtins_host_tempfile = roc_bitcode::host_tempfile()

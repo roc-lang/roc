@@ -868,6 +868,7 @@ mod cli_tests {
             expected_output: &'static str,
             stdin_opt: Option<&'static str>,
         ) {
+            dbg!("yo");
             use super::{concatcp, TARGET_FLAG};
             // Check with and without optimizations
             run_wasm_check_output_with_flags(
@@ -893,6 +894,7 @@ mod cli_tests {
             flags: &[&str],
         ) {
             use super::{concatcp, TARGET_FLAG};
+            dbg!("hey");
 
             let mut flags = flags.to_vec();
             flags.push(concatcp!(TARGET_FLAG, "=wasm32"));
@@ -901,6 +903,7 @@ mod cli_tests {
 
             let cli_build_out = cli_build.run();
             cli_build_out.assert_clean_success();
+            dbg!("clean success");
 
             // wasm can't take stdin, so we pass it as an arg
             let wasm_args = if let Some(stdin) = stdin_opt {
@@ -908,10 +911,15 @@ mod cli_tests {
             } else {
                 vec![]
             };
+            
+            dbg!("pre wasm_run_out");
 
             let wasm_run_out =
-                crate::run_wasm(&roc_file_path.with_extension("wasm"), wasm_args.clone());
-
+                crate::run_wasm_for_cli_test(&roc_file_path.with_extension("wasm"), wasm_args.clone());
+            
+            dbg!("post wasm_run_out");
+            
+            dbg!(&wasm_run_out);
             assert_eq!(wasm_run_out, expected_output);
 
             if TEST_LEGACY_LINKER {
@@ -921,7 +929,7 @@ mod cli_tests {
                 cli_build_legacy_out.assert_clean_success();
 
                 let wasm_run_out_legacy =
-                    crate::run_wasm(&roc_file_path.with_extension("wasm"), wasm_args);
+                    crate::run_wasm_for_cli_test(&roc_file_path.with_extension("wasm"), wasm_args);
 
                 assert_eq!(wasm_run_out_legacy, expected_output);
             }
@@ -1214,7 +1222,8 @@ mod cli_tests {
 }
 
 #[cfg(feature = "wasm32-cli-run")]
-fn run_wasm(wasm_path: &std::path::Path, stdin: Vec<&str>) -> String {
+fn run_wasm_for_cli_test(wasm_path: &std::path::Path, stdin: Vec<&str>) -> String {
+    dbg!("in run_wasm222");
     use bumpalo::Bump;
     use roc_wasm_interp::{DefaultImportDispatcher, Instance, Value, WasiFile};
 
@@ -1238,8 +1247,12 @@ fn run_wasm(wasm_path: &std::path::Path, stdin: Vec<&str>) -> String {
 
         Instance::from_bytes(&arena, &wasm_bytes, dispatcher, false).unwrap()
     };
+    
+    dbg!("pre call");
 
     let result = instance.call_export("_start", []);
+    
+    dbg!("post call");
 
     match result {
         Ok(Some(Value::I32(0))) => match &instance.import_dispatcher.wasi.files[1] {
