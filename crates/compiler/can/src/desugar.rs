@@ -200,7 +200,9 @@ fn desugar_value_def<'a>(
         }
         IngestedFileImport(_) => *def,
 
-        StmtAfterExpr => internal_error!("unexpected StmtAfterExpr"),
+        StmtAfterExpr => internal_error!(
+            "StmtAfterExpression is only created during desugaring, so it shouldn't exist here."
+        ),
 
         Stmt(stmt_expr) => {
             if env.fx_mode == FxMode::PurityInference {
