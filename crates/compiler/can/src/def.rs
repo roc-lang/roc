@@ -1226,25 +1226,27 @@ fn canonicalize_value_defs<'a>(
     let mut symbol_to_index: Vec<(IdentId, u32)> = Vec::with_capacity(pending_value_defs.len());
 
     for (def_index, pending_def) in pending_value_defs.iter().enumerate() {
-        if let Some(loc_pattern) = pending_def.loc_pattern() {
-            let new_bindings = BindingsFromPattern::new(loc_pattern).peekable();
+        let Some(loc_pattern) = pending_def.loc_pattern() else {
+            continue;
+        };
 
-            for (s, r) in new_bindings {
-                // store the top-level defs, used to ensure that closures won't capture them
-                if let PatternType::TopLevelDef = pattern_type {
-                    env.top_level_symbols.insert(s);
-                }
+        let new_bindings = BindingsFromPattern::new(loc_pattern).peekable();
 
-                symbols_introduced.insert(s, r);
-
-                debug_assert_eq!(env.home, s.module_id());
-                debug_assert!(
-                    !symbol_to_index.iter().any(|(id, _)| *id == s.ident_id()),
-                    "{s:?}"
-                );
-
-                symbol_to_index.push((s.ident_id(), def_index as u32));
+        for (s, r) in new_bindings {
+            // store the top-level defs, used to ensure that closures won't capture them
+            if let PatternType::TopLevelDef = pattern_type {
+                env.top_level_symbols.insert(s);
             }
+
+            symbols_introduced.insert(s, r);
+
+            debug_assert_eq!(env.home, s.module_id());
+            debug_assert!(
+                !symbol_to_index.iter().any(|(id, _)| *id == s.ident_id()),
+                "{s:?}"
+            );
+
+            symbol_to_index.push((s.ident_id(), def_index as u32));
         }
     }
 
