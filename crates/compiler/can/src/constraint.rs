@@ -53,6 +53,7 @@ impl std::fmt::Debug for Constraints {
             .field("pattern_eq", &self.pattern_eq)
             .field("cycles", &self.cycles)
             .field("fx_call_constraints", &self.fx_call_constraints)
+            .field("fx_suffix_constraints", &self.fx_suffix_constraints)
             .finish()
     }
 }
