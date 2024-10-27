@@ -4978,12 +4978,17 @@ pub fn with_hole<'a>(
                 }
             }
 
+            let struct_index = match index {
+                Some(index) => index,
+                None => return runtime_error(env, "No such field in record"),
+            };
+
             compile_struct_like_access(
                 env,
                 procs,
                 layout_cache,
                 field_layouts,
-                index.expect("field not in its own type") as _,
+                struct_index,
                 *loc_expr,
                 record_var,
                 hole,
@@ -5076,12 +5081,17 @@ pub fn with_hole<'a>(
                 }
             }
 
+            let tuple_index = match final_index {
+                Some(index) => index as u64,
+                None => return runtime_error(env, "No such index in tuple"),
+            };
+
             compile_struct_like_access(
                 env,
                 procs,
                 layout_cache,
                 field_layouts,
-                final_index.expect("elem not in its own type") as u64,
+                tuple_index,
                 *loc_expr,
                 tuple_var,
                 hole,
@@ -8055,7 +8065,10 @@ fn can_reuse_symbol<'a>(
                 .enumerate()
                 .find_map(|(current, (label, _, _))| (label == *field).then_some(current));
 
-            let struct_index = index.expect("field not in its own type");
+            let struct_index = match index {
+                Some(index) => index as u64,
+                None => return NotASymbol,
+            };
 
             let struct_symbol = possible_reuse_symbol_or_specialize(
                 env,
@@ -10136,7 +10149,6 @@ fn find_lambda_sets_help(
                     }
                 }
                 FlatType::EmptyRecord => {}
-                FlatType::EmptyTuple => {}
                 FlatType::EmptyTagUnion => {}
             },
             Content::Alias(_, _, actual, _) => {
