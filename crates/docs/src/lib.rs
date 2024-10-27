@@ -41,6 +41,7 @@ pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
 
     struct Assets<S: AsRef<str>> {
         search_js: S,
+        llms_txt: S,
         styles_css: S,
         raw_template_html: S,
     }
@@ -48,11 +49,13 @@ pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
     #[cfg(not(debug_assertions))]
     let assets = {
         let search_js = include_str!("./static/search.js");
+        let llms_txt = include_str!("./static/llms.txt");
         let styles_css = include_str!("./static/styles.css");
         let raw_template_html = include_str!("./static/index.html");
 
         Assets {
             search_js,
+            llms_txt,
             styles_css,
             raw_template_html,
         }
@@ -66,11 +69,13 @@ pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
 
         // Read the assets from the filesystem
         let search_js = fs::read_to_string(static_dir.join("search.js")).unwrap();
+        let llms_txt = fs::read_to_string(static_dir.join("llms.txt")).unwrap();
         let styles_css = fs::read_to_string(static_dir.join("styles.css")).unwrap();
         let raw_template_html = fs::read_to_string(static_dir.join("index.html")).unwrap();
 
         Assets {
             search_js,
+            llms_txt,
             styles_css,
             raw_template_html,
         }
@@ -80,6 +85,7 @@ pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
     // (The HTML requires more work!)
     for (file, contents) in [
         ("search.js", assets.search_js),
+        ("llms.txt", assets.llms_txt),
         ("styles.css", assets.styles_css),
     ] {
         let dir = build_dir.join(file);
@@ -117,6 +123,15 @@ pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
             "<!-- Search Type Ahead -->",
             render_search_type_ahead(exposed_module_docs.iter().map(|(_, docs)| docs)).as_str(),
         );
+
+    {
+        let llms_txt = llm_prompt(
+            package_name.as_str(),
+            exposed_module_docs.iter().map(|(_, docs)| docs),
+        );
+        fs::write(build_dir.join("llms.txt"), llms_txt)
+            .expect("TODO gracefully handle failing to write llms.txt");
+    }
 
     let all_exposed_symbols = {
         let mut set = VecSet::default();
@@ -535,6 +550,133 @@ fn render_search_type_ahead<'a, I: Iterator<Item = &'a ModuleDocumentation>>(mod
             }
         }
     }
+
+    buf
+}
+
+fn llm_prompt<'a, I: Iterator<Item = &'a ModuleDocumentation>>(
+    package_name: &str,
+    modules: I,
+) -> String {
+    let mut example_type_question_buf = String::new();
+    let mut example_description_question_buf = String::new();
+    let mut buf = String::new();
+    buf.push_str(format!("# LLM Prompt for {}\n\n", package_name).as_str());
+    buf.push_str("## Documentation\n\n");
+    for module in modules {
+        let module_name = module.name.as_str();
+        buf.push_str(format!("### {}\n\n", module_name).as_str());
+        for entry in &module.entries {
+            if let DocEntry::DocDef(doc_def) = entry {
+                if module.exposed_symbols.contains(&doc_def.symbol) {
+                    let mut doc_def_buf = String::new();
+                    doc_def_buf.push_str(format!("#### {}\n\n", doc_def.name).as_str());
+
+                    doc_def_buf.push_str("**Type Annotation**\n\n");
+                    let mut annotation_buf = String::new();
+                    type_annotation_to_html(
+                        0,
+                        &mut annotation_buf,
+                        &doc_def.type_annotation,
+                        false,
+                    );
+
+                    if !annotation_buf.is_empty() {
+                        doc_def_buf.push_str("```roc\n");
+                        doc_def_buf.push_str(format!("{}\n", annotation_buf).as_str());
+                        doc_def_buf.push_str("```\n\n");
+                    }
+
+                    let mut description_buf = String::new();
+                    if let Some(docs) = &doc_def.docs {
+                        doc_def_buf.push_str("**Description**\n\n");
+                        doc_def_buf.push_str(format!("{}\n", docs).as_str());
+                        description_buf.push_str(docs.as_str());
+                    }
+
+                    buf.push_str(doc_def_buf.as_str());
+
+                    if example_type_question_buf.is_empty() && !annotation_buf.is_empty() {
+                        example_type_question_buf.push_str("**Annotation Question Example**\n\n");
+                        example_type_question_buf.push_str("**Question:**\n");
+                        example_type_question_buf.push_str(
+                            format!("What is the type definition for `{}`?\n\n", doc_def.name)
+                                .as_str(),
+                        );
+                        example_type_question_buf.push_str("**Response:**\n");
+                        example_type_question_buf
+                            .push_str(format!("{}\n\n", annotation_buf).as_str());
+                        example_type_question_buf.push_str("**Source:**\n");
+                        example_description_question_buf.push_str("```md\n");
+                        example_type_question_buf
+                            .push_str(format!("{}\n", annotation_buf).as_str());
+                        example_description_question_buf.push_str("```\n\n");
+                    }
+
+                    if example_description_question_buf.is_empty() && !description_buf.is_empty() {
+                        example_description_question_buf
+                            .push_str("**Description Question Example**\n\n");
+                        example_description_question_buf.push_str("**Question:**\n");
+                        example_description_question_buf
+                            .push_str(format!("What does `{}` do?\n\n", doc_def.name).as_str());
+                        example_description_question_buf.push_str("**Response:**\n");
+                        example_description_question_buf
+                            .push_str(format!("{}\n\n", description_buf).as_str());
+                        example_description_question_buf.push_str("**Source:**\n");
+                        example_description_question_buf.push_str("```md\n");
+                        example_description_question_buf
+                            .push_str(format!("{}\n", doc_def_buf).as_str());
+                        example_description_question_buf.push_str("```\n\n");
+                    }
+                }
+            }
+        }
+    }
+    buf.push_str("## Instructions:\n\n");
+    buf.push_str(
+        format!(
+            "You are an expert in the Roc programming library, `{}`.\n",
+            package_name
+        )
+        .as_str(),
+    );
+    buf.push_str(
+        format!(
+            "Your task is to answer questions **only based on the official documentation** of the `{}` Roc library.\n",
+            package_name
+        )
+        .as_str(),
+    );
+    buf.push_str("If the documentation does not contain relevant information to answer the question, explicitly state: ");
+    buf.push_str(
+        format!(
+            "**I do not know, as this is not covered in the official documentation of `{}`.**\n",
+            package_name
+        )
+        .as_str(),
+    );
+
+    buf.push_str("## Example Responses:\n\n");
+
+    if !example_type_question_buf.is_empty() {
+        buf.push_str(example_type_question_buf.as_str());
+    }
+
+    if !example_description_question_buf.is_empty() {
+        buf.push_str(example_description_question_buf.as_str());
+    }
+
+    buf.push_str("**Gap in Documentation Question Example**\n\n");
+    buf.push_str("**Question:**\n");
+    buf.push_str("What's your favorite animal?\n\n");
+    buf.push_str("**Response:**\n");
+    buf.push_str(
+        format!(
+            "I do not know, as this is not covered in the official documentation of `{}`.\n\n",
+            package_name
+        )
+        .as_str(),
+    );
 
     buf
 }
