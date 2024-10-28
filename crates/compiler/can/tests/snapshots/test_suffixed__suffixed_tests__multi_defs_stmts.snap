@@ -94,14 +94,14 @@ Defs {
                                 "#!stmt",
                             ),
                         ],
-                        @33-56 Apply(
-                            @33-56 Var {
+                        @33-55 Apply(
+                            @33-55 Var {
                                 module_name: "Task",
                                 ident: "await",
                             },
                             [
-                                @33-56 Apply(
-                                    @33-56 Var {
+                                @33-55 Apply(
+                                    @33-55 Var {
                                         module_name: "Stdout",
                                         ident: "line",
                                     },
@@ -116,7 +116,7 @@ Defs {
                                         Pizza,
                                     ),
                                 ),
-                                @33-56 Closure(
+                                @33-55 Closure(
                                     [
                                         @28-30 RecordDestructure(
                                             [],

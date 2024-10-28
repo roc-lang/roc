@@ -421,7 +421,7 @@ pub fn desugar_expr<'a>(
         Var { module_name, ident } => {
             if env.fx_mode == FxMode::Task && ident.ends_with('!') {
                 env.arena.alloc(Loc::at(
-                    loc_expr.region,
+                    Region::new(loc_expr.region.start(), loc_expr.region.end().sub(1)),
                     TrySuffix {
                         expr: env.arena.alloc(Var {
                             module_name,

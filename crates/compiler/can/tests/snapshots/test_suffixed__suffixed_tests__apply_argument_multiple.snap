@@ -30,13 +30,13 @@ Defs {
                     ident: "await",
                 },
                 [
-                    @17-19 Var {
+                    @17-18 Var {
                         module_name: "",
                         ident: "a",
                     },
                     @15-22 Closure(
                         [
-                            @17-19 Identifier {
+                            @17-18 Identifier {
                                 ident: "#!0_arg",
                             },
                         ],
@@ -46,13 +46,13 @@ Defs {
                                 ident: "await",
                             },
                             [
-                                @20-22 Var {
+                                @20-21 Var {
                                     module_name: "",
                                     ident: "x",
                                 },
                                 @15-22 Closure(
                                     [
-                                        @20-22 Identifier {
+                                        @20-21 Identifier {
                                             ident: "#!1_arg",
                                         },
                                     ],
@@ -83,11 +83,11 @@ Defs {
                                                             ident: "b",
                                                         },
                                                         [
-                                                            @17-19 Var {
+                                                            @17-18 Var {
                                                                 module_name: "",
                                                                 ident: "#!0_arg",
                                                             },
-                                                            @20-22 Var {
+                                                            @20-21 Var {
                                                                 module_name: "",
                                                                 ident: "#!1_arg",
                                                             },

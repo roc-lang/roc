@@ -24,19 +24,19 @@ Defs {
             @0-4 Identifier {
                 ident: "main",
             },
-            @11-57 Apply(
-                @11-57 Var {
+            @11-56 Apply(
+                @11-56 Var {
                     module_name: "Task",
                     ident: "await",
                 },
                 [
-                    @11-57 Defs(
+                    @11-56 Defs(
                         Defs {
                             tags: [
                                 EitherIndex(2147483648),
                             ],
                             regions: [
-                                @11-57,
+                                @11-56,
                             ],
                             space_before: [
                                 Slice { start: 0, length: 0 },
@@ -66,8 +66,8 @@ Defs {
                                     body_pattern: @11-57 Identifier {
                                         ident: "#!0_stmt",
                                     },
-                                    body_expr: @11-57 Apply(
-                                        @11-57 Var {
+                                    body_expr: @11-56 Apply(
+                                        @11-56 Var {
                                             module_name: "",
                                             ident: "line",
                                         },
@@ -101,12 +101,12 @@ Defs {
                                 },
                             ],
                         },
-                        @11-57 Var {
+                        @11-56 Var {
                             module_name: "",
                             ident: "#!0_stmt",
                         },
                     ),
-                    @11-57 Closure(
+                    @11-56 Closure(
                         [
                             @11-57 Underscore(
                                 "#!stmt",
