@@ -103,6 +103,7 @@ impl RocServer {
                 work_done_progress: None,
             },
         };
+        let code_action_provider = CodeActionProviderCapability::Simple(true);
         ServerCapabilities {
             text_document_sync: Some(text_document_sync),
             hover_provider: Some(hover_provider),
@@ -110,6 +111,7 @@ impl RocServer {
             document_formatting_provider: Some(OneOf::Right(document_formatting_provider)),
             semantic_tokens_provider: Some(semantic_tokens_provider),
             completion_provider: Some(completion_provider),
+            code_action_provider: Some(code_action_provider),
             ..ServerCapabilities::default()
         }
     }
@@ -337,6 +339,18 @@ impl LanguageServer for RocServer {
                 .completion_items(&doc.text_document.uri, doc.position),
         )
         .await
+    }
+
+    async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+        let CodeActionParams {
+            text_document,
+            range,
+            context: _,
+            partial_result_params: _,
+            work_done_progress_params: _,
+        } = params;
+
+        unwind_async(self.state.registry.code_actions(&text_document.uri, range)).await
     }
 }
 
