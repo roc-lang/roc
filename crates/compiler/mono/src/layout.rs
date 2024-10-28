@@ -2192,8 +2192,7 @@ fn lambda_set_size(subs: &Subs, var: Variable) -> (usize, usize, usize) {
                     }
                     stack.push((ext.var(), depth_any + 1, depth_lset));
                 }
-                FlatType::EffectfulFunc => internal_error!(),
-                FlatType::EmptyRecord | FlatType::EmptyTagUnion => {}
+                FlatType::EmptyRecord | FlatType::EmptyTagUnion | FlatType::EffectfulFunc => {}
             },
             Content::FlexVar(_)
             | Content::RigidVar(_)
