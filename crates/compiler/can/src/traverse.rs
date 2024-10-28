@@ -989,3 +989,54 @@ pub fn find_declaration(symbol: Symbol, decls: &'_ Declarations) -> Option<Found
         }
     }
 }
+
+pub fn find_declaration_at(region: Region, decls: &Declarations) -> Option<FoundDeclaration<'_>> {
+    let mut visitor = Finder {
+        region,
+        found: None,
+    };
+
+    visitor.visit_decls(decls);
+    return visitor.found;
+
+    struct Finder<'a> {
+        region: Region,
+        found: Option<FoundDeclaration<'a>>,
+    }
+
+    impl Visitor for Finder<'_> {
+        fn should_visit(&mut self, region: Region) -> bool {
+            region.contains(&self.region)
+        }
+
+        fn visit_decl(&mut self, decl: DeclarationInfo<'_>) {
+            if self.should_visit(decl.region()) {
+                match decl {
+                    DeclarationInfo::Value { .. }
+                    | DeclarationInfo::Function { .. }
+                    | DeclarationInfo::Destructure { .. } => {
+                        self.found = Some(FoundDeclaration::Decl(unsafe {
+                            // Safety: Extends the lifetime to that of `visitor` which will not
+                            // outlive `decls`. The declaration can't escape the passed in `decls`,
+                            // and the visitor does not synthesize any.
+                            std::mem::transmute(decl.clone())
+                        }));
+                        walk_decl(self, decl);
+                    }
+                    _ => {
+                        walk_decl(self, decl);
+                    }
+                }
+            }
+        }
+
+        fn visit_def(&mut self, def: &Def) {
+            if self.should_visit(def.region()) {
+                // Safety: Extends the lifetime to that of `visitor` which will not outlive `decls`.
+                // The def can't escape the passed in `decls`, and the visitor does not synthesize defs.
+                self.found = Some(FoundDeclaration::Def(unsafe { std::mem::transmute(def) }));
+                walk_def(self, def)
+            }
+        }
+    }
+}
