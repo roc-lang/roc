@@ -25,6 +25,7 @@ roc_solve_problem = { path = "../compiler/solve_problem" }
 roc_target = { path = "../compiler/roc_target" }
 roc_types = { path = "../compiler/types" }
 roc_packaging = {path = "../packaging"}
+roc_cli = { path = "../cli" }
 
 bumpalo.workspace = true
 parking_lot.workspace = true
