@@ -35,6 +35,7 @@ pub enum DeclarationInfo<'a> {
         expr_var: Variable,
         pattern: Pattern,
         function: &'a Loc<expr::FunctionDef>,
+        annotation: Option<&'a Annotation>,
     },
     Destructure {
         loc_pattern: &'a Loc<Pattern>,
@@ -119,6 +120,7 @@ pub fn walk_decls<V: Visitor>(visitor: &mut V, decls: &Declarations) {
 
                 let loc_symbol = decls.symbols[index];
                 let expr_var = decls.variables[index];
+                let annotation = decls.annotations[index].as_ref();
 
                 let pattern = match decls.specializes.get(&index).copied() {
                     Some(specializes) => Pattern::AbilityMemberSpecialization {
@@ -136,6 +138,7 @@ pub fn walk_decls<V: Visitor>(visitor: &mut V, decls: &Declarations) {
                     expr_var,
                     pattern,
                     function: function_def,
+                    annotation,
                 }
             }
             Destructure(destructure_index) => {
@@ -200,6 +203,7 @@ pub fn walk_decl<V: Visitor>(visitor: &mut V, decl: DeclarationInfo<'_>) {
             expr_var,
             pattern,
             function,
+            annotation,
         } => {
             visitor.visit_pattern(&pattern, loc_symbol.region, Some(expr_var));
 
@@ -208,7 +212,11 @@ pub fn walk_decl<V: Visitor>(visitor: &mut V, decl: DeclarationInfo<'_>) {
                 &function.value.arguments,
                 loc_body,
                 function.value.return_type,
-            )
+            );
+
+            if let Some(annot) = annotation {
+                visitor.visit_annotation(annot);
+            }
         }
         Destructure {
             loc_pattern,
