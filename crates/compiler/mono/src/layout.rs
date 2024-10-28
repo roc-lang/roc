@@ -3465,7 +3465,9 @@ fn layout_from_flat_type<'a>(
         }
         EmptyTagUnion => cacheable(Ok(Layout::VOID)),
         EmptyRecord => cacheable(Ok(Layout::UNIT)),
-        EffectfulFunc => internal_error!(),
+        EffectfulFunc => {
+            internal_error!("Cannot create a layout for an unconstrained EffectfulFunc")
+        }
     }
 }
 
