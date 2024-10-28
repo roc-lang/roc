@@ -490,7 +490,14 @@ fn chomp_identifier_chain<'a>(
             chomped += width;
         } else if ch == '!' && !first_is_uppercase {
             chomped += width;
-            break;
+
+            let value = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
+            let ident = Ident::Access {
+                module_name: "",
+                parts: arena.alloc([Accessor::RecordField(value)]),
+            };
+
+            return Ok((chomped as u32, ident));
         } else {
             // we're done
             break;
