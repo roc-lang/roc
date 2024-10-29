@@ -6098,6 +6098,7 @@ mod test_fmt {
             r#"
             when foo is
                 "abc" -> ""
+                _ -> "abc"
             "#
         ));
     }
@@ -6109,6 +6110,7 @@ mod test_fmt {
             r#"
             foo ~
                 "abc" -> ""
+                _ -> "abc"
             "#
         ));
     }

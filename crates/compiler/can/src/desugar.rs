@@ -1349,7 +1349,7 @@ fn binop_to_function(binop: BinOp) -> (&'static str, &'static str) {
         And => (ModuleName::BOOL, "and"),
         Or => (ModuleName::BOOL, "or"),
         Pizza => unreachable!("Cannot desugar the |> operator"),
-        When => unreachable!("Cannot desugar the ~ `when` operator"),
+        TildeWhen => unreachable!("Cannot desugar the ~ `when` operator"),
     }
 }
 

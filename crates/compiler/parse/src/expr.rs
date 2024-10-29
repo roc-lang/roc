@@ -357,7 +357,7 @@ fn parse_term<'a>(
                     if at_keyword(keyword::WHEN, &state) {
                         let state = state.advance(keyword::WHEN.len());
                         let indent = state.line_indent();
-                        return match when::rest_of_when_expr(flags, arena, state, indent) {
+                        return match when::rest_of_when_expr(None, flags, arena, state, indent) {
                             Ok((p, expr, state)) => {
                                 Ok((p, Loc::pos(start, state.pos(), expr), state))
                             }
@@ -616,7 +616,7 @@ fn parse_stmt_start<'a>(
                 if at_keyword(keyword::WHEN, &state) {
                     state.advance_mut(keyword::WHEN.len());
                     let indent = state.line_indent();
-                    match when::rest_of_when_expr(flags, arena, state, indent) {
+                    match when::rest_of_when_expr(None, flags, arena, state, indent) {
                         Ok((p, expr, state)) => {
                             Ok((p, Loc::pos(start, state.pos(), Stmt::Expr(expr)), state))
                         }
@@ -1499,6 +1499,17 @@ fn parse_stmt_operator<'a>(
     let op_end = loc_op.region.end();
     let new_start = state.pos();
     match op {
+        OperatorOrDef::BinOp(BinOp::TildeWhen) => {
+            let when_pos = state.pos();
+            let pattern = expr_state.expr;
+            let pattern =
+                pattern.spaced_around(arena, expr_state.spaces_after, spaces_after_op.value);
+
+            match when::rest_of_when_expr(Some(pattern), flags, arena, state, min_indent) {
+                Ok((p, out, state)) => Ok((p, Stmt::Expr(out), state)),
+                Err((p, fail)) => Err((p, EExpr::When(fail, when_pos))),
+            }
+        }
         OperatorOrDef::BinOp(BinOp::Minus) if expr_state.end != op_start && op_end == new_start => {
             parse_negative_term(
                 arena,
@@ -1534,15 +1545,14 @@ fn parse_stmt_operator<'a>(
             let (value_def, state) = {
                 match expr_to_pattern_help(arena, &call.value) {
                     Ok(pattern) => {
-                        let (_, body, state) = parse_block_inner(
+                        let (_, body, state) = parse_block(
                             flags,
                             arena,
                             state,
                             inc_indent,
                             EExpr::IndentEnd,
                             |a, _| a.clone(),
-                            spaces_after_op,
-                            !spaces_after_op.value.is_empty(),
+                            Some(spaces_after_op),
                         )?;
 
                         let alias =
@@ -1551,7 +1561,7 @@ fn parse_stmt_operator<'a>(
                     }
                     Err(_) => {
                         // this `=` likely occurred inline; treat it as an invalid operator
-                        let fail = EExpr::BadOperator(arena.alloc("="), loc_op.region.start());
+                        let fail = EExpr::BadOperator(arena.alloc("="), op_start);
                         return Err((MadeProgress, fail));
                     }
                 }
@@ -1580,7 +1590,7 @@ fn parse_stmt_operator<'a>(
                     }
                     Err(_) => {
                         // this `=` likely occurred inline; treat it as an invalid operator
-                        let fail = EExpr::BadOperator("=", loc_op.region.start());
+                        let fail = EExpr::BadOperator("=", op_start);
                         return Err((MadeProgress, fail));
                     }
                 }
@@ -2502,35 +2512,48 @@ mod when {
 
     /// If Ok it always returns MadeProgress
     pub fn rest_of_when_expr<'a>(
+        pattern: Option<Loc<Expr<'a>>>,
         flags: ExprParseFlags,
         arena: &'a Bump,
         state: State<'a>,
         min_indent: u32,
     ) -> ParseResult<'a, Expr<'a>, EWhen<'a>> {
-        let (_, spaces_before, state) =
-            eat_space_check(EWhen::IndentCondition, arena, state, min_indent, true)?;
+        let (pattern, state) = if let Some(pat) = pattern {
+            (pat, state)
+        } else {
+            let (_, spaces_before, state) =
+                eat_space_check(EWhen::IndentCondition, arena, state, min_indent, true)?;
 
-        let at_cond = state.pos();
-        let (_, cond, state) = parse_expr_start(flags, None, arena, state, min_indent)
-            .map_err(|(_, fail)| (MadeProgress, EWhen::Condition(arena.alloc(fail), at_cond)))?;
+            let at_cond = state.pos();
+            let (pat, state) = match parse_expr_start(flags, None, arena, state, min_indent) {
+                Ok((_, out, state)) => (out, state),
+                Err((_, fail)) => {
+                    return Err((MadeProgress, EWhen::Condition(arena.alloc(fail), at_cond)))
+                }
+            };
 
-        let (_, (spaces_after, _), state) = eat_space(arena, state, true)?;
+            let (_, (spaces_after, _), state) = eat_space(arena, state, true)?;
+            let pat = pat.spaced_around(arena, spaces_before, spaces_after);
 
-        if !at_keyword(keyword::IS, &state) {
-            return Err((MadeProgress, EWhen::Is(state.pos())));
-        }
+            if !at_keyword(keyword::IS, &state) {
+                return Err((MadeProgress, EWhen::Is(state.pos())));
+            }
+
+            (pat, state.advance(keyword::IS.len()))
+        };
 
         // Note that we allow the `is` to be at any indent level, since this doesn't introduce any
         // ambiguity. The formatter will fix it up.
         // We require that branches are indented relative to the line containing the `is`.
         let branch_indent = state.line_indent() + 1;
-        let state = state.advance(keyword::IS.len());
 
         // 1. Parse the first branch and get its indentation level (it must be >= branch_indent).
         // 2. Parse the other branches. Their indentation levels must be == the first branch's.
-        let (_, ((pattern_indent, first_patterns), guard), state) =
-            parse_branch_alternatives(flags, None, arena, state, branch_indent)
-                .map_err(|(_, fail)| (MadeProgress, fail))?;
+        let (((pattern_indent, first_patterns), guard), state) =
+            match parse_branch_alternatives(flags, None, arena, state, branch_indent) {
+                Ok((_, out, state)) => (out, state),
+                Err((_, fail)) => return Err((MadeProgress, fail)),
+            };
 
         // Parse the first "->" and the expression after it.
         let (_, value, mut state) = parse_branch_result(arena, state)?;
@@ -2573,8 +2596,7 @@ mod when {
             }
         }
 
-        let cond = cond.spaced_around(arena, spaces_before, spaces_after);
-        let when = Expr::When(arena.alloc(cond), branches.into_bump_slice());
+        let when = Expr::When(arena.alloc(pattern), branches.into_bump_slice());
         Ok((MadeProgress, when, state))
     }
 
@@ -2699,14 +2721,15 @@ mod when {
             return Err((MadeProgress, EWhen::Arrow(state.pos())));
         }
         let state = state.advance(2);
-
+        let inc_indent = state.line_indent() + 1;
         match parse_block(
             CHECK_FOR_ARROW | ACCEPT_MULTI_BACKPASSING,
             arena,
             state,
-            true,
+            inc_indent,
             EWhen::IndentBranch,
             EWhen::Branch,
+            None,
         ) {
             Ok((_, value, state)) => Ok((MadeProgress, value, state)),
             Err((_, fail)) => Err((MadeProgress, fail)),
@@ -2722,13 +2745,15 @@ fn rest_of_expect_stmt<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Loc<Stmt<'a>>, EExpr<'a>> {
+    let inc_indent = state.line_indent() + 1;
     match parse_block(
         flags,
         arena,
         state,
-        true,
+        inc_indent,
         EExpect::IndentCondition,
         EExpect::Condition,
+        None,
     ) {
         Ok((_, condition, state)) => {
             let vd = if !is_fx {
@@ -2756,13 +2781,15 @@ fn rest_of_dbg_stmt<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Loc<Stmt<'a>>, EExpr<'a>> {
+    let inc_indent = state.line_indent() + 1;
     match parse_block(
         flags,
         arena,
         state,
-        true,
+        inc_indent,
         EExpect::IndentCondition,
         EExpect::Condition,
+        None,
     ) {
         Ok((_, condition, state)) => {
             let vd = ValueDef::Dbg {
@@ -2931,9 +2958,10 @@ fn rest_of_if_expr<'a>(
             CHECK_FOR_ARROW | ACCEPT_MULTI_BACKPASSING,
             arena,
             state,
-            false,
+            0,
             EIf::IndentThenBranch,
             EIf::ThenBranch,
+            None,
         )
         .map_err(|(_, fail)| (MadeProgress, fail))?;
 
@@ -2980,26 +3008,14 @@ fn rest_of_if_expr<'a>(
         if_indent
     };
 
-    let (_, first_spaces, at_final_else) = eat_space_loc_comments(
-        EIf::IndentElseBranch,
-        arena,
-        at_final_else,
-        min_indent,
-        false,
-    )?;
-
-    let allow_defs = !first_spaces.value.is_empty();
-
-    // use parse_block_inner so we can set min_indent
-    let (_, else_branch, state) = parse_block_inner(
+    let (_, else_branch, state) = parse_block(
         flags,
         arena,
         at_final_else,
         min_indent,
         EIf::IndentElseBranch,
         EIf::ElseBranch,
-        first_spaces,
-        allow_defs,
+        None,
     )?;
 
     let expr = Expr::If {
@@ -3016,64 +3032,36 @@ fn rest_of_if_expr<'a>(
 /// There are two cases here:
 /// 1. If there is a preceding newline, then the block must be indented and is allowed to have definitions.
 /// 2. If there is no preceding newline, then the block must consist of a single expression (no definitions).
-fn parse_block<'a, E>(
-    flags: ExprParseFlags,
-    arena: &'a Bump,
-    state: State<'a>,
-    require_indent: bool,
-    indent_problem: fn(Position) -> E,
-    wrap_error: fn(&'a EExpr<'a>, Position) -> E,
-) -> ParseResult<'a, Loc<Expr<'a>>, E>
-where
-    E: 'a + SpaceProblem,
-{
-    let min_indent = if require_indent {
-        state.line_indent() + 1
-    } else {
-        0
-    };
-
-    let (_, first_spaces, state) =
-        eat_space_loc_comments(indent_problem, arena, state, min_indent, false)?;
-
-    let allow_defs = !first_spaces.value.is_empty();
-    parse_block_inner(
-        flags,
-        arena,
-        state,
-        min_indent,
-        indent_problem,
-        wrap_error,
-        first_spaces,
-        allow_defs,
-    )
-}
-
-/// Parse a block of statements, and process that into an Expr.
-/// Assumes the caller has already parsed the optional first "space" (newline),
-/// and decided whether to allow definitions.
+/// 3. If you pass `first_spaces: None` this function will parse the spaces itself
 #[allow(clippy::too_many_arguments)]
-fn parse_block_inner<'a, E>(
+fn parse_block<'a, E>(
     flags: ExprParseFlags,
     arena: &'a Bump,
     state: State<'a>,
     min_indent: u32,
     indent_problem: fn(Position) -> E,
     wrap_error: fn(&'a EExpr<'a>, Position) -> E,
-    first_space: Loc<&'a [CommentOrNewline<'a>]>,
-    allow_defs: bool,
+    first_spaces: Option<Loc<&'a [CommentOrNewline<'a>]>>,
 ) -> ParseResult<'a, Loc<Expr<'a>>, E>
 where
     E: 'a + SpaceProblem,
 {
-    if allow_defs {
+    let (first_spaces, state) = if let Some(first_spaces) = first_spaces {
+        (first_spaces, state)
+    } else {
+        let (_, first_spaces, state) =
+            eat_space_loc_comments(indent_problem, arena, state, min_indent, false)?;
+        (first_spaces, state)
+    };
+
+    if !first_spaces.value.is_empty() {
         let (_, stmts, state) = parse_stmt_seq(
             arena,
             state,
             wrap_error,
             flags,
             min_indent,
-            Loc::at(first_space.region, &[]),
+            Loc::at(first_spaces.region, &[]),
             indent_problem,
         )?;
 
@@ -3085,7 +3073,7 @@ where
 
         match stmts_to_expr(&stmts, arena) {
             Ok(expr) => {
-                let expr = expr.spaced_before(arena, first_space.value);
+                let expr = expr.spaced_before(arena, first_spaces.value);
                 Ok((MadeProgress, expr, state))
             }
             Err(e) => Err((MadeProgress, wrap_error(arena.alloc(e), last_pos))),
@@ -3094,7 +3082,7 @@ where
         let prev_pos = state.pos();
         match parse_expr_start(flags, None, arena, state, min_indent) {
             Ok((_, expr, state)) => {
-                let expr = expr.spaced_before(arena, first_space.value);
+                let expr = expr.spaced_before(arena, first_spaces.value);
                 Ok((MadeProgress, expr, state))
             }
             Err((_, e)) => Err((MadeProgress, wrap_error(arena.alloc(e), prev_pos))),
@@ -4070,7 +4058,7 @@ where
         }
         "<-" => good!(OperatorOrDef::Backpassing, 2),
         "!" => Err((NoProgress, to_error("!", state.pos()))),
-        "~" => good!(OperatorOrDef::BinOp(BinOp::When), 2),
+        "~" => good!(OperatorOrDef::BinOp(BinOp::TildeWhen), 1),
         _ => Err((MadeProgress, to_error(chomped, state.pos()))),
     }
 }

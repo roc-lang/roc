@@ -14,7 +14,7 @@ const PRECEDENCES: [(BinOp, u8); BIN_OP_COUNT] = [
     (Plus, 5),
     (Minus, 5),
     (Pizza, 4),
-    (When, 4),
+    (TildeWhen, 4),
     (Equals, 3),
     (NotEquals, 3),
     (LessThan, 2),
@@ -34,7 +34,7 @@ const ASSOCIATIVITIES: [(BinOp, Associativity); BIN_OP_COUNT] = [
     (Plus, LeftAssociative),
     (Minus, LeftAssociative),
     (Pizza, LeftAssociative),
-    (When, LeftAssociative),
+    (TildeWhen, LeftAssociative),
     (Equals, NonAssociative),
     (NotEquals, NonAssociative),
     (LessThan, NonAssociative),
@@ -54,7 +54,7 @@ const DISPLAY_STRINGS: [(BinOp, &str); BIN_OP_COUNT] = [
     (Plus, "+"),
     (Minus, "-"),
     (Pizza, "|>"),
-    (When, "~"),
+    (TildeWhen, "~"),
     (Equals, "=="),
     (NotEquals, "!="),
     (LessThan, "<"),
@@ -150,7 +150,7 @@ pub enum BinOp {
     Plus,
     Minus,
     Pizza,
-    When, // todo: @wip @not_implemented
+    TildeWhen,
     Equals,
     NotEquals,
     LessThan,
@@ -166,7 +166,7 @@ impl BinOp {
     /// how wide this operator is when typed out
     pub fn width(self) -> u16 {
         match self {
-            Caret | Star | Slash | Percent | Plus | Minus | LessThan | GreaterThan | When => 1,
+            Caret | Star | Slash | Percent | Plus | Minus | LessThan | GreaterThan | TildeWhen => 1,
             DoubleSlash | Equals | NotEquals | LessThanOrEq | GreaterThanOrEq | And | Or
             | Pizza => 2,
         }
