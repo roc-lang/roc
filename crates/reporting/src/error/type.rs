@@ -1659,12 +1659,8 @@ fn to_expr_report<'b>(
                     found,
                     expected_type,
                     ExpectationContext::Arbitrary,
-                    add_category(alloc, alloc.text("It is"), &category),
-                    alloc.concat([
-                        alloc.reflow("But I need every "),
-                        alloc.keyword("return"),
-                        alloc.reflow(" statement in that function to return:"),
-                    ]),
+                    add_category(alloc, alloc.text("It"), &category),
+                    alloc.reflow("But I expected the function to have return type:"),
                     None,
                 );
 
@@ -1994,7 +1990,7 @@ fn format_category<'b>(
         }
 
         Uniqueness => (
-            alloc.concat([this_is, alloc.text(" an uniqueness attribute")]),
+            alloc.concat([this_is, alloc.text(" a uniqueness attribute")]),
             alloc.text(" of type:"),
         ),
         Crash => {
@@ -2022,12 +2018,7 @@ fn format_category<'b>(
             alloc.text(" of type:"),
         ),
         Return => (
-            alloc.concat([
-                this_is,
-                alloc.reflow(" a "),
-                alloc.keyword("return"),
-                alloc.reflow(" statement"),
-            ]),
+            alloc.concat([text!(alloc, "{}his", t), alloc.reflow(" returns a value")]),
             alloc.text(" of type:"),
         ),
     }

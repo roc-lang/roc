@@ -2605,13 +2605,11 @@ fn canonicalize_pending_body<'a>(
                 env.tailcallable_symbol = outer_tailcallable;
 
                 // The closure is self tail recursive iff it tail calls itself (by defined name).
-                let is_recursive = if can_output
-                    .early_tail_calls
-                    .iter()
-                    .chain(std::iter::once(&can_output.final_tail_call))
-                    .all(|tail_call| {
-                        matches!(tail_call, Some(tail_symbol) if tail_symbol == defined_symbol)
-                    })
+                let is_recursive = if !can_output.tail_calls.is_empty()
+                    && can_output
+                        .tail_calls
+                        .iter()
+                        .all(|tail_symbol| tail_symbol == defined_symbol)
                 {
                     Recursive::TailRecursive
                 } else {

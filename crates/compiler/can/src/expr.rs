@@ -39,8 +39,7 @@ pub type PendingDerives = VecMap<Symbol, (Type, Vec<Loc<Symbol>>)>;
 #[derive(Clone, Default, Debug)]
 pub struct Output {
     pub references: References,
-    pub early_tail_calls: Vec<Option<Symbol>>,
-    pub final_tail_call: Option<Symbol>,
+    pub tail_calls: Vec<Symbol>,
     pub introduced_variables: IntroducedVariables,
     pub aliases: VecMap<Symbol, Alias>,
     pub non_closures: VecSet<Symbol>,
@@ -51,9 +50,8 @@ impl Output {
     pub fn union(&mut self, other: Self) {
         self.references.union_mut(&other.references);
 
-        self.early_tail_calls.extend(other.early_tail_calls);
-        if let (None, Some(later)) = (self.final_tail_call, other.final_tail_call) {
-            self.final_tail_call = Some(later);
+        if self.tail_calls.is_empty() && !other.tail_calls.is_empty() {
+            self.tail_calls = other.tail_calls;
         }
 
         self.introduced_variables
@@ -909,17 +907,19 @@ pub fn canonicalize_expr<'a>(
                 output.union(fn_expr_output);
 
                 // Default: We're not tail-calling a symbol (by name), we're tail-calling a function value.
-                output.final_tail_call = None;
+                output.tail_calls = vec![];
 
                 let expr = match fn_expr.value {
                     Var(symbol, _) => {
                         output.references.insert_call(symbol);
 
                         // we're tail-calling a symbol by name, check if it's the tail-callable symbol
-                        output.final_tail_call = match &env.tailcallable_symbol {
-                            Some(tc_sym) if *tc_sym == symbol => Some(symbol),
-                            Some(_) | None => None,
-                        };
+                        if env
+                            .tailcallable_symbol
+                            .is_some_and(|tc_sym| tc_sym == symbol)
+                        {
+                            output.tail_calls.push(symbol);
+                        }
 
                         Call(
                             Box::new((
@@ -1045,7 +1045,7 @@ pub fn canonicalize_expr<'a>(
                 canonicalize_expr(env, var_store, scope, loc_cond.region, &loc_cond.value);
 
             // the condition can never be a tail-call
-            output.final_tail_call = None;
+            output.tail_calls = vec![];
 
             let mut can_branches = Vec::with_capacity(branches.len());
 
@@ -1070,7 +1070,7 @@ pub fn canonicalize_expr<'a>(
             // if code gen mistakenly thinks this is a tail call just because its condition
             // happened to be one. (The condition gave us our initial output value.)
             if branches.is_empty() {
-                output.final_tail_call = None;
+                output.tail_calls = vec![];
             }
 
             // Incorporate all three expressions into a combined Output value.
@@ -1280,15 +1280,13 @@ pub fn canonicalize_expr<'a>(
                 });
             }
 
-            let (loc_return_expr, mut output1) = canonicalize_expr(
+            let (loc_return_expr, output1) = canonicalize_expr(
                 env,
                 var_store,
                 scope,
                 return_expr.region,
                 &return_expr.value,
             );
-
-            output1.early_tail_calls.push(output1.final_tail_call);
 
             output.union(output1);
 
@@ -1654,12 +1652,12 @@ fn canonicalize_closure_body<'a>(
         }
     }
 
-    let final_expr = match &loc_body_expr.value {
-        Expr::LetRec(_, final_expr, _) | Expr::LetNonRec(_, final_expr) => &final_expr.value,
-        _ => &loc_body_expr.value,
-    };
+    let mut final_expr = &loc_body_expr;
+    while let Expr::LetRec(_, inner, _) | Expr::LetNonRec(_, inner) = &final_expr.value {
+        final_expr = &*inner;
+    }
 
-    if let Expr::Return { return_value, .. } = final_expr {
+    if let Expr::Return { return_value, .. } = &final_expr.value {
         env.problem(Problem::ReturnAtEndOfFunction {
             region: return_value.region,
         });

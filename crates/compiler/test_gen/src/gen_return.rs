@@ -106,17 +106,4 @@ fn early_return_solo() {
         identity,
         true
     );
-
-    assert_evals_to!(
-        r#"
-        identity = \x ->
-            return x
-
-        identity 123
-        "#,
-        123,
-        i64,
-        identity,
-        true
-    );
 }

@@ -1372,7 +1372,9 @@ pub fn can_problem<'b>(
                 alloc.concat([
                     alloc.hint("you can move the "),
                     alloc.keyword("return"),
-                    alloc.reflow(" statement below this block to make the block run."),
+                    alloc.reflow(
+                        " statement below this block to make the code that follows it run.",
+                    ),
                 ]),
             ]);
 
@@ -1384,15 +1386,15 @@ pub fn can_problem<'b>(
                 alloc.concat([
                     alloc.reflow("This "),
                     alloc.keyword("return"),
-                    alloc.reflow(" statement should be an expression instead:"),
+                    alloc.reflow(" keyword is redundant:"),
                 ]),
                 alloc.region(lines.convert_region(region), severity),
                 alloc.concat([
-                    alloc.reflow("In expression-based languages like Roc, the last expression in a function is treated like a "),
+                    alloc.reflow("The last expression in a function is treated like a "),
                     alloc.keyword("return"),
-                    alloc.reflow(" statement. Even though "),
+                    alloc.reflow(" statement. You can safely remove "),
                     alloc.keyword("return"),
-                    alloc.reflow(" would work here, just writing an expression is more elegant."),
+                    alloc.reflow(" here."),
                 ]),
             ]);
 

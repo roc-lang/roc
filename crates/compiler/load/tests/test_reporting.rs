@@ -14552,7 +14552,7 @@ All branches in an `if` must have the same type!
         9│>              useX x 123
         
         Hint: you can move the `return` statement below this block to make the
-        block run.
+        code that follows it run.
         "###
     );
 
@@ -14571,14 +14571,13 @@ All branches in an `if` must have the same type!
         @r###"
         ── UNNECESSARY RETURN in /code/proj/Main.roc ───────────────────────────────────
         
-        This `return` statement should be an expression instead:
+        This `return` keyword is redundant:
         
         7│          return y
                     ^^^^^^^^
         
-        In expression-based languages like Roc, the last expression in a
-        function is treated like a `return` statement. Even though `return` would
-        work here, just writing an expression is more elegant.
+        The last expression in a function is treated like a `return` statement.
+        You can safely remove `return` here.
         "###
     );
 
@@ -14606,11 +14605,11 @@ All branches in an `if` must have the same type!
         7│           else
         8│               x
         
-        It is a `return` statement of type:
+        This returns a value of type:
         
             Str
         
-        But I need every `return` statement in that function to return:
+        But I expected the function to have return type:
         
             Num *
         "###

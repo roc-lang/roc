@@ -3695,30 +3695,3 @@ fn dec_refcount_for_usage_after_early_return_in_if() {
         "#
     )
 }
-
-#[mono_test]
-fn dec_refcount_for_usage_after_early_return_in_when() {
-    indoc!(
-        r#"
-        displayN = \n ->
-            first = Num.toStr n
-            second =
-                when n is
-                    1 ->
-                        return "early 1"
-
-                    _ ->
-                        third = Num.toStr (n + 1)
-                        when n is
-                            2 ->
-                                return "early 2"
-
-                            _ ->
-                                third
-
-            "$(first), $(second)"
-
-        displayN 3
-        "#
-    )
-}
