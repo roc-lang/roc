@@ -1,68 +1,87 @@
 (() => {
+
     let sidebar = document.getElementById("sidebar-nav");
+    // Un-hide everything
+    sidebar
+        .querySelectorAll(".sidebar-entry a")
+        .forEach((entry) => entry.classList.remove("hidden"));
+
+    // Re-hide all the sub-entries except for those of the current module
+    let currentModuleName = document.querySelector(".module-name").textContent;
+
+    sidebar.querySelectorAll(".sidebar-entry").forEach((entry) => {
+        let entryName = entry.querySelector(".sidebar-module-link").textContent;
+        if (currentModuleName === entryName) {
+            entry.firstChild.classList.add("active");
+            return;
+        }
+        entry
+            .querySelectorAll(".sidebar-sub-entries a")
+            .forEach((subEntry) => subEntry.classList.add("hidden"));
+    });
+
+    let searchTypeAhead = document.getElementById("search-type-ahead");
     let searchBox = document.getElementById("module-search");
+    let searchForm = document.getElementById("module-search-form");
+    let topSearchResultListItem = undefined;
 
     if (searchBox != null) {
         function search() {
+            topSearchResultListItem = undefined;
             let text = searchBox.value.toLowerCase(); // Search is case-insensitive.
 
-            if (text === "") {
-                // Un-hide everything
-                sidebar
-                    .querySelectorAll(".sidebar-entry a")
-                    .forEach((entry) => entry.classList.remove("hidden"));
+                if (text === "") {
+                    searchTypeAhead.classList.add("hidden");
+                } else {
+                    let totalResults = 0;
+                    // Firsttype-ahead-signature", show/hide all the sub-entries within each module (top-level functions etc.)
+                    searchTypeAhead.querySelectorAll("li").forEach((entry) => {
+                        const entryName = entry
+                            .querySelector(".type-ahead-def-name")
+                            .textContent.toLowerCase();
+                        const entrySignature = entry
+                            .querySelector(".type-ahead-signature")
+                            .textContent.toLowerCase()
+                            .replace(/\s+/g, "");
 
-                // Re-hide all the sub-entries except for those of the current module
-                let currentModuleName =
-                    document.querySelector(".module-name").textContent;
-
-                sidebar.querySelectorAll(".sidebar-entry").forEach((entry) => {
-                    let entryName = entry.querySelector(
-                        ".sidebar-module-link"
-                    ).textContent;
-                    if (currentModuleName === entryName) {
-                        entry.firstChild.classList.add("active");
-                        return;
-                    }
-                    entry
-                        .querySelectorAll(".sidebar-sub-entries a")
-                        .forEach((subEntry) =>
-                            subEntry.classList.add("hidden")
-                        );
-                });
-            } else {
-                // First, show/hide all the sub-entries within each module (top-level functions etc.)
-                sidebar
-                    .querySelectorAll(".sidebar-sub-entries a")
-                    .forEach((entry) => {
-                        if (entry.textContent.toLowerCase().includes(text)) {
-                            entry.classList.remove("hidden");
-                        } else {
-                            entry.classList.add("hidden");
-                        }
-                    });
-
-                // Then, show/hide modules based on whether they match, or any of their sub-entries matched
-                sidebar
-                    .querySelectorAll(".sidebar-module-link")
-                    .forEach((entry) => {
                         if (
-                            entry.textContent.toLowerCase().includes(text) ||
-                            entry.parentNode.querySelectorAll(
-                                ".sidebar-sub-entries a:not(.hidden)"
-                            ).length > 0
+                            totalResults < 5 &&
+                            (entryName.includes(text) ||
+                                entrySignature.includes(text.replace(/\s+/g, "")))
                         ) {
+                            totalResults++;
                             entry.classList.remove("hidden");
+                            if (topSearchResultListItem === undefined) {
+                                topSearchResultListItem = entry;
+                            }
                         } else {
                             entry.classList.add("hidden");
                         }
                     });
-            }
+                    if (totalResults < 1) {
+                        searchTypeAhead.classList.add("hidden");
+                    } else {
+                        searchTypeAhead.classList.remove("hidden");
+                    }
+                }
         }
 
         searchBox.addEventListener("input", search);
 
         search();
+
+        function searchSubmit(e) {
+            // pick the top result if the user submits search form
+            e.preventDefault();
+            if (topSearchResultListItem !== undefined) {
+                let topSearchResultListItemAnchor =
+                    topSearchResultListItem.querySelector("a");
+                if (topSearchResultListItemAnchor !== null) {
+                    topSearchResultListItemAnchor.click();
+                }
+            }
+        }
+        searchForm.addEventListener("submit", searchSubmit);
 
         // Capture '/' keypress for quick search
         window.addEventListener("keyup", (e) => {
@@ -77,12 +96,19 @@
 
                 // De-focus input box
                 searchBox.blur();
+            } else if (
+                e.key === "Escape" &&
+                searchTypeAhead.contains(document.activeElement)
+            ) {
+                e.preventDefault;
 
-                // Reset sidebar state
-                search();
+                // De-focus type ahead
+                searchBox.focus();
+                searchBox.blur();
             }
         });
     }
+
 
     const isTouchSupported = () => {
         try {
