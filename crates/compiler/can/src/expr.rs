@@ -1654,7 +1654,7 @@ fn canonicalize_closure_body<'a>(
 
     let mut final_expr = &loc_body_expr;
     while let Expr::LetRec(_, inner, _) | Expr::LetNonRec(_, inner) = &final_expr.value {
-        final_expr = &*inner;
+        final_expr = inner;
     }
 
     if let Expr::Return { return_value, .. } = &final_expr.value {
