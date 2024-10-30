@@ -407,7 +407,7 @@ pub fn type_problem<'b>(
                     FxSuffixKind::Let(_) => alloc
                         .reflow("This function is effectful, but its name does not indicate so:"),
                     FxSuffixKind::Pattern(_) => alloc.reflow(
-                        "This matches an effectful function, but its name does not indicate so:",
+                        "This is an effectful function, but its name does not indicate so:",
                     ),
                     FxSuffixKind::RecordField(_) => {
                         unreachable!()
@@ -452,8 +452,9 @@ pub fn type_problem<'b>(
                     FxSuffixKind::Let(_) => {
                         alloc.reflow("This function is pure, but its name suggests otherwise:")
                     }
-                    FxSuffixKind::Pattern(_) => alloc
-                        .reflow("This matches a pure function, but the name suggests otherwise:"),
+                    FxSuffixKind::Pattern(_) => {
+                        alloc.reflow("This is a pure function, but its name suggests otherwise:")
+                    }
                     FxSuffixKind::RecordField(_) => alloc.reflow(
                         "This field's value is a pure function, but its name suggests otherwise:",
                     ),
