@@ -10838,7 +10838,7 @@ All branches in an `if` must have the same type!
 
     Since it doesn't call any effectful functions, this assignment cannot
     affect the program's behavior. If you don't need to use the value on
-    the right-hand-side, consider removing the assignment.
+    the right-hand side, consider removing the assignment.
 
     ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
 
@@ -10849,7 +10849,7 @@ All branches in an `if` must have the same type!
 
     Since it doesn't call any effectful functions, this assignment cannot
     affect the program's behavior. If you don't need to use the value on
-    the right-hand-side, consider removing the assignment.
+    the right-hand side, consider removing the assignment.
 
     ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
 
@@ -10860,7 +10860,7 @@ All branches in an `if` must have the same type!
 
     Since it doesn't call any effectful functions, this assignment cannot
     affect the program's behavior. If you don't need to use the value on
-    the right-hand-side, consider removing the assignment.
+    the right-hand side, consider removing the assignment.
 
     ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
 
@@ -10871,7 +10871,7 @@ All branches in an `if` must have the same type!
 
     Since it doesn't call any effectful functions, this assignment cannot
     affect the program's behavior. If you don't need to use the value on
-    the right-hand-side, consider removing the assignment.
+    the right-hand side, consider removing the assignment.
     "###
     );
 

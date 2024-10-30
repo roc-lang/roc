@@ -388,7 +388,7 @@ pub fn type_problem<'b>(
             let stack = [
                 alloc.reflow("This assignment doesn't introduce any new variables:"),
                 alloc.region(lines.convert_region(region), severity),
-                alloc.reflow("Since it doesn't call any effectful functions, this assignment cannot affect the program's behavior. If you don't need to use the value on the right-hand-side, consider removing the assignment.")
+                alloc.reflow("Since it doesn't call any effectful functions, this assignment cannot affect the program's behavior. If you don't need to use the value on the right-hand side, consider removing the assignment.")
             ];
 
             Some(Report {
