@@ -10,7 +10,7 @@ use crate::Buf;
 use roc_module::called_via::{self, BinOp};
 use roc_parse::ast::{
     is_expr_suffixed, AssignedField, Base, ClosureShortcut, Collection, CommentOrNewline, Expr,
-    ExtractSpaces, Pattern, TryTarget, WhenBranch,
+    ExtractSpaces, Pattern, TryTarget, WhenAsBinOp, WhenBranch,
 };
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_parse::ident::Accessor;
@@ -54,7 +54,7 @@ impl<'a> Formattable for Expr<'a> {
             }
 
             // These expressions always have newlines
-            Defs(_, _) | When(_, _) => true,
+            Defs(_, _) | When(_, _, _) => true,
 
             List(items) => is_collection_multiline(items),
 
@@ -476,7 +476,9 @@ impl<'a> Formattable for Expr<'a> {
                     indent,
                 );
             }
-            When(loc_condition, branches) => fmt_when(buf, loc_condition, branches, indent),
+            When(loc_condition, branches, as_binop) => {
+                fmt_when(buf, loc_condition, branches, as_binop, indent)
+            }
             Tuple(items) => fmt_collection(buf, indent, Braces::Round, *items, Newlines::No),
             List(items) => fmt_collection(buf, indent, Braces::Square, *items, Newlines::No),
             BinOps(lefts, right) => fmt_binops(buf, lefts, right, false, indent),
@@ -708,7 +710,7 @@ fn push_op(buf: &mut Buf, op: BinOp) {
         called_via::BinOp::And => buf.push_str("&&"),
         called_via::BinOp::Or => buf.push_str("||"),
         called_via::BinOp::Pizza => buf.push_str("|>"),
-        called_via::BinOp::TildeWhen => buf.push_str("~"),
+        called_via::BinOp::When => buf.push_str("~"),
     }
 }
 
@@ -852,12 +854,15 @@ fn fmt_when<'a>(
     buf: &mut Buf,
     loc_condition: &'a Loc<Expr<'a>>,
     branches: &[&'a WhenBranch<'a>],
+    as_binop: &Option<WhenAsBinOp>,
     indent: u16,
 ) {
     let is_multiline_condition = loc_condition.is_multiline();
-    buf.ensure_ends_with_newline();
-    buf.indent(indent);
-    buf.push_str("when");
+    if as_binop.is_none() {
+        buf.ensure_ends_with_newline();
+        buf.indent(indent);
+        buf.push_str("when");
+    }
     if is_multiline_condition {
         let condition_indent = indent + INDENT;
 
@@ -909,7 +914,11 @@ fn fmt_when<'a>(
         loc_condition.format(buf, indent);
         buf.spaces(1);
     }
-    buf.push_str("is");
+
+    match as_binop {
+        Some(WhenAsBinOp::BinOp) => buf.push_str("~"),
+        _ => buf.push_str("is"),
+    }
     buf.newline();
 
     let mut prev_branch_was_multiline = false;
@@ -1695,7 +1704,7 @@ fn sub_expr_requests_parens(expr: &Expr<'_>) -> bool {
                     | BinOp::And
                     | BinOp::Or
                     | BinOp::Pizza
-                    | BinOp::TildeWhen => true,
+                    | BinOp::When => true,
                 })
         }
         Expr::If { .. } => true,

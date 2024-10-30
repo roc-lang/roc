@@ -775,7 +775,9 @@ impl<'a> Normalize<'a> for Expr<'a> {
                 final_else: arena.alloc(final_else.normalize(arena)),
                 indented_else,
             },
-            Expr::When(a, b) => Expr::When(arena.alloc(a.normalize(arena)), b.normalize(arena)),
+            Expr::When(a, b, c) => {
+                Expr::When(arena.alloc(a.normalize(arena)), b.normalize(arena), c)
+            }
             Expr::ParensAround(a) => {
                 // The formatter can remove redundant parentheses, so also remove these when normalizing for comparison.
                 a.normalize(arena)

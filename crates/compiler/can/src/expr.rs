@@ -1028,7 +1028,7 @@ pub fn canonicalize_expr<'a>(
 
             (Closure(closure_data), output)
         }
-        ast::Expr::When(loc_cond, branches) => {
+        ast::Expr::When(loc_cond, branches, _) => {
             // Infer the condition expression's type.
             let cond_var = var_store.fresh();
             let (can_cond, mut output) =
@@ -2495,7 +2495,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         ast::Expr::DbgStmt(_, _)
         | ast::Expr::LowLevelDbg(_, _, _)
         | ast::Expr::Expect(_, _)
-        | ast::Expr::When(_, _)
+        | ast::Expr::When(_, _, _)
         | ast::Expr::Backpassing(_, _, _)
         | ast::Expr::SpaceBefore(_, _)
         | ast::Expr::Str(StrLiteral::Block(_))

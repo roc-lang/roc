@@ -406,10 +406,14 @@ pub enum ClosureShortcut {
     Access,
 }
 
-// todo: @perf consider making it a bool to save the space in Var, etc.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ClosureShortcutForAccess {
-    Yes,
+    Access,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum WhenAsBinOp {
+    BinOp,
 }
 
 /// A parsed expression. This uses lifetimes extensively for two reasons:
@@ -548,6 +552,7 @@ pub enum Expr<'a> {
         /// is Option<Expr> because each branch may be preceded by
         /// a guard (".. if ..").
         &'a [&'a WhenBranch<'a>],
+        #[educe(Debug(ignore))] Option<WhenAsBinOp>,
     ),
 
     // Blank Space (e.g. comments, spaces, newlines) before or after an expression.
@@ -716,7 +721,7 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::DbgStmt(a, b) => is_expr_suffixed(&a.value) || is_expr_suffixed(&b.value),
         Expr::LowLevelDbg(_, a, b) => is_expr_suffixed(&a.value) || is_expr_suffixed(&b.value),
         Expr::UnaryOp(a, _) => is_expr_suffixed(&a.value),
-        Expr::When(cond, branches) => {
+        Expr::When(cond, branches, _) => {
             is_expr_suffixed(&cond.value) || branches.iter().any(|x| is_when_branch_suffixed(x))
         }
         Expr::SpaceBefore(a, _) => is_expr_suffixed(a),
@@ -1018,7 +1023,7 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                     }
                     expr_stack.push(&final_else.value);
                 }
-                When(condition, branches) => {
+                When(condition, branches, _) => {
                     expr_stack.reserve(branches.len() + 1);
                     expr_stack.push(&condition.value);
 
@@ -2498,7 +2503,7 @@ impl<'a> Malformed for Expr<'a> {
             BinOps(firsts, last) => firsts.iter().any(|(expr, _)| expr.is_malformed()) || last.is_malformed(),
             UnaryOp(expr, _) => expr.is_malformed(),
             If { if_thens, final_else, ..} => if_thens.iter().any(|(cond, body)| cond.is_malformed() || body.is_malformed()) || final_else.is_malformed(),
-            When(cond, branches) => cond.is_malformed() || branches.iter().any(|branch| branch.is_malformed()),
+            When(cond, branches, _) => cond.is_malformed() || branches.iter().any(|branch| branch.is_malformed()),
 
             SpaceBefore(expr, _) |
             SpaceAfter(expr, _) |

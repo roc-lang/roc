@@ -6103,11 +6103,34 @@ mod test_fmt {
         ));
     }
 
-    // todo: @wip
-    // #[test]
-    fn _single_line_string_literal_in_pattern_binop_shortcut() {
+    #[test]
+    fn single_line_string_literal_in_pattern_with_comment_before_when() {
         expr_formats_same(indoc!(
             r#"
+            # Comment X
+            when foo is
+                "abc" -> ""
+                _ -> "abc"
+            "#
+        ));
+    }
+
+    #[test]
+    fn single_line_string_literal_in_pattern_binop() {
+        expr_formats_same(indoc!(
+            r#"
+            foo ~
+                "abc" -> ""
+                _ -> "abc"
+            "#
+        ));
+    }
+
+    #[test]
+    fn single_line_string_literal_in_pattern_binop_with_comment_before_cond() {
+        expr_formats_same(indoc!(
+            r#"
+            # Comment Y
             foo ~
                 "abc" -> ""
                 _ -> "abc"

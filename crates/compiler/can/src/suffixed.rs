@@ -597,7 +597,7 @@ pub fn unwrap_suffixed_expression_when_help<'a>(
     maybe_def_pat: Option<&'a Loc<Pattern<'a>>>,
 ) -> Result<&'a Loc<Expr<'a>>, EUnwrapped<'a>> {
     match loc_expr.value {
-        Expr::When(condition, branches) => {
+        Expr::When(condition, branches, as_binop) => {
 
             // first unwrap any when branches values
             // e.g.
@@ -625,7 +625,7 @@ pub fn unwrap_suffixed_expression_when_help<'a>(
                     new_branches.push(arena.alloc(new_branch));
                     new_branches.extend_from_slice(after);
 
-                    let new_when = arena.alloc(Loc::at(loc_expr.region, Expr::When(condition, arena.alloc_slice_copy(new_branches.as_slice()))));
+                    let new_when = arena.alloc(Loc::at(loc_expr.region, Expr::When(condition, arena.alloc_slice_copy(new_branches.as_slice()), as_binop)));
 
                     return unwrap_suffixed_expression(arena, new_when, maybe_def_pat);
                 }
@@ -634,11 +634,11 @@ pub fn unwrap_suffixed_expression_when_help<'a>(
             // then unwrap the when condition
             match unwrap_suffixed_expression(arena, condition, None) {
                 Ok(unwrapped_condition) => {
-                    let new_when = arena.alloc(Loc::at(loc_expr.region, Expr::When(unwrapped_condition, branches)));
+                    let new_when = arena.alloc(Loc::at(loc_expr.region, Expr::When(unwrapped_condition, branches, as_binop)));
                     Ok(new_when)
                 }
                 Err(EUnwrapped::UnwrappedSubExpr { sub_arg, sub_pat, sub_new, target }) => {
-                    let new_when = arena.alloc(Loc::at(loc_expr.region, Expr::When(sub_new, branches)));
+                    let new_when = arena.alloc(Loc::at(loc_expr.region, Expr::When(sub_new, branches, as_binop)));
                     let applied_task_await = apply_try_function(arena,loc_expr.region,sub_arg,sub_pat,new_when, None, target);
                     Ok(applied_task_await)
                 }

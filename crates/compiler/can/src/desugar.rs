@@ -884,7 +884,7 @@ pub fn desugar_expr<'a>(
                 region: loc_expr.region,
             })
         }
-        When(loc_cond_expr, branches) => {
+        When(loc_cond_expr, branches, as_binop) => {
             let loc_desugared_cond = &*env.arena.alloc(desugar_expr(env, scope, loc_cond_expr));
             let mut desugared_branches = Vec::with_capacity_in(branches.len(), env.arena);
 
@@ -908,7 +908,7 @@ pub fn desugar_expr<'a>(
             let desugared_branches = desugared_branches.into_bump_slice();
 
             env.arena.alloc(Loc {
-                value: When(loc_desugared_cond, desugared_branches),
+                value: When(loc_desugared_cond, desugared_branches, *as_binop),
                 region: loc_expr.region,
             })
         }
@@ -1349,7 +1349,7 @@ fn binop_to_function(binop: BinOp) -> (&'static str, &'static str) {
         And => (ModuleName::BOOL, "and"),
         Or => (ModuleName::BOOL, "or"),
         Pizza => unreachable!("Cannot desugar the |> operator"),
-        TildeWhen => unreachable!("Cannot desugar the ~ `when` operator"),
+        When => unreachable!("Cannot desugar the ~ `when` operator"),
     }
 }
 

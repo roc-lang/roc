@@ -278,13 +278,13 @@ fn parse_term<'a>(
     if let Some(b) = state.bytes().first() {
         match b {
             b'\\' => {
-                if opts.is_set(PARSE_NO_CLOSURE) {
-                    Err((NoProgress, EExpr::Start(start)))
-                } else {
+                if !opts.is_set(PARSE_NO_CLOSURE) {
                     match rest_of_closure(flags, arena, state.inc()) {
                         Ok((p, expr, state)) => Ok((p, Loc::pos(start, state.pos(), expr), state)),
                         Err((p, fail)) => Err((p, EExpr::Closure(fail, start))),
                     }
+                } else {
+                    Err((NoProgress, EExpr::Start(start)))
                 }
             }
             b'_' => {
@@ -478,6 +478,7 @@ pub(crate) fn parse_expr_start<'a>(
                 // We're part way thru parsing an expression, e.g. `bar foo `.
                 // We just tried parsing an argument and determined we couldn't -
                 // so we're going to try parsing an operator.
+                // todo: @wip ~ support
                 let op_res = match parse_bin_op(MadeProgress, state.clone()) {
                     Err((NoProgress, _)) => {
                         // roll back space parsing
@@ -709,12 +710,25 @@ fn parse_stmt_operator_chain<'a>(
                 let op_res = match parse_operator(EExpr::Start, EExpr::BadOperator, state.clone()) {
                     Err((MadeProgress, f)) => Err((MadeProgress, f)),
                     Ok((_, op, state)) => {
+                        // adds the spaces before operator to the preceding expression term
                         expr_state.consume_spaces(arena);
-                        let loc_op = Loc::pos(before_op.pos(), state.pos(), op);
-                        parse_stmt_operator(
-                            arena, state, min_indent, inc_indent, flags, expr_state, loc_op,
-                            before_op,
-                        )
+
+                        if let OperatorOrDef::BinOp(BinOp::When) = op {
+                            // the `~` when operator is handled here to handle the spaces specific to the when branches
+                            // instead of generic space handling in `parse_stmt_operator`
+                            let cond = Some(expr_state.expr);
+                            let when_pos = state.pos();
+                            match when::rest_of_when_expr(cond, flags, arena, state, min_indent) {
+                                Ok((p, out, state)) => Ok((p, Stmt::Expr(out), state)),
+                                Err((p, fail)) => Err((p, EExpr::When(fail, when_pos))),
+                            }
+                        } else {
+                            let loc_op = Loc::pos(before_op.pos(), state.pos(), op);
+                            parse_stmt_operator(
+                                arena, state, min_indent, inc_indent, flags, expr_state, loc_op,
+                                before_op,
+                            )
+                        }
                     }
                     Err((NoProgress, _)) => {
                         if flags.is_set(ACCEPT_MULTI_BACKPASSING) && state.bytes().starts_with(b",")
@@ -1493,24 +1507,14 @@ fn parse_stmt_operator<'a>(
     let (_, spaces_after_op, state) =
         eat_space_loc_comments(EExpr::IndentEnd, arena, state, min_indent, false)?;
 
-    // a `-` is unary if it is preceded by a space and not followed by a space
     let op = loc_op.value;
     let op_start = loc_op.region.start();
     let op_end = loc_op.region.end();
     let new_start = state.pos();
     match op {
-        OperatorOrDef::BinOp(BinOp::TildeWhen) => {
-            let when_pos = state.pos();
-            let pattern = expr_state.expr;
-            let pattern =
-                pattern.spaced_around(arena, expr_state.spaces_after, spaces_after_op.value);
-
-            match when::rest_of_when_expr(Some(pattern), flags, arena, state, min_indent) {
-                Ok((p, out, state)) => Ok((p, Stmt::Expr(out), state)),
-                Err((p, fail)) => Err((p, EExpr::When(fail, when_pos))),
-            }
-        }
+        OperatorOrDef::BinOp(BinOp::When) => unreachable!("the case handled by the caller"),
         OperatorOrDef::BinOp(BinOp::Minus) if expr_state.end != op_start && op_end == new_start => {
+            // a `-` is unary if it is preceded by a space and not followed by a space
             parse_negative_term(
                 arena,
                 state,
@@ -1778,7 +1782,7 @@ fn parse_stmt_multi_backpassing<'a>(
     Ok((MadeProgress, ret, state))
 }
 
-// todo: @wip what is the difference with `parse_negative_number`
+// todo: @wip what is the difference with `parse_negative_number`?
 /// We just saw a unary negation operator, and now we need to parse the expression.
 #[allow(clippy::too_many_arguments)]
 fn parse_negative_term<'a>(
@@ -1887,6 +1891,7 @@ fn parse_expr_end<'a>(
             } else {
                 NoProgress
             };
+            // todo: @wip ~ support
             match parse_bin_op(err_progress, state.clone()) {
                 Err((MadeProgress, f)) => Err((MadeProgress, f)),
                 Ok((_, op, state)) => {
@@ -2102,7 +2107,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::BinOps { .. }
         | Expr::Defs(_, _)
         | Expr::If { .. }
-        | Expr::When(_, _)
+        | Expr::When(..)
         | Expr::Expect(_, _)
         | Expr::Dbg
         | Expr::DbgStmt(_, _)
@@ -2331,71 +2336,67 @@ fn rest_of_closure<'a>(
         return Ok((MadeProgress, short_closure, state));
     }
 
-    // Either pipe shortcut `\|> f` into `\p -> p |> f`,
-    // or the rest of BinOp's, e.g. `\+ 1` into `\p -> p + 1`,
-    // Excluding the operators for which the shortcut does not make sense:
-    // Assignment '=', Backpassing '<-', and Type Alias ':', ':='
-    if let Ok((_, op, state)) = parse_operator(EExpr::Start, EExpr::BadOperator, state.clone()) {
-        if let OperatorOrDef::BinOp(binop) = op {
-            let after_binop = state.pos();
+    // Either pipe shortcut `\|> f` into `\p -> p |> f`, or the rest of BinOp's, e.g. `\+ 1` into `\p -> p + 1`,
+    // Excluding the operators for which the shortcut does not make sense, assignment '=', Type Alias ':', ':=', etc.
+    if let Ok((_, binop, state)) = parse_bin_op(NoProgress, state.clone()) {
+        let after_binop = state.pos();
 
-            let param = Pattern::Identifier {
-                ident: CLOSURE_SHORTCUT_ARG,
+        let param = Pattern::Identifier {
+            ident: CLOSURE_SHORTCUT_ARG,
+        };
+        let param = Loc::pos(after_slash, after_binop, param);
+        let mut params = Vec::with_capacity_in(1, arena);
+        params.push(param);
+
+        // the closure parameter is the left value of binary operator
+        let expr = Expr::new_var("", CLOSURE_SHORTCUT_ARG);
+        let expr: Loc<Expr<'_>> = Loc::pos(after_slash, after_binop, expr);
+
+        let expr_state = ExprState {
+            operators: Vec::new_in(arena),
+            arguments: Vec::new_in(arena),
+            expr,
+            spaces_after: &[],
+            end: after_slash,
+        };
+
+        let loc_op = Loc::pos(after_slash, after_binop, binop);
+
+        let min_indent = slash_indent + 1;
+        let (spaces_after_op, state) =
+            match eat_space_check(EExpr::IndentEnd, arena, state, min_indent, false) {
+                Ok((_, out, state)) => (out, state),
+                Err((_, fail)) => {
+                    return Err((MadeProgress, EClosure::Body(arena.alloc(fail), after_binop)))
+                }
             };
-            let param = Loc::pos(after_slash, after_binop, param);
-            let mut params = Vec::with_capacity_in(1, arena);
-            params.push(param);
 
-            // the closure parameter is the left value of binary operator
-            let expr = Expr::new_var("", CLOSURE_SHORTCUT_ARG);
-            let expr: Loc<Expr<'_>> = Loc::pos(after_slash, after_binop, expr);
+        let (_, body, state) = parse_after_binop(
+            arena,
+            state,
+            min_indent,
+            min_indent,
+            flags,
+            true,
+            spaces_after_op,
+            expr_state,
+            loc_op,
+        )
+        .map_err(|(_, e)| (MadeProgress, EClosure::Body(arena.alloc(e), after_binop)))?;
 
-            let expr_state = ExprState {
-                operators: Vec::new_in(arena),
-                arguments: Vec::new_in(arena),
-                expr,
-                spaces_after: &[],
-                end: after_slash,
-            };
+        let loc_body = Loc::pos(after_binop, state.pos(), body);
 
-            let loc_op = Loc::pos(after_slash, after_binop, binop);
-
-            let min_indent = slash_indent + 1;
-            let (spaces_after_op, state) =
-                match eat_space_check(EExpr::IndentEnd, arena, state, min_indent, false) {
-                    Ok((_, out, state)) => (out, state),
-                    Err((_, fail)) => {
-                        return Err((MadeProgress, EClosure::Body(arena.alloc(fail), after_binop)))
-                    }
-                };
-
-            let (_, body, state) = parse_after_binop(
-                arena,
-                state,
-                min_indent,
-                min_indent,
-                flags,
-                true,
-                spaces_after_op,
-                expr_state,
-                loc_op,
-            )
-            .map_err(|(_, e)| (MadeProgress, EClosure::Body(arena.alloc(e), after_binop)))?;
-
-            let loc_body = Loc::pos(after_binop, state.pos(), body);
-
-            let closure_shortcut = if format_keeps_shortcut {
-                Some(ClosureShortcut::BinOp)
-            } else {
-                None
-            };
-            let short_closure = Expr::Closure(
-                params.into_bump_slice(),
-                arena.alloc(loc_body),
-                closure_shortcut,
-            );
-            return Ok((MadeProgress, short_closure, state));
-        }
+        let closure_shortcut = if format_keeps_shortcut {
+            Some(ClosureShortcut::BinOp)
+        } else {
+            None
+        };
+        let short_closure = Expr::Closure(
+            params.into_bump_slice(),
+            arena.alloc(loc_body),
+            closure_shortcut,
+        );
+        return Ok((MadeProgress, short_closure, state));
     }
 
     // Parse the params, params are comma-separated
@@ -2508,24 +2509,27 @@ fn rest_of_closure<'a>(
 
 mod when {
     use super::*;
-    use crate::{ast::WhenBranch, blankspace::eat_space};
+    use crate::{
+        ast::{WhenAsBinOp, WhenBranch},
+        blankspace::eat_space,
+    };
 
     /// If Ok it always returns MadeProgress
     pub fn rest_of_when_expr<'a>(
-        pattern: Option<Loc<Expr<'a>>>,
+        cond: Option<Loc<Expr<'a>>>,
         flags: ExprParseFlags,
         arena: &'a Bump,
         state: State<'a>,
         min_indent: u32,
     ) -> ParseResult<'a, Expr<'a>, EWhen<'a>> {
-        let (pattern, state) = if let Some(pat) = pattern {
-            (pat, state)
+        let (as_binop, cond, state) = if let Some(cond) = cond {
+            (Some(WhenAsBinOp::BinOp), cond, state)
         } else {
             let (_, spaces_before, state) =
                 eat_space_check(EWhen::IndentCondition, arena, state, min_indent, true)?;
 
             let at_cond = state.pos();
-            let (pat, state) = match parse_expr_start(flags, None, arena, state, min_indent) {
+            let (cond, state) = match parse_expr_start(flags, None, arena, state, min_indent) {
                 Ok((_, out, state)) => (out, state),
                 Err((_, fail)) => {
                     return Err((MadeProgress, EWhen::Condition(arena.alloc(fail), at_cond)))
@@ -2533,13 +2537,13 @@ mod when {
             };
 
             let (_, (spaces_after, _), state) = eat_space(arena, state, true)?;
-            let pat = pat.spaced_around(arena, spaces_before, spaces_after);
+            let cond = cond.spaced_around(arena, spaces_before, spaces_after);
 
             if !at_keyword(keyword::IS, &state) {
                 return Err((MadeProgress, EWhen::Is(state.pos())));
             }
 
-            (pat, state.advance(keyword::IS.len()))
+            (None, cond, state.advance(keyword::IS.len()))
         };
 
         // Note that we allow the `is` to be at any indent level, since this doesn't introduce any
@@ -2574,9 +2578,9 @@ mod when {
                 state.clone(),
                 branch_indent,
             ) {
-                Ok((_, ((indent_column, patterns), guard), m_state)) => {
+                Ok((_, ((indent_column, patterns), guard), g_state)) => {
                     if pattern_indent == indent_column {
-                        let (_, value, next_state) = parse_branch_result(arena, m_state)?;
+                        let (_, value, next_state) = parse_branch_result(arena, g_state)?;
 
                         let branch = WhenBranch {
                             patterns: patterns.into_bump_slice(),
@@ -2587,7 +2591,7 @@ mod when {
                         state = next_state;
                     } else {
                         let indent = pattern_indent - indent_column;
-                        let fail = EWhen::PatternAlignment(indent, m_state.pos());
+                        let fail = EWhen::PatternAlignment(indent, g_state.pos());
                         return Err((MadeProgress, fail));
                     }
                 }
@@ -2596,7 +2600,7 @@ mod when {
             }
         }
 
-        let when = Expr::When(arena.alloc(pattern), branches.into_bump_slice());
+        let when = Expr::When(arena.alloc(cond), branches.into_bump_slice(), as_binop);
         Ok((MadeProgress, when, state))
     }
 
@@ -2712,7 +2716,6 @@ mod when {
     }
 
     /// Parsing the righthandside of a branch in a when conditional.
-    /// Always makes progress because called in the middle of parsing when and does not make sense alone
     fn parse_branch_result<'a>(
         arena: &'a Bump,
         state: State<'a>,
@@ -3049,6 +3052,7 @@ where
     let (first_spaces, state) = if let Some(first_spaces) = first_spaces {
         (first_spaces, state)
     } else {
+        // if no spaces are provided, try to parse them here
         let (_, first_spaces, state) =
             eat_space_loc_comments(indent_problem, arena, state, min_indent, false)?;
         (first_spaces, state)
@@ -3488,7 +3492,7 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>, is_closure_shortcut: bool)
             let mut iter = parts.iter();
 
             let closure_shortcut = if is_closure_shortcut {
-                Some(ClosureShortcutForAccess::Yes)
+                Some(ClosureShortcutForAccess::Access)
             } else {
                 None
             };
@@ -4058,7 +4062,7 @@ where
         }
         "<-" => good!(OperatorOrDef::Backpassing, 2),
         "!" => Err((NoProgress, to_error("!", state.pos()))),
-        "~" => good!(OperatorOrDef::BinOp(BinOp::TildeWhen), 1),
+        "~" => good!(OperatorOrDef::BinOp(BinOp::When), 1),
         _ => Err((MadeProgress, to_error(chomped, state.pos()))),
     }
 }

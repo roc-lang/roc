@@ -715,7 +715,7 @@ impl IterTokens for Loc<Expr<'_>> {
             } => (e1.iter_tokens(arena).into_iter())
                 .chain(e2.iter_tokens(arena))
                 .collect_in(arena),
-            Expr::When(e, branches) => (e.iter_tokens(arena).into_iter())
+            Expr::When(e, branches, _) => (e.iter_tokens(arena).into_iter())
                 .chain(branches.iter_tokens(arena))
                 .collect_in(arena),
             Expr::SpaceBefore(e, _) | Expr::SpaceAfter(e, _) => {
