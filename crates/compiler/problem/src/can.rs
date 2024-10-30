@@ -242,6 +242,15 @@ pub enum Problem {
         one_occurrence: Region,
         kind: AliasKind,
     },
+    ReturnOutsideOfFunction {
+        region: Region,
+    },
+    StatementsAfterReturn {
+        region: Region,
+    },
+    ReturnAtEndOfFunction {
+        region: Region,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -323,6 +332,9 @@ impl Problem {
             Problem::OverAppliedDbg { .. } => RuntimeError,
             Problem::DefsOnlyUsedInRecursion(_, _) => Warning,
             Problem::FileProblem { .. } => Fatal,
+            Problem::ReturnOutsideOfFunction { .. } => Warning,
+            Problem::StatementsAfterReturn { .. } => Warning,
+            Problem::ReturnAtEndOfFunction { .. } => Warning,
         }
     }
 
@@ -485,7 +497,10 @@ impl Problem {
             | Problem::UnappliedCrash { region }
             | Problem::OverAppliedDbg { region }
             | Problem::UnappliedDbg { region }
-            | Problem::DefsOnlyUsedInRecursion(_, region) => Some(*region),
+            | Problem::DefsOnlyUsedInRecursion(_, region)
+            | Problem::ReturnOutsideOfFunction { region }
+            | Problem::StatementsAfterReturn { region }
+            | Problem::ReturnAtEndOfFunction { region } => Some(*region),
             Problem::RuntimeError(RuntimeError::CircularDef(cycle_entries))
             | Problem::BadRecursion(cycle_entries) => {
                 cycle_entries.first().map(|entry| entry.expr_region)

@@ -181,7 +181,8 @@ fn remove_for_reason(
             def_region: _,
         }
         | Reason::CrashArg
-        | Reason::ImportParams(_) => {}
+        | Reason::ImportParams(_)
+        | Reason::FunctionOutput => {}
     }
 }
 

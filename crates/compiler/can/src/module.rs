@@ -369,6 +369,12 @@ pub fn canonicalize_module_defs<'a>(
         PatternType::TopLevelDef,
     );
 
+    for (_early_return_var, early_return_region) in &scope.early_returns {
+        env.problem(Problem::ReturnOutsideOfFunction {
+            region: *early_return_region,
+        });
+    }
+
     let pending_derives = output.pending_derives;
 
     // See if any of the new idents we defined went unused.
@@ -425,7 +431,7 @@ pub fn canonicalize_module_defs<'a>(
         ..Default::default()
     };
 
-    let (mut declarations, mut output) = crate::def::sort_can_defs_new(
+    let (mut declarations, mut output) = crate::def::sort_top_level_can_defs(
         &mut env,
         &mut scope,
         var_store,
@@ -964,6 +970,14 @@ fn fix_values_captured_in_closure_expr(
             );
             fix_values_captured_in_closure_expr(
                 &mut loc_continuation.value,
+                no_capture_symbols,
+                closure_captures,
+            );
+        }
+
+        Return { return_value, .. } => {
+            fix_values_captured_in_closure_expr(
+                &mut return_value.value,
                 no_capture_symbols,
                 closure_captures,
             );
