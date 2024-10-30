@@ -2620,6 +2620,7 @@ fn from_can_let<'a>(
                             expr_var: def.expr_var,
                             pattern_vars: std::iter::once((anon_name, def.expr_var)).collect(),
                             annotation: None,
+                            kind: def.kind,
                         });
 
                         // f = #lam
@@ -2629,6 +2630,7 @@ fn from_can_let<'a>(
                             expr_var: def.expr_var,
                             pattern_vars: def.pattern_vars,
                             annotation: def.annotation,
+                            kind: def.kind,
                         });
 
                         let new_inner = LetNonRec(new_def, cont);
@@ -2648,6 +2650,7 @@ fn from_can_let<'a>(
                             pattern_vars: def.pattern_vars,
                             annotation: def.annotation,
                             expr_var: def.expr_var,
+                            kind: def.kind,
                         };
 
                         let new_inner = LetNonRec(Box::new(new_def), cont);
@@ -2687,6 +2690,7 @@ fn from_can_let<'a>(
                     pattern_vars: def.pattern_vars,
                     annotation: def.annotation,
                     expr_var: def.expr_var,
+                    kind: def.kind,
                 };
 
                 let new_inner = LetNonRec(Box::new(new_def), cont);
@@ -7292,6 +7296,7 @@ fn to_opt_branches<'a>(
                                     roc_can::pattern::Pattern::Identifier(symbol),
                                 ),
                                 pattern_vars: std::iter::once((symbol, variable)).collect(),
+                                kind: roc_can::def::DefKind::Let,
                             };
                             let new_expr =
                                 roc_can::expr::Expr::LetNonRec(Box::new(def), Box::new(loc_expr));

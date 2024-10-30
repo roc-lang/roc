@@ -1,5 +1,5 @@
 use crate::{
-    def::Def,
+    def::{Def, DefKind},
     expr::{
         ClosureData, Expr, Field, OpaqueWrapFunctionData, StructAccessorData, WhenBranchPattern,
     },
@@ -378,6 +378,7 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
                          expr_var,
                          pattern_vars,
                          annotation,
+                         kind,
                      }| Def {
                         loc_pattern: loc_pattern.map(|p| deep_copy_pattern_help(env, copied, p)),
                         loc_expr: loc_expr.map(|e| go_help!(e)),
@@ -386,6 +387,10 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
                         // Annotation should only be used in constraining, don't clone before
                         // constraining :)
                         annotation: annotation.clone(),
+                        kind: match kind {
+                            DefKind::Let => DefKind::Let,
+                            DefKind::Stmt(v) => DefKind::Stmt(sub!(*v)),
+                        },
                     },
                 )
                 .collect(),
@@ -399,6 +404,7 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
                 expr_var,
                 pattern_vars,
                 annotation,
+                kind,
             } = &**def;
             let def = Def {
                 loc_pattern: loc_pattern.map(|p| deep_copy_pattern_help(env, copied, p)),
@@ -408,6 +414,7 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
                 // Annotation should only be used in constraining, don't clone before
                 // constraining :)
                 annotation: annotation.clone(),
+                kind: *kind,
             };
             LetNonRec(Box::new(def), Box::new(body.map(|e| go_help!(e))))
         }

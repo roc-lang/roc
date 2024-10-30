@@ -418,6 +418,7 @@ fn defn(
         expr_var: var_store.fresh(),
         pattern_vars: SendMap::default(),
         annotation: None,
+        kind: crate::def::DefKind::Let,
     }
 }
 
@@ -548,6 +549,7 @@ fn to_num_checked(symbol: Symbol, var_store: &mut VarStore, lowlevel: LowLevel) 
         expr_var: record_var,
         pattern_vars: SendMap::default(),
         annotation: None,
+        kind: crate::def::DefKind::Let,
     };
 
     let body = LetNonRec(Box::new(def), Box::new(no_region(cont)));

@@ -184,6 +184,7 @@ fn remove_for_reason(
         | Reason::ImportParams(_)
         | Reason::CallInFunction(_)
         | Reason::CallInTopLevelDef
+        | Reason::Stmt
         | Reason::FunctionOutput => {}
     }
 }
