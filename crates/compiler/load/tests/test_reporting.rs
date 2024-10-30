@@ -14880,7 +14880,7 @@ All branches in an `if` must have the same type!
             Stdout.line! "What's your name?"
             Stdin.line! {}
 
-    This will allow the caller to control when the effect runs.
+    This will allow the caller to control when the effects run.
     "###
     );
 

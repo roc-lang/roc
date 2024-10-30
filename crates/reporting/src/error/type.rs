@@ -358,7 +358,7 @@ pub fn type_problem<'b>(
                     alloc.reflow("If you don't need any arguments, use an empty record:"),
                 ]),
                 alloc.parser_suggestion("    askName! : {} => Str\n    askName! = \\{} ->\n        Stdout.line! \"What's your name?\"\n        Stdin.line! {}"),
-                alloc.reflow("This will allow the caller to control when the effect runs."),
+                alloc.reflow("This will allow the caller to control when the effects run."),
             ];
 
             Some(Report {
