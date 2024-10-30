@@ -1681,7 +1681,7 @@ impl DefOrdering {
 }
 
 #[inline(always)]
-pub(crate) fn sort_can_defs_new(
+pub(crate) fn sort_top_level_can_defs(
     env: &mut Env<'_>,
     scope: &mut Scope,
     var_store: &mut VarStore,
@@ -2354,6 +2354,7 @@ fn canonicalize_pending_value_def<'a>(
                         function_type: var_store.fresh(),
                         closure_type: var_store.fresh(),
                         return_type: var_store.fresh(),
+                        early_returns: scope.early_returns.clone(),
                         name: symbol,
                         captured_symbols: Vec::new(),
                         recursive: Recursive::NotRecursive,
@@ -2571,6 +2572,8 @@ fn canonicalize_pending_body<'a>(
         loc_value = value;
     }
 
+    let expr_var = var_store.fresh();
+
     // We treat closure definitions `foo = \a, b -> ...` differently from other body expressions,
     // because they need more bookkeeping (for tail calls, closure captures, etc.)
     //
@@ -2602,9 +2605,15 @@ fn canonicalize_pending_body<'a>(
                 env.tailcallable_symbol = outer_tailcallable;
 
                 // The closure is self tail recursive iff it tail calls itself (by defined name).
-                let is_recursive = match can_output.tail_call {
-                    Some(tail_symbol) if tail_symbol == *defined_symbol => Recursive::TailRecursive,
-                    _ => Recursive::NotRecursive,
+                let is_recursive = if !can_output.tail_calls.is_empty()
+                    && can_output
+                        .tail_calls
+                        .iter()
+                        .all(|tail_symbol| tail_symbol == defined_symbol)
+                {
+                    Recursive::TailRecursive
+                } else {
+                    Recursive::NotRecursive
                 };
 
                 closure_data.recursive = is_recursive;
@@ -2664,7 +2673,6 @@ fn canonicalize_pending_body<'a>(
         }
     };
 
-    let expr_var = var_store.fresh();
     let mut vars_by_symbol = SendMap::default();
 
     pattern_to_vars_by_symbol(&mut vars_by_symbol, &loc_can_pattern.value, expr_var);

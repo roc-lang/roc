@@ -456,6 +456,7 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             function_type,
             closure_type,
             return_type,
+            early_returns,
             name,
             captured_symbols,
             recursive,
@@ -465,6 +466,10 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             function_type: sub!(*function_type),
             closure_type: sub!(*closure_type),
             return_type: sub!(*return_type),
+            early_returns: early_returns
+                .iter()
+                .map(|(var, region)| (sub!(*var), *region))
+                .collect(),
             name: *name,
             captured_symbols: captured_symbols
                 .iter()
@@ -686,6 +691,14 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             loc_condition: Box::new(loc_condition.map(|e| go_help!(e))),
             loc_continuation: Box::new(loc_continuation.map(|e| go_help!(e))),
             lookups_in_cond: lookups_in_cond.to_vec(),
+        },
+
+        Return {
+            return_value,
+            return_var,
+        } => Return {
+            return_value: Box::new(return_value.map(|e| go_help!(e))),
+            return_var: sub!(*return_var),
         },
 
         Dbg {

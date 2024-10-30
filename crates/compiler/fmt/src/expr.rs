@@ -14,6 +14,7 @@ use roc_parse::ast::{
 };
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_parse::ident::Accessor;
+use roc_parse::keyword;
 use roc_region::all::Loc;
 
 impl<'a> Formattable for Expr<'a> {
@@ -70,6 +71,9 @@ impl<'a> Formattable for Expr<'a> {
             LowLevelDbg(_, _, _) => unreachable!(
                 "LowLevelDbg should only exist after desugaring, not during formatting"
             ),
+            Return(return_value, after_return) => {
+                return_value.is_multiline() || after_return.is_some()
+            }
 
             If {
                 if_thens: branches,
@@ -452,6 +456,9 @@ impl<'a> Formattable for Expr<'a> {
             LowLevelDbg(_, _, _) => unreachable!(
                 "LowLevelDbg should only exist after desugaring, not during formatting"
             ),
+            Return(return_value, after_return) => {
+                fmt_return(buf, return_value, after_return, parens, newlines, indent);
+            }
             If {
                 if_thens: branches,
                 final_else,
@@ -1062,6 +1069,33 @@ fn fmt_expect<'a>(
     buf.ensure_ends_with_blank_line();
 
     continuation.format(buf, indent);
+}
+
+fn fmt_return<'a>(
+    buf: &mut Buf,
+    return_value: &'a Loc<Expr<'a>>,
+    after_return: &Option<&'a Loc<Expr<'a>>>,
+    parens: Parens,
+    newlines: Newlines,
+    indent: u16,
+) {
+    buf.ensure_ends_with_newline();
+    buf.indent(indent);
+    buf.push_str(keyword::RETURN);
+
+    buf.spaces(1);
+
+    let return_indent = if return_value.is_multiline() {
+        indent + INDENT
+    } else {
+        indent
+    };
+
+    return_value.format(buf, return_indent);
+
+    if let Some(after_return) = after_return {
+        after_return.format_with_options(buf, parens, newlines, indent);
+    }
 }
 
 fn fmt_if<'a>(
