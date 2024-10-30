@@ -14544,37 +14544,6 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        leftover_statement,
-        indoc!(
-            r#"
-            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
-
-            import pf.Effect
-
-            main! = \{} ->
-                identity {}
-
-                Effect.putLine! "hello"
-
-            identity = \x -> x
-            "#
-        ),
-        @r###"
-    ── LEFTOVER STATEMENT in /code/proj/Main.roc ───────────────────────────────────
-
-    This statement does not produce any effects:
-
-    6│      identity {}
-            ^^^^^^^^^^^
-
-    Standalone statements are only useful if they call effectful
-    functions.
-
-    Did you forget to use its result? If not, feel free to remove it.
-    "###
-    );
-
-    test_report!(
         return_outside_of_function,
         indoc!(
             r"
@@ -14691,7 +14660,7 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        function_def_fx_no_bang,
+        leftover_statement,
         indoc!(
             r#"
             app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
@@ -14699,25 +14668,63 @@ All branches in an `if` must have the same type!
             import pf.Effect
 
             main! = \{} ->
-                printHello {}
+                identity {}
 
-            printHello = \{} ->
                 Effect.putLine! "hello"
+
+            identity = \x -> x
             "#
         ),
         @r###"
-    ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
+    ── LEFTOVER STATEMENT in /code/proj/Main.roc ───────────────────────────────────
 
-    This function is effectful, but its name does not indicate so:
+    This statement does not produce any effects:
 
-    8│  printHello = \{} ->
-        ^^^^^^^^^^
+    6│      identity {}
+            ^^^^^^^^^^^
 
-    Add an exclamation mark at the end of its name, like:
+    Standalone statements are only useful if they call effectful
+    functions.
 
-        printHello!
+    Did you forget to use its result? If not, feel free to remove it.
+    "###
+    );
 
-    This will help readers identify it as a source of effects.
+    test_report!(
+        fx_fn_annotated_as_pure,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                Effect.putLine! (getCheer "hello")
+
+            getCheer : Str -> Str
+            getCheer = \msg ->
+                name = Effect.getLine! {}
+
+                "$(msg), $(name)!"
+            "#
+        ),
+        @r###"
+    ── EFFECT IN PURE FUNCTION in /code/proj/Main.roc ──────────────────────────────
+
+    This expression calls an effectful function:
+
+    10│      name = Effect.getLine! {}
+                    ^^^^^^^^^^^^^^^^^^
+
+    However, the type of the enclosing function indicates it must be pure:
+
+    8│  getCheer : Str -> Str
+                   ^^^^^^^^^^
+
+    Tip: Replace `->` with `=>` to annotate it as effectful.
+
+    You can still run the program with this error, which can be helpful
+    when you're debugging.
     "###
     );
 
@@ -14809,4 +14816,6 @@ All branches in an `if` must have the same type!
     This will help readers identify it as a source of effects.
     "###
     );
+
+    // [purity-inference] TODO: check ! in records, tuples, tags, opaques, and arguments
 }
