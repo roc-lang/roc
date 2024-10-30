@@ -6139,6 +6139,33 @@ mod test_fmt {
     }
 
     #[test]
+    fn closure_shortcut_for_when_binop() {
+        expr_formats_same(indoc!(
+            r#"
+            \~
+                "abc" -> ""
+                _ -> "abc"
+            "#
+        ));
+    }
+
+    // #[test]
+    fn _closure_with_when_binop() {
+        expr_formats_same(indoc!(
+            r#"
+            \nu -> nu ~
+                """
+                abc
+                """ ->
+                    """
+                    xyz
+                    """
+                _ -> "abc"
+            "#
+        ));
+    }
+
+    #[test]
     fn multi_line_string_literal_in_pattern() {
         expr_formats_same(indoc!(
             r#"

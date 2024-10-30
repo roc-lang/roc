@@ -1,9 +1,9 @@
 use crate::ast::{
-    is_expr_suffixed, AssignedField, ClosureShortcut, ClosureShortcutForAccess, Collection,
-    CommentOrNewline, Defs, Expr, ExtractSpaces, Implements, ImportAlias, ImportAsKeyword,
-    ImportExposingKeyword, ImportedModuleName, IngestedFileAnnotation, IngestedFileImport,
-    ModuleImport, ModuleImportParams, Pattern, Spaceable, Spaced, Spaces, SpacesBefore, TryTarget,
-    TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    is_expr_suffixed, AccessVariant, AssignedField, ClosureShortcut, Collection, CommentOrNewline,
+    Defs, Expr, ExtractSpaces, Implements, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
+    ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport,
+    ModuleImportParams, Pattern, Spaceable, Spaced, Spaces, SpacesBefore, TryTarget,
+    TypeAnnotation, TypeDef, TypeHeader, ValueDef, WhenVariant,
 };
 use crate::blankspace::{eat_space, eat_space_check, eat_space_loc_comments, SpacedBuilder};
 use crate::header::{chomp_module_name, ModuleName};
@@ -716,8 +716,8 @@ fn parse_stmt_operator_chain<'a>(
                         if let OperatorOrDef::BinOp(BinOp::When) = op {
                             // the `~` when operator is handled here to handle the spaces specific to the when branches
                             // instead of generic space handling in `parse_stmt_operator`
-                            let cond = Some(expr_state.expr);
                             let when_pos = state.pos();
+                            let cond = Some((expr_state.expr, WhenVariant::BinOp));
                             match when::rest_of_when_expr(cond, flags, arena, state, min_indent) {
                                 Ok((p, out, state)) => Ok((p, Stmt::Expr(out), state)),
                                 Err((p, fail)) => Err((p, EExpr::When(fail, when_pos))),
@@ -1623,20 +1623,18 @@ fn parse_after_binop<'a>(
     inc_indent: u32,
     flags: ExprParseFlags,
     check_for_defs: bool,
-    spaces_after_operator: &'a [CommentOrNewline],
+    spaces_after_op: &'a [CommentOrNewline],
     mut expr_state: ExprState<'a>,
     loc_op: Loc<BinOp>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
-    let res = parse_term(PARSE_ALL, flags, arena, state.clone(), min_indent);
-
-    let (right_expr, state) = match res {
+    let (right_expr, state) = match parse_term(PARSE_ALL, flags, arena, state.clone(), min_indent) {
         Ok((_, expr, state)) => (expr, state),
         Err((NoProgress, _)) => return Err((MadeProgress, EExpr::TrailingOperator(state.pos()))),
         Err(err) => return Err(err),
     };
 
     // put the spaces from after the operator in front of the new_expr
-    let right_expr = right_expr.spaced_before(&arena, spaces_after_operator);
+    let right_expr = right_expr.spaced_before(&arena, spaces_after_op);
 
     let args = std::mem::replace(&mut expr_state.arguments, Vec::new_in(arena));
     let call = to_call(arena, args, expr_state.expr);
@@ -2254,10 +2252,10 @@ fn rest_of_closure<'a>(
 
     // Expand the shortcut into the full code guided by presence of space after slash (only if actual shortcut follows)
     // e.g. this `\ .foo.bar` will expand to `\un -> un.foo.bar`, but this `\.foo.bar` will stay as-is in the formatted output
-    let mut format_keeps_shortcut = true;
+    let mut fmt_keep_shortcut = true;
     if state.bytes().first() == Some(&b' ') {
         state.advance_mut(1);
-        format_keeps_shortcut = false;
+        fmt_keep_shortcut = false;
     };
 
     // note: @feat closure-shortcut
@@ -2302,7 +2300,7 @@ fn rest_of_closure<'a>(
             }
         };
 
-        let ident = ident_to_expr(arena, ident, format_keeps_shortcut);
+        let ident = ident_to_expr(arena, ident, fmt_keep_shortcut);
         let ident = apply_expr_access_chain(arena, ident, suffixes);
         let ident = Loc::pos(after_slash, ident_end, ident);
 
@@ -2323,17 +2321,10 @@ fn rest_of_closure<'a>(
                 }
             };
 
-        let closure_shortcut = if format_keeps_shortcut {
-            Some(ClosureShortcut::Access)
-        } else {
-            None
-        };
-        let short_closure = Expr::Closure(
-            params.into_bump_slice(),
-            arena.alloc(body),
-            closure_shortcut,
-        );
-        return Ok((MadeProgress, short_closure, state));
+        let what = ClosureShortcut::Access;
+        let shortcut_what = if fmt_keep_shortcut { Some(what) } else { None };
+        let closure = Expr::Closure(params.into_bump_slice(), arena.alloc(body), shortcut_what);
+        return Ok((MadeProgress, closure, state));
     }
 
     // Either pipe shortcut `\|> f` into `\p -> p |> f`, or the rest of BinOp's, e.g. `\+ 1` into `\p -> p + 1`,
@@ -2348,55 +2339,64 @@ fn rest_of_closure<'a>(
         let mut params = Vec::with_capacity_in(1, arena);
         params.push(param);
 
-        // the closure parameter is the left value of binary operator
+        let inc_indent = slash_indent + 1;
+
+        // a single closure parameter is the left value of the binary operator
         let expr = Expr::new_var("", CLOSURE_SHORTCUT_ARG);
-        let expr: Loc<Expr<'_>> = Loc::pos(after_slash, after_binop, expr);
+        let expr = Loc::pos(after_slash, after_binop, expr);
 
-        let expr_state = ExprState {
-            operators: Vec::new_in(arena),
-            arguments: Vec::new_in(arena),
-            expr,
-            spaces_after: &[],
-            end: after_slash,
-        };
+        // special handling of the `~` when operator
+        let (body, state, what) = if binop == BinOp::When {
+            let cond = Some((expr, WhenVariant::ClosureShortcut));
+            match when::rest_of_when_expr(cond, flags, arena, state, inc_indent) {
+                Ok((_, out, state)) => (out, state, ClosureShortcut::WhenBinOp),
+                Err((_, fail)) => {
+                    let fail = EExpr::When(fail, after_binop);
+                    return Err((MadeProgress, EClosure::Body(arena.alloc(fail), after_binop)));
+                }
+            }
+        } else {
+            // "usual" handling of the rest of the binary operators
+            let expr_state = ExprState {
+                operators: Vec::new_in(arena),
+                arguments: Vec::new_in(arena),
+                expr,
+                spaces_after: &[],
+                end: after_slash,
+            };
 
-        let loc_op = Loc::pos(after_slash, after_binop, binop);
+            let loc_op = Loc::pos(after_slash, after_binop, binop);
+            let (spaces_after_op, state) =
+                match eat_space_check(EExpr::IndentEnd, arena, state, inc_indent, false) {
+                    Ok((_, out, state)) => (out, state),
+                    Err((_, fail)) => {
+                        return Err((MadeProgress, EClosure::Body(arena.alloc(fail), after_binop)))
+                    }
+                };
 
-        let min_indent = slash_indent + 1;
-        let (spaces_after_op, state) =
-            match eat_space_check(EExpr::IndentEnd, arena, state, min_indent, false) {
-                Ok((_, out, state)) => (out, state),
+            match parse_after_binop(
+                arena,
+                state,
+                inc_indent,
+                inc_indent,
+                flags,
+                true,
+                spaces_after_op,
+                expr_state,
+                loc_op,
+            ) {
+                Ok((_, out, state)) => (out, state, ClosureShortcut::BinOp),
                 Err((_, fail)) => {
                     return Err((MadeProgress, EClosure::Body(arena.alloc(fail), after_binop)))
                 }
-            };
-
-        let (_, body, state) = parse_after_binop(
-            arena,
-            state,
-            min_indent,
-            min_indent,
-            flags,
-            true,
-            spaces_after_op,
-            expr_state,
-            loc_op,
-        )
-        .map_err(|(_, e)| (MadeProgress, EClosure::Body(arena.alloc(e), after_binop)))?;
-
-        let loc_body = Loc::pos(after_binop, state.pos(), body);
-
-        let closure_shortcut = if format_keeps_shortcut {
-            Some(ClosureShortcut::BinOp)
-        } else {
-            None
+            }
         };
-        let short_closure = Expr::Closure(
-            params.into_bump_slice(),
-            arena.alloc(loc_body),
-            closure_shortcut,
-        );
-        return Ok((MadeProgress, short_closure, state));
+
+        let body = Loc::pos(after_binop, state.pos(), body);
+
+        let shortcut_what = if fmt_keep_shortcut { Some(what) } else { None };
+        let closure = Expr::Closure(params.into_bump_slice(), arena.alloc(body), shortcut_what);
+        return Ok((MadeProgress, closure, state));
     }
 
     // Parse the params, params are comma-separated
@@ -2510,20 +2510,20 @@ fn rest_of_closure<'a>(
 mod when {
     use super::*;
     use crate::{
-        ast::{WhenAsBinOp, WhenBranch},
+        ast::{WhenBranch, WhenVariant},
         blankspace::eat_space,
     };
 
     /// If Ok it always returns MadeProgress
     pub fn rest_of_when_expr<'a>(
-        cond: Option<Loc<Expr<'a>>>,
+        cond: Option<(Loc<Expr<'a>>, WhenVariant)>,
         flags: ExprParseFlags,
         arena: &'a Bump,
         state: State<'a>,
         min_indent: u32,
     ) -> ParseResult<'a, Expr<'a>, EWhen<'a>> {
-        let (as_binop, cond, state) = if let Some(cond) = cond {
-            (Some(WhenAsBinOp::BinOp), cond, state)
+        let (variant, cond, state) = if let Some((cond, what)) = cond {
+            (Some(what), cond, state)
         } else {
             let (_, spaces_before, state) =
                 eat_space_check(EWhen::IndentCondition, arena, state, min_indent, true)?;
@@ -2600,7 +2600,7 @@ mod when {
             }
         }
 
-        let when = Expr::When(arena.alloc(cond), branches.into_bump_slice(), as_binop);
+        let when = Expr::When(arena.alloc(cond), branches.into_bump_slice(), variant);
         Ok((MadeProgress, when, state))
     }
 
@@ -3491,8 +3491,8 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>, is_closure_shortcut: bool)
         Ident::Access { module_name, parts } => {
             let mut iter = parts.iter();
 
-            let closure_shortcut = if is_closure_shortcut {
-                Some(ClosureShortcutForAccess::Access)
+            let shortcut_what = if is_closure_shortcut {
+                Some(AccessVariant::ClosureShortcut)
             } else {
                 None
             };
@@ -3501,7 +3501,7 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>, is_closure_shortcut: bool)
             // e.g. `foo` in `foo.bar.baz`
             let mut answer = match iter.next() {
                 Some(Accessor::RecordField(ident)) => {
-                    Expr::new_var_shortcut(module_name, ident, closure_shortcut)
+                    Expr::new_var_shortcut(module_name, ident, shortcut_what)
                 }
                 Some(Accessor::TupleIndex(_)) => {
                     // TODO: make this state impossible to represent in Ident::Access,
@@ -3518,7 +3518,7 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>, is_closure_shortcut: bool)
             // e.g. `bar` in `foo.bar.baz`, followed by `baz`
             let mut first = true;
             for field in iter {
-                let shortcut = if first { closure_shortcut } else { None };
+                let shortcut = if first { shortcut_what } else { None };
                 first = false;
                 // Wrap the previous answer in the new one, so we end up
                 // with a nested Expr. That way, `foo.bar.baz` gets represented

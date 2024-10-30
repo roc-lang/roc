@@ -10,7 +10,7 @@ use crate::Buf;
 use roc_module::called_via::{self, BinOp};
 use roc_parse::ast::{
     is_expr_suffixed, AssignedField, Base, ClosureShortcut, Collection, CommentOrNewline, Expr,
-    ExtractSpaces, Pattern, TryTarget, WhenAsBinOp, WhenBranch,
+    ExtractSpaces, Pattern, TryTarget, WhenBranch, WhenVariant,
 };
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_parse::ident::Accessor;
@@ -476,8 +476,8 @@ impl<'a> Formattable for Expr<'a> {
                     indent,
                 );
             }
-            When(loc_condition, branches, as_binop) => {
-                fmt_when(buf, loc_condition, branches, as_binop, indent)
+            When(loc_condition, branches, variant) => {
+                fmt_when(buf, loc_condition, branches, variant, indent)
             }
             Tuple(items) => fmt_collection(buf, indent, Braces::Round, *items, Newlines::No),
             List(items) => fmt_collection(buf, indent, Braces::Square, *items, Newlines::No),
@@ -854,70 +854,73 @@ fn fmt_when<'a>(
     buf: &mut Buf,
     loc_condition: &'a Loc<Expr<'a>>,
     branches: &[&'a WhenBranch<'a>],
-    as_binop: &Option<WhenAsBinOp>,
+    variant: &Option<WhenVariant>,
     indent: u16,
 ) {
     let is_multiline_condition = loc_condition.is_multiline();
-    if as_binop.is_none() {
+    if variant.is_none() {
         buf.ensure_ends_with_newline();
         buf.indent(indent);
         buf.push_str("when");
     }
-    if is_multiline_condition {
-        let condition_indent = indent + INDENT;
 
-        match &loc_condition.value {
-            Expr::SpaceBefore(expr_below, spaces_above_expr) => {
-                fmt_comments_only(
-                    buf,
-                    spaces_above_expr.iter(),
-                    NewlineAt::Top,
-                    condition_indent,
-                );
-                buf.newline();
-                match &expr_below {
-                    Expr::SpaceAfter(expr_above, spaces_below_expr) => {
-                        // If any of the spaces is a newline, add a newline at the top.
-                        // Otherwise leave it as just a comment.
-                        let newline_at = if spaces_below_expr
-                            .iter()
-                            .any(|spaces| matches!(spaces, CommentOrNewline::Newline))
-                        {
-                            NewlineAt::Top
-                        } else {
-                            NewlineAt::None
-                        };
+    if *variant != Some(WhenVariant::ClosureShortcut) {
+        if is_multiline_condition {
+            let condition_indent = indent + INDENT;
 
-                        expr_above.format(buf, condition_indent);
-                        fmt_comments_only(
-                            buf,
-                            spaces_below_expr.iter(),
-                            newline_at,
-                            condition_indent,
-                        );
-                        buf.newline();
-                    }
-                    _ => {
-                        expr_below.format(buf, condition_indent);
+            match &loc_condition.value {
+                Expr::SpaceBefore(expr_below, spaces_above_expr) => {
+                    fmt_comments_only(
+                        buf,
+                        spaces_above_expr.iter(),
+                        NewlineAt::Top,
+                        condition_indent,
+                    );
+                    buf.newline();
+                    match &expr_below {
+                        Expr::SpaceAfter(expr_above, spaces_below_expr) => {
+                            // If any of the spaces is a newline, add a newline at the top.
+                            // Otherwise leave it as just a comment.
+                            let newline_at = if spaces_below_expr
+                                .iter()
+                                .any(|spaces| matches!(spaces, CommentOrNewline::Newline))
+                            {
+                                NewlineAt::Top
+                            } else {
+                                NewlineAt::None
+                            };
+
+                            expr_above.format(buf, condition_indent);
+                            fmt_comments_only(
+                                buf,
+                                spaces_below_expr.iter(),
+                                newline_at,
+                                condition_indent,
+                            );
+                            buf.newline();
+                        }
+                        _ => {
+                            expr_below.format(buf, condition_indent);
+                        }
                     }
                 }
+                _ => {
+                    buf.newline();
+                    loc_condition.format(buf, condition_indent);
+                    buf.newline();
+                }
             }
-            _ => {
-                buf.newline();
-                loc_condition.format(buf, condition_indent);
-                buf.newline();
-            }
+            buf.indent(indent);
+        } else {
+            buf.spaces(1);
+            loc_condition.format(buf, indent);
+            buf.spaces(1);
         }
-        buf.indent(indent);
-    } else {
-        buf.spaces(1);
-        loc_condition.format(buf, indent);
-        buf.spaces(1);
     }
 
-    match as_binop {
-        Some(WhenAsBinOp::BinOp) => buf.push_str("~"),
-        _ => buf.push_str("is"),
+    match variant {
+        None => buf.push_str("is"),
+        _ => buf.push_str("~"),
     }
     buf.newline();
 
@@ -1255,8 +1258,17 @@ fn fmt_closure<'a>(
     buf.indent(indent);
     buf.push('\\');
 
+    let mut avoid_indent = false;
     match shortcut {
         Some(shortcut) => match shortcut {
+            ClosureShortcut::Access => {
+                // it will be handled by the `RecordAccess` or `TupleAccess` or `Var`
+            }
+            ClosureShortcut::WhenBinOp => {
+                // it will be handled by the `fmt_when`
+                // avoid double indent for the when branches
+                avoid_indent = true;
+            }
             ClosureShortcut::BinOp => {
                 if let BinOps([(_, binop)], loc_right) = loc_ret.value {
                     push_op(buf, binop.value);
@@ -1284,9 +1296,6 @@ fn fmt_closure<'a>(
                     );
                     return;
                 }
-            }
-            ClosureShortcut::Access => {
-                // do nothing , it will be handled by the `RecordAccess` or `TupleAccess` or `Var`
             }
         },
         None => {
@@ -1342,10 +1351,9 @@ fn fmt_closure<'a>(
         }
     }
 
-    let is_multiline = loc_ret.value.is_multiline();
-
     // If the body is multiline, go down a line and indent.
-    let body_indent = if is_multiline {
+    let is_multiline = loc_ret.value.is_multiline();
+    let body_indent = if is_multiline && !avoid_indent {
         indent + INDENT
     } else {
         indent

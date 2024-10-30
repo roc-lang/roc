@@ -403,17 +403,19 @@ pub enum TryTarget {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ClosureShortcut {
     BinOp,
+    WhenBinOp,
     Access,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub enum ClosureShortcutForAccess {
-    Access,
+pub enum AccessVariant {
+    ClosureShortcut,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub enum WhenAsBinOp {
+pub enum WhenVariant {
     BinOp,
+    ClosureShortcut,
 }
 
 /// A parsed expression. This uses lifetimes extensively for two reasons:
@@ -446,7 +448,7 @@ pub enum Expr<'a> {
     RecordAccess(
         &'a Expr<'a>,
         &'a str,
-        #[educe(Debug(ignore))] Option<ClosureShortcutForAccess>,
+        #[educe(Debug(ignore))] Option<AccessVariant>,
     ),
 
     /// e.g. `.foo` or `.0`
@@ -459,7 +461,7 @@ pub enum Expr<'a> {
     TupleAccess(
         &'a Expr<'a>,
         &'a str,
-        #[educe(Debug(ignore))] Option<ClosureShortcutForAccess>,
+        #[educe(Debug(ignore))] Option<AccessVariant>,
     ),
 
     /// Early return on failures - e.g. the ! in `File.readUtf8! path`
@@ -497,7 +499,7 @@ pub enum Expr<'a> {
         // Shortcut instructs to output the variable in the context of closure shortcut as '.' for the shortcut identity function `\.`
         // todo: @revisit for now ignoring it in the AST snapshot testing
         #[educe(Debug(ignore))]
-        closure_shortcut: Option<ClosureShortcutForAccess>,
+        closure_shortcut: Option<AccessVariant>,
     },
 
     Underscore(&'a str),
@@ -552,7 +554,7 @@ pub enum Expr<'a> {
         /// is Option<Expr> because each branch may be preceded by
         /// a guard (".. if ..").
         &'a [&'a WhenBranch<'a>],
-        #[educe(Debug(ignore))] Option<WhenAsBinOp>,
+        #[educe(Debug(ignore))] Option<WhenVariant>,
     ),
 
     // Blank Space (e.g. comments, spaces, newlines) before or after an expression.
@@ -585,7 +587,7 @@ impl Expr<'_> {
     pub const fn new_var_shortcut<'a>(
         module_name: &'a str,
         ident: &'a str,
-        closure_shortcut: Option<ClosureShortcutForAccess>,
+        closure_shortcut: Option<AccessVariant>,
     ) -> Expr<'a> {
         Expr::Var {
             module_name,
