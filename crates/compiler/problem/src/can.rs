@@ -195,6 +195,7 @@ pub enum Problem {
         unbound_symbol: Symbol,
         region: Region,
     },
+    NoIdentifiersIntroduced(Region),
     OverloadedSpecialization {
         overload: Region,
         original_opaque: Symbol,
@@ -317,6 +318,7 @@ impl Problem {
             Problem::ImplementsNonRequired { .. } => Warning,
             Problem::DoesNotImplementAbility { .. } => RuntimeError,
             Problem::NotBoundInAllPatterns { .. } => RuntimeError,
+            Problem::NoIdentifiersIntroduced(_) => Warning,
             Problem::OverloadedSpecialization { .. } => Warning, // Ideally, will compile
             Problem::UnnecessaryOutputWildcard { .. } => Warning,
             // TODO: sometimes this can just be a warning, e.g. if you have [1, .., .., 2] but we
@@ -480,6 +482,7 @@ impl Problem {
             }
             | Problem::NotAnAbility(region)
             | Problem::ImplementsNonRequired { region, .. }
+            | Problem::NoIdentifiersIntroduced(region)
             | Problem::DoesNotImplementAbility { region, .. }
             | Problem::OverloadedSpecialization {
                 overload: region, ..

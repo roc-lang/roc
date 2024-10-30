@@ -1267,6 +1267,14 @@ fn canonicalize_value_defs<'a>(
 
         output = temp_output.output;
 
+        if let (PatternType::TopLevelDef, DefKind::Ignored(_)) =
+            (pattern_type, temp_output.def.kind)
+        {
+            env.problems.push(Problem::NoIdentifiersIntroduced(
+                temp_output.def.loc_pattern.region,
+            ))
+        }
+
         defs.push(Some(temp_output.def));
 
         def_ordering.insert_symbol_references(def_id as u32, &temp_output.references)

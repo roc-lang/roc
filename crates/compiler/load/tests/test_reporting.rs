@@ -10185,6 +10185,18 @@ All branches in an `if` must have the same type!
 
     Since these variables have the same name, it's easy to use the wrong
     one by accident. Give one of them a new name.
+
+    ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
+
+    This destructure assignment doesn't introduce any new variables:
+
+    5│  main = \n -> n + 2
+        ^^^^
+
+    If you don't need to use the value on the right-hand side of this
+    assignment, consider removing the assignment. Since effects are not
+    allowed at the top-level, assignments that don't introduce variables
+    cannot affect a program's behavior
     "###
     );
 
@@ -10890,7 +10902,55 @@ All branches in an `if` must have the same type!
             Foo = Foo
             "#
         ),
-        @""
+        @r###"
+    ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
+
+    This destructure assignment doesn't introduce any new variables:
+
+    3│  Pair _ _ = Pair 0 1
+        ^^^^^^^^
+
+    If you don't need to use the value on the right-hand side of this
+    assignment, consider removing the assignment. Since effects are not
+    allowed at the top-level, assignments that don't introduce variables
+    cannot affect a program's behavior
+
+    ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
+
+    This destructure assignment doesn't introduce any new variables:
+
+    5│  _ = Pair 0 1
+        ^
+
+    If you don't need to use the value on the right-hand side of this
+    assignment, consider removing the assignment. Since effects are not
+    allowed at the top-level, assignments that don't introduce variables
+    cannot affect a program's behavior
+
+    ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
+
+    This destructure assignment doesn't introduce any new variables:
+
+    7│  {} = {}
+        ^^
+
+    If you don't need to use the value on the right-hand side of this
+    assignment, consider removing the assignment. Since effects are not
+    allowed at the top-level, assignments that don't introduce variables
+    cannot affect a program's behavior
+
+    ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
+
+    This destructure assignment doesn't introduce any new variables:
+
+    9│  Foo = Foo
+        ^^^
+
+    If you don't need to use the value on the right-hand side of this
+    assignment, consider removing the assignment. Since effects are not
+    allowed at the top-level, assignments that don't introduce variables
+    cannot affect a program's behavior
+    "###
     );
 
     test_report!(
