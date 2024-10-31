@@ -112,6 +112,10 @@ pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
         .replace(
             "<!-- Module links -->",
             render_sidebar(exposed_module_docs.iter().map(|(_, docs)| docs)).as_str(),
+        )
+        .replace(
+            "<!-- Search Type Ahead -->",
+            render_search_type_ahead(exposed_module_docs.iter().map(|(_, docs)| docs)).as_str(),
         );
 
     let all_exposed_symbols = {
@@ -464,6 +468,72 @@ fn render_sidebar<'a, I: Iterator<Item = &'a ModuleDocumentation>>(modules: I) -
             vec![("class", "sidebar-entry")],
             sidebar_entry_content.as_str(),
         );
+    }
+
+    buf
+}
+
+fn render_search_type_ahead<'a, I: Iterator<Item = &'a ModuleDocumentation>>(modules: I) -> String {
+    let mut buf = String::new();
+    for module in modules {
+        let module_name = module.name.as_str();
+        for entry in &module.entries {
+            if let DocEntry::DocDef(doc_def) = entry {
+                if module.exposed_symbols.contains(&doc_def.symbol) {
+                    let mut entry_contents_buf = String::new();
+                    push_html(
+                        &mut entry_contents_buf,
+                        "p",
+                        vec![("class", "type-ahead-def-name")],
+                        doc_def.name.as_str(),
+                    );
+
+                    let mut entry_signature_buf = String::new();
+                    type_annotation_to_html(
+                        0,
+                        &mut entry_signature_buf,
+                        &doc_def.type_annotation,
+                        false,
+                    );
+
+                    push_html(
+                        &mut entry_contents_buf,
+                        "p",
+                        vec![("class", "type-ahead-signature")],
+                        entry_signature_buf.as_str(),
+                    );
+
+                    push_html(
+                        &mut entry_contents_buf,
+                        "p",
+                        vec![("class", "type-ahead-doc-path")],
+                        format!("{} > {}", module_name, doc_def.name),
+                    );
+
+                    let mut entry_href = String::new();
+
+                    entry_href.push_str(module_name);
+                    entry_href.push('#');
+                    entry_href.push_str(doc_def.name.as_str());
+
+                    let mut anchor_buf = String::new();
+
+                    push_html(
+                        &mut anchor_buf,
+                        "a",
+                        vec![("href", entry_href.as_str()), ("class", "type-ahead-link")],
+                        entry_contents_buf.as_str(),
+                    );
+
+                    push_html(
+                        &mut buf,
+                        "li",
+                        vec![("role", "option")],
+                        anchor_buf.as_str(),
+                    );
+                }
+            }
+        }
     }
 
     buf

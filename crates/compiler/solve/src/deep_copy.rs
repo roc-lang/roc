@@ -1,11 +1,12 @@
 use std::ops::ControlFlow;
 
 use bumpalo::Bump;
+use roc_collections::soa::slice_extend_new;
 use roc_error_macros::internal_error;
 use roc_types::{
     subs::{
         self, AliasVariables, Content, Descriptor, FlatType, GetSubsSlice, Mark, OptVariable, Rank,
-        RecordFields, Subs, SubsSlice, TagExt, TupleElems, UnionLabels, Variable,
+        RecordFields, Subs, TagExt, TupleElems, UnionLabels, Variable,
     },
     types::{RecordField, Uls},
 };
@@ -185,7 +186,7 @@ fn deep_copy_var_help(
                         Func(new_arguments, new_closure_var, new_ret_var)
                     }
 
-                    same @ EmptyRecord | same @ EmptyTuple | same @ EmptyTagUnion => same,
+                    same @ EmptyRecord | same @ EmptyTagUnion => same,
 
                     Record(fields, ext_var) => {
                         let record_fields = {
@@ -201,7 +202,7 @@ fn deep_copy_var_help(
 
                             let new_field_types_start = if has_rigid_optional_field {
                                 let field_types = field_types.to_vec();
-                                let slice = SubsSlice::extend_new(
+                                let slice = slice_extend_new(
                                     &mut subs.record_fields,
                                     field_types.into_iter().map(|f| match f {
                                         RecordField::RigidOptional(())
@@ -212,7 +213,7 @@ fn deep_copy_var_help(
                                         | RecordField::Optional(_) => f,
                                     }),
                                 );
-                                slice.start
+                                slice.start()
                             } else {
                                 fields.field_types_start
                             };
@@ -220,7 +221,7 @@ fn deep_copy_var_help(
                             RecordFields {
                                 length: fields.length,
                                 field_names_start: fields.field_names_start,
-                                variables_start: new_variables.start,
+                                variables_start: new_variables.start(),
                                 field_types_start: new_field_types_start,
                             }
                         };
@@ -234,7 +235,7 @@ fn deep_copy_var_help(
 
                             TupleElems {
                                 length: elems.length,
-                                variables_start: new_variables.start,
+                                variables_start: new_variables.start(),
                                 elem_index_start: elems.elem_index_start,
                             }
                         };
@@ -291,7 +292,7 @@ fn deep_copy_var_help(
                     copy_sequence!(arguments.all_variables_len, arguments.all_variables());
 
                 let new_arguments = AliasVariables {
-                    variables_start: new_variables.start,
+                    variables_start: new_variables.start(),
                     ..arguments
                 };
 

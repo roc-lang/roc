@@ -464,7 +464,7 @@ fn old_package_header<'a>() -> impl Parser<'a, PackageHeader<'a>, EHeader<'a>> {
                 old.exposes.keyword.before,
                 old.exposes.keyword.after
             );
-        
+
             let before_packages = merge_spaces(
                 arena,
                 old.packages.value.keyword.before,
@@ -1396,6 +1396,7 @@ pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPac
             )),
             and(
                 optional(skip_first(
+                    // todo: @wip this is the last usage of keyword, replace it with at_keyword and remove the fn
                     crate::parser::keyword(crate::keyword::PLATFORM, EPackageEntry::Platform),
                     space0_e(EPackageEntry::IndentPackage),
                 )),

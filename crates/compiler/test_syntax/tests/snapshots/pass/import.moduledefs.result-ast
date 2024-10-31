@@ -1,15 +1,15 @@
 Defs {
     tags: [
-        Index(2147483648),
+        EitherIndex(2147483648),
     ],
     regions: [
         @0-12,
     ],
     space_before: [
-        Slice(start = 0, length = 0),
+        Slice { start: 0, length: 0 },
     ],
     space_after: [
-        Slice(start = 0, length = 1),
+        Slice { start: 0, length: 1 },
     ],
     spaces: [
         Newline,

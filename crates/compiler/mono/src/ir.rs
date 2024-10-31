@@ -4978,12 +4978,17 @@ pub fn with_hole<'a>(
                 }
             }
 
+            let struct_index = match index {
+                Some(index) => index,
+                None => return runtime_error(env, "No such field in record"),
+            };
+
             compile_struct_like_access(
                 env,
                 procs,
                 layout_cache,
                 field_layouts,
-                index.expect("field not in its own type") as _,
+                struct_index,
                 *loc_expr,
                 record_var,
                 hole,
@@ -5076,12 +5081,17 @@ pub fn with_hole<'a>(
                 }
             }
 
+            let tuple_index = match final_index {
+                Some(index) => index as u64,
+                None => return runtime_error(env, "No such index in tuple"),
+            };
+
             compile_struct_like_access(
                 env,
                 procs,
                 layout_cache,
                 field_layouts,
-                final_index.expect("elem not in its own type") as u64,
+                tuple_index,
                 *loc_expr,
                 tuple_var,
                 hole,
@@ -5877,6 +5887,28 @@ pub fn with_hole<'a>(
                     assign_to_symbols(env, procs, layout_cache, iter, result)
                 }
             }
+        }
+        Return {
+            return_value,
+            return_var,
+        } => {
+            let return_symbol = possible_reuse_symbol_or_specialize(
+                env,
+                procs,
+                layout_cache,
+                &return_value.value,
+                return_var,
+            );
+
+            assign_to_symbol(
+                env,
+                procs,
+                layout_cache,
+                return_var,
+                *return_value,
+                return_symbol,
+                Stmt::Ret(return_symbol),
+            )
         }
         TypedHole(_) => runtime_error(env, "Hit a blank"),
         RuntimeError(e) => runtime_error(env, env.arena.alloc(e.runtime_message())),
@@ -8055,7 +8087,10 @@ fn can_reuse_symbol<'a>(
                 .enumerate()
                 .find_map(|(current, (label, _, _))| (label == *field).then_some(current));
 
-            let struct_index = index.expect("field not in its own type");
+            let struct_index = match index {
+                Some(index) => index as u64,
+                None => return NotASymbol,
+            };
 
             let struct_symbol = possible_reuse_symbol_or_specialize(
                 env,
@@ -10124,7 +10159,7 @@ fn find_lambda_sets_help(
                 | FlatType::RecursiveTagUnion(_, union_tags, ext) => {
                     for tag in union_tags.variables() {
                         stack.extend(
-                            subs.get_subs_slice(subs.variable_slices[tag.index as usize])
+                            subs.get_subs_slice(subs.variable_slices[tag.index()])
                                 .iter()
                                 .rev(),
                         );
@@ -10136,7 +10171,6 @@ fn find_lambda_sets_help(
                     }
                 }
                 FlatType::EmptyRecord => {}
-                FlatType::EmptyTuple => {}
                 FlatType::EmptyTagUnion => {}
             },
             Content::Alias(_, _, actual, _) => {
@@ -10146,7 +10180,7 @@ fn find_lambda_sets_help(
                 // the lambda set itself should already be caught by Func above, but the
                 // capture can itself contain more lambda sets
                 for index in lambda_set.solved.variables() {
-                    let subs_slice = subs.variable_slices[index.index as usize];
+                    let subs_slice = subs.variable_slices[index.index()];
                     stack.extend(subs.variables[subs_slice.indices()].iter());
                 }
             }

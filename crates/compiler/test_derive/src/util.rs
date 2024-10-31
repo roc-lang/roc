@@ -1,12 +1,11 @@
-use std::fmt::Write as _; // import without risk of name clashing
-use std::path::PathBuf;
-
 use bumpalo::Bump;
 use roc_packaging::cache::RocCacheDir;
 use roc_solve::{
     module::{SolveConfig, SolveOutput},
     FunctionKind,
 };
+use std::fmt::Write as _;
+use std::path::PathBuf;
 use ven_pretty::DocAllocator;
 
 use roc_can::{
@@ -116,12 +115,12 @@ macro_rules! v {
          }
      }};
      ([ $($tag:ident $($payload:expr)*),* ] as $rec_var:ident) => {{
-         use roc_types::subs::{Subs, SubsIndex, Variable, Content, FlatType, TagExt, UnionTags};
+         use roc_types::subs::{Subs, Variable, Content, FlatType, TagExt, UnionTags};
          use roc_module::ident::TagName;
          |subs: &mut Subs| {
              let $rec_var = subs.fresh_unnamed_flex_var();
              let rec_name_index =
-                 SubsIndex::push_new(&mut subs.field_names, stringify!($rec).into());
+                 roc_collections::soa::index_push_new(&mut subs.field_names, stringify!($rec).into());
 
              $(
              let $tag = vec![ $( $payload(subs), )* ];
@@ -193,12 +192,12 @@ macro_rules! v {
          |subs: &mut Subs| { roc_derive::synth_var(subs, Content::FlexVar(None)) }
      }};
      ($name:ident implements $ability:path) => {{
-         use roc_types::subs::{Subs, SubsIndex, SubsSlice, Content};
+         use roc_types::subs::{Subs,  Content};
          |subs: &mut Subs| {
              let name_index =
-                 SubsIndex::push_new(&mut subs.field_names, stringify!($name).into());
+                 roc_collections::soa::index_push_new(&mut subs.field_names, stringify!($name).into());
 
-             let abilities_slice = SubsSlice::extend_new(&mut subs.symbol_names, [$ability]);
+             let abilities_slice = roc_collections::soa::slice_extend_new(&mut subs.symbol_names, [$ability]);
 
              roc_derive::synth_var(subs, Content::FlexAbleVar(Some(name_index), abilities_slice))
          }

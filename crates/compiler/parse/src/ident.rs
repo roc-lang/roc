@@ -65,6 +65,7 @@ pub fn parse_lowercase_ident<'a>(state: State<'a>) -> ParseResult<'a, &'a str, (
     match chomp_lowercase_part(state.bytes()) {
         Err(progress) => Err((progress, ())),
         Ok(ident) => {
+            // todo: @perf optimize for a single character identifier, which is "common", avoid chomp, avoid kw check
             if crate::keyword::KEYWORDS.iter().any(|kw| &ident == kw) {
                 Err((NoProgress, ()))
             } else {
@@ -121,7 +122,7 @@ pub fn parse_unqualified_ident<'a>(state: State<'a>) -> ParseResult<'a, &'a str,
 /// 4. The beginning of a type annotation (e.g. `foo :`)
 /// 5. A reserved keyword (e.g. `if ` or `when `), meaning we should do something else.
 pub fn parse_ident<'a>(arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Ident<'a>, EExpr<'a>> {
-    let initial = state.clone();
+    let initial = state.clone(); // todo: @perf optimize for a single character identifier, which is "common", avoid chomp, avoid kw check
     match chomp_identifier_chain(arena, state.bytes(), state.pos()) {
         Ok((width, ident)) => {
             let state = state.advance(width as usize);

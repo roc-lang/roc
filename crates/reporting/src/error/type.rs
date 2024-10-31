@@ -1645,6 +1645,40 @@ fn to_expr_report<'b>(
                 unimplemented!("record default field is not implemented yet")
             }
             Reason::ImportParams(_) => unreachable!(),
+            Reason::FunctionOutput => {
+                let problem = alloc.concat([
+                    alloc.text("This "),
+                    alloc.keyword("return"),
+                    alloc.reflow(
+                        " statement doesn't match the return type of its enclosing function:",
+                    ),
+                ]);
+
+                let comparison = type_comparison(
+                    alloc,
+                    found,
+                    expected_type,
+                    ExpectationContext::Arbitrary,
+                    add_category(alloc, alloc.text("It"), &category),
+                    alloc.reflow("But I expected the function to have return type:"),
+                    None,
+                );
+
+                Report {
+                    title: "TYPE MISMATCH".to_string(),
+                    filename,
+                    doc: alloc.stack([
+                        problem,
+                        alloc.region_with_subregion(
+                            lines.convert_region(region),
+                            lines.convert_region(expr_region),
+                            severity,
+                        ),
+                        comparison,
+                    ]),
+                    severity,
+                }
+            }
         },
     }
 }
@@ -1956,7 +1990,7 @@ fn format_category<'b>(
         }
 
         Uniqueness => (
-            alloc.concat([this_is, alloc.text(" an uniqueness attribute")]),
+            alloc.concat([this_is, alloc.text(" a uniqueness attribute")]),
             alloc.text(" of type:"),
         ),
         Crash => {
@@ -1981,6 +2015,10 @@ fn format_category<'b>(
         ),
         Dbg => (
             alloc.concat([this_is, alloc.text(" a dbg statement")]),
+            alloc.text(" of type:"),
+        ),
+        Return => (
+            alloc.concat([text!(alloc, "{}his", t), alloc.reflow(" returns a value")]),
             alloc.text(" of type:"),
         ),
     }

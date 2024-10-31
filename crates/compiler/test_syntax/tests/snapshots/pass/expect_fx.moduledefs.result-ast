@@ -1,15 +1,15 @@
 Defs {
     tags: [
-        Index(2147483648),
+        EitherIndex(2147483648),
     ],
     regions: [
         @25-41,
     ],
     space_before: [
-        Slice(start = 0, length = 1),
+        Slice { start: 0, length: 1 },
     ],
     space_after: [
-        Slice(start = 1, length = 1),
+        Slice { start: 1, length: 1 },
     ],
     spaces: [
         LineComment(

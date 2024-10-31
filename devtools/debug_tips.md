@@ -64,7 +64,7 @@ $ cargo build --bin roc
 $ ./target/debug/roc build ./examples/platform-switching/rocLovesRust.roc
 # To view in editor
 $ cargo llvm-cov report --lcov  --output-path lcov.info
-# To view in browser
+# To view in browser. This html report also allows you to see how many times each line of code was run. 
 $ cargo llvm-cov report --html
 ```
 Viewing lcov.info will depend on your editor. For vscode, you can use the [coverage gutters](https://marketplace.visualstudio.com/items?itemName=ryanluker.vscode-coverage-gutters) extension. After installing, click `Watch` in the bottom bar and go to a file for which you want to see the coverage, for example `crates/compiler/build/src/link.rs`. `Watch` in the bottom bar will now be replaced with `x% Coverage`.

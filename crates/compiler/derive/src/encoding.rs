@@ -188,6 +188,7 @@ fn to_encoder_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
         function_type: to_elem_encoder_fn_var,
         closure_type: to_elem_encoder_lset,
         return_type: elem_encoder_var,
+        early_returns: vec![],
         name: to_elem_encoder_sym,
         captured_symbols: vec![],
         recursive: Recursive::NotRecursive,
@@ -281,6 +282,7 @@ fn to_encoder_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
         function_type: fn_var,
         closure_type: fn_clos_var,
         return_type: this_encoder_var,
+        early_returns: vec![],
         name: fn_name,
         captured_symbols: vec![],
         recursive: Recursive::NotRecursive,
@@ -318,7 +320,7 @@ fn to_encoder_record(
         .map(|(field_name_index, field_var_index, _)| {
             let field_name = env.subs[field_name_index].clone();
             let field_var = env.subs[field_var_index];
-            let field_var_slice = VariableSubsSlice::new(field_var_index.index, 1);
+            let field_var_slice = VariableSubsSlice::new(field_var_index.index() as u32, 1);
 
             // key: "a"
             let key_field = Field {
@@ -490,6 +492,7 @@ fn to_encoder_record(
         function_type: fn_var,
         closure_type: fn_clos_var,
         return_type: this_encoder_var,
+        early_returns: vec![],
         name: fn_name,
         captured_symbols: vec![],
         recursive: Recursive::NotRecursive,
@@ -527,7 +530,7 @@ fn to_encoder_tuple(
         .map(|(elem_index, elem_var_index)| {
             let index = env.subs[elem_index];
             let elem_var = env.subs[elem_var_index];
-            let elem_var_slice = VariableSubsSlice::new(elem_var_index.index, 1);
+            let elem_var_slice = VariableSubsSlice::new(elem_var_index.index() as u32, 1);
 
             // tup.0
             let tuple_access = TupleAccess {
@@ -672,6 +675,7 @@ fn to_encoder_tuple(
         function_type: fn_var,
         closure_type: fn_clos_var,
         return_type: this_encoder_var,
+        early_returns: vec![],
         name: fn_name,
         captured_symbols: vec![],
         recursive: Recursive::NotRecursive,
@@ -914,6 +918,7 @@ fn to_encoder_tag_union(
         function_type: fn_var,
         closure_type: fn_clos_var,
         return_type: this_encoder_var,
+        early_returns: vec![],
         name: fn_name,
         captured_symbols: vec![],
         recursive: Recursive::NotRecursive,
@@ -1025,6 +1030,7 @@ fn wrap_in_encode_custom(
         function_type: fn_var,
         closure_type: fn_clos_var,
         return_type: Variable::LIST_U8,
+        early_returns: vec![],
         name: fn_name,
         captured_symbols: vec![(captured_symbol, captured_var)],
         recursive: Recursive::NotRecursive,

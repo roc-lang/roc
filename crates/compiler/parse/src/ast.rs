@@ -9,11 +9,12 @@ use crate::parser::ESingleQuote;
 use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
 use educe::Educe;
-use roc_collections::soa::{EitherIndex, Index, Slice};
+use roc_collections::soa::{index_push_new, slice_extend_new};
 use roc_error_macros::internal_error;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
 use roc_module::ident::QualifiedModuleName;
 use roc_region::all::{Loc, Position, Region};
+use soa::{EitherIndex, Slice};
 
 #[derive(Debug, Clone)]
 pub struct FullAst<'a> {
@@ -557,6 +558,13 @@ pub enum Expr<'a> {
         #[educe(Debug(ignore))] Option<WhenVariant>,
     ),
 
+    Return(
+        /// The return value
+        &'a Loc<Expr<'a>>,
+        /// The unused code after the return statement
+        Option<&'a Loc<Expr<'a>>>,
+    ),
+
     // Blank Space (e.g. comments, spaces, newlines) before or after an expression.
     // We preserve this for the formatter; canonicalization ignores it.
     SpaceBefore(&'a Expr<'a>, &'a [CommentOrNewline<'a>]),
@@ -725,6 +733,9 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::UnaryOp(a, _) => is_expr_suffixed(&a.value),
         Expr::When(cond, branches, _) => {
             is_expr_suffixed(&cond.value) || branches.iter().any(|x| is_when_branch_suffixed(x))
+        }
+        Expr::Return(a, b) => {
+            is_expr_suffixed(&a.value) || b.is_some_and(|loc_b| is_expr_suffixed(&loc_b.value))
         }
         Expr::SpaceBefore(a, _) => is_expr_suffixed(a),
         Expr::SpaceAfter(a, _) => is_expr_suffixed(a),
@@ -994,6 +1005,15 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                     expr_stack.reserve(2);
                     expr_stack.push(&condition.value);
                     expr_stack.push(&cont.value);
+                }
+                Return(return_value, after_return) => {
+                    if let Some(after_return) = after_return {
+                        expr_stack.reserve(2);
+                        expr_stack.push(&return_value.value);
+                        expr_stack.push(&after_return.value);
+                    } else {
+                        expr_stack.push(&return_value.value);
+                    }
                 }
                 Apply(fun, args, _) => {
                     expr_stack.reserve(args.len() + 1);
@@ -1369,10 +1389,10 @@ impl<'a> Defs<'a> {
 
         self.regions.push(region);
 
-        let before = Slice::extend_new(&mut self.spaces, spaces_before.iter().copied());
+        let before = slice_extend_new(&mut self.spaces, spaces_before.iter().copied());
         self.space_before.push(before);
 
-        let after = Slice::extend_new(&mut self.spaces, spaces_after.iter().copied());
+        let after = slice_extend_new(&mut self.spaces, spaces_after.iter().copied());
         self.space_after.push(after);
     }
 
@@ -1383,7 +1403,7 @@ impl<'a> Defs<'a> {
         spaces_before: &[CommentOrNewline<'a>],
         spaces_after: &[CommentOrNewline<'a>],
     ) {
-        let value_def_index = Index::push_new(&mut self.value_defs, value_def);
+        let value_def_index = index_push_new(&mut self.value_defs, value_def);
         let tag = EitherIndex::from_right(value_def_index);
         self.push_def_help(tag, region, spaces_before, spaces_after)
     }
@@ -1417,7 +1437,7 @@ impl<'a> Defs<'a> {
         spaces_before: &[CommentOrNewline<'a>],
         spaces_after: &[CommentOrNewline<'a>],
     ) {
-        let type_def_index = Index::push_new(&mut self.type_defs, type_def);
+        let type_def_index = index_push_new(&mut self.type_defs, type_def);
         let tag = EitherIndex::from_left(type_def_index);
         self.push_def_help(tag, region, spaces_before, spaces_after)
     }
@@ -1432,13 +1452,13 @@ impl<'a> Defs<'a> {
         for (tag_index, tag) in self.tags.iter().enumerate() {
             let region = self.regions[tag_index];
             let space_before = {
-                let start = self.space_before[tag_index].start();
+                let start = self.space_before[tag_index].start() as usize;
                 let len = self.space_before[tag_index].len();
 
                 &self.spaces[start..(start + len)]
             };
             let space_after = {
-                let start = self.space_after[tag_index].start();
+                let start = self.space_after[tag_index].start() as usize;
                 let len = self.space_after[tag_index].len();
 
                 &self.spaces[start..(start + len)]
@@ -1451,13 +1471,13 @@ impl<'a> Defs<'a> {
                     match tag_index.cmp(&target) {
                         std::cmp::Ordering::Less => {
                             // before
-                            let type_def_index = Index::push_new(&mut before.type_defs, type_def);
+                            let type_def_index = index_push_new(&mut before.type_defs, type_def);
                             let tag = EitherIndex::from_left(type_def_index);
                             before.push_def_help(tag, region, space_before, space_after);
                         }
                         std::cmp::Ordering::Greater => {
                             // after
-                            let type_def_index = Index::push_new(&mut after.type_defs, type_def);
+                            let type_def_index = index_push_new(&mut after.type_defs, type_def);
                             let tag = EitherIndex::from_left(type_def_index);
                             after.push_def_help(tag, region, space_before, space_after);
                         }
@@ -1473,14 +1493,14 @@ impl<'a> Defs<'a> {
                         std::cmp::Ordering::Less => {
                             // before
                             let new_value_def_index =
-                                Index::push_new(&mut before.value_defs, value_def);
+                                index_push_new(&mut before.value_defs, value_def);
                             let tag = EitherIndex::from_right(new_value_def_index);
                             before.push_def_help(tag, region, space_before, space_after);
                         }
                         std::cmp::Ordering::Greater => {
                             // after
                             let new_value_def_index =
-                                Index::push_new(&mut after.value_defs, value_def);
+                                index_push_new(&mut after.value_defs, value_def);
                             let tag = EitherIndex::from_right(new_value_def_index);
                             after.push_def_help(tag, region, space_before, space_after);
                         }
@@ -2501,6 +2521,7 @@ impl<'a> Malformed for Expr<'a> {
             Dbg => false,
             DbgStmt(condition, continuation) => condition.is_malformed() || continuation.is_malformed(),
             LowLevelDbg(_, condition, continuation) => condition.is_malformed() || continuation.is_malformed(),
+            Return(return_value, after_return) => return_value.is_malformed() || after_return.is_some_and(|ar| ar.is_malformed()),
             Apply(func, args, _) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
             BinOps(firsts, last) => firsts.iter().any(|(expr, _)| expr.is_malformed()) || last.is_malformed(),
             UnaryOp(expr, _) => expr.is_malformed(),

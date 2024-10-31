@@ -22,7 +22,6 @@ use roc_can::expr::{
 use roc_can::pattern::Pattern;
 use roc_can::traverse::symbols_introduced_from_pattern;
 use roc_collections::all::{HumanIndex, MutMap, SendMap};
-use roc_collections::soa::{Index, Slice};
 use roc_collections::VecMap;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::{ModuleId, Symbol};
@@ -33,6 +32,7 @@ use roc_types::types::{
     AliasKind, AnnotationSource, Category, IndexOrField, OptAbleType, PReason, Reason, RecordField,
     TypeExtension, TypeTag, Types,
 };
+use soa::{Index, Slice};
 
 /// This is for constraining Defs
 #[derive(Default, Debug)]
@@ -113,6 +113,7 @@ fn constrain_untyped_closure(
     fn_var: Variable,
     closure_var: Variable,
     ret_var: Variable,
+    early_returns: &[(Variable, Region)],
     arguments: &[(Variable, AnnotatedMark, Loc<Pattern>)],
     loc_body_expr: &Loc<Expr>,
     captured_symbols: &[(Symbol, Variable)],
@@ -134,7 +135,12 @@ fn constrain_untyped_closure(
     vars.push(closure_var);
     vars.push(fn_var);
 
-    let body_type = constraints.push_expected_type(NoExpectation(return_type_index));
+    let body_type = constraints.push_expected_type(ForReason(
+        Reason::FunctionOutput,
+        return_type_index,
+        loc_body_expr.region,
+    ));
+
     let ret_constraint = constrain_expr(
         types,
         constraints,
@@ -143,6 +149,21 @@ fn constrain_untyped_closure(
         &loc_body_expr.value,
         body_type,
     );
+
+    let mut early_return_constraints = Vec::with_capacity(early_returns.len());
+    for (early_return_variable, early_return_region) in early_returns {
+        let early_return_var = constraints.push_variable(*early_return_variable);
+        let early_return_con = constraints.equal_types(
+            early_return_var,
+            body_type,
+            Category::Return,
+            *early_return_region,
+        );
+
+        early_return_constraints.push(early_return_con);
+    }
+
+    let early_returns_constraint = constraints.and_constraint(early_return_constraints);
 
     // make sure the captured symbols are sorted!
     debug_assert_eq!(captured_symbols.to_vec(), {
@@ -185,6 +206,7 @@ fn constrain_untyped_closure(
             region,
             fn_var,
         ),
+        early_returns_constraint,
         closure_constraint,
     ];
 
@@ -624,6 +646,7 @@ pub fn constrain_expr(
             function_type: fn_var,
             closure_type: closure_var,
             return_type: ret_var,
+            early_returns,
             arguments,
             loc_body: boxed,
             captured_symbols,
@@ -640,6 +663,7 @@ pub fn constrain_expr(
                 *fn_var,
                 *closure_var,
                 *ret_var,
+                early_returns,
                 arguments,
                 boxed,
                 captured_symbols,
@@ -1378,6 +1402,29 @@ pub fn constrain_expr(
 
             body_con
         }
+        Return {
+            return_value,
+            return_var,
+        } => {
+            let return_type_index = constraints.push_variable(*return_var);
+
+            let expected_return_value = constraints.push_expected_type(ForReason(
+                Reason::FunctionOutput,
+                return_type_index,
+                return_value.region,
+            ));
+
+            let return_con = constrain_expr(
+                types,
+                constraints,
+                env,
+                return_value.region,
+                &return_value.value,
+                expected_return_value,
+            );
+
+            constraints.exists([*return_var], return_con)
+        }
         Tag {
             tag_union_var: variant_var,
             ext_var,
@@ -1870,6 +1917,7 @@ fn constrain_function_def(
                         expr_var,
                         function_def.closure_type,
                         function_def.return_type,
+                        &function_def.early_returns,
                         &function_def.arguments,
                         loc_body_expr,
                         &function_def.captured_symbols,
@@ -2071,6 +2119,7 @@ fn constrain_function_def(
                 expr_var,
                 function_def.closure_type,
                 function_def.return_type,
+                &function_def.early_returns,
                 &function_def.arguments,
                 loc_expr,
                 &function_def.captured_symbols,
@@ -2969,7 +3018,7 @@ fn constrain_typed_function_arguments(
         None
     };
 
-    let it = arguments.iter().zip(arg_types.into_iter()).enumerate();
+    let it = arguments.iter().zip(arg_types).enumerate();
     for (index, ((pattern_var, annotated_mark, loc_pattern), ann)) in it {
         let pattern_var_index = constraints.push_variable(*pattern_var);
         let ann_index = constraints.push_type(types, ann);
@@ -3123,7 +3172,7 @@ fn constrain_typed_function_arguments_simple(
     arguments: &[(Variable, AnnotatedMark, Loc<Pattern>)],
     arg_types: Slice<TypeTag>,
 ) {
-    let it = arguments.iter().zip(arg_types.into_iter()).enumerate();
+    let it = arguments.iter().zip(arg_types).enumerate();
     for (index, ((pattern_var, annotated_mark, loc_pattern), ann)) in it {
         let pattern_var_index = constraints.push_variable(*pattern_var);
         let ann_index = constraints.push_type(types, ann);
@@ -3651,6 +3700,7 @@ fn constraint_recursive_function(
                 expr_var,
                 function_def.closure_type,
                 function_def.return_type,
+                &function_def.early_returns,
                 &function_def.arguments,
                 loc_expr,
                 &function_def.captured_symbols,
@@ -4133,6 +4183,7 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             | Expect { .. }
             | ExpectFx { .. }
             | Dbg { .. }
+            | Return { .. }
             | TypedHole(_)
             | RuntimeError(..)
             | ZeroArgumentTag { .. }

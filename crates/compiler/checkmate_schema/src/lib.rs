@@ -97,7 +97,6 @@ impl_content! {
         extension: TagUnionExtension,
     },
     EmptyRecord {},
-    EmptyTuple {},
     EmptyTagUnion {},
     RangedNumber {
         range: NumericRange,

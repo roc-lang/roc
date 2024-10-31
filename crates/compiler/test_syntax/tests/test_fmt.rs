@@ -6477,6 +6477,16 @@ mod test_fmt {
         );
     }
 
+    // #[test]
+    // todo: @wip @fixme the corresponding test_snapshots was failing, `return_as_single_line_expr` comparing to main branch, in main `Expr(Start(@0), @0)` and here `Expr(Start(@4), @0)`
+    fn _bad_return_assignment() {
+        expr_formats_same(indoc!(
+            r"
+            x = return 5
+            "
+        ));
+    }
+
     #[test]
     fn preserve_annotated_body() {
         expr_formats_same(indoc!(

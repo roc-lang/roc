@@ -7,6 +7,7 @@ use roc_can::{
     num::{IntBound, IntLitWidth},
     pattern::Pattern,
 };
+use roc_collections::soa::{index_push_new, slice_extend_new};
 use roc_derive_key::hash::FlatHashKey;
 use roc_error_macros::internal_error;
 use roc_module::{
@@ -19,8 +20,7 @@ use roc_types::{
     num::int_lit_width_to_variable,
     subs::{
         Content, ExhaustiveMark, FlatType, GetSubsSlice, LambdaSet, OptVariable, RecordFields,
-        RedundantMark, Subs, SubsIndex, SubsSlice, TagExt, TupleElems, UnionLambdas, UnionTags,
-        Variable,
+        RedundantMark, Subs, SubsSlice, TagExt, TupleElems, UnionLambdas, UnionTags, Variable,
     },
     types::RecordField,
 };
@@ -372,8 +372,8 @@ fn hash_newtype_tag_union(
         }
 
         let variables_slices_slice =
-            SubsSlice::extend_new(&mut env.subs.variable_slices, [variables_slice]);
-        let tag_name_index = SubsIndex::push_new(&mut env.subs.tag_names, label.clone());
+            slice_extend_new(&mut env.subs.variable_slices, [variables_slice]);
+        let tag_name_index = index_push_new(&mut env.subs.tag_names, label.clone());
 
         let union_tags = UnionTags::from_slices(tag_name_index.as_slice(), variables_slices_slice);
         let tag_union_var = synth_var(
@@ -542,6 +542,7 @@ fn build_outer_derived_closure(
         function_type: fn_var,
         closure_type: fn_clos_var,
         return_type: body_var,
+        early_returns: vec![],
         name: fn_name,
         captured_symbols: vec![],
         recursive: Recursive::NotRecursive,

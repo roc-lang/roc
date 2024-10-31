@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 
 use roc_can::{abilities::AbilitiesStore, constraint::TypeOrVar, expected::Expected};
-use roc_collections::soa::{Index, Slice};
+use roc_collections::soa::slice_extend_new;
 use roc_error_macros::internal_error;
 use roc_module::{ident::TagName, symbol::Symbol};
 use roc_region::all::Loc;
@@ -19,6 +19,7 @@ use roc_types::{
     },
 };
 use roc_unify::unify::{unify, Unified};
+use soa::{Index, Slice};
 
 use crate::{
     ability::{AbilityImplError, ObligationCache},
@@ -372,7 +373,7 @@ pub(crate) fn type_to_var_help(
                 }
             }
             UnspecializedLambdaSet { unspecialized } => {
-                let unspecialized_slice = SubsSlice::extend_new(
+                let unspecialized_slice = slice_extend_new(
                     &mut env.subs.unspecialized_lambda_sets,
                     std::iter::once(unspecialized),
                 );
@@ -545,8 +546,8 @@ pub(crate) fn type_to_var_help(
                     unreachable!("we assert that the ext var is empty; otherwise we'd already know it was a tag union!");
                 }
 
-                let tag_names = SubsSlice::extend_new(&mut env.subs.tag_names, [tag_name]);
-                let symbols = SubsSlice::extend_new(&mut env.subs.symbol_names, [symbol]);
+                let tag_names = slice_extend_new(&mut env.subs.tag_names, [tag_name]);
+                let symbols = slice_extend_new(&mut env.subs.symbol_names, [symbol]);
 
                 let content =
                     Content::Structure(FlatType::FunctionOrTagUnion(tag_names, symbols, ext));
@@ -651,7 +652,7 @@ pub(crate) fn type_to_var_help(
                     }
 
                     AliasVariables {
-                        variables_start: new_variables.start,
+                        variables_start: new_variables.start(),
                         type_variables_len: type_arguments.len() as _,
                         lambda_set_variables_len: lambda_set_variables.len() as _,
                         all_variables_len: all_vars_length as _,
@@ -734,7 +735,7 @@ pub(crate) fn type_to_var_help(
                     }
 
                     AliasVariables {
-                        variables_start: new_variables.start,
+                        variables_start: new_variables.start(),
                         type_variables_len: type_arguments.len() as _,
                         lambda_set_variables_len: lambda_set_variables.len() as _,
                         all_variables_len: all_vars_length as _,
@@ -763,10 +764,8 @@ pub(crate) fn type_to_var_help(
         match *env.subs.get_content_unchecked(var) {
             Content::RigidVar(a) => {
                 // TODO(multi-abilities): check run cache
-                let abilities_slice = SubsSlice::extend_new(
-                    &mut env.subs.symbol_names,
-                    abilities.sorted_iter().copied(),
-                );
+                let abilities_slice =
+                    slice_extend_new(&mut env.subs.symbol_names, abilities.sorted_iter().copied());
                 env.subs
                     .set_content(var, Content::RigidAbleVar(a, abilities_slice));
             }
@@ -776,10 +775,8 @@ pub(crate) fn type_to_var_help(
                 // pass, already bound
             }
             _ => {
-                let abilities_slice = SubsSlice::extend_new(
-                    &mut env.subs.symbol_names,
-                    abilities.sorted_iter().copied(),
-                );
+                let abilities_slice =
+                    slice_extend_new(&mut env.subs.symbol_names, abilities.sorted_iter().copied());
 
                 let flex_ability = env.register(rank, Content::FlexAbleVar(None, abilities_slice));
 
@@ -967,7 +964,7 @@ fn find_tag_name_run(slice: &[TagName], subs: &mut Subs) -> Option<SubsSlice<Tag
         Some(occupied) => {
             let subs_slice = *occupied;
 
-            let prefix_slice = SubsSlice::new(subs_slice.start, slice.len() as _);
+            let prefix_slice = SubsSlice::new(subs_slice.start(), slice.len() as _);
 
             if slice.len() == 1 {
                 return Some(prefix_slice);
@@ -976,7 +973,7 @@ fn find_tag_name_run(slice: &[TagName], subs: &mut Subs) -> Option<SubsSlice<Tag
             match slice.len().cmp(&subs_slice.len()) {
                 Ordering::Less => {
                     // we might have a prefix
-                    let tag_names = &subs.tag_names[subs_slice.start as usize..];
+                    let tag_names = &subs.tag_names[subs_slice.start() as usize..];
 
                     for (from_subs, from_slice) in tag_names.iter().zip(slice.iter()) {
                         if from_subs != from_slice {
@@ -1024,7 +1021,7 @@ fn register_tag_arguments(
         VariableSubsSlice::default()
     } else {
         let new_variables = env.subs.reserve_into_vars(arguments.len());
-        let it = new_variables.indices().zip(arguments.into_iter());
+        let it = new_variables.indices().zip(arguments);
 
         for (target_index, argument) in it {
             let var = RegisterVariable::with_stack(env, rank, arena, types, argument, stack);
@@ -1054,8 +1051,7 @@ fn insert_tags_fast_path(
         let variable_slice =
             register_tag_arguments(env, rank, arena, types, stack, arguments_slice);
 
-        let new_variable_slices =
-            SubsSlice::extend_new(&mut env.subs.variable_slices, [variable_slice]);
+        let new_variable_slices = slice_extend_new(&mut env.subs.variable_slices, [variable_slice]);
 
         macro_rules! subs_tag_name {
             ($tag_name_slice:expr) => {
@@ -1076,7 +1072,7 @@ fn insert_tags_fast_path(
     let new_variable_slices = env.subs.reserve_variable_slices(tags.len());
     match find_tag_name_run(&types[tags], env.subs) {
         Some(new_tag_names) => {
-            let it = (new_variable_slices.indices()).zip(payload_slices.into_iter());
+            let it = (new_variable_slices.indices()).zip(payload_slices);
 
             for (variable_slice_index, arguments_index) in it {
                 let arguments = types[arguments_index];
@@ -1091,8 +1087,8 @@ fn insert_tags_fast_path(
 
             let it = (new_variable_slices.indices())
                 .zip(new_tag_names.indices())
-                .zip(tags.into_iter())
-                .zip(payload_slices.into_iter());
+                .zip(tags)
+                .zip(payload_slices);
 
             for (((variable_slice_index, tag_name_index), tag_name), arguments_index) in it {
                 let arguments = types[arguments_index];
@@ -1206,10 +1202,9 @@ fn create_union_lambda(
     stack: &mut bumpalo::collections::Vec<'_, TypeToVar>,
 ) -> UnionLambdas {
     let variable_slice = register_tag_arguments(env, rank, arena, types, stack, capture_types);
-    let new_variable_slices =
-        SubsSlice::extend_new(&mut env.subs.variable_slices, [variable_slice]);
+    let new_variable_slices = slice_extend_new(&mut env.subs.variable_slices, [variable_slice]);
 
-    let lambda_name_slice = SubsSlice::extend_new(&mut env.subs.symbol_names, [closure]);
+    let lambda_name_slice = slice_extend_new(&mut env.subs.symbol_names, [closure]);
 
     UnionLambdas::from_slices(lambda_name_slice, new_variable_slices)
 }

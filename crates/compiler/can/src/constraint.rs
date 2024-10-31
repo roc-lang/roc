@@ -5,12 +5,13 @@ use std::sync::Arc;
 use crate::abilities::SpecializationId;
 use crate::exhaustive::{ExhaustiveContext, SketchedRows};
 use crate::expected::{Expected, PExpected};
-use roc_collections::soa::{EitherIndex, Index, Slice};
+use roc_collections::soa::{index_push_new, slice_extend_new};
 use roc_module::ident::TagName;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{ExhaustiveMark, IllegalCycleMark, Variable};
 use roc_types::types::{Category, PatternCategory, TypeTag, Types};
+use soa::{EitherIndex, Index, Slice};
 
 pub struct Constraints {
     pub constraints: Vec<Constraint>,
@@ -96,6 +97,7 @@ impl Constraints {
             Category::List,
             Category::Str,
             Category::Character,
+            Category::Return,
         ]);
 
         pattern_categories.extend([
@@ -149,6 +151,7 @@ impl Constraints {
     pub const CATEGORY_LIST: Index<Category> = Index::new(11);
     pub const CATEGORY_STR: Index<Category> = Index::new(12);
     pub const CATEGORY_CHARACTER: Index<Category> = Index::new(13);
+    pub const CATEGORY_RETURN: Index<Category> = Index::new(14);
 
     pub const PCATEGORY_RECORD: Index<PatternCategory> = Index::new(0);
     pub const PCATEGORY_EMPTYRECORD: Index<PatternCategory> = Index::new(1);
@@ -205,11 +208,11 @@ impl Constraints {
     }
 
     pub fn push_expected_type(&mut self, expected: Expected<TypeOrVar>) -> ExpectedTypeIndex {
-        Index::push_new(&mut self.expectations, expected)
+        index_push_new(&mut self.expectations, expected)
     }
 
     pub fn push_pat_expected_type(&mut self, expected: PExpected<TypeOrVar>) -> PExpectedTypeIndex {
-        Index::push_new(&mut self.pattern_expectations, expected)
+        index_push_new(&mut self.pattern_expectations, expected)
     }
 
     #[inline(always)]
@@ -229,7 +232,7 @@ impl Constraints {
             Category::List => Self::CATEGORY_LIST,
             Category::Str => Self::CATEGORY_STR,
             Category::Character => Self::CATEGORY_CHARACTER,
-            other => Index::push_new(&mut self.categories, other),
+            other => index_push_new(&mut self.categories, other),
         }
     }
 
@@ -247,7 +250,7 @@ impl Constraints {
             PatternCategory::Int => Self::PCATEGORY_INT,
             PatternCategory::Float => Self::PCATEGORY_FLOAT,
             PatternCategory::Character => Self::PCATEGORY_CHARACTER,
-            other => Index::push_new(&mut self.pattern_categories, other),
+            other => index_push_new(&mut self.pattern_categories, other),
         }
     }
 
@@ -320,7 +323,7 @@ impl Constraints {
         category: PatternCategory,
         region: Region,
     ) -> Constraint {
-        let category_index = Index::push_new(&mut self.pattern_categories, category);
+        let category_index = index_push_new(&mut self.pattern_categories, category);
 
         Constraint::PatternPresence(type_index, expected_index, category_index, region)
     }
@@ -337,7 +340,7 @@ impl Constraints {
         category: PatternCategory,
         region: Region,
     ) -> Constraint {
-        let category_index = Index::push_new(&mut self.pattern_categories, category);
+        let category_index = index_push_new(&mut self.pattern_categories, category);
 
         let includes_tag = IncludesTag {
             type_index,
@@ -347,7 +350,7 @@ impl Constraints {
             region,
         };
 
-        let includes_tag_index = Index::push_new(&mut self.includes_tags, includes_tag);
+        let includes_tag_index = index_push_new(&mut self.includes_tags, includes_tag);
 
         Constraint::IncludesTag(includes_tag_index)
     }
@@ -614,7 +617,7 @@ impl Constraints {
         filename: &'static str,
         line_number: u32,
     ) -> Constraint {
-        let string_index = Index::push_new(&mut self.strings, filename);
+        let string_index = index_push_new(&mut self.strings, filename);
 
         Constraint::Store(type_index, variable, string_index, line_number)
     }
@@ -632,19 +635,19 @@ impl Constraints {
         exhaustive: ExhaustiveMark,
     ) -> Constraint {
         let real_var = Self::push_type_variable(real_var);
-        let sketched_rows = Index::push_new(&mut self.sketched_rows, sketched_rows);
+        let sketched_rows = index_push_new(&mut self.sketched_rows, sketched_rows);
 
         let equality = match category_and_expectation {
             Ok((category, expected)) => {
-                let category = Index::push_new(&mut self.categories, category);
+                let category = index_push_new(&mut self.categories, category);
                 let equality = Eq(real_var, expected, category, real_region);
-                let equality = Index::push_new(&mut self.eq, equality);
+                let equality = index_push_new(&mut self.eq, equality);
                 Ok(equality)
             }
             Err((category, expected)) => {
-                let category = Index::push_new(&mut self.pattern_categories, category);
+                let category = index_push_new(&mut self.pattern_categories, category);
                 let equality = PatternEq(real_var, expected, category, real_region);
-                let equality = Index::push_new(&mut self.pattern_eq, equality);
+                let equality = index_push_new(&mut self.pattern_eq, equality);
                 Err(equality)
             }
         };
@@ -662,18 +665,18 @@ impl Constraints {
         I: IntoIterator<Item = (Symbol, Region)>,
         I1: IntoIterator<Item = Region>,
     {
-        let def_names = Slice::extend_new(&mut self.loc_symbols, loc_symbols);
+        let def_names = slice_extend_new(&mut self.loc_symbols, loc_symbols);
 
         // we add a dummy symbol to these regions, so we can store the data in the loc_symbols vec
         let it = expr_regions.into_iter().map(|r| (Symbol::ATTR_ATTR, r));
-        let expr_regions = Slice::extend_new(&mut self.loc_symbols, it);
+        let expr_regions = slice_extend_new(&mut self.loc_symbols, it);
         let expr_regions = Slice::new(expr_regions.start() as _, expr_regions.len() as _);
 
         let cycle = Cycle {
             def_names,
             expr_regions,
         };
-        let cycle_index = Index::push_new(&mut self.cycles, cycle);
+        let cycle_index = index_push_new(&mut self.cycles, cycle);
 
         Constraint::CheckCycle(cycle_index, cycle_mark)
     }

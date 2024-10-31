@@ -14,11 +14,13 @@ pub fn parse_expr_with<'a>(
     arena: &'a Bump,
     input: &'a str,
 ) -> Result<ast::Expr<'a>, SyntaxError<'a>> {
-    parse_loc_with(arena, input)
-        .map(|loc_expr| loc_expr.value)
-        .map_err(|e| e.problem)
+    match parse_loc_with(arena, input) {
+        Ok(loc_expr) => Ok(loc_expr.value),
+        Err(fail) => Err(fail.problem),
+    }
 }
 
+// todo: @wip @remove move the code into the `test_parse_expr` and remove this method
 #[allow(dead_code)]
 pub fn parse_loc_with<'a>(
     arena: &'a Bump,

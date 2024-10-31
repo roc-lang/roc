@@ -14,7 +14,7 @@ use crate::ident::{
 use crate::number_literal::parse_number_base;
 use crate::parser::{
     at_keyword, collection_inner, EClosure, EExpect, EExpr, EIf, EImport, EImportParams, EInParens,
-    EList, EPattern, ERecord, EType, EWhen, ParseResult, Parser, SpaceProblem,
+    EList, EPattern, ERecord, EReturn, EType, EWhen, ParseResult, Parser, SpaceProblem,
 };
 use crate::pattern::parse_closure_param;
 use crate::state::State;
@@ -26,7 +26,7 @@ use crate::type_annotation::{
 use crate::{header, keyword};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_collections::soa::Slice;
+use roc_collections::soa::slice_extend_new;
 use roc_error_macros::internal_error;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
@@ -378,7 +378,7 @@ fn parse_term<'a>(
                     return Ok((MadeProgress, dbg_expr, state));
                 }
 
-                // todo: @perf here the 4 keywords where already checked, if, when, dbg, crash
+                // todo: @perf here the 4 keywords were already checked, if, when, dbg, crash, avoid checking them again in parse_ident
                 let (_, ident, state) = parse_ident(arena, state)?;
                 let ident_end = state.pos();
 
@@ -564,7 +564,7 @@ pub fn parse_repl_defs_and_optional_expr<'a>(
 
 fn parse_stmt_start<'a>(
     flags: ExprParseFlags,
-    preceding_comment: Region,
+    comment_region: Region,
     arena: &'a Bump,
     mut state: State<'a>,
     min_indent: u32,
@@ -597,10 +597,10 @@ fn parse_stmt_start<'a>(
             b'e' => {
                 if at_keyword(keyword::EXPECT, &state) {
                     state.advance_mut(keyword::EXPECT.len());
-                    rest_of_expect_stmt(false, start, flags, preceding_comment, arena, state)
+                    rest_of_expect_stmt(false, start, flags, comment_region, arena, state)
                 } else if at_keyword(&keyword::EXPECT_FX, &state) {
                     state.advance_mut(keyword::EXPECT_FX.len());
-                    rest_of_expect_stmt(true, start, flags, preceding_comment, arena, state)
+                    rest_of_expect_stmt(true, start, flags, comment_region, arena, state)
                 } else {
                     parse_stmt_operator_chain(start, flags, arena, state, min_indent)
                 }
@@ -608,7 +608,15 @@ fn parse_stmt_start<'a>(
             b'd' => {
                 if at_keyword(keyword::DBG, &state) {
                     state.advance_mut(keyword::DBG.len());
-                    rest_of_dbg_stmt(start, flags, preceding_comment, arena, state)
+                    rest_of_dbg_stmt(start, flags, comment_region, arena, state)
+                } else {
+                    parse_stmt_operator_chain(start, flags, arena, state, min_indent)
+                }
+            }
+            b'r' => {
+                if at_keyword(keyword::RETURN, &state) {
+                    state.advance_mut(keyword::RETURN.len());
+                    rest_of_return_stmt(start, flags, arena, state)
                 } else {
                     parse_stmt_operator_chain(start, flags, arena, state, min_indent)
                 }
@@ -1511,6 +1519,7 @@ fn parse_stmt_operator<'a>(
     let op_start = loc_op.region.start();
     let op_end = loc_op.region.end();
     let new_start = state.pos();
+
     match op {
         OperatorOrDef::BinOp(BinOp::When) => unreachable!("the case handled by the caller"),
         OperatorOrDef::BinOp(BinOp::Minus) if expr_state.end != op_start && op_end == new_start => {
@@ -2110,6 +2119,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::Dbg
         | Expr::DbgStmt(_, _)
         | Expr::LowLevelDbg(_, _, _)
+        | Expr::Return(_, _)
         | Expr::MalformedClosure
         | Expr::MalformedSuffixed(..)
         | Expr::PrecedenceConflict { .. }
@@ -2222,7 +2232,7 @@ pub fn parse_top_level_defs<'a>(
     }
 
     if output.tags.len() > existing_len {
-        let after = Slice::extend_new(&mut output.spaces, last_spaces.iter().copied());
+        let after = slice_extend_new(&mut output.spaces, last_spaces.iter().copied());
         let last = output.tags.len() - 1;
         debug_assert!(output.space_after[last].is_empty() || after.is_empty());
         output.space_after[last] = after;
@@ -2234,7 +2244,7 @@ pub fn parse_top_level_defs<'a>(
 // todo: @revisit now it is a fixed name which is "rarely used" (at least in the Roc compiler source),
 // it also helps to have nice identifier on re-format without additional processing.
 // but we may consider generating the unique `next_unique_suffixed_ident` from the `suffixed` desugaring.
-pub const CLOSURE_SHORTCUT_ARG: &str = "un"; //todo: @wip rename to "nu" as more rare fruit
+pub const CLOSURE_SHORTCUT_ARG: &str = "un"; //todo: @wip rename to "nu" as a more rare fruit
 
 /// If Ok it always returns MadeProgress
 fn rest_of_closure<'a>(
@@ -2777,6 +2787,31 @@ fn rest_of_expect_stmt<'a>(
     }
 }
 
+fn rest_of_return_stmt<'a>(
+    start: Position,
+    flags: ExprParseFlags,
+    arena: &'a Bump,
+    state: State<'a>,
+) -> ParseResult<'a, Loc<Stmt<'a>>, EExpr<'a>> {
+    let inc_indent = state.line_indent() + 1;
+    match parse_block(
+        flags,
+        arena,
+        state,
+        inc_indent,
+        EReturn::IndentReturnValue,
+        EReturn::ReturnValue,
+        None,
+    ) {
+        Ok((_, expr, state)) => {
+            let expr = Loc::pos(start, expr.region.end(), expr.value);
+            let stmt = Stmt::Expr(Expr::Return(arena.alloc(expr), None));
+            Ok((MadeProgress, Loc::pos(start, state.pos(), stmt), state))
+        }
+        Err((_, fail)) => Err((MadeProgress, EExpr::Return(fail, start))),
+    }
+}
+
 fn rest_of_dbg_stmt<'a>(
     start: Position,
     flags: ExprParseFlags,
@@ -3052,7 +3087,7 @@ where
     let (first_spaces, state) = if let Some(first_spaces) = first_spaces {
         (first_spaces, state)
     } else {
-        // if no spaces are provided, try to parse them here
+        // if no spaces are provided, parse them here
         let (_, first_spaces, state) =
             eat_space_loc_comments(indent_problem, arena, state, min_indent, false)?;
         (first_spaces, state)
@@ -3261,6 +3296,20 @@ fn stmts_to_defs<'a>(
     while i < stmts.len() {
         let sp_stmt = stmts[i];
         match sp_stmt.item.value {
+            Stmt::Expr(Expr::Return(return_value, _after_return)) => {
+                if i == stmts.len() - 1 {
+                    last_expr = Some(Loc::at_zero(Expr::Return(return_value, None)));
+                } else {
+                    let rest = stmts_to_expr(&stmts[i + 1..], arena)?;
+                    last_expr = Some(Loc::at_zero(Expr::Return(
+                        return_value,
+                        Some(arena.alloc(rest)),
+                    )));
+                }
+
+                // don't re-process the rest of the statements, they got consumed by the early return
+                break;
+            }
             Stmt::Expr(e) => {
                 if is_expr_suffixed(&e) && i + 1 < stmts.len() {
                     defs.push_value_def(
@@ -3652,7 +3701,7 @@ pub fn parse_record_field<'a>(
 
     let start = state.pos();
     match parse_lowercase_ident(state.clone()) {
-        Err((NoProgress, _)) => { /* skip below */ }
+        Err((NoProgress, _)) => { /* goto below :) */ }
         Err(_) => return Err((MadeProgress, ERecord::Field(start))),
         Ok((_, label, state)) => {
             let field_label = Loc::pos(start, state.pos(), label);

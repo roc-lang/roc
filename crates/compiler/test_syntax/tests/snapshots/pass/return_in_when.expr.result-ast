@@ -1,0 +1,177 @@
+SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-154,
+            ],
+            space_before: [
+                Slice { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Body(
+                    @0-16 Identifier {
+                        ident: "maybeEarlyReturn",
+                    },
+                    @19-154 Closure(
+                        [
+                            @20-21 Identifier {
+                                ident: "x",
+                            },
+                        ],
+                        @29-154 SpaceBefore(
+                            Defs(
+                                Defs {
+                                    tags: [
+                                        EitherIndex(2147483648),
+                                    ],
+                                    regions: [
+                                        @29-136,
+                                    ],
+                                    space_before: [
+                                        Slice { start: 0, length: 0 },
+                                    ],
+                                    space_after: [
+                                        Slice { start: 0, length: 0 },
+                                    ],
+                                    spaces: [],
+                                    type_defs: [],
+                                    value_defs: [
+                                        Body(
+                                            @29-30 Identifier {
+                                                ident: "y",
+                                            },
+                                            @37-136 SpaceBefore(
+                                                When(
+                                                    @42-43 Var {
+                                                        module_name: "",
+                                                        ident: "x",
+                                                    },
+                                                    [
+                                                        WhenBranch {
+                                                            patterns: [
+                                                                @55-56 SpaceBefore(
+                                                                    NumLiteral(
+                                                                        "5",
+                                                                    ),
+                                                                    [
+                                                                        Newline,
+                                                                    ],
+                                                                ),
+                                                            ],
+                                                            value: @80-116 SpaceBefore(
+                                                                Return(
+                                                                    @80-116 SpaceBefore(
+                                                                        Str(
+                                                                            PlainLine(
+                                                                                "abc",
+                                                                            ),
+                                                                        ),
+                                                                        [
+                                                                            Newline,
+                                                                        ],
+                                                                    ),
+                                                                    None,
+                                                                ),
+                                                                [
+                                                                    Newline,
+                                                                ],
+                                                            ),
+                                                            guard: None,
+                                                        },
+                                                        WhenBranch {
+                                                            patterns: [
+                                                                @126-127 SpaceBefore(
+                                                                    Underscore(
+                                                                        "",
+                                                                    ),
+                                                                    [
+                                                                        Newline,
+                                                                        Newline,
+                                                                    ],
+                                                                ),
+                                                            ],
+                                                            value: @131-136 BinOps(
+                                                                [
+                                                                    (
+                                                                        @131-132 Var {
+                                                                            module_name: "",
+                                                                            ident: "x",
+                                                                        },
+                                                                        @133-134 Plus,
+                                                                    ),
+                                                                ],
+                                                                @135-136 Num(
+                                                                    "2",
+                                                                ),
+                                                            ),
+                                                            guard: None,
+                                                        },
+                                                    ],
+                                                ),
+                                                [
+                                                    Newline,
+                                                ],
+                                            ),
+                                        ),
+                                    ],
+                                },
+                                @143-154 SpaceBefore(
+                                    Apply(
+                                        @143-152 Var {
+                                            module_name: "Num",
+                                            ident: "toStr",
+                                        },
+                                        [
+                                            @153-154 Var {
+                                                module_name: "",
+                                                ident: "y",
+                                            },
+                                        ],
+                                        Space,
+                                    ),
+                                    [
+                                        Newline,
+                                        Newline,
+                                        Newline,
+                                    ],
+                                ),
+                            ),
+                            [
+                                Newline,
+                            ],
+                        ),
+                    ),
+                ),
+            ],
+        },
+        @156-173 SpaceBefore(
+            Apply(
+                @156-171 Var {
+                    module_name: "",
+                    ident: "maybeEarlyRetun",
+                },
+                [
+                    @172-173 Num(
+                        "3",
+                    ),
+                ],
+                Space,
+            ),
+            [
+                Newline,
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

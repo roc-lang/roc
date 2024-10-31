@@ -1346,6 +1346,60 @@ pub fn can_problem<'b>(
             doc = report.doc;
             title = report.title;
         }
+
+        Problem::ReturnOutsideOfFunction { region } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This "),
+                    alloc.keyword("return"),
+                    alloc.reflow(" statement doesn't belong to a function:"),
+                ]),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.reflow("I wouldn't know where to return to if I used it!"),
+            ]);
+
+            title = "RETURN OUTSIDE OF FUNCTION".to_string();
+        }
+
+        Problem::StatementsAfterReturn { region } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This code won't run because it follows a "),
+                    alloc.keyword("return"),
+                    alloc.reflow(" statement:"),
+                ]),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.concat([
+                    alloc.hint("you can move the "),
+                    alloc.keyword("return"),
+                    alloc.reflow(
+                        " statement below this block to make the code that follows it run.",
+                    ),
+                ]),
+            ]);
+
+            title = "UNREACHABLE CODE".to_string();
+        }
+
+        Problem::ReturnAtEndOfFunction { region } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This "),
+                    alloc.keyword("return"),
+                    alloc.reflow(" keyword is redundant:"),
+                ]),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.concat([
+                    alloc.reflow("The last expression in a function is treated like a "),
+                    alloc.keyword("return"),
+                    alloc.reflow(" statement. You can safely remove "),
+                    alloc.keyword("return"),
+                    alloc.reflow(" here."),
+                ]),
+            ]);
+
+            title = "UNNECESSARY RETURN".to_string();
+        }
     };
 
     Report {
