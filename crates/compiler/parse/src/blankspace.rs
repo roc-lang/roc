@@ -26,8 +26,8 @@ pub trait SpacedBuilder<'a, T: 'a + Spaceable<'a>> {
     where
         Self: Sized,
     {
-        self.spaced_after(&arena, spaces_after)
-            .spaced_before(&arena, spaces_before)
+        self.spaced_after(arena, spaces_after)
+            .spaced_before(arena, spaces_before)
     }
 }
 
@@ -225,6 +225,7 @@ fn begins_with_crlf(bytes: &[u8]) -> bool {
 }
 
 // note: @dup of the eat_nc_locs
+#[allow(clippy::type_complexity)]
 pub fn eat_nc<'a, E>(
     arena: &'a Bump,
     mut state: State<'a>,

@@ -209,23 +209,20 @@ fn rest_of_type_in_parens<'a>(
     state: State<'a>,
     min_indent: u32,
 ) -> ParseResult<'a, Loc<TypeAnnotation<'a>>, ETypeInParens<'a>> {
-    let (fields, state) = match collection_inner(
-        move |a: &'a Bump, state: State<'a>, min_indent: u32| {
-            let type_pos = state.pos();
-            match type_expr(TRAILING_COMMA_VALID | SKIP_PARSING_SPACES_BEFORE)
-                .parse(a, state, min_indent)
-            {
-                Ok(ok) => Ok(ok),
-                Err((p, fail)) => Err((p, ETypeInParens::Type(a.alloc(fail), type_pos))),
-            }
-        },
-        TypeAnnotation::SpaceBefore,
-    )
-    .parse(arena, state, 0)
-    {
-        Ok((_, out, state)) => (out, state),
-        Err((_, fail)) => return Err((MadeProgress, fail)),
+    let elem_p = move |a: &'a Bump, state: State<'a>, min_indent: u32| {
+        let type_pos = state.pos();
+        match type_expr(TRAILING_COMMA_VALID | SKIP_PARSING_SPACES_BEFORE)
+            .parse(a, state, min_indent)
+        {
+            Ok(ok) => Ok(ok),
+            Err((p, fail)) => Err((p, ETypeInParens::Type(a.alloc(fail), type_pos))),
+        }
     };
+    let (fields, state) =
+        match collection_inner(elem_p, TypeAnnotation::SpaceBefore).parse(arena, state, 0) {
+            Ok((_, out, state)) => (out, state),
+            Err((_, fail)) => return Err((MadeProgress, fail)),
+        };
 
     if state.bytes().first() != Some(&b')') {
         return Err((MadeProgress, ETypeInParens::End(state.pos())));
@@ -714,7 +711,7 @@ pub(crate) fn type_expr<'a>(
         let more_args_res = loop {
             if state.bytes().first() != Some(&b',') {
                 // if no more type args then add the space after the first type annotation here
-                let (p, sp_after_single_ann, state) = if more_args.len() == 0 {
+                let (p, sp_after_single_ann, state) = if more_args.is_empty() {
                     match eat_nc_check(EType::TIndentStart, arena, state, min_indent, false) {
                         Ok((_, sp, state)) => (NoProgress, sp, state),
                         Err(err) => break Err(err),
@@ -885,7 +882,7 @@ pub(crate) fn type_expr<'a>(
 // /// A bound type variable, e.g. `a` in `(a -> a)`
 // BoundVariable(&'a str),
 
-fn parse_concrete_type<'a>(state: State<'a>) -> ParseResult<'a, TypeAnnotation<'a>, ETypeApply> {
+fn parse_concrete_type(state: State<'_>) -> ParseResult<'_, TypeAnnotation<'_>, ETypeApply> {
     let initial_bytes = state.bytes();
 
     match chomp_concrete_type(state.bytes()) {

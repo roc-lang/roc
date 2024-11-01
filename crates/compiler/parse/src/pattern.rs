@@ -297,9 +297,9 @@ fn rest_of_list_pattern<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
-    let inner = collection_inner(list_element_pattern(), Pattern::SpaceBefore);
-
-    let (elems, state) = match inner.parse(arena, state, 0) {
+    let (elems, state) = match collection_inner(list_element_pattern(), Pattern::SpaceBefore)
+        .parse(arena, state, 0)
+    {
         Ok((_, out, state)) => (out, state),
         Err((_, fail)) => return Err((MadeProgress, EPattern::List(fail, start))),
     };
@@ -311,7 +311,7 @@ fn rest_of_list_pattern<'a>(
     let state = state.inc();
 
     let pattern = Loc::pos(start, state.pos(), Pattern::List(elems));
-    return Ok((MadeProgress, pattern, state));
+    Ok((MadeProgress, pattern, state))
 }
 
 fn list_element_pattern<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PList<'a>> {
@@ -463,10 +463,10 @@ fn parse_ident_pattern<'a>(
     }
 }
 
-fn rest_of_underscore_pattern<'a>(
+fn rest_of_underscore_pattern(
     start: Position,
-    state: State<'a>,
-) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
+    state: State<'_>,
+) -> ParseResult<'_, Loc<Pattern<'_>>, EPattern<'_>> {
     let after_underscore = state.clone();
     match parse_lowercase_ident(state) {
         Ok((_, name, state)) => {
@@ -486,9 +486,9 @@ fn rest_of_record_pattern<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
-    let inner = collection_inner(record_pattern_field(), Pattern::SpaceBefore);
-
-    let (fields, state) = match inner.parse(arena, state, 0) {
+    let (fields, state) = match collection_inner(record_pattern_field(), Pattern::SpaceBefore)
+        .parse(arena, state, 0)
+    {
         Ok((_, fields, state)) => (fields, state),
         Err((_, fail)) => return Err((MadeProgress, EPattern::Record(fail, start))),
     };

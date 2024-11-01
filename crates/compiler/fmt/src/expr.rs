@@ -186,7 +186,7 @@ impl<'a> Formattable for Expr<'a> {
                 ident,
                 closure_shortcut,
             } => {
-                if *closure_shortcut == None {
+                if closure_shortcut.is_none() {
                     buf.indent(indent);
                     if !module_name.is_empty() {
                         buf.push_str(module_name);
@@ -540,14 +540,14 @@ impl<'a> Formattable for Expr<'a> {
                 buf.push_str(key);
             }
             RecordAccess(expr, key, shortcut) => {
-                if *shortcut == None {
+                if shortcut.is_none() {
                     expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
                 }
                 buf.push('.');
                 buf.push_str(key);
             }
             TupleAccess(expr, key, shortcut) => {
-                if *shortcut == None {
+                if shortcut.is_none() {
                     expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
                 }
                 buf.push('.');

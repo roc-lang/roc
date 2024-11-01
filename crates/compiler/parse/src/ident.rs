@@ -61,7 +61,7 @@ pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
 /// * A record field, e.g. "email" in `.email` or in `email:`
 /// * A named pattern match, e.g. "foo" in `foo =` or `foo ->` or `\foo ->`
 #[inline(always)]
-pub fn parse_lowercase_ident<'a>(state: State<'a>) -> ParseResult<'a, &'a str, ()> {
+pub fn parse_lowercase_ident(state: State<'_>) -> ParseResult<'_, &str, ()> {
     match chomp_lowercase_part(state.bytes()) {
         Err(progress) => Err((progress, ())),
         Ok(ident) => {
@@ -87,7 +87,7 @@ pub fn uppercase<'a>() -> impl Parser<'a, UppercaseIdent<'a>, ()> {
     }
 }
 
-pub fn parse_unqualified_ident<'a>(state: State<'a>) -> ParseResult<'a, &'a str, ()> {
+pub fn parse_unqualified_ident(state: State<'_>) -> ParseResult<'_, &str, ()> {
     match chomp_anycase_part(state.bytes()) {
         Err(progress) => Err((progress, ())),
         Ok(ident) => {

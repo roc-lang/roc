@@ -15,6 +15,7 @@ use crate::number_literal::parse_number_base;
 use crate::parser::{
     at_keyword, collection_inner, EClosure, EExpect, EExpr, EIf, EImport, EImportParams, EInParens,
     EList, EPattern, ERecord, EReturn, EType, EWhen, ParseResult, Parser, SpaceProblem,
+    SyntaxError,
 };
 use crate::pattern::parse_closure_param;
 use crate::state::State;
@@ -34,32 +35,31 @@ use roc_region::all::{Loc, Position, Region};
 use crate::parser::Progress::{self, *};
 
 pub fn test_parse_expr<'a>(
-    min_indent: u32,
     arena: &'a bumpalo::Bump,
     state: State<'a>,
-) -> Result<Loc<Expr<'a>>, EExpr<'a>> {
-    let (spaces_before, state) =
-        match eat_nc_check(EExpr::IndentStart, arena, state, min_indent, false) {
-            Ok((_, sp, state)) => (sp, state),
-            Err((_, fail)) => return Err(fail),
-        };
-
-    let flags = CHECK_FOR_ARROW | ACCEPT_MULTI_BACKPASSING;
-    let (expr, state) = match parse_expr_block(flags, arena, state, min_indent) {
-        Ok((_, out, state)) => (out, state),
-        Err((_, fail)) => return Err(fail),
+) -> Result<Loc<Expr<'a>>, SyntaxError<'a>> {
+    let (spaces_before, state) = match eat_nc_check(EExpr::IndentStart, arena, state, 0, false) {
+        Ok((_, sp, state)) => (sp, state),
+        Err((_, fail)) => return Err(SyntaxError::Expr(fail, Position::default())),
     };
 
-    let (spaces_after, state) =
-        match eat_nc_check(EExpr::IndentEnd, arena, state.clone(), min_indent, false) {
-            Ok((_, spaces_after, state)) => (spaces_after, state),
-            Err(_) => (&[] as &[_], state),
-        };
+    let flags = CHECK_FOR_ARROW | ACCEPT_MULTI_BACKPASSING;
+    let (expr, state) = match parse_expr_block(flags, arena, state, 0) {
+        Ok((_, out, state)) => (out, state),
+        Err((_, fail)) => return Err(SyntaxError::Expr(fail, Position::default())),
+    };
+
+    let (spaces_after, state) = match eat_nc_check(EExpr::IndentEnd, arena, state.clone(), 0, false)
+    {
+        Ok((_, spaces_after, state)) => (spaces_after, state),
+        Err(_) => (&[] as &[_], state),
+    };
 
     if state.has_reached_end() {
         Ok(expr.spaced_around(arena, spaces_before, spaces_after))
     } else {
-        Err(EExpr::BadExprEnd(state.pos()))
+        let fail = EExpr::BadExprEnd(state.pos());
+        Err(SyntaxError::Expr(fail, Position::default()))
     }
 }
 
@@ -104,18 +104,14 @@ fn rest_of_expr_in_parens_etc<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
-    let (elems, state) = match collection_inner(
-        move |a: &'a Bump, state: State<'a>, min_indent: u32| {
-            let block_pos = state.pos();
-            match parse_expr_block(CHECK_FOR_ARROW, a, state, min_indent) {
-                Ok(ok) => Ok(ok),
-                Err((p, fail)) => return Err((p, EInParens::Expr(a.alloc(fail), block_pos))),
-            }
-        },
-        Expr::SpaceBefore,
-    )
-    .parse(arena, state, 0)
-    {
+    let elem_p = move |a: &'a Bump, state: State<'a>, min_indent: u32| {
+        let block_pos = state.pos();
+        match parse_expr_block(CHECK_FOR_ARROW, a, state, min_indent) {
+            Ok(ok) => Ok(ok),
+            Err((p, fail)) => return Err((p, EInParens::Expr(a.alloc(fail), block_pos))),
+        }
+    };
+    let (elems, state) = match collection_inner(elem_p, Expr::SpaceBefore).parse(arena, state, 0) {
         Ok((_, out, state)) => (out, state),
         Err((p, fail)) => return Err((p, EExpr::InParens(fail, start))),
     };
@@ -189,9 +185,9 @@ fn parse_field_task_result_suffixes<'a>(
                 }
                 b'!' => (Suffix::TrySuffix(TryTarget::Task), state.inc()),
                 b'?' => (Suffix::TrySuffix(TryTarget::Result), state.inc()),
-                _ => return Ok((Progress::when(fields.len() != 0), fields, prev_state)),
+                _ => return Ok((Progress::when(!fields.is_empty()), fields, prev_state)),
             },
-            _ => return Ok((Progress::when(fields.len() != 0), fields, prev_state)),
+            _ => return Ok((Progress::when(!fields.is_empty()), fields, prev_state)),
         };
 
         fields.push(next_field);
@@ -600,7 +596,7 @@ fn parse_stmt_start<'a>(
                 if at_keyword(keyword::EXPECT, &state) {
                     state.advance_mut(keyword::EXPECT.len());
                     rest_of_expect_stmt(false, start, flags, comment_region, arena, state)
-                } else if at_keyword(&keyword::EXPECT_FX, &state) {
+                } else if at_keyword(keyword::EXPECT_FX, &state) {
                     state.advance_mut(keyword::EXPECT_FX.len());
                     rest_of_expect_stmt(true, start, flags, comment_region, arena, state)
                 } else {
@@ -1020,9 +1016,9 @@ fn parse_import_params<'a>(
     Ok((MadeProgress, import_params, state))
 }
 
-fn parse_imported_module_name<'a>(
-    state: State<'a>,
-) -> ParseResult<'a, ImportedModuleName<'a>, EImport<'a>> {
+fn parse_imported_module_name(
+    state: State<'_>,
+) -> ParseResult<'_, ImportedModuleName<'_>, EImport<'_>> {
     let package_pos = state.pos();
     let (package, state) = match parse_lowercase_ident(state.clone()) {
         Ok((_, name, state)) => match state.bytes().first() {
@@ -1099,24 +1095,21 @@ fn import_exposing<'a>() -> impl Parser<
         }
         let state = state.inc();
 
-        let (item, state) = match collection_inner(
-            move |_: &'a Bump, state: State<'a>, _: u32| {
-                let pos: Position = state.pos();
-                match parse_unqualified_ident(state) {
-                    Ok((p, ident, state)) => {
-                        let ident = Spaced::Item(crate::header::ExposedName::new(ident));
-                        Ok((p, Loc::pos(pos, state.pos(), ident), state))
-                    }
-                    Err((p, _)) => Err((p, EImport::ExposedName(pos))),
+        let elem_p = move |_: &'a Bump, state: State<'a>, _: u32| {
+            let pos: Position = state.pos();
+            match parse_unqualified_ident(state) {
+                Ok((p, ident, state)) => {
+                    let ident = Spaced::Item(crate::header::ExposedName::new(ident));
+                    Ok((p, Loc::pos(pos, state.pos(), ident), state))
                 }
-            },
-            Spaced::SpaceBefore,
-        )
-        .parse(arena, state, 0)
-        {
-            Ok((_, out, state)) => (out, state),
-            Err((_, fail)) => return Err((MadeProgress, fail)),
+                Err((p, _)) => Err((p, EImport::ExposedName(pos))),
+            }
         };
+        let (item, state) =
+            match collection_inner(elem_p, Spaced::SpaceBefore).parse(arena, state, 0) {
+                Ok((_, out, state)) => (out, state),
+                Err((_, fail)) => return Err((MadeProgress, fail)),
+            };
 
         if state.bytes().first() != Some(&b']') {
             return Err((MadeProgress, EImport::ExposingListEnd(state.pos())));
@@ -1600,7 +1593,7 @@ fn parse_stmt_operator<'a>(
                             parse_expr_start(flags, None, arena, state, inc_indent)?;
 
                         // put the spaces from after the operator in front of the call
-                        type_ann = type_ann.spaced_before(&arena, spaces_after_op.value);
+                        type_ann = type_ann.spaced_before(arena, spaces_after_op.value);
                         (Loc::at(expr_region, pat), type_ann, state)
                     }
                     Err(_) => {
@@ -1645,7 +1638,7 @@ fn parse_after_binop<'a>(
     };
 
     // put the spaces from after the operator in front of the new_expr
-    let right_expr = right_expr.spaced_before(&arena, spaces_after_op);
+    let right_expr = right_expr.spaced_before(arena, spaces_after_op);
 
     let args = std::mem::replace(&mut expr_state.arguments, Vec::new_in(arena));
     let call = to_call(arena, args, expr_state.expr);
@@ -2284,7 +2277,7 @@ fn rest_of_closure<'a>(
         let initial = state.clone();
         let pos = state.pos();
         let module_name = "";
-        let (ident, state) = match chomp_access_chain(&state.bytes(), &mut parts) {
+        let (ident, state) = match chomp_access_chain(state.bytes(), &mut parts) {
             Ok(width) => {
                 let parts = parts.into_bump_slice();
                 let ident = Ident::Access { module_name, parts };
@@ -2616,6 +2609,7 @@ mod when {
     }
 
     /// Parsing alternative patterns in `when` branches.
+    #[allow(clippy::type_complexity)]
     fn parse_branch_alternatives<'a>(
         flags: ExprParseFlags,
         pattern_indent: Option<u32>,
@@ -3838,21 +3832,18 @@ fn record_help<'a>() -> impl Parser<'a, RecordHelp<'a>, ERecord<'a>> {
             }
         };
 
-        let (fields, state) = match collection_inner(
-            move |a: &'a Bump, state: State<'a>, min_indent: u32| {
-                let field_pos = state.pos();
-                match parse_record_field(a, state, min_indent) {
-                    Ok((p, out, state)) => Ok((p, Loc::pos(field_pos, state.pos(), out), state)),
-                    Err(err) => Err(err),
-                }
-            },
-            RecordField::SpaceBefore,
-        )
-        .parse(arena, state, 0)
-        {
-            Ok((_, out, state)) => (out, state),
-            Err((_, fail)) => return Err((MadeProgress, fail)),
+        let elem_p = move |a: &'a Bump, state: State<'a>, min_indent: u32| {
+            let field_pos = state.pos();
+            match parse_record_field(a, state, min_indent) {
+                Ok((p, out, state)) => Ok((p, Loc::pos(field_pos, state.pos(), out), state)),
+                Err(err) => Err(err),
+            }
         };
+        let (fields, state) =
+            match collection_inner(elem_p, RecordField::SpaceBefore).parse(arena, state, 0) {
+                Ok((_, out, state)) => (out, state),
+                Err((_, fail)) => return Err((MadeProgress, fail)),
+            };
 
         if state.bytes().first() != Some(&b'}') {
             return Err((MadeProgress, ERecord::End(state.pos())));
@@ -4047,7 +4038,7 @@ enum OperatorOrDef {
     Backpassing,
 }
 
-fn parse_bin_op<'a>(err_progress: Progress, state: State<'a>) -> ParseResult<'a, BinOp, EExpr<'a>> {
+fn parse_bin_op(err_progress: Progress, state: State<'_>) -> ParseResult<'_, BinOp, EExpr<'_>> {
     let start = state.pos();
     let (_, op, state) = parse_operator(EExpr::Start, EExpr::BadOperator, state)?;
     match op {

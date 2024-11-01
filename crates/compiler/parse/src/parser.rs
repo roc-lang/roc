@@ -1422,7 +1422,7 @@ pub fn zero_or_more<'a, Output, E: 'a>(
                     buf.push(next_elem);
                 }
                 Err((NoProgress, _)) => {
-                    break Ok((Progress::when(buf.len() != 0), buf, prev_state))
+                    break Ok((Progress::when(!buf.is_empty()), buf, prev_state))
                 }
                 Err(err) => break Err(err),
             }

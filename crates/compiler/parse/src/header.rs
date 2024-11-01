@@ -942,45 +942,42 @@ where
 
 fn imports_entry<'a>() -> impl Parser<'a, Spaced<'a, ImportsEntry<'a>>, EImports> {
     move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
-        match and(
-            move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
-                let (name, state) = match skip_second(
-                    shortname(),
-                    byte(b'.', EImports::ShorthandDot),
-                )
+        let parser1 = move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
+            let (name, state) = match skip_second(shortname(), byte(b'.', EImports::ShorthandDot))
                 .parse(arena, state.clone(), min_indent)
-                {
-                    Ok((_, out, state)) => (Some(out), state),
-                    Err(_) => (None, state),
-                };
+            {
+                Ok((_, out, state)) => (Some(out), state),
+                Err(_) => (None, state),
+            };
 
-                match module_name_help(EImports::ModuleName).parse(arena, state, min_indent) {
-                    Ok((p, module_name, state)) => Ok((p, (name, module_name), state)),
-                    Err(err) => Err(err),
-                }
-            },
-            // e.g. `.{ Task, after}`
-            move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
-                let olds = state.clone();
-                match skip_first(
-                    byte(b'.', EImports::ExposingDot),
-                    collection_trailing_sep_e(
-                        byte(b'{', EImports::SetStart),
-                        exposes_entry(EImports::Identifier),
-                        byte(b'}', EImports::SetEnd),
-                        Spaced::SpaceBefore,
-                    ),
-                )
-                .parse(arena, state, min_indent)
-                {
-                    Ok((p, out, state)) => Ok((p, Some(out), state)),
-                    Err((NoProgress, _)) => Ok((NoProgress, None, olds)),
-                    Err(err) => Err(err),
-                }
-            },
-        )
-        .trace("normal_import")
-        .parse(arena, state.clone(), min_indent)
+            match module_name_help(EImports::ModuleName).parse(arena, state, min_indent) {
+                Ok((p, module_name, state)) => Ok((p, (name, module_name), state)),
+                Err(err) => Err(err),
+            }
+        };
+
+        // e.g. `.{ Task, after}`
+        let parser2 = move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
+            let olds = state.clone();
+            match skip_first(
+                byte(b'.', EImports::ExposingDot),
+                collection_trailing_sep_e(
+                    byte(b'{', EImports::SetStart),
+                    exposes_entry(EImports::Identifier),
+                    byte(b'}', EImports::SetEnd),
+                    Spaced::SpaceBefore,
+                ),
+            )
+            .parse(arena, state, min_indent)
+            {
+                Ok((p, out, state)) => Ok((p, Some(out), state)),
+                Err((NoProgress, _)) => Ok((NoProgress, None, olds)),
+                Err(err) => Err(err),
+            }
+        };
+        match and(parser1, parser2)
+            .trace("normal_import")
+            .parse(arena, state.clone(), min_indent)
         {
             Err((NoProgress, _)) => {}
             Err(err) => return Err(err),
