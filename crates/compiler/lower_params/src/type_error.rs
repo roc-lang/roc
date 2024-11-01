@@ -182,7 +182,9 @@ fn remove_for_reason(
         }
         | Reason::CrashArg
         | Reason::ImportParams(_)
-        | Reason::FunctionOutput => {}
+        | Reason::FunctionOutput
+        | Reason::TryResult
+        | Reason::TryFailure => {}
     }
 }
 

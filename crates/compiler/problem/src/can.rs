@@ -8,7 +8,7 @@ use roc_module::symbol::{ModuleId, Symbol};
 use roc_parse::ast::Base;
 use roc_parse::pattern::PatternType;
 use roc_region::all::{Loc, Region};
-use roc_types::types::AliasKind;
+use roc_types::types::{AliasKind, EarlyReturnType};
 
 use crate::Severity;
 
@@ -244,6 +244,7 @@ pub enum Problem {
     },
     ReturnOutsideOfFunction {
         region: Region,
+        return_type: EarlyReturnType,
     },
     StatementsAfterReturn {
         region: Region,
@@ -498,7 +499,7 @@ impl Problem {
             | Problem::OverAppliedDbg { region }
             | Problem::UnappliedDbg { region }
             | Problem::DefsOnlyUsedInRecursion(_, region)
-            | Problem::ReturnOutsideOfFunction { region }
+            | Problem::ReturnOutsideOfFunction { region, .. }
             | Problem::StatementsAfterReturn { region }
             | Problem::ReturnAtEndOfFunction { region } => Some(*region),
             Problem::RuntimeError(RuntimeError::CircularDef(cycle_entries))

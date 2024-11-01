@@ -267,6 +267,11 @@ pub(crate) fn list_type(typ: Type) -> Type {
     builtin_type(Symbol::LIST_LIST, vec![typ])
 }
 
+// #[cfg_attr(not(debug_assertions), inline(always))]
+// pub(crate) fn result_type(ok_type: Type, err_type: Type) -> Type {
+//     builtin_type(Symbol::RESULT_RESULT, vec![ok_type, err_type])
+// }
+
 #[cfg_attr(not(debug_assertions), inline(always))]
 fn builtin_num_alias(
     symbol: Symbol,

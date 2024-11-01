@@ -369,9 +369,10 @@ pub fn canonicalize_module_defs<'a>(
         PatternType::TopLevelDef,
     );
 
-    for (_early_return_var, early_return_region) in &scope.early_returns {
+    for (_early_return_var, early_return_region, early_return_type) in &scope.early_returns {
         env.problem(Problem::ReturnOutsideOfFunction {
             region: *early_return_region,
+            return_type: *early_return_type,
         });
     }
 
@@ -970,6 +971,14 @@ fn fix_values_captured_in_closure_expr(
             );
             fix_values_captured_in_closure_expr(
                 &mut loc_continuation.value,
+                no_capture_symbols,
+                closure_captures,
+            );
+        }
+
+        Try { result_expr, .. } => {
+            fix_values_captured_in_closure_expr(
+                &mut result_expr.value,
                 no_capture_symbols,
                 closure_captures,
             );

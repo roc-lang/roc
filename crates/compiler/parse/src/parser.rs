@@ -343,6 +343,7 @@ pub enum EExpr<'a> {
     Closure(EClosure<'a>, Position),
     Underscore(Position),
     Crash(Position),
+    Try(Position),
 
     InParens(EInParens<'a>, Position),
     Record(ERecord<'a>, Position),

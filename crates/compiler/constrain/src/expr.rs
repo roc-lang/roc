@@ -29,8 +29,8 @@ use roc_region::all::{Loc, Region};
 use roc_types::subs::{IllegalCycleMark, Variable};
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
-    AliasKind, AnnotationSource, Category, IndexOrField, OptAbleType, PReason, Reason, RecordField,
-    TypeExtension, TypeTag, Types,
+    AliasKind, AnnotationSource, Category, EarlyReturnType, IndexOrField, OptAbleType, PReason,
+    Reason, RecordField, TypeExtension, TypeTag, Types,
 };
 use soa::{Index, Slice};
 
@@ -113,7 +113,7 @@ fn constrain_untyped_closure(
     fn_var: Variable,
     closure_var: Variable,
     ret_var: Variable,
-    early_returns: &[(Variable, Region)],
+    early_returns: &[(Variable, Region, EarlyReturnType)],
     arguments: &[(Variable, AnnotatedMark, Loc<Pattern>)],
     loc_body_expr: &Loc<Expr>,
     captured_symbols: &[(Symbol, Variable)],
@@ -151,12 +151,12 @@ fn constrain_untyped_closure(
     );
 
     let mut early_return_constraints = Vec::with_capacity(early_returns.len());
-    for (early_return_variable, early_return_region) in early_returns {
+    for (early_return_variable, early_return_region, early_return_type) in early_returns {
         let early_return_var = constraints.push_variable(*early_return_variable);
         let early_return_con = constraints.equal_types(
             early_return_var,
             body_type,
-            Category::Return,
+            Category::Return(*early_return_type),
             *early_return_region,
         );
 
@@ -815,6 +815,156 @@ pub fn constrain_expr(
             );
 
             constraints.exists_many([*variable], [message_con, continuation_con])
+        }
+
+        Try {
+            result_expr,
+            result_var,
+            ok_tag_var,
+            ok_payload_var,
+            err_tag_var,
+            err_payload_var,
+            return_var,
+            return_ok_payload_var,
+        } => {
+            let try_result_type_index = {
+                let typ = types.from_old_type(&Type::TagUnion(
+                    vec![
+                        ("Ok".into(), vec![Type::Variable(*ok_payload_var)]),
+                        ("Err".into(), vec![Type::Variable(*err_payload_var)]),
+                    ],
+                    TypeExtension::Closed,
+                ));
+                constraints.push_type(types, typ)
+            };
+            let try_result_expected_type = constraints.push_expected_type(ForReason(
+                Reason::TryResult,
+                try_result_type_index,
+                result_expr.region,
+            ));
+
+            // let try_proper_result_type_index = {
+            //     let typ = types.from_old_type(&result_type(
+            //         Type::Variable(*ok_payload_var),
+            //         Type::Variable(*err_payload_var),
+            //     ));
+            //     constraints.push_type(types, typ)
+            // };
+            // let try_proper_result_expected_type = constraints.push_expected_type(ForReason(
+            //     Reason::TryResult,
+            //     try_proper_result_type_index,
+            //     result_expr.region,
+            // ));
+
+            let try_result_expr_constraint = constrain_expr(
+                types,
+                constraints,
+                env,
+                result_expr.region,
+                &result_expr.value,
+                try_result_expected_type,
+            );
+            let try_result_var_constraint = constraints.equal_types_var(
+                *result_var,
+                try_result_expected_type,
+                Category::TryResult,
+                result_expr.region,
+            );
+            // let try_proper_result_var_constraint = constraints.equal_types_var(
+            //     *result_var,
+            //     try_proper_result_expected_type,
+            //     Category::TryResult,
+            //     result_expr.region,
+            // );
+
+            let return_result_type_index = {
+                // let typ = types.from_old_type(&result_type(
+                //     Type::Variable(*return_ok_payload_var),
+                //     Type::Variable(*err_payload_var),
+                // ));
+                let typ = types.from_old_type(&Type::TagUnion(
+                    vec![
+                        ("Ok".into(), vec![Type::Variable(*return_ok_payload_var)]),
+                        ("Err".into(), vec![Type::Variable(*err_payload_var)]),
+                    ],
+                    TypeExtension::Closed,
+                ));
+                constraints.push_type(types, typ)
+            };
+            let return_result_expected_type = constraints.push_expected_type(ForReason(
+                Reason::TryFailure,
+                return_result_type_index,
+                result_expr.region,
+            ));
+
+            let return_result_constraint = constraints.equal_types_var(
+                *return_var,
+                return_result_expected_type,
+                Category::TryFailure,
+                result_expr.region,
+            );
+
+            let ok_tag_type_index = {
+                let typ = types.from_old_type(&Type::TagUnion(
+                    vec![("Ok".into(), vec![Type::Variable(*ok_payload_var)])],
+                    TypeExtension::Closed,
+                ));
+                constraints.push_type(types, typ)
+            };
+            let ok_tag_expected_type =
+                constraints.push_expected_type(NoExpectation(ok_tag_type_index));
+
+            let ok_tag_constraint = constraints.equal_types_var(
+                *ok_tag_var,
+                ok_tag_expected_type,
+                Category::TrySuccess,
+                result_expr.region,
+            );
+
+            let err_tag_type_index = {
+                let typ = types.from_old_type(&Type::TagUnion(
+                    vec![("Err".into(), vec![Type::Variable(*err_payload_var)])],
+                    TypeExtension::Closed,
+                ));
+                constraints.push_type(types, typ)
+            };
+            let err_tag_expected_type =
+                constraints.push_expected_type(NoExpectation(err_tag_type_index));
+
+            let err_tag_constraint = constraints.equal_types_var(
+                *err_tag_var,
+                err_tag_expected_type,
+                Category::TryFailure,
+                result_expr.region,
+            );
+
+            let try_success_constraint = constraints.equal_types_var(
+                *ok_payload_var,
+                expected,
+                Category::TrySuccess,
+                result_expr.region,
+            );
+
+            constraints.exists_many(
+                [
+                    *result_var,
+                    *ok_tag_var,
+                    *ok_payload_var,
+                    *err_tag_var,
+                    *err_payload_var,
+                    *return_var,
+                    *return_ok_payload_var,
+                ],
+                [
+                    ok_tag_constraint,
+                    err_tag_constraint,
+                    try_result_expr_constraint,
+                    try_result_var_constraint,
+                    // try_proper_result_var_constraint,
+                    return_result_constraint,
+                    try_success_constraint,
+                ],
+            )
         }
 
         If {
@@ -4183,6 +4333,7 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             | Expect { .. }
             | ExpectFx { .. }
             | Dbg { .. }
+            | Try { .. }
             | Return { .. }
             | TypedHole(_)
             | RuntimeError(..)

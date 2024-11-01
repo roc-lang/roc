@@ -11,7 +11,7 @@ use crate::layout::{
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
 use roc_can::abilities::SpecializationId;
-use roc_can::expr::{AnnotatedMark, ClosureData, ExpectLookup};
+use roc_can::expr::{AnnotatedMark, ClosureData, ExpectLookup, WhenBranch, WhenBranchPattern};
 use roc_can::module::ExposedByModule;
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
 use roc_collections::VecMap;
@@ -2218,16 +2218,6 @@ impl<'a> Expr<'a> {
 }
 
 impl<'a> Stmt<'a> {
-    pub fn new(
-        env: &mut Env<'a, '_>,
-        can_expr: roc_can::expr::Expr,
-        var: Variable,
-        procs: &mut Procs<'a>,
-        layout_cache: &mut LayoutCache<'a>,
-    ) -> Self {
-        from_can(env, var, can_expr, procs, layout_cache)
-    }
-
     pub fn to_doc<'b, D, A, I>(
         &'b self,
         alloc: &'b D,
@@ -2946,7 +2936,7 @@ fn pattern_to_when_help(
     body: Loc<roc_can::expr::Expr>,
     symbol: Symbol,
 ) -> (Symbol, Loc<roc_can::expr::Expr>) {
-    use roc_can::expr::{Expr, WhenBranch, WhenBranchPattern};
+    use roc_can::expr::Expr;
 
     let wrapped_body = Expr::When {
         cond_var: pattern_var,
@@ -5888,6 +5878,139 @@ pub fn with_hole<'a>(
                 }
             }
         }
+        Try {
+            result_expr,
+            result_var,
+            ok_tag_var,
+            ok_payload_var,
+            err_tag_var,
+            err_payload_var,
+            return_var,
+            return_ok_payload_var,
+        } => {
+            let _ = dbg!((
+                env.subs.get_content_without_compacting(result_var),
+                env.subs.get_content_without_compacting(ok_tag_var),
+                env.subs.get_content_without_compacting(ok_payload_var),
+                env.subs.get_content_without_compacting(err_tag_var),
+                env.subs.get_content_without_compacting(err_payload_var),
+                env.subs.get_content_without_compacting(return_var),
+                env.subs
+                    .get_content_without_compacting(return_ok_payload_var),
+            ));
+
+            // let result_var = {
+            //     let result_union_tags =
+            //         UnionTags::for_result(env.subs, ok_payload_var, err_payload_var);
+
+            //     synth_var(
+            //         env.subs,
+            //         Content::Structure(FlatType::TagUnion(
+            //             result_union_tags,
+            //             TagExt::Openness(Variable::EMPTY_TAG_UNION),
+            //         )),
+            //     )
+            // };
+
+            // let ok_tag_var = {
+            //     let variables_slice = env.subs.insert_into_vars(std::iter::once(ok_payload_var));
+            //     let ok_tuple = ("Ok".into(), variables_slice);
+            //     let ok_union_tags = UnionTags::insert_slices_into_subs(env.subs, [ok_tuple]);
+
+            //     synth_var(
+            //         env.subs,
+            //         Content::Structure(FlatType::TagUnion(
+            //             ok_union_tags,
+            //             TagExt::Openness(Variable::EMPTY_TAG_UNION),
+            //         )),
+            //     )
+            // };
+
+            // let err_tag_var = {
+            //     let variables_slice = env.subs.insert_into_vars(std::iter::once(err_payload_var));
+            //     let err_tuple = ("Err".into(), variables_slice);
+            //     let err_union_tags = UnionTags::insert_slices_into_subs(env.subs, [err_tuple]);
+
+            //     synth_var(
+            //         env.subs,
+            //         Content::Structure(FlatType::TagUnion(
+            //             err_union_tags,
+            //             TagExt::Openness(Variable::EMPTY_TAG_UNION),
+            //         )),
+            //     )
+            // };
+
+            let ok_symbol = env.unique_symbol();
+            let err_symbol = env.unique_symbol();
+
+            let ok_branch = WhenBranch {
+                patterns: vec![WhenBranchPattern {
+                    pattern: Loc::at_zero(roc_can::pattern::Pattern::AppliedTag {
+                        whole_var: ok_tag_var,
+                        ext_var: Variable::EMPTY_TAG_UNION,
+                        tag_name: "Ok".into(),
+                        arguments: vec![(
+                            ok_payload_var,
+                            Loc::at_zero(roc_can::pattern::Pattern::Identifier(ok_symbol)),
+                        )],
+                    }),
+                    degenerate: false,
+                }],
+                value: Loc::at_zero(Var(ok_symbol, ok_payload_var)),
+                guard: None,
+                redundant: RedundantMark::known_non_redundant(),
+            };
+
+            let err_branch = WhenBranch {
+                patterns: vec![WhenBranchPattern {
+                    pattern: Loc::at_zero(roc_can::pattern::Pattern::AppliedTag {
+                        whole_var: err_tag_var,
+                        ext_var: Variable::EMPTY_TAG_UNION,
+                        tag_name: "Err".into(),
+                        arguments: vec![(
+                            err_payload_var,
+                            Loc::at_zero(roc_can::pattern::Pattern::Identifier(err_symbol)),
+                        )],
+                    }),
+                    degenerate: false,
+                }],
+                value: Loc::at_zero(Return {
+                    return_var,
+                    return_value: Box::new(Loc::at_zero(Tag {
+                        tag_union_var: return_var,
+                        ext_var: Variable::EMPTY_TAG_UNION,
+                        name: "Err".into(),
+                        arguments: vec![(
+                            err_payload_var,
+                            Loc::at_zero(Var(err_symbol, err_payload_var)),
+                        )],
+                    })),
+                }),
+                guard: None,
+                redundant: RedundantMark::known_non_redundant(),
+            };
+
+            let result_region = result_expr.region;
+            let when_expr = When {
+                loc_cond: result_expr,
+                cond_var: result_var,
+                expr_var: ok_payload_var,
+                region: result_region,
+                branches: vec![ok_branch, err_branch],
+                branches_cond_var: result_var,
+                exhaustive: ExhaustiveMark::known_exhaustive(),
+            };
+
+            with_hole(
+                env,
+                when_expr,
+                variable,
+                procs,
+                layout_cache,
+                assigned,
+                hole,
+            )
+        }
         Return {
             return_value,
             return_var,
@@ -7228,6 +7351,7 @@ pub fn from_can<'a>(
             from_can(env, variable, cont.value, procs, layout_cache)
         }
         LetNonRec(def, cont) => from_can_let(env, procs, layout_cache, def, cont, variable, None),
+        // Retu
         _ => {
             let symbol = env.unique_symbol();
             let hole = env.arena.alloc(Stmt::Ret(symbol));

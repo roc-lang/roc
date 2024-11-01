@@ -20,8 +20,8 @@ use roc_solve_problem::{
 use roc_std::RocDec;
 use roc_types::pretty_print::{Parens, WILDCARD};
 use roc_types::types::{
-    AbilitySet, AliasKind, Category, ErrorType, IndexOrField, PatternCategory, Polarity, Reason,
-    RecordField, TypeExt,
+    AbilitySet, AliasKind, Category, EarlyReturnType, ErrorType, IndexOrField, PatternCategory,
+    Polarity, Reason, RecordField, TypeExt,
 };
 use std::path::PathBuf;
 use ven_pretty::{text, DocAllocator};
@@ -1679,6 +1679,76 @@ fn to_expr_report<'b>(
                     severity,
                 }
             }
+            Reason::TryResult => {
+                let problem = alloc.concat([
+                    alloc.text("This "),
+                    alloc.keyword("try"),
+                    alloc.reflow(
+                        " expression doesn't match the return type of its enclosing function:",
+                    ),
+                ]);
+
+                let comparison = type_comparison(
+                    alloc,
+                    found,
+                    expected_type,
+                    ExpectationContext::Arbitrary,
+                    add_category(alloc, alloc.text("It is"), &category),
+                    alloc
+                        .concat([alloc
+                            .reflow("But I need every early return in that function to return:")]),
+                    None,
+                );
+
+                Report {
+                    title: "TYPE MISMATCH".to_string(),
+                    filename,
+                    doc: alloc.stack([
+                        problem,
+                        alloc.region_with_subregion(
+                            lines.convert_region(region),
+                            lines.convert_region(expr_region),
+                            severity,
+                        ),
+                        comparison,
+                    ]),
+                    severity,
+                }
+            }
+            Reason::TryFailure => {
+                let problem = alloc.concat([
+                    alloc.text("This "),
+                    alloc.keyword("try"),
+                    alloc.reflow(" expression doesn't fail with the right type:"),
+                ]);
+
+                let comparison = type_comparison(
+                    alloc,
+                    found,
+                    expected_type,
+                    ExpectationContext::Arbitrary,
+                    add_category(alloc, alloc.text("It is"), &category),
+                    alloc.concat([
+                        alloc.reflow("But I need every try in that function to fail with:")
+                    ]),
+                    None,
+                );
+
+                Report {
+                    title: "TYPE MISMATCH".to_string(),
+                    filename,
+                    doc: alloc.stack([
+                        problem,
+                        alloc.region_with_subregion(
+                            lines.convert_region(region),
+                            lines.convert_region(expr_region),
+                            severity,
+                        ),
+                        comparison,
+                    ]),
+                    severity,
+                }
+            }
         },
     }
 }
@@ -2017,9 +2087,40 @@ fn format_category<'b>(
             alloc.concat([this_is, alloc.text(" a dbg statement")]),
             alloc.text(" of type:"),
         ),
-        Return => (
+        Return(EarlyReturnType::Return) => (
             alloc.concat([text!(alloc, "{}his", t), alloc.reflow(" returns a value")]),
             alloc.text(" of type:"),
+        ),
+        Return(EarlyReturnType::Try) => (
+            alloc.concat([
+                text!(alloc, "{}his", t),
+                alloc.reflow(" returns an "),
+                alloc.tag_name("Err".into()),
+                alloc.reflow(" on failure "),
+            ]),
+            alloc.text(" of type:"),
+        ),
+        TryResult => (
+            alloc.concat([this_is, alloc.text(" a result")]),
+            alloc.text(" of type:"),
+        ),
+        TrySuccess => (
+            alloc.concat([
+                this_is,
+                alloc.reflow(" a "),
+                alloc.keyword("try"),
+                alloc.reflow(" expression"),
+            ]),
+            alloc.text(" that succeeds with type:"),
+        ),
+        TryFailure => (
+            alloc.concat([
+                this_is,
+                alloc.reflow(" a "),
+                alloc.keyword("try"),
+                alloc.reflow(" expression"),
+            ]),
+            alloc.text(" that fails with type:"),
         ),
     }
 }

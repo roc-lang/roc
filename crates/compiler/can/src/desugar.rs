@@ -48,6 +48,33 @@ fn new_op_call_expr<'a>(
                     Apply(function, args, CalledVia::BinOp(Pizza))
                 }
                 Dbg => *desugar_dbg_expr(env, scope, left, region),
+                Expr::Var {
+                    module_name: "",
+                    ident: "try",
+                } => LowLevelTry(desugar_expr(env, scope, left)),
+                LowLevelTry(
+                    try_fn @ Loc {
+                        value: Expr::Var { .. },
+                        ..
+                    },
+                ) => LowLevelTry(env.arena.alloc(Loc::at(
+                    right.region,
+                    Apply(*try_fn, env.arena.alloc([left]), CalledVia::Try),
+                ))),
+                LowLevelTry(Loc {
+                    value: Expr::Apply(apply_fn, arguments, _called_via),
+                    region: _,
+                    ..
+                }) => {
+                    let mut args = Vec::with_capacity_in(arguments.len() + 1, env.arena);
+                    args.push(left);
+                    args.extend_from_slice(arguments);
+
+                    LowLevelTry(env.arena.alloc(Loc::at(
+                        right.region,
+                        Expr::Apply(apply_fn, args.into_bump_slice(), CalledVia::Try),
+                    )))
+                }
                 _ => {
                     // e.g. `1 |> (if b then (\a -> a) else (\c -> c))`
                     Apply(right, env.arena.alloc([left]), CalledVia::BinOp(Pizza))
@@ -870,6 +897,30 @@ pub fn desugar_expr<'a>(
                 })
             }
         }
+        Apply(
+            Loc {
+                value: Try,
+                region: _,
+            },
+            loc_args,
+            _called_via,
+        ) => {
+            let result_expr = if loc_args.len() == 1 {
+                loc_args[0].value
+            } else {
+                let function = loc_args.first().unwrap();
+                Expr::Apply(function, &loc_args[1..], CalledVia::Try)
+            };
+
+            env.arena.alloc(Loc::at(
+                loc_expr.region,
+                LowLevelTry(desugar_expr(
+                    env,
+                    scope,
+                    env.arena.alloc(Loc::at(loc_expr.region, result_expr)),
+                )),
+            ))
+        }
         Apply(loc_fn, loc_args, called_via) => {
             let mut desugared_args = Vec::with_capacity_in(loc_args.len(), env.arena);
 
@@ -1027,6 +1078,16 @@ pub fn desugar_expr<'a>(
                 region: loc_expr.region,
             })
         }
+        Try => {
+            // Treat any remaining `try` symbols as variables
+            env.arena.alloc(Loc {
+                region: loc_expr.region,
+                value: Expr::Var {
+                    module_name: "",
+                    ident: "try",
+                },
+            })
+        }
         Return(return_value, after_return) => {
             let desugared_return_value = &*env.arena.alloc(desugar_expr(env, scope, return_value));
 
@@ -1037,8 +1098,9 @@ pub fn desugar_expr<'a>(
             })
         }
 
-        // note this only exists after desugaring
+        // NOTE: these only exist after desugaring
         LowLevelDbg(_, _, _) => loc_expr,
+        LowLevelTry(_) => loc_expr,
     }
 }
 

@@ -97,7 +97,6 @@ impl Constraints {
             Category::List,
             Category::Str,
             Category::Character,
-            Category::Return,
         ]);
 
         pattern_categories.extend([

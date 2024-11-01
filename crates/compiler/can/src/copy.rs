@@ -468,7 +468,7 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             return_type: sub!(*return_type),
             early_returns: early_returns
                 .iter()
-                .map(|(var, region)| (sub!(*var), *region))
+                .map(|(var, region, type_)| (sub!(*var), *region, *type_))
                 .collect(),
             name: *name,
             captured_symbols: captured_symbols
@@ -715,6 +715,26 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             loc_continuation: Box::new(loc_continuation.map(|e| go_help!(e))),
             variable: sub!(*variable),
             symbol: *symbol,
+        },
+
+        Try {
+            result_expr,
+            result_var,
+            ok_tag_var,
+            ok_payload_var,
+            err_tag_var,
+            err_payload_var,
+            return_var,
+            return_ok_payload_var,
+        } => Try {
+            result_expr: Box::new(result_expr.map(|e| go_help!(e))),
+            result_var: sub!(*result_var),
+            ok_tag_var: sub!(*ok_tag_var),
+            ok_payload_var: sub!(*ok_payload_var),
+            err_tag_var: sub!(*err_tag_var),
+            err_payload_var: sub!(*err_payload_var),
+            return_var: sub!(*return_var),
+            return_ok_payload_var: sub!(*return_ok_payload_var),
         },
 
         TypedHole(v) => TypedHole(sub!(*v)),

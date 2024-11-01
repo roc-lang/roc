@@ -757,6 +757,8 @@ impl<'a> Normalize<'a> for Expr<'a> {
                 arena.alloc(a.normalize(arena)),
                 arena.alloc(b.normalize(arena)),
             ),
+            Expr::Try => Expr::Try,
+            Expr::LowLevelTry(a) => Expr::LowLevelTry(arena.alloc(a.normalize(arena))),
             Expr::Return(a, b) => Expr::Return(
                 arena.alloc(a.normalize(arena)),
                 b.map(|loc_b| &*arena.alloc(loc_b.normalize(arena))),
@@ -1055,6 +1057,7 @@ impl<'a> Normalize<'a> for EExpr<'a> {
             }
             EExpr::Underscore(_pos) => EExpr::Underscore(Position::zero()),
             EExpr::Crash(_pos) => EExpr::Crash(Position::zero()),
+            EExpr::Try(_pos) => EExpr::Try(Position::zero()),
             EExpr::InParens(inner_err, _pos) => {
                 EExpr::InParens(inner_err.normalize(arena), Position::zero())
             }

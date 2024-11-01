@@ -48,7 +48,8 @@ impl<'a> Formattable for Expr<'a> {
             | Tag(_)
             | OpaqueRef(_)
             | Crash
-            | Dbg => false,
+            | Dbg
+            | Try => false,
 
             RecordAccess(inner, _) | TupleAccess(inner, _) | TrySuffix { expr: inner, .. } => {
                 inner.is_multiline()
@@ -70,6 +71,9 @@ impl<'a> Formattable for Expr<'a> {
             DbgStmt(condition, _) => condition.is_multiline(),
             LowLevelDbg(_, _, _) => unreachable!(
                 "LowLevelDbg should only exist after desugaring, not during formatting"
+            ),
+            LowLevelTry(_) => unreachable!(
+                "LowLevelTry should only exist after desugaring, not during formatting"
             ),
             Return(return_value, after_return) => {
                 return_value.is_multiline() || after_return.is_some()
@@ -455,6 +459,13 @@ impl<'a> Formattable for Expr<'a> {
             }
             LowLevelDbg(_, _, _) => unreachable!(
                 "LowLevelDbg should only exist after desugaring, not during formatting"
+            ),
+            Try => {
+                buf.indent(indent);
+                buf.push_str("try");
+            }
+            LowLevelTry(_) => unreachable!(
+                "LowLevelTry should only exist after desugaring, not during formatting"
             ),
             Return(return_value, after_return) => {
                 fmt_return(buf, return_value, after_return, parens, newlines, indent);
