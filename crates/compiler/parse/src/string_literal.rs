@@ -1,5 +1,5 @@
 use crate::ast::{EscapedChar, SingleQuoteLiteral, StrLiteral, StrSegment};
-use crate::blankspace::{eat_space, SpacedBuilder};
+use crate::blankspace::{eat_nc, SpacedBuilder};
 use crate::expr::{parse_expr_start, ACCEPT_MULTI_BACKPASSING, CHECK_FOR_ARROW};
 use crate::parser::Progress::{self, *};
 use crate::parser::{BadInputError, ESingleQuote, EString, ParseResult, Parser};
@@ -459,7 +459,7 @@ pub fn rest_of_str_like<'a>(
 
                 // Parse an arbitrary expression, followed by ')'
                 let expr_pos = state.pos();
-                let ((spaces_before, _), news) = match eat_space(arena, state, false) {
+                let ((spaces_before, _), news) = match eat_nc(arena, state, false) {
                     Ok((_, out, state)) => (out, state),
                     Err((p, fail)) => {
                         return Err((p, EString::Format(arena.alloc(fail), expr_pos)));

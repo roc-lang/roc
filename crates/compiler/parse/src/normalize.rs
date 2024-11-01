@@ -1644,7 +1644,6 @@ impl<'a> Normalize<'a> for EPackageEntry<'a> {
             EPackageEntry::Colon(_) => EPackageEntry::Colon(Position::zero()),
             EPackageEntry::IndentPackage(_) => EPackageEntry::IndentPackage(Position::zero()),
             EPackageEntry::IndentPlatform(_) => EPackageEntry::IndentPlatform(Position::zero()),
-            EPackageEntry::Platform(_) => EPackageEntry::Platform(Position::zero()),
             EPackageEntry::Space(inner_err, _) => {
                 EPackageEntry::Space(*inner_err, Position::zero())
             }

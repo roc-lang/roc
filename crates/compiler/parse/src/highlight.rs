@@ -6,7 +6,7 @@ use roc_region::all::{Loc, Region};
 
 use crate::{
     ast::CommentOrNewline,
-    blankspace::eat_space_locs,
+    blankspace::eat_nc_locs,
     keyword::KEYWORDS,
     number_literal::parse_number_base,
     parser::Parser,
@@ -97,7 +97,7 @@ fn highlight_inner<'a>(
         if let Ok((b, _width)) = char::from_utf8_slice_start(state.bytes()) {
             match b {
                 ' ' | '\n' | '\t' | '\r' | '#' => {
-                    if let Some((spaces, new_state)) = eat_space_locs(arena, state.clone()) {
+                    if let Some((spaces, new_state)) = eat_nc_locs(arena, state.clone()) {
                         state = new_state;
                         for space in spaces {
                             let token = match space.value {

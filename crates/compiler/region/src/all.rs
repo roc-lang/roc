@@ -18,7 +18,7 @@ impl Region {
         Self { start, end }
     }
 
-    pub const fn at(start: Position) -> Self {
+    pub const fn point(start: Position) -> Self {
         Self { start, end: start }
     }
 

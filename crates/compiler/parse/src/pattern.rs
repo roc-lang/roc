@@ -1,5 +1,5 @@
 use crate::ast::{Collection, Implements, Pattern, PatternAs};
-use crate::blankspace::{eat_space, eat_space_check, SpacedBuilder};
+use crate::blankspace::{eat_nc, eat_nc_check, SpacedBuilder};
 use crate::expr::{parse_expr_start, CHECK_FOR_ARROW};
 use crate::ident::{parse_ident, parse_lowercase_ident, Accessor, Ident};
 use crate::keyword;
@@ -68,7 +68,7 @@ pub fn loc_pattern_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>>
 
         let pattern_state = state.clone();
         let (pattern_spaces, state) =
-            match eat_space_check(EPattern::AsKeyword, arena, state, min_indent, false) {
+            match eat_nc_check(EPattern::AsKeyword, arena, state, min_indent, false) {
                 Ok((_, pattern_spaces, state)) => (pattern_spaces, state),
                 Err(_) => return Ok((MadeProgress, pattern, pattern_state)),
             };
@@ -153,7 +153,7 @@ fn parse_pattern_as<'a>(
     let state = state.advance(keyword::AS.len());
 
     let (_, spaces_before, state) =
-        eat_space_check(EPattern::AsIdentifier, arena, state, min_indent, false)?;
+        eat_nc_check(EPattern::AsIdentifier, arena, state, min_indent, false)?;
 
     let pos = state.pos();
     match parse_lowercase_ident(state) {
@@ -186,7 +186,7 @@ fn loc_tag_pattern_arg<'a>(
     move |arena, state: State<'a>, min_indent| {
         let start = state.pos();
         let (spaces, state) =
-            match eat_space_check(EPattern::IndentStart, arena, state, min_indent, false) {
+            match eat_nc_check(EPattern::IndentStart, arena, state, min_indent, false) {
                 Ok((_, sp, state)) => (sp, state),
                 Err((_, fail)) => return Err((NoProgress, fail)),
             };
@@ -349,7 +349,7 @@ fn parse_list_rest_pattern<'a>(
 
     let pattern_state = state.clone();
     let (pattern_spaces, state) =
-        match eat_space_check(EPattern::AsKeyword, arena, state, min_indent, false) {
+        match eat_nc_check(EPattern::AsKeyword, arena, state, min_indent, false) {
             Ok((_, pattern_spaces, state)) => (pattern_spaces, state),
             Err(_) => return Ok((MadeProgress, no_as, pattern_state)),
         };
@@ -537,14 +537,14 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
         debug_assert_eq!(label_progress, MadeProgress);
         let label_at = Region::new(start, state.pos());
 
-        let (_, (label_spaces, _), state) = eat_space(arena, state, true)?;
+        let (_, (label_spaces, _), state) = eat_nc(arena, state, true)?;
 
         // Having a value is optional; both `{ email }` and `{ email: blah }` work.
         // (This is true in both literals and types.)
         if state.bytes().first() == Some(&b':') {
             let state = state.inc();
 
-            let (_, (colon_spaces, _), state) = eat_space(arena, state, true)?;
+            let (_, (colon_spaces, _), state) = eat_nc(arena, state, true)?;
 
             let pattern_pos = state.pos();
             let (pattern_val, state) = match loc_pattern_help().parse(arena, state, min_indent) {
@@ -567,7 +567,7 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
         if state.bytes().first() == Some(&b'?') {
             let state = state.inc();
 
-            let (_, (question_spaces, _), state) = eat_space(arena, state, true)?;
+            let (_, (question_spaces, _), state) = eat_nc(arena, state, true)?;
 
             let optional_val_pos = state.pos();
             let (optional_val, state) =

@@ -4,17 +4,17 @@ use crate::ast::{
     Collection, CommentOrNewline, Defs, Header, Malformed, Pattern, Spaced, Spaces, SpacesBefore,
     StrLiteral, TypeAnnotation,
 };
-use crate::blankspace::{eat_space_check, space0_e, SpacedBuilder};
+use crate::blankspace::{eat_nc_check, space0_e, SpacedBuilder};
 use crate::expr::merge_spaces;
 use crate::ident::{
     self, lowercase_ident, parse_lowercase_ident, parse_unqualified_ident, UppercaseIdent,
 };
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    and, at_keyword, byte, collection_inner, collection_trailing_sep_e, loc, map, map_with_arena,
-    optional, reset_min_indent, skip_first, skip_second, specialize_err, succeed, two_bytes,
-    zero_or_more, EExposes, EHeader, EImports, EPackageEntry, EPackageName, EPackages, EParams,
-    EProvides, ERequires, ETypedIdent, ParseResult, Parser, SourceError, SpaceProblem, SyntaxError,
+    and, at_keyword, byte, collection_inner, collection_trailing_sep_e, loc, map, reset_min_indent,
+    skip_first, skip_second, specialize_err, succeed, two_bytes, zero_or_more, EExposes, EHeader,
+    EImports, EPackageEntry, EPackageName, EPackages, EParams, EProvides, ERequires, ETypedIdent,
+    ParseResult, Parser, SourceError, SpaceProblem, SyntaxError,
 };
 use crate::pattern::parse_record_pattern_fields;
 use crate::state::State;
@@ -53,7 +53,7 @@ pub fn parse_header<'a>(
 pub fn header<'a>() -> impl Parser<'a, SpacesBefore<'a, Header<'a>>, EHeader<'a>> {
     move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
         let (_, before, state) =
-            eat_space_check(EHeader::IndentStart, arena, state, min_indent, false)?;
+            eat_nc_check(EHeader::IndentStart, arena, state, min_indent, false)?;
 
         let inc_indent = min_indent + 1;
 
@@ -117,7 +117,7 @@ fn parse_module_header<'a>(
     min_indent: u32,
 ) -> ParseResult<'a, ModuleHeader<'a>, EHeader<'a>> {
     let (_, after_keyword, state) =
-        eat_space_check(EHeader::IndentStart, arena, state, min_indent, false)?;
+        eat_nc_check(EHeader::IndentStart, arena, state, min_indent, false)?;
 
     let params_pos = state.pos();
     let (params, state) = match parse_module_params(arena, state.clone(), min_indent) {
@@ -156,7 +156,7 @@ fn parse_module_params<'a>(
     };
 
     let (_, before_arrow, state) =
-        eat_space_check(EParams::BeforeArrow, arena, state, min_indent, false)?;
+        eat_nc_check(EParams::BeforeArrow, arena, state, min_indent, false)?;
 
     if !state.bytes().starts_with(b"->") {
         return Err((MadeProgress, EParams::Arrow(state.pos())));
@@ -164,7 +164,7 @@ fn parse_module_params<'a>(
     let state = state.advance(2);
 
     let (_, after_arrow, state) =
-        eat_space_check(EParams::AfterArrow, arena, state, min_indent, false)?;
+        eat_nc_check(EParams::AfterArrow, arena, state, min_indent, false)?;
 
     let params = ModuleParams {
         pattern,
@@ -188,19 +188,21 @@ macro_rules! merge_n_spaces {
 /// Parse old interface headers so we can format them into module headers
 #[inline(always)]
 fn interface_header<'a>() -> impl Parser<'a, ModuleHeader<'a>, EHeader<'a>> {
-    let after_keyword = map_with_arena(
-        and(
-            skip_second(
-                space0_e(EHeader::IndentStart),
-                loc(module_name_help(EHeader::ModuleName)),
-            ),
-            specialize_err(EHeader::Exposes, exposes_kw()),
+    let after_keyword = |arena, state: crate::state::State<'a>, min_indent: u32| match and(
+        skip_second(
+            space0_e(EHeader::IndentStart),
+            loc(module_name_help(EHeader::ModuleName)),
         ),
-        |arena: &'a bumpalo::Bump,
-         (before_name, kw): (&'a [CommentOrNewline<'a>], Spaces<'a, ExposesKeyword>)| {
-            merge_n_spaces!(arena, before_name, kw.before, kw.after)
-        },
-    );
+        specialize_err(EHeader::Exposes, exposes_kw()),
+    )
+    .parse(arena, state, min_indent)
+    {
+        Ok((_, (before_name, kw), state)) => {
+            let out = merge_n_spaces!(arena, before_name, kw.before, kw.after);
+            Ok((MadeProgress, out, state))
+        }
+        Err(err) => Err(err),
+    };
 
     record!(ModuleHeader {
         after_keyword: after_keyword,
@@ -323,108 +325,129 @@ fn old_app_header<'a>() -> impl Parser<'a, AppHeader<'a>, EHeader<'a>> {
                 string_literal::parse_str_literal()
             ))
         ),
-        packages: optional(specialize_err(EHeader::Packages, loc(packages()))),
-        imports: optional(specialize_err(EHeader::Imports, imports())),
+        packages: move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
+            let olds = state.clone();
+            match packages().parse(arena, state, min_indent) {
+                Ok((p, out, state)) => Ok((p, Some(Loc::pos(olds.pos(), state.pos(), out)), state)),
+                Err((NoProgress, _)) => Ok((NoProgress, None, olds)),
+                Err((_, fail)) => Err((MadeProgress, EHeader::Packages(fail, olds.pos()))),
+            }
+        },
+        imports: move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
+            let olds = state.clone();
+            match imports().parse(arena, state, min_indent) {
+                Ok((p, out, state)) => Ok((p, Some(out), state)),
+                Err((NoProgress, _)) => Ok((NoProgress, None, olds)),
+                Err((_, fail)) => Err((MadeProgress, EHeader::Imports(fail, olds.pos()))),
+            }
+        },
         provides: specialize_err(EHeader::Provides, provides_to()),
     });
 
-    map_with_arena(old, |arena: &'a bumpalo::Bump, old: OldAppHeader<'a>| {
-        let mut before_packages: &'a [CommentOrNewline] = &[];
+    move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| match old
+        .parse(arena, state, min_indent)
+    {
+        Ok((p, old, state)) => {
+            let mut before_packages: &'a [CommentOrNewline] = &[];
 
-        let packages = match old.packages {
-            Some(packages) => {
-                before_packages = merge_spaces(
-                    arena,
-                    packages.value.keyword.before,
-                    packages.value.keyword.after,
-                );
+            let packages = match old.packages {
+                Some(packages) => {
+                    before_packages = merge_spaces(
+                        arena,
+                        packages.value.keyword.before,
+                        packages.value.keyword.after,
+                    );
 
-                if let To::ExistingPackage(platform_shorthand) = old.provides.to.value {
-                    packages.map(|coll| {
-                        coll.item.map_items(arena, |loc_spaced_pkg| {
-                            if loc_spaced_pkg.value.item().shorthand == platform_shorthand {
-                                loc_spaced_pkg.map(|spaced_pkg| {
-                                    spaced_pkg.map(arena, |pkg| {
-                                        let mut new_pkg = *pkg;
-                                        new_pkg.platform_marker = Some(merge_spaces(
-                                            arena,
-                                            old.provides.to_keyword.before,
-                                            old.provides.to_keyword.after,
-                                        ));
-                                        new_pkg
+                    if let To::ExistingPackage(platform_shorthand) = old.provides.to.value {
+                        packages.map(|coll| {
+                            coll.item.map_items(arena, |loc_spaced_pkg| {
+                                if loc_spaced_pkg.value.item().shorthand == platform_shorthand {
+                                    loc_spaced_pkg.map(|spaced_pkg| {
+                                        spaced_pkg.map(arena, |pkg| {
+                                            let mut new_pkg = *pkg;
+                                            new_pkg.platform_marker = Some(merge_spaces(
+                                                arena,
+                                                old.provides.to_keyword.before,
+                                                old.provides.to_keyword.after,
+                                            ));
+                                            new_pkg
+                                        })
                                     })
-                                })
-                            } else {
-                                *loc_spaced_pkg
-                            }
+                                } else {
+                                    *loc_spaced_pkg
+                                }
+                            })
                         })
-                    })
-                } else {
-                    packages.map(|kw| kw.item)
+                    } else {
+                        packages.map(|kw| kw.item)
+                    }
                 }
-            }
-            None => Loc {
-                region: Region::zero(),
-                value: Collection::empty(),
-            },
-        };
+                None => Loc {
+                    region: Region::zero(),
+                    value: Collection::empty(),
+                },
+            };
 
-        let provides = match old.provides.types {
-            Some(types) => {
-                let mut combined_items = bumpalo::collections::Vec::with_capacity_in(
-                    old.provides.entries.items.len() + types.items.len(),
-                    arena,
-                );
+            let provides = match old.provides.types {
+                Some(types) => {
+                    let mut combined_items = bumpalo::collections::Vec::with_capacity_in(
+                        old.provides.entries.items.len() + types.items.len(),
+                        arena,
+                    );
 
-                combined_items.extend_from_slice(old.provides.entries.items);
+                    combined_items.extend_from_slice(old.provides.entries.items);
 
-                for loc_spaced_type_ident in types.items {
-                    combined_items.push(loc_spaced_type_ident.map(|spaced_type_ident| {
-                        spaced_type_ident.map(arena, |type_ident| {
-                            ExposedName::new(From::from(*type_ident))
-                        })
-                    }));
+                    for loc_spaced_type_ident in types.items {
+                        combined_items.push(loc_spaced_type_ident.map(|spaced_type_ident| {
+                            spaced_type_ident.map(arena, |type_ident| {
+                                ExposedName::new(From::from(*type_ident))
+                            })
+                        }));
+                    }
+
+                    let value_comments = old.provides.entries.final_comments();
+                    let type_comments = types.final_comments();
+
+                    let mut combined_comments = bumpalo::collections::Vec::with_capacity_in(
+                        value_comments.len() + type_comments.len(),
+                        arena,
+                    );
+                    combined_comments.extend_from_slice(value_comments);
+                    combined_comments.extend_from_slice(type_comments);
+
+                    Collection::with_items_and_comments(
+                        arena,
+                        combined_items.into_bump_slice(),
+                        combined_comments.into_bump_slice(),
+                    )
                 }
+                None => old.provides.entries,
+            };
 
-                let value_comments = old.provides.entries.final_comments();
-                let type_comments = types.final_comments();
-
-                let mut combined_comments = bumpalo::collections::Vec::with_capacity_in(
-                    value_comments.len() + type_comments.len(),
+            let out = AppHeader {
+                before_provides: merge_spaces(
                     arena,
-                );
-                combined_comments.extend_from_slice(value_comments);
-                combined_comments.extend_from_slice(type_comments);
-
-                Collection::with_items_and_comments(
+                    old.before_name,
+                    old.provides.provides_keyword.before,
+                ),
+                provides,
+                before_packages: merge_spaces(
                     arena,
-                    combined_items.into_bump_slice(),
-                    combined_comments.into_bump_slice(),
-                )
-            }
-            None => old.provides.entries,
-        };
+                    before_packages,
+                    old.provides.provides_keyword.after,
+                ),
+                packages,
+                old_imports: old.imports.and_then(imports_none_if_empty),
+                old_provides_to_new_package: match old.provides.to.value {
+                    To::NewPackage(new_pkg) => Some(new_pkg),
+                    To::ExistingPackage(_) => None,
+                },
+            };
 
-        AppHeader {
-            before_provides: merge_spaces(
-                arena,
-                old.before_name,
-                old.provides.provides_keyword.before,
-            ),
-            provides,
-            before_packages: merge_spaces(
-                arena,
-                before_packages,
-                old.provides.provides_keyword.after,
-            ),
-            packages,
-            old_imports: old.imports.and_then(imports_none_if_empty),
-            old_provides_to_new_package: match old.provides.to.value {
-                To::NewPackage(new_pkg) => Some(new_pkg),
-                To::ExistingPackage(_) => None,
-            },
+            Ok((p, out, state))
         }
-    })
+        Err(err) => Err(err),
+    }
 }
 
 #[inline(always)]
@@ -448,16 +471,19 @@ struct OldPackageHeader<'a> {
 
 #[inline(always)]
 fn old_package_header<'a>() -> impl Parser<'a, PackageHeader<'a>, EHeader<'a>> {
-    map_with_arena(
-        record!(OldPackageHeader {
+    move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| match record!(
+        OldPackageHeader {
             before_name: skip_second(
                 space0_e(EHeader::IndentStart),
                 specialize_err(EHeader::PackageName, package_name())
             ),
             exposes: specialize_err(EHeader::Exposes, exposes_modules()),
             packages: specialize_err(EHeader::Packages, loc(packages())),
-        }),
-        |arena: &'a bumpalo::Bump, old: OldPackageHeader<'a>| {
+        }
+    )
+    .parse(arena, state, min_indent)
+    {
+        Ok((p, old, state)) => {
             let before_exposes = merge_n_spaces!(
                 arena,
                 old.before_name,
@@ -471,15 +497,17 @@ fn old_package_header<'a>() -> impl Parser<'a, PackageHeader<'a>, EHeader<'a>> {
                 old.packages.value.keyword.after,
             );
 
-            PackageHeader {
+            let old = PackageHeader {
                 before_exposes,
                 exposes: old.exposes.item,
                 before_packages,
                 packages: old.packages.map(|kw| kw.item),
-            }
-        },
-    )
-    .trace("old_package_header")
+            };
+
+            Ok((p, old, state))
+        }
+        Err(err) => Err(err),
+    }
 }
 
 #[inline(always)]
@@ -745,18 +773,17 @@ where
     E: 'a + SpaceProblem,
 {
     move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
-        let (before, state) =
-            match eat_space_check(indent_problem1, arena, state, min_indent, false) {
-                Ok((_, sp, state)) => (sp, state),
-                Err((_, fail)) => return Err((NoProgress, fail)),
-            };
+        let (before, state) = match eat_nc_check(indent_problem1, arena, state, min_indent, false) {
+            Ok((_, sp, state)) => (sp, state),
+            Err((_, fail)) => return Err((NoProgress, fail)),
+        };
 
         if !at_keyword(K::KEYWORD, &state) {
             return Err((NoProgress, expectation(state.pos())));
         }
         let state = state.advance(K::KEYWORD.len());
 
-        let (_, after, state) = eat_space_check(indent_problem2, arena, state, min_indent, false)?;
+        let (_, after, state) = eat_nc_check(indent_problem2, arena, state, min_indent, false)?;
 
         let spaced_keyword = Spaces {
             before,
@@ -875,7 +902,7 @@ pub fn typed_ident<'a>() -> impl Parser<'a, Spaced<'a, TypedIdent<'a>>, ETypedId
         };
 
         let (_, spaces_before_colon, state) =
-            eat_space_check(ETypedIdent::IndentHasType, arena, state, min_indent, true)?;
+            eat_nc_check(ETypedIdent::IndentHasType, arena, state, min_indent, true)?;
 
         if state.bytes().first() != Some(&b':') {
             return Err((MadeProgress, ETypedIdent::HasType(state.pos())));
@@ -883,7 +910,7 @@ pub fn typed_ident<'a>() -> impl Parser<'a, Spaced<'a, TypedIdent<'a>>, ETypedId
         let state = state.inc();
 
         let (_, spaces_after_colon, state) =
-            eat_space_check(ETypedIdent::IndentType, arena, state, min_indent, true)?;
+            eat_nc_check(ETypedIdent::IndentType, arena, state, min_indent, true)?;
 
         let ann_pos = state.pos();
         match type_expr(TRAILING_COMMA_VALID | SKIP_PARSING_SPACES_BEFORE).parse(arena, state, 0) {
@@ -933,15 +960,24 @@ fn imports_entry<'a>() -> impl Parser<'a, Spaced<'a, ImportsEntry<'a>>, EImports
                 }
             },
             // e.g. `.{ Task, after}`
-            optional(skip_first(
-                byte(b'.', EImports::ExposingDot),
-                collection_trailing_sep_e(
-                    byte(b'{', EImports::SetStart),
-                    exposes_entry(EImports::Identifier),
-                    byte(b'}', EImports::SetEnd),
-                    Spaced::SpaceBefore,
-                ),
-            )),
+            move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
+                let olds = state.clone();
+                match skip_first(
+                    byte(b'.', EImports::ExposingDot),
+                    collection_trailing_sep_e(
+                        byte(b'{', EImports::SetStart),
+                        exposes_entry(EImports::Identifier),
+                        byte(b'}', EImports::SetEnd),
+                        Spaced::SpaceBefore,
+                    ),
+                )
+                .parse(arena, state, min_indent)
+                {
+                    Ok((p, out, state)) => Ok((p, Some(out), state)),
+                    Err((NoProgress, _)) => Ok((NoProgress, None, olds)),
+                    Err(err) => Err(err),
+                }
+            },
         )
         .trace("normal_import")
         .parse(arena, state.clone(), min_indent)
@@ -1378,13 +1414,10 @@ pub struct PackageEntry<'a> {
 }
 
 pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPackageEntry<'a>> {
-    map_with_arena(
-        // You may optionally have a package shorthand,
-        // e.g. "uc" in `uc: roc/unicode 1.0.0`
-        //
-        // (Indirect dependencies don't have a shorthand.)
-        and(
-            optional(and(
+    move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
+        let parser1 = move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
+            let olds = state.clone();
+            match and(
                 skip_second(
                     and(
                         specialize_err(|_, pos| EPackageEntry::Shorthand(pos), lowercase_ident()),
@@ -1393,39 +1426,58 @@ pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPac
                     byte(b':', EPackageEntry::Colon),
                 ),
                 space0_e(EPackageEntry::IndentPackage),
-            )),
-            and(
-                optional(skip_first(
-                    // todo: @wip this is the last usage of keyword, replace it with at_keyword and remove the fn
-                    crate::parser::keyword(crate::keyword::PLATFORM, EPackageEntry::Platform),
-                    space0_e(EPackageEntry::IndentPackage),
-                )),
-                loc(specialize_err(EPackageEntry::BadPackage, package_name())),
-            ),
-        ),
-        move |arena, (opt_shorthand, (platform_marker, package_or_path))| {
-            let entry = match opt_shorthand {
-                Some(((shorthand, spaces_before_colon), spaces_after_colon)) => PackageEntry {
-                    shorthand,
-                    spaces_after_shorthand: merge_spaces(
-                        arena,
-                        spaces_before_colon,
-                        spaces_after_colon,
-                    ),
-                    platform_marker,
-                    package_name: package_or_path,
-                },
-                None => PackageEntry {
-                    shorthand: "",
-                    spaces_after_shorthand: &[],
-                    platform_marker,
-                    package_name: package_or_path,
-                },
-            };
+            )
+            .parse(arena, state, min_indent)
+            {
+                Ok((p, out, state)) => Ok((p, Some(out), state)),
+                Err((NoProgress, _)) => Ok((NoProgress, None, olds)),
+                Err(err) => Err(err),
+            }
+        };
 
-            Spaced::Item(entry)
-        },
-    )
+        let plat_parser = move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
+            let olds = state.clone();
+            let (p, sp, state) = if at_keyword(crate::keyword::PLATFORM, &state) {
+                let state = state.advance(crate::keyword::PLATFORM.len());
+                let (_, sp, state) =
+                    eat_nc_check(EPackageEntry::IndentPackage, arena, state, min_indent, true)?;
+                (MadeProgress, Some(sp), state)
+            } else {
+                (NoProgress, None, olds)
+            };
+            let name_pos = state.pos();
+            match package_name().parse(arena, state, min_indent) {
+                Ok((p2, name, state)) => {
+                    Ok((p2.or(p), (sp, Loc::pos(name_pos, state.pos(), name)), state))
+                }
+                Err((p2, fail)) => Err((p2.or(p), EPackageEntry::BadPackage(fail, name_pos))),
+            }
+        };
+
+        let (_, (opt_shorthand, (platform_marker, package_or_path)), state) =
+            and(parser1, plat_parser).parse(arena, state, min_indent)?;
+
+        let entry = match opt_shorthand {
+            Some(((shorthand, spaces_before_colon), spaces_after_colon)) => PackageEntry {
+                shorthand,
+                spaces_after_shorthand: merge_spaces(
+                    arena,
+                    spaces_before_colon,
+                    spaces_after_colon,
+                ),
+                platform_marker,
+                package_name: package_or_path,
+            },
+            None => PackageEntry {
+                shorthand: "",
+                spaces_after_shorthand: &[],
+                platform_marker,
+                package_name: package_or_path,
+            },
+        };
+
+        Ok((MadeProgress, Spaced::Item(entry), state))
+    }
 }
 
 pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, EPackageName<'a>> {
