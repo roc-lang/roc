@@ -1,13 +1,13 @@
 use bumpalo::Bump;
-use std::borrow::Cow;
 
 /// The purpose of this function is to let us run tests like this:
 ///
-///     run_some_test(r#"
-///         x = 1
+/// ```rust,ignore
+/// run_some_test(r#"
+///     x = 1
 ///
-///         x
-///     ")
+///     x
+/// "#)
 ///
 /// ...without needing to call a macro like `indoc!` to deal with the fact that
 /// multiline Rust string literals preserve all the indented spaces.

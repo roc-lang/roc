@@ -1,6 +1,31 @@
+use std::path::Path;
+
 use crate::help_parse::ParseExpr;
 use bumpalo::Bump;
-use roc_can::expr::Expr;
+use roc_can::{
+    desugar,
+    env::Env,
+    expr::{canonicalize_expr, Expr, Output},
+    scope::Scope,
+};
+use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, PackageModuleIds, Symbol};
+use roc_problem::can::Problem;
+use roc_region::all::{Loc, Region};
+use roc_types::{
+    subs::{VarStore, Variable},
+    types::{AliasVar, Type},
+};
+
+#[derive(Debug)]
+pub struct CanExprOut {
+    pub loc_expr: Loc<Expr>,
+    pub output: Output,
+    pub problems: Vec<Problem>,
+    pub home: ModuleId,
+    pub interns: Interns,
+    pub var_store: VarStore,
+    pub var: Variable,
+}
 
 pub struct CanExpr {
     parse_expr: ParseExpr,
@@ -14,20 +39,18 @@ impl Default for CanExpr {
     }
 }
 
-impl CanExpr {
-    pub fn can_expr<'a>(&'a self, input: &'a str) -> Result<Expr, CanExprProblem> {
-        match self.parse_expr.parse_expr(input) {
-            Ok(ast) => {
-                // todo canonicalize AST and return that result.
-                let loc_expr = roc_parse::test_helpers::parse_loc_with(arena, expr_str).unwrap_or_else(|e| {
-                    panic!(
-                        "can_expr_with() got a parse error when attempting to canonicalize:\n\n{expr_str:?} {e:?}"
-                    )
-                });
+fn test_home() -> ModuleId {
+    ModuleIds::default().get_or_insert(&"Test".into())
+}
 
+impl CanExpr {
+    pub fn can_expr<'a>(&'a self, input: &'a str) -> CanExprOut {
+        match self.parse_expr.parse_loc_expr(input) {
+            Ok(loc_expr) => {
                 let mut var_store = VarStore::default();
                 let var = var_store.fresh();
                 let qualified_module_ids = PackageModuleIds::default();
+                let home = test_home();
 
                 let mut scope = Scope::new(
                     home,
@@ -38,8 +61,8 @@ impl CanExpr {
 
                 let dep_idents = IdentIds::exposed_builtins(0);
                 let mut env = Env::new(
-                    arena,
-                    expr_str,
+                    &self.arena(),
+                    input,
                     home,
                     Path::new("Test.roc"),
                     &dep_idents,
@@ -95,12 +118,16 @@ impl CanExpr {
                 }
             }
             Err(syntax_error) => {
-                // todo panic due to unexpected syntax error
+                panic!("Unexpected syntax error: {:?}", syntax_error);
             }
         }
     }
 
     pub fn into_arena(self) -> Bump {
         self.parse_expr.into_arena()
+    }
+
+    pub fn arena(&self) -> &Bump {
+        &self.parse_expr.arena()
     }
 }

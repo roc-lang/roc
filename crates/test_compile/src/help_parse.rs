@@ -57,4 +57,8 @@ impl ParseExpr {
     pub fn into_arena(self) -> Bump {
         self.arena
     }
+
+    pub fn arena(&self) -> &Bump {
+        &self.arena
+    }
 }

@@ -16,6 +16,8 @@ roc_region = { path = "../compiler/region" }
 roc_load = { path = "../compiler/load" }
 roc_parse = { path = "../compiler/parse" }
 roc_can = { path = "../compiler/can" }
+roc_module = { path = "../compiler/module" }
+roc_types = { path = "../compiler/types" }
 roc_problem = { path = "../compiler/problem" }
 roc_reporting = { path = "../reporting" }
 roc_target = { path = "../compiler/roc_target" }
