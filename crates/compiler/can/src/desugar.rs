@@ -74,8 +74,6 @@ fn new_op_call_expr<'a>(
             let right = desugar_expr(env, scope, right);
 
             match right.value {
-                // Match on desugared `try` ident because this function's arguments
-                // are desugared before being passed
                 Apply(function, arguments, _called_via) => {
                     let mut args = Vec::with_capacity_in(1 + arguments.len(), env.arena);
 
