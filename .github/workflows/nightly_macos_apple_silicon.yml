@@ -47,7 +47,7 @@ jobs:
       - name: build nightly release
         env:
             # set rpath to able to find libzstd.1.dylib in more cases 
-            RUSTFLAGS: -C link-arg=-Wl,-rpath,/opt/local/lib,/opt/homebrew/opt/zstd/lib,/usr/local/lib"
+            RUSTFLAGS: -C link-arg=-Wl,-rpath,/opt/local/lib,/opt/homebrew/opt/zstd/lib"
         run: cargo build --locked --profile=release-with-lto --bin roc --bin roc_language_server
 
       - name: modify hardcoded zstd path on roc binary
