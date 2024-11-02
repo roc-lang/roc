@@ -47,7 +47,7 @@ jobs:
       - name: build nightly release
         env:
             # For if zstd was installed with MacPorts
-            RUSTFLAGS: -C link-arg=-Wl,-rpath,/opt/local/lib,-install_name,@rpath/libzstd.dylib"
+            RUSTFLAGS: -C link-arg=-Wl,-rpath,/opt/local/lib,-install_name,@rpath/libzstd.1.dylib"
         run: cargo build --locked --profile=release-with-lto --bin roc --bin roc_language_server
 
       - name: package release
