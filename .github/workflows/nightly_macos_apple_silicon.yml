@@ -46,9 +46,12 @@ jobs:
 
       - name: build nightly release
         env:
-            # For if zstd was installed with MacPorts
-            RUSTFLAGS: -C link-arg=-Wl,-rpath,/opt/local/lib,-install_name,@rpath/libzstd.1.dylib"
+            # set rpath to able to find libzstd.1.dylib in more cases 
+            RUSTFLAGS: -C link-arg=-Wl,-rpath,/opt/local/lib,/opt/homebrew/opt/zstd/lib,/usr/local/lib,/usr/lib"
         run: cargo build --locked --profile=release-with-lto --bin roc --bin roc_language_server
+
+      - name: modify hardcoded zstd path on roc binary
+        run: install_name_tool -change /opt/homebrew/opt/zstd/lib/libzstd.1.dylib @rpath/libzstd.1.dylib ./roc
 
       - name: package release
         run: ./ci/package_release.sh ${{ env.RELEASE_FOLDER_NAME }}
