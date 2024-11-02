@@ -16,7 +16,7 @@ mod test_can {
     use bumpalo::Bump;
     use core::panic;
     use roc_can::expr::Expr::{self, *};
-    use roc_can::expr::{ClosureData, IntValue, Recursive};
+    use roc_can::expr::{ClosureData, IntValue, Recursive, WhenBranch};
     use roc_can::pattern::Pattern;
     use roc_module::called_via::CalledVia;
     use roc_problem::can::{CycleEntry, FloatErrorKind, IntErrorKind, Problem, RuntimeError};
@@ -504,6 +504,7 @@ mod test_can {
 
         assert_eq!(problems, Vec::new());
     }
+
     #[test]
     fn correct_double_nested_body() {
         let src = indoc!(
@@ -801,6 +802,256 @@ mod test_can {
         }
     }
 
+    #[test]
+    fn try_desugar_plain_prefix() {
+        let src = indoc!(
+            r#"
+                try parseData str
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems.len(), 0);
+
+        // Assert that we desugar to:
+        //
+        // when parseData str is
+        //     Ok 0 -> 0
+        //     Err 1 -> return Err 1
+
+        let (cond_expr, branches) = assert_when(&out.loc_expr.value);
+        let cond_args = assert_func_call(cond_expr, "parseData", CalledVia::Try, &out.interns);
+
+        assert_eq!(cond_args.len(), 1);
+        assert_var_usage(&cond_args[0].1.value, "str", &out.interns);
+
+        assert_eq!(branches.len(), 2);
+
+        assert_eq!(branches[0].patterns.len(), 1);
+        assert!(!branches[0].patterns[0].degenerate);
+        match &branches[0].patterns[0].pattern.value {
+            Pattern::AppliedTag {
+                tag_name,
+                arguments,
+                ..
+            } => {
+                assert_eq!(tag_name.0.to_string(), "Ok");
+                assert_eq!(arguments.len(), 1);
+                assert_pattern_name(&arguments[0].1.value, "0", &out.interns);
+            }
+            other => panic!("First argument was not an applied tag: {:?}", other),
+        }
+
+        assert!(&branches[0].guard.is_none());
+        assert_var_usage(&branches[0].value.value, "0", &out.interns);
+
+        assert_eq!(branches[1].patterns.len(), 1);
+        assert!(!branches[1].patterns[0].degenerate);
+        match &branches[1].patterns[0].pattern.value {
+            Pattern::AppliedTag {
+                tag_name,
+                arguments,
+                ..
+            } => {
+                assert_eq!(tag_name.0.to_string(), "Err");
+                assert_eq!(arguments.len(), 1);
+                assert_pattern_name(&arguments[0].1.value, "1", &out.interns);
+            }
+            other => panic!("First argument was not an applied tag: {:?}", other),
+        }
+
+        match &branches[1].value.value {
+            Expr::Return { return_value, .. } => match &return_value.value {
+                Expr::Tag {
+                    name, arguments, ..
+                } => {
+                    assert_eq!(name.0.to_string(), "Err");
+                    assert_eq!(arguments.len(), 1);
+                    assert_var_usage(&arguments[0].1.value, "1", &out.interns);
+                }
+                other_inner => panic!("Expr was not a Tag: {:?}", other_inner),
+            },
+            other_outer => panic!("Expr was not a Return: {:?}", other_outer),
+        }
+    }
+
+    #[test]
+    fn try_desugar_pipe_prefix() {
+        let src = indoc!(
+            r#"
+                str |> try parseData
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems.len(), 0);
+
+        // Assert that we desugar to:
+        //
+        // when parseData str is
+        //     Ok 0 -> 0
+        //     Err 1 -> return Err 1
+
+        let (cond_expr, branches) = assert_when(&out.loc_expr.value);
+        let cond_args = assert_func_call(cond_expr, "parseData", CalledVia::Try, &out.interns);
+
+        assert_eq!(cond_args.len(), 1);
+        assert_var_usage(&cond_args[0].1.value, "str", &out.interns);
+
+        assert_eq!(branches.len(), 2);
+
+        assert_eq!(branches[0].patterns.len(), 1);
+        assert!(!branches[0].patterns[0].degenerate);
+        match &branches[0].patterns[0].pattern.value {
+            Pattern::AppliedTag {
+                tag_name,
+                arguments,
+                ..
+            } => {
+                assert_eq!(tag_name.0.to_string(), "Ok");
+                assert_eq!(arguments.len(), 1);
+                assert_pattern_name(&arguments[0].1.value, "0", &out.interns);
+            }
+            other => panic!("First argument was not an applied tag: {:?}", other),
+        }
+
+        assert!(&branches[0].guard.is_none());
+        assert_var_usage(&branches[0].value.value, "0", &out.interns);
+
+        assert_eq!(branches[1].patterns.len(), 1);
+        assert!(!branches[1].patterns[0].degenerate);
+        match &branches[1].patterns[0].pattern.value {
+            Pattern::AppliedTag {
+                tag_name,
+                arguments,
+                ..
+            } => {
+                assert_eq!(tag_name.0.to_string(), "Err");
+                assert_eq!(arguments.len(), 1);
+                assert_pattern_name(&arguments[0].1.value, "1", &out.interns);
+            }
+            other => panic!("First argument was not an applied tag: {:?}", other),
+        }
+
+        match &branches[1].value.value {
+            Expr::Return { return_value, .. } => match &return_value.value {
+                Expr::Tag {
+                    name, arguments, ..
+                } => {
+                    assert_eq!(name.0.to_string(), "Err");
+                    assert_eq!(arguments.len(), 1);
+                    assert_var_usage(&arguments[0].1.value, "1", &out.interns);
+                }
+                other_inner => panic!("Expr was not a Tag: {:?}", other_inner),
+            },
+            other_outer => panic!("Expr was not a Return: {:?}", other_outer),
+        }
+    }
+
+    #[test]
+    fn try_desugar_pipe_suffix() {
+        let src = indoc!(
+            r#"
+                parseData str |> try
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems.len(), 0);
+
+        // Assert that we desugar to:
+        //
+        // when parseData str is
+        //     Ok 0 -> 0
+        //     Err 1 -> return Err 1
+
+        let (cond_expr, branches) = assert_when(&out.loc_expr.value);
+        let cond_args = assert_func_call(cond_expr, "parseData", CalledVia::Try, &out.interns);
+
+        assert_eq!(cond_args.len(), 1);
+        assert_var_usage(&cond_args[0].1.value, "str", &out.interns);
+
+        assert_eq!(branches.len(), 2);
+
+        assert_eq!(branches[0].patterns.len(), 1);
+        assert!(!branches[0].patterns[0].degenerate);
+        match &branches[0].patterns[0].pattern.value {
+            Pattern::AppliedTag {
+                tag_name,
+                arguments,
+                ..
+            } => {
+                assert_eq!(tag_name.0.to_string(), "Ok");
+                assert_eq!(arguments.len(), 1);
+                assert_pattern_name(&arguments[0].1.value, "0", &out.interns);
+            }
+            other => panic!("First argument was not an applied tag: {:?}", other),
+        }
+
+        assert!(&branches[0].guard.is_none());
+        assert_var_usage(&branches[0].value.value, "0", &out.interns);
+
+        assert_eq!(branches[1].patterns.len(), 1);
+        assert!(!branches[1].patterns[0].degenerate);
+        match &branches[1].patterns[0].pattern.value {
+            Pattern::AppliedTag {
+                tag_name,
+                arguments,
+                ..
+            } => {
+                assert_eq!(tag_name.0.to_string(), "Err");
+                assert_eq!(arguments.len(), 1);
+                assert_pattern_name(&arguments[0].1.value, "1", &out.interns);
+            }
+            other => panic!("First argument was not an applied tag: {:?}", other),
+        }
+
+        match &branches[1].value.value {
+            Expr::Return { return_value, .. } => match &return_value.value {
+                Expr::Tag {
+                    name, arguments, ..
+                } => {
+                    assert_eq!(name.0.to_string(), "Err");
+                    assert_eq!(arguments.len(), 1);
+                    assert_var_usage(&arguments[0].1.value, "1", &out.interns);
+                }
+                other_inner => panic!("Expr was not a Tag: {:?}", other_inner),
+            },
+            other_outer => panic!("Expr was not a Return: {:?}", other_outer),
+        }
+    }
+
+    #[test]
+    fn try_desugar_works_elsewhere() {
+        let src = indoc!(
+            r#"
+                try = \result, fallible ->
+                    when result is
+                        Ok ok -> fallible ok
+                        Err err -> Err err
+
+                try input
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems.len(), 0);
+
+        // Assert that we don't treat `try` as a keyword here
+        // by desugaring to:
+        //
+        // try = \result, fallible ->
+        //     when result is
+        //         Ok ok -> fallible ok
+        //         Err err -> Err err
+
+        assert!(false, "TODO");
+    }
+
     fn assert_num_value(expr: &Expr, num: usize) {
         match expr {
             Expr::Num(_, num_str, _, _) => {
@@ -843,6 +1094,15 @@ mod test_can {
         match pattern {
             Pattern::Identifier(sym) => assert_eq!(sym.as_str(interns), name),
             _ => panic!("Pattern was not an identifier: {:?}", pattern),
+        }
+    }
+
+    fn assert_when(expr: &Expr) -> (&Expr, &Vec<WhenBranch>) {
+        match expr {
+            Expr::When {
+                loc_cond, branches, ..
+            } => (&loc_cond.value, branches),
+            _ => panic!("Expr was not a When: {:?}", expr),
         }
     }
 
