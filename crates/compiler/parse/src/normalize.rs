@@ -811,7 +811,6 @@ impl<'a> Normalize<'a> for Expr<'a> {
 fn remove_spaces_bad_ident(ident: BadIdent) -> BadIdent {
     match ident {
         BadIdent::Start(_) => BadIdent::Start(Position::zero()),
-        BadIdent::Space(e, _) => BadIdent::Space(e, Position::zero()),
         BadIdent::UnderscoreAlone(_) => BadIdent::UnderscoreAlone(Position::zero()),
         BadIdent::UnderscoreInMiddle(_) => BadIdent::UnderscoreInMiddle(Position::zero()),
         BadIdent::UnderscoreAtStart {

@@ -6153,7 +6153,7 @@ mod test_fmt {
     fn _closure_with_when_binop() {
         expr_formats_same(indoc!(
             r#"
-            \nu -> nu ~
+            \x -> x ~
                 """
                 abc
                 """ ->

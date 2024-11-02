@@ -153,7 +153,6 @@ fn rest_of_expr_in_parens_etc<'a>(
     Ok((MadeProgress, loc_elems, state))
 }
 
-// todo: @perf when the method called after `parse_ident` it duplicates the field access chain already consumed by `parse_ident`
 fn parse_field_task_result_suffixes<'a>(
     arena: &'a Bump,
     mut state: State<'a>,
@@ -161,7 +160,7 @@ fn parse_field_task_result_suffixes<'a>(
     let mut fields = Vec::with_capacity_in(1, arena);
     loop {
         let prev_state = state.clone();
-        let (next_field, next_state) = match state.bytes().first() {
+        let (field, next_state) = match state.bytes().first() {
             Some(b) => match b {
                 b'.' => {
                     let state = state.inc();
@@ -190,7 +189,7 @@ fn parse_field_task_result_suffixes<'a>(
             _ => return Ok((Progress::when(!fields.is_empty()), fields, prev_state)),
         };
 
-        fields.push(next_field);
+        fields.push(field);
         state = next_state;
     }
 }
@@ -378,8 +377,8 @@ fn parse_term<'a>(
                 // todo: @perf here the 4 keywords were already checked, if, when, dbg, crash, avoid checking them again in parse_ident
                 // todo: @perf can we use the same check as for TypeAnnotation::Inferred to quickly check for one character identifier or `_`, plus it's not required to lookup for it in keywords, cause they start from 2 chars?
                 let (_, ident, state) = parse_ident(arena, state)?;
-                let ident_end = state.pos();
 
+                let ident_end = state.pos();
                 let (suffixes, state) = match parse_field_task_result_suffixes(arena, state) {
                     Ok((_, out, state)) => (out, state),
                     Err((_, fail)) => return Err((MadeProgress, fail)),
@@ -458,7 +457,7 @@ pub(crate) fn parse_expr_start<'a>(
                     Err(_) => {
                         expr_state.spaces_after = &[];
 
-                        let expr = parse_expr_final(expr_state, arena);
+                        let expr = complete_expr(expr_state, arena);
                         let expr = Loc::pos(start, state.pos(), expr);
                         return Ok((MadeProgress, expr, state));
                     }
@@ -480,7 +479,7 @@ pub(crate) fn parse_expr_start<'a>(
                 let op_res = match parse_bin_op(MadeProgress, state.clone()) {
                     Err((NoProgress, _)) => {
                         // roll back space parsing
-                        let expr = parse_expr_final(expr_state, arena);
+                        let expr = complete_expr(expr_state, arena);
                         Ok((MadeProgress, expr, prev_state))
                     }
                     Err(err) => Err(err),
@@ -748,7 +747,7 @@ fn parse_stmt_operator_chain<'a>(
                             Err((MadeProgress, EExpr::BadOperator("->", state.pos())))
                         } else {
                             // roll back space parsing
-                            let expr = parse_expr_final(expr_state, arena);
+                            let expr = complete_expr(expr_state, arena);
                             Ok((MadeProgress, Stmt::Expr(expr), prev_state))
                         }
                     }
@@ -773,7 +772,7 @@ fn parse_stmt_operator_chain<'a>(
                 match eat_nc_check(EExpr::IndentEnd, arena, state.clone(), min_indent, false) {
                     Err(_) => {
                         expr_state.spaces_after = &[];
-                        let expr = parse_expr_final(expr_state, arena);
+                        let expr = complete_expr(expr_state, arena);
                         let expr = Loc::pos(start, state.pos(), Stmt::Expr(expr));
                         return Ok((MadeProgress, expr, state));
                     }
@@ -876,7 +875,7 @@ impl<'a> ExprState<'a> {
 }
 
 #[allow(clippy::unnecessary_wraps)]
-fn parse_expr_final<'a>(expr_state: ExprState<'a>, arena: &'a Bump) -> Expr<'a> {
+fn complete_expr<'a>(expr_state: ExprState<'a>, arena: &'a Bump) -> Expr<'a> {
     let right_arg = to_call(arena, expr_state.arguments, expr_state.expr);
     if expr_state.operators.is_empty() {
         right_arg.value
@@ -1650,7 +1649,7 @@ fn parse_after_binop<'a>(
     match eat_nc_check(EExpr::IndentEnd, arena, state.clone(), min_indent, false) {
         Err(_) => {
             expr_state.spaces_after = &[];
-            let expr = parse_expr_final(expr_state, arena);
+            let expr = complete_expr(expr_state, arena);
             Ok((MadeProgress, expr, state))
         }
         Ok((_, spaces_after, state)) => {
@@ -1865,7 +1864,7 @@ fn parse_expr_end<'a>(
             match eat_nc_check(EExpr::IndentEnd, arena, state.clone(), min_indent, false) {
                 Err(_) => {
                     expr_state.spaces_after = &[];
-                    let expr = parse_expr_final(expr_state, arena);
+                    let expr = complete_expr(expr_state, arena);
                     Ok((MadeProgress, expr, state))
                 }
                 Ok((_, spaces_after, state)) => {
@@ -1928,7 +1927,7 @@ fn parse_expr_end<'a>(
                 }
                 Err((NoProgress, _)) => {
                     // roll back space parsing
-                    let expr = parse_expr_final(expr_state, arena);
+                    let expr = complete_expr(expr_state, arena);
                     Ok((MadeProgress, expr, initial_state))
                 }
             }
@@ -2255,7 +2254,7 @@ fn rest_of_closure<'a>(
     let after_slash = state.pos();
 
     // Expand the shortcut into the full code guided by presence of space after slash (only if actual shortcut follows)
-    // e.g. this `\ .foo.bar` will expand to `\un -> un.foo.bar`, but this `\.foo.bar` will stay as-is in the formatted output
+    // e.g. this one with th space after slash `\ .foo.bar` will expand to `\un -> un.foo.bar`, but this one `\.foo.bar` will stay as-is in the formatted output
     let mut fmt_keep_shortcut = true;
     if state.bytes().first() == Some(&b' ') {
         state.advance_mut(1);
@@ -2281,7 +2280,7 @@ fn rest_of_closure<'a>(
             Ok(width) => {
                 let parts = parts.into_bump_slice();
                 let ident = Ident::Access { module_name, parts };
-                (ident, state.advance(width as usize))
+                (ident, state.advance(width))
             }
             Err(1) => {
                 // Here we handling the identity function `\.`
@@ -2291,8 +2290,8 @@ fn rest_of_closure<'a>(
                 (ident, state.inc())
             }
             Err(width) => {
-                let fail = BadIdent::WeirdDotAccess(pos.bump_column(width));
-                malformed_ident(initial.bytes(), fail, state.advance(width as usize))
+                let fail = BadIdent::WeirdDotAccess(pos.bump_offset(width));
+                malformed_ident(initial.bytes(), fail, state.advance(width))
             }
         };
 

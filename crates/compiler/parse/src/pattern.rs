@@ -37,7 +37,7 @@ pub fn parse_closure_param<'a>(
     if let Some(b) = state.bytes().first() {
         let start = state.pos();
         match b {
-            b'_' => {
+            b'_' => { // todo: @perf optimize for the single underscore identifier
                 // Underscore is also common, e.g. \_ -> ...
                 rest_of_underscore_pattern(start, state.inc())
             }

@@ -7,7 +7,7 @@ use crate::expr::parse_record_field;
 use crate::ident::{
     chomp_concrete_type, chomp_lowercase_part, chomp_uppercase_part, parse_lowercase_ident,
 };
-use crate::keyword;
+use crate::keyword::{self, is_keyword};
 use crate::parser::{
     at_keyword, collection_inner, loc, ERecord, EType, ETypeApply, ETypeInParens, ETypeInlineAlias,
     ETypeRecord, ETypeTagUnion, ParseResult, Parser, Progress::*,
@@ -309,7 +309,7 @@ fn record_type_field<'a>(
         let (label, state) = match chomp_lowercase_part(state.bytes()) {
             Err(p) => return Err((p, ETypeRecord::Field(start))),
             Ok(ident) => {
-                if crate::keyword::KEYWORDS.iter().any(|kw| &ident == kw) {
+                if is_keyword(ident) {
                     return Err((MadeProgress, ETypeRecord::Field(start)));
                 }
                 (ident, state.advance(ident.len()))

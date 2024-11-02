@@ -122,6 +122,13 @@ impl Position {
     }
 
     #[must_use]
+    pub const fn bump_offset(self, count: usize) -> Self {
+        Self {
+            offset: self.offset + count as u32,
+        }
+    }
+
+    #[must_use]
     pub fn bump_invisible(self, count: u32) -> Self {
         Self {
             offset: self.offset + count,
