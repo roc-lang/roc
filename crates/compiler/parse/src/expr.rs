@@ -195,6 +195,7 @@ fn loc_term_or_underscore_or_conditional<'a>(
         loc(specialize_err(EExpr::Closure, closure_help(options))),
         loc(crash_kw()),
         loc(specialize_err(EExpr::Dbg, dbg_kw())),
+        loc(try_kw()),
         loc(underscore_expression()),
         loc(record_literal_help()),
         loc(specialize_err(EExpr::List, list_literal_help())),
@@ -217,6 +218,7 @@ fn loc_term_or_underscore<'a>(
         )),
         loc(specialize_err(EExpr::Closure, closure_help(options))),
         loc(specialize_err(EExpr::Dbg, dbg_kw())),
+        loc(try_kw()),
         loc(underscore_expression()),
         loc(record_literal_help()),
         loc(specialize_err(EExpr::List, list_literal_help())),
@@ -235,6 +237,7 @@ fn loc_term<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr<'a>>, EEx
         )),
         loc(specialize_err(EExpr::Closure, closure_help(options))),
         loc(specialize_err(EExpr::Dbg, dbg_kw())),
+        loc(try_kw()),
         loc(record_literal_help()),
         loc(specialize_err(EExpr::List, list_literal_help())),
         ident_seq(),
@@ -2129,6 +2132,8 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
             pattern
         }
 
+        Expr::Try => Pattern::Identifier { ident: "try" },
+
         Expr::SpaceBefore(..) | Expr::SpaceAfter(..) | Expr::ParensAround(..) => unreachable!(),
 
         Expr::Record(fields) => {
@@ -2710,6 +2715,16 @@ fn dbg_kw<'a>() -> impl Parser<'a, Expr<'a>, EExpect<'a>> {
         Ok((MadeProgress, Expr::Dbg, next_state))
     })
     .trace("dbg_kw")
+}
+
+fn try_kw<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
+    (move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
+        let (_, _, next_state) =
+            parser::keyword("try", EExpr::Try).parse(arena, state, min_indent)?;
+
+        Ok((MadeProgress, Expr::Try, next_state))
+    })
+    .trace("try_kw")
 }
 
 fn import<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>> {
