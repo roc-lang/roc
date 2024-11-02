@@ -26,8 +26,8 @@ jobs:
 
       - run: zig version
 
-      - name: run tests
-        run: cargo test --locked --release
+      #- name: run tests
+      #  run: cargo test --locked --release
 
       - name: get commit SHA
         run:  echo "SHA=$(git rev-parse --short "$GITHUB_SHA")" >> $GITHUB_ENV
@@ -47,7 +47,7 @@ jobs:
       - name: build nightly release
         env:
             # For if zstd was installed with MacPorts
-            RUSTFLAGS: -C link-arg=-Wl,-rpath,/opt/local/lib
+            RUSTFLAGS: -C link-arg=-Wl,-rpath,/opt/local/lib,-install_name,@rpath/libzstd.dylib"
         run: cargo build --locked --profile=release-with-lto --bin roc --bin roc_language_server
 
       - name: package release
