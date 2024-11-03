@@ -10,7 +10,7 @@ use crate::Buf;
 use roc_module::called_via::{self, BinOp};
 use roc_parse::ast::{
     is_expr_suffixed, AssignedField, Base, ClosureShortcut, Collection, CommentOrNewline, Expr,
-    ExtractSpaces, Pattern, TryTarget, WhenBranch, WhenVariant,
+    ExtractSpaces, Pattern, TryTarget, WhenBranch, WhenShortcut,
 };
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_parse::ident::Accessor;
@@ -184,15 +184,14 @@ impl<'a> Formattable for Expr<'a> {
             Var {
                 module_name,
                 ident,
-                closure_shortcut,
+                shortcut,
             } => {
-                if closure_shortcut.is_none() {
+                if shortcut.is_none() {
                     buf.indent(indent);
                     if !module_name.is_empty() {
                         buf.push_str(module_name);
                         buf.push('.');
                     }
-
                     buf.push_str(ident);
                 } else {
                     // if we reach this place and were not interrupted by the `RecordAccess` or `TupleAccess` which skips its var completely,
@@ -861,17 +860,17 @@ fn fmt_when<'a>(
     buf: &mut Buf,
     loc_condition: &'a Loc<Expr<'a>>,
     branches: &[&'a WhenBranch<'a>],
-    variant: &Option<WhenVariant>,
+    shortcut: &Option<WhenShortcut>,
     indent: u16,
 ) {
     let is_multiline_condition = loc_condition.is_multiline();
-    if variant.is_none() {
+    if shortcut.is_none() {
         buf.ensure_ends_with_newline();
         buf.indent(indent);
         buf.push_str("when");
     }
 
-    if *variant != Some(WhenVariant::ClosureShortcut) {
+    if *shortcut != Some(WhenShortcut::Closure) {
         if is_multiline_condition {
             let condition_indent = indent + INDENT;
 
@@ -925,7 +924,7 @@ fn fmt_when<'a>(
         }
     }
 
-    match variant {
+    match shortcut {
         None => buf.push_str("is"),
         _ => buf.push_str("~"),
     }

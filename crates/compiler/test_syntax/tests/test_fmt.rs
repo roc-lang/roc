@@ -6165,6 +6165,24 @@ mod test_fmt {
         ));
     }
 
+    // #[test]
+    fn _closure_of_statements_with_when_binop() {
+        expr_formats_same(indoc!(
+            r#"
+            \x ->
+                # Hey!
+                x ~
+                    """
+                    abc
+                    """ ->
+                        """
+                        xyz
+                        """
+                    _ -> "abc"
+            "#
+        ));
+    }
+
     #[test]
     fn multi_line_string_literal_in_pattern() {
         expr_formats_same(indoc!(

@@ -1,9 +1,9 @@
 use crate::ast::{
-    is_expr_suffixed, AccessVariant, AssignedField, ClosureShortcut, Collection, CommentOrNewline,
+    is_expr_suffixed, AccessShortcut, AssignedField, ClosureShortcut, Collection, CommentOrNewline,
     Defs, Expr, ExtractSpaces, Implements, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
     ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport,
     ModuleImportParams, Pattern, Spaceable, Spaced, Spaces, SpacesBefore, TryTarget,
-    TypeAnnotation, TypeDef, TypeHeader, ValueDef, WhenVariant,
+    TypeAnnotation, TypeDef, TypeHeader, ValueDef, WhenShortcut,
 };
 use crate::blankspace::{eat_nc, eat_nc_check, eat_space_loc_comments, SpacedBuilder};
 use crate::header::{chomp_module_name, ModuleName};
@@ -286,7 +286,7 @@ fn parse_term<'a>(
                 if opts.is_set(PARSE_UNDERSCORE) {
                     // todo: @perf improve the hot path when this is a single underscore identifier
                     let state = state.inc();
-                    match parse_lowercase_ident(state.clone()) {
+                    match parse_lowercase_ident(state.clone()) { // todo: @wip avoid keyword lookup here
                         Ok((_, name, state)) => {
                             let expr = Loc::pos(start, state.pos(), Expr::Underscore(name));
                             Ok((MadeProgress, expr, state))
@@ -384,8 +384,8 @@ fn parse_term<'a>(
                     Err((_, fail)) => return Err((MadeProgress, fail)),
                 };
 
-                let ident = ident_to_expr(arena, ident, false);
-                let expr = apply_expr_access_chain(arena, ident, suffixes);
+                let ident = ident_to_expr(arena, ident, None);
+                let expr = apply_expr_access_chain(arena, ident, suffixes); // todo: @perf avoid if empty
                 Ok((MadeProgress, Loc::pos(start, ident_end, expr), state))
             }
         }
@@ -457,7 +457,7 @@ pub(crate) fn parse_expr_start<'a>(
                     Err(_) => {
                         expr_state.spaces_after = &[];
 
-                        let expr = complete_expr(expr_state, arena);
+                        let expr = finalize_expr(expr_state, arena);
                         let expr = Loc::pos(start, state.pos(), expr);
                         return Ok((MadeProgress, expr, state));
                     }
@@ -479,7 +479,7 @@ pub(crate) fn parse_expr_start<'a>(
                 let op_res = match parse_bin_op(MadeProgress, state.clone()) {
                     Err((NoProgress, _)) => {
                         // roll back space parsing
-                        let expr = complete_expr(expr_state, arena);
+                        let expr = finalize_expr(expr_state, arena);
                         Ok((MadeProgress, expr, prev_state))
                     }
                     Err(err) => Err(err),
@@ -722,7 +722,7 @@ fn parse_stmt_operator_chain<'a>(
                             // the `~` when operator is handled here to handle the spaces specific to the when branches
                             // instead of generic space handling in `parse_stmt_operator`
                             let when_pos = state.pos();
-                            let cond = Some((expr_state.expr, WhenVariant::BinOp));
+                            let cond = Some((expr_state.expr, WhenShortcut::BinOp));
                             match when::rest_of_when_expr(cond, flags, arena, state, min_indent) {
                                 Ok((p, out, state)) => Ok((p, Stmt::Expr(out), state)),
                                 Err((p, fail)) => Err((p, EExpr::When(fail, when_pos))),
@@ -747,7 +747,7 @@ fn parse_stmt_operator_chain<'a>(
                             Err((MadeProgress, EExpr::BadOperator("->", state.pos())))
                         } else {
                             // roll back space parsing
-                            let expr = complete_expr(expr_state, arena);
+                            let expr = finalize_expr(expr_state, arena);
                             Ok((MadeProgress, Stmt::Expr(expr), prev_state))
                         }
                     }
@@ -772,7 +772,7 @@ fn parse_stmt_operator_chain<'a>(
                 match eat_nc_check(EExpr::IndentEnd, arena, state.clone(), min_indent, false) {
                     Err(_) => {
                         expr_state.spaces_after = &[];
-                        let expr = complete_expr(expr_state, arena);
+                        let expr = finalize_expr(expr_state, arena);
                         let expr = Loc::pos(start, state.pos(), Stmt::Expr(expr));
                         return Ok((MadeProgress, expr, state));
                     }
@@ -875,7 +875,7 @@ impl<'a> ExprState<'a> {
 }
 
 #[allow(clippy::unnecessary_wraps)]
-fn complete_expr<'a>(expr_state: ExprState<'a>, arena: &'a Bump) -> Expr<'a> {
+fn finalize_expr<'a>(expr_state: ExprState<'a>, arena: &'a Bump) -> Expr<'a> {
     let right_arg = to_call(arena, expr_state.arguments, expr_state.expr);
     if expr_state.operators.is_empty() {
         right_arg.value
@@ -1649,7 +1649,7 @@ fn parse_after_binop<'a>(
     match eat_nc_check(EExpr::IndentEnd, arena, state.clone(), min_indent, false) {
         Err(_) => {
             expr_state.spaces_after = &[];
-            let expr = complete_expr(expr_state, arena);
+            let expr = finalize_expr(expr_state, arena);
             Ok((MadeProgress, expr, state))
         }
         Ok((_, spaces_after, state)) => {
@@ -1864,7 +1864,7 @@ fn parse_expr_end<'a>(
             match eat_nc_check(EExpr::IndentEnd, arena, state.clone(), min_indent, false) {
                 Err(_) => {
                     expr_state.spaces_after = &[];
-                    let expr = complete_expr(expr_state, arena);
+                    let expr = finalize_expr(expr_state, arena);
                     Ok((MadeProgress, expr, state))
                 }
                 Ok((_, spaces_after, state)) => {
@@ -1927,7 +1927,7 @@ fn parse_expr_end<'a>(
                 }
                 Err((NoProgress, _)) => {
                     // roll back space parsing
-                    let expr = complete_expr(expr_state, arena);
+                    let expr = finalize_expr(expr_state, arena);
                     Ok((MadeProgress, expr, initial_state))
                 }
             }
@@ -2265,33 +2265,30 @@ fn rest_of_closure<'a>(
     // Parses `\.foo.bar + 1` into `\p -> p.foo.bar + 1`
     if state.bytes().first() == Some(&b'.') {
         let ident = CLOSURE_SHORTCUT_ARG;
-        let param = Loc::pos(after_slash, after_slash, Pattern::Identifier { ident });
+        let param = Loc::at(Region::point(after_slash), Pattern::Identifier { ident });
         let mut params = Vec::with_capacity_in(1, arena);
         params.push(param);
 
-        let ident_state = state.clone();
-        let mut parts = Vec::with_capacity_in(4, arena);
+        let mut parts = Vec::with_capacity_in(2, arena);
         parts.push(Accessor::RecordField(ident));
 
-        let initial = state.clone();
+        let ident_state = state.clone();
+        let bytes = state.bytes();
         let pos = state.pos();
         let module_name = "";
-        let (ident, state) = match chomp_access_chain(state.bytes(), &mut parts) {
+        let (ident, state) = match chomp_access_chain(bytes, &mut parts) {
             Ok(width) => {
                 let parts = parts.into_bump_slice();
                 let ident = Ident::Access { module_name, parts };
                 (ident, state.advance(width))
             }
             Err(1) => {
-                // Here we handling the identity function `\.`
-                // where we found the `.` but did not find anything afterwards, therefore the width is 1.
-                let parts = parts.into_bump_slice();
-                let ident = Ident::Access { module_name, parts };
-                (ident, state.inc())
+                // Handling the identity function `\.`, where the `.` was found but nothing after it, therefore the width is 1.
+                (Ident::Plain(ident), state.inc())
             }
             Err(width) => {
                 let fail = BadIdent::WeirdDotAccess(pos.bump_offset(width));
-                malformed_ident(initial.bytes(), fail, state.advance(width))
+                malformed_ident(bytes, fail, state.advance(width))
             }
         };
 
@@ -2303,7 +2300,11 @@ fn rest_of_closure<'a>(
             }
         };
 
-        let ident = ident_to_expr(arena, ident, fmt_keep_shortcut);
+        let mut shortcut = None;
+        if fmt_keep_shortcut {
+            shortcut = Some(AccessShortcut::Closure);
+        }
+        let ident = ident_to_expr(arena, ident, shortcut);
         let ident = apply_expr_access_chain(arena, ident, suffixes);
         let ident = Loc::pos(after_slash, ident_end, ident);
 
@@ -2324,9 +2325,11 @@ fn rest_of_closure<'a>(
                 }
             };
 
-        let what = ClosureShortcut::Access;
-        let shortcut_what = if fmt_keep_shortcut { Some(what) } else { None };
-        let closure = Expr::Closure(params.into_bump_slice(), arena.alloc(body), shortcut_what);
+        let mut shortcut = None;
+        if fmt_keep_shortcut {
+            shortcut = Some(ClosureShortcut::Access)
+        }
+        let closure = Expr::Closure(params.into_bump_slice(), arena.alloc(body), shortcut);
         return Ok((MadeProgress, closure, state));
     }
 
@@ -2350,7 +2353,7 @@ fn rest_of_closure<'a>(
 
         // special handling of the `~` when operator
         let (body, state, what) = if binop == BinOp::When {
-            let cond = Some((expr, WhenVariant::ClosureShortcut));
+            let cond = Some((expr, WhenShortcut::Closure));
             match when::rest_of_when_expr(cond, flags, arena, state, inc_indent) {
                 Ok((_, out, state)) => (out, state, ClosureShortcut::WhenBinOp),
                 Err((_, fail)) => {
@@ -2513,13 +2516,13 @@ fn rest_of_closure<'a>(
 mod when {
     use super::*;
     use crate::{
-        ast::{WhenBranch, WhenVariant},
+        ast::{WhenBranch, WhenShortcut},
         blankspace::eat_nc,
     };
 
     /// If Ok it always returns MadeProgress
     pub fn rest_of_when_expr<'a>(
-        cond: Option<(Loc<Expr<'a>>, WhenVariant)>,
+        cond: Option<(Loc<Expr<'a>>, WhenShortcut)>,
         flags: ExprParseFlags,
         arena: &'a Bump,
         state: State<'a>,
@@ -3527,24 +3530,22 @@ where
     }
 }
 
-fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>, is_closure_shortcut: bool) -> Expr<'a> {
+fn ident_to_expr<'a>(
+    arena: &'a Bump,
+    src: Ident<'a>,
+    shortcut: Option<AccessShortcut>,
+) -> Expr<'a> {
     match src {
         Ident::Tag(string) => Expr::Tag(string),
         Ident::OpaqueRef(string) => Expr::OpaqueRef(string),
+        Ident::Plain(ident) => Expr::new_var_shortcut("", ident, shortcut),
         Ident::Access { module_name, parts } => {
-            let mut iter = parts.iter();
-
-            let shortcut_what = if is_closure_shortcut {
-                Some(AccessVariant::ClosureShortcut)
-            } else {
-                None
-            };
-
             // The first value in the iterator is the variable name,
             // e.g. `foo` in `foo.bar.baz`
+            let mut iter = parts.iter();
             let mut answer = match iter.next() {
                 Some(Accessor::RecordField(ident)) => {
-                    Expr::new_var_shortcut(module_name, ident, shortcut_what)
+                    Expr::new_var_shortcut(module_name, ident, shortcut)
                 }
                 Some(Accessor::TupleIndex(_)) => {
                     // TODO: make this state impossible to represent in Ident::Access,
@@ -3561,7 +3562,7 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>, is_closure_shortcut: bool)
             // e.g. `bar` in `foo.bar.baz`, followed by `baz`
             let mut first = true;
             for field in iter {
-                let shortcut = if first { shortcut_what } else { None };
+                let shortcut = if first { shortcut } else { None };
                 first = false;
                 // Wrap the previous answer in the new one, so we end up
                 // with a nested Expr. That way, `foo.bar.baz` gets represented
@@ -3575,7 +3576,6 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>, is_closure_shortcut: bool)
                     }
                 }
             }
-
             answer
         }
         Ident::AccessorFunction(string) => Expr::AccessorFunction(string),
@@ -3811,7 +3811,7 @@ fn record_help<'a>() -> impl Parser<'a, RecordHelp<'a>, ERecord<'a>> {
                     Err(_) => (None, before_prefix),
                     Ok((_, ident, state)) => {
                         let ident =
-                            Loc::pos(ident_at, state.pos(), ident_to_expr(arena, ident, false));
+                            Loc::pos(ident_at, state.pos(), ident_to_expr(arena, ident, None));
                         match eat_nc::<'_, ERecord<'_>>(arena, state, false) {
                             Err(_) => (None, before_prefix),
                             Ok((_, (spaces_after, _), state)) => {

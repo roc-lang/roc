@@ -409,14 +409,14 @@ pub enum ClosureShortcut {
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub enum AccessVariant {
-    ClosureShortcut,
+pub enum AccessShortcut {
+    Closure,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub enum WhenVariant {
+pub enum WhenShortcut {
     BinOp,
-    ClosureShortcut,
+    Closure,
 }
 
 /// A parsed expression. This uses lifetimes extensively for two reasons:
@@ -449,7 +449,7 @@ pub enum Expr<'a> {
     RecordAccess(
         &'a Expr<'a>,
         &'a str,
-        #[educe(Debug(ignore))] Option<AccessVariant>,
+        #[educe(Debug(ignore))] Option<AccessShortcut>,
     ),
 
     /// e.g. `.foo` or `.0`
@@ -462,7 +462,7 @@ pub enum Expr<'a> {
     TupleAccess(
         &'a Expr<'a>,
         &'a str,
-        #[educe(Debug(ignore))] Option<AccessVariant>,
+        #[educe(Debug(ignore))] Option<AccessShortcut>,
     ),
 
     /// Early return on failures - e.g. the ! in `File.readUtf8! path`
@@ -500,7 +500,7 @@ pub enum Expr<'a> {
         // Shortcut instructs to output the variable in the context of closure shortcut as '.' for the shortcut identity function `\.`
         // todo: @revisit for now ignoring it in the AST snapshot testing
         #[educe(Debug(ignore))]
-        closure_shortcut: Option<AccessVariant>,
+        shortcut: Option<AccessShortcut>,
     },
 
     Underscore(&'a str),
@@ -555,7 +555,7 @@ pub enum Expr<'a> {
         /// is Option<Expr> because each branch may be preceded by
         /// a guard (".. if ..").
         &'a [&'a WhenBranch<'a>],
-        #[educe(Debug(ignore))] Option<WhenVariant>,
+        #[educe(Debug(ignore))] Option<WhenShortcut>,
     ),
 
     Return(
@@ -588,19 +588,19 @@ impl Expr<'_> {
         Expr::Var {
             module_name,
             ident,
-            closure_shortcut: None,
+            shortcut: None,
         }
     }
 
     pub const fn new_var_shortcut<'a>(
         module_name: &'a str,
         ident: &'a str,
-        closure_shortcut: Option<AccessVariant>,
+        shortcut: Option<AccessShortcut>,
     ) -> Expr<'a> {
         Expr::Var {
             module_name,
             ident,
-            closure_shortcut,
+            shortcut,
         }
     }
 
@@ -2257,13 +2257,13 @@ impl<'a> Expr<'a> {
     pub const REPL_OPAQUE_FUNCTION: Self = Expr::Var {
         module_name: "",
         ident: "<function>",
-        closure_shortcut: None,
+        shortcut: None,
     };
 
     pub const REPL_RUNTIME_CRASH: Self = Expr::Var {
         module_name: "",
         ident: "*",
-        closure_shortcut: None,
+        shortcut: None,
     };
 
     pub fn loc_ref(&'a self, region: Region) -> Loc<&'a Self> {

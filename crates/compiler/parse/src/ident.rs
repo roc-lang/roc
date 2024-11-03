@@ -40,6 +40,8 @@ pub enum Ident<'a> {
     Tag(&'a str),
     /// @Foo or @Bar
     OpaqueRef(&'a str),
+    /// lowercase identifier, e.g. x, foo, or bar in \bar
+    Plain(&'a str),
     /// foo or foo.bar or Foo.Bar.baz.qux
     Access {
         module_name: &'a str,
@@ -270,7 +272,6 @@ fn chomp_accessor(buffer: &[u8], pos: Position) -> Result<Accessor, BadIdent> {
     match chomp_lowercase_part(buffer) {
         Ok(name) => {
             let chomped = name.len();
-
             if let Ok(('.', _)) = char::from_utf8_slice_start(&buffer[chomped..]) {
                 Err(BadIdent::WeirdAccessor(pos))
             } else {
@@ -281,7 +282,6 @@ fn chomp_accessor(buffer: &[u8], pos: Position) -> Result<Accessor, BadIdent> {
             match chomp_integer_part(buffer) {
                 Ok(name) => {
                     let chomped = name.len();
-
                     if let Ok(('.', _)) = char::from_utf8_slice_start(&buffer[chomped..]) {
                         Err(BadIdent::WeirdAccessor(pos))
                     } else {
@@ -318,9 +318,8 @@ fn chomp_opaque_ref(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
     match chomp_uppercase_part(&buffer[1..]) {
         Ok(name) => {
             let width = 1 + name.len();
-
             if let Ok(('.', _)) = char::from_utf8_slice_start(&buffer[width..]) {
-                Err(BadIdent::BadOpaqueRef(pos.bump_column(width as u32)))
+                Err(BadIdent::BadOpaqueRef(pos.bump_offset(width)))
             } else {
                 let value = unsafe { std::str::from_utf8_unchecked(&buffer[..width]) };
                 Ok(value)
@@ -415,7 +414,7 @@ pub fn parse_ident<'a>(arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Ide
                             chomped += width;
                             unsafe { std::str::from_utf8_unchecked(&bytes[..chomped]) }
                         }
-                        Err(MadeProgress) => todo!(), // todo: @wip @original what?
+                        Err(MadeProgress) => todo!(), // todo: @wip this is original todo, now what?
                         Err(NoProgress) => unsafe {
                             std::str::from_utf8_unchecked(&bytes[..chomped])
                         },
@@ -476,21 +475,14 @@ pub fn parse_ident<'a>(arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Ide
                 chomped += width;
             }
             _ => {
+                let value = unsafe { std::str::from_utf8_unchecked(&bytes[..chomped]) };
                 if first_is_uppercase {
-                    // just one segment, starting with an uppercase letter; that's a tag
-                    let value = unsafe { std::str::from_utf8_unchecked(&bytes[..chomped]) };
                     return Ok((MadeProgress, Ident::Tag(value), state.advance(chomped)));
                 } else {
-                    // just one segment, starting with a lowercase letter; that's a normal identifier
-                    let value = unsafe { std::str::from_utf8_unchecked(&bytes[..chomped]) };
                     if is_keyword(value) {
                         return Err((NoProgress, EExpr::Start(start)));
                     }
-
-                    let module_name = "";
-                    let parts = arena.alloc([Accessor::RecordField(value)]);
-                    let ident = Ident::Access { module_name, parts };
-                    return Ok((MadeProgress, ident, state.advance(chomped)));
+                    return Ok((MadeProgress, Ident::Plain(value), state.advance(chomped)));
                 }
             }
         }
@@ -544,7 +536,6 @@ pub(crate) fn chomp_concrete_type(buffer: &[u8]) -> Result<(&str, &str, usize), 
                         let module_name =
                             unsafe { std::str::from_utf8_unchecked(&slice[..index - 1]) };
                         let type_name = unsafe { std::str::from_utf8_unchecked(&slice[index..]) };
-
                         Ok((module_name, type_name, width))
                     }
                 }

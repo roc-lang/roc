@@ -1,7 +1,7 @@
 use crate::ast::{Collection, Implements, Pattern, PatternAs};
 use crate::blankspace::{eat_nc, eat_nc_check, SpacedBuilder};
 use crate::expr::{parse_expr_start, CHECK_FOR_ARROW};
-use crate::ident::{parse_ident, parse_lowercase_ident, Accessor, Ident};
+use crate::ident::{parse_ident, parse_lowercase_ident, Ident};
 use crate::keyword;
 use crate::number_literal::parse_number_base;
 use crate::parser::{at_keyword, Progress::*};
@@ -37,7 +37,8 @@ pub fn parse_closure_param<'a>(
     if let Some(b) = state.bytes().first() {
         let start = state.pos();
         match b {
-            b'_' => { // todo: @perf optimize for the single underscore identifier
+            b'_' => {
+                // todo: @perf optimize for the single underscore identifier
                 // Underscore is also common, e.g. \_ -> ...
                 rest_of_underscore_pattern(start, state.inc())
             }
@@ -425,17 +426,20 @@ fn parse_ident_pattern<'a>(
                 Ok((MadeProgress, loc_pat, state))
             }
         }
-        Ident::Access {
-            module_name, parts, ..
-        } => {
+        Ident::Plain(ident) => {
+            let ident = Loc::at(ident_loc, Pattern::Identifier { ident });
+            return Ok((MadeProgress, ident, state));
+        }
+        Ident::Access { module_name, parts } => {
             // Plain identifiers (e.g. `foo`) are allowed in patterns, but
             // more complex ones (e.g. `Foo.bar` or `foo.bar.baz`) are not.
-            if module_name.is_empty() && parts.len() == 1 {
-                if let Accessor::RecordField(var) = &parts[0] {
-                    let ident = Loc::at(ident_loc, Pattern::Identifier { ident: var });
-                    return Ok((MadeProgress, ident, state));
-                }
-            }
+            // todo: @wip remove
+            // if module_name.is_empty() && parts.len() == 1 {
+            //     if let Accessor::RecordField(ident) = &parts[0] {
+            //         let ident = Loc::at(ident_loc, Pattern::Identifier { ident });
+            //         return Ok((MadeProgress, ident, state));
+            //     }
+            // }
 
             let mut malformed_str = String::new_in(arena);
             if !module_name.is_empty() {
@@ -468,7 +472,7 @@ fn rest_of_underscore_pattern(
     state: State<'_>,
 ) -> ParseResult<'_, Loc<Pattern<'_>>, EPattern<'_>> {
     let after_underscore = state.clone();
-    match parse_lowercase_ident(state) {
+    match parse_lowercase_ident(state) { // todo: @wip avoid keyword lookup here
         Ok((_, name, state)) => {
             let ident = Loc::pos(start, state.pos(), Pattern::Underscore(name));
             Ok((MadeProgress, ident, state))
