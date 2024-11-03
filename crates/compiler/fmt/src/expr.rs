@@ -918,7 +918,10 @@ fn fmt_when<'a>(
             }
             buf.indent(indent);
         } else {
-            buf.spaces(1);
+            if shortcut.is_none() {
+                // normal space after 'when', in other cases we don't have a 'when' and starting with the identifier
+                buf.spaces(1);
+            }
             loc_condition.format(buf, indent);
             buf.spaces(1);
         }
@@ -1382,6 +1385,11 @@ fn fmt_closure<'a>(
                 }
             };
         }
+    }
+
+    // just a bit of nicety niceness to avoid double indent for the ~ when branches of the when lambda body
+    if !avoid_indent && matches!(loc_ret.value, When(.., Some(WhenShortcut::BinOp))) {
+        avoid_indent = true;
     }
 
     // If the body is multiline, go down a line and indent.

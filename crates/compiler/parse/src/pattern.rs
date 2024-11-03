@@ -1,7 +1,7 @@
 use crate::ast::{Collection, Implements, Pattern, PatternAs};
 use crate::blankspace::{eat_nc, eat_nc_check, SpacedBuilder};
 use crate::expr::{parse_expr_start, CHECK_FOR_ARROW};
-use crate::ident::{parse_ident, parse_lowercase_ident, Ident};
+use crate::ident::{chomp_lowercase_part, parse_ident, parse_lowercase_ident, Ident};
 use crate::keyword;
 use crate::number_literal::parse_number_base;
 use crate::parser::{at_keyword, Progress::*};
@@ -38,7 +38,6 @@ pub fn parse_closure_param<'a>(
         let start = state.pos();
         match b {
             b'_' => {
-                // todo: @perf optimize for the single underscore identifier
                 // Underscore is also common, e.g. \_ -> ...
                 rest_of_underscore_pattern(start, state.inc())
             }
@@ -471,17 +470,17 @@ fn rest_of_underscore_pattern(
     start: Position,
     state: State<'_>,
 ) -> ParseResult<'_, Loc<Pattern<'_>>, EPattern<'_>> {
-    let after_underscore = state.clone();
-    match parse_lowercase_ident(state) { // todo: @wip avoid keyword lookup here
-        Ok((_, name, state)) => {
+    match chomp_lowercase_part(state.bytes()) {
+        Ok(name) => {
+            let state = state.advance(name.len());
             let ident = Loc::pos(start, state.pos(), Pattern::Underscore(name));
             Ok((MadeProgress, ident, state))
         }
-        Err((NoProgress, _)) => {
-            let ident = Loc::pos(start, after_underscore.pos(), Pattern::Underscore(""));
-            Ok((MadeProgress, ident, after_underscore))
+        Err(NoProgress) => {
+            let ident = Loc::pos(start, state.pos(), Pattern::Underscore(""));
+            Ok((MadeProgress, ident, state))
         }
-        Err(_) => Err((MadeProgress, EPattern::End(after_underscore.pos()))),
+        Err(_) => Err((MadeProgress, EPattern::End(state.pos()))),
     }
 }
 

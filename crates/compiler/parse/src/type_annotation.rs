@@ -115,7 +115,6 @@ fn parse_term<'a>(
                 (out, state.inc())
             }
             _ => {
-                // todo: @perf can we use the same check as for Inferred above to quickly check for one character identifier, plus it's not required to lookup for it in keywords, cause they start from 2 chars?
                 let ident_res = match parse_lowercase_ident(state.clone()) {
                     Ok((_, name, state)) => {
                         if name == keyword::WHERE

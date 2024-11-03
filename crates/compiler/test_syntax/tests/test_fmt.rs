@@ -6149,10 +6149,44 @@ mod test_fmt {
         ));
     }
 
-    // #[test]
-    fn _closure_with_when_binop() {
+    // #[test] // todo: @wip
+    fn _closure_shortcut_for_when_binop_after_other_binop() {
         expr_formats_same(indoc!(
             r#"
+            \+ 5 ~
+                42 -> ""
+                _ -> "42"
+            "#
+        ));
+    }
+
+    // #[test] // todo: @wip
+    fn _closure_for_when_binop_after_other_binop() {
+        expr_formats_same(indoc!(
+            r#"
+            \x -> x + 5 ~
+                42 -> ""
+                _ -> "42"
+            "#
+        ));
+    }
+
+    #[test]
+    fn closure_for_when_binop_with_cond_in_parens() {
+        expr_formats_same(indoc!(
+            r#"
+            \x -> (x + 5) ~
+                42 -> ""
+                _ -> "42"
+            "#
+        ));
+    }
+
+    #[test]
+    fn closure_with_when_binop() {
+        expr_formats_to(
+            indoc!(
+                r#"
             \x -> x ~
                 """
                 abc
@@ -6162,13 +6196,24 @@ mod test_fmt {
                     """
                 _ -> "abc"
             "#
-        ));
+            ),
+            indoc!(
+                r#"
+            \x -> x ~
+                "abc" ->
+                    "xyz"
+
+                _ -> "abc"
+            "#
+            ),
+        );
     }
 
-    // #[test]
-    fn _closure_of_statements_with_when_binop() {
-        expr_formats_same(indoc!(
-            r#"
+    #[test]
+    fn closure_of_statements_with_when_binop() {
+        expr_formats_to(
+            indoc!(
+                r#"
             \x ->
                 # Hey!
                 x ~
@@ -6180,7 +6225,19 @@ mod test_fmt {
                         """
                     _ -> "abc"
             "#
-        ));
+            ),
+            indoc!(
+                r#"
+            \x ->
+                # Hey!
+                x ~
+                    "abc" ->
+                        "xyz"
+
+                    _ -> "abc"
+            "#
+            ),
+        );
     }
 
     #[test]

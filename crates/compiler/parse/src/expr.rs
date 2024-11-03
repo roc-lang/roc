@@ -8,8 +8,8 @@ use crate::ast::{
 use crate::blankspace::{eat_nc, eat_nc_check, eat_space_loc_comments, SpacedBuilder};
 use crate::header::{chomp_module_name, ModuleName};
 use crate::ident::{
-    chomp_access_chain, chomp_integer_part, malformed_ident, parse_ident, parse_lowercase_ident,
-    parse_unqualified_ident, Accessor, BadIdent, Ident, Suffix,
+    chomp_access_chain, chomp_integer_part, chomp_lowercase_part, malformed_ident, parse_ident,
+    parse_lowercase_ident, parse_unqualified_ident, Accessor, BadIdent, Ident, Suffix,
 };
 use crate::number_literal::parse_number_base;
 use crate::parser::{
@@ -284,14 +284,14 @@ fn parse_term<'a>(
             }
             b'_' => {
                 if opts.is_set(PARSE_UNDERSCORE) {
-                    // todo: @perf improve the hot path when this is a single underscore identifier
                     let state = state.inc();
-                    match parse_lowercase_ident(state.clone()) { // todo: @wip avoid keyword lookup here
-                        Ok((_, name, state)) => {
+                    match chomp_lowercase_part(state.bytes()) {
+                        Ok(name) => {
+                            let state = state.advance(name.len());
                             let expr = Loc::pos(start, state.pos(), Expr::Underscore(name));
                             Ok((MadeProgress, expr, state))
                         }
-                        Err((NoProgress, _)) => {
+                        Err(NoProgress) => {
                             let expr = Loc::pos(start, state.pos(), Expr::Underscore(""));
                             Ok((MadeProgress, expr, state))
                         }
@@ -374,8 +374,6 @@ fn parse_term<'a>(
                     return Ok((MadeProgress, dbg_expr, state));
                 }
 
-                // todo: @perf here the 4 keywords were already checked, if, when, dbg, crash, avoid checking them again in parse_ident
-                // todo: @perf can we use the same check as for TypeAnnotation::Inferred to quickly check for one character identifier or `_`, plus it's not required to lookup for it in keywords, cause they start from 2 chars?
                 let (_, ident, state) = parse_ident(arena, state)?;
 
                 let ident_end = state.pos();
@@ -384,9 +382,11 @@ fn parse_term<'a>(
                     Err((_, fail)) => return Err((MadeProgress, fail)),
                 };
 
-                let ident = ident_to_expr(arena, ident, None);
-                let expr = apply_expr_access_chain(arena, ident, suffixes); // todo: @perf avoid if empty
-                Ok((MadeProgress, Loc::pos(start, ident_end, expr), state))
+                let mut ident = ident_to_expr(arena, ident, None);
+                if !suffixes.is_empty() {
+                    ident = apply_expr_access_chain(arena, ident, suffixes);
+                }
+                Ok((MadeProgress, Loc::pos(start, ident_end, ident), state))
             }
         }
     } else {
@@ -475,7 +475,6 @@ pub(crate) fn parse_expr_start<'a>(
                 // We're part way thru parsing an expression, e.g. `bar foo `.
                 // We just tried parsing an argument and determined we couldn't -
                 // so we're going to try parsing an operator.
-                // todo: @wip ~ support
                 let op_res = match parse_bin_op(MadeProgress, state.clone()) {
                     Err((NoProgress, _)) => {
                         // roll back space parsing
@@ -488,29 +487,41 @@ pub(crate) fn parse_expr_start<'a>(
                         let op_end = state.pos();
 
                         expr_state.consume_spaces(arena);
-                        let (_, spaces_after_op, state) =
-                            eat_nc_check(EExpr::IndentEnd, arena, state, min_indent, false)?;
 
-                        // a `-` is unary if it is preceded by a space and not followed by a space
-                        let loc_op = Loc::pos(op_start, op_end, op);
-                        match op {
-                            BinOp::Minus if expr_state.end != op_start && op_end == state.pos() => {
-                                parse_negative_term(
-                                    arena, state, min_indent, inc_indent, expr_state, flags,
-                                    before_op, loc_op,
-                                )
+                        if let BinOp::When = op {
+                            let when_pos = state.pos();
+                            let cond = Some((expr_state.expr, WhenShortcut::BinOp));
+                            match when::rest_of_when_expr(cond, flags, arena, state, min_indent) {
+                                Ok(ok) => Ok(ok),
+                                Err((p, fail)) => Err((p, EExpr::When(fail, when_pos))),
                             }
-                            _ => parse_after_binop(
-                                arena,
-                                state,
-                                min_indent,
-                                inc_indent,
-                                flags,
-                                true,
-                                spaces_after_op,
-                                expr_state,
-                                loc_op,
-                            ),
+                        } else {
+                            let (_, spaces_after_op, state) =
+                                eat_nc_check(EExpr::IndentEnd, arena, state, min_indent, false)?;
+
+                            // a `-` is unary if it is preceded by a space and not followed by a space
+                            let loc_op = Loc::pos(op_start, op_end, op);
+                            match op {
+                                BinOp::Minus
+                                    if expr_state.end != op_start && op_end == state.pos() =>
+                                {
+                                    parse_negative_term(
+                                        arena, state, min_indent, inc_indent, expr_state, flags,
+                                        before_op, loc_op,
+                                    )
+                                }
+                                _ => parse_after_binop(
+                                    arena,
+                                    state,
+                                    min_indent,
+                                    inc_indent,
+                                    flags,
+                                    true,
+                                    spaces_after_op,
+                                    expr_state,
+                                    loc_op,
+                                ),
+                            }
                         }
                     }
                 };
@@ -1839,7 +1850,7 @@ fn parse_expr_end<'a>(
     min_indent: u32,
     inc_indent: u32,
     flags: ExprParseFlags,
-    check_for_defs: bool,
+    check_for_defs: bool, // todo: @wip remove it as it is always true
     mut expr_state: ExprState<'a>,
     initial_state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
@@ -1887,42 +1898,52 @@ fn parse_expr_end<'a>(
             // We just tried parsing an argument and determined we couldn't -
             // so we're going to try parsing an operator.
             let before_op = state.clone();
-            let err_progress = if check_for_defs {
+            let err_p = if check_for_defs {
                 MadeProgress
             } else {
                 NoProgress
             };
             // todo: @wip ~ support
-            match parse_bin_op(err_progress, state.clone()) {
+            match parse_bin_op(err_p, state.clone()) {
                 Err((MadeProgress, f)) => Err((MadeProgress, f)),
                 Ok((_, op, state)) => {
                     let op_start = before_op.pos();
                     let op_end = state.pos();
 
                     expr_state.consume_spaces(arena);
-                    let (_, spaces_after_op, state) =
-                        eat_nc_check(EExpr::IndentEnd, arena, state, min_indent, false)?;
 
-                    // a `-` is unary if it is preceded by a space and not followed by a space
-                    let loc_op = Loc::pos(op_start, op_end, op);
-                    match op {
-                        BinOp::Minus if expr_state.end != op_start && op_end == state.pos() => {
-                            parse_negative_term(
-                                arena, state, min_indent, inc_indent, expr_state, flags, before_op,
-                                loc_op,
-                            )
+                    if let BinOp::When = op {
+                        let when_pos = state.pos();
+                        let cond = Some((expr_state.expr, WhenShortcut::BinOp));
+                        match when::rest_of_when_expr(cond, flags, arena, state, min_indent) {
+                            Ok(ok) => Ok(ok),
+                            Err((p, fail)) => Err((p, EExpr::When(fail, when_pos))),
                         }
-                        _ => parse_after_binop(
-                            arena,
-                            state,
-                            min_indent,
-                            inc_indent,
-                            flags,
-                            check_for_defs,
-                            spaces_after_op,
-                            expr_state,
-                            loc_op,
-                        ),
+                    } else {
+                        let (_, spaces_after_op, state) =
+                            eat_nc_check(EExpr::IndentEnd, arena, state, min_indent, false)?;
+
+                        // a `-` is unary if it is preceded by a space and not followed by a space
+                        let loc_op = Loc::pos(op_start, op_end, op);
+                        match op {
+                            BinOp::Minus if expr_state.end != op_start && op_end == state.pos() => {
+                                parse_negative_term(
+                                    arena, state, min_indent, inc_indent, expr_state, flags,
+                                    before_op, loc_op,
+                                )
+                            }
+                            _ => parse_after_binop(
+                                arena,
+                                state,
+                                min_indent,
+                                inc_indent,
+                                flags,
+                                check_for_defs,
+                                spaces_after_op,
+                                expr_state,
+                                loc_op,
+                            ),
+                        }
                     }
                 }
                 Err((NoProgress, _)) => {
@@ -2304,8 +2325,10 @@ fn rest_of_closure<'a>(
         if fmt_keep_shortcut {
             shortcut = Some(AccessShortcut::Closure);
         }
-        let ident = ident_to_expr(arena, ident, shortcut);
-        let ident = apply_expr_access_chain(arena, ident, suffixes);
+        let mut ident = ident_to_expr(arena, ident, shortcut);
+        if !suffixes.is_empty() {
+            ident = apply_expr_access_chain(arena, ident, suffixes);
+        }
         let ident = Loc::pos(after_slash, ident_end, ident);
 
         // todo: @wip for the identity function and Unary Negate and Not, should we consider to stop here and return early
@@ -3536,9 +3559,9 @@ fn ident_to_expr<'a>(
     shortcut: Option<AccessShortcut>,
 ) -> Expr<'a> {
     match src {
+        Ident::Plain(ident) => Expr::new_var_shortcut("", ident, shortcut),
         Ident::Tag(string) => Expr::Tag(string),
         Ident::OpaqueRef(string) => Expr::OpaqueRef(string),
-        Ident::Plain(ident) => Expr::new_var_shortcut("", ident, shortcut),
         Ident::Access { module_name, parts } => {
             // The first value in the iterator is the variable name,
             // e.g. `foo` in `foo.bar.baz`
@@ -3742,9 +3765,9 @@ pub fn parse_record_field<'a>(
         Some(&b'_') => {
             let state = state.inc();
             let name_pos = state.pos();
-            let (opt_field_label, state) = match parse_lowercase_ident(state.clone()) {
-                Ok((_, name, state)) => (name, state),
-                Err((NoProgress, _)) => ("", state),
+            let (opt_field_label, state) = match chomp_lowercase_part(state.bytes()) {
+                Ok(name) => (name, state.advance(name.len())),
+                Err(NoProgress) => ("", state),
                 Err(_) => return Err((MadeProgress, ERecord::Field(name_pos))),
             };
 
