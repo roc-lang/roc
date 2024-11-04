@@ -6149,8 +6149,8 @@ mod test_fmt {
         ));
     }
 
-    // #[test] // todo: @wip
-    fn _closure_shortcut_for_when_binop_after_other_binop() {
+    #[test]
+    fn closure_shortcut_binop_with_when_binop_chain() {
         expr_formats_same(indoc!(
             r#"
             \+ 5 ~
@@ -6160,8 +6160,8 @@ mod test_fmt {
         ));
     }
 
-    // #[test] // todo: @wip
-    fn _closure_for_when_binop_after_other_binop() {
+    #[test]
+    fn closure_for_when_binop_chain() {
         expr_formats_same(indoc!(
             r#"
             \x -> x + 5 ~
@@ -6176,6 +6176,28 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r#"
             \x -> (x + 5) ~
+                42 -> ""
+                _ -> "42"
+            "#
+        ));
+    }
+
+    #[test]
+    fn closure_shortcut_access_with_when_binop() {
+        expr_formats_same(indoc!(
+            r#"
+            \.foo ~
+                42 -> ""
+                _ -> "42"
+            "#
+        ));
+    }
+
+    #[test]
+    fn closure_shortcut_access_with_when_binop_chain() {
+        expr_formats_same(indoc!(
+            r#"
+            \.foo + 5 ~
                 42 -> ""
                 _ -> "42"
             "#

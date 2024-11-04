@@ -482,12 +482,12 @@ impl<'a> Formattable for Expr<'a> {
                     indent,
                 );
             }
-            When(loc_condition, branches, variant) => {
-                fmt_when(buf, loc_condition, branches, variant, indent)
+            When(loc_condition, branches, shortcut) => {
+                fmt_when(buf, loc_condition, branches, shortcut, indent)
             }
             Tuple(items) => fmt_collection(buf, indent, Braces::Round, *items, Newlines::No),
             List(items) => fmt_collection(buf, indent, Braces::Square, *items, Newlines::No),
-            BinOps(lefts, right) => fmt_binops(buf, lefts, right, false, indent),
+            BinOps(lefts, right) => fmt_binops(buf, lefts, right, indent, None),
             UnaryOp(sub_expr, unary_op) => {
                 buf.indent(indent);
                 match &unary_op.value {
@@ -782,49 +782,52 @@ pub fn fmt_str_literal(buf: &mut Buf, literal: StrLiteral, indent: u16) {
 fn fmt_binops<'a>(
     buf: &mut Buf,
     lefts: &'a [(Loc<Expr<'a>>, Loc<BinOp>)],
-    loc_right_side: &'a Loc<Expr<'a>>,
-    part_of_multi_line_binops: bool,
+    right: &'a Loc<Expr<'a>>,
     indent: u16,
+    closure_shortcut: Option<ClosureShortcut>,
 ) {
-    let is_multiline = part_of_multi_line_binops
-        || loc_right_side.value.is_multiline()
-        || lefts.iter().any(|(expr, _)| expr.value.is_multiline());
+    let is_multiline =
+        right.value.is_multiline() || lefts.iter().any(|(expr, _)| expr.value.is_multiline());
 
-    let is_any_lefts_suffixed = lefts.iter().any(|(left, _)| is_expr_suffixed(&left.value));
-    let is_right_suffixed = is_expr_suffixed(&loc_right_side.value);
-    let is_any_suffixed = is_any_lefts_suffixed || is_right_suffixed;
+    let is_any_suffixed = is_expr_suffixed(&right.value)
+        || lefts.iter().any(|(left, _)| is_expr_suffixed(&left.value));
 
-    let mut is_first = false;
+    // we only want to indent the remaining lines if this is a suffixed expression.
+    let mut is_first = is_any_suffixed;
     let mut adjusted_indent = indent;
-
-    if is_any_suffixed {
-        // we only want to indent the remaining lines if this is a suffixed expression.
-        is_first = true;
+    if closure_shortcut.is_some() {
+        // set the additional closure body indent from the start
+        adjusted_indent += INDENT;
     }
 
-    for (loc_left_side, loc_binop) in lefts {
-        let binop = loc_binop.value;
-        loc_left_side.format_with_options(buf, Parens::InOperator, Newlines::No, adjusted_indent);
+    let mut skip = closure_shortcut == Some(ClosureShortcut::BinOp);
+    for (left, loc_binop) in lefts {
+        if !skip {
+            left.format_with_options(buf, Parens::InOperator, Newlines::No, adjusted_indent);
+            if is_first {
+                adjusted_indent += INDENT;
+                is_first = false;
+            }
 
-        if is_first {
             // indent the remaining lines, but only if the expression is suffixed.
-            is_first = false;
-            adjusted_indent = indent + INDENT;
-        }
-
-        if is_multiline {
-            buf.ensure_ends_with_newline();
-            buf.indent(adjusted_indent);
+            if is_multiline {
+                buf.ensure_ends_with_newline();
+                buf.indent(adjusted_indent);
+            } else {
+                buf.spaces(1);
+            }
+            skip = false;
         } else {
-            buf.spaces(1);
+            if is_first {
+                adjusted_indent += INDENT;
+                is_first = false;
+            }
         }
-
-        push_op(buf, binop);
-
+        push_op(buf, loc_binop.value);
         buf.spaces(1);
     }
 
-    loc_right_side.format_with_options(buf, Parens::InOperator, Newlines::Yes, adjusted_indent);
+    right.format_with_options(buf, Parens::InOperator, Newlines::Yes, adjusted_indent);
 }
 
 fn format_spaces(buf: &mut Buf, spaces: &[CommentOrNewline], newlines: Newlines, indent: u16) {
@@ -1286,7 +1289,7 @@ fn fmt_closure<'a>(
     buf: &mut Buf,
     loc_patterns: &'a [Loc<Pattern<'a>>],
     loc_ret: &'a Loc<Expr<'a>>,
-    shortcut: Option<ClosureShortcut>,
+    closure_shortcut: Option<ClosureShortcut>,
     indent: u16,
 ) {
     use self::Expr::*;
@@ -1294,111 +1297,102 @@ fn fmt_closure<'a>(
     buf.indent(indent);
     buf.push('\\');
 
-    let mut avoid_indent = false;
-    match shortcut {
-        Some(shortcut) => match shortcut {
-            ClosureShortcut::Access => {
-                // it will be handled by the `RecordAccess` or `TupleAccess` or `Var`
+    let mut skip_args = false;
+    if closure_shortcut.is_some() {
+        match loc_ret.value {
+            RecordAccess(..) | TupleAccess(..) | Var { .. } => {
+                // skip formatting the arguments, and go to the body
+                // the shortcut will be handled in respective expression in the body
+                skip_args = true;
             }
-            ClosureShortcut::WhenBinOp => {
-                // it will be handled by the `fmt_when`
-                // avoid double indent for the when branches
-                avoid_indent = true;
+            BinOps(lefts, right) => {
+                fmt_binops(buf, lefts, right, indent, closure_shortcut);
+                return;
             }
-            ClosureShortcut::BinOp => {
-                if let BinOps([(_, binop)], loc_right) = loc_ret.value {
-                    push_op(buf, binop.value);
-                    buf.spaces(1);
-
-                    // If the body is multiline, go down a line and indent.
-                    let body_indent = if loc_ret.value.is_multiline() {
-                        indent + INDENT
-                    } else {
-                        indent
-                    };
-
-                    // we only want to indent the remaining lines if this is a suffixed expression.
-                    let right_indent = if is_expr_suffixed(&loc_right.value) {
-                        body_indent + INDENT
-                    } else {
-                        body_indent
-                    };
-
-                    loc_right.format_with_options(
-                        buf,
-                        Parens::InOperator,
-                        Newlines::Yes,
-                        right_indent,
-                    );
-                    return;
-                }
-            }
-        },
-        None => {
-            let arguments_are_multiline = loc_patterns
-                .iter()
-                .any(|loc_pattern| loc_pattern.is_multiline());
-
-            // If the arguments are multiline, go down a line and indent.
-            let indent = if arguments_are_multiline {
-                indent + INDENT
-            } else {
-                indent
-            };
-
-            let mut it = loc_patterns.iter().peekable();
-
-            while let Some(loc_pattern) = it.next() {
-                loc_pattern.format_with_options(buf, Parens::InAsPattern, Newlines::No, indent);
-
-                if it.peek().is_some() {
-                    buf.indent(indent);
-                    if arguments_are_multiline {
-                        buf.push(',');
-                        buf.newline();
-                    } else {
-                        buf.push_str(",");
+            When(cond, branches, _) => {
+                match cond.value {
+                    RecordAccess(..) | TupleAccess(..) => {
+                        // BinOp means that we keep the condition and delegate shortcut handling to the accessors in condition
+                        fmt_when(buf, cond, branches, &Some(WhenShortcut::BinOp), indent);
+                    }
+                    BinOps(lefts, right) => {
+                        fmt_binops(buf, lefts, right, indent, closure_shortcut);
+                        // space before the ` ~` operator
                         buf.spaces(1);
+                        // set the closure shortcut to skip formatting the condition altogether, because it is done above
+                        fmt_when(buf, cond, branches, &Some(WhenShortcut::Closure), indent);
+                    }
+                    _ => {
+                        fmt_when(buf, cond, branches, &Some(WhenShortcut::Closure), indent);
                     }
                 }
+                return;
             }
-
-            if arguments_are_multiline {
-                buf.newline();
-                buf.indent(indent);
-            } else {
-                buf.spaces(1);
-            }
-
-            buf.push_str("->");
-
-            // the body of the Closure can be on the same line, or
-            // on a new line. If it's on the same line, insert a space.
-            match &loc_ret.value {
-                SpaceBefore(_, _) => {
-                    // the body starts with (first comment and then) a newline
-                    // do nothing
-                }
-                _ => {
-                    // add a space after the `->`
-                    buf.spaces(1);
-                }
-            };
+            _ => {}
         }
     }
 
-    // just a bit of nicety niceness to avoid double indent for the ~ when branches of the when lambda body
-    if !avoid_indent && matches!(loc_ret.value, When(.., Some(WhenShortcut::BinOp))) {
-        avoid_indent = true;
+    if !skip_args {
+        let arguments_are_multiline = loc_patterns
+            .iter()
+            .any(|loc_pattern| loc_pattern.is_multiline());
+
+        // If the arguments are multiline, go down a line and indent.
+        let indent = if arguments_are_multiline {
+            indent + INDENT
+        } else {
+            indent
+        };
+
+        let mut it = loc_patterns.iter().peekable();
+
+        while let Some(loc_pattern) = it.next() {
+            loc_pattern.format_with_options(buf, Parens::InAsPattern, Newlines::No, indent);
+
+            if it.peek().is_some() {
+                buf.indent(indent);
+                if arguments_are_multiline {
+                    buf.push(',');
+                    buf.newline();
+                } else {
+                    buf.push_str(",");
+                    buf.spaces(1);
+                }
+            }
+        }
+
+        if arguments_are_multiline {
+            buf.newline();
+            buf.indent(indent);
+        } else {
+            buf.spaces(1);
+        }
+
+        buf.push_str("->");
+
+        // the body of the Closure can be on the same line, or
+        // on a new line. If it's on the same line, insert a space.
+        match &loc_ret.value {
+            SpaceBefore(_, _) => {
+                // the body starts with (first comment and then) a newline
+                // do nothing
+            }
+            _ => {
+                // add a space after the `->`
+                buf.spaces(1);
+            }
+        };
     }
 
     // If the body is multiline, go down a line and indent.
     let is_multiline = loc_ret.value.is_multiline();
-    let body_indent = if is_multiline && !avoid_indent {
-        indent + INDENT
-    } else {
-        indent
-    };
+    let body_indent =
+        // just a bit of nicety niceness to avoid double indent for the ~ multiple when branches in the lambda body
+        if is_multiline && !matches!(loc_ret.value, When(.., Some(WhenShortcut::BinOp))) {
+            indent + INDENT
+        } else {
+            indent
+        };
 
     if is_multiline {
         match &loc_ret.value {

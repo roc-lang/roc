@@ -164,7 +164,7 @@ fn parse_pattern_as<'a>(
             };
             Ok((MadeProgress, pattern, state))
         }
-        Err((_, ())) => Err((MadeProgress, EPattern::AsIdentifier(pos))),
+        Err(_) => Err((MadeProgress, EPattern::AsIdentifier(pos))),
     }
 }
 
