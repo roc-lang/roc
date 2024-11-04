@@ -374,6 +374,13 @@ fn parse_term<'a>(
                     return Ok((MadeProgress, dbg_expr, state));
                 }
 
+                // todo: @ask why "try" is not included into KEYWORDS in keyword.rs
+                if at_keyword("try", &state) {
+                    let state = state.advance("try".len());
+                    let try_expr = Loc::pos(start, state.pos(), Expr::Try);
+                    return Ok((MadeProgress, try_expr, state));
+                }
+
                 let (_, ident, state) = parse_ident(arena, state)?;
 
                 let ident_end = state.pos();
@@ -2096,6 +2103,8 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
 
             pattern
         }
+
+        Expr::Try => Pattern::Identifier { ident: "try" },
 
         Expr::SpaceBefore(..) | Expr::SpaceAfter(..) | Expr::ParensAround(..) => unreachable!(),
 
