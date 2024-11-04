@@ -57,7 +57,7 @@ table of contents for this document.
 
 ## Parsing
 
-**todo: @wip Update this section when combinators removed** 
+**todo: @wip @ask Update this section when combinators removed** 
 
 Roc's parsers are designed as [combinators](https://en.wikipedia.org/wiki/Parser_combinator).
 A list of Roc's parse AST and combinators can be found in [the root parse

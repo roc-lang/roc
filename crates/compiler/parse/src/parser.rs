@@ -166,7 +166,6 @@ pub enum EParams<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EExposes {
     Exposes(Position),
-    Open(Position),
     IndentExposes(Position),
     IndentListStart(Position),
     ListStart(Position),
@@ -239,9 +238,6 @@ pub enum EImports {
     ListStart(Position),
     ListEnd(Position),
     Identifier(Position),
-    ExposingDot(Position),
-    ShorthandDot(Position),
-    Shorthand(Position),
     ModuleName(Position),
     Space(BadInputError, Position),
     IndentSetStart(Position),
@@ -1151,16 +1147,6 @@ where
     move |arena, state, _min_indent| parser.parse(arena, state, 0)
 }
 
-pub fn line_min_indent<'a, P, T, X: 'a>(parser: P) -> impl Parser<'a, T, X>
-where
-    P: Parser<'a, T, X>,
-{
-    move |arena, state: State<'a>, min_indent| {
-        let min_indent = std::cmp::max(state.line_indent(), min_indent);
-        parser.parse(arena, state, min_indent)
-    }
-}
-
 /// Transforms a possible error, like `map_err` in Rust.
 /// It has no effect if the given parser succeeds.
 ///
@@ -1197,49 +1183,6 @@ where
         match parser.parse(a, state, min_indent) {
             Ok(t) => Ok(t),
             Err((p, error)) => Err((p, map_error(error, original_pos))),
-        }
-    }
-}
-
-/// Transforms a possible error, like `map_err` in Rust.
-/// Similar to [`specialize_err`], but the error is arena allocated, and the
-/// mapping function receives a reference to the error.
-/// It has no effect if the inner parser succeeds.
-///
-/// # Examples
-/// ```
-/// # #![forbid(unused_imports)]
-/// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, word, specialize_err_ref};
-/// # use roc_region::all::Position;
-/// # use bumpalo::Bump;
-/// # #[derive(Debug, PartialEq)]
-/// # enum Problem {
-/// #     NotFound(Position),
-/// #     Other(Position),
-/// # }
-/// # let arena = Bump::new();
-/// let parser = specialize_err_ref(
-///     |_prev_err, pos| Problem::Other(pos),
-///     word("bye", Problem::NotFound)
-/// );
-///
-/// let (progress, err) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap_err();
-/// assert_eq!(progress, Progress::NoProgress);
-/// assert_eq!(err, Problem::Other(Position::new(0)));
-/// ```
-pub fn specialize_err_ref<'a, F, P, T, X, Y>(map_error: F, parser: P) -> impl Parser<'a, T, Y>
-where
-    F: Fn(&'a X, Position) -> Y,
-    P: Parser<'a, T, X>,
-    Y: 'a,
-    X: 'a,
-{
-    move |a: &'a Bump, state: State<'a>, min_indent: u32| {
-        let original_pos = state.pos();
-        match parser.parse(a, state, min_indent) {
-            Ok(t) => Ok(t),
-            Err((p, error)) => Err((p, map_error(a.alloc(error), original_pos))),
         }
     }
 }
@@ -1301,68 +1244,6 @@ where
         }
         _ => Err((NoProgress, to_error(state.pos()))),
     }
-}
-
-/// Matches two `u8` in a row.
-///
-/// # Example
-///
-/// ```
-/// # #![forbid(unused_imports)]
-/// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, two_bytes};
-/// # use roc_region::all::Position;
-/// # use bumpalo::Bump;
-/// # #[derive(Debug, PartialEq)]
-/// # enum Problem {
-/// #     NotFound(Position),
-/// # }
-/// # let arena = Bump::new();
-/// let parser = two_bytes(b'h', b'e', Problem::NotFound);
-///
-/// // Success case
-/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
-/// assert_eq!(progress, Progress::MadeProgress);
-/// assert_eq!(output, ());
-/// assert_eq!(state.pos(), Position::new(2));
-///
-/// // Error case
-/// let (progress, problem) = parser.parse(&arena, State::new("hi, world".as_bytes()), 0).unwrap_err();
-/// assert_eq!(progress, Progress::NoProgress);
-/// assert_eq!(problem, Problem::NotFound(Position::zero()));
-/// ```
-pub fn two_bytes<'a, ToError, E>(
-    byte_1: u8,
-    byte_2: u8,
-    to_error: ToError,
-) -> impl Parser<'a, (), E>
-where
-    ToError: Fn(Position) -> E,
-    E: 'a,
-{
-    debug_assert_ne!(byte_1, b'\n');
-    debug_assert_ne!(byte_2, b'\n');
-
-    let needle = [byte_1, byte_2];
-
-    move |_arena: &'a Bump, state: State<'a>, _min_indent: u32| {
-        if state.bytes().starts_with(&needle) {
-            let state = state.advance(2);
-            Ok((MadeProgress, (), state))
-        } else {
-            Err((NoProgress, to_error(state.pos())))
-        }
-    }
-}
-
-#[macro_export]
-macro_rules! byte_check_indent {
-    ($byte_to_match:expr, $problem:expr, $min_indent:expr, $indent_problem:expr) => {
-        $crate::parser::and(
-            byte($byte_to_match, $problem),
-            $crate::parser::check_indent($min_indent, $indent_problem),
-        )
-    };
 }
 
 /// transform the `Ok` result of a parser

@@ -1689,7 +1689,6 @@ impl<'a> Normalize<'a> for EExposes {
     fn normalize(&self, _arena: &'a Bump) -> Self {
         match self {
             EExposes::Exposes(_) => EExposes::Exposes(Position::zero()),
-            EExposes::Open(_) => EExposes::Open(Position::zero()),
             EExposes::IndentExposes(_) => EExposes::IndentExposes(Position::zero()),
             EExposes::IndentListStart(_) => EExposes::IndentListStart(Position::zero()),
             EExposes::ListStart(_) => EExposes::ListStart(Position::zero()),
@@ -1711,9 +1710,6 @@ impl<'a> Normalize<'a> for EImports {
             EImports::ListStart(_) => EImports::ListStart(Position::zero()),
             EImports::ListEnd(_) => EImports::ListEnd(Position::zero()),
             EImports::Identifier(_) => EImports::Identifier(Position::zero()),
-            EImports::ExposingDot(_) => EImports::ExposingDot(Position::zero()),
-            EImports::ShorthandDot(_) => EImports::ShorthandDot(Position::zero()),
-            EImports::Shorthand(_) => EImports::Shorthand(Position::zero()),
             EImports::ModuleName(_) => EImports::ModuleName(Position::zero()),
             EImports::Space(inner_err, _) => EImports::Space(*inner_err, Position::zero()),
             EImports::IndentSetStart(_) => EImports::IndentSetStart(Position::zero()),

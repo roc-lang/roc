@@ -1705,8 +1705,7 @@ fn parse_stmt_multi_backpassing<'a>(
         let (sp, sp_before, state) =
             eat_nc_check(EPattern::Start, arena, state, min_indent, false)?;
 
-        let (pat, state) = match crate::pattern::loc_pattern_help().parse(arena, state, min_indent)
-        {
+        let (pat, state) = match crate::pattern::parse_pattern(arena, state, min_indent) {
             Ok((_, out, state)) => (out, state),
             Err((p, fail)) => return Err((p.or(sp), fail)),
         };
@@ -2231,7 +2230,6 @@ fn assigned_expr_field_to_pattern_help<'a>(
     })
 }
 
-// todo: @wip inline me
 pub fn parse_top_level_defs<'a>(
     arena: &'a bumpalo::Bump,
     state: State<'a>,
@@ -2257,10 +2255,8 @@ pub fn parse_top_level_defs<'a>(
         stmts_to_defs(&stmts, output, false, arena).map_err(|e| (MadeProgress, e))?;
 
     if let Some(expr) = last_expr {
-        return Err((
-            MadeProgress,
-            EExpr::UnexpectedTopLevelExpr(expr.region.start()),
-        ));
+        let fail = EExpr::UnexpectedTopLevelExpr(expr.region.start());
+        return Err((MadeProgress, fail));
     }
 
     if output.tags.len() > existing_len {
@@ -2693,11 +2689,10 @@ mod when {
             };
 
         let pattern_pos = state.pos();
-        let (pattern, state) =
-            match crate::pattern::loc_pattern_help().parse(arena, state, pat_indent) {
-                Ok((_, out, state)) => (out, state),
-                Err((ep, fail)) => return Err((ep.or(sp), EWhen::Pattern(fail, pattern_pos))),
-            };
+        let (pattern, state) = match crate::pattern::parse_pattern(arena, state, pat_indent) {
+            Ok((_, out, state)) => (out, state),
+            Err((ep, fail)) => return Err((ep.or(sp), EWhen::Pattern(fail, pattern_pos))),
+        };
 
         let (_, spaces_after, mut state) =
             eat_nc_check(EWhen::IndentPattern, arena, state, pat_indent, true)?;
@@ -2716,7 +2711,7 @@ mod when {
 
                 let pattern_pos = next_state.pos();
                 let (pat, next_state) =
-                    match crate::pattern::loc_pattern_help().parse(arena, next_state, pat_indent) {
+                    match crate::pattern::parse_pattern(arena, next_state, pat_indent) {
                         Ok((_, out, state)) => (out, state),
                         Err((_, fail)) => {
                             return Err((MadeProgress, EWhen::Pattern(fail, pattern_pos)))
@@ -3914,10 +3909,30 @@ fn parse_record_expr<'a>(
 
     let expr_result = match record.prefix {
         Some((update, RecordHelpPrefix::Update)) => {
-            record_update_help(arena, update, record.fields)
+            let result = record.fields.map_items_result(arena, |loc_field| {
+                match loc_field.value.to_assigned_field(arena) {
+                    AssignedField::IgnoredValue(_, _, _) => {
+                        Err(EExpr::RecordUpdateIgnoredField(loc_field.region))
+                    }
+                    builder_field => Ok(Loc {
+                        region: loc_field.region,
+                        value: builder_field,
+                    }),
+                }
+            });
+
+            let update = &*arena.alloc(update);
+            result.map(|fields| Expr::RecordUpdate { update, fields })
         }
         Some((mapper, RecordHelpPrefix::Mapper)) => {
-            record_builder_help(arena, mapper, record.fields)
+            let result = record.fields.map_items_result(arena, |loc_field| {
+                let region = loc_field.region;
+                let value = loc_field.value.to_assigned_field(arena);
+                Ok(Loc { region, value })
+            });
+
+            let mapper = &*arena.alloc(mapper);
+            result.map(|fields| Expr::RecordBuilder { mapper, fields })
         }
         None => {
             let special_field_found = record.fields.iter().find_map(|field| {
@@ -3945,47 +3960,6 @@ fn parse_record_expr<'a>(
         }
         Err(fail) => Err((MadeProgress, fail)),
     }
-}
-
-// todo: @wip: inline me
-fn record_update_help<'a>(
-    arena: &'a Bump,
-    update: Loc<Expr<'a>>,
-    fields: Collection<'a, Loc<RecordField<'a>>>,
-) -> Result<Expr<'a>, EExpr<'a>> {
-    let result = fields.map_items_result(arena, |loc_field| {
-        match loc_field.value.to_assigned_field(arena) {
-            AssignedField::IgnoredValue(_, _, _) => {
-                Err(EExpr::RecordUpdateIgnoredField(loc_field.region))
-            }
-            builder_field => Ok(Loc {
-                region: loc_field.region,
-                value: builder_field,
-            }),
-        }
-    });
-
-    result.map(|fields| Expr::RecordUpdate {
-        update: &*arena.alloc(update),
-        fields,
-    })
-}
-
-fn record_builder_help<'a>(
-    arena: &'a Bump,
-    mapper: Loc<Expr<'a>>,
-    fields: Collection<'a, Loc<RecordField<'a>>>,
-) -> Result<Expr<'a>, EExpr<'a>> {
-    let result = fields.map_items_result(arena, |loc_field| {
-        let region = loc_field.region;
-        let value = loc_field.value.to_assigned_field(arena);
-        Ok(Loc { region, value })
-    });
-
-    result.map(|fields| Expr::RecordBuilder {
-        mapper: &*arena.alloc(mapper),
-        fields,
-    })
 }
 
 fn apply_expr_access_chain<'a>(

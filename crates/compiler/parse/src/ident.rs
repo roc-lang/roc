@@ -49,7 +49,7 @@ pub enum Ident<'a> {
     },
     /// `.foo { foo: 42 }` or `.1 (1, 2, 3)`
     AccessorFunction(Accessor<'a>),
-    /// `&foo { foo: 42 } 3`, e.g. update = \rec -> &foo rec 3, or shortcut update = \.foo.bar & 3
+    /// `&foo { foo: 42 } 3`
     RecordUpdaterFunction(&'a str),
     /// .Foo or foo. or something like foo.Bar
     Malformed(&'a str, BadIdent),
@@ -414,7 +414,7 @@ pub fn parse_ident<'a>(arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Ide
                             chomped += width;
                             unsafe { std::str::from_utf8_unchecked(&bytes[..chomped]) }
                         }
-                        Err(MadeProgress) => todo!(), // todo: @wip this is original todo, now what?
+                        Err(MadeProgress) => todo!(), // todo: @wip @ask this is original todo, can I write the test to expose it?
                         Err(NoProgress) => unsafe {
                             std::str::from_utf8_unchecked(&bytes[..chomped])
                         },

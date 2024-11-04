@@ -492,7 +492,7 @@ impl Scope {
     pub fn gen_unique_symbol(&mut self) -> Symbol {
         Symbol::new(self.home, self.locals.gen_unique())
     }
-    // todo: @wip use this for the @feat closure-shortcut parameter name?
+    // todo: @wip @ask use this for the @feat closure-shortcut parameter name?
     /// Generates a unique new symbol and return the symbol's unqualified identifier name.
     pub fn gen_unique_symbol_name(&mut self) -> &str {
         let ident_id = self.locals.gen_unique();
