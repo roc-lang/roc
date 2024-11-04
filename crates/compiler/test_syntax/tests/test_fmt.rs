@@ -5090,6 +5090,56 @@ mod test_fmt {
         );
     }
 
+    // #[test] // todo: @wip @fixme double indent for the withModel lambda argument
+    fn _pipeline_apply_lambda_multiline_with_closure_shortcuts() {
+        expr_formats_same(indoc!(
+            r"
+                    example = \|> withModel
+                            (\~
+                                Err _ ->
+                                    Err {}
+
+                                Ok val ->
+                                    Ok {}
+                            )
+                    example
+                "
+        ));
+    }
+
+    // #[test] // todo: @wip @fixme missing left operand when expanding `\ ~`
+    fn _pipeline_apply_lambda_multiline_with_closure_shortcuts_expansion() {
+        expr_formats_to(
+            indoc!(
+                r"
+                    example = \ |> withModel
+                            (\ ~
+                                Err _ ->
+                                    Err {}
+
+                                Ok val ->
+                                    Ok {}
+                            )
+                    example
+                "
+            ),
+            indoc!(
+                r"
+                example = \un -> un
+                    |> withModel
+                        (\un -> ~
+                                Err _ ->
+                                    Err {}
+
+                                Ok val ->
+                                    Ok {}
+                        )
+                example
+            "
+            ),
+        );
+    }
+
     #[test]
     fn func_call_trailing_multiline_lambda() {
         expr_formats_same(indoc!(
