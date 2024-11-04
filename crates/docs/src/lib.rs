@@ -632,52 +632,6 @@ fn llm_prompt<'a, I: Iterator<Item = &'a ModuleDocumentation>>(
             }
         }
     }
-    buf.push_str("## Instructions:\n\n");
-    buf.push_str(
-        format!(
-            "You are an expert in the Roc programming library, `{}`.\n",
-            package_name
-        )
-        .as_str(),
-    );
-    buf.push_str(
-        format!(
-            "Your task is to answer questions **only based on the official documentation** of the `{}` Roc library.\n",
-            package_name
-        )
-        .as_str(),
-    );
-    buf.push_str("If the documentation does not contain relevant information to answer the question, explicitly state: ");
-    buf.push_str(
-        format!(
-            "**I do not know, as this is not covered in the official documentation of `{}`.**\n",
-            package_name
-        )
-        .as_str(),
-    );
-
-    buf.push_str("## Example Responses:\n\n");
-
-    if !example_type_question_buf.is_empty() {
-        buf.push_str(example_type_question_buf.as_str());
-    }
-
-    if !example_description_question_buf.is_empty() {
-        buf.push_str(example_description_question_buf.as_str());
-    }
-
-    buf.push_str("**Gap in Documentation Question Example**\n\n");
-    buf.push_str("**Question:**\n");
-    buf.push_str("What's your favorite animal?\n\n");
-    buf.push_str("**Response:**\n");
-    buf.push_str(
-        format!(
-            "I do not know, as this is not covered in the official documentation of `{}`.\n\n",
-            package_name
-        )
-        .as_str(),
-    );
-
     buf
 }
 
