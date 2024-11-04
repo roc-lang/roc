@@ -31,7 +31,6 @@ members = [
     "crates/wasm_interp",
     "crates/language_server",
     "crates/roc_std_heap",
-    "examples/platform-switching/rust-platform",
 ]
 
 exclude = [

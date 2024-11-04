@@ -56,10 +56,9 @@ jobs:
       - name: extract tar for a quick test
         run: ls | grep tar | xargs tar -xf
 
-      - name: test with rust platform (prebuild the host first)
+      - name: test with zig platform
         run: |
-          examples/platform-switching/rust-platform/build.sh
-          cd ${{ env.RELEASE_FOLDER_NAME }} && ./roc examples/platform-switching/rocLovesRust.roc
+          cd ${{ env.RELEASE_FOLDER_NAME }} && ./roc --build-host --suppress-build-host-warning crates/cli/tests/test-projects/test-platform-simple-zig/app.roc
 
       - name: print short commit SHA
         run: git rev-parse --short "$GITHUB_SHA"
