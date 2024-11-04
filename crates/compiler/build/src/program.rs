@@ -1008,7 +1008,7 @@ fn build_loaded_file<'a>(
             let mut inputs = vec![app_o_file.to_str().unwrap()];
 
             let mut host_path = String::new();
-            
+
             match built_host_opt {
                 BuiltHostOpt::Legacy(p) => {
                     host_path.push_str(&p.to_string_lossy());
@@ -1018,14 +1018,15 @@ fn build_loaded_file<'a>(
                     // In case of link_type == LinkType::Dylib or target == Target::Wasm32
                     // When compiling a Dylib there is no host, such as when generating glue using `roc glue`.
                     if target == Target::Wasm32 {
-                        let wasm_host_zig:PathBuf = platform_main_roc_path.with_file_name("host.zig");
-                        
+                        let wasm_host_zig: PathBuf =
+                            platform_main_roc_path.with_file_name("host.zig");
+
                         assert!(
                             wasm_host_zig.exists(),
-                            "No host.zig file found at {} when building wasm32 target.", 
+                            "No host.zig file found at {} when building wasm32 target.",
                             wasm_host_zig.display()
                         );
-                        
+
                         host_path.push_str(&wasm_host_zig.to_string_lossy());
                         inputs.push(&host_path);
                     }

@@ -911,14 +911,16 @@ mod cli_tests {
             } else {
                 vec![]
             };
-            
+
             dbg!("pre wasm_run_out");
 
-            let wasm_run_out =
-                crate::run_wasm_for_cli_test(&roc_file_path.with_extension("wasm"), wasm_args.clone());
-            
+            let wasm_run_out = crate::run_wasm_for_cli_test(
+                &roc_file_path.with_extension("wasm"),
+                wasm_args.clone(),
+            );
+
             dbg!("post wasm_run_out");
-            
+
             dbg!(&wasm_run_out);
             assert_eq!(wasm_run_out, expected_output);
 
@@ -1247,11 +1249,11 @@ fn run_wasm_for_cli_test(wasm_path: &std::path::Path, stdin: Vec<&str>) -> Strin
 
         Instance::from_bytes(&arena, &wasm_bytes, dispatcher, false).unwrap()
     };
-    
+
     dbg!("pre call");
 
     let result = instance.call_export("_start", []);
-    
+
     dbg!("post call");
 
     match result {
