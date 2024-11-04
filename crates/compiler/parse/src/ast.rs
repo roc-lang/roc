@@ -496,6 +496,9 @@ pub enum Expr<'a> {
     // This form of debug is a desugared call to roc_dbg
     LowLevelDbg(&'a (&'a str, &'a str), &'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
 
+    /// The `try` keyword that performs early return on errors
+    Try,
+
     // Application
     /// To apply by name, do Apply(Var(...), ...)
     /// To apply a tag by name, do Apply(Tag(...), ...)
@@ -672,6 +675,7 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::Dbg => false,
         Expr::DbgStmt(a, b) => is_expr_suffixed(&a.value) || is_expr_suffixed(&b.value),
         Expr::LowLevelDbg(_, a, b) => is_expr_suffixed(&a.value) || is_expr_suffixed(&b.value),
+        Expr::Try => false,
         Expr::UnaryOp(a, _) => is_expr_suffixed(&a.value),
         Expr::When(cond, branches) => {
             is_expr_suffixed(&cond.value) || branches.iter().any(|x| is_when_branch_suffixed(x))
@@ -1027,6 +1031,7 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                 | Underscore(_)
                 | Crash
                 | Dbg
+                | Try
                 | Tag(_)
                 | OpaqueRef(_)
                 | MalformedIdent(_, _)
@@ -2483,6 +2488,7 @@ impl<'a> Malformed for Expr<'a> {
             Dbg => false,
             DbgStmt(condition, continuation) => condition.is_malformed() || continuation.is_malformed(),
             LowLevelDbg(_, condition, continuation) => condition.is_malformed() || continuation.is_malformed(),
+            Try => false,
             Return(return_value, after_return) => return_value.is_malformed() || after_return.is_some_and(|ar| ar.is_malformed()),
             Apply(func, args, _) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
             BinOps(firsts, last) => firsts.iter().any(|(expr, _)| expr.is_malformed()) || last.is_malformed(),

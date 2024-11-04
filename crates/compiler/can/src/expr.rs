@@ -1132,6 +1132,11 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::TrySuffix { .. } => internal_error!(
             "a Expr::TrySuffix expression was not completely removed in desugar_value_def_suffixed"
         ),
+        ast::Expr::Try => {
+            // Treat remaining `try` keywords as normal variables so that we can continue to support `Result.try`
+            canonicalize_var_lookup(env, var_store, scope, "", "try", region)
+        }
+
         ast::Expr::Tag(tag) => {
             let variant_var = var_store.fresh();
             let ext_var = var_store.fresh();
@@ -2547,6 +2552,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         | ast::Expr::RecordUpdater(_)
         | ast::Expr::Crash
         | ast::Expr::Dbg
+        | ast::Expr::Try
         | ast::Expr::Underscore(_)
         | ast::Expr::MalformedIdent(_, _)
         | ast::Expr::Tag(_)

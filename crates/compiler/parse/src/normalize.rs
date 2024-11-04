@@ -3,7 +3,6 @@ use bumpalo::Bump;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
 
-use crate::parser::EReturn;
 use crate::{
     ast::{
         AbilityImpls, AbilityMember, AssignedField, Collection, Defs, Expr, FullAst, Header,
@@ -23,9 +22,9 @@ use crate::{
     parser::{
         EAbility, EClosure, EExpect, EExposes, EExpr, EHeader, EIf, EImport, EImportParams,
         EImports, EInParens, EList, EPackageEntry, EPackageName, EPackages, EParams, EPattern,
-        EProvides, ERecord, ERequires, EString, EType, ETypeAbilityImpl, ETypeApply, ETypeInParens,
-        ETypeInlineAlias, ETypeRecord, ETypeTagUnion, ETypedIdent, EWhen, PInParens, PList,
-        PRecord, SyntaxError,
+        EProvides, ERecord, ERequires, EReturn, EString, EType, ETypeAbilityImpl, ETypeApply,
+        ETypeInParens, ETypeInlineAlias, ETypeRecord, ETypeTagUnion, ETypedIdent, EWhen, PInParens,
+        PList, PRecord, SyntaxError,
     },
 };
 
@@ -757,6 +756,7 @@ impl<'a> Normalize<'a> for Expr<'a> {
                 arena.alloc(a.normalize(arena)),
                 arena.alloc(b.normalize(arena)),
             ),
+            Expr::Try => Expr::Try,
             Expr::Return(a, b) => Expr::Return(
                 arena.alloc(a.normalize(arena)),
                 b.map(|loc_b| &*arena.alloc(loc_b.normalize(arena))),
@@ -1055,6 +1055,7 @@ impl<'a> Normalize<'a> for EExpr<'a> {
             }
             EExpr::Underscore(_pos) => EExpr::Underscore(Position::zero()),
             EExpr::Crash(_pos) => EExpr::Crash(Position::zero()),
+            EExpr::Try(_pos) => EExpr::Try(Position::zero()),
             EExpr::InParens(inner_err, _pos) => {
                 EExpr::InParens(inner_err.normalize(arena), Position::zero())
             }

@@ -699,6 +699,7 @@ impl IterTokens for Loc<Expr<'_>> {
             Expr::LowLevelDbg(_, e1, e2) => (e1.iter_tokens(arena).into_iter())
                 .chain(e2.iter_tokens(arena))
                 .collect_in(arena),
+            Expr::Try => onetoken(Token::Keyword, region, arena),
             Expr::Apply(e1, e2, _called_via) => (e1.iter_tokens(arena).into_iter())
                 .chain(e2.iter_tokens(arena))
                 .collect_in(arena),
