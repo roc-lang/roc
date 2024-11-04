@@ -113,7 +113,7 @@ pub unsafe extern "C" fn roc_shm_open(
 ///
 /// TODO
 #[no_mangle]
-pub extern "C" fn rust_main() -> i32 {
+pub extern "C" fn main() -> i32 {
     let mut roc_str = RocStr::default();
     unsafe { roc_main(&mut roc_str) };
 
@@ -126,6 +126,5 @@ pub extern "C" fn rust_main() -> i32 {
         panic!("Failed to flush stdout: {:?}", e);
     }
 
-    // Exit code
     0
 }

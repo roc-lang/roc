@@ -52,22 +52,25 @@ mod cli_tests {
     #[test]
     #[cfg_attr(windows, ignore)]
     fn platform_switching_rust() {
+        // pre-build the platform
+        std::process::Command::new("bash")
+            .arg(file_from_root(
+                "examples/platform-switching/rust-platform",
+                "build.sh",
+            ))
+            .status()
+            .unwrap();
+
         let cli_build = ExecCli::new(
-            CMD_BUILD,
+            roc_cli::CMD_RUN,
             file_from_root("examples/platform-switching", "rocLovesRust.roc"),
-        )
-        .arg(BUILD_HOST_FLAG)
-        .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
+        );
 
         let expected_output = "Roc <3 Rust!\n";
 
-        cli_build.full_check_build_and_run(
-            expected_output,
-            TEST_LEGACY_LINKER,
-            ALLOW_VALGRIND,
-            None,
-            None,
-        );
+        let output = cli_build.run();
+
+        output.assert_clean_stdout(expected_output);
     }
 
     #[test]

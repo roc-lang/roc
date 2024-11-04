@@ -3268,6 +3268,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rust-platform"
+version = "0.0.1"
+dependencies = [
+ "libc",
+ "roc_std",
+]
+
+[[package]]
 name = "rustc-demangle"
 version = "0.1.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
