@@ -8,7 +8,7 @@
 //         clang-16: error: linker command failed with exit code 1 (use -v to see invocation)
 // ```
 //
-// This is ok, becuase this static library will be linked later by roc and the symbols will be resolved.
+// This is ok, because this static library will be linked later by roc and the symbols will be resolved.
 //
 fn main() {
     // Get the target triple
