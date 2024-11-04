@@ -220,6 +220,7 @@ impl<'a> LowerParams<'a> {
                     function_type: _,
                     closure_type: _,
                     return_type: _,
+                    early_returns: _,
                     recursive: _,
                     arguments: _,
                 }) => {
@@ -380,6 +381,12 @@ impl<'a> LowerParams<'a> {
                     expr_stack.push(&mut loc_message.value);
                     expr_stack.push(&mut loc_continuation.value);
                 }
+                Return {
+                    return_value,
+                    return_var: _,
+                } => {
+                    expr_stack.push(&mut return_value.value);
+                }
                 RecordAccessor(_)
                 | ImportParams(_, _, None)
                 | ZeroArgumentTag {
@@ -532,6 +539,7 @@ impl<'a> LowerParams<'a> {
                 function_type: self.var_store.fresh(),
                 closure_type: self.var_store.fresh(),
                 return_type: self.var_store.fresh(),
+                early_returns: vec![],
                 name: self.unique_symbol(),
                 captured_symbols,
                 recursive: roc_can::expr::Recursive::NotRecursive,

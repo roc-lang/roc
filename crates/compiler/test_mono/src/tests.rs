@@ -3672,3 +3672,26 @@ fn issue_6606_2() {
         "
     )
 }
+
+#[mono_test]
+fn dec_refcount_for_usage_after_early_return_in_if() {
+    indoc!(
+        r#"
+        displayN = \n ->
+            first = Num.toStr n
+            second =
+                if n == 1 then
+                    return "early 1"
+                else
+                    third = Num.toStr (n + 1)
+                    if n == 2 then
+                        return "early 2"
+                    else
+                        third
+
+            "$(first), $(second)"
+
+        displayN 3
+        "#
+    )
+}

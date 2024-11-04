@@ -22,9 +22,9 @@ use crate::{
     parser::{
         EAbility, EClosure, EExpect, EExposes, EExpr, EHeader, EIf, EImport, EImportParams,
         EImports, EInParens, EList, EPackageEntry, EPackageName, EPackages, EParams, EPattern,
-        EProvides, ERecord, ERequires, EString, EType, ETypeAbilityImpl, ETypeApply, ETypeInParens,
-        ETypeInlineAlias, ETypeRecord, ETypeTagUnion, ETypedIdent, EWhen, PInParens, PList,
-        PRecord, SyntaxError,
+        EProvides, ERecord, ERequires, EReturn, EString, EType, ETypeAbilityImpl, ETypeApply,
+        ETypeInParens, ETypeInlineAlias, ETypeRecord, ETypeTagUnion, ETypedIdent, EWhen, PInParens,
+        PList, PRecord, SyntaxError,
     },
 };
 
@@ -756,6 +756,11 @@ impl<'a> Normalize<'a> for Expr<'a> {
                 arena.alloc(a.normalize(arena)),
                 arena.alloc(b.normalize(arena)),
             ),
+            Expr::Try => Expr::Try,
+            Expr::Return(a, b) => Expr::Return(
+                arena.alloc(a.normalize(arena)),
+                b.map(|loc_b| &*arena.alloc(loc_b.normalize(arena))),
+            ),
             Expr::Apply(a, b, c) => {
                 Expr::Apply(arena.alloc(a.normalize(arena)), b.normalize(arena), c)
             }
@@ -1038,6 +1043,9 @@ impl<'a> Normalize<'a> for EExpr<'a> {
             EExpr::Expect(inner_err, _pos) => {
                 EExpr::Expect(inner_err.normalize(arena), Position::zero())
             }
+            EExpr::Return(inner_err, _pos) => {
+                EExpr::Return(inner_err.normalize(arena), Position::zero())
+            }
             EExpr::Dbg(inner_err, _pos) => EExpr::Dbg(inner_err.normalize(arena), Position::zero()),
             EExpr::Import(inner_err, _pos) => {
                 EExpr::Import(inner_err.normalize(arena), Position::zero())
@@ -1047,6 +1055,7 @@ impl<'a> Normalize<'a> for EExpr<'a> {
             }
             EExpr::Underscore(_pos) => EExpr::Underscore(Position::zero()),
             EExpr::Crash(_pos) => EExpr::Crash(Position::zero()),
+            EExpr::Try(_pos) => EExpr::Try(Position::zero()),
             EExpr::InParens(inner_err, _pos) => {
                 EExpr::InParens(inner_err.normalize(arena), Position::zero())
             }
@@ -1472,6 +1481,20 @@ impl<'a> Normalize<'a> for EExpect<'a> {
         }
     }
 }
+
+impl<'a> Normalize<'a> for EReturn<'a> {
+    fn normalize(&self, arena: &'a Bump) -> Self {
+        match self {
+            EReturn::Space(inner_err, _) => EReturn::Space(*inner_err, Position::zero()),
+            EReturn::Return(_) => EReturn::Return(Position::zero()),
+            EReturn::ReturnValue(inner_err, _) => {
+                EReturn::ReturnValue(arena.alloc(inner_err.normalize(arena)), Position::zero())
+            }
+            EReturn::IndentReturnValue(_) => EReturn::IndentReturnValue(Position::zero()),
+        }
+    }
+}
+
 impl<'a> Normalize<'a> for EIf<'a> {
     fn normalize(&self, arena: &'a Bump) -> Self {
         match self {

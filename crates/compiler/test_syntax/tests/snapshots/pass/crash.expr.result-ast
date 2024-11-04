@@ -96,10 +96,7 @@ SpaceAfter(
                         "",
                     ),
                     @50-74 Apply(
-                        @50-53 Var {
-                            module_name: "",
-                            ident: "try",
-                        },
+                        @50-53 Try,
                         [
                             @54-57 Var {
                                 module_name: "",

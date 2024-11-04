@@ -496,6 +496,9 @@ pub enum Expr<'a> {
     // This form of debug is a desugared call to roc_dbg
     LowLevelDbg(&'a (&'a str, &'a str), &'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
 
+    /// The `try` keyword that performs early return on errors
+    Try,
+
     // Application
     /// To apply by name, do Apply(Var(...), ...)
     /// To apply a tag by name, do Apply(Tag(...), ...)
@@ -518,6 +521,13 @@ pub enum Expr<'a> {
         /// is Option<Expr> because each branch may be preceded by
         /// a guard (".. if ..").
         &'a [&'a WhenBranch<'a>],
+    ),
+
+    Return(
+        /// The return value
+        &'a Loc<Expr<'a>>,
+        /// The unused code after the return statement
+        Option<&'a Loc<Expr<'a>>>,
     ),
 
     // Blank Space (e.g. comments, spaces, newlines) before or after an expression.
@@ -665,9 +675,13 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::Dbg => false,
         Expr::DbgStmt(a, b) => is_expr_suffixed(&a.value) || is_expr_suffixed(&b.value),
         Expr::LowLevelDbg(_, a, b) => is_expr_suffixed(&a.value) || is_expr_suffixed(&b.value),
+        Expr::Try => false,
         Expr::UnaryOp(a, _) => is_expr_suffixed(&a.value),
         Expr::When(cond, branches) => {
             is_expr_suffixed(&cond.value) || branches.iter().any(|x| is_when_branch_suffixed(x))
+        }
+        Expr::Return(a, b) => {
+            is_expr_suffixed(&a.value) || b.is_some_and(|loc_b| is_expr_suffixed(&loc_b.value))
         }
         Expr::SpaceBefore(a, _) => is_expr_suffixed(a),
         Expr::SpaceAfter(a, _) => is_expr_suffixed(a),
@@ -938,6 +952,15 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                     expr_stack.push(&condition.value);
                     expr_stack.push(&cont.value);
                 }
+                Return(return_value, after_return) => {
+                    if let Some(after_return) = after_return {
+                        expr_stack.reserve(2);
+                        expr_stack.push(&return_value.value);
+                        expr_stack.push(&after_return.value);
+                    } else {
+                        expr_stack.push(&return_value.value);
+                    }
+                }
                 Apply(fun, args, _) => {
                     expr_stack.reserve(args.len() + 1);
                     expr_stack.push(&fun.value);
@@ -1008,6 +1031,7 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                 | Underscore(_)
                 | Crash
                 | Dbg
+                | Try
                 | Tag(_)
                 | OpaqueRef(_)
                 | MalformedIdent(_, _)
@@ -2464,6 +2488,8 @@ impl<'a> Malformed for Expr<'a> {
             Dbg => false,
             DbgStmt(condition, continuation) => condition.is_malformed() || continuation.is_malformed(),
             LowLevelDbg(_, condition, continuation) => condition.is_malformed() || continuation.is_malformed(),
+            Try => false,
+            Return(return_value, after_return) => return_value.is_malformed() || after_return.is_some_and(|ar| ar.is_malformed()),
             Apply(func, args, _) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
             BinOps(firsts, last) => firsts.iter().any(|(expr, _)| expr.is_malformed()) || last.is_malformed(),
             UnaryOp(expr, _) => expr.is_malformed(),

@@ -613,14 +613,6 @@ trait DerivableVisitor {
     }
 
     #[inline(always)]
-    fn visit_empty_tuple(var: Variable) -> Result<(), NotDerivable> {
-        Err(NotDerivable {
-            var,
-            context: NotDerivableContext::NoContext,
-        })
-    }
-
-    #[inline(always)]
     fn visit_empty_tag_union(var: Variable) -> Result<(), NotDerivable> {
         Err(NotDerivable {
             var,
@@ -786,7 +778,6 @@ trait DerivableVisitor {
                         }
                     }
                     EmptyRecord => Self::visit_empty_record(var)?,
-                    EmptyTuple => Self::visit_empty_tuple(var)?,
                     EmptyTagUnion => Self::visit_empty_tag_union(var)?,
                 },
                 Alias(
