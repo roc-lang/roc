@@ -939,6 +939,21 @@ mod cli_run {
 
     #[test]
     #[cfg_attr(windows, ignore)]
+    fn module_params_issue_7116() {
+        test_roc_app(
+            "crates/cli/tests/module_params",
+            "issue_7116.roc",
+            &[],
+            &[],
+            &[],
+            "",
+            UseValgrind::No,
+            TestCliCommands::Run,
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
     fn module_params_multiline_pattern() {
         test_roc_app(
             "crates/cli/tests/module_params",
