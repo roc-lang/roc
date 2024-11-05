@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use crate::ast::{
     is_expr_suffixed, AccessShortcut, AssignedField, ClosureShortcut, Collection, CommentOrNewline,
     Defs, Expr, ExtractSpaces, Implements, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
@@ -2269,10 +2271,30 @@ pub fn parse_top_level_defs<'a>(
     Ok((MadeProgress, output, state))
 }
 
-// todo: @revisit now it is a fixed name which is "rarely used" (at least in the Roc compiler source),
-// it also helps to have nice identifier on re-format without additional processing.
-// but we may consider generating the unique `next_unique_suffixed_ident` from the `suffixed` desugaring.
-pub const CLOSURE_SHORTCUT_ARG: &str = "un"; //todo: @wip rename to "nu" as a more rare fruit
+thread_local! {
+    // we use a thread_local here so that tests consistently give the same pattern
+    static SUFFIXED_ANSWER_COUNTER: Cell<usize> = const { Cell::new(0) };
+}
+
+// Took this approach from the `next_unique_suffixed_ident`.
+fn next_unique_closure_shortcut_arg(arena: &'_ Bump) -> &str {
+    SUFFIXED_ANSWER_COUNTER.with(|counter| {
+        let count = counter.get();
+        counter.set(count + 1);
+        arena.alloc(format!("nu{}", count))
+    })
+}
+
+pub(crate) fn reset_unique_closure_shortcut_arg_generator() {
+    SUFFIXED_ANSWER_COUNTER.with(|counter| {
+        counter.set(0);
+    });
+}
+
+// todo: @ask is it convention too smart, get feedback from the real usage
+// For the space guided format of the closure shortcut, we use a nice short name for the argument,
+// it is no need to be unique and expected to be modified by the User
+pub const FMT_CLOSURE_SHORTCUT_ARG: &str = "x";
 
 /// If Ok it always returns MadeProgress
 fn rest_of_closure<'a>(
@@ -2288,18 +2310,23 @@ fn rest_of_closure<'a>(
 
     let after_slash = state.pos();
 
+    // @feat entry point for parsing the closure-shortcut
     // Expand the shortcut into the full code guided by presence of space after slash (only if actual shortcut follows)
-    // e.g. this one with th space after slash `\ .foo.bar` will expand to `\un -> un.foo.bar`, but this one `\.foo.bar` will stay as-is in the formatted output
+    // e.g. this one with th space after slash `\ .foo.bar` will expand to `\x -> x.foo.bar`, but this one `\.foo.bar` will stay as-is in the formatted output
     let mut fmt_keep_shortcut = true;
     if state.bytes().first() == Some(&b' ') {
         state.advance_mut(1);
         fmt_keep_shortcut = false;
     };
 
-    // note: @feat closure-shortcut
     // Parses `\.foo.bar + 1` into `\p -> p.foo.bar + 1`
     if state.bytes().first() == Some(&b'.') {
-        let ident = CLOSURE_SHORTCUT_ARG;
+        let ident = if fmt_keep_shortcut {
+            next_unique_closure_shortcut_arg(arena)
+        } else {
+            FMT_CLOSURE_SHORTCUT_ARG
+        };
+
         let param = Loc::at(Region::point(after_slash), Pattern::Identifier { ident });
         let mut params = Vec::with_capacity_in(1, arena);
         params.push(param);
@@ -2373,11 +2400,14 @@ fn rest_of_closure<'a>(
     // Either pipe shortcut `\|> f` into `\p -> p |> f`, or the rest of BinOp's, e.g. `\+ 1` into `\p -> p + 1`,
     // Excluding the operators for which the shortcut does not make sense, assignment '=', Type Alias ':', ':=', etc.
     if let Ok((_, binop, state)) = parse_bin_op(NoProgress, state.clone()) {
-        let after_binop = state.pos();
-
-        let param = Pattern::Identifier {
-            ident: CLOSURE_SHORTCUT_ARG,
+        let ident = if fmt_keep_shortcut {
+            next_unique_closure_shortcut_arg(arena)
+        } else {
+            FMT_CLOSURE_SHORTCUT_ARG
         };
+
+        let after_binop = state.pos();
+        let param = Pattern::Identifier { ident };
         let param = Loc::pos(after_slash, after_binop, param);
         let mut params = Vec::with_capacity_in(1, arena);
         params.push(param);
@@ -2385,7 +2415,7 @@ fn rest_of_closure<'a>(
         let inc_indent = slash_indent + 1;
 
         // a single closure parameter is the left value of the binary operator
-        let left_var = Expr::new_var("", CLOSURE_SHORTCUT_ARG);
+        let left_var = Expr::new_var("", ident);
         let left_var = Loc::pos(after_slash, after_binop, left_var);
 
         // special handling of the `~` when operator

@@ -4837,7 +4837,7 @@ mod test_fmt {
     fn simple_closure_field_access() {
         expr_formats_same(indoc!(
             r"
-            \un -> un.foo
+            \nu -> nu.foo
             "
         ));
     }
@@ -4846,7 +4846,7 @@ mod test_fmt {
     fn simple_closure_field_access_chain() {
         expr_formats_same(indoc!(
             r"
-            \un -> un.foo.bar.buz
+            \nu -> nu.foo.bar.buz
             "
         ));
     }
@@ -4897,7 +4897,7 @@ mod test_fmt {
             ),
             indoc!(
                 r"
-                \un -> un.foo
+                \x -> x.foo
                 "
             ),
         );
@@ -4922,7 +4922,7 @@ mod test_fmt {
             ),
             indoc!(
                 r"
-            \un -> un
+            \x -> x
             "
             ),
         );
@@ -5123,11 +5123,13 @@ mod test_fmt {
                     example
                 "
             ),
+            // it is fine to have the same names for the nested lambda arguments,
+            // because they are supposed to be changed by the user one at a time.
             indoc!(
                 r"
-                example = \un -> un
+                example = \x -> x
                     |> withModel
-                        (\un -> un ~
+                        (\x -> x ~
                             Err _ ->
                                 Err {}
 

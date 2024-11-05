@@ -2,6 +2,7 @@ use crate::ast;
 use crate::ast::Defs;
 use crate::ast::Header;
 use crate::ast::SpacesBefore;
+use crate::expr::reset_unique_closure_shortcut_arg_generator;
 use crate::header::parse_module_defs;
 use crate::parser::SourceError;
 use crate::parser::SyntaxError;
@@ -13,6 +14,9 @@ pub fn parse_expr_with<'a>(
     arena: &'a Bump,
     input: &'a str,
 ) -> Result<ast::Expr<'a>, SyntaxError<'a>> {
+    // each parsing (in a thread) should produce the same parameter names, se may compare parsed and re-parsed output
+    reset_unique_closure_shortcut_arg_generator();
+
     let state = State::new(input.as_bytes());
     match crate::expr::test_parse_expr(arena, state) {
         Ok(loc_expr) => Ok(loc_expr.value),

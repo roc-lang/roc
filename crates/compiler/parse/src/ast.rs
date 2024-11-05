@@ -514,7 +514,7 @@ pub enum Expr<'a> {
     // Reference to an opaque type, e.g. @Opaq
     OpaqueRef(&'a str),
 
-    // Closure with parameter patterns, body, and flag saying if it is a @feat shortcut-closure
+    // Closure with parameter patterns, body, and a variant of a closure-shortcut
     Closure(
         &'a [Loc<Pattern<'a>>],
         &'a Loc<Expr<'a>>,

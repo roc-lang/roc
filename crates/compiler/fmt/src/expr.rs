@@ -822,11 +822,9 @@ fn fmt_binops<'a>(
                 buf.spaces(1);
             }
             skip = false;
-        } else {
-            if is_first {
-                adjusted_indent += INDENT;
-                is_first = false;
-            }
+        } else if is_first {
+            adjusted_indent += INDENT;
+            is_first = false;
         }
         push_op(buf, loc_binop.value);
         buf.spaces(1);

@@ -433,7 +433,7 @@ fn parse_ident_pattern<'a>(
         }
         Ident::Plain(ident) => {
             let ident = Loc::at(ident_loc, Pattern::Identifier { ident });
-            return Ok((MadeProgress, ident, state));
+            Ok((MadeProgress, ident, state))
         }
         Ident::Access { module_name, parts } => {
             // Plain identifiers (e.g. `foo`) are allowed in patterns, but

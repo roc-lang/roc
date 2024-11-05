@@ -15,7 +15,6 @@ thread_local! {
     static SUFFIXED_ANSWER_COUNTER: Cell<usize> = const { Cell::new(0) };
 }
 
-// todo: @wip can we utilize it for the CLOSURE_SHORTCUT_ARG?
 /// Generates a unique identifier, useful for intermediate items during desugaring.
 fn next_unique_suffixed_ident() -> String {
     SUFFIXED_ANSWER_COUNTER.with(|counter| {
