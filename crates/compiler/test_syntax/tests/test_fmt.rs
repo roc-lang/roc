@@ -5090,7 +5090,7 @@ mod test_fmt {
         );
     }
 
-    // #[test] // todo: @wip @fixme double indent for the withModel lambda argument
+    #[test] // todo: @wip @fixme double indent for the withModel lambda argument
     fn _pipeline_apply_lambda_multiline_with_closure_shortcuts() {
         expr_formats_same(indoc!(
             r"
@@ -5107,8 +5107,8 @@ mod test_fmt {
         ));
     }
 
-    // #[test] // todo: @wip @fixme missing left operand when expanding `\ ~`
-    fn _pipeline_apply_lambda_multiline_with_closure_shortcuts_expansion() {
+    #[test]
+    fn pipeline_apply_lambda_multiline_with_closure_shortcuts_expansion() {
         expr_formats_to(
             indoc!(
                 r"
@@ -5127,12 +5127,12 @@ mod test_fmt {
                 r"
                 example = \un -> un
                     |> withModel
-                        (\un -> ~
-                                Err _ ->
-                                    Err {}
+                        (\un -> un ~
+                            Err _ ->
+                                Err {}
 
-                                Ok val ->
-                                    Ok {}
+                            Ok val ->
+                                Ok {}
                         )
                 example
             "
@@ -6660,7 +6660,7 @@ mod test_fmt {
     }
 
     // #[test]
-    // todo: @wip @fixme the corresponding test_snapshots was failing, `return_as_single_line_expr` comparing to main branch, in main `Expr(Start(@0), @0)` and here `Expr(Start(@4), @0)`
+    // todo: @wip @ask the corresponding test_snapshots was failing, `return_as_single_line_expr` comparing to main branch, in main `Expr(Start(@0), @0)` and here `Expr(Start(@4), @0)`
     fn _bad_return_assignment() {
         expr_formats_same(indoc!(
             r"

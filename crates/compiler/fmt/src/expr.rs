@@ -488,7 +488,7 @@ impl<'a> Formattable for Expr<'a> {
                 );
             }
             When(loc_condition, branches, shortcut) => {
-                fmt_when(buf, loc_condition, branches, shortcut, indent)
+                fmt_when(buf, loc_condition, branches, *shortcut, indent)
             }
             Tuple(items) => fmt_collection(buf, indent, Braces::Round, *items, Newlines::No),
             List(items) => fmt_collection(buf, indent, Braces::Square, *items, Newlines::No),
@@ -868,7 +868,7 @@ fn fmt_when<'a>(
     buf: &mut Buf,
     loc_condition: &'a Loc<Expr<'a>>,
     branches: &[&'a WhenBranch<'a>],
-    shortcut: &Option<WhenShortcut>,
+    shortcut: Option<WhenShortcut>,
     indent: u16,
 ) {
     let is_multiline_condition = loc_condition.is_multiline();
@@ -878,7 +878,7 @@ fn fmt_when<'a>(
         buf.push_str("when");
     }
 
-    if *shortcut != Some(WhenShortcut::Closure) {
+    if shortcut != Some(WhenShortcut::Closure) {
         if is_multiline_condition {
             let condition_indent = indent + INDENT;
 
@@ -1302,33 +1302,33 @@ fn fmt_closure<'a>(
     buf.indent(indent);
     buf.push('\\');
 
-    let mut skip_args = false;
+    let mut skip_arg = false;
     if closure_shortcut.is_some() {
         match loc_ret.value {
             RecordAccess(..) | TupleAccess(..) | Var { .. } => {
                 // skip formatting the arguments, and go to the body
                 // the shortcut will be handled in respective expression in the body
-                skip_args = true;
+                skip_arg = true;
             }
             BinOps(lefts, right) => {
                 fmt_binops(buf, lefts, right, indent, closure_shortcut);
                 return;
             }
-            When(cond, branches, _) => {
+            When(cond, branches, shortcut) => {
                 match cond.value {
                     RecordAccess(..) | TupleAccess(..) => {
-                        // BinOp means that we keep the condition and delegate shortcut handling to the accessors in condition
-                        fmt_when(buf, cond, branches, &Some(WhenShortcut::BinOp), indent);
+                        // pass WhenShortcut::BinOp here to keep the condition and delegate shortcut handling to the accessors in condition
+                        fmt_when(buf, cond, branches, Some(WhenShortcut::BinOp), indent);
                     }
                     BinOps(lefts, right) => {
                         fmt_binops(buf, lefts, right, indent, closure_shortcut);
                         // space before the ` ~` operator
                         buf.spaces(1);
                         // set the closure shortcut to skip formatting the condition altogether, because it is done above
-                        fmt_when(buf, cond, branches, &Some(WhenShortcut::Closure), indent);
+                        fmt_when(buf, cond, branches, Some(WhenShortcut::Closure), indent);
                     }
                     _ => {
-                        fmt_when(buf, cond, branches, &Some(WhenShortcut::Closure), indent);
+                        fmt_when(buf, cond, branches, shortcut, indent);
                     }
                 }
                 return;
@@ -1337,7 +1337,7 @@ fn fmt_closure<'a>(
         }
     }
 
-    if !skip_args {
+    if !skip_arg {
         let arguments_are_multiline = loc_patterns
             .iter()
             .any(|loc_pattern| loc_pattern.is_multiline());

@@ -2335,11 +2335,11 @@ fn rest_of_closure<'a>(
             }
         };
 
-        let mut shortcut = None;
+        let mut closure_shortcut = None;
         if fmt_keep_shortcut {
-            shortcut = Some(AccessShortcut::Closure);
+            closure_shortcut = Some(AccessShortcut::Closure);
         }
-        let mut ident = ident_to_expr(arena, ident, shortcut);
+        let mut ident = ident_to_expr(arena, ident, closure_shortcut);
         if !suffixes.is_empty() {
             ident = apply_expr_access_chain(arena, ident, suffixes);
         }
@@ -2390,7 +2390,12 @@ fn rest_of_closure<'a>(
 
         // special handling of the `~` when operator
         let (body, state, what) = if binop == BinOp::When {
-            let cond = Some((left_var, WhenShortcut::Closure));
+            let what = if fmt_keep_shortcut {
+                WhenShortcut::Closure
+            } else {
+                WhenShortcut::BinOp
+            };
+            let cond = Some((left_var, what));
             match when::rest_of_when_expr(cond, flags, arena, state, inc_indent) {
                 Ok((_, out, state)) => (out, state, ClosureShortcut::WhenBinOp),
                 Err((_, fail)) => {
@@ -2437,8 +2442,8 @@ fn rest_of_closure<'a>(
 
         let body = Loc::pos(after_binop, state.pos(), body);
 
-        let shortcut_what = if fmt_keep_shortcut { Some(what) } else { None };
-        let closure = Expr::Closure(params.into_bump_slice(), arena.alloc(body), shortcut_what);
+        let shortcut = if fmt_keep_shortcut { Some(what) } else { None };
+        let closure = Expr::Closure(params.into_bump_slice(), arena.alloc(body), shortcut);
         return Ok((MadeProgress, closure, state));
     }
 
