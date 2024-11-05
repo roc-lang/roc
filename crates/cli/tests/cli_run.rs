@@ -943,6 +943,21 @@ mod cli_run {
 
     #[test]
     #[cfg_attr(windows, ignore)]
+    fn import_in_expect() {
+        test_roc_expect(
+            "crates/cli/tests/module_params",
+            "ImportInExpect.roc",
+            &[],
+            indoc!(
+                r#"
+                0 failed and 3 passed in <ignored for test> ms.
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
     fn transitive_expects() {
         test_roc_expect(
             "crates/cli/tests/expects_transitive",
