@@ -426,7 +426,8 @@ pub fn annotation_edit(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs::File;
+    use indoc::indoc;
+    use std::fs::{read_to_string, File};
     use std::io::Write;
     use tempfile::{tempdir, TempDir};
 
@@ -526,5 +527,76 @@ main =
         assert!(!error_message.contains("formatted.roc"));
 
         cleanup_temp_dir(dir);
+    }
+
+    const HEADER: &str = indoc! {r#"
+        interface Test
+            exposes []
+            imports []
+
+    "#};
+
+    fn annotate_string(before: String) -> String {
+        let dir = tempdir().unwrap();
+        let file_path = setup_test_file(dir.path(), "before.roc", &before);
+
+        let arena = Bump::new();
+        let result = annotate_file(&arena, file_path.clone());
+        result.unwrap();
+
+        let annotated = read_to_string(file_path).unwrap();
+
+        cleanup_temp_dir(dir);
+        annotated
+    }
+
+    #[test]
+    fn test_annotate_simple() {
+        let before = HEADER.to_string()
+            + indoc! {r#"
+            main =
+                Task.ok {}"#};
+
+        let after = HEADER.to_string()
+            + indoc! {r#"
+            main : Task {} *
+            main =
+                Task.ok {}
+            "#};
+
+        let annotated = annotate_string(before);
+
+        assert_eq!(annotated, after);
+    }
+
+    #[test]
+    fn test_annotate_empty() {
+        let before = HEADER.to_string();
+        let after = HEADER.to_string() + "\n";
+        let annotated = annotate_string(before);
+
+        assert_eq!(annotated, after);
+    }
+
+    #[test]
+    fn test_annotate_destructure() {
+        let before = HEADER.to_string()
+            + indoc! {r#"
+            {a, b} = {a: Task.ok {}, b: (1, 2)}
+
+            main = a"#};
+
+        let after = HEADER.to_string()
+            + indoc! {r#"
+            {a, b} : { a : Task {} *, b : ( Num *, Num * )* }
+            {a, b} = {a: Task.ok {}, b: (1, 2)}
+
+            main : Task {} *
+            main = a
+            "#};
+
+        let annotated = annotate_string(before);
+
+        assert_eq!(annotated, after);
     }
 }
