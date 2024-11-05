@@ -924,6 +924,21 @@ mod cli_run {
 
     #[test]
     #[cfg_attr(windows, ignore)]
+    fn module_params_different_types() {
+        test_roc_app(
+            "crates/cli/tests/module_params",
+            "different_types.roc",
+            &["42"],
+            &[],
+            &[],
+            "Write something:\n42\n",
+            UseValgrind::No,
+            TestCliCommands::Run,
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
     fn module_params_multiline_pattern() {
         test_roc_app(
             "crates/cli/tests/module_params",

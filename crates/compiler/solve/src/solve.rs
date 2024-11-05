@@ -1403,7 +1403,7 @@ fn solve(
             }
             ImportParams(opt_provided, module_id, region) => {
                 match (module_params_vars.get(module_id), opt_provided) {
-                    (Some(expected), Some(provided)) => {
+                    (Some(expected_og), Some(provided)) => {
                         let actual = either_type_index_to_var(
                             env,
                             rank,
@@ -1415,10 +1415,18 @@ fn solve(
                             *provided,
                         );
 
+                        let expected = {
+                            // Similar to Lookup, we need to unify on a copy of the module params variable
+                            // Otherwise, this import might make it less general than it really is
+                            let mut solve_env = env.as_solve_env();
+                            let solve_env = &mut solve_env;
+                            deep_copy_var_in(solve_env, rank, *expected_og, solve_env.arena)
+                        };
+
                         match unify(
                             &mut env.uenv(),
                             actual,
-                            *expected,
+                            expected,
                             UnificationMode::EQ,
                             Polarity::OF_VALUE,
                         ) {
