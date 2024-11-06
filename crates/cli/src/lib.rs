@@ -53,6 +53,7 @@ pub const CMD_CHECK: &str = "check";
 pub const CMD_VERSION: &str = "version";
 pub const CMD_FORMAT: &str = "format";
 pub const CMD_TEST: &str = "test";
+pub const CMD_INIT: &str = "init";
 pub const CMD_GLUE: &str = "glue";
 pub const CMD_GEN_STUB_LIB: &str = "gen-stub-lib";
 pub const CMD_PREPROCESS_HOST: &str = "preprocess-host";
@@ -84,6 +85,8 @@ pub const ROC_FILE: &str = "ROC_FILE";
 pub const ROC_DIR: &str = "ROC_DIR";
 pub const GLUE_DIR: &str = "GLUE_DIR";
 pub const GLUE_SPEC: &str = "GLUE_SPEC";
+pub const ROC_PLATFORM: &str = "ROC_PLATFORM";
+pub const INIT_DIR: &str = "INIT_DIR";
 pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
 pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
 pub const FLAG_PP_HOST: &str = "host";
@@ -380,6 +383,21 @@ pub fn build_app() -> Command {
                     .required(false)
                     .default_value(DEFAULT_ROC_FILENAME),
                 )
+        )
+        .subcommand(Command::new(CMD_INIT)
+            .about("Generate a project based on a platform init.roc file")
+            .arg(
+                Arg::new(ROC_PLATFORM)
+                    .help("The target platform that provides the init.roc file.")
+                    .value_parser(value_parser!(PathBuf))
+                    .required(true)
+            )
+            .arg(
+                Arg::new(INIT_DIR)
+                    .help("The directory for the generated init code.\nNote: The implementation can write to any file in this directory.")
+                    .value_parser(value_parser!(PathBuf))
+                    .required(true)
+            )
         )
         .subcommand(Command::new(CMD_GLUE)
             .about("Generate glue code between a platform's Roc API and its host language")
