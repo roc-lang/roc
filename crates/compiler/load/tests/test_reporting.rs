@@ -5821,6 +5821,36 @@ mod test_reporting {
     "#
     );
 
+    test_report!(
+        unhandled_parse_error,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            42
+            "#
+        ),
+        @r#"
+    ── UNHANDLED PARSE ERROR in tmp/unhandled_parse_error/Test.roc ─────────────────
+
+    I got stuck while parsing this:
+
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  42
+        ^
+
+    Here's the internal parse problem:
+
+        UnexpectedTopLevelExpr(@44)
+
+    Unfortunately, I'm not able to provide a more insightful error message
+    for this syntax problem yet. This is considered a bug in the compiler.
+
+    Note: If you'd like to contribute to Roc, this would be a good first issue!
+    "#
+    );
+
     // https://github.com/roc-lang/roc/issues/1714
     test_report!(
     interpolate_concat_is_transparent_1714,
