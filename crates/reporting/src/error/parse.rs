@@ -4065,10 +4065,11 @@ fn to_exposes_report<'a>(
 
         EExposes::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
 
-        EExposes::Open(_) |
-        EExposes::IndentExposes(_) |
-        EExposes::IndentListStart(_) |
-        EExposes::ListStart(_) => todo!("unhandled `exposes` parsing error {:?}", parse_problem),
+        EExposes::Open(pos) |
+        EExposes::IndentExposes(pos) |
+        EExposes::IndentListStart(pos) |
+        EExposes::ListStart(pos) =>
+            to_unhandled_parse_error_report(alloc, lines, filename, format!("{:?}", parse_problem), pos, start)
     }
 }
 
