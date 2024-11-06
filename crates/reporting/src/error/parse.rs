@@ -10,10 +10,19 @@ pub fn parse_problem<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     filename: PathBuf,
-    _starting_line: u32,
+    starting_line: u32,
     parse_problem: FileError<SyntaxError<'a>>,
 ) -> Report<'a> {
-    to_syntax_report(alloc, lines, filename, &parse_problem.problem.problem)
+    to_syntax_report(
+        alloc,
+        lines,
+        filename,
+        &parse_problem.problem.problem,
+        lines.convert_line_column(LineColumn {
+            line: starting_line,
+            column: 0,
+        }),
+    )
 }
 
 fn note_for_record_type_indent<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
@@ -57,6 +66,7 @@ fn to_syntax_report<'a>(
     lines: &LineInfo,
     filename: PathBuf,
     parse_problem: &roc_parse::parser::SyntaxError<'a>,
+    start: Position,
 ) -> Report<'a> {
     use SyntaxError::*;
 
@@ -148,8 +158,18 @@ fn to_syntax_report<'a>(
             Position::default(),
         ),
         Header(header) => to_header_report(alloc, lines, filename, header, Position::default()),
-        InvalidPattern | BadUtf8 | ReservedKeyword(_) | NotYetImplemented(_) | Todo | Space(_) => {
-            todo!("unhandled parse error: {:?}", parse_problem)
+
+        // If you're adding or changing syntax, please handle the case with a
+        // good error message above instead of adding more unhandled cases below.
+        InvalidPattern | BadUtf8 | Todo | ReservedKeyword(_) | NotYetImplemented(_) | Space(_) => {
+            to_unhandled_parse_error_report(
+                alloc,
+                lines,
+                filename,
+                format!("{:?}", parse_problem),
+                start,
+                start,
+            )
         }
     }
 }
