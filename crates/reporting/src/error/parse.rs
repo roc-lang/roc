@@ -1,4 +1,4 @@
-use roc_parse::parser::{ENumber, ESingleQuote, FileError, PList, SyntaxError};
+use roc_parse::parser::{ENumber, EReturn, ESingleQuote, FileError, PList, SyntaxError};
 use roc_problem::Severity;
 use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Position, Region};
 use std::path::PathBuf;
@@ -172,6 +172,7 @@ enum Node {
     StringFormat,
     Dbg,
     Expect,
+    Return,
 }
 
 fn to_expr_report<'a>(
@@ -413,6 +414,7 @@ fn to_expr_report<'a>(
                     Node::ListElement => (pos, alloc.text("a list")),
                     Node::Dbg => (pos, alloc.text("a dbg statement")),
                     Node::Expect => (pos, alloc.text("an expect statement")),
+                    Node::Return => (pos, alloc.text("a return statement")),
                     Node::RecordConditionalDefault => (pos, alloc.text("record field default")),
                     Node::StringFormat => (pos, alloc.text("a string format")),
                     Node::InsideParens => (pos, alloc.text("some parentheses")),
@@ -677,6 +679,27 @@ fn to_expr_report<'a>(
                 title: "STATEMENT AFTER EXPRESSION".to_string(),
                 severity,
             }
+        }
+        EExpr::Return(EReturn::Return(pos) | EReturn::IndentReturnValue(pos), start) => {
+            to_expr_report(
+                alloc,
+                lines,
+                filename,
+                Context::InNode(Node::Return, *start),
+                &EExpr::IndentStart(*pos),
+                *pos,
+            )
+        }
+        EExpr::Return(EReturn::ReturnValue(parse_problem, pos), start) => to_expr_report(
+            alloc,
+            lines,
+            filename,
+            Context::InNode(Node::Return, *start),
+            parse_problem,
+            *pos,
+        ),
+        EExpr::Return(EReturn::Space(parse_problem, pos), _) => {
+            to_space_report(alloc, lines, filename, parse_problem, *pos)
         }
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }

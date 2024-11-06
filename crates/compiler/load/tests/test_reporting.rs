@@ -3804,7 +3804,7 @@ mod test_reporting {
     10│      y = { Test.example & age: 3 }
                    ^^^^^^^^^^^^
 
-    Only variables can be updated with record update syntax. 
+    Only variables can be updated with record update syntax.
     "
     );
 
@@ -4345,7 +4345,7 @@ mod test_reporting {
     like `return 4` in other programming languages. To me, it seems like
     you did `return 4` followed by more code in the lines after, that code
     would never be executed!
-    
+
     Tip: If you are working with `Task`, this error can happen if you
     forgot a `!` somewhere.
     "###
@@ -5412,7 +5412,7 @@ mod test_reporting {
              2 -> 2
             "
         ),
-        @r###"
+        @r#"
     ── UNKNOWN OPERATOR in tmp/when_outdented_branch/Test.roc ──────────────────────
 
     This looks like an operator, but it's not one I recognize!
@@ -5430,7 +5430,7 @@ mod test_reporting {
     In Roc, functions are always written as a lambda, like 
 
         increment = \n -> n + 1
-    "###
+    "#
     );
 
     test_report!(
@@ -5596,6 +5596,60 @@ mod test_reporting {
     Note: When I get stuck like this, it usually means that there is a
     missing parenthesis or bracket somewhere earlier. It could also be a
     stray keyword or operator.
+    "
+    );
+
+    test_report!(
+        missing_return_expression,
+        indoc!(
+            r"
+            return
+            "
+        ),
+        @r#"
+    ── MISSING EXPRESSION in tmp/missing_return_expression/Test.roc ────────────────
+
+    I am partway through parsing a return statement, but I got stuck here:
+
+    4│      return
+                  ^
+
+    I was expecting to see an expression like 42 or "hello".
+    "#
+    );
+
+    test_report!(
+        return_as_def_name,
+        indoc!(
+            r"
+            return = \a -> a
+            return
+            "
+        ),
+        @r#"
+    ── MISSING EXPRESSION in tmp/return_as_def_name/Test.roc ───────────────────────
+
+    I am partway through parsing a return statement, but I got stuck here:
+
+    4│      return = \a -> a
+                   ^
+
+    I was expecting to see an expression like 42 or "hello".
+    "#
+    );
+
+    test_report!(
+        return_space_problem,
+        "return \t",
+        @r"
+    ── TAB CHARACTER in tmp/return_space_problem/Test.roc ──────────────────────────
+
+    I encountered a tab character:
+
+    4│      return 	
+                   ^
+
+    Tab characters are not allowed in Roc code. Please use spaces instead!
     "
     );
 
@@ -14436,12 +14490,12 @@ All branches in an `if` must have the same type!
         ),
         @r###"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
-    
+
     This record doesn’t have a `abcde` field:
-    
+
     4│      {}.abcde
             ^^^^^^^^
-    
+
     In fact, it’s a record with no fields at all!
     "###
     );
@@ -14455,21 +14509,21 @@ All branches in an `if` must have the same type!
         ),
         @r###"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
-    
+
     This expression is used in an unexpected way:
-    
+
     4│      ("", "").abcde
             ^^^^^^^^^^^^^^
-    
+
     It is a tuple of type:
-    
+
         (
             Str,
             Str,
         )a
-    
+
     But you are trying to use it as:
-    
+
         { abcde : * }b
     "###
     );
@@ -14485,16 +14539,16 @@ All branches in an `if` must have the same type!
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression is used in an unexpected way:
-    
+
     4│      {}.0
             ^^^^
-    
+
     It is a record of type:
-    
+
         {}
-    
+
     But you are trying to use it as:
-    
+
         (*)b
     "###
     );
@@ -14515,12 +14569,12 @@ All branches in an `if` must have the same type!
         ),
         @r###"
         ── RETURN OUTSIDE OF FUNCTION in /code/proj/Main.roc ───────────────────────────
-        
+
         This `return` statement doesn't belong to a function:
-        
+
         7│              return x
                         ^^^^^^^^
-        
+
         I wouldn't know where to return to if I used it!
         "###
     );
@@ -14543,14 +14597,14 @@ All branches in an `if` must have the same type!
         ),
         @r###"
         ── UNREACHABLE CODE in /code/proj/Main.roc ─────────────────────────────────────
-        
+
         This code won't run because it follows a `return` statement:
-        
+
         6│>              return x
         7│>
         8│>              log! "someData"
         9│>              useX x 123
-        
+
         Hint: you can move the `return` statement below this block to make the
         code that follows it run.
         "###
@@ -14570,12 +14624,12 @@ All branches in an `if` must have the same type!
         ),
         @r###"
         ── UNNECESSARY RETURN in /code/proj/Main.roc ───────────────────────────────────
-        
+
         This `return` keyword is redundant:
-        
+
         7│          return y
                     ^^^^^^^^
-        
+
         The last expression in a function is treated like a `return` statement.
         You can safely remove `return` here.
         "###
@@ -14596,21 +14650,21 @@ All branches in an `if` must have the same type!
         ),
         @r###"
         ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
-        
+
         This `return` statement doesn't match the return type of its enclosing
         function:
-        
+
         5│           if x == 5 then
         6│>              return "abc"
         7│           else
         8│               x
-        
+
         This returns a value of type:
-        
+
             Str
-        
+
         But I expected the function to have return type:
-        
+
             Num *
         "###
     );
