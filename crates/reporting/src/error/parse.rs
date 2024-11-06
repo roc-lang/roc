@@ -723,16 +723,21 @@ fn to_expr_report<'a>(
         | EExpr::Underscore(pos)
         | EExpr::Crash(pos)
         | EExpr::Try(pos)
-        | EExpr::UnexpectedTopLevelExpr(pos) => {
-            to_unhandled_parse_error_report(alloc, lines, filename, parse_problem, *pos, start)
-        }
+        | EExpr::UnexpectedTopLevelExpr(pos) => to_unhandled_parse_error_report(
+            alloc,
+            lines,
+            filename,
+            format!("{:?}", parse_problem),
+            *pos,
+            start,
+        ),
         EExpr::RecordUpdateOldBuilderField(region)
         | EExpr::RecordUpdateIgnoredField(region)
         | EExpr::RecordBuilderOldBuilderField(region) => to_unhandled_parse_error_report(
             alloc,
             lines,
             filename,
-            parse_problem,
+            format!("{:?}", parse_problem),
             region.start(),
             start,
         ),
@@ -743,7 +748,7 @@ fn to_unhandled_parse_error_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     filename: PathBuf,
-    parse_problem: &roc_parse::parser::EExpr<'a>,
+    parse_problem_str: String,
     pos: Position,
     start: Position,
 ) -> Report<'a> {
@@ -755,7 +760,7 @@ fn to_unhandled_parse_error_report<'a>(
         alloc.reflow("I got stuck while parsing this:"),
         alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
         alloc.reflow("Here's the internal parse problem:"),
-        alloc.text(format!("{:?}", parse_problem)).indent(4),
+        alloc.string(parse_problem_str).indent(4),
         alloc.reflow("Unfortunately, I'm not able to provide a more insightful error message for this syntax problem yet. This is considered a bug in the compiler."),
         alloc.note("If you'd like to contribute to Roc, this would be a good first issue!")
     ]);
@@ -2251,17 +2256,24 @@ fn to_pattern_report<'a>(
         &EPattern::NumLiteral(ENumber::End, pos) => {
             to_malformed_number_literal_report(alloc, lines, filename, pos)
         }
-        EPattern::AsKeyword(_)
-        | EPattern::AsIdentifier(_)
-        | EPattern::Underscore(_)
-        | EPattern::NotAPattern(_)
-        | EPattern::End(_)
-        | EPattern::Space(_, _)
-        | EPattern::IndentStart(_)
-        | EPattern::IndentEnd(_)
-        | EPattern::AsIndentStart(_)
-        | EPattern::AccessorFunction(_)
-        | EPattern::RecordUpdaterFunction(_) => todo!("unhandled parse error: {:?}", parse_problem),
+        EPattern::AsKeyword(pos)
+        | EPattern::AsIdentifier(pos)
+        | EPattern::Underscore(pos)
+        | EPattern::NotAPattern(pos)
+        | EPattern::End(pos)
+        | EPattern::Space(_, pos)
+        | EPattern::IndentStart(pos)
+        | EPattern::IndentEnd(pos)
+        | EPattern::AsIndentStart(pos)
+        | EPattern::AccessorFunction(pos)
+        | EPattern::RecordUpdaterFunction(pos) => to_unhandled_parse_error_report(
+            alloc,
+            lines,
+            filename,
+            format!("{:?}", parse_problem),
+            *pos,
+            start,
+        ),
     }
 }
 
