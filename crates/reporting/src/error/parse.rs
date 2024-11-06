@@ -703,30 +703,68 @@ fn to_expr_report<'a>(
         EExpr::Return(EReturn::Space(parse_problem, pos), _) => {
             to_space_report(alloc, lines, filename, parse_problem, *pos)
         }
-        EExpr::End(_)
-        | EExpr::Dot(_)
-        | EExpr::Access(_)
-        | EExpr::UnaryNot(_)
-        | EExpr::UnaryNegate(_)
-        | EExpr::Pattern(_, _)
-        | EExpr::IndentDefBody(_)
-        | EExpr::IndentEquals(_)
-        | EExpr::IndentAnnotation(_)
-        | EExpr::Equals(_)
-        | EExpr::DoubleColon(_)
-        | EExpr::MalformedPattern(_)
-        | EExpr::BackpassComma(_)
-        | EExpr::BackpassContinue(_)
-        | EExpr::DbgContinue(_)
-        | EExpr::Underscore(_)
-        | EExpr::Crash(_)
-        | EExpr::Try(_)
-        | EExpr::RecordUpdateOldBuilderField(_)
-        | EExpr::RecordUpdateIgnoredField(_)
-        | EExpr::RecordBuilderOldBuilderField(_)
-        | EExpr::UnexpectedTopLevelExpr(_) => {
-            todo!("unhandled parse error: {:?}", parse_problem)
+        // If you're adding or changing syntax, please handle the case with a good error message
+        // above instead of adding more unhandled cases below.
+        EExpr::End(pos)
+        | EExpr::Dot(pos)
+        | EExpr::Access(pos)
+        | EExpr::UnaryNot(pos)
+        | EExpr::UnaryNegate(pos)
+        | EExpr::Pattern(_, pos)
+        | EExpr::IndentDefBody(pos)
+        | EExpr::IndentEquals(pos)
+        | EExpr::IndentAnnotation(pos)
+        | EExpr::Equals(pos)
+        | EExpr::DoubleColon(pos)
+        | EExpr::MalformedPattern(pos)
+        | EExpr::BackpassComma(pos)
+        | EExpr::BackpassContinue(pos)
+        | EExpr::DbgContinue(pos)
+        | EExpr::Underscore(pos)
+        | EExpr::Crash(pos)
+        | EExpr::Try(pos)
+        | EExpr::UnexpectedTopLevelExpr(pos) => {
+            to_unhandled_parse_error_report(alloc, lines, filename, parse_problem, *pos, start)
         }
+        EExpr::RecordUpdateOldBuilderField(region)
+        | EExpr::RecordUpdateIgnoredField(region)
+        | EExpr::RecordBuilderOldBuilderField(region) => to_unhandled_parse_error_report(
+            alloc,
+            lines,
+            filename,
+            parse_problem,
+            region.start(),
+            start,
+        ),
+    }
+}
+
+fn to_unhandled_parse_error_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    lines: &LineInfo,
+    filename: PathBuf,
+    parse_problem: &roc_parse::parser::EExpr<'a>,
+    pos: Position,
+    start: Position,
+) -> Report<'a> {
+    let severity = Severity::Fatal;
+    let surroundings = Region::new(start, pos);
+    let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+    let doc = alloc.stack([
+        alloc.reflow("I got stuck while parsing this:"),
+        alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
+        alloc.reflow("Here's the internal parse problem:"),
+        alloc.text(format!("{:?}", parse_problem)).indent(4),
+        alloc.reflow("Unfortunately, I'm not able to provide a more insightful error message for this syntax problem yet. This is considered a bug in the compiler."),
+        alloc.note("If you'd like to contribute to Roc, this would be a good first issue!")
+    ]);
+
+    Report {
+        filename,
+        doc,
+        title: "UNHANDLED PARSE ERROR".to_string(),
+        severity,
     }
 }
 
