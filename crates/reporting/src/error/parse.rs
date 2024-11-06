@@ -4401,12 +4401,21 @@ fn to_packages_report<'a>(
 
         EPackages::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
 
-        EPackages::Open(_)
-        | EPackages::IndentPackages(_)
-        | EPackages::ListStart(_)
-        | EPackages::IndentListStart(_)
-        | EPackages::IndentListEnd(_)
-        | EPackages::PackageEntry(_, _) => todo!("unhandled parse error {:?}", parse_problem),
+        // If you're adding or changing syntax, please handle the case with a
+        // good error message above instead of adding more unhandled cases below.
+        EPackages::Open(pos)
+        | EPackages::IndentPackages(pos)
+        | EPackages::ListStart(pos)
+        | EPackages::IndentListStart(pos)
+        | EPackages::IndentListEnd(pos)
+        | EPackages::PackageEntry(_, pos) => to_unhandled_parse_error_report(
+            alloc,
+            lines,
+            filename,
+            format!("{:?}", parse_problem),
+            pos,
+            start,
+        ),
     }
 }
 
