@@ -4484,7 +4484,16 @@ fn to_space_report<'a>(
             }
         }
 
-        BadInputError::BadUtf8 => todo!("unhandled type parse error: {:?}", &parse_problem),
+        // If you're adding or changing syntax, please handle the case with a
+        // good error message above instead of adding more unhandled cases below.
+        BadInputError::BadUtf8 => to_unhandled_parse_error_report(
+            alloc,
+            lines,
+            filename,
+            format!("{:?}", parse_problem),
+            pos,
+            pos,
+        ),
     }
 }
 
