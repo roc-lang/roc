@@ -703,8 +703,8 @@ fn to_expr_report<'a>(
         EExpr::Return(EReturn::Space(parse_problem, pos), _) => {
             to_space_report(alloc, lines, filename, parse_problem, *pos)
         }
-        // If you're adding or changing syntax, please handle the case with a good error message
-        // above instead of adding more unhandled cases below.
+        // If you're adding or changing syntax, please handle the case with a
+        // good error message above instead of adding more unhandled cases below.
         EExpr::End(pos)
         | EExpr::Dot(pos)
         | EExpr::Access(pos)
@@ -2256,6 +2256,8 @@ fn to_pattern_report<'a>(
         &EPattern::NumLiteral(ENumber::End, pos) => {
             to_malformed_number_literal_report(alloc, lines, filename, pos)
         }
+        // If you're adding or changing syntax, please handle the case with a
+        // good error message above instead of adding more unhandled cases below.
         EPattern::AsKeyword(pos)
         | EPattern::AsIdentifier(pos)
         | EPattern::Underscore(pos)
@@ -2780,17 +2782,23 @@ fn to_type_report<'a>(
                 severity,
             }
         }
-
-        EType::Space(_, _)
-        | EType::UnderscoreSpacing(_)
-        | EType::TWildcard(_)
-        | EType::TInferred(_)
-        | EType::TEnd(_)
-        | EType::TWhereBar(_)
-        | EType::TImplementsClause(_)
-        | EType::TAbilityImpl(_, _) => {
-            todo!("unhandled type parse error: {:?}", &parse_problem)
-        }
+        // If you're adding or changing syntax, please handle the case with a
+        // good error message above instead of adding more unhandled cases below.
+        EType::Space(_, pos)
+        | EType::UnderscoreSpacing(pos)
+        | EType::TWildcard(pos)
+        | EType::TInferred(pos)
+        | EType::TEnd(pos)
+        | EType::TWhereBar(pos)
+        | EType::TImplementsClause(pos)
+        | EType::TAbilityImpl(_, pos) => to_unhandled_parse_error_report(
+            alloc,
+            lines,
+            filename,
+            format!("{:?}", parse_problem),
+            *pos,
+            start,
+        ),
     }
 }
 
