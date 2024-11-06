@@ -3949,6 +3949,8 @@ fn to_provides_report<'a>(
                 severity,
             }
         }
+        // If you're adding or changing syntax, please handle the case with a
+        // good error message above instead of adding more unhandled cases below.
         EProvides::Open(pos) |
         EProvides::To(pos) |
         EProvides::IndentPackage(pos) |
@@ -4065,6 +4067,8 @@ fn to_exposes_report<'a>(
 
         EExposes::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
 
+        // If you're adding or changing syntax, please handle the case with a
+        // good error message above instead of adding more unhandled cases below.
         EExposes::Open(pos) |
         EExposes::IndentExposes(pos) |
         EExposes::IndentListStart(pos) |
@@ -4177,7 +4181,8 @@ fn to_imports_report<'a>(
                 severity,
             }
         }
-
+        // If you're adding or changing syntax, please handle the case with a
+        // good error message above instead of adding more unhandled cases below.
         EImports::Open(pos)
         | EImports::IndentListStart(pos)
         | EImports::IndentListEnd(pos)
@@ -4322,10 +4327,18 @@ fn to_requires_report<'a>(
                 severity,
             }
         }
-
-        ERequires::IndentRequires(_)
-        | ERequires::IndentListStart(_)
-        | ERequires::TypedIdent(_, _) => todo!("unhandled parse error {:?}", parse_problem),
+        // If you're adding or changing syntax, please handle the case with a
+        // good error message above instead of adding more unhandled cases below.
+        ERequires::IndentRequires(pos)
+        | ERequires::IndentListStart(pos)
+        | ERequires::TypedIdent(_, pos) => to_unhandled_parse_error_report(
+            alloc,
+            lines,
+            filename,
+            format!("{:?}", parse_problem),
+            pos,
+            start,
+        ),
     }
 }
 
