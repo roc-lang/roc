@@ -2482,6 +2482,9 @@ fn from_can_let<'a>(
 
                 lower_rest!(variable, cont.value)
             }
+            ImportParams(_, _, None) => {
+                lower_rest!(variable, cont.value)
+            }
             Var(original, _) | AbilityMember(original, _, _)
                 if procs.get_partial_proc(original).is_none() =>
             {
