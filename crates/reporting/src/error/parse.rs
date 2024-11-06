@@ -3949,11 +3949,12 @@ fn to_provides_report<'a>(
                 severity,
             }
         }
-        EProvides::Open(_) |
-        EProvides::To(_) |
-        EProvides::IndentPackage(_) |
-        EProvides::ListStart(_) |
-        EProvides::Package(_, _) => todo!("unhandled parse error {:?}", parse_problem)
+        EProvides::Open(pos) |
+        EProvides::To(pos) |
+        EProvides::IndentPackage(pos) |
+        EProvides::ListStart(pos) |
+        EProvides::Package(_, pos) =>
+            to_unhandled_parse_error_report(alloc, lines, filename, format!("{:?}", parse_problem), pos, start),
     }
 }
 
