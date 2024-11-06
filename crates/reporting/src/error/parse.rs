@@ -4178,21 +4178,26 @@ fn to_imports_report<'a>(
             }
         }
 
-        EImports::Open(_)
-        | EImports::IndentListStart(_)
-        | EImports::IndentListEnd(_)
-        | EImports::ListStart(_)
-        | EImports::ExposingDot(_)
-        | EImports::ShorthandDot(_)
-        | EImports::Shorthand(_)
-        | EImports::IndentSetStart(_)
-        | EImports::SetStart(_)
-        | EImports::SetEnd(_)
-        | EImports::TypedIdent(_)
-        | EImports::AsKeyword(_)
-        | EImports::StrLiteral(_) => {
-            todo!("unhandled parse error {:?}", parse_problem)
-        }
+        EImports::Open(pos)
+        | EImports::IndentListStart(pos)
+        | EImports::IndentListEnd(pos)
+        | EImports::ListStart(pos)
+        | EImports::ExposingDot(pos)
+        | EImports::ShorthandDot(pos)
+        | EImports::Shorthand(pos)
+        | EImports::IndentSetStart(pos)
+        | EImports::SetStart(pos)
+        | EImports::SetEnd(pos)
+        | EImports::TypedIdent(pos)
+        | EImports::AsKeyword(pos)
+        | EImports::StrLiteral(pos) => to_unhandled_parse_error_report(
+            alloc,
+            lines,
+            filename,
+            format!("{:?}", parse_problem),
+            pos,
+            start,
+        ),
     }
 }
 
