@@ -148,7 +148,9 @@ fn to_syntax_report<'a>(
             Position::default(),
         ),
         Header(header) => to_header_report(alloc, lines, filename, header, Position::default()),
-        _ => todo!("unhandled parse error: {:?}", parse_problem),
+        InvalidPattern | BadUtf8 | ReservedKeyword(_) | NotYetImplemented(_) | Todo | Space(_) => {
+            todo!("unhandled parse error: {:?}", parse_problem)
+        }
     }
 }
 
@@ -701,7 +703,30 @@ fn to_expr_report<'a>(
         EExpr::Return(EReturn::Space(parse_problem, pos), _) => {
             to_space_report(alloc, lines, filename, parse_problem, *pos)
         }
-        _ => todo!("unhandled parse error: {:?}", parse_problem),
+        EExpr::End(_)
+        | EExpr::Dot(_)
+        | EExpr::Access(_)
+        | EExpr::UnaryNot(_)
+        | EExpr::UnaryNegate(_)
+        | EExpr::Pattern(_, _)
+        | EExpr::IndentDefBody(_)
+        | EExpr::IndentEquals(_)
+        | EExpr::IndentAnnotation(_)
+        | EExpr::Equals(_)
+        | EExpr::DoubleColon(_)
+        | EExpr::MalformedPattern(_)
+        | EExpr::BackpassComma(_)
+        | EExpr::BackpassContinue(_)
+        | EExpr::DbgContinue(_)
+        | EExpr::Underscore(_)
+        | EExpr::Crash(_)
+        | EExpr::Try(_)
+        | EExpr::RecordUpdateOldBuilderField(_)
+        | EExpr::RecordUpdateIgnoredField(_)
+        | EExpr::RecordBuilderOldBuilderField(_)
+        | EExpr::UnexpectedTopLevelExpr(_) => {
+            todo!("unhandled parse error: {:?}", parse_problem)
+        }
     }
 }
 
@@ -2188,7 +2213,17 @@ fn to_pattern_report<'a>(
         &EPattern::NumLiteral(ENumber::End, pos) => {
             to_malformed_number_literal_report(alloc, lines, filename, pos)
         }
-        _ => todo!("unhandled parse error: {:?}", parse_problem),
+        EPattern::AsKeyword(_)
+        | EPattern::AsIdentifier(_)
+        | EPattern::Underscore(_)
+        | EPattern::NotAPattern(_)
+        | EPattern::End(_)
+        | EPattern::Space(_, _)
+        | EPattern::IndentStart(_)
+        | EPattern::IndentEnd(_)
+        | EPattern::AsIndentStart(_)
+        | EPattern::AccessorFunction(_)
+        | EPattern::RecordUpdaterFunction(_) => todo!("unhandled parse error: {:?}", parse_problem),
     }
 }
 
@@ -2597,7 +2632,7 @@ fn to_type_report<'a>(
                         severity,
                     }
                 }
-                _ => todo!(),
+                Next::Other(_) | Next::Keyword(_) | Next::Close(_, _) | Next::Token(_) => todo!(),
             }
         }
 
@@ -2696,7 +2731,16 @@ fn to_type_report<'a>(
             }
         }
 
-        _ => todo!("unhandled type parse error: {:?}", &parse_problem),
+        EType::Space(_, _)
+        | EType::UnderscoreSpacing(_)
+        | EType::TWildcard(_)
+        | EType::TInferred(_)
+        | EType::TEnd(_)
+        | EType::TWhereBar(_)
+        | EType::TImplementsClause(_)
+        | EType::TAbilityImpl(_, _) => {
+            todo!("unhandled type parse error: {:?}", &parse_problem)
+        }
     }
 }
 
@@ -3847,8 +3891,11 @@ fn to_provides_report<'a>(
                 severity,
             }
         }
-
-        _ => todo!("unhandled parse error {:?}", parse_problem),
+        EProvides::Open(_) |
+        EProvides::To(_) |
+        EProvides::IndentPackage(_) |
+        EProvides::ListStart(_) |
+        EProvides::Package(_, _) => todo!("unhandled parse error {:?}", parse_problem)
     }
 }
 
@@ -3959,7 +4006,10 @@ fn to_exposes_report<'a>(
 
         EExposes::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
 
-        _ => todo!("unhandled `exposes` parsing error {:?}", parse_problem),
+        EExposes::Open(_) |
+        EExposes::IndentExposes(_) |
+        EExposes::IndentListStart(_) |
+        EExposes::ListStart(_) => todo!("unhandled `exposes` parsing error {:?}", parse_problem),
     }
 }
 
@@ -4068,7 +4118,21 @@ fn to_imports_report<'a>(
             }
         }
 
-        _ => todo!("unhandled parse error {:?}", parse_problem),
+        EImports::Open(_)
+        | EImports::IndentListStart(_)
+        | EImports::IndentListEnd(_)
+        | EImports::ListStart(_)
+        | EImports::ExposingDot(_)
+        | EImports::ShorthandDot(_)
+        | EImports::Shorthand(_)
+        | EImports::IndentSetStart(_)
+        | EImports::SetStart(_)
+        | EImports::SetEnd(_)
+        | EImports::TypedIdent(_)
+        | EImports::AsKeyword(_)
+        | EImports::StrLiteral(_) => {
+            todo!("unhandled parse error {:?}", parse_problem)
+        }
     }
 }
 
@@ -4194,7 +4258,9 @@ fn to_requires_report<'a>(
             }
         }
 
-        _ => todo!("unhandled parse error {:?}", parse_problem),
+        ERequires::IndentRequires(_)
+        | ERequires::IndentListStart(_)
+        | ERequires::TypedIdent(_, _) => todo!("unhandled parse error {:?}", parse_problem),
     }
 }
 
@@ -4257,7 +4323,12 @@ fn to_packages_report<'a>(
 
         EPackages::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
 
-        _ => todo!("unhandled parse error {:?}", parse_problem),
+        EPackages::Open(_)
+        | EPackages::IndentPackages(_)
+        | EPackages::ListStart(_)
+        | EPackages::IndentListStart(_)
+        | EPackages::IndentListEnd(_)
+        | EPackages::PackageEntry(_, _) => todo!("unhandled parse error {:?}", parse_problem),
     }
 }
 
@@ -4326,7 +4397,7 @@ fn to_space_report<'a>(
             }
         }
 
-        _ => todo!("unhandled type parse error: {:?}", &parse_problem),
+        BadInputError::BadUtf8 => todo!("unhandled type parse error: {:?}", &parse_problem),
     }
 }
 
