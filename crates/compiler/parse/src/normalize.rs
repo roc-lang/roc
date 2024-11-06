@@ -1373,8 +1373,6 @@ impl<'a> Normalize<'a> for ETypeInParens<'a> {
             ETypeInParens::Space(inner_err, _) => {
                 ETypeInParens::Space(*inner_err, Position::zero())
             }
-            ETypeInParens::IndentOpen(_) => ETypeInParens::IndentOpen(Position::zero()),
-            ETypeInParens::IndentEnd(_) => ETypeInParens::IndentEnd(Position::zero()),
         }
     }
 }

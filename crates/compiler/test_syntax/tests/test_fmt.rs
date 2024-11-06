@@ -4776,13 +4776,13 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r"
-            \un -> un |>
+            \x -> x |>
                 Num.add 1
             "
             ),
             indoc!(
                 r"
-            \un -> un
+            \x -> x
                 |>
                 Num.add 1
             "
@@ -4800,7 +4800,7 @@ mod test_fmt {
         ));
     }
 
-    // note: @not_implemented but successfully parses
+    // todo: @ask it is not implemented but successfully parses, hmm..
     #[test]
     fn simple_closure_nested_field_accessor() {
         expr_formats_same(indoc!(
@@ -4811,7 +4811,7 @@ mod test_fmt {
         ));
     }
 
-    // note: @not_implemented but successfully parses
+    // todo: @ask it is not implemented but successfully parses, hmm..
     #[test]
     fn simple_closure_nested_field_accessor_plus_one() {
         expr_formats_same(indoc!(
@@ -4958,7 +4958,7 @@ mod test_fmt {
         ));
     }
 
-    // note: word 'pipline' looks interesting :)
+    // 'pipline' looks interesting :)
     #[test]
     fn pipline_apply_lambda_1() {
         expr_formats_same(indoc!(
@@ -4998,6 +4998,50 @@ mod test_fmt {
             |> List.join
             "
         ));
+    }
+
+    // #[test]
+    fn _closure_shortcut_for_unary_minus() {
+        expr_formats_same(indoc!(
+            r"
+            \-.
+            "
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r"
+            \ -.
+            "
+            ),
+            indoc!(
+                r"
+            \x -> -x
+            "
+            ),
+        );
+    }
+
+    // #[test]
+    fn _closure_shortcut_for_unary_negate() {
+        expr_formats_same(indoc!(
+            r"
+            \!.
+            "
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r"
+            \ !.
+            "
+            ),
+            indoc!(
+                r"
+            \x -> !x
+            "
+            ),
+        );
     }
 
     #[test]

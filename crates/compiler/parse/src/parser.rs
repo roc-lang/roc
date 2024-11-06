@@ -653,7 +653,6 @@ pub enum ETypeTagUnion<'a> {
     Space(BadInputError, Position),
 }
 
-// todo: @wip remove the unreachable variants
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ETypeInParens<'a> {
     /// e.g. (), which isn't a valid type
@@ -663,11 +662,8 @@ pub enum ETypeInParens<'a> {
     ///
     Type(&'a EType<'a>, Position),
 
-    ///
+    /// note: Do not delete it, because we have a macro implementation that uses it
     Space(BadInputError, Position),
-    ///
-    IndentOpen(Position),
-    IndentEnd(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1246,65 +1242,21 @@ where
     }
 }
 
-/// transform the `Ok` result of a parser
-///
-/// # Example
-///
-/// ```
-/// # #![forbid(unused_imports)]
-/// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, word, map};
-/// # use roc_region::all::Position;
-/// # use bumpalo::Bump;
-/// # #[derive(Debug, PartialEq)]
-/// # enum Problem {
-/// #     NotFound(Position),
-/// # }
-/// # let arena = Bump::new();
-/// let parser = map(
-///     word("hello", Problem::NotFound),
-///     |_output| "new output!"
-/// );
-///
-/// // Success case
-/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
-/// assert_eq!(progress, Progress::MadeProgress);
-/// assert_eq!(output, "new output!");
-/// assert_eq!(state.pos(), Position::new(5));
-///
-/// // Error case
-/// let (progress, err) = parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap_err();
-/// assert_eq!(progress, Progress::NoProgress);
-/// assert_eq!(err, Problem::NotFound(Position::zero()));
-/// ```
-pub fn map<'a, Output, MappedOutput, E: 'a>(
-    parser: impl Parser<'a, Output, E>,
-    transform: impl Fn(Output) -> MappedOutput,
-) -> impl Parser<'a, MappedOutput, E> {
-    move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
-        parser
-            .parse(arena, state, min_indent)
-            .map(|(progress, output, next_state)| (progress, transform(output), next_state))
-    }
-}
-
 /// Applies the parser as many times as possible.
 /// This parser will only fail if the given parser makes partial progress.
 pub fn zero_or_more<'a, Output, E: 'a>(
     parser: impl Parser<'a, Output, E>,
 ) -> impl Parser<'a, bumpalo::collections::Vec<'a, Output>, E> {
     move |arena: &'a Bump, mut state: State<'a>, min_indent: u32| {
-        let mut buf = Vec::with_capacity_in(1, arena);
+        let mut out = Vec::with_capacity_in(1, arena);
         loop {
-            let prev_state = state.clone();
+            let prev = state.clone();
             match parser.parse(arena, state, min_indent) {
-                Ok((_, next_elem, next_state)) => {
-                    state = next_state;
-                    buf.push(next_elem);
+                Ok((_, elem, next)) => {
+                    state = next;
+                    out.push(elem);
                 }
-                Err((NoProgress, _)) => {
-                    break Ok((Progress::when(!buf.is_empty()), buf, prev_state))
-                }
+                Err((NoProgress, _)) => break Ok((Progress::when(!out.is_empty()), out, prev)),
                 Err(err) => break Err(err),
             }
         }

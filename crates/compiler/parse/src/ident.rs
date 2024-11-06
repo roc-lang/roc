@@ -1,11 +1,11 @@
-use crate::ast::TryTarget;
+use crate::ast::{Spaced, TryTarget};
 use crate::keyword::is_keyword;
 use crate::parser::Progress::{self, *};
 use crate::parser::{EExpr, ParseResult, Parser};
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_region::all::{Position, Region};
+use roc_region::all::{Loc, Position, Region};
 
 /// A tag, for example. Must start with an uppercase letter
 /// and then contain only letters and numbers afterwards - no dots allowed!
@@ -82,10 +82,17 @@ pub fn parse_lowercase_ident(state: State<'_>) -> ParseResult<'_, &str, ()> {
 /// * A module name
 /// * A type name
 /// * A tag
-pub fn uppercase<'a>() -> impl Parser<'a, UppercaseIdent<'a>, ()> {
-    move |_, state: State<'a>, _: u32| match chomp_uppercase_part(state.bytes()) {
-        Err(p) => Err((p, ())),
-        Ok(ident) => Ok((MadeProgress, ident.into(), state.advance(ident.len()))),
+pub fn uppercase<'a>() -> impl Parser<'a, Loc<Spaced<'a, UppercaseIdent<'a>>>, ()> {
+    move |_, state: State<'a>, _: u32| {
+        let start = state.pos();
+        match chomp_uppercase_part(state.bytes()) {
+            Err(p) => Err((p, ())),
+            Ok(ident) => {
+                let state = state.advance(ident.len());
+                let ident = Loc::pos(start, state.pos(), Spaced::Item(ident.into()));
+                Ok((MadeProgress, ident, state))
+            }
+        }
     }
 }
 

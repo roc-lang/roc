@@ -20,10 +20,6 @@ fn note_for_record_type_indent<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuil
     alloc.note("I may be confused by indentation")
 }
 
-fn note_for_tag_union_type_indent<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
-    alloc.note("I may be confused by indentation")
-}
-
 fn hint_for_tag_name<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
     alloc.concat([
         alloc.hint("Tag names "),
@@ -2956,81 +2952,6 @@ fn to_tinparens_report<'a>(
 
         ETypeInParens::Type(tipe, pos) => to_type_report(alloc, lines, filename, tipe, pos),
 
-        ETypeInParens::IndentOpen(pos) => {
-            let surroundings = Region::new(start, pos);
-            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
-
-            let doc = alloc.stack([
-                alloc
-                    .reflow(r"I just started parsing a type in parentheses, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
-                alloc.concat([
-                    alloc.reflow(r"Tag unions look like "),
-                    alloc.parser_suggestion("[Many I64, None],"),
-                    alloc.reflow(" so I was expecting to see a tag name next."),
-                ]),
-                note_for_tag_union_type_indent(alloc),
-            ]);
-
-            Report {
-                filename,
-                doc,
-                title: "UNFINISHED PARENTHESES".to_string(),
-                severity,
-            }
-        }
-
-        ETypeInParens::IndentEnd(pos) => {
-            match next_line_starts_with_close_parenthesis(alloc.src_lines, lines.convert_pos(pos)) {
-                Some(curly_pos) => {
-                    let surroundings = LineColumnRegion::new(lines.convert_pos(start), curly_pos);
-                    let region = LineColumnRegion::from_pos(curly_pos);
-
-                    let doc = alloc.stack([
-                        alloc.reflow(
-                            "I am partway through parsing a type in parentheses, but I got stuck here:",
-                        ),
-                        alloc.region_with_subregion(surroundings, region, severity),
-                        alloc.concat([
-                            alloc.reflow("I need this parenthesis to be indented more. Try adding more spaces before it!"),
-                        ]),
-                    ]);
-
-                    Report {
-                        filename,
-                        doc,
-                        title: "NEED MORE INDENTATION".to_string(),
-                        severity,
-                    }
-                }
-                None => {
-                    let surroundings = Region::new(start, pos);
-                    let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
-
-                    let doc = alloc.stack([
-                        alloc.reflow(
-                            r"I am partway through parsing a type in parentheses, but I got stuck here:",
-                        ),
-                        alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
-                        alloc.concat([
-                            alloc.reflow("I was expecting to see a parenthesis "),
-                            alloc.reflow("before this, so try adding a "),
-                            alloc.parser_suggestion(")"),
-                            alloc.reflow(" and see if that helps?"),
-                        ]),
-                        note_for_tag_union_type_indent(alloc),
-                    ]);
-
-                    Report {
-                        filename,
-                        doc,
-                        title: "UNFINISHED PARENTHESES".to_string(),
-                        severity,
-                    }
-                }
-            }
-        }
-
         ETypeInParens::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
     }
 }
@@ -4160,13 +4081,6 @@ pub fn starts_with_keyword(rest_of_line: &str, keyword: &str) -> bool {
 
 fn next_line_starts_with_close_curly(source_lines: &[&str], pos: LineColumn) -> Option<LineColumn> {
     next_line_starts_with_char(source_lines, pos, '}')
-}
-
-fn next_line_starts_with_close_parenthesis(
-    source_lines: &[&str],
-    pos: LineColumn,
-) -> Option<LineColumn> {
-    next_line_starts_with_char(source_lines, pos, ')')
 }
 
 fn next_line_starts_with_char(
