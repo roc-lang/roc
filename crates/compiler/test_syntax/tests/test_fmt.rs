@@ -4870,7 +4870,7 @@ mod test_fmt {
     }
 
     #[test]
-    fn simple_closure_shortcut_for_field_tuple_index_access() {
+    fn closure_shortcut_for_field_tuple_index_access() {
         expr_formats_same(indoc!(
             r"
             \.bru.0
@@ -4879,7 +4879,7 @@ mod test_fmt {
     }
 
     #[test]
-    fn simple_closure_shortcut_for_field_as_part_of_bin_op() {
+    fn closure_shortcut_for_field_as_part_of_bin_op() {
         expr_formats_same(indoc!(
             r"
             \.foo + 1
@@ -4888,7 +4888,7 @@ mod test_fmt {
     }
 
     #[test]
-    fn simple_closure_shortcut_for_field_space_format() {
+    fn closure_shortcut_for_field_space_format() {
         expr_formats_to(
             indoc!(
                 r"
@@ -4904,7 +4904,7 @@ mod test_fmt {
     }
 
     #[test]
-    fn simple_closure_shortcut_for_identity_function() {
+    fn closure_shortcut_for_identity_function() {
         expr_formats_same(indoc!(
             r"
             \.
@@ -4913,7 +4913,7 @@ mod test_fmt {
     }
 
     #[test]
-    fn simple_closure_shortcut_for_identity_function_format() {
+    fn closure_shortcut_for_identity_function_format() {
         expr_formats_to(
             indoc!(
                 r"
