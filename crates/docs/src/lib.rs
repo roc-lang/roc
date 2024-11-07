@@ -10,6 +10,7 @@ use roc_load::docs::{ModuleDocumentation, RecordField};
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_packaging::cache::{self, RocCacheDir};
+use roc_parse::ast::FunctionArrow;
 use roc_parse::ident::{parse_ident, Accessor, Ident};
 use roc_parse::keyword;
 use roc_parse::state::State;
@@ -827,7 +828,11 @@ fn type_annotation_to_html(
 
             type_annotation_to_html(indent_level, buf, extension, true);
         }
-        TypeAnnotation::Function { args, output } => {
+        TypeAnnotation::Function {
+            args,
+            arrow,
+            output,
+        } => {
             let mut paren_is_open = false;
             let mut peekable_args = args.iter().peekable();
 
@@ -858,7 +863,10 @@ fn type_annotation_to_html(
                 buf.push(' ');
             }
 
-            buf.push_str("-> ");
+            match arrow {
+                FunctionArrow::Effectful => buf.push_str("=> "),
+                FunctionArrow::Pure => buf.push_str("-> "),
+            }
 
             let mut next_indent_level = indent_level;
 
@@ -1029,9 +1037,11 @@ fn should_be_multiline(type_ann: &TypeAnnotation) -> bool {
                     .iter()
                     .any(|tag| tag.values.iter().any(should_be_multiline))
         }
-        TypeAnnotation::Function { args, output } => {
-            args.len() > 2 || should_be_multiline(output) || args.iter().any(should_be_multiline)
-        }
+        TypeAnnotation::Function {
+            args,
+            arrow: _,
+            output,
+        } => args.len() > 2 || should_be_multiline(output) || args.iter().any(should_be_multiline),
         TypeAnnotation::ObscuredTagUnion => false,
         TypeAnnotation::ObscuredRecord => false,
         TypeAnnotation::BoundVariable(_) => false,

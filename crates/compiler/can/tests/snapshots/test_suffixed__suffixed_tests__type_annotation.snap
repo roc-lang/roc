@@ -30,19 +30,19 @@ Defs {
                         ident: "x",
                     },
                 ],
-                @28-30 Apply(
-                    @28-30 Var {
+                @28-29 Apply(
+                    @28-29 Var {
                         module_name: "Task",
                         ident: "await",
                     },
                     [
-                        @14-30 Defs(
+                        @14-29 Defs(
                             Defs {
                                 tags: [
                                     EitherIndex(2147483648),
                                 ],
                                 regions: [
-                                    @28-30,
+                                    @28-29,
                                 ],
                                 space_before: [
                                     Slice { start: 0, length: 0 },
@@ -73,19 +73,19 @@ Defs {
                                         body_pattern: @24-25 Identifier {
                                             ident: "#!0_expr",
                                         },
-                                        body_expr: @28-30 Var {
+                                        body_expr: @28-29 Var {
                                             module_name: "",
                                             ident: "x",
                                         },
                                     },
                                 ],
                             },
-                            @28-30 Var {
+                            @28-29 Var {
                                 module_name: "",
                                 ident: "#!0_expr",
                             },
                         ),
-                        @28-30 Closure(
+                        @28-29 Closure(
                             [
                                 @24-25 Identifier {
                                     ident: "r",

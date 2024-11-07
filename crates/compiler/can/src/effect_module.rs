@@ -1,4 +1,4 @@
-use crate::def::Def;
+use crate::def::{Def, DefKind};
 use crate::expr::{AnnotatedMark, ClosureData, Expr, Recursive};
 use crate::pattern::Pattern;
 use crate::scope::Scope;
@@ -33,7 +33,7 @@ pub fn build_host_exposed_def(
 
     let def_body = {
         match typ.shallow_structural_dealias() {
-            Type::Function(args, _, _) => {
+            Type::Function(args, _, _, fx) if **fx == Type::Pure => {
                 for i in 0..args.len() {
                     let name = format!("closure_arg_{ident}_{i}");
 
@@ -72,6 +72,7 @@ pub fn build_host_exposed_def(
                     function_type: var_store.fresh(),
                     closure_type: var_store.fresh(),
                     return_type: var_store.fresh(),
+                    fx_type: var_store.fresh(),
                     early_returns: vec![],
                     name: task_closure_symbol,
                     captured_symbols,
@@ -99,12 +100,54 @@ pub fn build_host_exposed_def(
                     function_type: var_store.fresh(),
                     closure_type: var_store.fresh(),
                     return_type: var_store.fresh(),
+                    fx_type: var_store.fresh(),
                     early_returns: vec![],
                     name: symbol,
                     captured_symbols: std::vec::Vec::new(),
                     recursive: Recursive::NotRecursive,
                     arguments,
                     loc_body: Box::new(Loc::at_zero(body)),
+                })
+            }
+            Type::Function(args, _, _, fx) if **fx == Type::Effectful => {
+                for i in 0..args.len() {
+                    let name = format!("{ident}_arg_{i}");
+
+                    let arg_symbol = {
+                        let ident = name.clone().into();
+                        scope.introduce(ident, Region::zero()).unwrap()
+                    };
+
+                    let arg_var = var_store.fresh();
+
+                    arguments.push((
+                        arg_var,
+                        AnnotatedMark::new(var_store),
+                        Loc::at_zero(Pattern::Identifier(arg_symbol)),
+                    ));
+
+                    linked_symbol_arguments.push((arg_var, Expr::Var(arg_symbol, arg_var)));
+                }
+
+                let ident_without_bang = ident.trim_end_matches('!');
+                let foreign_symbol_name = format!("roc_fx_{ident_without_bang}");
+                let foreign_call = Expr::ForeignCall {
+                    foreign_symbol: foreign_symbol_name.into(),
+                    args: linked_symbol_arguments,
+                    ret_var: var_store.fresh(),
+                };
+
+                Expr::Closure(ClosureData {
+                    function_type: var_store.fresh(),
+                    closure_type: var_store.fresh(),
+                    return_type: var_store.fresh(),
+                    fx_type: var_store.fresh(),
+                    early_returns: vec![],
+                    name: symbol,
+                    captured_symbols: std::vec::Vec::new(),
+                    recursive: Recursive::NotRecursive,
+                    arguments,
+                    loc_body: Box::new(Loc::at_zero(foreign_call)),
                 })
             }
             _ => {
@@ -128,6 +171,7 @@ pub fn build_host_exposed_def(
                     function_type: var_store.fresh(),
                     closure_type: var_store.fresh(),
                     return_type: var_store.fresh(),
+                    fx_type: var_store.fresh(),
                     early_returns: vec![],
                     name: task_closure_symbol,
                     captured_symbols,
@@ -167,6 +211,7 @@ pub fn build_host_exposed_def(
         expr_var,
         pattern_vars,
         annotation: Some(def_annotation),
+        kind: DefKind::Let,
     }
 }
 
@@ -178,11 +223,13 @@ fn build_fresh_opaque_variables(
     let ok_var = var_store.fresh();
     let err_var = var_store.fresh();
     let result_var = var_store.fresh();
+    let fx_var = var_store.fresh();
 
     let actual = Type::Function(
         vec![Type::EmptyRec],
         Box::new(Type::Variable(closure_var)),
         Box::new(Type::Variable(result_var)),
+        Box::new(Type::Variable(fx_var)),
     );
 
     let type_arguments = vec![

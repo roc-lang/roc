@@ -252,21 +252,27 @@ fn is_alnum(ch: char) -> bool {
 }
 
 fn chomp_lowercase_part(buffer: &[u8]) -> Result<&str, Progress> {
-    chomp_part(char::is_lowercase, is_alnum, buffer)
+    chomp_part(char::is_lowercase, is_alnum, true, buffer)
 }
 
 fn chomp_uppercase_part(buffer: &[u8]) -> Result<&str, Progress> {
-    chomp_part(char::is_uppercase, is_alnum, buffer)
+    chomp_part(char::is_uppercase, is_alnum, false, buffer)
 }
 
 fn chomp_anycase_part(buffer: &[u8]) -> Result<&str, Progress> {
-    chomp_part(char::is_alphabetic, is_alnum, buffer)
+    use encode_unicode::CharExt;
+
+    let allow_bang =
+        char::from_utf8_slice_start(buffer).map_or(false, |(leading, _)| leading.is_lowercase());
+
+    chomp_part(char::is_alphabetic, is_alnum, allow_bang, buffer)
 }
 
 fn chomp_integer_part(buffer: &[u8]) -> Result<&str, Progress> {
     chomp_part(
         |ch| char::is_ascii_digit(&ch),
         |ch| char::is_ascii_digit(&ch),
+        false,
         buffer,
     )
 }
@@ -276,7 +282,12 @@ fn is_plausible_ident_continue(ch: char) -> bool {
 }
 
 #[inline(always)]
-fn chomp_part<F, G>(leading_is_good: F, rest_is_good: G, buffer: &[u8]) -> Result<&str, Progress>
+fn chomp_part<F, G>(
+    leading_is_good: F,
+    rest_is_good: G,
+    allow_bang: bool,
+    buffer: &[u8],
+) -> Result<&str, Progress>
 where
     F: Fn(char) -> bool,
     G: Fn(char) -> bool,
@@ -296,6 +307,9 @@ where
     while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
         if rest_is_good(ch) {
             chomped += width;
+        } else if allow_bang && ch == '!' {
+            chomped += width;
+            break;
         } else {
             // we're done
             break;
@@ -474,6 +488,16 @@ fn chomp_identifier_chain<'a>(
     while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
         if ch.is_alphabetic() || ch.is_ascii_digit() {
             chomped += width;
+        } else if ch == '!' && !first_is_uppercase {
+            chomped += width;
+
+            let value = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
+            let ident = Ident::Access {
+                module_name: "",
+                parts: arena.alloc([Accessor::RecordField(value)]),
+            };
+
+            return Ok((chomped as u32, ident));
         } else {
             // we're done
             break;

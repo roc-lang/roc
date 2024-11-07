@@ -236,6 +236,10 @@ impl Lowercase {
     pub fn as_str(&self) -> &str {
         self.0.as_str()
     }
+
+    pub fn suffix(&self) -> IdentSuffix {
+        IdentSuffix::from_name(self.0.as_str())
+    }
 }
 
 impl From<Lowercase> for String {
@@ -360,5 +364,69 @@ impl fmt::Debug for Uppercase {
 impl fmt::Display for Uppercase {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Display::fmt(&self.0, f)
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum IdentSuffix {
+    None,
+    Bang,
+}
+
+impl IdentSuffix {
+    #[inline(always)]
+    pub const fn from_name(name: &str) -> Self {
+        // Checking bytes directly so it can be const.
+        // This should be fine since the suffix is ASCII.
+        let bytes = name.as_bytes();
+        let len = bytes.len();
+
+        debug_assert!(len > 0, "Ident name must not be empty");
+
+        if bytes[len - 1] == b'!' {
+            IdentSuffix::Bang
+        } else {
+            IdentSuffix::None
+        }
+    }
+
+    pub fn is_none(&self) -> bool {
+        match self {
+            IdentSuffix::None => true,
+            IdentSuffix::Bang => false,
+        }
+    }
+
+    pub fn is_bang(&self) -> bool {
+        match self {
+            IdentSuffix::None => false,
+            IdentSuffix::Bang => true,
+        }
+    }
+}
+
+#[cfg(test)]
+mod suffix_test {
+    use crate::ident::IdentSuffix;
+
+    #[test]
+    fn ends_with_bang() {
+        assert_eq!(IdentSuffix::from_name("foo!"), IdentSuffix::Bang)
+    }
+
+    #[test]
+    fn ends_without_bang() {
+        assert_eq!(IdentSuffix::from_name("foo"), IdentSuffix::None)
+    }
+
+    #[test]
+    fn invalid() {
+        assert_eq!(IdentSuffix::from_name("foo!bar"), IdentSuffix::None)
+    }
+
+    #[test]
+    #[should_panic]
+    fn empty_panics() {
+        IdentSuffix::from_name("");
     }
 }

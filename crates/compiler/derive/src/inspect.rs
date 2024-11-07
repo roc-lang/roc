@@ -137,6 +137,7 @@ fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
             elem_var_slice,
             to_inspector_clos_var,
             elem_inspector_var,
+            Variable::PURE,
         )),
     );
 
@@ -152,6 +153,7 @@ fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
         Loc::at_zero(to_inspector_var),
         to_inspector_clos_var,
         elem_inspector_var,
+        Variable::PURE,
     ));
 
     // toInspector elem
@@ -186,6 +188,7 @@ fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
             elem_var_slice,
             to_elem_inspector_lset,
             elem_inspector_var,
+            Variable::PURE,
         )),
     );
 
@@ -194,6 +197,7 @@ fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
         function_type: to_elem_inspector_fn_var,
         closure_type: to_elem_inspector_lset,
         return_type: elem_inspector_var,
+        fx_type: Variable::PURE,
         early_returns: vec![],
         name: to_elem_inspector_sym,
         captured_symbols: vec![],
@@ -223,6 +227,7 @@ fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
             this_inspect_list_args_slice,
             this_inspect_list_clos_var,
             this_list_inspector_var,
+            Variable::PURE,
         )),
     );
 
@@ -237,6 +242,7 @@ fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
         Loc::at_zero(inspect_list),
         this_inspect_list_clos_var,
         this_list_inspector_var,
+        Variable::PURE,
     ));
 
     // Inspect.list lst to_elem_inspector
@@ -285,6 +291,7 @@ fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
             list_var_slice,
             fn_clos_var,
             this_inspector_var,
+            Variable::PURE,
         )),
     );
 
@@ -293,6 +300,7 @@ fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
         function_type: fn_var,
         closure_type: fn_clos_var,
         return_type: this_inspector_var,
+        fx_type: Variable::PURE,
         early_returns: vec![],
         name: fn_name,
         captured_symbols: vec![],
@@ -365,6 +373,7 @@ fn to_inspector_record(
                     field_var_slice,
                     to_inspector_clos_var,
                     inspector_var,
+                    Variable::PURE,
                 )),
             );
 
@@ -380,6 +389,7 @@ fn to_inspector_record(
                 Loc::at_zero(to_inspector_var),
                 to_inspector_clos_var,
                 inspector_var,
+                Variable::PURE,
             ));
 
             // toInspector rcd.a
@@ -447,6 +457,7 @@ fn to_inspector_record(
             fields_list_var_slice,
             inspect_record_clos_var,
             inspector_var,
+            Variable::PURE,
         )),
     );
 
@@ -461,6 +472,7 @@ fn to_inspector_record(
         Loc::at_zero(inspect_record_var),
         inspect_record_clos_var,
         inspector_var,
+        Variable::PURE,
     ));
 
     // Inspect.record [ { key: .., value: .. }, .. ]
@@ -496,6 +508,7 @@ fn to_inspector_record(
             record_var_slice,
             fn_clos_var,
             this_inspector_var,
+            Variable::PURE,
         )),
     );
 
@@ -504,6 +517,7 @@ fn to_inspector_record(
         function_type: fn_var,
         closure_type: fn_clos_var,
         return_type: this_inspector_var,
+        fx_type: Variable::PURE,
         early_returns: vec![],
         name: fn_name,
         captured_symbols: vec![],
@@ -569,6 +583,7 @@ fn to_inspector_tuple(
                     elem_var_slice,
                     to_inspector_clos_var,
                     inspector_var,
+                    Variable::PURE,
                 )),
             );
 
@@ -584,6 +599,7 @@ fn to_inspector_tuple(
                 Loc::at_zero(to_inspector_var),
                 to_inspector_clos_var,
                 inspector_var,
+                Variable::PURE,
             ));
 
             // toInspector tup.0
@@ -631,6 +647,7 @@ fn to_inspector_tuple(
             elem_inspectors_list_var_slice,
             inspect_tuple_clos_var,
             inspector_var,
+            Variable::PURE,
         )),
     );
 
@@ -645,6 +662,7 @@ fn to_inspector_tuple(
         Loc::at_zero(inspect_tuple_var),
         inspect_tuple_clos_var,
         inspector_var,
+        Variable::PURE,
     ));
 
     // Inspect.tuple [ { key: .., value: .. }, .. ]
@@ -680,6 +698,7 @@ fn to_inspector_tuple(
             tuple_var_slice,
             fn_clos_var,
             this_inspector_var,
+            Variable::PURE,
         )),
     );
 
@@ -688,6 +707,7 @@ fn to_inspector_tuple(
         function_type: fn_var,
         closure_type: fn_clos_var,
         return_type: this_inspector_var,
+        fx_type: Variable::PURE,
         early_returns: vec![],
         name: fn_name,
         captured_symbols: vec![],
@@ -770,6 +790,7 @@ fn to_inspector_tag_union(
                             var_slice_of_sym_var,
                             to_inspector_clos_var,
                             inspector_var,
+                            Variable::PURE,
                         )),
                     );
 
@@ -785,6 +806,7 @@ fn to_inspector_tag_union(
                         Loc::at_zero(to_inspector_var),
                         to_inspector_clos_var,
                         inspector_var,
+                        Variable::PURE,
                     ));
 
                     // toInspector rcd.a
@@ -834,6 +856,7 @@ fn to_inspector_tag_union(
                     this_inspect_tag_args_var_slice,
                     this_inspect_tag_clos_var,
                     this_inspector_var,
+                    Variable::PURE,
                 )),
             );
 
@@ -848,6 +871,7 @@ fn to_inspector_tag_union(
                 Loc::at_zero(inspect_tag_var),
                 this_inspect_tag_clos_var,
                 this_inspector_var,
+                Variable::PURE,
             ));
 
             // Inspect.tag "A" [ Inspect.toInspector v1, Inspect.toInspector v2 ]
@@ -922,6 +946,7 @@ fn to_inspector_tag_union(
             tag_union_var_slice,
             fn_clos_var,
             this_inspector_var,
+            Variable::PURE,
         )),
     );
 
@@ -935,6 +960,7 @@ fn to_inspector_tag_union(
         function_type: fn_var,
         closure_type: fn_clos_var,
         return_type: this_inspector_var,
+        fx_type: Variable::PURE,
         early_returns: vec![],
         name: fn_name,
         captured_symbols: vec![],
@@ -979,6 +1005,7 @@ fn wrap_in_inspect_custom(
             this_apply_args_var_slice,
             this_apply_clos_var,
             fmt_var,
+            Variable::PURE,
         )),
     );
 
@@ -992,6 +1019,7 @@ fn wrap_in_inspect_custom(
         Loc::at_zero(Var(Symbol::INSPECT_APPLY, this_apply_fn_var)),
         this_apply_clos_var,
         fmt_var,
+        Variable::PURE,
     ));
 
     // Inspect.apply inspector fmt
@@ -1026,7 +1054,12 @@ fn wrap_in_inspect_custom(
     let args_slice = env.subs.insert_into_vars(vec![fmt_var]);
     env.subs.set_content(
         fn_var,
-        Content::Structure(FlatType::Func(args_slice, fn_clos_var, fmt_var)),
+        Content::Structure(FlatType::Func(
+            args_slice,
+            fn_clos_var,
+            fmt_var,
+            Variable::PURE,
+        )),
     );
 
     // \fmt -[[fn_name captured_var]]-> Inspect.apply inspector fmt
@@ -1034,6 +1067,7 @@ fn wrap_in_inspect_custom(
         function_type: fn_var,
         closure_type: fn_clos_var,
         return_type: fmt_var,
+        fx_type: Variable::PURE,
         early_returns: vec![],
         name: fn_name,
         captured_symbols: vec![(captured_symbol, captured_var)],
@@ -1062,6 +1096,7 @@ fn wrap_in_inspect_custom(
             this_custom_args_var_slice,
             this_custom_clos_var,
             this_custom_inspector_var,
+            Variable::PURE,
         )),
     );
 
@@ -1075,6 +1110,7 @@ fn wrap_in_inspect_custom(
         Loc::at_zero(Var(Symbol::INSPECT_CUSTOM, this_custom_fn_var)),
         this_custom_clos_var,      // -[clos]->
         this_custom_inspector_var, // t' ~ Inspector fmt
+        Variable::PURE,
     ));
 
     // Inspect.custom \fmt -> Inspect.apply inspector fmt

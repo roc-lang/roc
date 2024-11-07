@@ -4322,21 +4322,15 @@ mod test_reporting {
             "
         ),
         @r###"
-    ── STATEMENT AFTER EXPRESSION in tmp/double_equals_in_def/Test.roc ─────────────
+    ── STATEMENT AFTER EXPRESSION in /code/proj/Main.roc ───────────────────────────
 
     I just finished parsing an expression with a series of definitions,
 
     and this line is indented as if it's intended to be part of that
     expression:
 
-    1│  app "test" provides [main] to "./platform"
-    2│
-    3│  main =
-    4│      x = 3
-    5│      y =
     6│          x == 5
-    7│          Num.add 1 2
-                ^
+                ^^^^^^
 
     However, I already saw the final expression in that series of
     definitions.
@@ -10176,7 +10170,7 @@ All branches in an `if` must have the same type!
             main = \n -> n + 2
             "#
         ),
-        @r"
+        @r###"
     ── DUPLICATE NAME in /code/proj/Main.roc ───────────────────────────────────────
 
     The `main` name is first defined here:
@@ -10199,11 +10193,11 @@ All branches in an `if` must have the same type!
     5│  main = \n -> n + 2
         ^^^^
 
-    If you don't need to use the value on the right-hand-side of this
-    assignment, consider removing the assignment. Since Roc is purely
-    functional, assignments that don't introduce variables cannot affect a
-    program's behavior!
-    "
+    If you don't need to use the value on the right-hand side of this
+    assignment, consider removing the assignment. Since effects are not
+    allowed at the top-level, assignments that don't introduce variables
+    cannot affect a program's behavior
+    "###
     );
 
     test_report!(
@@ -10849,51 +10843,47 @@ All branches in an `if` must have the same type!
         @r###"
     ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
 
-    This destructure assignment doesn't introduce any new variables:
+    This assignment doesn't introduce any new variables:
 
     4│      Pair _ _ = Pair 0 1
             ^^^^^^^^
 
-    If you don't need to use the value on the right-hand-side of this
-    assignment, consider removing the assignment. Since Roc is purely
-    functional, assignments that don't introduce variables cannot affect a
-    program's behavior!
+    Since it doesn't call any effectful functions, this assignment cannot
+    affect the program's behavior. If you don't need to use the value on
+    the right-hand side, consider removing the assignment.
 
     ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
 
-    This destructure assignment doesn't introduce any new variables:
+    This assignment doesn't introduce any new variables:
 
     6│      _ = Pair 0 1
             ^
 
-    If you don't need to use the value on the right-hand-side of this
-    assignment, consider removing the assignment. Since Roc is purely
-    functional, assignments that don't introduce variables cannot affect a
-    program's behavior!
+    Since it doesn't call any effectful functions, this assignment cannot
+    affect the program's behavior. If you don't need to use the value on
+    the right-hand side, consider removing the assignment.
 
     ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
 
-    This destructure assignment doesn't introduce any new variables:
+    This assignment doesn't introduce any new variables:
 
     8│      {} = {}
             ^^
 
-    If you don't need to use the value on the right-hand-side of this
-    assignment, consider removing the assignment. Since Roc is purely
-    functional, assignments that don't introduce variables cannot affect a
-    program's behavior!
+    Since it doesn't call any effectful functions, this assignment cannot
+    affect the program's behavior. If you don't need to use the value on
+    the right-hand side, consider removing the assignment.
 
     ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
 
-    This destructure assignment doesn't introduce any new variables:
+    This assignment doesn't introduce any new variables:
 
     10│      Foo = Foo
              ^^^
 
-    If you don't need to use the value on the right-hand-side of this
-    assignment, consider removing the assignment. Since Roc is purely
-    functional, assignments that don't introduce variables cannot affect a
-    program's behavior!
+    Since it doesn't call any effectful functions, this assignment cannot
+    affect the program's behavior. If you don't need to use the value on
+    the right-hand side, consider removing the assignment.
     "###
     );
 
@@ -10912,7 +10902,7 @@ All branches in an `if` must have the same type!
             Foo = Foo
             "#
         ),
-        @r"
+        @r###"
     ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
 
     This destructure assignment doesn't introduce any new variables:
@@ -10920,10 +10910,10 @@ All branches in an `if` must have the same type!
     3│  Pair _ _ = Pair 0 1
         ^^^^^^^^
 
-    If you don't need to use the value on the right-hand-side of this
-    assignment, consider removing the assignment. Since Roc is purely
-    functional, assignments that don't introduce variables cannot affect a
-    program's behavior!
+    If you don't need to use the value on the right-hand side of this
+    assignment, consider removing the assignment. Since effects are not
+    allowed at the top-level, assignments that don't introduce variables
+    cannot affect a program's behavior
 
     ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
 
@@ -10932,10 +10922,10 @@ All branches in an `if` must have the same type!
     5│  _ = Pair 0 1
         ^
 
-    If you don't need to use the value on the right-hand-side of this
-    assignment, consider removing the assignment. Since Roc is purely
-    functional, assignments that don't introduce variables cannot affect a
-    program's behavior!
+    If you don't need to use the value on the right-hand side of this
+    assignment, consider removing the assignment. Since effects are not
+    allowed at the top-level, assignments that don't introduce variables
+    cannot affect a program's behavior
 
     ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
 
@@ -10944,10 +10934,10 @@ All branches in an `if` must have the same type!
     7│  {} = {}
         ^^
 
-    If you don't need to use the value on the right-hand-side of this
-    assignment, consider removing the assignment. Since Roc is purely
-    functional, assignments that don't introduce variables cannot affect a
-    program's behavior!
+    If you don't need to use the value on the right-hand side of this
+    assignment, consider removing the assignment. Since effects are not
+    allowed at the top-level, assignments that don't introduce variables
+    cannot affect a program's behavior
 
     ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
 
@@ -10956,11 +10946,11 @@ All branches in an `if` must have the same type!
     9│  Foo = Foo
         ^^^
 
-    If you don't need to use the value on the right-hand-side of this
-    assignment, consider removing the assignment. Since Roc is purely
-    functional, assignments that don't introduce variables cannot affect a
-    program's behavior!
-    "
+    If you don't need to use the value on the right-hand side of this
+    assignment, consider removing the assignment. Since effects are not
+    allowed at the top-level, assignments that don't introduce variables
+    cannot affect a program's behavior
+    "###
     );
 
     test_report!(
@@ -14477,40 +14467,6 @@ All branches in an `if` must have the same type!
     "#
     );
 
-    // TODO: add the following tests after built-in Tasks are added
-    // https://github.com/roc-lang/roc/pull/6836
-
-    // test_report!(
-    // suffixed_stmt_invalid_type,
-    //     indoc!(
-    //         r###"
-    //         app "test" provides [main] to "./platform"
-
-    //         main : Task U64 _ -> _
-    //         main = \task ->
-    //             task!
-    //             42
-    //         "###
-    //     ),
-    //     @r""
-    // );
-
-    // test_report!(
-    // suffixed_expr_invalid_type,
-    //     indoc!(
-    //         r###"
-    //         app "test" provides [main] to "./platform"
-
-    //         main : Task U64 _ -> _
-    //         main = \task ->
-    //             result : U32
-    //             result = task!
-    //             result
-    //         "###
-    //     ),
-    //     @r""
-    // );
-
     test_report!(
         issue_6240_1,
         indoc!(
@@ -14534,38 +14490,38 @@ All branches in an `if` must have the same type!
         issue_6240_2,
         indoc!(
             r#"
-            ("", "").abcde
-            "#
+              ("", "").abcde
+              "#
         ),
         @r###"
-    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+      ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
-    This expression is used in an unexpected way:
+      This expression is used in an unexpected way:
 
-    4│      ("", "").abcde
-            ^^^^^^^^^^^^^^
+      4│      ("", "").abcde
+              ^^^^^^^^^^^^^^
 
-    It is a tuple of type:
+      It is a tuple of type:
 
-        (
-            Str,
-            Str,
-        )a
+          (
+              Str,
+              Str,
+          )a
 
-    But you are trying to use it as:
+      But you are trying to use it as:
 
-        { abcde : * }b
-    "###
+          { abcde : * }b
+      "###
     );
 
     test_report!(
         issue_6240_3,
         indoc!(
             r"
-            {}.0
-            "
+              {}.0
+              "
         ),
-        @r###"
+        @r"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression is used in an unexpected way:
@@ -14580,7 +14536,7 @@ All branches in an `if` must have the same type!
     But you are trying to use it as:
 
         (*)b
-    "###
+    "
     );
 
     test_report!(
@@ -14697,5 +14653,751 @@ All branches in an `if` must have the same type!
 
             Num *
         "###
+    );
+
+    test_report!(
+        leftover_statement,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                identity {}
+
+                Effect.putLine! "hello"
+
+            identity = \x -> x
+            "#
+        ),
+        @r###"
+    ── LEFTOVER STATEMENT in /code/proj/Main.roc ───────────────────────────────────
+
+    This statement does not produce any effects:
+
+    6│      identity {}
+            ^^^^^^^^^^^
+
+    Standalone statements are only useful if they call effectful
+    functions.
+
+    Did you forget to use its result? If not, feel free to remove it.
+    "###
+    );
+
+    test_report!(
+        fx_fn_annotated_as_pure,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                Effect.putLine! (getCheer "hello")
+
+            getCheer : Str -> Str
+            getCheer = \msg ->
+                name = Effect.getLine! {}
+
+                "$(msg), $(name)!"
+            "#
+        ),
+        @r###"
+    ── EFFECT IN PURE FUNCTION in /code/proj/Main.roc ──────────────────────────────
+
+    This call to `Effect.getLine!` might produce an effect:
+
+    10│      name = Effect.getLine! {}
+                    ^^^^^^^^^^^^^^^^^^
+
+    However, the type of the enclosing function requires that it's pure:
+
+    8│  getCheer : Str -> Str
+                   ^^^^^^^^^^
+
+    Tip: Replace `->` with `=>` to annotate it as effectful.
+
+    You can still run the program with this error, which can be helpful
+    when you're debugging.
+    "###
+    );
+
+    test_report!(
+        fx_fn_annotated_as_pure_stmt,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                trim "hello "
+
+            trim : Str -> Str
+            trim = \msg ->
+                Effect.putLine! "Trimming $(msg)"
+                Str.trim msg
+            "#
+        ),
+        @r###"
+    ── EFFECT IN PURE FUNCTION in /code/proj/Main.roc ──────────────────────────────
+
+    This call to `Effect.putLine!` might produce an effect:
+
+    10│      Effect.putLine! "Trimming $(msg)"
+             ^^^^^^^^^^^^^^^
+
+    However, the type of the enclosing function requires that it's pure:
+
+    8│  trim : Str -> Str
+               ^^^^^^^^^^
+
+    Tip: Replace `->` with `=>` to annotate it as effectful.
+
+    You can still run the program with this error, which can be helpful
+    when you're debugging.
+
+    ── UNNECESSARY EXCLAMATION in /code/proj/Main.roc ──────────────────────────────
+
+    This function is pure, but its name suggests otherwise:
+
+    5│  main! = \{} ->
+        ^^^^^
+
+    The exclamation mark at the end is reserved for effectful functions.
+
+    Hint: Did you forget to run an effect? Is the type annotation wrong?
+    "###
+    );
+
+    test_report!(
+        nested_function_def_fx_no_bang,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                printHello = \{} ->
+                    Effect.putLine! "hello"
+
+                printHello {}
+            "#
+        ),
+        @r###"
+    ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
+
+    This function is effectful, but its name does not indicate so:
+
+    6│      printHello = \{} ->
+            ^^^^^^^^^^
+
+    Add an exclamation mark at the end, like:
+
+        printHello!
+
+    This will help readers identify it as a source of effects.
+    "###
+    );
+
+    test_report!(
+        ignored_result_stmt,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                Effect.getLine! {}
+                {}
+            "#
+        ),
+        @r###"
+    ── IGNORED RESULT in /code/proj/Main.roc ───────────────────────────────────────
+
+    The result of this call to `Effect.getLine!` is ignored:
+
+    6│      Effect.getLine! {}
+            ^^^^^^^^^^^^^^^
+
+    Standalone statements are required to produce an empty record, but the
+    type of this one is:
+
+        Str
+
+    If you still want to ignore it, assign it to `_`, like this:
+
+        _ = File.delete! "data.json"
+    "###
+    );
+
+    test_report!(
+        ignored_stmt_forgot_to_call,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                Effect.getLine!
+                Effect.putLine! "hi"
+            "#
+        ),
+        @r###"
+    ── IGNORED RESULT in /code/proj/Main.roc ───────────────────────────────────────
+
+    The result of this expression is ignored:
+
+    6│      Effect.getLine!
+            ^^^^^^^^^^^^^^^
+
+    Standalone statements are required to produce an empty record, but the
+    type of this one is:
+
+        {} => Str
+
+    Hint: Did you forget to call the function?
+
+    ── LEFTOVER STATEMENT in /code/proj/Main.roc ───────────────────────────────────
+
+    This statement does not produce any effects:
+
+    6│      Effect.getLine!
+            ^^^^^^^^^^^^^^^
+
+    Standalone statements are only useful if they call effectful
+    functions.
+
+    Did you forget to use its result? If not, feel free to remove it.
+    "###
+    );
+
+    test_report!(
+        function_def_leftover_bang,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                Effect.putLine! (hello! {})
+
+            hello! = \{} ->
+                "hello"
+            "#
+        ),
+        @r###"
+    ── UNNECESSARY EXCLAMATION in /code/proj/Main.roc ──────────────────────────────
+
+    This function is pure, but its name suggests otherwise:
+
+    8│  hello! = \{} ->
+        ^^^^^^
+
+    The exclamation mark at the end is reserved for effectful functions.
+
+    Hint: Did you forget to run an effect? Is the type annotation wrong?
+    "###
+    );
+
+    test_report!(
+        effect_in_top_level_value_def,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            hello =
+                Effect.putLine! "calling hello!"
+                "hello"
+
+            main! = \{} ->
+                Effect.putLine! hello
+            "#
+        ),
+        @r###"
+    ── EFFECT IN TOP-LEVEL in /code/proj/Main.roc ──────────────────────────────────
+
+    This call to `Effect.putLine!` might produce an effect:
+
+    6│      Effect.putLine! "calling hello!"
+            ^^^^^^^^^^^^^^^
+
+    However, it appears in a top-level def instead of a function. If we
+    allowed this, importing this module would produce a side effect.
+
+    Tip: If you don't need any arguments, use an empty record:
+
+        askName! : {} => Str
+        askName! = \{} ->
+            Stdout.line! "What's your name?"
+            Stdin.line! {}
+
+    This will allow the caller to control when the effects run.
+    "###
+    );
+
+    test_report!(
+        aliased_fx_fn,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                printLn "Hello"
+
+            printLn = Effect.putLine!
+            "#
+        ),
+        @r###"
+    ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
+
+    This function is effectful, but its name does not indicate so:
+
+    8│  printLn = Effect.putLine!
+        ^^^^^^^
+
+    Add an exclamation mark at the end, like:
+
+        printLn!
+
+    This will help readers identify it as a source of effects.
+    "###
+    );
+
+    test_report!(
+        unsuffixed_fx_in_record,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                fx = {
+                    putLine: Effect.putLine!
+                }
+                fx.putLine "hello world!"
+            "#
+        ),
+        @r###"
+    ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
+
+    This field's value is an effectful function, but its name does not
+    indicate so:
+
+    7│          putLine: Effect.putLine!
+                ^^^^^^^^^^^^^^^^^^^^^^^^
+
+    Add an exclamation mark at the end, like:
+
+        { readFile! : File.read! }
+
+    This will help readers identify it as a source of effects.
+    "###
+    );
+
+    test_report!(
+        suffixed_pure_in_record,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                notFx = {
+                    trim!: Str.trim
+                }
+                Effect.putLine! (notFx.trim! " hello ")
+            "#
+        ),
+        @r###"
+    ── UNNECESSARY EXCLAMATION in /code/proj/Main.roc ──────────────────────────────
+
+    This field's value is a pure function, but its name suggests
+    otherwise:
+
+    7│          trim!: Str.trim
+                ^^^^^^^^^^^^^^^
+
+    The exclamation mark at the end is reserved for effectful functions.
+
+    Hint: Did you forget to run an effect? Is the type annotation wrong?
+    "###
+    );
+
+    test_report!(
+        unsuffixed_fx_arg,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                ["Hello", "world!"]
+                |> forEach! Effect.putLine!
+
+            forEach! : List a, (a => {}) => {}
+            forEach! = \l, f ->
+                when l is
+                    [] -> {}
+                    [x, .. as xs] ->
+                        f x
+                        forEach! xs f
+            "#
+        ),
+        @r###"
+    ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
+
+    This is an effectful function, but its name does not indicate so:
+
+    10│  forEach! = \l, f ->
+                        ^
+
+    Add an exclamation mark at the end, like:
+
+        f!
+
+    This will help readers identify it as a source of effects.
+    "###
+    );
+
+    test_report!(
+        suffixed_pure_arg,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                Ok " hi "
+                |> mapOk  Str.trim
+                |> Result.withDefault ""
+                |> Effect.putLine!
+
+            mapOk : Result a err, (a -> b) -> Result b err
+            mapOk = \result, fn! ->
+                when result is
+                    Ok x -> Ok (fn! x)
+                    Err e -> Err e
+            "#
+        ),
+        @r###"
+    ── UNNECESSARY EXCLAMATION in /code/proj/Main.roc ──────────────────────────────
+
+    This is a pure function, but its name suggests otherwise:
+
+    12│  mapOk = \result, fn! ->
+                          ^^^
+
+    The exclamation mark at the end is reserved for effectful functions.
+
+    Hint: Did you forget to run an effect? Is the type annotation wrong?
+    "###
+    );
+
+    test_report!(
+        unsuffixed_tuple_fx_field,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                (get, put) = (Effect.getLine!, Effect.putLine!)
+
+                name = get {}
+                put "Hi, $(name)"
+            "#
+        ),
+        @r###"
+    ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
+
+    This function is effectful, but its name does not indicate so:
+
+    6│      (get, put) = (Effect.getLine!, Effect.putLine!)
+             ^^^
+
+    Add an exclamation mark at the end, like:
+
+        get!
+
+    This will help readers identify it as a source of effects.
+
+    ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
+
+    This function is effectful, but its name does not indicate so:
+
+    6│      (get, put) = (Effect.getLine!, Effect.putLine!)
+                  ^^^
+
+    Add an exclamation mark at the end, like:
+
+        put!
+
+    This will help readers identify it as a source of effects.
+    "###
+    );
+
+    test_report!(
+        suffixed_tuple_pure_field,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                (msg, trim!) = (" hi ", Str.trim)
+
+                Effect.putLine! (trim! msg)
+            "#
+        ),
+        @r###"
+    ── UNNECESSARY EXCLAMATION in /code/proj/Main.roc ──────────────────────────────
+
+    This function is pure, but its name suggests otherwise:
+
+    6│      (msg, trim!) = (" hi ", Str.trim)
+                  ^^^^^
+
+    The exclamation mark at the end is reserved for effectful functions.
+
+    Hint: Did you forget to run an effect? Is the type annotation wrong?
+    "###
+    );
+
+    test_report!(
+        unsuffixed_tag_fx_field,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                Tag get put = Tag Effect.getLine! Effect.putLine!
+
+                name = get {}
+                put "Hi, $(name)"
+            "#
+        ),
+        @r###"
+    ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
+
+    This function is effectful, but its name does not indicate so:
+
+    6│      Tag get put = Tag Effect.getLine! Effect.putLine!
+                ^^^
+
+    Add an exclamation mark at the end, like:
+
+        get!
+
+    This will help readers identify it as a source of effects.
+
+    ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
+
+    This function is effectful, but its name does not indicate so:
+
+    6│      Tag get put = Tag Effect.getLine! Effect.putLine!
+                    ^^^
+
+    Add an exclamation mark at the end, like:
+
+        put!
+
+    This will help readers identify it as a source of effects.
+    "###
+    );
+
+    test_report!(
+        suffixed_tag_pure_field,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                Tag msg trim! = Tag " hi " Str.trim
+
+                Effect.putLine! (trim! msg)
+            "#
+        ),
+        @r###"
+    ── UNNECESSARY EXCLAMATION in /code/proj/Main.roc ──────────────────────────────
+
+    This function is pure, but its name suggests otherwise:
+
+    6│      Tag msg trim! = Tag " hi " Str.trim
+                    ^^^^^
+
+    The exclamation mark at the end is reserved for effectful functions.
+
+    Hint: Did you forget to run an effect? Is the type annotation wrong?
+    "###
+    );
+
+    test_report!(
+        unsuffixed_opaque_fx_field,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            PutLine := Str => {}
+
+            main! = \{} ->
+                @PutLine put = @PutLine Effect.putLine!
+
+                put "Hi!"
+            "#
+        ),
+        @r###"
+    ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
+
+    This function is effectful, but its name does not indicate so:
+
+    8│      @PutLine put = @PutLine Effect.putLine!
+                     ^^^
+
+    Add an exclamation mark at the end, like:
+
+        put!
+
+    This will help readers identify it as a source of effects.
+    "###
+    );
+
+    test_report!(
+        suffixed_opaque_pure_field,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            Trim := Str -> Str
+
+            main! = \{} ->
+                @Trim trim! = @Trim Str.trim
+
+                Effect.putLine! (trim! " hi ")
+            "#
+        ),
+        @r###"
+    ── UNNECESSARY EXCLAMATION in /code/proj/Main.roc ──────────────────────────────
+
+    This function is pure, but its name suggests otherwise:
+
+    8│      @Trim trim! = @Trim Str.trim
+                  ^^^^^
+
+    The exclamation mark at the end is reserved for effectful functions.
+
+    Hint: Did you forget to run an effect? Is the type annotation wrong?
+    "###
+    );
+
+    test_report!(
+        fx_passed_to_untyped_pure_hof,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                pureHigherOrder Effect.putLine! "hi"
+
+            pureHigherOrder = \f, x -> f x
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+
+    This 1st argument to `pureHigherOrder` has an unexpected type:
+
+    6│      pureHigherOrder Effect.putLine! "hi"
+                            ^^^^^^^^^^^^^^^
+
+    This `Effect.putLine!` value is a:
+
+        Str => {}
+
+    But `pureHigherOrder` needs its 1st argument to be:
+
+        Str -> {}
+
+    ── UNNECESSARY EXCLAMATION in /code/proj/Main.roc ──────────────────────────────
+
+    This function is pure, but its name suggests otherwise:
+
+    5│  main! = \{} ->
+        ^^^^^
+
+    The exclamation mark at the end is reserved for effectful functions.
+
+    Hint: Did you forget to run an effect? Is the type annotation wrong?
+    "###
+    );
+
+    test_report!(
+        fx_passed_to_partially_inferred_pure_hof,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                pureHigherOrder Effect.putLine! "hi"
+
+            pureHigherOrder : _, _ -> _
+            pureHigherOrder = \f, x -> f x
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+
+    This 1st argument to `pureHigherOrder` has an unexpected type:
+
+    6│      pureHigherOrder Effect.putLine! "hi"
+                            ^^^^^^^^^^^^^^^
+
+    This `Effect.putLine!` value is a:
+
+        Str => {}
+
+    But `pureHigherOrder` needs its 1st argument to be:
+
+        Str -> {}
+
+    ── UNNECESSARY EXCLAMATION in /code/proj/Main.roc ──────────────────────────────
+
+    This function is pure, but its name suggests otherwise:
+
+    5│  main! = \{} ->
+        ^^^^^
+
+    The exclamation mark at the end is reserved for effectful functions.
+
+    Hint: Did you forget to run an effect? Is the type annotation wrong?
+    "###
     );
 }

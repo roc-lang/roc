@@ -24,17 +24,17 @@ Defs {
             @0-4 Identifier {
                 ident: "main",
             },
-            @17-24 Apply(
-                @17-24 Var {
+            @17-23 Apply(
+                @17-23 Var {
                     module_name: "Task",
                     ident: "await",
                 },
                 [
-                    @17-24 Var {
+                    @17-23 Var {
                         module_name: "",
                         ident: "getFoo",
                     },
-                    @17-24 Closure(
+                    @17-23 Closure(
                         [
                             @11-14 Identifier {
                                 ident: "foo",

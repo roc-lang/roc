@@ -30,18 +30,18 @@ Defs {
                     ident: "await",
                 },
                 [
-                    @16-24 Var {
+                    @16-23 Var {
                         module_name: "",
                         ident: "getList",
                     },
                     @11-120 Closure(
                         [
-                            @16-24 Identifier {
+                            @16-23 Identifier {
                                 ident: "#!2_arg",
                             },
                         ],
                         @11-120 When(
-                            @16-24 Var {
+                            @16-23 Var {
                                 module_name: "",
                                 ident: "#!2_arg",
                             },

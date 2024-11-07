@@ -1,7 +1,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 use crate::types::{
-    name_type_var, AbilitySet, AliasKind, ErrorType, ExtImplicitOpenness, Polarity, RecordField,
-    RecordFieldsError, TupleElemsError, TypeExt, Uls,
+    name_type_var, AbilitySet, AliasKind, ErrorFunctionFx, ErrorType, ExtImplicitOpenness,
+    Polarity, RecordField, RecordFieldsError, TupleElemsError, TypeExt, Uls,
 };
 use crate::unification_table::{self, UnificationTable};
 use roc_collections::all::{FnvMap, ImMap, ImSet, MutSet, SendMap};
@@ -711,6 +711,8 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
             write!(f, ", ^<{ambient_function_var:?}>)")
         }
         Content::ErasedLambda => write!(f, "ErasedLambda"),
+        Content::Pure => write!(f, "Pure"),
+        Content::Effectful => write!(f, "Effectful"),
         Content::RangedNumber(range) => {
             write!(f, "RangedNumber( {range:?})")
         }
@@ -733,7 +735,7 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
 
             write!(f, "Apply({name:?}, {slice:?})")
         }
-        FlatType::Func(arguments, lambda_set, result) => {
+        FlatType::Func(arguments, lambda_set, result, fx) => {
             let slice = subs.get_subs_slice(*arguments);
             write!(f, "Func([")?;
             for var in slice {
@@ -741,15 +743,18 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
                 write!(f, "<{:?}>{:?},", *var, SubsFmtContent(content, subs))?;
             }
             let result_content = subs.get_content_without_compacting(*result);
+            let fx_content = subs.get_content_without_compacting(*fx);
             let lambda_content = subs.get_content_without_compacting(*lambda_set);
             write!(
                 f,
-                "], <{:?}={:?}>{:?}, <{:?}>{:?})",
+                "], <{:?}={:?}>{:?}, <{:?}>{:?}, <{:?}>{:?})",
                 lambda_set,
                 subs.get_root_key_without_compacting(*lambda_set),
                 SubsFmtContent(lambda_content, subs),
                 *result,
-                SubsFmtContent(result_content, subs)
+                SubsFmtContent(result_content, subs),
+                *fx,
+                SubsFmtContent(fx_content, subs),
             )
         }
         FlatType::Record(fields, ext) => {
@@ -828,6 +833,7 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
         }
         FlatType::EmptyRecord => write!(f, "EmptyRecord"),
         FlatType::EmptyTagUnion => write!(f, "EmptyTagUnion"),
+        FlatType::EffectfulFunc => write!(f, "EffectfulFunc"),
     }
 }
 
@@ -1171,6 +1177,10 @@ define_const_var! {
 
     /// The erased lambda type.
     :pub ERASED_LAMBDA,
+
+    /// Kind of function
+    :pub PURE,
+    :pub EFFECTFUL,
 }
 
 impl Variable {
@@ -1631,6 +1641,8 @@ impl Subs {
         );
 
         subs.set_content(Variable::ERASED_LAMBDA, Content::ErasedLambda);
+        subs.set_content(Variable::PURE, Content::Pure);
+        subs.set_content(Variable::EFFECTFUL, Content::Effectful);
 
         subs
     }
@@ -2147,6 +2159,7 @@ impl Subs {
                 | Content::RangedNumber(_)
                 | Content::Error => return false,
                 Content::LambdaSet(_) | Content::ErasedLambda => return false,
+                Content::Pure | Content::Effectful => return false,
                 Content::Structure(FlatType::Func(..)) => return true,
                 Content::Structure(_) => return false,
                 Content::Alias(_, _, real_var, _) => {
@@ -2318,6 +2331,9 @@ pub enum Content {
     Alias(Symbol, AliasVariables, Variable, AliasKind),
     RangedNumber(crate::num::NumericRange),
     Error,
+    /// The fx type variable for a given function
+    Pure,
+    Effectful,
 }
 
 /// Stores the lambdas an arrow might pass through; for example
@@ -2568,7 +2584,9 @@ impl TagExt {
 #[derive(Clone, Copy, Debug)]
 pub enum FlatType {
     Apply(Symbol, VariableSubsSlice),
-    Func(VariableSubsSlice, Variable, Variable),
+    Func(VariableSubsSlice, Variable, Variable, Variable),
+    /// A function that we know nothing about yet except that it's effectful
+    EffectfulFunc,
     Record(RecordFields, Variable),
     Tuple(TupleElems, Variable),
     TagUnion(UnionTags, TagExt),
@@ -3441,10 +3459,11 @@ fn occurs(
                     ctx,
                     safe!([Variable], subs.get_subs_slice(*args)).iter(),
                 ),
-                Func(arg_vars, closure_var, ret_var) => {
+                Func(arg_vars, closure_var, ret_var, fx_var) => {
                     let it = iter::once(safe!(Variable, ret_var))
                         .chain(iter::once(safe!(Variable, closure_var)))
-                        .chain(safe!([Variable], subs.get_subs_slice(*arg_vars)).iter());
+                        .chain(safe!([Variable], subs.get_subs_slice(*arg_vars)).iter())
+                        .chain(iter::once(safe!(Variable, fx_var)));
                     short_circuit(subs, root_var, ctx, it)
                 }
                 Record(vars_by_field, ext) => {
@@ -3476,7 +3495,7 @@ fn occurs(
 
                     short_circuit_help(subs, root_var, ctx, ext_var)
                 }
-                EmptyRecord | EmptyTagUnion => Ok(()),
+                EmptyRecord | EmptyTagUnion | EffectfulFunc => Ok(()),
             },
             Alias(_, args, _, _) => {
                 // THEORY: we only need to explore the args, as that is the surface of all
@@ -3503,6 +3522,7 @@ fn occurs(
                 occurs_union(subs, root_var, ctx, safe!(UnionLabels<Symbol>, solved))
             }
             ErasedLambda => Ok(()),
+            Pure | Effectful => Ok(()),
             RangedNumber(_range_vars) => Ok(()),
         })();
 
@@ -3589,7 +3609,9 @@ fn explicit_substitute(
             | RigidAbleVar(_, _)
             | RecursionVar { .. }
             | Error
-            | ErasedLambda => in_var,
+            | ErasedLambda
+            | Pure
+            | Effectful => in_var,
 
             Structure(flat_type) => {
                 match flat_type {
@@ -3602,7 +3624,7 @@ fn explicit_substitute(
 
                         subs.set_content(in_var, Structure(Apply(symbol, args)));
                     }
-                    Func(arg_vars, closure_var, ret_var) => {
+                    Func(arg_vars, closure_var, ret_var, fx_var) => {
                         for var_index in arg_vars.into_iter() {
                             let var = subs[var_index];
                             let answer = explicit_substitute(subs, from, to, var, seen);
@@ -3612,10 +3634,11 @@ fn explicit_substitute(
                         let new_ret_var = explicit_substitute(subs, from, to, ret_var, seen);
                         let new_closure_var =
                             explicit_substitute(subs, from, to, closure_var, seen);
+                        let new_fx_var = explicit_substitute(subs, from, to, fx_var, seen);
 
                         subs.set_content(
                             in_var,
-                            Structure(Func(arg_vars, new_closure_var, new_ret_var)),
+                            Structure(Func(arg_vars, new_closure_var, new_ret_var, new_fx_var)),
                         );
                     }
                     TagUnion(tags, ext) => {
@@ -3666,7 +3689,7 @@ fn explicit_substitute(
                         subs.set_content(in_var, Structure(Tuple(vars_by_elem, new_ext)));
                     }
 
-                    EmptyRecord | EmptyTagUnion => {}
+                    EmptyRecord | EmptyTagUnion | EffectfulFunc => {}
                 }
 
                 in_var
@@ -3770,7 +3793,9 @@ fn get_var_names(
         subs.set_mark(var, Mark::GET_VAR_NAMES);
 
         match desc.content {
-            Error | FlexVar(None) | FlexAbleVar(None, _) | ErasedLambda => taken_names,
+            Error | FlexVar(None) | FlexAbleVar(None, _) | ErasedLambda | Pure | Effectful => {
+                taken_names
+            }
 
             FlexVar(Some(name_index)) | FlexAbleVar(Some(name_index), _) => add_name(
                 subs,
@@ -3834,9 +3859,10 @@ fn get_var_names(
                     })
                 }
 
-                FlatType::Func(arg_vars, closure_var, ret_var) => {
+                FlatType::Func(arg_vars, closure_var, ret_var, fx_var) => {
                     let taken_names = get_var_names(subs, ret_var, taken_names);
                     let taken_names = get_var_names(subs, closure_var, taken_names);
+                    debug_assert!(get_var_names(subs, fx_var, Default::default()).is_empty());
 
                     let mut accum = taken_names;
 
@@ -3849,7 +3875,9 @@ fn get_var_names(
                     accum
                 }
 
-                FlatType::EmptyRecord | FlatType::EmptyTagUnion => taken_names,
+                FlatType::EmptyRecord | FlatType::EmptyTagUnion | FlatType::EffectfulFunc => {
+                    taken_names
+                }
 
                 FlatType::Record(vars_by_field, ext) => {
                     let mut accum = get_var_names(subs, ext, taken_names);
@@ -4089,6 +4117,11 @@ fn content_to_err_type(
             ErrorType::Error
         }
 
+        Pure | Effectful => {
+            // Not exposed directly
+            ErrorType::Error
+        }
+
         RangedNumber(range) => {
             if state.context == ErrorTypeContext::ExpandRanges {
                 let mut types = Vec::new();
@@ -4178,7 +4211,7 @@ fn flat_type_to_err_type(
             ErrorType::Type(symbol, arg_types)
         }
 
-        Func(arg_vars, closure_var, ret_var) => {
+        Func(arg_vars, closure_var, ret_var, fx_var) => {
             let args = arg_vars
                 .into_iter()
                 .map(|index| {
@@ -4189,10 +4222,26 @@ fn flat_type_to_err_type(
 
             let ret = var_to_err_type(subs, state, ret_var, Polarity::Pos);
             let closure = var_to_err_type(subs, state, closure_var, pol);
+            let fx = match subs.get_content_without_compacting(fx_var) {
+                Content::Pure | Content::FlexVar(_) | Content::Error => ErrorFunctionFx::Pure,
+                Content::Effectful => ErrorFunctionFx::Effectful,
+                Content::RigidVar(_)
+                | Content::FlexAbleVar(_, _)
+                | Content::RigidAbleVar(_, _)
+                | Content::RecursionVar { .. }
+                | Content::LambdaSet(_)
+                | Content::ErasedLambda
+                | Content::Structure(_)
+                | Content::Alias(_, _, _, _)
+                | Content::RangedNumber(_) => {
+                    internal_error!("Unexpected content in fx var")
+                }
+            };
 
-            ErrorType::Function(args, Box::new(closure), Box::new(ret))
+            ErrorType::Function(args, Box::new(closure), fx, Box::new(ret))
         }
 
+        EffectfulFunc => ErrorType::EffectfulFunc,
         EmptyRecord => ErrorType::Record(SendMap::default(), TypeExt::Closed),
         EmptyTagUnion => ErrorType::TagUnion(SendMap::default(), TypeExt::Closed, pol),
 
@@ -4621,10 +4670,11 @@ impl StorageSubs {
             FlatType::Apply(symbol, arguments) => {
                 FlatType::Apply(*symbol, Self::offset_variable_slice(offsets, *arguments))
             }
-            FlatType::Func(arguments, lambda_set, result) => FlatType::Func(
+            FlatType::Func(arguments, lambda_set, result, fx) => FlatType::Func(
                 Self::offset_variable_slice(offsets, *arguments),
                 Self::offset_variable(offsets, *lambda_set),
                 Self::offset_variable(offsets, *result),
+                Self::offset_variable(offsets, *fx),
             ),
             FlatType::Record(record_fields, ext) => FlatType::Record(
                 Self::offset_record_fields(offsets, *record_fields),
@@ -4650,6 +4700,7 @@ impl StorageSubs {
             ),
             FlatType::EmptyRecord => FlatType::EmptyRecord,
             FlatType::EmptyTagUnion => FlatType::EmptyTagUnion,
+            FlatType::EffectfulFunc => FlatType::EffectfulFunc,
         }
     }
 
@@ -4691,6 +4742,8 @@ impl StorageSubs {
                 ambient_function: Self::offset_variable(offsets, *ambient_function_var),
             }),
             ErasedLambda => ErasedLambda,
+            Pure => Pure,
+            Effectful => Effectful,
             RangedNumber(range) => RangedNumber(*range),
             Error => Content::Error,
         }
@@ -4927,10 +4980,12 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
                     Apply(symbol, new_arguments)
                 }
 
-                Func(arguments, closure_var, ret_var) => {
+                Func(arguments, closure_var, ret_var, fx_var) => {
                     let new_ret_var = storage_copy_var_to_help(env, ret_var);
 
                     let new_closure_var = storage_copy_var_to_help(env, closure_var);
+
+                    let new_fx_var = storage_copy_var_to_help(env, fx_var);
 
                     let new_arguments = env.target.reserve_into_vars(arguments.len());
 
@@ -4940,7 +4995,7 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
                         env.target.variables[target_index] = copy_var;
                     }
 
-                    Func(new_arguments, new_closure_var, new_ret_var)
+                    Func(new_arguments, new_closure_var, new_ret_var, new_fx_var)
                 }
 
                 same @ EmptyRecord | same @ EmptyTagUnion => same,
@@ -5036,6 +5091,8 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
 
                     RecursiveTagUnion(new_rec_var, union_tags, new_ext)
                 }
+
+                EffectfulFunc => EffectfulFunc,
             };
 
             env.target
@@ -5054,7 +5111,7 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
             copy
         }
 
-        FlexVar(None) | ErasedLambda | Error => copy,
+        FlexVar(None) | ErasedLambda | Error | Pure | Effectful => copy,
 
         RecursionVar {
             opt_name,
@@ -5289,6 +5346,7 @@ fn is_registered(content: &Content) -> bool {
         | Content::RigidAbleVar(..) => false,
         Content::Structure(FlatType::EmptyRecord | FlatType::EmptyTagUnion) => false,
         Content::ErasedLambda => false,
+        Content::Pure | Content::Effectful => false,
 
         Content::Structure(_)
         | Content::RecursionVar { .. }
@@ -5393,10 +5451,12 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
                     Apply(symbol, new_arguments)
                 }
 
-                Func(arguments, closure_var, ret_var) => {
+                Func(arguments, closure_var, ret_var, fx_var) => {
                     let new_ret_var = copy_import_to_help(env, max_rank, ret_var);
 
                     let new_closure_var = copy_import_to_help(env, max_rank, closure_var);
+
+                    let new_fx_var = copy_import_to_help(env, max_rank, fx_var);
 
                     let new_arguments = env.target.reserve_into_vars(arguments.len());
 
@@ -5406,7 +5466,7 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
                         env.target.variables[target_index] = copy_var;
                     }
 
-                    Func(new_arguments, new_closure_var, new_ret_var)
+                    Func(new_arguments, new_closure_var, new_ret_var, new_fx_var)
                 }
 
                 same @ EmptyRecord | same @ EmptyTagUnion => same,
@@ -5501,6 +5561,7 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
 
                     RecursiveTagUnion(new_rec_var, union_tags, new_ext)
                 }
+                EffectfulFunc => EffectfulFunc,
             };
 
             env.target
@@ -5686,6 +5747,16 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
             copy
         }
 
+        Pure => {
+            env.target.set(copy, make_descriptor(Pure));
+            copy
+        }
+
+        Effectful => {
+            env.target.set(copy, make_descriptor(Effectful));
+            copy
+        }
+
         RangedNumber(range) => {
             let new_content = RangedNumber(range);
 
@@ -5760,7 +5831,7 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
                     }
                 })
             }
-            FlexVar(_) | FlexAbleVar(_, _) | ErasedLambda | Error => (),
+            FlexVar(_) | FlexAbleVar(_, _) | ErasedLambda | Error | Pure | Effectful => (),
 
             RecursionVar { structure, .. } => {
                 stack.push(*structure);
@@ -5771,15 +5842,17 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
                     stack.extend(var_slice!(*args));
                 }
 
-                Func(arg_vars, closure_var, ret_var) => {
+                Func(arg_vars, closure_var, ret_var, fx_var) => {
                     let arg_vars = *arg_vars;
                     let ret_var = *ret_var;
                     let closure_var = *closure_var;
+                    let fx_var = *fx_var;
 
                     stack.extend(var_slice!(arg_vars));
 
                     stack.push(ret_var);
                     stack.push(closure_var);
+                    stack.push(fx_var);
                 }
 
                 EmptyRecord | EmptyTagUnion => (),
@@ -5827,6 +5900,8 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
                     stack.push(ext.var());
                     stack.push(rec_var);
                 }
+
+                EffectfulFunc => {}
             },
             Alias(_, args, var, _) => {
                 let var = *var;
@@ -5900,10 +5975,11 @@ pub fn get_member_lambda_sets_at_region(subs: &Subs, var: Variable, target_regio
                 FlatType::Apply(_, vars) => {
                     stack.extend(subs.get_subs_slice(*vars));
                 }
-                FlatType::Func(args, lset, ret) => {
+                FlatType::Func(args, lset, ret, fx) => {
                     stack.extend(subs.get_subs_slice(*args));
                     stack.push(*lset);
                     stack.push(*ret);
+                    stack.push(*fx);
                 }
                 FlatType::Record(fields, ext) => {
                     stack.extend(subs.get_subs_slice(fields.variables()));
@@ -5933,7 +6009,7 @@ pub fn get_member_lambda_sets_at_region(subs: &Subs, var: Variable, target_regio
                     );
                     stack.push(ext.var());
                 }
-                FlatType::EmptyRecord | FlatType::EmptyTagUnion => {}
+                FlatType::EffectfulFunc | FlatType::EmptyRecord | FlatType::EmptyTagUnion => {}
             },
             Content::Alias(_, _, real_var, _) => {
                 stack.push(*real_var);
@@ -5948,7 +6024,9 @@ pub fn get_member_lambda_sets_at_region(subs: &Subs, var: Variable, target_regio
                 structure: _,
                 opt_name: _,
             }
-            | Content::ErasedLambda => {}
+            | Content::ErasedLambda
+            | Content::Pure
+            | Content::Effectful => {}
         }
     }
 
@@ -5974,9 +6052,10 @@ fn is_inhabited(subs: &Subs, var: Variable) -> bool {
             //     cannot have a tag union without a non-recursive variant.
             | Content::RecursionVar { .. } => {}
             Content::LambdaSet(_) | Content::ErasedLambda => {}
+            Content::Pure | Content::Effectful => {}
             Content::Structure(structure) => match structure {
                 FlatType::Apply(_, args) => stack.extend(subs.get_subs_slice(*args)),
-                FlatType::Func(args, _, ret) => {
+                FlatType::Func(args, _, ret, _fx) => {
                     stack.extend(subs.get_subs_slice(*args));
                     stack.push(*ret);
                 }
@@ -6006,6 +6085,7 @@ fn is_inhabited(subs: &Subs, var: Variable) -> bool {
                         return false;
                     }
                 }
+                FlatType::EffectfulFunc => {}
                 FlatType::FunctionOrTagUnion(_, _, _) => {}
                 FlatType::EmptyRecord => {}
                 FlatType::EmptyTagUnion => {
