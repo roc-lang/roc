@@ -2114,6 +2114,21 @@ fn constrain_function_def(
                 ret_type_index,
             ));
 
+            let mut early_return_constraints = Vec::with_capacity(function_def.early_returns.len());
+            for (early_return_variable, early_return_region) in &function_def.early_returns {
+                let early_return_var = constraints.push_variable(*early_return_variable);
+                let early_return_con = constraints.equal_types(
+                    early_return_var,
+                    return_type_annotation_expected,
+                    Category::Return,
+                    *early_return_region,
+                );
+
+                early_return_constraints.push(early_return_con);
+            }
+
+            let early_returns_constraint = constraints.and_constraint(early_return_constraints);
+
             let solved_fn_type = {
                 // TODO(types-soa) optimize for Variable
                 let pattern_types = types.from_old_type_slice(
@@ -2151,6 +2166,7 @@ fn constrain_function_def(
                     std::file!(),
                     std::line!(),
                 ),
+                early_returns_constraint,
                 constraints.let_constraint(
                     [],
                     argument_pattern_state.vars,

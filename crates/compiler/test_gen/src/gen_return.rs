@@ -107,3 +107,45 @@ fn early_return_solo() {
         true
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn early_return_annotated_function() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            failIfLessThanFive : U64 -> Result {} [LessThanFive]
+            failIfLessThanFive = \n ->
+                if n < 5 then
+                    Err LessThanFive
+                else
+                    Ok {}
+
+            validateInput : Str -> Result U64 [InvalidNumStr, LessThanFive]
+            validateInput = \str ->
+                num = try Str.toU64 str
+
+                when failIfLessThanFive num is
+                    Err err ->
+                        return Err err
+
+                    Ok {} ->
+                        Ok num
+
+            main : List Str
+            main =
+                ["abc", "3", "7"]
+                |> List.map validateInput
+                |> List.map Inspect.toStr
+            "#
+        ),
+        RocList::from_slice(&[
+            RocStr::from("(Err InvalidNumStr)"),
+            RocStr::from("(Err LessThanFive)"),
+            RocStr::from("(Ok 7)")
+        ]),
+        RocList<RocStr>
+    );
+}
