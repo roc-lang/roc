@@ -47,13 +47,11 @@ mod specialize_types {
         let (can_problems, type_problems) =
             format_problems(&src, home, &interns, can_problems, type_problems);
 
-        let subs = solved.inner_mut();
-
         exposed_to_host.retain(|s, _| !abilities_store.is_specialization_name(*s));
 
         debug_assert!(exposed_to_host.len() == 1, "{exposed_to_host:?}");
         let (_symbol, variable) = exposed_to_host.into_iter().next().unwrap();
-        let mut mono_cache = MonoCache::from_subs(subs);
+        let mut mono_cache = MonoCache::from_subs(&solved);
         let mut mono_types = MonoTypes::new();
         let debug_info = DebugInfo::new();
         let mut record_field_ids = RecordFieldIds::new();
@@ -61,7 +59,7 @@ mod specialize_types {
         let mut problems = Vec::new();
 
         mono_cache.monomorphize_var(
-            subs,
+            solved.inner_mut(),
             &mut mono_types,
             &mut record_field_ids,
             &mut tuple_elem_ids,
@@ -72,7 +70,13 @@ mod specialize_types {
 
         assert_eq!(problems, Vec::new());
 
-        let actual_str = name_and_print_var(variable, subs, home, &interns, DebugPrint::NOTHING);
+        let actual_str = name_and_print_var(
+            variable,
+            solved.inner_mut(),
+            home,
+            &interns,
+            DebugPrint::NOTHING,
+        );
 
         Ok((type_problems, can_problems, actual_str))
     }

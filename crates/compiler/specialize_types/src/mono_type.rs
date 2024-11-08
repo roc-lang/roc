@@ -12,6 +12,7 @@ impl MonoTypeId {
     }
 }
 
+#[derive(Debug)]
 pub struct MonoTypes {
     entries: Vec<MonoType>,
     ids: Vec<MonoTypeId>,

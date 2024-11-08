@@ -8,14 +8,14 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use soa::{Id, NonEmptySlice, Slice2, Slice3};
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MonoPatternId {
     inner: u32,
 }
 
 pub type IdentId = Symbol; // TODO make this an Index into an array local to this module
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Def {
     pub pattern: MonoPatternId,
     /// Named variables in the pattern, e.g. `a` in `Ok a ->`
@@ -30,6 +30,10 @@ pub struct MonoExprs {
 }
 
 impl MonoExprs {
+    pub fn new() -> Self {
+        Self { exprs: Vec::new() }
+    }
+
     pub fn add(&mut self, expr: MonoExpr) -> MonoExprId {
         let index = self.exprs.len() as u32;
         self.exprs.push(expr);
@@ -38,6 +42,16 @@ impl MonoExprs {
             inner: Id::new(index),
         }
     }
+
+    pub fn get(&self, id: MonoExprId) -> &MonoExpr {
+        debug_assert!(
+            self.exprs.get(id.inner.index()).is_some(),
+            "A MonoExprId was not found in MonoExprs. This should never happen!"
+        );
+
+        // Safety: we should only ever hand out MonoExprIds that are valid indices into here.
+        unsafe { self.exprs.get_unchecked(id.inner.index() as usize) }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,7 +59,7 @@ pub struct MonoExprId {
     inner: Id<MonoExpr>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum MonoExpr {
     Str,
     Number(Number),
@@ -189,7 +203,7 @@ pub enum MonoExpr {
     CompilerBug(Problem),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WhenBranch {
     pub patterns: Slice<MonoPatternId>,
     pub body: MonoExprId,

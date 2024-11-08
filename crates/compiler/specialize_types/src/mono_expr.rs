@@ -7,6 +7,7 @@ use crate::{
 };
 use roc_can::expr::{Expr, IntValue};
 use roc_collections::Push;
+use roc_solve::module::Solved;
 use roc_types::subs::Subs;
 
 pub struct Env<'c, 'd, 's, 't, P> {
@@ -21,6 +22,28 @@ pub struct Env<'c, 'd, 's, 't, P> {
 }
 
 impl<'c, 'd, 's, 't, P: Push<Problem>> Env<'c, 'd, 's, 't, P> {
+    pub fn new(
+        subs: &'s mut Solved<Subs>,
+        types_cache: &'c mut MonoCache,
+        mono_types: &'t mut MonoTypes,
+        mono_exprs: &'t mut MonoExprs,
+        record_field_ids: RecordFieldIds,
+        tuple_elem_ids: TupleElemIds,
+        debug_info: &'d mut Option<DebugInfo>,
+        problems: P,
+    ) -> Self {
+        Env {
+            subs: subs.inner_mut(),
+            types_cache,
+            mono_types,
+            mono_exprs,
+            record_field_ids,
+            tuple_elem_ids,
+            debug_info,
+            problems,
+        }
+    }
+
     pub fn to_mono_expr(&mut self, can_expr: Expr) -> Option<MonoExprId> {
         let problems = &mut self.problems;
         let mono_types = &mut self.mono_types;
@@ -67,6 +90,10 @@ impl<'c, 'd, 's, 't, P: Push<Problem>> Env<'c, 'd, 's, 't, P> {
                     return compiler_bug!(Problem::NumSpecializedToWrongType(None));
                 }
             },
+            Expr::EmptyRecord => {
+                // Empty records are zero-sized and should be discarded.
+                return None;
+            }
             _ => todo!(),
             // Expr::Float(var, _precision_var, _str, val, _bound) => {
             //     match mono_from_var(var) {
@@ -129,8 +156,10 @@ impl<'c, 'd, 's, 't, P: Push<Problem>> Env<'c, 'd, 's, 't, P> {
             //     ret_var,
             // } => todo!(),
             // Expr::Closure(closure_data) => todo!(),
-            // Expr::Record { record_var, fields } => todo!(),
-            // Expr::EmptyRecord => todo!(),
+            // Expr::Record { record_var, fields } => {
+            //     // TODO *after* having converted to mono (dropping zero-sized fields), if no fields remain, then return None.
+            //     todo!()
+            // }
             // Expr::Tuple { tuple_var, elems } => todo!(),
             // Expr::ImportParams(module_id, region, _) => todo!(),
             // Expr::Crash { msg, ret_var } => todo!(),

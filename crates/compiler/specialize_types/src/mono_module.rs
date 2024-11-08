@@ -1,3 +1,4 @@
+use roc_solve::module::Solved;
 use roc_types::subs::Subs;
 
 use crate::{foreign_symbol::ForeignSymbols, mono_type::MonoTypes, DebugInfo};
@@ -10,7 +11,7 @@ pub struct MonoModule {
 }
 
 impl MonoModule {
-    pub fn from_typed_can_module(subs: &Subs) -> Self {
+    pub fn from_typed_can_module(subs: &Solved<Subs>) -> Self {
         Self {
             mono_types: MonoTypes::new(),
             foreign_symbols: ForeignSymbols::new(),
@@ -20,5 +21,5 @@ impl MonoModule {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InternedStrId(u32);

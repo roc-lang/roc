@@ -2345,6 +2345,7 @@ dependencies = [
  "roc_serialize",
  "roc_types",
  "static_assertions",
+ "test_compile",
  "ven_pretty",
 ]
 
@@ -3105,6 +3106,7 @@ dependencies = [
  "roc_types",
  "roc_unify",
  "tempfile",
+ "test_compile",
  "test_solve_helpers",
 ]
 
@@ -3154,6 +3156,7 @@ dependencies = [
  "roc_types",
  "soa",
  "static_assertions",
+ "test_compile",
  "test_solve_helpers",
 ]
 
@@ -3811,6 +3814,8 @@ dependencies = [
  "pretty_assertions",
  "roc_builtins",
  "roc_can",
+ "roc_collections",
+ "roc_constrain",
  "roc_derive",
  "roc_load",
  "roc_module",
@@ -3819,6 +3824,8 @@ dependencies = [
  "roc_region",
  "roc_reporting",
  "roc_solve",
+ "roc_solve_problem",
+ "roc_specialize_types",
  "roc_target",
  "roc_types",
  "test_solve_helpers",

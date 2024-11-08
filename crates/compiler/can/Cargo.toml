@@ -28,3 +28,4 @@ static_assertions.workspace = true
 indoc.workspace = true
 insta.workspace = true
 pretty_assertions.workspace = true
+test_compile.workspace = true

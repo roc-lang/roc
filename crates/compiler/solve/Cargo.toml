@@ -43,3 +43,5 @@ lazy_static.workspace = true
 pretty_assertions.workspace = true
 regex.workspace = true
 tempfile.workspace = true
+
+test_compile.workspace = true

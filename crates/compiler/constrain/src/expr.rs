@@ -60,6 +60,16 @@ pub struct Env {
     pub home: ModuleId,
 }
 
+impl Env {
+    pub fn new(home: ModuleId) -> Self {
+        Self {
+            rigids: MutMap::default(),
+            resolutions_to_make: Vec::new(),
+            home,
+        }
+    }
+}
+
 fn constrain_untyped_args(
     types: &mut Types,
     constraints: &mut Constraints,

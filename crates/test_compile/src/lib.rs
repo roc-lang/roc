@@ -4,3 +4,20 @@ mod help_constrain;
 mod help_parse;
 mod help_solve;
 mod help_specialize;
+
+pub use help_can::{CanExpr, CanExprOut};
+pub use help_parse::ParseExpr;
+pub use help_solve::{SolvedExpr, SolvedExprOut};
+pub use help_specialize::{SpecializedExpr, SpecializedExprOut};
+
+pub fn can_expr<'a>(input: &'a str) -> CanExprOut {
+    CanExpr::default().can_expr(input)
+}
+
+pub fn solve_expr<'a>(input: &'a str) -> SolvedExprOut {
+    SolvedExpr::default().solve_expr(input)
+}
+
+pub fn specialize_expr<'a>(input: &'a str) -> SpecializedExprOut {
+    SpecializedExpr::default().specialize_expr(input)
+}

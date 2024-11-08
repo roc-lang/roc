@@ -1,6 +1,6 @@
 use roc_can::expr::IntValue;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Number {
     I8(i8),
     U8(u8),

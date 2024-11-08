@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use crate::help_parse::ParseExpr;
 use bumpalo::Bump;
 use roc_can::{
@@ -15,10 +13,12 @@ use roc_types::{
     subs::{VarStore, Variable},
     types::{AliasVar, Type},
 };
+use std::path::Path;
 
 #[derive(Debug)]
 pub struct CanExprOut {
-    pub loc_expr: Loc<Expr>,
+    pub expr: Expr,
+    pub region: Region,
     pub output: Output,
     pub problems: Vec<Problem>,
     pub home: ModuleId,
@@ -28,6 +28,8 @@ pub struct CanExprOut {
 }
 
 pub struct CanExpr {
+    pub(crate) home: ModuleId,
+
     parse_expr: ParseExpr,
 }
 
@@ -35,6 +37,7 @@ impl Default for CanExpr {
     fn default() -> Self {
         Self {
             parse_expr: ParseExpr::default(),
+            home: test_home(),
         }
     }
 }
@@ -108,7 +111,8 @@ impl CanExpr {
                 };
 
                 CanExprOut {
-                    loc_expr,
+                    expr: loc_expr.value,
+                    region: loc_expr.region,
                     output,
                     problems: env.problems,
                     home: env.home,
@@ -129,5 +133,9 @@ impl CanExpr {
 
     pub fn arena(&self) -> &Bump {
         &self.parse_expr.arena()
+    }
+
+    pub fn home(&self) -> ModuleId {
+        self.home
     }
 }

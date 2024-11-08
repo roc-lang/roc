@@ -10,6 +10,7 @@ use crate::{
 };
 use roc_collections::{Push, VecMap};
 use roc_module::ident::{Lowercase, TagName};
+use roc_solve::module::Solved;
 use roc_types::subs::{
     Content, FlatType, RecordFields, Subs, TagExt, TupleElems, UnionLabels, UnionTags, Variable,
 };
@@ -44,9 +45,9 @@ pub struct MonoCache {
 }
 
 impl MonoCache {
-    pub fn from_subs(subs: &Subs) -> Self {
+    pub fn from_subs(subs: &Solved<Subs>) -> Self {
         Self {
-            inner: VecMap::with_capacity(subs.len()),
+            inner: VecMap::with_capacity(subs.inner().len()),
         }
     }
 

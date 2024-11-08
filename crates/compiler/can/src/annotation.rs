@@ -130,7 +130,7 @@ pub struct AbleVariable {
     pub first_seen: Region,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct IntroducedVariables {
     pub wildcards: Vec<Loc<Variable>>,
     pub lambda_sets: Vec<Variable>,

@@ -132,7 +132,7 @@ impl IntValue {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
     // Literals
 
@@ -341,7 +341,7 @@ pub enum Expr {
     RuntimeError(RuntimeError),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ExpectLookup {
     pub symbol: Symbol,
     pub var: Variable,
@@ -419,7 +419,7 @@ impl Expr {
 
 /// Stores exhaustiveness-checking metadata for a closure argument that may
 /// have an annotated type.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AnnotatedMark {
     pub annotation_var: Variable,
     pub exhaustive: ExhaustiveMark,
@@ -443,7 +443,7 @@ impl AnnotatedMark {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ClosureData {
     pub function_type: Variable,
     pub closure_type: Variable,
@@ -536,7 +536,7 @@ impl StructAccessorData {
 /// An opaque wrapper like `@Foo`, which is equivalent to `\p -> @Foo p`
 /// These are desugared to closures, but we distinguish them so we can have
 /// better error messages during constraint generation.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct OpaqueWrapFunctionData {
     pub opaque_name: Symbol,
     pub opaque_var: Variable,
@@ -606,7 +606,7 @@ impl OpaqueWrapFunctionData {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Field {
     pub var: Variable,
     // The region of the full `foo: f bar`, rather than just `f bar`
@@ -630,7 +630,7 @@ impl Recursive {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct WhenBranchPattern {
     pub pattern: Loc<Pattern>,
     /// Degenerate branch patterns are those that don't fully bind symbols that the branch body
@@ -639,7 +639,7 @@ pub struct WhenBranchPattern {
     pub degenerate: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct WhenBranch {
     pub patterns: Vec<WhenBranchPattern>,
     pub value: Loc<Expr>,

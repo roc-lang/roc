@@ -305,7 +305,7 @@ impl FromIterator<Symbol> for AbilitySet {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct OptAbleVar {
     pub var: Variable,
     pub opt_abilities: Option<AbilitySet>,
@@ -3561,7 +3561,7 @@ pub enum MemberImpl {
     Error,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Alias {
     pub region: Region,
     pub type_variables: Vec<Loc<AliasVar>>,

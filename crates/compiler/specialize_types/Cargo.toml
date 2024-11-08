@@ -13,6 +13,7 @@ roc_region = { path = "../region" }
 roc_types = { path = "../types" }
 roc_collections = { path = "../collections" }
 roc_module = { path = "../module" }
+roc_solve = { path = "../solve" }
 
 bitvec.workspace = true
 arrayvec.workspace = true
@@ -35,4 +36,5 @@ roc_target = { path = "../roc_target" }
 roc_solve = { path = "../solve" }
 test_solve_helpers = { path = "../test_solve_helpers" }
 
+test_compile.workspace = true
 pretty_assertions.workspace = true
