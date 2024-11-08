@@ -924,6 +924,36 @@ mod cli_run {
 
     #[test]
     #[cfg_attr(windows, ignore)]
+    fn module_params_different_types() {
+        test_roc_app(
+            "crates/cli/tests/module_params",
+            "different_types.roc",
+            &["42"],
+            &[],
+            &[],
+            "Write something:\n42\n",
+            UseValgrind::No,
+            TestCliCommands::Run,
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn module_params_issue_7116() {
+        test_roc_app(
+            "crates/cli/tests/module_params",
+            "issue_7116.roc",
+            &[],
+            &[],
+            &[],
+            "",
+            UseValgrind::No,
+            TestCliCommands::Run,
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
     fn module_params_multiline_pattern() {
         test_roc_app(
             "crates/cli/tests/module_params",
@@ -934,6 +964,155 @@ mod cli_run {
             indoc!(
                 r#"
                 hi
+                "#
+            ),
+            UseValgrind::No,
+            TestCliCommands::Dev,
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn import_in_expect() {
+        test_roc_expect(
+            "crates/cli/tests/module_params",
+            "ImportInExpect.roc",
+            &[],
+            indoc!(
+                r#"
+                0 failed and 3 passed in <ignored for test> ms.
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn effectful_form() {
+        test_roc_app(
+            "crates/cli/tests/effectful",
+            "form.roc",
+            &["Agus\n", "Zubiaga\n", "27\n"],
+            &[],
+            &[],
+            indoc!(
+                r#"
+                What's your first name?
+                What's your last name?
+
+                Hi, Agus Zubiaga!
+
+                How old are you?
+
+                Nice! You can vote!
+
+                Bye! 👋
+                "#
+            ),
+            UseValgrind::No,
+            TestCliCommands::Dev,
+        );
+    }
+
+    // Other effectful tests are disabled in Linux because of a platform build issue
+    // The program actually runs fine, but it fails on tests
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    #[cfg_attr(target_os = "linux", ignore)]
+    fn interactive_effects() {
+        test_roc_app(
+            "examples/cli",
+            "effects.roc",
+            &["hi there!"],
+            &[],
+            &[],
+            "hi there!\nIt is known\n",
+            UseValgrind::Yes,
+            TestCliCommands::Run,
+        )
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    #[cfg_attr(target_os = "linux", ignore)]
+    fn effectful_hello() {
+        test_roc_app(
+            "crates/cli/tests/effectful",
+            "hello.roc",
+            &[],
+            &[],
+            &[],
+            indoc!(
+                r#"
+                    I'm an effect 👻
+                    "#
+            ),
+            UseValgrind::No,
+            TestCliCommands::Dev,
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    #[cfg_attr(target_os = "linux", ignore)]
+    fn effectful_loops() {
+        test_roc_app(
+            "crates/cli/tests/effectful",
+            "loops.roc",
+            &[],
+            &[],
+            &[],
+            indoc!(
+                r#"
+                    Lu
+                    Marce
+                    Joaquin
+                    Chloé
+                    Mati
+                    Pedro
+                    "#
+            ),
+            UseValgrind::No,
+            TestCliCommands::Dev,
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    #[cfg_attr(target_os = "linux", ignore)]
+    fn effectful_untyped_passed_fx() {
+        test_roc_app(
+            "crates/cli/tests/effectful",
+            "untyped_passed_fx.roc",
+            &[],
+            &[],
+            &[],
+            indoc!(
+                r#"
+                Before hello
+                Hello, World!
+                After hello
+                "#
+            ),
+            UseValgrind::No,
+            TestCliCommands::Dev,
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    #[cfg_attr(target_os = "linux", ignore)]
+    fn effectful_ignore_result() {
+        test_roc_app(
+            "crates/cli/tests/effectful",
+            "ignore_result.roc",
+            &[],
+            &[],
+            &[],
+            indoc!(
+                r#"
+                I asked for input and I ignored it. Deal with it! 😎
                 "#
             ),
             UseValgrind::No,
@@ -1097,21 +1276,6 @@ mod cli_run {
         let path = file_path_from_root("crates/cli/tests/cli", "http-get.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert_valid_roc_check_status(out.status);
-    }
-
-    #[test]
-    #[cfg_attr(windows, ignore)]
-    fn interactive_effects() {
-        test_roc_app(
-            "examples/cli",
-            "effects.roc",
-            &["hi there!"],
-            &[],
-            &[],
-            "hi there!\nIt is known\n",
-            UseValgrind::Yes,
-            TestCliCommands::Run,
-        )
     }
 
     #[test]

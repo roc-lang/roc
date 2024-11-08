@@ -92,7 +92,7 @@ impl<'a> LowerParams<'a> {
                             .retain(|(sym, _)| !home_param_symbols.contains(sym));
 
                         if let Some(ann) = &mut decls.annotations[index] {
-                            if let Type::Function(args, _, _) = &mut ann.signature {
+                            if let Type::Function(args, _, _, _) = &mut ann.signature {
                                 args.push(Type::Variable(var));
                             }
                         }
@@ -218,6 +218,7 @@ impl<'a> LowerParams<'a> {
                     captured_symbols: _,
                     name: _,
                     function_type: _,
+                    fx_type: _,
                     closure_type: _,
                     return_type: _,
                     early_returns: _,
@@ -519,6 +520,7 @@ impl<'a> LowerParams<'a> {
                 Loc::at_zero(Var(symbol, var)),
                 self.var_store.fresh(),
                 self.var_store.fresh(),
+                self.var_store.fresh(),
             ));
 
             let body = Call(
@@ -539,6 +541,7 @@ impl<'a> LowerParams<'a> {
                 function_type: self.var_store.fresh(),
                 closure_type: self.var_store.fresh(),
                 return_type: self.var_store.fresh(),
+                fx_type: self.var_store.fresh(),
                 early_returns: vec![],
                 name: self.unique_symbol(),
                 captured_symbols,
@@ -561,6 +564,7 @@ impl<'a> LowerParams<'a> {
         let call_fn = Box::new((
             self.var_store.fresh(),
             Loc::at_zero(Var(symbol, var)),
+            self.var_store.fresh(),
             self.var_store.fresh(),
             self.var_store.fresh(),
         ));

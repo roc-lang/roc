@@ -117,7 +117,7 @@ impl FlatEncodable {
                 }
                 FlatType::EmptyRecord => Ok(Key(FlatEncodableKey::Record(vec![]))),
                 FlatType::EmptyTagUnion => Ok(Key(FlatEncodableKey::TagUnion(vec![]))),
-                FlatType::Func(..) => Err(Underivable),
+                FlatType::Func(..) | FlatType::EffectfulFunc => Err(Underivable),
             },
             Content::Alias(sym, _, real_var, _) => match from_builtin_symbol(sym) {
                 Some(lambda) => lambda,
@@ -135,6 +135,7 @@ impl FlatEncodable {
             | Content::FlexAbleVar(_, _)
             | Content::RigidAbleVar(_, _) => Err(UnboundVar),
             Content::LambdaSet(_) | Content::ErasedLambda => Err(Underivable),
+            Content::Pure | Content::Effectful => Err(Underivable),
         }
     }
 

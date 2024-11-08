@@ -177,16 +177,17 @@ fn deep_copy_var_help(
                         Apply(symbol, new_arguments)
                     }
 
-                    Func(arguments, closure_var, ret_var) => {
+                    Func(arguments, closure_var, ret_var, fx_var) => {
                         let new_ret_var = work!(ret_var);
                         let new_closure_var = work!(closure_var);
+                        let new_fx_var = work!(fx_var);
 
                         let new_arguments = copy_sequence!(arguments.len(), arguments);
 
-                        Func(new_arguments, new_closure_var, new_ret_var)
+                        Func(new_arguments, new_closure_var, new_ret_var, new_fx_var)
                     }
 
-                    same @ EmptyRecord | same @ EmptyTagUnion => same,
+                    same @ (EmptyRecord | EmptyTagUnion | EffectfulFunc) => same,
 
                     Record(fields, ext_var) => {
                         let record_fields = {
@@ -263,7 +264,7 @@ fn deep_copy_var_help(
                 subs.set_content_unchecked(copy, Structure(new_flat_type));
             }
 
-            FlexVar(_) | FlexAbleVar(_, _) | Error | ErasedLambda => {
+            FlexVar(_) | FlexAbleVar(_, _) | Error | ErasedLambda | Pure | Effectful => {
                 subs.set_content_unchecked(copy, content);
             }
 

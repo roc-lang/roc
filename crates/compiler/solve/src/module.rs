@@ -186,7 +186,9 @@ pub fn exposed_types_storage_subs(
                         .as_inner()
                         .get_content_without_compacting(imported_lset_ambient_function_var)
                     {
-                        Content::Structure(FlatType::Func(_, lambda_set_var, _)) => *lambda_set_var,
+                        Content::Structure(FlatType::Func(_, lambda_set_var, _, _)) => {
+                            *lambda_set_var
+                        }
                         content => internal_error!(
                             "ambient lambda set function import is not a function, found: {:?}",
                             roc_types::subs::SubsFmtContent(content, storage_subs.as_inner())

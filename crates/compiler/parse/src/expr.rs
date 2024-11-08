@@ -3120,7 +3120,7 @@ fn stmts_to_defs<'a>(
                 break;
             }
             Stmt::Expr(e) => {
-                if is_expr_suffixed(&e) && i + 1 < stmts.len() {
+                if i + 1 < stmts.len() {
                     defs.push_value_def(
                         ValueDef::Stmt(arena.alloc(Loc::at(sp_stmt.item.region, e))),
                         sp_stmt.item.region,
@@ -3128,10 +3128,6 @@ fn stmts_to_defs<'a>(
                         &[],
                     );
                 } else {
-                    if last_expr.is_some() {
-                        return Err(EExpr::StmtAfterExpr(sp_stmt.item.region.start()));
-                    }
-
                     let e = if sp_stmt.before.is_empty() {
                         e
                     } else {
@@ -3142,10 +3138,6 @@ fn stmts_to_defs<'a>(
                 }
             }
             Stmt::Backpassing(pats, call) => {
-                if last_expr.is_some() {
-                    return Err(EExpr::StmtAfterExpr(sp_stmt.item.region.start()));
-                }
-
                 if i + 1 >= stmts.len() {
                     return Err(EExpr::BackpassContinue(sp_stmt.item.region.end()));
                 }
@@ -3169,10 +3161,6 @@ fn stmts_to_defs<'a>(
             }
 
             Stmt::TypeDef(td) => {
-                if last_expr.is_some() {
-                    return Err(EExpr::StmtAfterExpr(sp_stmt.item.region.start()));
-                }
-
                 if let (
                     TypeDef::Alias {
                         header,
@@ -3224,10 +3212,6 @@ fn stmts_to_defs<'a>(
                 }
             }
             Stmt::ValueDef(vd) => {
-                if last_expr.is_some() {
-                    return Err(EExpr::StmtAfterExpr(sp_stmt.item.region.start()));
-                }
-
                 // NOTE: it shouldn't be necessary to convert ValueDef::Dbg into an expr, but
                 // it turns out that ValueDef::Dbg exposes some bugs in the rest of the compiler.
                 // In particular, it seems that the solver thinks the dbg expr must be a bool.

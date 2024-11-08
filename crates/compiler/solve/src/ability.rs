@@ -718,11 +718,12 @@ trait DerivableVisitor {
                             push_var_slice!(vars)
                         }
                     }
-                    Func(args, _clos, ret) => {
+                    Func(args, _clos, ret, fx) => {
                         let descend = Self::visit_func(var)?;
                         if descend.0 {
                             push_var_slice!(args);
                             stack.push(ret);
+                            stack.push(fx);
                         }
                     }
                     Record(fields, ext) => {
@@ -779,6 +780,12 @@ trait DerivableVisitor {
                     }
                     EmptyRecord => Self::visit_empty_record(var)?,
                     EmptyTagUnion => Self::visit_empty_tag_union(var)?,
+                    EffectfulFunc => {
+                        return Err(NotDerivable {
+                            var,
+                            context: NotDerivableContext::NoContext,
+                        })
+                    }
                 },
                 Alias(
                     Symbol::NUM_NUM | Symbol::NUM_INTEGER,
@@ -824,6 +831,12 @@ trait DerivableVisitor {
                     })
                 }
                 ErasedLambda => {
+                    return Err(NotDerivable {
+                        var,
+                        context: NotDerivableContext::NoContext,
+                    })
+                }
+                Pure | Effectful => {
                     return Err(NotDerivable {
                         var,
                         context: NotDerivableContext::NoContext,

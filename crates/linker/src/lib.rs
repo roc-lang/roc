@@ -97,7 +97,7 @@ pub fn generate_stub_lib(
         .exposed_to_host
         .top_level_values
         .keys()
-        .map(|x| x.as_str(&loaded.interns).to_string())
+        .map(|x| x.as_unsuffixed_str(&loaded.interns).to_string())
         .collect();
 
     let exported_closure_types = loaded
@@ -108,7 +108,7 @@ pub fn generate_stub_lib(
             format!(
                 "{}_{}",
                 x.module_string(&loaded.interns),
-                x.as_str(&loaded.interns)
+                x.as_unsuffixed_str(&loaded.interns)
             )
         })
         .collect();
@@ -162,7 +162,7 @@ impl ExposedSymbols {
         let mut custom_names = Vec::new();
 
         for x in exposed_to_host.top_level_values.keys() {
-            let sym = x.as_str(interns);
+            let sym = x.as_unsuffixed_str(interns);
 
             custom_names.extend([
                 format!("roc__{sym}_1_exposed"),
@@ -170,10 +170,13 @@ impl ExposedSymbols {
                 format!("roc__{sym}_1_exposed_size"),
             ]);
 
-            let exported_closure_types = exposed_to_host
-                .closure_types
-                .iter()
-                .map(|x| format!("{}_{}", x.module_string(interns), x.as_str(interns)));
+            let exported_closure_types = exposed_to_host.closure_types.iter().map(|x| {
+                format!(
+                    "{}_{}",
+                    x.module_string(interns),
+                    x.as_unsuffixed_str(interns)
+                )
+            });
 
             for (i, _) in exported_closure_types.enumerate() {
                 custom_names.extend([
@@ -185,7 +188,7 @@ impl ExposedSymbols {
         }
 
         for x in &exposed_to_host.getters {
-            let sym = x.as_str(interns);
+            let sym = x.as_unsuffixed_str(interns);
             custom_names.extend([
                 sym.to_string(),
                 format!("{sym}_generic"),
@@ -194,7 +197,7 @@ impl ExposedSymbols {
         }
 
         for (top_level_value, lambda_set_id) in &exposed_to_host.lambda_sets {
-            let sym = top_level_value.as_str(interns);
+            let sym = top_level_value.as_unsuffixed_str(interns);
             let id = lambda_set_id.0;
             custom_names.extend([format!("roc__{sym}_{id}_caller")]);
         }

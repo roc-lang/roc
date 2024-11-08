@@ -1,11 +1,27 @@
-app [main] { pf: platform "effects-platform/main.roc" }
+app [main!] { pf: platform "effects-platform/main.roc" }
 
-import pf.PlatformTasks
+import pf.Effect
 
-main : Task {} []
-main =
-    line = PlatformTasks.getLine!
-    PlatformTasks.putLine! "You entered: $(line)"
-    PlatformTasks.putLine! "It is known"
+main! : {} => {}
+main! = \{} ->
+    ["Welcome!", "What's your name?"]
+    |> forEach! Effect.putLine!
 
-    Task.ok {}
+    line = Effect.getLine! {}
+
+    if line == "secret" then
+        Effect.putLine! "You found the secret"
+        Effect.putLine! "Congratulations!"
+    else
+        {}
+
+    Effect.putLine! "You entered: $(line)"
+    Effect.putLine! "It is known"
+
+forEach! : List a, (a => {}) => {}
+forEach! = \l, f! ->
+    when l is
+        [] -> {}
+        [x, .. as xs] ->
+            f! x
+            forEach! xs f!

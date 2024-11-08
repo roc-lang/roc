@@ -394,6 +394,7 @@ pub enum StrLiteral<'a> {
 /// Values that can be tried, extracting success values or "returning early" on failure
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TryTarget {
+    // TODO: Remove when purity inference replaces Task fully
     /// Tasks suffixed with ! are `Task.await`ed
     Task,
     /// Results suffixed with ? are `Result.try`ed
@@ -841,6 +842,8 @@ pub enum ValueDef<'a> {
     IngestedFileImport(IngestedFileImport<'a>),
 
     Stmt(&'a Loc<Expr<'a>>),
+
+    StmtAfterExpr,
 }
 
 impl<'a> ValueDef<'a> {
@@ -1093,7 +1096,9 @@ impl<'a, 'b> Iterator for RecursiveValueDefIter<'a, 'b> {
                             }
                         }
                         ValueDef::Stmt(loc_expr) => self.push_pending_from_expr(&loc_expr.value),
-                        ValueDef::Annotation(_, _) | ValueDef::IngestedFileImport(_) => {}
+                        ValueDef::Annotation(_, _)
+                        | ValueDef::IngestedFileImport(_)
+                        | ValueDef::StmtAfterExpr => {}
                     }
 
                     self.index += 1;
@@ -1531,9 +1536,21 @@ impl ImplementsAbilities<'_> {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
+pub enum FunctionArrow {
+    /// ->
+    Pure,
+    /// =>
+    Effectful,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum TypeAnnotation<'a> {
-    /// A function. The types of its arguments, then the type of its return value.
-    Function(&'a [Loc<TypeAnnotation<'a>>], &'a Loc<TypeAnnotation<'a>>),
+    /// A function. The types of its arguments, the type of arrow used, then the type of its return value.
+    Function(
+        &'a [Loc<TypeAnnotation<'a>>],
+        FunctionArrow,
+        &'a Loc<TypeAnnotation<'a>>,
+    ),
 
     /// Applying a type to some arguments (e.g. Map.Map String Int)
     Apply(&'a str, &'a str, &'a [Loc<TypeAnnotation<'a>>]),
@@ -2740,6 +2757,7 @@ impl<'a> Malformed for ValueDef<'a> {
                 annotation,
             }) => path.is_malformed() || annotation.is_malformed(),
             ValueDef::Stmt(loc_expr) => loc_expr.is_malformed(),
+            ValueDef::StmtAfterExpr => false,
         }
     }
 }
@@ -2755,7 +2773,7 @@ impl<'a> Malformed for ModuleImportParams<'a> {
 impl<'a> Malformed for TypeAnnotation<'a> {
     fn is_malformed(&self) -> bool {
         match self {
-            TypeAnnotation::Function(args, ret) => {
+            TypeAnnotation::Function(args, _arrow, ret) => {
                 args.iter().any(|arg| arg.is_malformed()) || ret.is_malformed()
             }
             TypeAnnotation::Apply(_, _, args) => args.iter().any(|arg| arg.is_malformed()),

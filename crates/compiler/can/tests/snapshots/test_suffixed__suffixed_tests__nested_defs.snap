@@ -45,17 +45,17 @@ Defs {
                             @11-12 Identifier {
                                 ident: "x",
                             },
-                            @27-29 Apply(
-                                @27-29 Var {
+                            @27-28 Apply(
+                                @27-28 Var {
                                     module_name: "Task",
                                     ident: "await",
                                 },
                                 [
-                                    @27-29 Var {
+                                    @27-28 Var {
                                         module_name: "",
                                         ident: "b",
                                     },
-                                    @27-29 Closure(
+                                    @27-28 Closure(
                                         [
                                             @23-24 Identifier {
                                                 ident: "a",
