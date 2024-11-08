@@ -263,7 +263,7 @@ mod tests {
     use std::io::Write;
     use tempfile::{tempdir, TempDir};
 
-    const FORMATTED_ROC: &str = r#"app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.15.0/SlwdbJ-3GR7uBWQo6zlmYWNYOxnvo8r6YABXD-45UOw.tar.br" }
+    const FORMATTED_ROC: &str = r#"app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.16.0/O00IPk-Krg_diNS2dVWlI0ZQP794Vctxzv0ha96mK0E.tar.br" }
 
 import pf.Stdout
 import pf.Stdin
@@ -273,7 +273,7 @@ main =
     name = Stdin.line!
     Stdout.line! "Hi $(name)!""#;
 
-    const UNFORMATTED_ROC: &str = r#"app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.15.0/SlwdbJ-3GR7uBWQo6zlmYWNYOxnvo8r6YABXD-45UOw.tar.br" }
+    const UNFORMATTED_ROC: &str = r#"app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.16.0/O00IPk-Krg_diNS2dVWlI0ZQP794Vctxzv0ha96mK0E.tar.br" }
 
 
 import pf.Stdout
