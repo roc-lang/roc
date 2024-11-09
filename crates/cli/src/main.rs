@@ -4,11 +4,11 @@ use roc_build::link::LinkType;
 use roc_build::program::{check_file, CodeGenBackend};
 use roc_cli::{
     build_app, format_files, format_src, test, BuildConfig, FormatMode, CMD_BUILD, CMD_CHECK,
-    CMD_DEV, CMD_DOCS, CMD_FORMAT, CMD_GEN_STUB_LIB, CMD_GLUE, CMD_PREPROCESS_HOST, CMD_REPL,
-    CMD_RUN, CMD_TEST, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_LIB, FLAG_MAIN,
-    FLAG_NO_COLOR, FLAG_NO_HEADER, FLAG_NO_LINK, FLAG_OUTPUT, FLAG_PP_DYLIB, FLAG_PP_HOST,
-    FLAG_PP_PLATFORM, FLAG_STDIN, FLAG_STDOUT, FLAG_TARGET, FLAG_TIME, GLUE_DIR, GLUE_SPEC,
-    ROC_FILE, VERSION,
+    CMD_DEV, CMD_DOCS, CMD_FORMAT, CMD_GEN_STUB_LIB, CMD_GLUE, CMD_INIT, CMD_PREPROCESS_HOST,
+    CMD_REPL, CMD_RUN, CMD_TEST, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_LIB,
+    FLAG_MAIN, FLAG_NO_COLOR, FLAG_NO_HEADER, FLAG_NO_LINK, FLAG_OUTPUT, FLAG_PP_DYLIB,
+    FLAG_PP_HOST, FLAG_PP_PLATFORM, FLAG_STDIN, FLAG_STDOUT, FLAG_TARGET, FLAG_TIME, GLUE_DIR,
+    GLUE_SPEC, INIT_DIR, ROC_FILE, ROC_PLATFORM, VERSION,
 };
 use roc_docs::generate_docs_html;
 use roc_error_macros::user_error;
@@ -97,6 +97,20 @@ fn main() -> io::Result<()> {
                 )
             } else {
                 eprintln!("What .roc file do you want to build? Specify it at the end of the `roc run` command.");
+
+                Ok(1)
+            }
+        }
+        Some((CMD_INIT, matches)) => {
+            let _platform_path = matches.get_one::<PathBuf>(ROC_PLATFORM).unwrap();
+            let output_path = matches.get_one::<PathBuf>(INIT_DIR).unwrap();
+
+            if !output_path.exists() || output_path.is_dir() {
+                // TODO: implement
+                eprintln!("This feature is currently being implemented");
+                Ok(0)
+            } else {
+                eprintln!("`roc init` must be given a directory to output into, because the init might generate multiple files.");
 
                 Ok(1)
             }
