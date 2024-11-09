@@ -241,7 +241,16 @@ fn add_source_files<W: Write>(
         // Symlinks may not work on Windows, and directories will get automatically
         // added based on the paths of the files inside anyway. (In fact, if we don't
         // filter out directories in this step, then empty ones can sometimes be added!)
-        if path.is_file() {
+        if path.is_file() && path.file_name().and_then(OsStr::to_str) == Some("init.roc") {
+            eprintln!("I should handle init.roc");
+            builder.append_path_with_name(
+                path,
+                // Store it without the root path, so that (for example) we don't store
+                // `examples/cli/main.roc` and therefore end up with the root of the tarball
+                // being an `examples/cli/` dir instead of having `main.roc` in the root.
+                path.strip_prefix(root_dir).unwrap(),
+            )?;
+        } else if path.is_file() {
             add_ingested_files(arena, root_dir, path, builder)?;
 
             builder.append_path_with_name(
