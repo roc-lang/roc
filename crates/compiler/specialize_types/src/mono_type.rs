@@ -7,6 +7,68 @@ pub struct MonoTypeId {
 }
 
 impl MonoTypeId {
+    pub const CRASH: Self = Self {
+        inner: Index::new(0),
+    };
+
+    pub const STR: Self = Self {
+        inner: Index::new(1),
+    };
+
+    pub const U8: Self = Self {
+        inner: Index::new(2),
+    };
+
+    pub const I8: Self = Self {
+        inner: Index::new(3),
+    };
+
+    pub const U16: Self = Self {
+        inner: Index::new(4),
+    };
+
+    pub const I16: Self = Self {
+        inner: Index::new(5),
+    };
+
+    pub const U32: Self = Self {
+        inner: Index::new(6),
+    };
+
+    pub const I32: Self = Self {
+        inner: Index::new(7),
+    };
+    pub const U64: Self = Self {
+        inner: Index::new(8),
+    };
+
+    pub const I64: Self = Self {
+        inner: Index::new(9),
+    };
+
+    pub const U128: Self = Self {
+        inner: Index::new(10),
+    };
+
+    pub const I128: Self = Self {
+        inner: Index::new(11),
+    };
+
+    pub const F32: Self = Self {
+        inner: Index::new(12),
+    };
+
+    pub const F64: Self = Self {
+        inner: Index::new(13),
+    };
+
+    pub const DEC: Self = Self {
+        inner: Index::new(14),
+    };
+
+    pub const DEFAULT_INT: Self = Self::I64; // TODO change this to I128
+    pub const DEFAULT_FRAC: Self = Self::DEC;
+
     fn new(inner: Index<MonoType>) -> Self {
         Self { inner }
     }
@@ -22,7 +84,23 @@ pub struct MonoTypes {
 impl MonoTypes {
     pub fn new() -> Self {
         Self {
-            entries: Vec::new(),
+            entries: vec![
+                MonoType::Primitive(Primitive::Crash),
+                MonoType::Primitive(Primitive::Str),
+                MonoType::Primitive(Primitive::U8),
+                MonoType::Primitive(Primitive::I8),
+                MonoType::Primitive(Primitive::U16),
+                MonoType::Primitive(Primitive::I16),
+                MonoType::Primitive(Primitive::U32),
+                MonoType::Primitive(Primitive::I32),
+                MonoType::Primitive(Primitive::U64),
+                MonoType::Primitive(Primitive::I64),
+                MonoType::Primitive(Primitive::U128),
+                MonoType::Primitive(Primitive::I128),
+                MonoType::Primitive(Primitive::F32),
+                MonoType::Primitive(Primitive::F64),
+                MonoType::Primitive(Primitive::Dec),
+            ],
             ids: Vec::new(),
             slices: Vec::new(),
         }
@@ -150,10 +228,8 @@ impl MonoTypes {
 /// In the future, we may promote common builtin types to Primitives, e.g. List U8, List Str, etc.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Primitive {
+    Crash,
     Str,
-    Dec,
-    F32,
-    F64,
     U8,
     I8,
     U16,
@@ -164,6 +240,9 @@ pub enum Primitive {
     I64,
     U128,
     I128,
+    F32,
+    F64,
+    Dec,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

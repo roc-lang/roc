@@ -9,10 +9,14 @@ use crate::{
     MonoFieldId, MonoType,
 };
 use roc_collections::{Push, VecMap};
-use roc_module::ident::{Lowercase, TagName};
+use roc_module::{
+    ident::{Lowercase, TagName},
+    symbol::Symbol,
+};
 use roc_solve::module::Solved;
 use roc_types::subs::{
-    Content, FlatType, RecordFields, Subs, TagExt, TupleElems, UnionLabels, UnionTags, Variable,
+    Content, FlatType, RecordFields, Subs, SubsSlice, TagExt, TupleElems, UnionLabels, UnionTags,
+    Variable,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,6 +34,7 @@ pub enum Problem {
     CharSpecializedToWrongType(
         Option<MonoType>, // `None` means it specialized to Unit
     ),
+    BadNumTypeParam,
 }
 
 /// For MonoTypes that are records, store their field indices.
@@ -98,19 +103,31 @@ fn lower_var<P: Push<Problem>>(
     // TODO: we could replace this cache by having Subs store a Content::Monomorphic(MonoTypeId)
     // and then overwrite it rather than having a separate cache. That memory is already in cache
     // for sure, and the lookups should be faster because they're O(1) but don't require hashing.
+    // Kinda creates a cyclic dep though.
     if let Some(mono_id) = env.cache.inner.get(&root_var) {
         return Some(*mono_id);
     }
 
     // Convert the Content to a MonoType, often by passing an iterator. None of these iterators introduce allocations.
-    let opt_mono_id = match *subs.get_content_without_compacting(root_var) {
+    let mono_id = match *subs.get_content_without_compacting(root_var) {
         Content::Structure(flat_type) => match flat_type {
             FlatType::Apply(symbol, args) => {
-                let new_args = args
-                    .into_iter()
-                    .flat_map(|var_index| lower_var(env, subs, subs[var_index]));
+                if symbol.is_builtin() {
+                    if symbol == Symbol::NUM_NUM {
+                        num_args_to_mono_id(args, subs, env.problems)
+                    } else if symbol == Symbol::LIST_LIST {
+                        todo!();
+                        // let mut new_args = args
+                        //     .into_iter()
+                        //     .flat_map(|var_index| lower_var(env, subs, subs[var_index]));
 
-                todo!("maybe instead of making new_args, branch and then call lower_var to create Primitive, List, Box, etc.");
+                        // let arg = new_args.next();
+                    } else {
+                        todo!()
+                    }
+                } else {
+                    todo!("handle non-builtin Apply");
+                }
             }
             // FlatType::Func(args, _capture, ret) => {
             //     let mono_args = args
@@ -240,13 +257,122 @@ fn lower_var<P: Push<Problem>>(
         }
     };
 
-    if let Some(mono_id) = opt_mono_id {
-        // This var is now known to be monomorphic, so we don't repeat this work again later.
-        // (We don't insert entries for Unit values.)
-        env.cache.inner.insert(root_var, mono_id);
+    // This var is now known to be monomorphic, so we don't repeat this work again later.
+    // (We don't insert entries for Unit values.)
+    env.cache.inner.insert(root_var, mono_id);
+
+    Some(mono_id)
+}
+
+fn num_args_to_mono_id(
+    args: SubsSlice<Variable>,
+    subs: &Subs,
+    problems: &mut impl Push<Problem>,
+) -> MonoTypeId {
+    match args.into_iter().next() {
+        Some(arg_index) if args.len() == 1 => {
+            match subs.get_content_without_compacting(subs[arg_index]) {
+                Content::Structure(flat_type) => {
+                    if let FlatType::Apply(outer_symbol, args) = flat_type {
+                        let outer_symbol = *outer_symbol;
+
+                        match args.into_iter().next() {
+                            Some(arg_index) if args.len() == 1 => {
+                                match subs.get_content_without_compacting(subs[arg_index]) {
+                                    Content::Structure(flat_type) => {
+                                        if let FlatType::Apply(inner_symbol, args) = flat_type {
+                                            let inner_symbol = *inner_symbol;
+
+                                            if args.is_empty() {
+                                                if outer_symbol == Symbol::NUM_INTEGER {
+                                                    if inner_symbol == Symbol::NUM_UNSIGNED8 {
+                                                        return MonoTypeId::U8;
+                                                    } else if inner_symbol == Symbol::NUM_SIGNED8 {
+                                                        return MonoTypeId::I8;
+                                                    } else if inner_symbol == Symbol::NUM_UNSIGNED16
+                                                    {
+                                                        return MonoTypeId::U16;
+                                                    } else if inner_symbol == Symbol::NUM_SIGNED16 {
+                                                        return MonoTypeId::I16;
+                                                    } else if inner_symbol == Symbol::NUM_UNSIGNED32
+                                                    {
+                                                        return MonoTypeId::U32;
+                                                    } else if inner_symbol == Symbol::NUM_SIGNED32 {
+                                                        return MonoTypeId::I32;
+                                                    } else if inner_symbol == Symbol::NUM_UNSIGNED64
+                                                    {
+                                                        return MonoTypeId::U64;
+                                                    } else if inner_symbol == Symbol::NUM_SIGNED64 {
+                                                        return MonoTypeId::I64;
+                                                    } else if inner_symbol
+                                                        == Symbol::NUM_UNSIGNED128
+                                                    {
+                                                        return MonoTypeId::U128;
+                                                    } else if inner_symbol == Symbol::NUM_SIGNED128
+                                                    {
+                                                        return MonoTypeId::I128;
+                                                    }
+                                                } else if outer_symbol == Symbol::NUM_FLOATINGPOINT
+                                                {
+                                                    if inner_symbol == Symbol::NUM_BINARY32 {
+                                                        return MonoTypeId::F32;
+                                                    } else if inner_symbol == Symbol::NUM_BINARY64 {
+                                                        return MonoTypeId::F64;
+                                                    } else if inner_symbol == Symbol::NUM_DECIMAL {
+                                                        return MonoTypeId::DEC;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Content::FlexVar(_) => {
+                                        if outer_symbol == Symbol::NUM_INTEGER {
+                                            // Int *
+                                            return MonoTypeId::DEFAULT_INT;
+                                        } else if outer_symbol == Symbol::NUM_FLOATINGPOINT {
+                                            // Frac *
+                                            return MonoTypeId::DEFAULT_FRAC;
+                                        }
+                                    }
+                                    Content::Alias(
+                                        symbol,
+                                        alias_variables,
+                                        variable,
+                                        alias_kind,
+                                    ) => todo!(),
+                                    Content::RangedNumber(numeric_range) => todo!(),
+                                    _ => {
+                                        // no-op
+                                    }
+                                }
+                            }
+                            _ => {
+                                // no-op
+                            }
+                        }
+                    }
+                }
+                Content::FlexVar(subs_index) => {
+                    // Num *
+                    return MonoTypeId::DEFAULT_INT;
+                }
+                Content::Alias(symbol, alias_variables, variable, alias_kind) => todo!(),
+                Content::RangedNumber(numeric_range) => todo!(),
+                _ => {
+                    // fall through
+                }
+            }
+        }
+        _ => {
+            // fall through
+        }
     }
 
-    opt_mono_id
+    // If we got here, it's because the Num type parameter(s) don't fit the form we expect.
+    // Specialize to a crash!
+    problems.push(Problem::BadNumTypeParam);
+
+    MonoTypeId::CRASH
 }
 
 fn resolve_tag_ext(
