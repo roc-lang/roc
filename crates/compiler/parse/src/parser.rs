@@ -230,17 +230,14 @@ pub enum EPackageEntry<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EImports {
-    Open(Position),
     Imports(Position),
     IndentImports(Position),
     IndentListStart(Position),
-    IndentListEnd(Position),
     ListStart(Position),
     ListEnd(Position),
     Identifier(Position),
     ModuleName(Position),
     Space(BadInputError, Position),
-    IndentSetStart(Position),
     SetStart(Position),
     SetEnd(Position),
     TypedIdent(Position),
@@ -303,7 +300,6 @@ pub enum EExpr<'a> {
     Start(Position),
     End(Position),
     BadExprEnd(Position),
-    StmtAfterExpr(Position),
     Space(BadInputError, Position),
 
     Dot(Position),
@@ -611,7 +607,6 @@ pub enum PInParens<'a> {
 pub enum EType<'a> {
     Space(BadInputError, Position),
 
-    UnderscoreSpacing(Position),
     TRecord(ETypeRecord<'a>, Position),
     TTagUnion(ETypeTagUnion<'a>, Position),
     TInParens(ETypeInParens<'a>, Position),

@@ -24,17 +24,17 @@ Defs {
             @0-4 Identifier {
                 ident: "main",
             },
-            @20-31 Apply(
-                @20-31 Var {
+            @20-30 Apply(
+                @20-30 Var {
                     module_name: "Task",
                     ident: "await",
                 },
                 [
-                    @20-31 Var {
+                    @20-30 Var {
                         module_name: "Stdin",
                         ident: "line",
                     },
-                    @20-31 Closure(
+                    @20-30 Closure(
                         [
                             @11-17 Identifier {
                                 ident: "result",

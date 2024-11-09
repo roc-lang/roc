@@ -479,7 +479,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
 
                     single_tag_union_to_ast(env, mem, addr, field_layouts, tag_name, &[])
                 }
-                Content::Structure(FlatType::Func(_, _, _)) => {
+                Content::Structure(FlatType::Func(_, _, _, _)) => {
                     // a function with a struct as the closure environment
                     Expr::REPL_OPAQUE_FUNCTION
                 }
@@ -597,7 +597,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
     let raw_content = env.subs.get_content_without_compacting(raw_var);
 
     let expr = match (raw_content, layout) {
-        (Content::Structure(FlatType::Func(_, _, _)), _) | (_, LayoutRepr::LambdaSet(_) | LayoutRepr::FunctionPointer(_) | LayoutRepr::Erased(_)) => {
+        (Content::Structure(FlatType::Func(_, _, _,_)), _) | (_, LayoutRepr::LambdaSet(_) | LayoutRepr::FunctionPointer(_) | LayoutRepr::Erased(_)) => {
             Expr::REPL_OPAQUE_FUNCTION
         }
         (_, LayoutRepr::Builtin(Builtin::Bool)) => {

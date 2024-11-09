@@ -1,7 +1,11 @@
 //! Provides types to describe problems that can occur during solving.
 use std::{path::PathBuf, str::Utf8Error};
 
-use roc_can::expected::{Expected, PExpected};
+use roc_can::constraint::{ExpectEffectfulReason, FxSuffixKind};
+use roc_can::{
+    constraint::FxCallKind,
+    expected::{Expected, PExpected},
+};
 use roc_module::{
     ident::Lowercase,
     symbol::{ModuleId, Symbol},
@@ -39,6 +43,11 @@ pub enum TypeError {
     UnexpectedModuleParams(Region, ModuleId),
     MissingModuleParams(Region, ModuleId, ErrorType),
     ModuleParamsMismatch(Region, ModuleId, ErrorType, ErrorType),
+    FxInPureFunction(Region, FxCallKind, Option<Region>),
+    FxInTopLevel(Region, FxCallKind),
+    ExpectedEffectful(Region, ExpectEffectfulReason),
+    UnsuffixedEffectfulFunction(Region, FxSuffixKind),
+    SuffixedPureFunction(Region, FxSuffixKind),
 }
 
 impl TypeError {
@@ -63,6 +72,11 @@ impl TypeError {
             TypeError::ModuleParamsMismatch(..) => RuntimeError,
             TypeError::IngestedFileBadUtf8(..) => Fatal,
             TypeError::IngestedFileUnsupportedType(..) => Fatal,
+            TypeError::ExpectedEffectful(..) => Warning,
+            TypeError::FxInPureFunction(_, _, _) => Warning,
+            TypeError::FxInTopLevel(_, _) => Warning,
+            TypeError::UnsuffixedEffectfulFunction(_, _) => Warning,
+            TypeError::SuffixedPureFunction(_, _) => Warning,
         }
     }
 
@@ -78,7 +92,12 @@ impl TypeError {
             | TypeError::BadPatternMissingAbility(region, ..)
             | TypeError::UnexpectedModuleParams(region, ..)
             | TypeError::MissingModuleParams(region, ..)
-            | TypeError::ModuleParamsMismatch(region, ..) => Some(*region),
+            | TypeError::ModuleParamsMismatch(region, ..)
+            | TypeError::FxInPureFunction(region, _, _)
+            | TypeError::FxInTopLevel(region, _)
+            | TypeError::ExpectedEffectful(region, _)
+            | TypeError::UnsuffixedEffectfulFunction(region, _)
+            | TypeError::SuffixedPureFunction(region, _) => Some(*region),
             TypeError::UnfulfilledAbility(ab, ..) => ab.region(),
             TypeError::Exhaustive(e) => Some(e.region()),
             TypeError::CircularDef(c) => c.first().map(|ce| ce.symbol_region),

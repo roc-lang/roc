@@ -12,9 +12,6 @@ const Allocator = mem.Allocator;
 
 extern fn roc__mainForHost_1_exposed_generic([*]u8) void;
 extern fn roc__mainForHost_1_exposed_size() i64;
-extern fn roc__mainForHost_0_caller(*const u8, [*]u8, [*]u8) void;
-extern fn roc__mainForHost_0_size() i64;
-extern fn roc__mainForHost_0_result_size() i64;
 
 const Align = 2 * @alignOf(usize);
 extern fn malloc(size: usize) callconv(.C) ?*align(Align) anyopaque;
@@ -127,8 +124,6 @@ pub export fn main() u8 {
 
     roc__mainForHost_1_exposed_generic(output);
 
-    call_the_closure(output);
-
     const nanos = timer.read();
     const seconds = (@as(f64, @floatFromInt(nanos)) / 1_000_000_000.0);
 
@@ -139,35 +134,6 @@ pub export fn main() u8 {
 
 fn to_seconds(tms: std.os.timespec) f64 {
     return @as(f64, @floatFromInt(tms.tv_sec)) + (@as(f64, @floatFromInt(tms.tv_nsec)) / 1_000_000_000.0);
-}
-
-fn call_the_closure(closure_data_pointer: [*]u8) void {
-    const allocator = std.heap.page_allocator;
-
-    const size = roc__mainForHost_0_result_size();
-
-    if (size == 0) {
-        // the function call returns an empty record
-        // allocating 0 bytes causes issues because the allocator will return a NULL pointer
-        // So it's special-cased
-        const flags: u8 = 0;
-        var result: [1]u8 = .{0};
-        roc__mainForHost_0_caller(&flags, closure_data_pointer, &result);
-
-        return;
-    }
-
-    const raw_output = allocator.alignedAlloc(u8, @alignOf(u64), @as(usize, @intCast(size))) catch unreachable;
-    var output = @as([*]u8, @ptrCast(raw_output));
-
-    defer {
-        allocator.free(raw_output);
-    }
-
-    const flags: u8 = 0;
-    roc__mainForHost_0_caller(&flags, closure_data_pointer, output);
-
-    return;
 }
 
 pub export fn roc_fx_getLine() str.RocStr {

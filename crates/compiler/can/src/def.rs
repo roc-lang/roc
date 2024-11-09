@@ -10,6 +10,7 @@ use crate::annotation::IntroducedVariables;
 use crate::annotation::OwnedNamedOrAble;
 use crate::derive;
 use crate::env::Env;
+use crate::env::FxMode;
 use crate::expr::canonicalize_record;
 use crate::expr::get_lookup_symbols;
 use crate::expr::AnnotatedMark;
@@ -69,6 +70,7 @@ pub struct Def {
     pub expr_var: Variable,
     pub pattern_vars: SendMap<Symbol, Variable>,
     pub annotation: Option<Annotation>,
+    pub kind: DefKind,
 }
 
 impl Def {
@@ -86,6 +88,38 @@ impl Def {
             None => self.loc_pattern.region,
         };
         Region::span_across(&head_region, &self.loc_expr.region)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum DefKind {
+    /// A def that introduces identifiers
+    Let,
+    /// A standalone statement with an fx variable
+    Stmt(Variable),
+    /// Ignored result, must be effectful
+    Ignored(Variable),
+}
+
+impl DefKind {
+    pub fn map_var<F: Fn(Variable) -> Variable>(self, f: F) -> Self {
+        match self {
+            DefKind::Let => DefKind::Let,
+            DefKind::Stmt(v) => DefKind::Stmt(f(v)),
+            DefKind::Ignored(v) => DefKind::Ignored(f(v)),
+        }
+    }
+
+    pub fn from_pattern(var_store: &mut VarStore, pattern: &Loc<Pattern>) -> Self {
+        if BindingsFromPattern::new(pattern)
+            .peekable()
+            .peek()
+            .is_none()
+        {
+            DefKind::Ignored(var_store.fresh())
+        } else {
+            DefKind::Let
+        }
     }
 }
 
@@ -127,6 +161,7 @@ impl Annotation {
             arg_types,
             Box::new(Type::Variable(var_store.fresh())),
             Box::new(self.signature.clone()),
+            Box::new(Type::Variable(var_store.fresh())),
         );
     }
 }
@@ -194,22 +229,25 @@ enum PendingValueDef<'a> {
         Option<Loc<ast::TypeAnnotation<'a>>>,
         Loc<ast::StrLiteral<'a>>,
     ),
+    /// A standalone statement
+    Stmt(&'a Loc<ast::Expr<'a>>),
 }
 
 impl PendingValueDef<'_> {
-    fn loc_pattern(&self) -> &Loc<Pattern> {
+    fn loc_pattern(&self) -> Option<&Loc<Pattern>> {
         match self {
-            PendingValueDef::AnnotationOnly(loc_pattern, _) => loc_pattern,
-            PendingValueDef::Body(loc_pattern, _) => loc_pattern,
-            PendingValueDef::TypedBody(_, loc_pattern, _, _) => loc_pattern,
+            PendingValueDef::AnnotationOnly(loc_pattern, _) => Some(loc_pattern),
+            PendingValueDef::Body(loc_pattern, _) => Some(loc_pattern),
+            PendingValueDef::TypedBody(_, loc_pattern, _, _) => Some(loc_pattern),
             PendingValueDef::ImportParams {
                 loc_pattern,
                 symbol: _,
                 variable: _,
                 module_id: _,
                 opt_provided: _,
-            } => loc_pattern,
-            PendingValueDef::IngestedFile(loc_pattern, _, _) => loc_pattern,
+            } => Some(loc_pattern),
+            PendingValueDef::IngestedFile(loc_pattern, _, _) => Some(loc_pattern),
+            PendingValueDef::Stmt(_) => None,
         }
     }
 }
@@ -1183,19 +1221,18 @@ fn canonicalize_value_defs<'a>(
             }
             PendingValue::InvalidIngestedFile => { /* skip */ }
             PendingValue::ImportNameConflict => { /* skip */ }
+            PendingValue::StmtAfterExpr => { /* skip */ }
         }
     }
 
     let mut symbol_to_index: Vec<(IdentId, u32)> = Vec::with_capacity(pending_value_defs.len());
 
     for (def_index, pending_def) in pending_value_defs.iter().enumerate() {
-        let mut new_bindings = BindingsFromPattern::new(pending_def.loc_pattern()).peekable();
+        let Some(loc_pattern) = pending_def.loc_pattern() else {
+            continue;
+        };
 
-        if new_bindings.peek().is_none() {
-            env.problem(Problem::NoIdentifiersIntroduced(
-                pending_def.loc_pattern().region,
-            ));
-        }
+        let new_bindings = BindingsFromPattern::new(loc_pattern).peekable();
 
         for (s, r) in new_bindings {
             // store the top-level defs, used to ensure that closures won't capture them
@@ -1231,6 +1268,14 @@ fn canonicalize_value_defs<'a>(
         );
 
         output = temp_output.output;
+
+        if let (PatternType::TopLevelDef, DefKind::Ignored(_)) =
+            (pattern_type, temp_output.def.kind)
+        {
+            env.problems.push(Problem::NoIdentifiersIntroduced(
+                temp_output.def.loc_pattern.region,
+            ))
+        }
 
         defs.push(Some(temp_output.def));
 
@@ -2217,6 +2262,7 @@ fn single_can_def(
     expr_var: Variable,
     opt_loc_annotation: Option<Loc<crate::annotation::Annotation>>,
     pattern_vars: SendMap<Symbol, Variable>,
+    kind: DefKind,
 ) -> Def {
     let def_annotation = opt_loc_annotation.map(|loc_annotation| Annotation {
         signature: loc_annotation.value.typ,
@@ -2234,6 +2280,7 @@ fn single_can_def(
         },
         pattern_vars,
         annotation: def_annotation,
+        kind,
     }
 }
 
@@ -2356,6 +2403,7 @@ fn canonicalize_pending_value_def<'a>(
                         function_type: var_store.fresh(),
                         closure_type: var_store.fresh(),
                         return_type: var_store.fresh(),
+                        fx_type: var_store.fresh(),
                         early_returns: scope.early_returns.clone(),
                         name: symbol,
                         captured_symbols: Vec::new(),
@@ -2373,6 +2421,7 @@ fn canonicalize_pending_value_def<'a>(
                 expr_var,
                 Some(Loc::at(loc_ann.region, type_annotation)),
                 vars_by_symbol.clone(),
+                DefKind::Let,
             );
 
             DefOutput {
@@ -2408,10 +2457,13 @@ fn canonicalize_pending_value_def<'a>(
                 loc_can_pattern,
                 loc_expr,
                 Some(Loc::at(loc_ann.region, type_annotation)),
+                DefKind::Let,
             )
         }
         Body(loc_can_pattern, loc_expr) => {
             //
+            let def_kind = DefKind::from_pattern(var_store, &loc_can_pattern);
+
             canonicalize_pending_body(
                 env,
                 output,
@@ -2420,6 +2472,20 @@ fn canonicalize_pending_value_def<'a>(
                 loc_can_pattern,
                 loc_expr,
                 None,
+                def_kind,
+            )
+        }
+        Stmt(loc_expr) => {
+            let fx_var = var_store.fresh();
+            canonicalize_pending_body(
+                env,
+                output,
+                scope,
+                var_store,
+                Loc::at(loc_expr.region, Pattern::Underscore),
+                loc_expr,
+                None,
+                DefKind::Stmt(fx_var),
             )
         }
         ImportParams {
@@ -2460,6 +2526,7 @@ fn canonicalize_pending_value_def<'a>(
                 var_store.fresh(),
                 None,
                 SendMap::default(),
+                DefKind::Let,
             );
 
             DefOutput {
@@ -2529,6 +2596,7 @@ fn canonicalize_pending_value_def<'a>(
                 var_store.fresh(),
                 opt_loc_can_ann,
                 SendMap::default(),
+                DefKind::Let,
             );
 
             DefOutput {
@@ -2567,6 +2635,7 @@ fn canonicalize_pending_body<'a>(
     loc_expr: &'a Loc<ast::Expr>,
 
     opt_loc_annotation: Option<Loc<crate::annotation::Annotation>>,
+    kind: DefKind,
 ) -> DefOutput {
     let mut loc_value = &loc_expr.value;
 
@@ -2685,6 +2754,7 @@ fn canonicalize_pending_body<'a>(
         expr_var,
         opt_loc_annotation,
         vars_by_symbol,
+        kind,
     );
 
     DefOutput {
@@ -3019,6 +3089,7 @@ enum PendingValue<'a> {
     SignatureDefMismatch,
     InvalidIngestedFile,
     ImportNameConflict,
+    StmtAfterExpr,
 }
 
 struct PendingExpectOrDbg<'a> {
@@ -3073,10 +3144,7 @@ fn to_pending_value_def<'a>(
                 loc_pattern.region,
             );
 
-            PendingValue::Def(PendingValueDef::AnnotationOnly(
-                loc_can_pattern,
-                loc_ann,
-            ))
+            PendingValue::Def(PendingValueDef::AnnotationOnly(loc_can_pattern, loc_ann))
         }
         Body(loc_pattern, loc_expr) => {
             // This takes care of checking for shadowing and adding idents to scope.
@@ -3182,15 +3250,17 @@ fn to_pending_value_def<'a>(
             // Generate a symbol for the module params def
             // We do this even if params weren't provided so that solve can report if they are missing
             let params_sym = scope.gen_unique_symbol();
-            let params_region = module_import.params.map(|p| p.params.region).unwrap_or(region);
+            let params_region = module_import
+                .params
+                .map(|p| p.params.region)
+                .unwrap_or(region);
             let params_var = var_store.fresh();
-            let params =
-                PendingModuleImportParams {
-                    symbol: params_sym,
-                    variable: params_var,
-                    loc_pattern: Loc::at(params_region, Pattern::Identifier(params_sym)),
-                    opt_provided: module_import.params.map(|p| p.params.value),
-                };
+            let params = PendingModuleImportParams {
+                symbol: params_sym,
+                variable: params_var,
+                loc_pattern: Loc::at(params_region, Pattern::Identifier(params_sym)),
+                opt_provided: module_import.params.map(|p| p.params.value),
+            };
             let provided_params = if module_import.params.is_some() {
                 // Only add params to scope if they are provided
                 Some((params_var, params_sym))
@@ -3219,8 +3289,12 @@ fn to_pending_value_def<'a>(
                 .map(|kw| kw.item.items)
                 .unwrap_or_default();
 
-            if exposed_names.is_empty() && !env.home.is_builtin() && module_id.is_automatically_imported() {
-                env.problems.push(Problem::ExplicitBuiltinImport(module_id, region));
+            if exposed_names.is_empty()
+                && !env.home.is_builtin()
+                && module_id.is_automatically_imported()
+            {
+                env.problems
+                    .push(Problem::ExplicitBuiltinImport(module_id, region));
             }
 
             let exposed_ids = env
@@ -3240,7 +3314,9 @@ fn to_pending_value_def<'a>(
                         let symbol = Symbol::new(module_id, ident_id);
                         exposed_symbols.push((symbol, loc_name.region));
 
-                        if let Err((_shadowed_symbol, existing_symbol_region)) = scope.import_symbol(ident, symbol, loc_name.region) {
+                        if let Err((_shadowed_symbol, existing_symbol_region)) =
+                            scope.import_symbol(ident, symbol, loc_name.region)
+                        {
                             if symbol.is_automatically_imported() {
                                 env.problem(Problem::ExplicitBuiltinTypeImport(
                                     symbol,
@@ -3255,14 +3331,12 @@ fn to_pending_value_def<'a>(
                             }
                         }
                     }
-                    None => {
-                        env.problem(Problem::RuntimeError(RuntimeError::ValueNotExposed {
-                            module_name: module_name.clone(),
-                            ident,
-                            region: loc_name.region,
-                            exposed_values: exposed_ids.exposed_values(),
-                        }))
-                    }
+                    None => env.problem(Problem::RuntimeError(RuntimeError::ValueNotExposed {
+                        module_name: module_name.clone(),
+                        ident,
+                        region: loc_name.region,
+                        exposed_values: exposed_ids.exposed_values(),
+                    })),
                 }
             }
 
@@ -3277,12 +3351,12 @@ fn to_pending_value_def<'a>(
             let loc_name = ingested_file.name.item;
 
             let symbol = match scope.introduce(loc_name.value.into(), loc_name.region) {
-                Ok(symbol ) => symbol,
+                Ok(symbol) => symbol,
                 Err((original, shadow, _)) => {
                     env.problem(Problem::Shadowing {
                         original_region: original.region,
                         shadow,
-                        kind: ShadowKind::Variable
+                        kind: ShadowKind::Variable,
                     });
 
                     return PendingValue::InvalidIngestedFile;
@@ -3291,9 +3365,20 @@ fn to_pending_value_def<'a>(
 
             let loc_pattern = Loc::at(loc_name.region, Pattern::Identifier(symbol));
 
-            PendingValue::Def(PendingValueDef::IngestedFile(loc_pattern, ingested_file.annotation.map(|ann| ann.annotation), ingested_file.path))
+            PendingValue::Def(PendingValueDef::IngestedFile(
+                loc_pattern,
+                ingested_file.annotation.map(|ann| ann.annotation),
+                ingested_file.path,
+            ))
         }
-        Stmt(_) => internal_error!("a Stmt was not desugared correctly, should have been converted to a Body(...) in desguar"),
+        StmtAfterExpr => PendingValue::StmtAfterExpr,
+        Stmt(expr) => {
+            if env.fx_mode == FxMode::Task {
+                internal_error!("a Stmt was not desugared correctly, should have been converted to a Body(...) in desguar")
+            }
+
+            PendingValue::Def(PendingValueDef::Stmt(expr))
+        }
     }
 }
 

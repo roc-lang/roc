@@ -18,6 +18,7 @@ use crate::pattern::parse_record_pattern_fields;
 use crate::state::State;
 use crate::string_literal::{self, parse_str_literal};
 use crate::type_annotation::{type_expr, SKIP_PARSING_SPACES_BEFORE, TRAILING_COMMA_VALID};
+use roc_module::ident::IdentSuffix;
 use roc_module::symbol::ModuleId;
 use roc_region::all::{Loc, Position, Region};
 
@@ -1252,6 +1253,10 @@ impl<'a> ExposedName<'a> {
     pub fn as_str(&'a self) -> &'a str {
         self.0
     }
+
+    pub fn is_effectful_fn(&self) -> bool {
+        IdentSuffix::from_name(self.0).is_bang()
+    }
 }
 
 pub trait Keyword: Copy + Clone + Debug {
@@ -1375,7 +1380,7 @@ pub struct PlatformHeader<'a> {
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum ImportsEntry<'a> {
-    /// e.g. `Hello` or `Hello exposing [hello]` see roc-lang.org/examples/MultipleRocFiles/README.html  
+    /// e.g. `Hello` or `Hello exposing [hello]` see roc-lang.org/examples/MultipleRocFiles/README.html
     Module(
         ModuleName<'a>,
         Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,

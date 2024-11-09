@@ -10,7 +10,7 @@ use roc_build::{
     },
 };
 use roc_collections::MutMap;
-use roc_error_macros::todo_lambda_erasure;
+use roc_error_macros::{internal_error, todo_lambda_erasure};
 use roc_gen_llvm::run_roc::RocCallResult;
 use roc_load::{ExecutionMode, FunctionKind, LoadConfig, LoadedModule, LoadingProblem, Threading};
 use roc_mono::ir::{generate_glue_procs, CrashTag, GlueProc, OptLevel};
@@ -297,7 +297,13 @@ fn number_lambda_sets(subs: &Subs, initial: Variable) -> Vec<Variable> {
         use roc_types::types::Uls;
 
         match subs.get_content_without_compacting(var) {
-            RigidVar(_) | RigidAbleVar(_, _) | FlexVar(_) | FlexAbleVar(_, _) | Error => (),
+            RigidVar(_)
+            | RigidAbleVar(_, _)
+            | FlexVar(_)
+            | FlexAbleVar(_, _)
+            | Pure
+            | Effectful
+            | Error => (),
 
             RecursionVar { .. } => {
                 // we got here, so we've treated this type already
@@ -308,7 +314,7 @@ fn number_lambda_sets(subs: &Subs, initial: Variable) -> Vec<Variable> {
                     stack.extend(var_slice!(*args));
                 }
 
-                Func(arg_vars, closure_var, ret_var) => {
+                Func(arg_vars, closure_var, ret_var, _fx_var) => {
                     lambda_sets.push(subs.get_root_key_without_compacting(*closure_var));
 
                     stack.push(*ret_var);
@@ -318,6 +324,7 @@ fn number_lambda_sets(subs: &Subs, initial: Variable) -> Vec<Variable> {
 
                 EmptyRecord => (),
                 EmptyTagUnion => (),
+                EffectfulFunc => internal_error!(),
 
                 Record(fields, ext) => {
                     let fields = *fields;

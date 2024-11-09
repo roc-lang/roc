@@ -102,6 +102,7 @@ pub(crate) fn decoder(env: &mut Env, _def_symbol: Symbol, arity: u32) -> (Expr, 
                 .insert_into_vars([state_var, step_var, finalizer_var]),
             decode_record_lambda_set,
             tuple_decoder_var,
+            Variable::PURE,
         );
 
         synth_var(env.subs, Content::Structure(flat_type))
@@ -120,6 +121,7 @@ pub(crate) fn decoder(env: &mut Env, _def_symbol: Symbol, arity: u32) -> (Expr, 
             )),
             decode_record_lambda_set,
             tuple_decoder_var,
+            Variable::PURE,
         )),
         vec![
             (state_var, Loc::at_zero(initial_state)),
@@ -276,7 +278,12 @@ fn step_elem(
                         .insert_into_vars([bytes_arg_var, decoder_var, fmt_arg_var]);
                 let this_decode_with_var = synth_var(
                     env.subs,
-                    Content::Structure(FlatType::Func(subs_slice, lambda_set_var, rec_var)),
+                    Content::Structure(FlatType::Func(
+                        subs_slice,
+                        lambda_set_var,
+                        rec_var,
+                        Variable::PURE,
+                    )),
                 );
 
                 env.unify(decode_with_var, this_decode_with_var);
@@ -490,6 +497,7 @@ fn step_elem(
                         Loc::at_zero(Expr::Var(Symbol::DECODE_DECODE_WITH, this_decode_with_var)),
                         lambda_set_var,
                         rec_var,
+                        Variable::PURE,
                     )),
                     vec![
                         (
@@ -545,6 +553,7 @@ fn step_elem(
                         subs_slice,
                         custom_callback_lambda_set_var,
                         custom_callback_ret_var,
+                        Variable::PURE,
                     )),
                 );
 
@@ -556,6 +565,7 @@ fn step_elem(
                 function_type: this_custom_callback_var,
                 closure_type: custom_callback_lambda_set_var,
                 return_type: custom_callback_ret_var,
+                fx_type: Variable::PURE,
                 early_returns: vec![],
                 name: custom_closure_symbol,
                 captured_symbols: vec![(state_arg_symbol, state_record_var)],
@@ -582,8 +592,12 @@ fn step_elem(
             let decode_custom_closure_var = env.subs.fresh_unnamed_flex_var();
             let this_decode_custom_var = {
                 let subs_slice = env.subs.insert_into_vars([this_custom_callback_var]);
-                let flat_type =
-                    FlatType::Func(subs_slice, decode_custom_closure_var, decode_custom_ret_var);
+                let flat_type = FlatType::Func(
+                    subs_slice,
+                    decode_custom_closure_var,
+                    decode_custom_ret_var,
+                    Variable::PURE,
+                );
 
                 synth_var(env.subs, Content::Structure(flat_type))
             };
@@ -597,6 +611,7 @@ fn step_elem(
                     Loc::at_zero(Expr::Var(Symbol::DECODE_CUSTOM, this_decode_custom_var)),
                     decode_custom_closure_var,
                     decode_custom_ret_var,
+                    Variable::PURE,
                 )),
                 vec![(this_custom_callback_var, Loc::at_zero(custom_callback))],
                 CalledVia::Space,
@@ -703,7 +718,12 @@ fn step_elem(
 
         env.subs.set_content(
             function_type,
-            Content::Structure(FlatType::Func(args_slice, closure_type, keep_or_skip_var)),
+            Content::Structure(FlatType::Func(
+                args_slice,
+                closure_type,
+                keep_or_skip_var,
+                Variable::PURE,
+            )),
         )
     };
 
@@ -711,6 +731,7 @@ fn step_elem(
         function_type,
         closure_type,
         return_type: keep_or_skip_var,
+        fx_type: Variable::PURE,
         early_returns: vec![],
         name: step_elem_closure,
         captured_symbols: Vec::new(),
@@ -888,6 +909,7 @@ fn finalizer(
         env.subs.insert_into_vars([state_record_var]),
         closure_type,
         return_type_var,
+        Variable::PURE,
     );
 
     // Fix up function_var so it's not Content::Error anymore
@@ -898,6 +920,7 @@ fn finalizer(
         function_type: function_var,
         closure_type,
         return_type: return_type_var,
+        fx_type: Variable::PURE,
         early_returns: vec![],
         name: function_symbol,
         captured_symbols: Vec::new(),

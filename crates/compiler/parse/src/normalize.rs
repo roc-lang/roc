@@ -439,6 +439,7 @@ impl<'a> Normalize<'a> for ValueDef<'a> {
                 IngestedFileImport(ingested_file_import.normalize(arena))
             }
             Stmt(loc_expr) => Stmt(arena.alloc(loc_expr.normalize(arena))),
+            StmtAfterExpr => StmtAfterExpr,
         }
     }
 }
@@ -885,8 +886,9 @@ impl<'a> Normalize<'a> for Pattern<'a> {
 impl<'a> Normalize<'a> for TypeAnnotation<'a> {
     fn normalize(&self, arena: &'a Bump) -> Self {
         match *self {
-            TypeAnnotation::Function(a, b) => TypeAnnotation::Function(
+            TypeAnnotation::Function(a, arrow, b) => TypeAnnotation::Function(
                 arena.alloc(a.normalize(arena)),
+                arrow,
                 arena.alloc(b.normalize(arena)),
             ),
             TypeAnnotation::Apply(a, b, c) => TypeAnnotation::Apply(a, b, c.normalize(arena)),
@@ -1070,7 +1072,6 @@ impl<'a> Normalize<'a> for EExpr<'a> {
             EExpr::IndentEnd(_pos) => EExpr::IndentEnd(Position::zero()),
             EExpr::UnexpectedComma(_pos) => EExpr::UnexpectedComma(Position::zero()),
             EExpr::UnexpectedTopLevelExpr(_pos) => EExpr::UnexpectedTopLevelExpr(Position::zero()),
-            EExpr::StmtAfterExpr(_pos) => EExpr::StmtAfterExpr(Position::zero()),
             EExpr::RecordUpdateOldBuilderField(_pos) => {
                 EExpr::RecordUpdateOldBuilderField(Region::zero())
             }
@@ -1246,7 +1247,6 @@ impl<'a> Normalize<'a> for EType<'a> {
     fn normalize(&self, arena: &'a Bump) -> Self {
         match self {
             EType::Space(inner_err, _) => EType::Space(*inner_err, Position::zero()),
-            EType::UnderscoreSpacing(_) => EType::UnderscoreSpacing(Position::zero()),
             EType::TRecord(inner_err, _) => {
                 EType::TRecord(inner_err.normalize(arena), Position::zero())
             }
@@ -1700,17 +1700,14 @@ impl<'a> Normalize<'a> for EExposes {
 impl<'a> Normalize<'a> for EImports {
     fn normalize(&self, _arena: &'a Bump) -> Self {
         match self {
-            EImports::Open(_) => EImports::Open(Position::zero()),
             EImports::Imports(_) => EImports::Imports(Position::zero()),
             EImports::IndentImports(_) => EImports::IndentImports(Position::zero()),
             EImports::IndentListStart(_) => EImports::IndentListStart(Position::zero()),
-            EImports::IndentListEnd(_) => EImports::IndentListEnd(Position::zero()),
             EImports::ListStart(_) => EImports::ListStart(Position::zero()),
             EImports::ListEnd(_) => EImports::ListEnd(Position::zero()),
             EImports::Identifier(_) => EImports::Identifier(Position::zero()),
             EImports::ModuleName(_) => EImports::ModuleName(Position::zero()),
             EImports::Space(inner_err, _) => EImports::Space(*inner_err, Position::zero()),
-            EImports::IndentSetStart(_) => EImports::IndentSetStart(Position::zero()),
             EImports::SetStart(_) => EImports::SetStart(Position::zero()),
             EImports::SetEnd(_) => EImports::SetEnd(Position::zero()),
             EImports::TypedIdent(_) => EImports::TypedIdent(Position::zero()),

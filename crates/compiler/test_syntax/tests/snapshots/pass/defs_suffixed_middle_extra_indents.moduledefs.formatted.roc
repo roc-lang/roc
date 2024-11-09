@@ -1,8 +1,8 @@
 main =
     a = "Foo"
-    Stdout.line! a
+    Stdout.line? a
 
-    printBar!
+    printBar?
 
 printBar =
     b = "Bar"

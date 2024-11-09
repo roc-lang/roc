@@ -1,6 +1,6 @@
 #![allow(clippy::manual_map)]
 
-use crate::env::Env;
+use crate::env::{Env, FxMode};
 use crate::scope::Scope;
 use crate::suffixed::{apply_try_function, unwrap_suffixed_expression, EUnwrapped};
 use bumpalo::collections::Vec;
@@ -11,8 +11,8 @@ use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
 use roc_parse::ast::{
-    AssignedField, Collection, Defs, ModuleImportParams, Pattern, StrLiteral, StrSegment,
-    TypeAnnotation, ValueDef, WhenBranch,
+    is_expr_suffixed, AssignedField, Collection, Defs, ModuleImportParams, Pattern, StrLiteral,
+    StrSegment, TypeAnnotation, ValueDef, WhenBranch,
 };
 use roc_problem::can::Problem;
 use roc_region::all::{Loc, Region};
@@ -199,10 +199,28 @@ fn desugar_value_def<'a>(
         }
         IngestedFileImport(_) => *def,
 
+        StmtAfterExpr => internal_error!(
+            "StmtAfterExpression is only created during desugaring, so it shouldn't exist here."
+        ),
+
         Stmt(stmt_expr) => {
+            if env.fx_mode == FxMode::PurityInference {
+                // In purity inference mode, statements aren't fully desugared here
+                // so we can provide better errors
+                return Stmt(desugar_expr(env, scope, stmt_expr));
+            }
+
             // desugar `stmt_expr!` to
             // _ : {}
             // _ = stmt_expr!
+
+            let desugared_expr = desugar_expr(env, scope, stmt_expr);
+
+            if !is_expr_suffixed(&desugared_expr.value) {
+                env.problems.push(Problem::StmtAfterExpr(stmt_expr.region));
+
+                return ValueDef::StmtAfterExpr;
+            }
 
             let region = stmt_expr.region;
             let new_pat = env
@@ -220,7 +238,7 @@ fn desugar_value_def<'a>(
                 )),
                 lines_between: &[],
                 body_pattern: new_pat,
-                body_expr: desugar_expr(env, scope, stmt_expr),
+                body_expr: desugared_expr,
             }
         }
     }
@@ -363,7 +381,7 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
 
         // TODO support desugaring of Dbg and ExpectFx
         Dbg { .. } | ExpectFx { .. } => value_def,
-        ModuleImport { .. } | IngestedFileImport(_) => value_def,
+        ModuleImport { .. } | IngestedFileImport(_) | StmtAfterExpr => value_def,
 
         Stmt(..) => {
             internal_error!(
@@ -386,7 +404,6 @@ pub fn desugar_expr<'a>(
         | NonBase10Int { .. }
         | SingleQuote(_)
         | AccessorFunction(_)
-        | Var { .. }
         | Underscore { .. }
         | MalformedIdent(_, _)
         | MalformedClosure
@@ -399,6 +416,28 @@ pub fn desugar_expr<'a>(
         | OpaqueRef(_)
         | Crash
         | Try => loc_expr,
+
+        Var {
+            module_name,
+            ident,
+            shortcut,
+        } => {
+            if env.fx_mode == FxMode::Task && ident.ends_with('!') {
+                env.arena.alloc(Loc::at(
+                    Region::new(loc_expr.region.start(), loc_expr.region.end().prev()),
+                    TrySuffix {
+                        expr: env.arena.alloc(Var {
+                            module_name,
+                            ident: ident.trim_end_matches('!'),
+                            shortcut: *shortcut,
+                        }),
+                        target: roc_parse::ast::TryTarget::Task,
+                    },
+                ))
+            } else {
+                loc_expr
+            }
+        }
 
         Str(str_literal) => match str_literal {
             StrLiteral::PlainLine(_) => loc_expr,

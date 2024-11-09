@@ -28,6 +28,7 @@ SpaceAfter(
                                 [],
                             ),
                         ],
+                        Pure,
                         @11-21 Tuple {
                             elems: [
                                 @12-15 Apply(

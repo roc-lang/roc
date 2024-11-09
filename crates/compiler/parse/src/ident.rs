@@ -160,7 +160,7 @@ pub enum BadIdent {
 pub(crate) fn chomp_lowercase_part(buffer: &[u8]) -> Result<(&str, bool), Progress> {
     match char::from_utf8_slice_start(buffer) {
         Ok((ch, mut chomped)) if ch.is_lowercase() => {
-            let may_be_kw = true;
+            let mut may_be_kw = true;
             while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
                 if ch.is_alphabetic() || ch.is_ascii_digit() {
                     chomped += width;
@@ -168,11 +168,10 @@ pub(crate) fn chomp_lowercase_part(buffer: &[u8]) -> Result<(&str, bool), Progre
                     if ch == '_' {
                         return Err(NoProgress);
                     }
-                    // todo: @wip @feat
-                    // if ch == '!' {
-                    //     chomped += width;
-                    //     may_be_kw = false;
-                    // }
+                    if ch == '!' {
+                        chomped += width;
+                        may_be_kw = false;
+                    }
                     break;
                 }
             }
@@ -206,8 +205,8 @@ pub(crate) fn chomp_uppercase_part(buffer: &[u8]) -> Result<&str, Progress> {
 pub(crate) fn chomp_anycase_part(buffer: &[u8]) -> Result<(&str, bool), Progress> {
     match char::from_utf8_slice_start(buffer) {
         Ok((ch, mut chomped)) if ch.is_alphabetic() => {
-            let is_uppercase = ch.is_uppercase();
-            let may_be_kw = !is_uppercase;
+            let is_lowercase = ch.is_lowercase();
+            let mut may_be_kw = is_lowercase;
             while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
                 if ch.is_alphabetic() || ch.is_ascii_digit() {
                     chomped += width;
@@ -215,11 +214,10 @@ pub(crate) fn chomp_anycase_part(buffer: &[u8]) -> Result<(&str, bool), Progress
                     if ch == '_' {
                         return Err(NoProgress);
                     }
-                    // todo: @wip @feat
-                    // if is_lowercase && ch == '!' {
-                    //     chomped += width;
-                    //     may_be_kw = false;
-                    // }
+                    if is_lowercase && ch == '!' {
+                        chomped += width;
+                        may_be_kw = false;
+                    }
                     break;
                 }
             }
@@ -489,14 +487,14 @@ pub fn parse_ident_chain<'a>(
                 // continue the parsing loop
                 chomped += width;
             }
-            _ => {
-                let may_be_kw = !first_is_uppercase;
-                // if !first_is_uppercase {
-                //     if let Ok(('!', width)) = other {
-                //         chomped += width;
-                //         may_be_kw = false;
-                //     }
-                // }
+            other => {
+                let mut may_be_kw = !first_is_uppercase;
+                if !first_is_uppercase {
+                    if let Ok(('!', width)) = other {
+                        chomped += width;
+                        may_be_kw = false;
+                    }
+                }
                 let value = unsafe { std::str::from_utf8_unchecked(&bytes[..chomped]) };
                 if first_is_uppercase {
                     return Ok((MadeProgress, Ident::Tag(value), state.advance(chomped)));

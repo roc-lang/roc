@@ -1,4 +1,4 @@
-use roc_parse::parser::{ENumber, ESingleQuote, FileError, PList, SyntaxError};
+use roc_parse::parser::{ENumber, EReturn, ESingleQuote, FileError, PList, SyntaxError};
 use roc_problem::Severity;
 use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Position, Region};
 use std::path::PathBuf;
@@ -10,10 +10,19 @@ pub fn parse_problem<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     filename: PathBuf,
-    _starting_line: u32,
+    starting_line: u32,
     parse_problem: FileError<SyntaxError<'a>>,
 ) -> Report<'a> {
-    to_syntax_report(alloc, lines, filename, &parse_problem.problem.problem)
+    to_syntax_report(
+        alloc,
+        lines,
+        filename,
+        &parse_problem.problem.problem,
+        lines.convert_line_column(LineColumn {
+            line: starting_line,
+            column: 0,
+        }),
+    )
 }
 
 fn note_for_record_type_indent<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
@@ -53,6 +62,7 @@ fn to_syntax_report<'a>(
     lines: &LineInfo,
     filename: PathBuf,
     parse_problem: &roc_parse::parser::SyntaxError<'a>,
+    start: Position,
 ) -> Report<'a> {
     use SyntaxError::*;
 
@@ -144,7 +154,19 @@ fn to_syntax_report<'a>(
             Position::default(),
         ),
         Header(header) => to_header_report(alloc, lines, filename, header, Position::default()),
-        _ => todo!("unhandled parse error: {:?}", parse_problem),
+
+        // If you're adding or changing syntax, please handle the case with a
+        // good error message above instead of adding more unhandled cases below.
+        InvalidPattern | BadUtf8 | Todo | ReservedKeyword(_) | NotYetImplemented(_) | Space(_) => {
+            to_unhandled_parse_error_report(
+                alloc,
+                lines,
+                filename,
+                format!("{:?}", parse_problem),
+                start,
+                start,
+            )
+        }
     }
 }
 
@@ -168,6 +190,7 @@ enum Node {
     StringFormat,
     Dbg,
     Expect,
+    Return,
 }
 
 fn to_expr_report<'a>(
@@ -409,6 +432,7 @@ fn to_expr_report<'a>(
                     Node::ListElement => (pos, alloc.text("a list")),
                     Node::Dbg => (pos, alloc.text("a dbg statement")),
                     Node::Expect => (pos, alloc.text("an expect statement")),
+                    Node::Return => (pos, alloc.text("a return statement")),
                     Node::RecordConditionalDefault => (pos, alloc.text("record field default")),
                     Node::StringFormat => (pos, alloc.text("a string format")),
                     Node::InsideParens => (pos, alloc.text("some parentheses")),
@@ -641,40 +665,89 @@ fn to_expr_report<'a>(
                 severity,
             }
         }
-        EExpr::StmtAfterExpr(pos) => {
-            let surroundings = Region::new(start, *pos);
-            let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
-
-            let doc = alloc.stack([
-                alloc
-                    .reflow(r"I just finished parsing an expression with a series of definitions,"),
-                alloc.reflow(
-                    r"and this line is indented as if it's intended to be part of that expression:",
-                ),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
-                alloc.reflow(
-                    "However, I already saw the final expression in that series of definitions."
-                ),
-                alloc.tip().append(
-                    alloc.reflow(
-                        "An expression like `4`, `\"hello\"`, or `functionCall MyThing` is like `return 4` in other programming languages. To me, it seems like you did `return 4` followed by more code in the lines after, that code would never be executed!"
-                    )
-                ),
-                alloc.tip().append(
-                    alloc.reflow(
-                        "If you are working with `Task`, this error can happen if you forgot a `!` somewhere."
-                    )
-                )
-            ]);
-
-            Report {
+        EExpr::Return(EReturn::Return(pos) | EReturn::IndentReturnValue(pos), start) => {
+            to_expr_report(
+                alloc,
+                lines,
                 filename,
-                doc,
-                title: "STATEMENT AFTER EXPRESSION".to_string(),
-                severity,
-            }
+                Context::InNode(Node::Return, *start),
+                &EExpr::IndentStart(*pos),
+                *pos,
+            )
         }
-        _ => todo!("unhandled parse error: {:?}", parse_problem),
+        EExpr::Return(EReturn::ReturnValue(parse_problem, pos), start) => to_expr_report(
+            alloc,
+            lines,
+            filename,
+            Context::InNode(Node::Return, *start),
+            parse_problem,
+            *pos,
+        ),
+        EExpr::Return(EReturn::Space(parse_problem, pos), _) => {
+            to_space_report(alloc, lines, filename, parse_problem, *pos)
+        }
+        // If you're adding or changing syntax, please handle the case with a
+        // good error message above instead of adding more unhandled cases below.
+        EExpr::End(pos)
+        | EExpr::Dot(pos)
+        | EExpr::Access(pos)
+        | EExpr::Pattern(_, pos)
+        | EExpr::IndentDefBody(pos)
+        | EExpr::IndentEquals(pos)
+        | EExpr::IndentAnnotation(pos)
+        | EExpr::Equals(pos)
+        | EExpr::DoubleColon(pos)
+        | EExpr::MalformedPattern(pos)
+        | EExpr::BackpassComma(pos)
+        | EExpr::BackpassContinue(pos)
+        | EExpr::DbgContinue(pos)
+        | EExpr::UnexpectedTopLevelExpr(pos) => to_unhandled_parse_error_report(
+            alloc,
+            lines,
+            filename,
+            format!("{:?}", parse_problem),
+            *pos,
+            start,
+        ),
+        EExpr::RecordUpdateOldBuilderField(region)
+        | EExpr::RecordUpdateIgnoredField(region)
+        | EExpr::RecordBuilderOldBuilderField(region) => to_unhandled_parse_error_report(
+            alloc,
+            lines,
+            filename,
+            format!("{:?}", parse_problem),
+            region.start(),
+            start,
+        ),
+    }
+}
+
+fn to_unhandled_parse_error_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    lines: &LineInfo,
+    filename: PathBuf,
+    parse_problem_str: String,
+    pos: Position,
+    start: Position,
+) -> Report<'a> {
+    let severity = Severity::Fatal;
+    let surroundings = Region::new(start, pos);
+    let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+    let doc = alloc.stack([
+        alloc.reflow("I got stuck while parsing this:"),
+        alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
+        alloc.reflow("Here's the internal parse problem:"),
+        alloc.string(parse_problem_str).indent(4),
+        alloc.reflow("Unfortunately, I'm not able to provide a more insightful error message for this syntax problem yet. This is considered a bug in the compiler."),
+        alloc.note("If you'd like to contribute to Roc, this would be a good first issue!")
+    ]);
+
+    Report {
+        filename,
+        doc,
+        title: "UNHANDLED PARSE ERROR".to_string(),
+        severity,
     }
 }
 
@@ -2096,7 +2169,26 @@ fn to_pattern_report<'a>(
         &EPattern::NumLiteral(ENumber::End, pos) => {
             to_malformed_number_literal_report(alloc, lines, filename, pos)
         }
-        _ => todo!("unhandled parse error: {:?}", parse_problem),
+        // If you're adding or changing syntax, please handle the case with a
+        // good error message above instead of adding more unhandled cases below.
+        EPattern::AsKeyword(pos)
+        | EPattern::AsIdentifier(pos)
+        | EPattern::Underscore(pos)
+        | EPattern::NotAPattern(pos)
+        | EPattern::End(pos)
+        | EPattern::Space(_, pos)
+        | EPattern::IndentStart(pos)
+        | EPattern::IndentEnd(pos)
+        | EPattern::AsIndentStart(pos)
+        | EPattern::AccessorFunction(pos)
+        | EPattern::RecordUpdaterFunction(pos) => to_unhandled_parse_error_report(
+            alloc,
+            lines,
+            filename,
+            format!("{:?}", parse_problem),
+            *pos,
+            start,
+        ),
     }
 }
 
@@ -2498,7 +2590,7 @@ fn to_type_report<'a>(
                         severity,
                     }
                 }
-                _ => todo!(),
+                Next::Other(_) | Next::Keyword(_) | Next::Close(_, _) | Next::Token(_) => todo!(),
             }
         }
 
@@ -2596,8 +2688,18 @@ fn to_type_report<'a>(
                 severity,
             }
         }
-
-        _ => todo!("unhandled type parse error: {:?}", &parse_problem),
+        // If you're adding or changing syntax, please handle the case with a
+        // good error message above instead of adding more unhandled cases below.
+        EType::Space(_, pos) | EType::TEnd(pos) | EType::TImplementsClause(pos) => {
+            to_unhandled_parse_error_report(
+                alloc,
+                lines,
+                filename,
+                format!("{:?}", parse_problem),
+                *pos,
+                start,
+            )
+        }
     }
 }
 
@@ -3466,8 +3568,14 @@ fn to_provides_report<'a>(
                 severity,
             }
         }
-
-        _ => todo!("unhandled parse error {:?}", parse_problem),
+        // If you're adding or changing syntax, please handle the case with a
+        // good error message above instead of adding more unhandled cases below.
+        EProvides::Open(pos) |
+        EProvides::To(pos) |
+        EProvides::IndentPackage(pos) |
+        EProvides::ListStart(pos) |
+        EProvides::Package(_, pos) =>
+            to_unhandled_parse_error_report(alloc, lines, filename, format!("{:?}", parse_problem), pos, start),
     }
 }
 
@@ -3578,7 +3686,12 @@ fn to_exposes_report<'a>(
 
         EExposes::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
 
-        _ => todo!("unhandled `exposes` parsing error {:?}", parse_problem),
+        // If you're adding or changing syntax, please handle the case with a
+        // good error message above instead of adding more unhandled cases below.
+        EExposes::IndentExposes(pos) |
+        EExposes::IndentListStart(pos) |
+        EExposes::ListStart(pos) =>
+            to_unhandled_parse_error_report(alloc, lines, filename, format!("{:?}", parse_problem), pos, start)
     }
 }
 
@@ -3686,8 +3799,22 @@ fn to_imports_report<'a>(
                 severity,
             }
         }
-
-        _ => todo!("unhandled parse error {:?}", parse_problem),
+        // If you're adding or changing syntax, please handle the case with a
+        // good error message above instead of adding more unhandled cases below.
+        EImports::IndentListStart(pos)
+        | EImports::ListStart(pos)
+        | EImports::SetStart(pos)
+        | EImports::SetEnd(pos)
+        | EImports::TypedIdent(pos)
+        | EImports::AsKeyword(pos)
+        | EImports::StrLiteral(pos) => to_unhandled_parse_error_report(
+            alloc,
+            lines,
+            filename,
+            format!("{:?}", parse_problem),
+            pos,
+            start,
+        ),
     }
 }
 
@@ -3812,8 +3939,18 @@ fn to_requires_report<'a>(
                 severity,
             }
         }
-
-        _ => todo!("unhandled parse error {:?}", parse_problem),
+        // If you're adding or changing syntax, please handle the case with a
+        // good error message above instead of adding more unhandled cases below.
+        ERequires::IndentRequires(pos)
+        | ERequires::IndentListStart(pos)
+        | ERequires::TypedIdent(_, pos) => to_unhandled_parse_error_report(
+            alloc,
+            lines,
+            filename,
+            format!("{:?}", parse_problem),
+            pos,
+            start,
+        ),
     }
 }
 
@@ -3876,7 +4013,21 @@ fn to_packages_report<'a>(
 
         EPackages::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
 
-        _ => todo!("unhandled parse error {:?}", parse_problem),
+        // If you're adding or changing syntax, please handle the case with a
+        // good error message above instead of adding more unhandled cases below.
+        EPackages::Open(pos)
+        | EPackages::IndentPackages(pos)
+        | EPackages::ListStart(pos)
+        | EPackages::IndentListStart(pos)
+        | EPackages::IndentListEnd(pos)
+        | EPackages::PackageEntry(_, pos) => to_unhandled_parse_error_report(
+            alloc,
+            lines,
+            filename,
+            format!("{:?}", parse_problem),
+            pos,
+            start,
+        ),
     }
 }
 
@@ -3945,7 +4096,16 @@ fn to_space_report<'a>(
             }
         }
 
-        _ => todo!("unhandled type parse error: {:?}", &parse_problem),
+        // If you're adding or changing syntax, please handle the case with a
+        // good error message above instead of adding more unhandled cases below.
+        BadInputError::BadUtf8 => to_unhandled_parse_error_report(
+            alloc,
+            lines,
+            filename,
+            format!("{:?}", parse_problem),
+            pos,
+            pos,
+        ),
     }
 }
 

@@ -35,6 +35,7 @@ SpaceAfter(
                                         "a",
                                     ),
                                 ],
+                                Pure,
                                 @30-33 Apply(
                                     "",
                                     "U64",
@@ -55,6 +56,7 @@ SpaceAfter(
                                         "a",
                                     ),
                                 ],
+                                Pure,
                                 @49-52 Apply(
                                     "",
                                     "U64",

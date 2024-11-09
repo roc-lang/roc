@@ -239,7 +239,7 @@ fn make_completion_item(
     let typ = match subs.get(var).content {
         roc_types::subs::Content::Structure(var) => match var {
             roc_types::subs::FlatType::Apply(_, _) => CompletionItemKind::FUNCTION,
-            roc_types::subs::FlatType::Func(_, _, _) => CompletionItemKind::FUNCTION,
+            roc_types::subs::FlatType::Func(_, _, _, _) => CompletionItemKind::FUNCTION,
             roc_types::subs::FlatType::EmptyTagUnion
             | roc_types::subs::FlatType::TagUnion(_, _) => CompletionItemKind::ENUM,
             _ => CompletionItemKind::VARIABLE,

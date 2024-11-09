@@ -1,6 +1,6 @@
 use crate::ast::{
-    AbilityImpls, AssignedField, Expr, ImplementsAbilities, ImplementsAbility, ImplementsClause,
-    Pattern, Spaceable, Spaced, Tag, TypeAnnotation, TypeHeader,
+    AbilityImpls, AssignedField, Expr, FunctionArrow, ImplementsAbilities, ImplementsAbility,
+    ImplementsClause, Pattern, Spaceable, Spaced, Tag, TypeAnnotation, TypeHeader,
 };
 use crate::blankspace::{eat_nc_check, SpacedBuilder};
 use crate::expr::parse_record_field;
@@ -720,8 +720,11 @@ pub(crate) fn type_expr<'a>(
                 };
 
                 break if state.bytes().starts_with(b"->") {
-                    let state = state.advance(2);
-                    Ok((MadeProgress, (more_args, sp_after_single_ann), state))
+                    let out = (more_args, sp_after_single_ann, FunctionArrow::Pure);
+                    Ok((MadeProgress, out, state.advance(2)))
+                } else if state.bytes().starts_with(b"=>") {
+                    let out = (more_args, sp_after_single_ann, FunctionArrow::Effectful);
+                    Ok((MadeProgress, out, state.advance(2)))
                 } else {
                     Err((p, EType::TStart(state.pos())))
                 };
@@ -759,7 +762,7 @@ pub(crate) fn type_expr<'a>(
         };
 
         let (types_pr, types, state) = match more_args_res {
-            Ok((_, (more_args, sp_after_single_ann), state)) => {
+            Ok((_, (more_args, sp_after_single_ann, arrow), state)) => {
                 let (p, spaces_before_ret, state) =
                     eat_nc_check(EType::TIndentStart, arena, state, min_indent, false)?;
 
@@ -785,7 +788,7 @@ pub(crate) fn type_expr<'a>(
                 }
 
                 let args_out = arena.alloc(arguments);
-                let result = TypeAnnotation::Function(args_out, arena.alloc(return_type));
+                let result = TypeAnnotation::Function(args_out, arrow, arena.alloc(return_type));
                 let result = Loc::at(region, result);
 
                 (MadeProgress, result, state)
