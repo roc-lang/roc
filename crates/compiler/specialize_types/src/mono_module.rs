@@ -1,3 +1,4 @@
+use bumpalo::Bump;
 use roc_solve::module::Solved;
 use roc_types::subs::Subs;
 
@@ -26,6 +27,7 @@ impl MonoModule {
 pub struct InternedStrId(u32);
 
 /// TODO move this to its own crate
+#[derive(Debug)]
 pub struct Interns<'a> {
     interned: Vec<&'a str>,
 }
@@ -37,7 +39,7 @@ impl<'a> Interns<'a> {
         }
     }
 
-    pub fn get(&mut self, string: &'a str) -> InternedStrId {
+    pub fn get(&mut self, _arena: &'a Bump, string: &'a str) -> InternedStrId {
         match self
             .interned
             .iter()
@@ -51,6 +53,17 @@ impl<'a> Interns<'a> {
 
                 answer
             }
+        }
+    }
+
+    pub fn try_get(&self, _arena: &'a Bump, string: &'a str) -> Option<InternedStrId> {
+        match self
+            .interned
+            .iter()
+            .position(|&interned| interned == string)
+        {
+            Some(index) => Some(InternedStrId(index as u32)),
+            None => None,
         }
     }
 }

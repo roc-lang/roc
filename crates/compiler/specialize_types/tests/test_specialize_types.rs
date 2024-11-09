@@ -51,7 +51,7 @@ mod specialize_types {
 
         debug_assert!(exposed_to_host.len() == 1, "{exposed_to_host:?}");
         let (_symbol, variable) = exposed_to_host.into_iter().next().unwrap();
-        let mut mono_cache = MonoCache::from_subs(&solved);
+        let mut mono_cache = MonoCache::from_solved_subs(&solved);
         let mut mono_types = MonoTypes::new();
         let debug_info = DebugInfo::new();
         let mut record_field_ids = RecordFieldIds::new();

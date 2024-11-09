@@ -12,7 +12,7 @@ use roc_collections::Push;
 use roc_solve::module::Solved;
 use roc_types::subs::Subs;
 
-pub struct Env<'a, 'c, 'd, 's, 't, P> {
+pub struct Env<'a, 'c, 'd, 'i, 's, 't, P> {
     arena: &'a Bump,
     subs: &'s mut Subs,
     types_cache: &'c mut MonoCache,
@@ -21,11 +21,11 @@ pub struct Env<'a, 'c, 'd, 's, 't, P> {
     record_field_ids: RecordFieldIds,
     tuple_elem_ids: TupleElemIds,
     debug_info: &'d mut Option<DebugInfo>,
-    string_interns: &'a mut Interns<'a>,
+    string_interns: &'i mut Interns<'a>,
     problems: P,
 }
 
-impl<'a, 'c, 'd, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 's, 't, P> {
+impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
     pub fn new(
         arena: &'a Bump,
         subs: &'s mut Solved<Subs>,
@@ -34,7 +34,7 @@ impl<'a, 'c, 'd, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 's, 't, P> {
         mono_exprs: &'t mut MonoExprs,
         record_field_ids: RecordFieldIds,
         tuple_elem_ids: TupleElemIds,
-        string_interns: &'a mut Interns<'a>,
+        string_interns: &'i mut Interns<'a>,
         debug_info: &'d mut Option<DebugInfo>,
         problems: P,
     ) -> Self {
@@ -88,6 +88,7 @@ impl<'a, 'c, 'd, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 's, 't, P> {
                 }
             },
             Expr::Num(var, _str, int_value, _) | Expr::Int(var, _, _str, int_value, _) => {
+                // Numbers can specialize
                 match mono_from_var(var) {
                     Some(mono_id) => match mono_types.get(mono_id) {
                         MonoType::Primitive(primitive) => to_num(*primitive, int_value, problems),
@@ -115,9 +116,10 @@ impl<'a, 'c, 'd, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 's, 't, P> {
                     return compiler_bug!(Problem::CharSpecializedToWrongType(None));
                 }
             },
-            Expr::Str(contents) => {
-                MonoExpr::Str(self.string_interns.get(self.arena.alloc(contents)))
-            }
+            Expr::Str(contents) => MonoExpr::Str(
+                self.string_interns
+                    .get(self.arena, self.arena.alloc(contents)),
+            ),
             Expr::EmptyRecord => {
                 // Empty records are zero-sized and should be discarded.
                 return None;

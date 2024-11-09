@@ -48,7 +48,7 @@ pub struct MonoCache {
 }
 
 impl MonoCache {
-    pub fn from_subs(subs: &Solved<Subs>) -> Self {
+    pub fn from_solved_subs(subs: &Solved<Subs>) -> Self {
         Self {
             inner: VecMap::with_capacity(subs.inner().len()),
         }
