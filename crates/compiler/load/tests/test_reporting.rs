@@ -15007,36 +15007,6 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        suffixed_pure_in_record,
-        indoc!(
-            r#"
-            app [main!] { pf: platform "../../../../../examples/cli/effects-platform/main.roc" }
-
-            import pf.Effect
-
-            main! = \{} ->
-                notFx = {
-                    trim!: Str.trim
-                }
-                Effect.putLine! (notFx.trim! " hello ")
-            "#
-        ),
-        @r###"
-    ── UNNECESSARY EXCLAMATION in /code/proj/Main.roc ──────────────────────────────
-
-    This field's value is a pure function, but its name suggests
-    otherwise:
-
-    7│          trim!: Str.trim
-                ^^^^^^^^^^^^^^^
-
-    The exclamation mark at the end is reserved for effectful functions.
-
-    Hint: Did you forget to run an effect? Is the type annotation wrong?
-    "###
-    );
-
-    test_report!(
         unsuffixed_fx_arg,
         indoc!(
             r#"

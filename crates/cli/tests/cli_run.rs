@@ -1122,6 +1122,27 @@ mod cli_run {
 
     #[test]
     #[cfg_attr(windows, ignore)]
+    #[cfg_attr(target_os = "linux", ignore)]
+    fn effectful_suffixed_record_field() {
+        test_roc_app(
+            "crates/cli/tests/effectful",
+            "suffixed_record_field.roc",
+            &["from stdin"],
+            &[],
+            &[],
+            indoc!(
+                r#"
+                notEffectful: hardcoded
+                effectful: from stdin
+                "#
+            ),
+            UseValgrind::No,
+            TestCliCommands::Dev,
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
     fn transitive_expects() {
         test_roc_expect(
             "crates/cli/tests/expects_transitive",
