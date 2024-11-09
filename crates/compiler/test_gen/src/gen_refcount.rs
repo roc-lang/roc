@@ -226,7 +226,7 @@ fn list_str_split() {
             r#"
                 s = Str.concat "A long enough string " "to be heap-allocated"
                 list = [s, s, s]
-                List.split list 1
+                List.splitAt list 1
             "#
         ),
         (RocList<RocStr>, RocList<RocStr>),
@@ -245,7 +245,7 @@ fn list_str_split_zero() {
             r#"
                 s = Str.concat "A long enough string " "to be heap-allocated"
                 list = [s, s, s]
-                List.split list 0
+                List.splitAt list 0
             "#
         ),
         (RocList<RocStr>, RocList<RocStr>),

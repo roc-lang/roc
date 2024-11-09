@@ -27,7 +27,7 @@ echo = \shout ->
     |> List.mapWithIndex
         (\_, i ->
             length = (List.len (Str.toUtf8 shout) - i)
-            phrase = (List.split (Str.toUtf8 shout) length).before
+            phrase = (List.splitAt (Str.toUtf8 shout) length).before
 
             List.concat (silence (if i == 0 then 2 * length else length)) phrase)
     |> List.join

@@ -56,7 +56,7 @@ movieInfoExplanation = \@MovieInfo { title, releaseYear, actors } ->
 
 enumerate : List Str -> Str
 enumerate = \elements ->
-    { before: inits, others: last } = List.split elements (List.len elements - 1)
+    { before: inits, others: last } = List.splitAt elements (List.len elements - 1)
 
     last
     |> List.prepend (inits |> Str.joinWith ", ")

@@ -136,7 +136,7 @@ splitAtSpace = \bytes ->
         Err _ -> { taken: [], rest: bytes }
 
 decodeNumPre = \bytes, pre, toNum ->
-    when List.split bytes 1 is
+    when List.splitAt bytes 1 is
         { before: [b], others } if b == pre ->
             { taken, rest } = splitAtSpace others
             str = taken |> Str.fromUtf8 |> Result.mapErr \_ -> TooShort
@@ -186,9 +186,9 @@ decodeTry = \{ result, rest }, map ->
 decodeString = Decode.custom \bytes, @TagLenFmt {} ->
     decodeLenPre bytes 's'
     |> decodeTry \len, lenRest ->
-        { before, others } = List.split lenRest len
+        { before, others } = List.splitAt lenRest len
         result = Str.fromUtf8 before |> Result.mapErr \_ -> TooShort
-        when List.split others 1 is
+        when List.splitAt others 1 is
             { before: [' '], others: rest } -> { result, rest }
             _ -> { result: Err TooShort, rest: others }
 
@@ -258,4 +258,3 @@ expect
     encoded = Encode.toBytes input tagLenFmt
     decoded = Decode.fromBytes encoded tagLenFmt
     decoded == Ok input
-

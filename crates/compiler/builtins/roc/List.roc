@@ -56,6 +56,7 @@ module [
     sublist,
     intersperse,
     split,
+    splitAt,
     splitFirst,
     splitLast,
     startsWith,
@@ -1026,7 +1027,7 @@ first = \list ->
 ## To remove elements from both the beginning and end of the list,
 ## use `List.sublist`.
 ##
-## To split the list into two lists, use `List.split`.
+## To split the list into two lists, use `List.splitAt`.
 ##
 takeFirst : List elem, U64 -> List elem
 takeFirst = \list, outputLength ->
@@ -1046,7 +1047,7 @@ takeFirst = \list, outputLength ->
 ## To remove elements from both the beginning and end of the list,
 ## use `List.sublist`.
 ##
-## To split the list into two lists, use `List.split`.
+## To split the list into two lists, use `List.splitAt`.
 ##
 takeLast : List elem, U64 -> List elem
 takeLast = \list, outputLength ->
@@ -1247,6 +1248,16 @@ endsWith = \list, suffix ->
 ## than the given index, # and the `others` list will be all the others. (This
 ## means if you give an index of 0, the `before` list will be empty and the
 ## `others` list will have the same elements as the original list.)
+splitAt : List elem, U64 -> { before : List elem, others : List elem }
+splitAt = \elements, userSplitIndex ->
+    length = List.len elements
+    splitIndex = if length > userSplitIndex then userSplitIndex else length
+    before = List.sublist elements { start: 0, len: splitIndex }
+    others = List.sublist elements { start: splitIndex, len: Num.subWrap length splitIndex }
+
+    { before, others }
+
+## DEPRECATED: will be removed soon
 split : List elem, U64 -> { before : List elem, others : List elem }
 split = \elements, userSplitIndex ->
     length = List.len elements
@@ -1305,7 +1316,7 @@ chunksOfHelp = \listRest, chunkSize, chunks ->
     if List.isEmpty listRest then
         chunks
     else
-        { before, others } = List.split listRest chunkSize
+        { before, others } = List.splitAt listRest chunkSize
         chunksOfHelp others chunkSize (List.append chunks before)
 
 ## Like [List.map], except the transformation function returns a [Result].
@@ -1382,4 +1393,3 @@ iterBackwardsHelp = \list, state, f, prevIndex ->
 concatUtf8 : List U8, Str -> List U8
 
 expect (List.concatUtf8 [1, 2, 3, 4] "🐦") == [1, 2, 3, 4, 240, 159, 144, 166]
-
