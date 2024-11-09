@@ -21,5 +21,36 @@ impl MonoModule {
     }
 }
 
+/// TODO move this to its own crate
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InternedStrId(u32);
+
+/// TODO move this to its own crate
+pub struct Interns<'a> {
+    interned: Vec<&'a str>,
+}
+
+impl<'a> Interns<'a> {
+    pub fn new() -> Self {
+        Self {
+            interned: Vec::new(),
+        }
+    }
+
+    pub fn get(&mut self, string: &'a str) -> InternedStrId {
+        match self
+            .interned
+            .iter()
+            .position(|&interned| interned == string)
+        {
+            Some(index) => InternedStrId(index as u32),
+            None => {
+                let answer = InternedStrId(self.interned.len() as u32);
+
+                self.interned.push(string);
+
+                answer
+            }
+        }
+    }
+}

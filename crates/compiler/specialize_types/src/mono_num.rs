@@ -14,7 +14,7 @@ pub enum Number {
     U128(u128),
     F32(f32),
     F64(f64),
-    Dec(i128),
+    Dec(f64),
 }
 
 impl Number {

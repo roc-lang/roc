@@ -1,16 +1,19 @@
 use crate::{
     mono_ir::{MonoExpr, MonoExprId, MonoExprs},
+    mono_module::Interns,
     mono_num::Number,
     mono_type::{MonoType, MonoTypes, Primitive},
     specialize_type::{MonoCache, Problem, RecordFieldIds, TupleElemIds},
     DebugInfo,
 };
+use bumpalo::Bump;
 use roc_can::expr::{Expr, IntValue};
 use roc_collections::Push;
 use roc_solve::module::Solved;
 use roc_types::subs::Subs;
 
-pub struct Env<'c, 'd, 's, 't, P> {
+pub struct Env<'a, 'c, 'd, 's, 't, P> {
+    arena: &'a Bump,
     subs: &'s mut Subs,
     types_cache: &'c mut MonoCache,
     mono_types: &'t mut MonoTypes,
@@ -18,27 +21,32 @@ pub struct Env<'c, 'd, 's, 't, P> {
     record_field_ids: RecordFieldIds,
     tuple_elem_ids: TupleElemIds,
     debug_info: &'d mut Option<DebugInfo>,
+    string_interns: &'a mut Interns<'a>,
     problems: P,
 }
 
-impl<'c, 'd, 's, 't, P: Push<Problem>> Env<'c, 'd, 's, 't, P> {
+impl<'a, 'c, 'd, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 's, 't, P> {
     pub fn new(
+        arena: &'a Bump,
         subs: &'s mut Solved<Subs>,
         types_cache: &'c mut MonoCache,
         mono_types: &'t mut MonoTypes,
         mono_exprs: &'t mut MonoExprs,
         record_field_ids: RecordFieldIds,
         tuple_elem_ids: TupleElemIds,
+        string_interns: &'a mut Interns<'a>,
         debug_info: &'d mut Option<DebugInfo>,
         problems: P,
     ) -> Self {
         Env {
+            arena,
             subs: subs.inner_mut(),
             types_cache,
             mono_types,
             mono_exprs,
             record_field_ids,
             tuple_elem_ids,
+            string_interns,
             debug_info,
             problems,
         }
@@ -68,9 +76,9 @@ impl<'c, 'd, 's, 't, P: Push<Problem>> Env<'c, 'd, 's, 't, P> {
         }
 
         let mono_expr = match can_expr {
-            Expr::Num(var, _str, int_value, _bound) => match mono_from_var(var) {
+            Expr::Float(var, _precision_var, _str, val, _bound) => match mono_from_var(var) {
                 Some(mono_id) => match mono_types.get(mono_id) {
-                    MonoType::Primitive(primitive) => to_num(*primitive, int_value, problems),
+                    MonoType::Primitive(primitive) => to_frac(*primitive, val, problems),
                     other => {
                         return compiler_bug!(Problem::NumSpecializedToWrongType(Some(*other)));
                     }
@@ -79,45 +87,42 @@ impl<'c, 'd, 's, 't, P: Push<Problem>> Env<'c, 'd, 's, 't, P> {
                     return compiler_bug!(Problem::NumSpecializedToWrongType(None));
                 }
             },
-            Expr::Int(var, _precision_var, _str, val, _bound) => match mono_from_var(var) {
+            Expr::Num(var, _str, int_value, _) | Expr::Int(var, _, _str, int_value, _) => {
+                match mono_from_var(var) {
+                    Some(mono_id) => match mono_types.get(mono_id) {
+                        MonoType::Primitive(primitive) => to_num(*primitive, int_value, problems),
+                        other => {
+                            return compiler_bug!(Problem::NumSpecializedToWrongType(Some(*other)));
+                        }
+                    },
+                    None => {
+                        return compiler_bug!(Problem::NumSpecializedToWrongType(None));
+                    }
+                }
+            }
+            Expr::SingleQuote(var, _precision_var, char, _bound) => match mono_from_var(var) {
+                // Single-quote characters monomorphize to an integer.
+                // TODO if we store these using the same representation as other ints (e.g. Expr::Int,
+                // or keeping a separate value but storing an IntValue instead of a char), then
+                // even though we verify them differently, then we can combine this branch with Num and Int.
                 Some(mono_id) => match mono_types.get(mono_id) {
-                    MonoType::Primitive(primitive) => to_int(*primitive, val, problems),
+                    MonoType::Primitive(primitive) => char_to_int(*primitive, char, problems),
                     other => {
-                        return compiler_bug!(Problem::NumSpecializedToWrongType(Some(*other)));
+                        return compiler_bug!(Problem::CharSpecializedToWrongType(Some(*other)));
                     }
                 },
                 None => {
-                    return compiler_bug!(Problem::NumSpecializedToWrongType(None));
+                    return compiler_bug!(Problem::CharSpecializedToWrongType(None));
                 }
             },
+            Expr::Str(contents) => {
+                MonoExpr::Str(self.string_interns.get(self.arena.alloc(contents)))
+            }
             Expr::EmptyRecord => {
                 // Empty records are zero-sized and should be discarded.
                 return None;
             }
             _ => todo!(),
-            // Expr::Float(var, _precision_var, _str, val, _bound) => {
-            //     match mono_from_var(var) {
-            //         Some(mono_id) => {
-            //             match mono_types.get(mono_id) {
-            //                 MonoType::Number(number) => {
-            //                     Some(mono_types.add(to_frac(number, val, problems)))
-            //                 }
-            //                 _ => {
-            //                     // TODO push problem and return Malformed expr: Num specialized to something that wasn't a number, namely: _____
-            //                 }
-            //             }
-            //         }
-            //         None => {
-            //             // TODO push problem and return Malformed expr: Num's type param specialized to Unit somehow
-            //         }
-            //     }
-            // }
-            // Expr::SingleQuote(variable, _precision_var, _char, _bound) => {
-            //     // Single quote monomorphizes to an integer.
-            //     // TODO let's just start writing some tests for converting numbers and single quotes and strings.
-            //     // TODO also, verify that doing nonsense like a type annotation of Num {} is handled gracefully.
-            // }
-            // Expr::Str(_) => todo!(),
             // Expr::List {
             //     elem_var,
             //     loc_elems,
@@ -233,13 +238,13 @@ impl<'c, 'd, 's, 't, P: Push<Problem>> Env<'c, 'd, 's, 't, P> {
     }
 }
 
-/// Convert a number literal (e.g. `42`) to a monomorphized type.
-/// This is allowed to convert to either an integer or a fraction.
+/// Convert a number literal (e.g. `42`) or integer literal (e.g. `0x42`) to a monomorphized type.
+/// Nums are allowed to convert to either an integer or a fraction. Integer literals should have
+/// given a compile-time error if they ended up unifying to a fractional type, but we can
+/// gracefully allow them to compile to that type anyway.
 fn to_num(primitive: Primitive, val: IntValue, problems: &mut impl Push<Problem>) -> MonoExpr {
     match primitive {
-        Primitive::Dec => MonoExpr::Number(Number::Dec(val.as_i128())),
-        Primitive::F32 => MonoExpr::Number(Number::F32(val.as_i128() as f32)),
-        Primitive::F64 => MonoExpr::Number(Number::F64(val.as_i128() as f64)),
+        // These are ordered roughly by most to least common integer types
         Primitive::U8 => MonoExpr::Number(Number::U8(val.as_i128() as u8)),
         Primitive::I8 => MonoExpr::Number(Number::I8(val.as_i128() as i8)),
         Primitive::U16 => MonoExpr::Number(Number::U16(val.as_i128() as u16)),
@@ -248,6 +253,12 @@ fn to_num(primitive: Primitive, val: IntValue, problems: &mut impl Push<Problem>
         Primitive::I32 => MonoExpr::Number(Number::I32(val.as_i128() as i32)),
         Primitive::U64 => MonoExpr::Number(Number::U64(val.as_i128() as u64)),
         Primitive::I64 => MonoExpr::Number(Number::I64(val.as_i128() as i64)),
+        Primitive::F32 => MonoExpr::Number(Number::F32(val.as_i128() as f32)),
+        Primitive::F64 => MonoExpr::Number(Number::F64(val.as_i128() as f64)),
+        Primitive::Dec => MonoExpr::Number(Number::Dec(match val {
+            IntValue::I128(bytes) => i128::from_ne_bytes(bytes) as f64,
+            IntValue::U128(bytes) => u128::from_ne_bytes(bytes) as f64,
+        })),
         Primitive::U128 => MonoExpr::Number(Number::U128(val.as_u128())),
         Primitive::I128 => MonoExpr::Number(Number::I128(val.as_i128())),
         Primitive::Str => {
@@ -258,23 +269,49 @@ fn to_num(primitive: Primitive, val: IntValue, problems: &mut impl Push<Problem>
     }
 }
 
-/// Convert an integer literal (e.g. `0x5`) to a monomorphized type.
-/// If somehow its type was not an integer type, that's a compiler bug!
-fn to_int(primitive: Primitive, val: IntValue, problems: &mut impl Push<Problem>) -> MonoExpr {
+/// Convert a fractional literal (e.g. `0.5`) to a monomorphized type.
+/// If somehow its type was not a fractional type, that's a compiler bug!
+fn to_frac(primitive: Primitive, val: f64, problems: &mut impl Push<Problem>) -> MonoExpr {
     match primitive {
-        // These are ordered roughly by most to least common integer types
-        Primitive::U64 => MonoExpr::Number(Number::U64(val.as_u64())),
-        Primitive::U8 => MonoExpr::Number(Number::U8(val.as_u8())),
-        Primitive::I64 => MonoExpr::Number(Number::I64(val.as_i64())),
-        Primitive::I32 => MonoExpr::Number(Number::I32(val.as_i32())),
-        Primitive::U16 => MonoExpr::Number(Number::U16(val.as_u16())),
-        Primitive::U32 => MonoExpr::Number(Number::U32(val.as_u32())),
-        Primitive::I128 => MonoExpr::Number(Number::I128(val.as_i128())),
-        Primitive::U128 => MonoExpr::Number(Number::U128(val.as_u128())),
-        Primitive::I16 => MonoExpr::Number(Number::I16(val.as_i16())),
-        Primitive::I8 => MonoExpr::Number(Number::I8(val.as_i8())),
-        Primitive::Str | Primitive::Dec | Primitive::F32 | Primitive::F64 => {
+        // These are ordered roughly by most to least common fractional types
+        Primitive::F32 => MonoExpr::Number(Number::F32(val as f32)),
+        Primitive::F64 => MonoExpr::Number(Number::F64(val)),
+        Primitive::Dec => MonoExpr::Number(Number::Dec(val)),
+        Primitive::U8
+        | Primitive::I8
+        | Primitive::U16
+        | Primitive::I16
+        | Primitive::U32
+        | Primitive::I32
+        | Primitive::U64
+        | Primitive::I64
+        | Primitive::U128
+        | Primitive::I128
+        | Primitive::Str => {
             let problem = Problem::NumSpecializedToWrongType(Some(MonoType::Primitive(primitive)));
+            problems.push(problem);
+            MonoExpr::CompilerBug(problem)
+        }
+    }
+}
+
+/// Convert a single-quote character (e.g. `'r'`) to a monomorphized type.
+/// If somehow its type was not an integer type, that's a compiler bug!
+fn char_to_int(primitive: Primitive, ch: char, problems: &mut impl Push<Problem>) -> MonoExpr {
+    match primitive {
+        // These are ordered roughly by most to least common character types
+        Primitive::U8 => MonoExpr::Number(Number::U8(ch as u8)),
+        Primitive::U64 => MonoExpr::Number(Number::U64(ch as u64)),
+        Primitive::U16 => MonoExpr::Number(Number::U16(ch as u16)),
+        Primitive::U32 => MonoExpr::Number(Number::U32(ch as u32)),
+        Primitive::U128 => MonoExpr::Number(Number::U128(ch as u128)),
+        Primitive::I64 => MonoExpr::Number(Number::I64(ch as i64)),
+        Primitive::I32 => MonoExpr::Number(Number::I32(ch as i32)),
+        Primitive::I128 => MonoExpr::Number(Number::I128(ch as i128)),
+        Primitive::I16 => MonoExpr::Number(Number::I16(ch as i16)),
+        Primitive::I8 => MonoExpr::Number(Number::I8(ch as i8)),
+        Primitive::Str | Primitive::Dec | Primitive::F32 | Primitive::F64 => {
+            let problem = Problem::CharSpecializedToWrongType(Some(MonoType::Primitive(primitive)));
             problems.push(problem);
             MonoExpr::CompilerBug(problem)
         }

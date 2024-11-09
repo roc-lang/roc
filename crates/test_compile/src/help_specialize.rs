@@ -1,7 +1,7 @@
 use crate::SolvedExpr;
 use bumpalo::Bump;
 use roc_specialize_types::{
-    DebugInfo, Env, MonoCache, MonoExprId, MonoExprs, MonoTypes, Problem, RecordFieldIds,
+    DebugInfo, Env, Interns, MonoCache, MonoExprId, MonoExprs, MonoTypes, Problem, RecordFieldIds,
     TupleElemIds,
 };
 
@@ -26,14 +26,17 @@ impl SpecializedExpr {
         let mut types_cache = MonoCache::from_subs(&solved_out.subs);
         let mut mono_types = MonoTypes::new();
         let mut mono_exprs = MonoExprs::new();
+        let mut string_interns = Interns::new();
 
         let mut env = Env::new(
+            self.solved_expr.arena(),
             &mut solved_out.subs,
             &mut types_cache,
             &mut mono_types,
             &mut mono_exprs,
             RecordFieldIds::default(),
             TupleElemIds::default(),
+            &mut string_interns,
             &mut debug_info,
             &mut problems,
         );

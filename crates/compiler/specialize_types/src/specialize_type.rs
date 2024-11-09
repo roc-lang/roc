@@ -27,6 +27,9 @@ pub enum Problem {
     NumSpecializedToWrongType(
         Option<MonoType>, // `None` means it specialized to Unit
     ),
+    CharSpecializedToWrongType(
+        Option<MonoType>, // `None` means it specialized to Unit
+    ),
 }
 
 /// For MonoTypes that are records, store their field indices.

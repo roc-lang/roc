@@ -61,7 +61,7 @@ pub struct MonoExprId {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum MonoExpr {
-    Str,
+    Str(InternedStrId),
     Number(Number),
     List {
         elem_type: MonoTypeId,
