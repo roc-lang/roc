@@ -195,6 +195,7 @@ fn loc_term_or_underscore_or_conditional<'a>(
         loc(specialize_err(EExpr::Closure, closure_help(options))),
         loc(crash_kw()),
         loc(specialize_err(EExpr::Dbg, dbg_kw())),
+        loc(try_kw()),
         loc(underscore_expression()),
         loc(record_literal_help()),
         loc(specialize_err(EExpr::List, list_literal_help())),
@@ -217,6 +218,7 @@ fn loc_term_or_underscore<'a>(
         )),
         loc(specialize_err(EExpr::Closure, closure_help(options))),
         loc(specialize_err(EExpr::Dbg, dbg_kw())),
+        loc(try_kw()),
         loc(underscore_expression()),
         loc(record_literal_help()),
         loc(specialize_err(EExpr::List, list_literal_help())),
@@ -235,6 +237,7 @@ fn loc_term<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr<'a>>, EEx
         )),
         loc(specialize_err(EExpr::Closure, closure_help(options))),
         loc(specialize_err(EExpr::Dbg, dbg_kw())),
+        loc(try_kw()),
         loc(record_literal_help()),
         loc(specialize_err(EExpr::List, list_literal_help())),
         ident_seq(),
@@ -2129,6 +2132,8 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
             pattern
         }
 
+        Expr::Try => Pattern::Identifier { ident: "try" },
+
         Expr::SpaceBefore(..) | Expr::SpaceAfter(..) | Expr::ParensAround(..) => unreachable!(),
 
         Expr::Record(fields) => {
@@ -2712,6 +2717,16 @@ fn dbg_kw<'a>() -> impl Parser<'a, Expr<'a>, EExpect<'a>> {
     .trace("dbg_kw")
 }
 
+fn try_kw<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
+    (move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
+        let (_, _, next_state) =
+            parser::keyword("try", EExpr::Try).parse(arena, state, min_indent)?;
+
+        Ok((MadeProgress, Expr::Try, next_state))
+    })
+    .trace("try_kw")
+}
+
 fn import<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>> {
     skip_second(
         skip_first(
@@ -3105,7 +3120,7 @@ fn stmts_to_defs<'a>(
                 break;
             }
             Stmt::Expr(e) => {
-                if is_expr_suffixed(&e) && i + 1 < stmts.len() {
+                if i + 1 < stmts.len() {
                     defs.push_value_def(
                         ValueDef::Stmt(arena.alloc(Loc::at(sp_stmt.item.region, e))),
                         sp_stmt.item.region,
@@ -3113,10 +3128,6 @@ fn stmts_to_defs<'a>(
                         &[],
                     );
                 } else {
-                    if last_expr.is_some() {
-                        return Err(EExpr::StmtAfterExpr(sp_stmt.item.region.start()));
-                    }
-
                     let e = if sp_stmt.before.is_empty() {
                         e
                     } else {
@@ -3127,10 +3138,6 @@ fn stmts_to_defs<'a>(
                 }
             }
             Stmt::Backpassing(pats, call) => {
-                if last_expr.is_some() {
-                    return Err(EExpr::StmtAfterExpr(sp_stmt.item.region.start()));
-                }
-
                 if i + 1 >= stmts.len() {
                     return Err(EExpr::BackpassContinue(sp_stmt.item.region.end()));
                 }
@@ -3154,10 +3161,6 @@ fn stmts_to_defs<'a>(
             }
 
             Stmt::TypeDef(td) => {
-                if last_expr.is_some() {
-                    return Err(EExpr::StmtAfterExpr(sp_stmt.item.region.start()));
-                }
-
                 if let (
                     TypeDef::Alias {
                         header,
@@ -3209,10 +3212,6 @@ fn stmts_to_defs<'a>(
                 }
             }
             Stmt::ValueDef(vd) => {
-                if last_expr.is_some() {
-                    return Err(EExpr::StmtAfterExpr(sp_stmt.item.region.start()));
-                }
-
                 // NOTE: it shouldn't be necessary to convert ValueDef::Dbg into an expr, but
                 // it turns out that ValueDef::Dbg exposes some bugs in the rest of the compiler.
                 // In particular, it seems that the solver thinks the dbg expr must be a bool.

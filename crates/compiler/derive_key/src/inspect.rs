@@ -129,6 +129,9 @@ impl FlatInspectable {
                 FlatType::EmptyRecord => Key(FlatInspectableKey::Record(Vec::new())),
                 FlatType::EmptyTagUnion => Key(FlatInspectableKey::TagUnion(Vec::new())),
                 FlatType::Func(..) => Immediate(Symbol::INSPECT_FUNCTION),
+                FlatType::EffectfulFunc => {
+                    unreachable!("There must have been a bug in the solver, because we're trying to derive Inspect on a non-concrete type.");
+                }
             },
             Content::Alias(sym, _, real_var, kind) => match Self::from_builtin_alias(sym) {
                 Some(lambda) => lambda,
@@ -178,7 +181,9 @@ impl FlatInspectable {
             | Content::FlexAbleVar(_, _)
             | Content::RigidAbleVar(_, _)
             | Content::LambdaSet(_)
-            | Content::ErasedLambda => {
+            | Content::ErasedLambda
+            | Content::Pure
+            | Content::Effectful => {
                 unreachable!("There must have been a bug in the solver, because we're trying to derive Inspect on a non-concrete type.");
             }
         }

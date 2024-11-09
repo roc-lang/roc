@@ -78,6 +78,7 @@ fn wrap_in_decode_custom_decode_with(
                 this_decode_with_var_slice,
                 this_decode_with_clos_var,
                 this_decode_with_ret_var,
+                Variable::PURE,
             )),
         );
 
@@ -91,6 +92,7 @@ fn wrap_in_decode_custom_decode_with(
             Loc::at_zero(decode_with_var),
             this_decode_with_clos_var,
             this_decode_with_ret_var,
+            Variable::PURE,
         ));
         let decode_with_call = Call(
             decode_with_fn,
@@ -139,6 +141,7 @@ fn wrap_in_decode_custom_decode_with(
                 args_slice,
                 fn_clos_var,
                 decode_with_result_var,
+                Variable::PURE,
             )),
         );
 
@@ -147,6 +150,7 @@ fn wrap_in_decode_custom_decode_with(
             function_type: fn_var,
             closure_type: fn_clos_var,
             return_type: decode_with_result_var,
+            fx_type: Variable::PURE,
             early_returns: vec![],
             name: fn_name,
             captured_symbols: sorted_inner_decoder_captures,
@@ -184,6 +188,7 @@ fn wrap_in_decode_custom_decode_with(
                 this_decode_custom_args,
                 this_decode_custom_clos_var,
                 this_decode_custom_ret_var,
+                Variable::PURE,
             )),
         );
 
@@ -197,6 +202,7 @@ fn wrap_in_decode_custom_decode_with(
             Loc::at_zero(decode_custom_var),
             this_decode_custom_clos_var,
             this_decode_custom_ret_var,
+            Variable::PURE,
         ));
         let decode_custom_call = Call(
             decode_custom_fn,

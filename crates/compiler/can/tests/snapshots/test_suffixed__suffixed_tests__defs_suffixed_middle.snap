@@ -128,7 +128,7 @@ Defs {
                                     "#!stmt",
                                 ),
                             ],
-                            @45-54 Var {
+                            @45-53 Var {
                                 module_name: "",
                                 ident: "printBar",
                             },

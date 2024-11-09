@@ -386,9 +386,11 @@ impl IterTokens for PlatformRequires<'_> {
 impl IterTokens for Loc<TypeAnnotation<'_>> {
     fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
         match self.value {
-            TypeAnnotation::Function(params, ret) => (params.iter_tokens(arena).into_iter())
-                .chain(ret.iter_tokens(arena))
-                .collect_in(arena),
+            TypeAnnotation::Function(params, _arrow, ret) => {
+                (params.iter_tokens(arena).into_iter())
+                    .chain(ret.iter_tokens(arena))
+                    .collect_in(arena)
+            }
             TypeAnnotation::Apply(_mod, _type, args) => args.iter_tokens(arena),
             TypeAnnotation::BoundVariable(_) => onetoken(Token::Type, self.region, arena),
             TypeAnnotation::As(ty, _, as_ty) => (ty.iter_tokens(arena).into_iter())
@@ -641,6 +643,7 @@ impl IterTokens for ValueDef<'_> {
                 onetoken(Token::Import, import.name.item.region, arena)
             }
             ValueDef::Stmt(loc_expr) => loc_expr.iter_tokens(arena),
+            ValueDef::StmtAfterExpr => BumpVec::new_in(arena),
         }
     }
 }
@@ -699,6 +702,7 @@ impl IterTokens for Loc<Expr<'_>> {
             Expr::LowLevelDbg(_, e1, e2) => (e1.iter_tokens(arena).into_iter())
                 .chain(e2.iter_tokens(arena))
                 .collect_in(arena),
+            Expr::Try => onetoken(Token::Keyword, region, arena),
             Expr::Apply(e1, e2, _called_via) => (e1.iter_tokens(arena).into_iter())
                 .chain(e2.iter_tokens(arena))
                 .collect_in(arena),

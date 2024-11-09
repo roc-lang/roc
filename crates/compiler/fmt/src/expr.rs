@@ -48,7 +48,8 @@ impl<'a> Formattable for Expr<'a> {
             | Tag(_)
             | OpaqueRef(_)
             | Crash
-            | Dbg => false,
+            | Dbg
+            | Try => false,
 
             RecordAccess(inner, _) | TupleAccess(inner, _) | TrySuffix { expr: inner, .. } => {
                 inner.is_multiline()
@@ -198,6 +199,10 @@ impl<'a> Formattable for Expr<'a> {
             Crash => {
                 buf.indent(indent);
                 buf.push_str("crash");
+            }
+            Try => {
+                buf.indent(indent);
+                buf.push_str("try");
             }
             Apply(loc_expr, loc_args, _) => {
                 // Sadly this assertion fails in practice. The fact that the parser produces code like this is going to

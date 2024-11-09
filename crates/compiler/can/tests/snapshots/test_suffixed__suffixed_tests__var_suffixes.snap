@@ -24,24 +24,24 @@ Defs {
             @0-4 Identifier {
                 ident: "main",
             },
-            @15-19 Apply(
-                @15-19 Var {
+            @15-18 Apply(
+                @15-18 Var {
                     module_name: "Task",
                     ident: "await",
                 },
                 [
-                    @15-19 Var {
+                    @15-18 Var {
                         module_name: "",
                         ident: "foo",
                     },
-                    @15-19 Closure(
+                    @15-18 Closure(
                         [
                             @11-12 Identifier {
                                 ident: "a",
                             },
                         ],
-                        @15-19 Apply(
-                            @15-19 Var {
+                        @15-18 Apply(
+                            @15-18 Var {
                                 module_name: "Task",
                                 ident: "await",
                             },
@@ -50,7 +50,7 @@ Defs {
                                     module_name: "",
                                     ident: "bar",
                                 },
-                                @15-19 Closure(
+                                @15-18 Closure(
                                     [
                                         @28-33 Identifier {
                                             ident: "#!0_arg",

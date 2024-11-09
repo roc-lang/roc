@@ -112,6 +112,7 @@ pub(crate) fn decoder(
                 .insert_into_vars([initial_state_var, step_var, finalizer_var]),
             decode_record_lambda_set,
             record_decoder_var,
+            Variable::PURE,
         );
 
         synth_var(env.subs, Content::Structure(flat_type))
@@ -130,6 +131,7 @@ pub(crate) fn decoder(
             )),
             decode_record_lambda_set,
             record_decoder_var,
+            Variable::PURE,
         )),
         vec![
             (initial_state_var, Loc::at_zero(initial_state)),
@@ -342,7 +344,12 @@ pub(super) fn step_field(
 
         env.subs.set_content(
             function_type,
-            Content::Structure(FlatType::Func(args_slice, closure_type, keep_or_skip_var)),
+            Content::Structure(FlatType::Func(
+                args_slice,
+                closure_type,
+                keep_or_skip_var,
+                Variable::PURE,
+            )),
         )
     };
 
@@ -350,6 +357,7 @@ pub(super) fn step_field(
         function_type,
         closure_type,
         return_type: keep_or_skip_var,
+        fx_type: Variable::PURE,
         early_returns: vec![],
         name: step_field_closure,
         captured_symbols: Vec::new(),
@@ -406,8 +414,12 @@ fn custom_decoder(env: &mut Env<'_>, args: DecodingFieldArgs) -> (Variable, Expr
         let decode_custom_closure_var = env.subs.fresh_unnamed_flex_var();
         let this_decode_custom_var = {
             let subs_slice = env.subs.insert_into_vars([this_custom_callback_var]);
-            let flat_type =
-                FlatType::Func(subs_slice, decode_custom_closure_var, decode_custom_ret_var);
+            let flat_type = FlatType::Func(
+                subs_slice,
+                decode_custom_closure_var,
+                decode_custom_ret_var,
+                Variable::PURE,
+            );
 
             synth_var(env.subs, Content::Structure(flat_type))
         };
@@ -421,6 +433,7 @@ fn custom_decoder(env: &mut Env<'_>, args: DecodingFieldArgs) -> (Variable, Expr
                 Loc::at_zero(Expr::Var(Symbol::DECODE_CUSTOM, this_decode_custom_var)),
                 decode_custom_closure_var,
                 decode_custom_ret_var,
+                Variable::PURE,
             )),
             vec![(this_custom_callback_var, Loc::at_zero(custom_callback))],
             CalledVia::Space,
@@ -576,6 +589,7 @@ fn custom_decoder_lambda(env: &mut Env<'_>, args: DecodingFieldArgs) -> (Variabl
                     subs_slice,
                     custom_callback_lambda_set_var,
                     custom_callback_ret_var,
+                    Variable::PURE,
                 )),
             );
 
@@ -587,6 +601,7 @@ fn custom_decoder_lambda(env: &mut Env<'_>, args: DecodingFieldArgs) -> (Variabl
             function_type: this_custom_callback_var,
             closure_type: custom_callback_lambda_set_var,
             return_type: custom_callback_ret_var,
+            fx_type: Variable::PURE,
             early_returns: vec![],
             name: custom_closure_symbol,
             captured_symbols: vec![(state_arg_symbol, state_record_var)],
@@ -985,6 +1000,7 @@ pub(super) fn finalizer(
         env.subs.insert_into_vars([state_record_var, fmt_arg_var]),
         closure_type,
         return_type_var,
+        Variable::PURE,
     );
 
     // Fix up function_var so it's not Content::Error anymore
@@ -995,6 +1011,7 @@ pub(super) fn finalizer(
         function_type: function_var,
         closure_type,
         return_type: return_type_var,
+        fx_type: Variable::PURE,
         early_returns: vec![],
         name: function_symbol,
         captured_symbols: Vec::new(),
@@ -1275,7 +1292,12 @@ fn make_decode_with_vars(
             .insert_into_vars([bytes_arg_var, decoder_var, fmt_arg_var]);
         let this_decode_with_var = synth_var(
             env.subs,
-            Content::Structure(FlatType::Func(subs_slice, lambda_set_var, rec_var)),
+            Content::Structure(FlatType::Func(
+                subs_slice,
+                lambda_set_var,
+                rec_var,
+                Variable::PURE,
+            )),
         );
 
         env.unify(decode_with_var, this_decode_with_var);
@@ -1325,6 +1347,7 @@ pub(super) fn decode_with(
             Loc::at_zero(Expr::Var(Symbol::DECODE_DECODE_WITH, this_decode_with_var)),
             lambda_set_var,
             rec_var,
+            Variable::PURE,
         )),
         vec![
             (Variable::LIST_U8, Loc::at_zero(bytes_arg_expr)),

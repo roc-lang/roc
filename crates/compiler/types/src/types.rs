@@ -376,6 +376,8 @@ pub enum TypeTag {
         Index<TypeTag>,
         /// return type
         Index<TypeTag>,
+        /// fx type
+        Index<TypeTag>,
     ),
     /// Closure arguments are implicit
     ClosureTag {
@@ -419,6 +421,9 @@ pub enum TypeTag {
     RecursiveTagUnion(Variable, UnionTags, ExtImplicitOpenness),
     Record(RecordFields),
     Tuple(TupleElems),
+    // A function fx type
+    Pure,
+    Effectful,
 }
 
 /// Look-aside slice of types used in [Types], when the slice does not correspond to the direct
@@ -733,10 +738,11 @@ impl Types {
         arguments: Slice<TypeTag>,
         lambda_set: Index<TypeTag>,
         ret: Index<TypeTag>,
+        fx: Index<TypeTag>,
     ) -> Index<TypeTag> {
         let index = self.reserve_type_tag();
 
-        let tag = TypeTag::Function(lambda_set, ret);
+        let tag = TypeTag::Function(lambda_set, ret, fx);
         self.set_type_tag(index, tag, arguments);
         index
     }
@@ -748,12 +754,13 @@ impl Types {
             Type::EmptyTagUnion => {
                 self.set_type_tag(index, TypeTag::EmptyTagUnion, Slice::default())
             }
-            Type::Function(arguments, lambda_set, return_type) => {
+            Type::Function(arguments, lambda_set, return_type, fx_type) => {
                 let argument_slice = self.from_old_type_slice(arguments.iter());
 
                 let tag = TypeTag::Function(
                     self.from_old_type(lambda_set),
                     self.from_old_type(return_type),
+                    self.from_old_type(fx_type),
                 );
 
                 self.set_type_tag(index, tag, argument_slice)
@@ -1001,6 +1008,8 @@ impl Types {
                 self.set_type_tag(index, TypeTag::RangedNumber(*range), Slice::default())
             }
             Type::Error => self.set_type_tag(index, TypeTag::Error, Slice::default()),
+            Type::Pure => self.set_type_tag(index, TypeTag::Pure, Slice::default()),
+            Type::Effectful => self.set_type_tag(index, TypeTag::Effectful, Slice::default()),
         }
     }
 
@@ -1093,14 +1102,15 @@ impl Types {
                 Variable(v) => (Variable(subst!(v)), Default::default()),
                 EmptyRecord => (EmptyRecord, Default::default()),
                 EmptyTagUnion => (EmptyTagUnion, Default::default()),
-                Function(clos, ret) => {
+                Function(clos, ret, fx) => {
                     let args = self.get_type_arguments(typ);
 
                     let new_args = defer_slice!(args);
                     let new_clos = defer!(clos);
                     let new_ret = defer!(ret);
+                    let new_fx = defer!(fx);
 
-                    (Function(new_clos, new_ret), new_args)
+                    (Function(new_clos, new_ret, new_fx), new_args)
                 }
                 ClosureTag {
                     name,
@@ -1252,6 +1262,8 @@ impl Types {
                 }
                 RangedNumber(range) => (RangedNumber(range), Default::default()),
                 Error => (Error, Default::default()),
+                Pure => (Pure, Default::default()),
+                Effectful => (Effectful, Default::default()),
             };
 
             self.set_type_tag(dest_index, tag, args);
@@ -1328,7 +1340,7 @@ mod debug_types {
         let group = match types[tag] {
             TypeTag::EmptyRecord => f.text("{}"),
             TypeTag::EmptyTagUnion => f.text("[]"),
-            TypeTag::Function(clos, ret) => {
+            TypeTag::Function(clos, ret, fx) => {
                 let args = types.get_type_arguments(tag);
                 maybe_paren!(
                     Free,
@@ -1339,6 +1351,8 @@ mod debug_types {
                     )
                     .append(f.text(" -"))
                     .append(typ(types, f, Free, clos))
+                    .append(f.text(" -"))
+                    .append(typ(types, f, Free, fx))
                     .append(f.text("->"))
                     .append(f.line())
                     .append(typ(types, f, Arg, ret))
@@ -1459,6 +1473,8 @@ mod debug_types {
                         .align(),
                 )
             }
+            TypeTag::Pure => f.text("Pure"),
+            TypeTag::Effectful => f.text("Effectful"),
         };
         group.group()
     }
@@ -1653,8 +1669,8 @@ impl std::ops::Index<Slice<AsideTypeSlice>> for Types {
 pub enum Type {
     EmptyRec,
     EmptyTagUnion,
-    /// A function. The types of its arguments, size of its closure, then the type of its return value.
-    Function(Vec<Type>, Box<Type>, Box<Type>),
+    /// A function. The types of its arguments, size of its closure, its return value, then the fx type.
+    Function(Vec<Type>, Box<Type>, Box<Type>, Box<Type>),
     Record(SendMap<Lowercase, RecordField<Type>>, TypeExtension),
     Tuple(VecMap<usize, Type>, TypeExtension),
     TagUnion(Vec<(TagName, Vec<Type>)>, TypeExtension),
@@ -1686,6 +1702,9 @@ pub enum Type {
     Apply(Symbol, Vec<Loc<Type>>, Region),
     Variable(Variable),
     RangedNumber(NumericRange),
+    /// A function's fx type
+    Pure,
+    Effectful,
     /// A type error, which will code gen to a runtime error
     Error,
 }
@@ -1730,8 +1749,8 @@ impl Clone for Type {
         match self {
             Self::EmptyRec => Self::EmptyRec,
             Self::EmptyTagUnion => Self::EmptyTagUnion,
-            Self::Function(arg0, arg1, arg2) => {
-                Self::Function(arg0.clone(), arg1.clone(), arg2.clone())
+            Self::Function(arg0, arg1, arg2, arg3) => {
+                Self::Function(arg0.clone(), arg1.clone(), arg2.clone(), arg3.clone())
             }
             Self::Record(arg0, arg1) => Self::Record(arg0.clone(), arg1.clone()),
             Self::Tuple(arg0, arg1) => Self::Tuple(arg0.clone(), arg1.clone()),
@@ -1774,6 +1793,8 @@ impl Clone for Type {
             Self::Variable(arg0) => Self::Variable(*arg0),
             Self::RangedNumber(arg1) => Self::RangedNumber(*arg1),
             Self::Error => Self::Error,
+            Type::Pure => Self::Pure,
+            Type::Effectful => Self::Effectful,
         }
     }
 }
@@ -1886,7 +1907,7 @@ impl fmt::Debug for Type {
         match self {
             Type::EmptyRec => write!(f, "{{}}"),
             Type::EmptyTagUnion => write!(f, "[]"),
-            Type::Function(args, closure, ret) => {
+            Type::Function(args, closure, ret, fx) => {
                 write!(f, "Fn(")?;
 
                 for (index, arg) in args.iter().enumerate() {
@@ -1898,7 +1919,8 @@ impl fmt::Debug for Type {
                 }
 
                 write!(f, " |{closure:?}|")?;
-                write!(f, " -> ")?;
+                write!(f, " -{fx:?}")?;
+                write!(f, "-> ")?;
 
                 ret.fmt(f)?;
 
@@ -2137,13 +2159,15 @@ impl fmt::Debug for Type {
             Type::UnspecializedLambdaSet { unspecialized } => {
                 write!(f, "{unspecialized:?}")
             }
+            Type::Pure => write!(f, "->"),
+            Type::Effectful => write!(f, "=>"),
         }
     }
 }
 
 impl Type {
     pub fn arity(&self) -> usize {
-        if let Type::Function(args, _, _) = self {
+        if let Type::Function(args, _, _, _) = self {
             args.len()
         } else {
             0
@@ -2187,10 +2211,11 @@ impl Type {
                         *typ = replacement.clone();
                     }
                 }
-                Function(args, closure, ret) => {
+                Function(args, closure, ret, fx) => {
                     stack.extend(args);
                     stack.push(closure);
                     stack.push(ret);
+                    stack.push(fx);
                 }
                 ClosureTag {
                     name: _,
@@ -2299,7 +2324,7 @@ impl Type {
                     );
                 }
 
-                EmptyRec | EmptyTagUnion | Error => {}
+                EmptyRec | EmptyTagUnion | Error | Pure | Effectful => {}
             }
         }
     }
@@ -2316,10 +2341,11 @@ impl Type {
                         *v = *replacement;
                     }
                 }
-                Function(args, closure, ret) => {
+                Function(args, closure, ret, fx) => {
                     stack.extend(args);
                     stack.push(closure);
                     stack.push(ret);
+                    stack.push(fx);
                 }
                 ClosureTag {
                     name: _,
@@ -2421,7 +2447,7 @@ impl Type {
                     );
                 }
 
-                EmptyRec | EmptyTagUnion | Error => {}
+                EmptyRec | EmptyTagUnion | Error | Pure | Effectful => {}
             }
         }
     }
@@ -2437,12 +2463,13 @@ impl Type {
         use Type::*;
 
         match self {
-            Function(args, closure, ret) => {
+            Function(args, closure, ret, fx) => {
                 for arg in args {
                     arg.substitute_alias(rep_symbol, rep_args, actual)?;
                 }
                 closure.substitute_alias(rep_symbol, rep_args, actual)?;
-                ret.substitute_alias(rep_symbol, rep_args, actual)
+                ret.substitute_alias(rep_symbol, rep_args, actual)?;
+                fx.substitute_alias(rep_symbol, rep_args, actual)
             }
             FunctionOrTagUnion(_, _, ext) => match ext {
                 TypeExtension::Open(ext, _) => ext.substitute_alias(rep_symbol, rep_args, actual),
@@ -2536,7 +2563,13 @@ impl Type {
             }
             RangedNumber(_) => Ok(()),
             UnspecializedLambdaSet { .. } => Ok(()),
-            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) => Ok(()),
+            EmptyRec
+            | EmptyTagUnion
+            | ClosureTag { .. }
+            | Error
+            | Variable(_)
+            | Pure
+            | Effectful => Ok(()),
         }
     }
 
@@ -2551,7 +2584,7 @@ impl Type {
         use Type::*;
 
         match self {
-            Function(args, closure, ret) => {
+            Function(args, closure, ret, _fx) => {
                 ret.contains_symbol(rep_symbol)
                     || closure.contains_symbol(rep_symbol)
                     || args.iter().any(|arg| arg.contains_symbol(rep_symbol))
@@ -2599,7 +2632,13 @@ impl Type {
             UnspecializedLambdaSet {
                 unspecialized: Uls(_, sym, _),
             } => *sym == rep_symbol,
-            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) => false,
+            EmptyRec
+            | EmptyTagUnion
+            | ClosureTag { .. }
+            | Error
+            | Variable(_)
+            | Pure
+            | Effectful => false,
         }
     }
 
@@ -2615,10 +2654,11 @@ impl Type {
 
         match self {
             Variable(v) => *v == rep_variable,
-            Function(args, closure, ret) => {
+            Function(args, closure, ret, fx) => {
                 ret.contains_variable(rep_variable)
                     || closure.contains_variable(rep_variable)
                     || args.iter().any(|arg| arg.contains_variable(rep_variable))
+                    || fx.contains_variable(rep_variable)
             }
             FunctionOrTagUnion(_, _, ext) => Self::contains_variable_ext(ext, rep_variable),
             ClosureTag {
@@ -2660,7 +2700,7 @@ impl Type {
                 .iter()
                 .any(|arg| arg.value.contains_variable(rep_variable)),
             RangedNumber(_) => false,
-            EmptyRec | EmptyTagUnion | Error => false,
+            EmptyRec | EmptyTagUnion | Error | Pure | Effectful => false,
         }
     }
 
@@ -2761,8 +2801,11 @@ impl Type {
                 }
                 TypeExtension::Closed => fields.values().all(|field| field.as_inner().is_narrow()),
             },
-            Type::Function(args, clos, ret) => {
-                args.iter().all(|a| a.is_narrow()) && clos.is_narrow() && ret.is_narrow()
+            Type::Function(args, clos, ret, fx) => {
+                args.iter().all(|a| a.is_narrow())
+                    && clos.is_narrow()
+                    && ret.is_narrow()
+                    && fx.is_narrow()
             }
             // Lists and sets are morally two-tagged unions, as they can be empty
             Type::Apply(Symbol::LIST_LIST | Symbol::SET_SET, _, _) => false,
@@ -2801,12 +2844,13 @@ fn instantiate_aliases<'a, F>(
     use Type::*;
 
     match typ {
-        Function(args, closure, ret) => {
+        Function(args, closure, ret, fx) => {
             for arg in args {
                 instantiate_aliases(arg, region, aliases, ctx);
             }
             instantiate_aliases(closure, region, aliases, ctx);
             instantiate_aliases(ret, region, aliases, ctx);
+            instantiate_aliases(fx, region, aliases, ctx);
         }
         FunctionOrTagUnion(_, _, ext) => {
             if let TypeExtension::Open(ext, _) = ext {
@@ -2965,7 +3009,7 @@ fn instantiate_aliases<'a, F>(
         }
         RangedNumber(_) => {}
         UnspecializedLambdaSet { .. } => {}
-        EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) => {}
+        EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) | Pure | Effectful => {}
     }
 }
 
@@ -2977,9 +3021,10 @@ fn symbols_help(initial: &Type) -> Vec<Symbol> {
 
     while let Some(tipe) = stack.pop() {
         match tipe {
-            Function(args, closure, ret) => {
+            Function(args, closure, ret, fx) => {
                 stack.push(ret);
                 stack.push(closure);
+                stack.push(fx);
                 stack.extend(args);
             }
             FunctionOrTagUnion(_, _, ext) => {
@@ -3026,7 +3071,13 @@ fn symbols_help(initial: &Type) -> Vec<Symbol> {
             } => {
                 // ignore the member symbol because unspecialized lambda sets are internal-only
             }
-            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) => {}
+            EmptyRec
+            | EmptyTagUnion
+            | ClosureTag { .. }
+            | Error
+            | Variable(_)
+            | Pure
+            | Effectful => {}
         }
     }
 
@@ -3046,12 +3097,13 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             accum.insert(*v);
         }
 
-        Function(args, closure, ret) => {
+        Function(args, closure, ret, fx) => {
             for arg in args {
                 variables_help(arg, accum);
             }
             variables_help(closure, accum);
             variables_help(ret, accum);
+            variables_help(fx, accum);
         }
         Record(fields, ext) => {
             for (_, field) in fields {
@@ -3147,6 +3199,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
                 variables_help(&x.value, accum);
             }
         }
+        Pure | Effectful => {}
     }
 }
 
@@ -3175,7 +3228,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             accum.type_variables.insert(*v);
         }
 
-        Function(args, closure, ret) => {
+        Function(args, closure, ret, fx) => {
             for arg in args {
                 variables_help_detailed(arg, accum);
             }
@@ -3186,6 +3239,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             }
 
             variables_help_detailed(ret, accum);
+            variables_help_detailed(fx, accum);
         }
         Record(fields, ext) => {
             for (_, field) in fields {
@@ -3289,6 +3343,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
                 variables_help_detailed(&x.value, accum);
             }
         }
+        Pure | Effectful => {}
     }
 }
 
@@ -3393,6 +3448,7 @@ pub enum Reason {
         foreign_symbol: ForeignSymbol,
         arg_index: HumanIndex,
     },
+    Stmt(Option<Symbol>),
     FloatLiteral,
     IntLiteral,
     NumLiteral,
@@ -3604,6 +3660,7 @@ pub enum ErrorType {
     /// If the name was auto-generated, it will start with a `#`.
     FlexVar(Lowercase),
     RigidVar(Lowercase),
+    EffectfulFunc,
     /// If the name was auto-generated, it will start with a `#`.
     FlexAbleVar(Lowercase, AbilitySet),
     RigidAbleVar(Lowercase, AbilitySet),
@@ -3616,10 +3673,21 @@ pub enum ErrorType {
         TypeExt,
         Polarity,
     ),
-    Function(Vec<ErrorType>, Box<ErrorType>, Box<ErrorType>),
+    Function(
+        Vec<ErrorType>,
+        Box<ErrorType>,
+        ErrorFunctionFx,
+        Box<ErrorType>,
+    ),
     Alias(Symbol, Vec<ErrorType>, Box<ErrorType>, AliasKind),
     Range(Vec<ErrorType>),
     Error,
+}
+
+#[derive(PartialEq, Eq, Clone, Hash)]
+pub enum ErrorFunctionFx {
+    Pure,
+    Effectful,
 }
 
 impl std::fmt::Debug for ErrorType {
@@ -3667,7 +3735,7 @@ impl ErrorType {
                     .for_each(|(_, ts)| ts.iter().for_each(|t| t.add_names(taken)));
                 ext.add_names(taken);
             }
-            Function(args, capt, ret) => {
+            Function(args, capt, _fx, ret) => {
                 args.iter().for_each(|t| t.add_names(taken));
                 capt.add_names(taken);
                 ret.add_names(taken);
@@ -3683,6 +3751,7 @@ impl ErrorType {
                     t.add_names(taken);
                 });
             }
+            EffectfulFunc => {}
             Error => {}
         }
     }
@@ -3753,7 +3822,7 @@ fn write_error_type_help(
                 }
             }
         }
-        Function(arguments, _closure, result) => {
+        Function(arguments, _closure, fx, result) => {
             let write_parens = parens != Parens::Unnecessary;
 
             if write_parens {
@@ -3769,7 +3838,10 @@ fn write_error_type_help(
                 }
             }
 
-            buf.push_str(" -> ");
+            match fx {
+                ErrorFunctionFx::Pure => buf.push_str(" -> "),
+                ErrorFunctionFx::Effectful => buf.push_str(" => "),
+            }
 
             write_error_type_help(interns, *result, buf, Parens::InFn);
 
@@ -3832,6 +3904,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
                 buf.push(')');
             }
         }
+        EffectfulFunc => buf.push_str("EffectfulFunc"),
         Type(symbol, arguments) => {
             let write_parens = parens == Parens::InTypeParam && !arguments.is_empty();
 
@@ -3903,7 +3976,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
                 buf.push(')');
             }
         }
-        Function(arguments, _closure, result) => {
+        Function(arguments, _closure, fx, result) => {
             let write_parens = parens != Parens::Unnecessary;
 
             if write_parens {
@@ -3919,7 +3992,10 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
                 }
             }
 
-            buf.push_str(" -> ");
+            match fx {
+                ErrorFunctionFx::Pure => buf.push_str(" -> "),
+                ErrorFunctionFx::Effectful => buf.push_str(" => "),
+            }
 
             write_debug_error_type_help(*result, buf, Parens::InFn);
 
@@ -4407,7 +4483,7 @@ fn instantiate_lambda_sets_as_unspecialized(
         match typ {
             Type::EmptyRec => {}
             Type::EmptyTagUnion => {}
-            Type::Function(args, lambda_set, ret) => {
+            Type::Function(args, lambda_set, ret, fx) => {
                 debug_assert!(
                     matches!(**lambda_set, Type::Variable(..)),
                     "lambda set already bound"
@@ -4415,6 +4491,7 @@ fn instantiate_lambda_sets_as_unspecialized(
 
                 **lambda_set = new_uls();
                 stack.push(ret);
+                stack.push(fx);
                 stack.extend(args.iter_mut().rev());
             }
             Type::Record(fields, ext) => {
@@ -4483,6 +4560,7 @@ fn instantiate_lambda_sets_as_unspecialized(
             Type::Variable(_) => {}
             Type::RangedNumber(_) => {}
             Type::Error => {}
+            Type::Pure | Type::Effectful => {}
         }
     }
 }
@@ -4497,16 +4575,20 @@ mod test {
         let l1 = Box::new(Type::Variable(var_store.fresh()));
         let l2 = Box::new(Type::Variable(var_store.fresh()));
         let l3 = Box::new(Type::Variable(var_store.fresh()));
+        let fx1 = Box::new(Type::Variable(var_store.fresh()));
+        let fx2 = Box::new(Type::Variable(var_store.fresh()));
+        let fx3 = Box::new(Type::Variable(var_store.fresh()));
         let mut typ = Type::Function(
-            vec![Type::Function(vec![], l2, Box::new(Type::EmptyRec))],
+            vec![Type::Function(vec![], l2, Box::new(Type::EmptyRec), fx1)],
             l1,
             Box::new(Type::TagUnion(
                 vec![(
                     TagName("A".into()),
-                    vec![Type::Function(vec![], l3, Box::new(Type::EmptyRec))],
+                    vec![Type::Function(vec![], l3, Box::new(Type::EmptyRec), fx2)],
                 )],
                 TypeExtension::Closed,
             )),
+            fx3,
         );
 
         let able_var = var_store.fresh();
@@ -4527,11 +4609,11 @@ mod test {
         }
 
         match typ {
-            Type::Function(args, l1, ret) => {
+            Type::Function(args, l1, ret, _fx) => {
                 check_uls!(*l1, 1);
 
                 match args.as_slice() {
-                    [Type::Function(args, l2, ret)] => {
+                    [Type::Function(args, l2, ret, _fx)] => {
                         check_uls!(**l2, 2);
                         assert!(args.is_empty());
                         assert!(matches!(**ret, Type::EmptyRec));
@@ -4544,7 +4626,7 @@ mod test {
                         [(name, args)] => {
                             assert_eq!(name.0.as_str(), "A");
                             match args.as_slice() {
-                                [Type::Function(args, l3, ret)] => {
+                                [Type::Function(args, l3, ret, _fx)] => {
                                     check_uls!(**l3, 3);
                                     assert!(args.is_empty());
                                     assert!(matches!(**ret, Type::EmptyRec));

@@ -1,6 +1,7 @@
 ---
 source: crates/compiler/can/tests/test_suffixed.rs
 expression: snapshot
+snapshot_kind: text
 ---
 Defs {
     tags: [
@@ -94,14 +95,14 @@ Defs {
                                 "#!stmt",
                             ),
                         ],
-                        @33-55 Apply(
-                            @33-55 Var {
+                        @33-56 Apply(
+                            @33-56 Var {
                                 module_name: "Task",
                                 ident: "await",
                             },
                             [
-                                @33-55 Apply(
-                                    @33-55 Var {
+                                @33-56 Apply(
+                                    @33-56 Var {
                                         module_name: "Stdout",
                                         ident: "line",
                                     },
@@ -116,7 +117,7 @@ Defs {
                                         Pizza,
                                     ),
                                 ),
-                                @33-55 Closure(
+                                @33-56 Closure(
                                     [
                                         @28-30 RecordDestructure(
                                             [],

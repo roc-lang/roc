@@ -2,9 +2,9 @@ use std::path::Path;
 
 use crate::abilities::{AbilitiesStore, ImplKey, PendingAbilitiesStore, ResolvedImpl};
 use crate::annotation::{canonicalize_annotation, AnnotationFor};
-use crate::def::{canonicalize_defs, report_unused_imports, Def};
+use crate::def::{canonicalize_defs, report_unused_imports, Def, DefKind};
 use crate::desugar::desugar_record_destructures;
-use crate::env::Env;
+use crate::env::{Env, FxMode};
 use crate::expr::{
     ClosureData, DbgLookup, Declarations, ExpectLookup, Expr, Output, PendingDerives,
 };
@@ -226,6 +226,7 @@ pub fn canonicalize_module_defs<'a>(
     symbols_from_requires: &[(Loc<Symbol>, Loc<TypeAnnotation<'a>>)],
     var_store: &mut VarStore,
     opt_shorthand: Option<&'a str>,
+    fx_mode: FxMode,
 ) -> ModuleOutput {
     let mut can_exposed_imports = MutMap::default();
 
@@ -247,6 +248,7 @@ pub fn canonicalize_module_defs<'a>(
         dep_idents,
         qualified_module_ids,
         opt_shorthand,
+        fx_mode,
     );
 
     for (name, alias) in aliases.into_iter() {
@@ -533,7 +535,7 @@ pub fn canonicalize_module_defs<'a>(
                                 aliases: Default::default(),
                             };
 
-                            let hosted_def = crate::task_module::build_host_exposed_def(
+                            let hosted_def = crate::effect_module::build_host_exposed_def(
                                 &mut scope, *symbol, &ident, var_store, annotation,
                             );
 
@@ -586,7 +588,7 @@ pub fn canonicalize_module_defs<'a>(
                                 aliases: Default::default(),
                             };
 
-                            let hosted_def = crate::task_module::build_host_exposed_def(
+                            let hosted_def = crate::effect_module::build_host_exposed_def(
                                 &mut scope, *symbol, &ident, var_store, annotation,
                             );
 
@@ -655,6 +657,7 @@ pub fn canonicalize_module_defs<'a>(
             expr_var: var_store.fresh(),
             pattern_vars,
             annotation: None,
+            kind: DefKind::Let,
         };
 
         declarations.push_def(def);

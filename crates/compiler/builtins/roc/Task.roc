@@ -222,8 +222,8 @@ sequence = \taskList ->
     Task.loop (taskList, List.withCapacity (List.len taskList)) \(tasks, values) ->
         when tasks is
             [task, .. as rest] ->
-                value = task!
-                Task.ok (Step (rest, List.append values value))
+                Task.map task \value ->
+                    Step (rest, List.append values value)
 
             [] ->
                 Task.ok (Done values)

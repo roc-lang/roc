@@ -4,6 +4,7 @@ use std::iter::once;
 use std::sync::{Arc, Mutex};
 
 use roc_can::abilities::SpecializationLambdaSets;
+use roc_can::def::DefKind;
 use roc_can::expr::Expr;
 use roc_can::pattern::Pattern;
 use roc_can::{def::Def, module::ExposedByModule};
@@ -90,6 +91,7 @@ fn build_derived_body(
         expr_var: body_type,
         pattern_vars: once((derived_symbol, body_type)).collect(),
         annotation: None,
+        kind: DefKind::Let,
     };
 
     (def, specialization_lambda_sets)
