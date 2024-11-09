@@ -10,8 +10,9 @@ use crate::ast::{
 use crate::blankspace::{eat_nc, eat_nc_check, eat_space_loc_comments, SpacedBuilder};
 use crate::header::{chomp_module_name, ModuleName};
 use crate::ident::{
-    chomp_access_chain, chomp_integer_part, chomp_lowercase_part, malformed_ident, parse_ident,
-    parse_lowercase_ident, parse_unqualified_ident, Accessor, BadIdent, Ident, Suffix,
+    chomp_access_chain, chomp_integer_part, chomp_lowercase_part, malformed_ident,
+    parse_anycase_ident, parse_ident_chain, parse_lowercase_ident, Accessor, BadIdent, Ident,
+    Suffix,
 };
 use crate::number_literal::parse_number_base;
 use crate::parser::{
@@ -288,7 +289,7 @@ fn parse_term<'a>(
                 if opts.is_set(PARSE_UNDERSCORE) {
                     let state = state.inc();
                     match chomp_lowercase_part(state.bytes()) {
-                        Ok(name) => {
+                        Ok((name, _)) => {
                             let state = state.advance(name.len());
                             let expr = Loc::pos(start, state.pos(), Expr::Underscore(name));
                             Ok((MadeProgress, expr, state))
@@ -383,7 +384,7 @@ fn parse_term<'a>(
                     return Ok((MadeProgress, try_expr, state));
                 }
 
-                let (_, ident, state) = parse_ident(arena, state)?;
+                let (_, ident, state) = parse_ident_chain(arena, state)?;
 
                 let ident_end = state.pos();
                 let (suffixes, state) = match parse_field_task_result_suffixes(arena, state) {
@@ -1071,7 +1072,7 @@ fn import_as<'a>(
         .parse(arena, state, min_indent)?;
 
         let ident_pos = state.pos();
-        let (item, state) = match parse_unqualified_ident(state) {
+        let (item, state) = match parse_anycase_ident(state) {
             Ok((_, ident, state)) => {
                 let ident_at = Region::new(ident_pos, state.pos());
                 match ident.chars().next() {
@@ -1117,7 +1118,7 @@ fn import_exposing<'a>() -> impl Parser<
 
         let elem_p = move |_: &'a Bump, state: State<'a>, _: u32| {
             let pos: Position = state.pos();
-            match parse_unqualified_ident(state) {
+            match parse_anycase_ident(state) {
                 Ok((p, ident, state)) => {
                     let ident = Spaced::Item(crate::header::ExposedName::new(ident));
                     Ok((p, Loc::pos(pos, state.pos(), ident), state))
@@ -3814,7 +3815,7 @@ pub fn parse_record_field<'a>(
             let state = state.inc();
             let name_pos = state.pos();
             let (opt_field_label, state) = match chomp_lowercase_part(state.bytes()) {
-                Ok(name) => (name, state.advance(name.len())),
+                Ok((name, _)) => (name, state.advance(name.len())),
                 Err(NoProgress) => ("", state),
                 Err(_) => return Err((MadeProgress, ERecord::Field(name_pos))),
             };
@@ -3878,7 +3879,7 @@ fn record_help<'a>() -> impl Parser<'a, RecordHelp<'a>, ERecord<'a>> {
             Err(_) => (None, before_prefix),
             Ok((_, (spaces_before, _), state)) => {
                 let ident_at = state.pos();
-                match parse_ident(arena, state) {
+                match parse_ident_chain(arena, state) {
                     Err(_) => (None, before_prefix),
                     Ok((_, ident, state)) => {
                         let ident =

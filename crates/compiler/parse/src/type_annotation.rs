@@ -307,8 +307,8 @@ fn record_type_field<'a>(
         let start = state.pos();
         let (label, state) = match chomp_lowercase_part(state.bytes()) {
             Err(p) => return Err((p, ETypeRecord::Field(start))),
-            Ok(ident) => {
-                if is_keyword(ident) {
+            Ok((ident, may_be_kw)) => {
+                if may_be_kw && is_keyword(ident) {
                     return Err((MadeProgress, ETypeRecord::Field(start)));
                 }
                 (ident, state.advance(ident.len()))

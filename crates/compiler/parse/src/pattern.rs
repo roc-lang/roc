@@ -1,7 +1,7 @@
 use crate::ast::{Collection, Implements, Pattern, PatternAs};
 use crate::blankspace::{eat_nc, eat_nc_check, SpacedBuilder};
 use crate::expr::{parse_expr_start, CHECK_FOR_ARROW};
-use crate::ident::{chomp_lowercase_part, parse_ident, parse_lowercase_ident, Ident};
+use crate::ident::{chomp_lowercase_part, parse_ident_chain, parse_lowercase_ident, Ident};
 use crate::keyword;
 use crate::number_literal::parse_number_base;
 use crate::parser::{at_keyword, Progress::*};
@@ -380,7 +380,7 @@ fn parse_ident_pattern<'a>(
     state: State<'a>,
     min_indent: u32,
 ) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
-    let (ident, state) = match parse_ident(arena, state) {
+    let (ident, state) = match parse_ident_chain(arena, state) {
         Ok((_, out, state)) => (out, state),
         Err((p, _)) => return Err((p, EPattern::Start(start))),
     };
@@ -468,18 +468,13 @@ fn rest_of_underscore_pattern(
     start: Position,
     state: State<'_>,
 ) -> ParseResult<'_, Loc<Pattern<'_>>, EPattern<'_>> {
-    match chomp_lowercase_part(state.bytes()) {
-        Ok(name) => {
-            let state = state.advance(name.len());
-            let ident = Loc::pos(start, state.pos(), Pattern::Underscore(name));
-            Ok((MadeProgress, ident, state))
-        }
-        Err(NoProgress) => {
-            let ident = Loc::pos(start, state.pos(), Pattern::Underscore(""));
-            Ok((MadeProgress, ident, state))
-        }
-        Err(_) => Err((MadeProgress, EPattern::End(state.pos()))),
-    }
+    let (name, state) = match chomp_lowercase_part(state.bytes()) {
+        Ok((name, _)) => (name, state.advance(name.len())),
+        Err(NoProgress) => ("", state),
+        Err(_) => return Err((MadeProgress, EPattern::End(state.pos()))),
+    };
+    let out = Loc::pos(start, state.pos(), Pattern::Underscore(name));
+    Ok((MadeProgress, out, state))
 }
 
 fn rest_of_record_pattern<'a>(

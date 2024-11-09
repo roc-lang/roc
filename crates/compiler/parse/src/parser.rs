@@ -888,29 +888,6 @@ pub fn loc<'a, Output, E: 'a>(
     }
 }
 
-/// If the first one parses, ignore its output and move on to parse with the second one.
-///
-/// # Examples
-/// ```
-/// # #![forbid(unused_imports)]
-/// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, word, skip_first};
-/// # use roc_parse::ident::lowercase_ident;
-/// # use bumpalo::Bump;
-/// # let arena = Bump::new();
-/// # fn foo<'a>(arena: &'a Bump) {
-/// let parser = skip_first(
-///    word("hello, ", |_| ()),
-///    lowercase_ident()
-/// );
-///
-/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
-/// assert_eq!(progress, Progress::MadeProgress);
-/// assert_eq!(output, "world");
-/// assert_eq!(state.pos().offset, 12);
-/// # }
-/// # foo(&arena);
-/// ```
 pub fn skip_first<'a, P1, First, P2, Second, E>(p1: P1, p2: P2) -> impl Parser<'a, Second, E>
 where
     P1: Parser<'a, First, E>,
@@ -928,30 +905,6 @@ where
     }
 }
 
-/// If the first one parses, parse the second one; if it also parses, use the
-/// output from the first one.
-///
-/// # Examples
-/// ```
-/// # #![forbid(unused_imports)]
-/// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, word, skip_second};
-/// # use roc_parse::ident::lowercase_ident;
-/// # use bumpalo::Bump;
-/// # let arena = Bump::new();
-/// # fn foo<'a>(arena: &'a Bump) {
-/// let parser = skip_second(
-///    lowercase_ident(),
-///    word(", world", |_| ())
-/// );
-///
-/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
-/// assert_eq!(progress, Progress::MadeProgress);
-/// assert_eq!(output, "hello");
-/// assert_eq!(state.pos().offset, 12);
-/// # }
-/// # foo(&arena);
-/// ```
 pub fn skip_second<'a, P1, First, P2, Second, E>(p1: P1, p2: P2) -> impl Parser<'a, First, E>
 where
     E: 'a,
@@ -1068,52 +1021,6 @@ pub fn collection_trailing_sep_e<
 pub fn succeed<'a, T: Clone, E: 'a>(value: T) -> impl Parser<'a, T, E> {
     move |_arena: &'a bumpalo::Bump, state: crate::state::State<'a>, _min_indent: u32| {
         Ok((NoProgress, value.clone(), state))
-    }
-}
-
-/// Runs two parsers in succession. If both parsers succeed, the output is a tuple of both outputs.
-/// Both parsers must have the same error type.
-///
-/// # Example
-///
-/// ```
-/// # #![forbid(unused_imports)]
-/// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, and, word};
-/// # use roc_region::all::Position;
-/// # use bumpalo::Bump;
-/// # #[derive(Debug, PartialEq)]
-/// # enum Problem {
-/// #     NotFound(Position),
-/// # }
-/// # let arena = Bump::new();
-/// let parser1 = word("hello", Problem::NotFound);
-/// let parser2 = word(", ", Problem::NotFound);
-/// let parser = and(parser1, parser2);
-///
-/// // Success case
-/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
-/// assert_eq!(progress, Progress::MadeProgress);
-/// assert_eq!(output, ((),()));
-/// assert_eq!(state.pos(), Position::new(7));
-///
-/// // Error case
-/// let (progress, err) = parser.parse(&arena, State::new("hello!! world".as_bytes()), 0).unwrap_err();
-/// assert_eq!(progress, Progress::MadeProgress);
-/// assert_eq!(err, Problem::NotFound(Position::new(5)));
-/// ```
-pub fn and<'a, Output1, Output2, E: 'a>(
-    p1: impl Parser<'a, Output1, E>,
-    p2: impl Parser<'a, Output2, E>,
-) -> impl Parser<'a, (Output1, Output2), E> {
-    move |arena: &'a bumpalo::Bump, state: crate::state::State<'a>, min_indent: u32| match p1
-        .parse(arena, state, min_indent)
-    {
-        Ok((p1, out1, state)) => match p2.parse(arena, state, min_indent) {
-            Ok((p2, out2, state)) => Ok((p1.or(p2), (out1, out2), state)),
-            Err((p2, fail)) => Err((p1.or(p2), fail)),
-        },
-        Err((progress, fail)) => Err((progress, fail)),
     }
 }
 

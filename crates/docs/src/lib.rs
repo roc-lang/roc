@@ -10,7 +10,7 @@ use roc_load::docs::{ModuleDocumentation, RecordField};
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_packaging::cache::{self, RocCacheDir};
-use roc_parse::ident::{parse_ident, Accessor, Ident};
+use roc_parse::ident::{parse_ident_chain, Accessor, Ident};
 use roc_parse::keyword;
 use roc_parse::state::State;
 use roc_problem::Severity;
@@ -1090,7 +1090,7 @@ fn markdown_to_html(
                 // more memory as we iterate through these.
                 arena.reset();
 
-                match parse_ident(&arena, state) {
+                match parse_ident_chain(&arena, state) {
                     Ok((_, Ident::Plain(ident), _)) => {
                         match doc_url(all_exposed_symbols, scope, interns, "", ident) {
                             Ok(DocUrl { url, title }) => Some((url.into(), title.into())),

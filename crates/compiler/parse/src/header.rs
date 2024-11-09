@@ -6,12 +6,10 @@ use crate::ast::{
 };
 use crate::blankspace::{eat_nc_check, space0_e, SpacedBuilder};
 use crate::expr::merge_spaces;
-use crate::ident::{
-    self, lowercase_ident, parse_lowercase_ident, parse_unqualified_ident, UppercaseIdent,
-};
+use crate::ident::{self, parse_anycase_ident, parse_lowercase_ident, UppercaseIdent};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    and, at_keyword, byte, collection_inner, collection_trailing_sep_e, loc, reset_min_indent,
+    at_keyword, byte, collection_inner, collection_trailing_sep_e, loc, reset_min_indent,
     skip_first, skip_second, specialize_err, succeed, zero_or_more, EExposes, EHeader, EImports,
     EPackageEntry, EPackageName, EPackages, EParams, EProvides, ERequires, ETypedIdent,
     ParseResult, Parser, SourceError, SpaceProblem, SyntaxError,
@@ -186,25 +184,24 @@ macro_rules! merge_n_spaces {
 }
 
 /// Parse old interface headers so we can format them into module headers
-#[inline(always)]
 fn interface_header<'a>() -> impl Parser<'a, ModuleHeader<'a>, EHeader<'a>> {
-    let after_keyword = |arena, state: crate::state::State<'a>, min_indent: u32| match and(
-        skip_second(
-            space0_e(EHeader::IndentStart),
-            loc(specialize_err(
-                move |_, pos| EHeader::ModuleName(pos),
-                module_name(),
-            )),
-        ),
-        specialize_err(EHeader::Exposes, exposes_kw()),
-    )
-    .parse(arena, state, min_indent)
-    {
-        Ok((_, (before_name, kw), state)) => {
-            let out = merge_n_spaces!(arena, before_name, kw.before, kw.after);
-            Ok((MadeProgress, out, state))
-        }
-        Err(err) => Err(err),
+    let after_keyword = |arena, state: crate::state::State<'a>, min_indent: u32| {
+        let (p, before_name, state) =
+            eat_nc_check(EHeader::IndentStart, arena, state, min_indent, false)?;
+
+        let name_pos = state.pos();
+        let state = match module_name().parse(arena, state, min_indent) {
+            Ok((_, _, state)) => state,
+            Err((p2, _)) => return Err((p2.or(p), EHeader::ModuleName(name_pos))),
+        };
+
+        let kw_pos = state.pos();
+        let (_, kw, state) = match exposes_kw().parse(arena, state, min_indent) {
+            Ok(ok) => ok,
+            Err((p, fail)) => return Err((p, EHeader::Exposes(fail, kw_pos))),
+        };
+        let out = merge_n_spaces!(arena, before_name, kw.before, kw.after);
+        Ok((MadeProgress, out, state))
     };
 
     record!(ModuleHeader {
@@ -664,7 +661,7 @@ where
 {
     move |_: &'a bumpalo::Bump, state: State<'a>, _: u32| {
         let ident_pos = state.pos();
-        match parse_unqualified_ident(state) {
+        match parse_anycase_ident(state) {
             Ok((p, ident, state)) => {
                 let ident = Spaced::Item(ExposedName::new(ident));
                 let ident = Loc::pos(ident_pos, state.pos(), ident);
@@ -978,15 +975,22 @@ fn imports_entry<'a>() -> impl Parser<'a, Spaced<'a, ImportsEntry<'a>>, EImports
             Ok((MadeProgress, opt_values, state))
         };
 
-        match and(p_name_module_name, p_opt_values).parse(arena, state.clone(), min_indent) {
+        match p_name_module_name.parse(arena, state.clone(), min_indent) {
             Err((NoProgress, _)) => { /*goto below */ }
             Err(err) => return Err(err),
-            Ok((p, ((opt_shortname, module_name), opt_values), state)) => {
-                let entry = match opt_shortname {
-                    Some(shortname) => ImportsEntry::Package(shortname, module_name, opt_values),
-                    None => ImportsEntry::Module(module_name, opt_values),
-                };
-                return Ok((p, Spaced::Item(entry), state));
+            Ok((_, (opt_shortname, module_name), state)) => {
+                match p_opt_values.parse(arena, state, min_indent) {
+                    Err((_, fail)) => return Err((MadeProgress, fail)),
+                    Ok((_, opt_values, state)) => {
+                        let entry = match opt_shortname {
+                            Some(shortname) => {
+                                ImportsEntry::Package(shortname, module_name, opt_values)
+                            }
+                            None => ImportsEntry::Module(module_name, opt_values),
+                        };
+                        return Ok((MadeProgress, Spaced::Item(entry), state));
+                    }
+                }
             }
         };
 
@@ -1408,10 +1412,9 @@ pub struct PackageEntry<'a> {
 
 pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPackageEntry<'a>> {
     move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
-        let parser1 = move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
+        let shorthand_p = move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
             let ident_pos = state.pos();
-            let (_, ident, state) = match lowercase_ident().parse(arena, state.clone(), min_indent)
-            {
+            let (_, ident, state) = match parse_lowercase_ident(state.clone()) {
                 Ok(ok) => ok,
                 Err((NoProgress, _)) => return Ok((NoProgress, None, state)),
                 Err(_) => return Err((MadeProgress, EPackageEntry::Shorthand(ident_pos))),
@@ -1451,8 +1454,13 @@ pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPac
             }
         };
 
-        let (_, (opt_shorthand, (platform_marker, package_or_path)), state) =
-            and(parser1, plat_parser).parse(arena, state, min_indent)?;
+        let (p, opt_shorthand, state) = shorthand_p.parse(arena, state, min_indent)?;
+
+        let (_, (platform_marker, package_or_path), state) =
+            match plat_parser.parse(arena, state, min_indent) {
+                Ok(ok) => ok,
+                Err((p2, fail)) => return Err((p2.or(p), fail)),
+            };
 
         let entry = match opt_shorthand {
             Some(((shorthand, spaces_before_colon), spaces_after_colon)) => PackageEntry {

@@ -5,6 +5,7 @@ use crate::parser::{EExpr, ParseResult, Parser};
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
+use encode_unicode::CharExt;
 use roc_region::all::{Loc, Position, Region};
 
 /// A tag, for example. Must start with an uppercase letter
@@ -55,10 +56,6 @@ pub enum Ident<'a> {
     Malformed(&'a str, BadIdent),
 }
 
-pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
-    move |_, state: State<'a>, _: u32| parse_lowercase_ident(state)
-}
-
 /// This could be:
 ///
 /// * A record field, e.g. "email" in `.email` or in `email:`
@@ -67,8 +64,8 @@ pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
 pub fn parse_lowercase_ident(state: State<'_>) -> ParseResult<'_, &str, ()> {
     match chomp_lowercase_part(state.bytes()) {
         Err(p) => Err((p, ())),
-        Ok(ident) => {
-            if is_keyword(ident) {
+        Ok((ident, may_be_kw)) => {
+            if may_be_kw && is_keyword(ident) {
                 Err((NoProgress, ()))
             } else {
                 Ok((MadeProgress, ident, state.advance(ident.len())))
@@ -96,11 +93,12 @@ pub fn uppercase<'a>() -> impl Parser<'a, Loc<Spaced<'a, UppercaseIdent<'a>>>, (
     }
 }
 
-pub fn parse_unqualified_ident(state: State<'_>) -> ParseResult<'_, &str, ()> {
+#[inline(always)]
+pub fn parse_anycase_ident(state: State<'_>) -> ParseResult<'_, &str, ()> {
     match chomp_anycase_part(state.bytes()) {
         Err(p) => Err((p, ())),
-        Ok(ident) => {
-            if is_keyword(ident) {
+        Ok((ident, may_be_kw)) => {
+            if may_be_kw && is_keyword(ident) {
                 Err((MadeProgress, ()))
             } else {
                 Ok((MadeProgress, ident, state.advance(ident.len())))
@@ -123,7 +121,6 @@ pub(crate) fn malformed_ident<'a>(
 
 /// skip forward to the next non-identifier character
 pub fn chomp_malformed(bytes: &[u8]) -> usize {
-    use encode_unicode::CharExt;
     let mut chomped = 0;
     while let Ok((ch, width)) = char::from_utf8_slice_start(&bytes[chomped..]) {
         // We can't use ch.is_alphanumeric() here because that passes for
@@ -135,7 +132,6 @@ pub fn chomp_malformed(bytes: &[u8]) -> usize {
             break;
         }
     }
-
     chomped
 }
 
@@ -161,81 +157,96 @@ pub enum BadIdent {
     QualifiedTupleAccessor(Position),
 }
 
-pub(crate) fn chomp_lowercase_part(buffer: &[u8]) -> Result<&str, Progress> {
-    chomp_part(char::is_lowercase, buffer)
+pub(crate) fn chomp_lowercase_part(buffer: &[u8]) -> Result<(&str, bool), Progress> {
+    match char::from_utf8_slice_start(buffer) {
+        Ok((ch, mut chomped)) if ch.is_lowercase() => {
+            let may_be_kw = true;
+            while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
+                if ch.is_alphabetic() || ch.is_ascii_digit() {
+                    chomped += width;
+                } else {
+                    if ch == '_' {
+                        return Err(NoProgress);
+                    }
+                    // todo: @wip @feat
+                    // if ch == '!' {
+                    //     chomped += width;
+                    //     may_be_kw = false;
+                    // }
+                    break;
+                }
+            }
+            let name = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
+            Ok((name, may_be_kw))
+        }
+        _ => Err(NoProgress),
+    }
 }
 
 pub(crate) fn chomp_uppercase_part(buffer: &[u8]) -> Result<&str, Progress> {
-    chomp_part(char::is_uppercase, buffer)
+    match char::from_utf8_slice_start(buffer) {
+        Ok((ch, mut chomped)) if ch.is_uppercase() => {
+            while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
+                if ch.is_alphabetic() || ch.is_ascii_digit() {
+                    chomped += width;
+                } else {
+                    if ch == '_' {
+                        return Err(NoProgress);
+                    }
+                    break;
+                }
+            }
+            let name = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
+            Ok(name)
+        }
+        _ => Err(NoProgress),
+    }
 }
 
-fn chomp_anycase_part(buffer: &[u8]) -> Result<&str, Progress> {
-    chomp_part(char::is_alphabetic, buffer)
+pub(crate) fn chomp_anycase_part(buffer: &[u8]) -> Result<(&str, bool), Progress> {
+    match char::from_utf8_slice_start(buffer) {
+        Ok((ch, mut chomped)) if ch.is_alphabetic() => {
+            let is_uppercase = ch.is_uppercase();
+            let may_be_kw = !is_uppercase;
+            while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
+                if ch.is_alphabetic() || ch.is_ascii_digit() {
+                    chomped += width;
+                } else {
+                    if ch == '_' {
+                        return Err(NoProgress);
+                    }
+                    // todo: @wip @feat
+                    // if is_lowercase && ch == '!' {
+                    //     chomped += width;
+                    //     may_be_kw = false;
+                    // }
+                    break;
+                }
+            }
+            let name = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
+            Ok((name, may_be_kw))
+        }
+        _ => Err(NoProgress),
+    }
 }
 
 pub(crate) fn chomp_integer_part(buffer: &[u8]) -> Result<&str, Progress> {
-    use encode_unicode::CharExt;
-
-    let mut chomped = 0;
-    if let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
-        if ch.is_ascii_digit() {
-            chomped += width;
-        } else {
-            return Err(NoProgress);
-        }
-    }
-
-    while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
-        if ch.is_ascii_digit() {
-            chomped += width;
-        } else {
-            if ch == '_' || ch.is_alphabetic() {
-                return Err(NoProgress);
+    match char::from_utf8_slice_start(buffer) {
+        Ok((ch, mut chomped)) if ch.is_ascii_digit() => {
+            while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
+                if ch.is_ascii_digit() {
+                    chomped += width;
+                } else {
+                    if ch == '_' || ch.is_alphabetic() {
+                        return Err(NoProgress);
+                    }
+                    break;
+                }
             }
-            break;
+            let name = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
+            Ok(name)
         }
-    }
-
-    if chomped == 0 {
-        Err(NoProgress)
-    } else {
-        let name = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
-        Ok(name)
-    }
-}
-
-#[inline(always)]
-fn chomp_part<F>(leading_is_good: F, buffer: &[u8]) -> Result<&str, Progress>
-where
-    F: Fn(char) -> bool,
-{
-    use encode_unicode::CharExt;
-
-    let mut chomped = 0;
-    if let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
-        if leading_is_good(ch) {
-            chomped += width;
-        } else {
-            return Err(NoProgress);
-        }
-    }
-
-    while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
-        if ch.is_alphabetic() || ch.is_ascii_digit() {
-            chomped += width;
-        } else {
-            if ch == '_' {
-                return Err(NoProgress);
-            }
-            break;
-        }
-    }
-
-    if chomped == 0 {
-        Err(NoProgress)
-    } else {
-        let name = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
-        Ok(name)
+        _ => Err(NoProgress),
     }
 }
 
@@ -274,10 +285,8 @@ pub enum Suffix<'a> {
 /// a `.foo` or `.1` accessor function
 fn chomp_accessor(buffer: &[u8], pos: Position) -> Result<Accessor, BadIdent> {
     // assumes the leading `.` has been chomped already
-    use encode_unicode::CharExt;
-
     match chomp_lowercase_part(buffer) {
-        Ok(name) => {
+        Ok((name, _)) => {
             let chomped = name.len();
             if let Ok(('.', _)) = char::from_utf8_slice_start(&buffer[chomped..]) {
                 Err(BadIdent::WeirdAccessor(pos))
@@ -308,7 +317,7 @@ fn chomp_accessor(buffer: &[u8], pos: Position) -> Result<Accessor, BadIdent> {
 fn chomp_record_updater(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
     // assumes the leading `&` has been chomped already
     match chomp_lowercase_part(buffer) {
-        Ok(name) => Ok(name),
+        Ok((name, _)) => Ok(name),
         Err(_) => {
             // we've already made progress with the initial `&`
             Err(BadIdent::StrayAmpersand(pos.bump_column(1)))
@@ -320,8 +329,6 @@ fn chomp_record_updater(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> 
 fn chomp_opaque_ref(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
     // assumes the leading `@` has NOT been chomped already
     debug_assert_eq!(buffer.first(), Some(&b'@'));
-    use encode_unicode::CharExt;
-
     match chomp_uppercase_part(&buffer[1..]) {
         Ok(name) => {
             let width = 1 + name.len();
@@ -357,9 +364,10 @@ fn chomp_opaque_ref(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
 /// 3. The beginning of a definition (e.g. `foo =`)
 /// 4. The beginning of a type annotation (e.g. `foo :`)
 /// 5. A reserved keyword (e.g. `if ` or `when `), meaning we should do something else.
-pub fn parse_ident<'a>(arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Ident<'a>, EExpr<'a>> {
-    use encode_unicode::CharExt;
-
+pub fn parse_ident_chain<'a>(
+    arena: &'a Bump,
+    state: State<'a>,
+) -> ParseResult<'a, Ident<'a>, EExpr<'a>> {
     let start = state.pos();
     let bytes = state.bytes();
     let first_is_uppercase;
@@ -482,15 +490,21 @@ pub fn parse_ident<'a>(arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Ide
                 chomped += width;
             }
             _ => {
+                let may_be_kw = !first_is_uppercase;
+                // if !first_is_uppercase {
+                //     if let Ok(('!', width)) = other {
+                //         chomped += width;
+                //         may_be_kw = false;
+                //     }
+                // }
                 let value = unsafe { std::str::from_utf8_unchecked(&bytes[..chomped]) };
                 if first_is_uppercase {
                     return Ok((MadeProgress, Ident::Tag(value), state.advance(chomped)));
-                } else {
-                    if is_keyword(value) {
-                        return Err((NoProgress, EExpr::Start(start)));
-                    }
-                    return Ok((MadeProgress, Ident::Plain(value), state.advance(chomped)));
                 }
+                if may_be_kw && is_keyword(value) {
+                    return Err((NoProgress, EExpr::Start(start)));
+                }
+                return Ok((MadeProgress, Ident::Plain(value), state.advance(chomped)));
             }
         }
     }
@@ -562,19 +576,17 @@ pub(crate) fn chomp_access_chain<'a>(
         let next = chomped + 1;
         match &buffer.get(next..) {
             Some(slice) => match chomp_lowercase_part(slice) {
-                Ok(name) => {
-                    let value =
-                        unsafe { std::str::from_utf8_unchecked(&buffer[next..next + name.len()]) };
-                    parts.push(Accessor::RecordField(value));
+                Ok((name, _)) => {
                     chomped = next + name.len();
+                    let value = unsafe { std::str::from_utf8_unchecked(&buffer[next..chomped]) };
+                    parts.push(Accessor::RecordField(value));
                 }
                 Err(_) => match chomp_integer_part(slice) {
                     Ok(name) => {
-                        let value = unsafe {
-                            std::str::from_utf8_unchecked(&buffer[next..next + name.len()])
-                        };
-                        parts.push(Accessor::TupleIndex(value));
                         chomped = next + name.len();
+                        let value =
+                            unsafe { std::str::from_utf8_unchecked(&buffer[next..chomped]) };
+                        parts.push(Accessor::TupleIndex(value));
                     }
                     Err(_) => return Err(next),
                 },
