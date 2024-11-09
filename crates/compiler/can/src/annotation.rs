@@ -2,12 +2,12 @@ use crate::env::Env;
 use crate::procedure::{QualifiedReference, References};
 use crate::scope::{PendingAbilitiesInScope, Scope, SymbolLookup};
 use roc_collections::{ImMap, MutSet, SendMap, VecMap, VecSet};
-use roc_module::ident::{Ident, Lowercase, TagName};
+use roc_module::ident::{Ident, IdentSuffix, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{
     AssignedField, ExtractSpaces, FunctionArrow, Pattern, Tag, TypeAnnotation, TypeHeader,
 };
-use roc_problem::can::ShadowKind;
+use roc_problem::can::{Problem, ShadowKind};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{
@@ -1378,6 +1378,8 @@ fn can_assigned_fields<'a>(
                     );
 
                     let label = Lowercase::from(field_name.value);
+                    check_record_field_suffix(env, label.suffix(), &field_type, &loc_field.region);
+
                     field_types.insert(label.clone(), RigidRequired(field_type));
 
                     break 'inner label;
@@ -1396,6 +1398,8 @@ fn can_assigned_fields<'a>(
                     );
 
                     let label = Lowercase::from(field_name.value);
+                    check_record_field_suffix(env, label.suffix(), &field_type, &loc_field.region);
+
                     field_types.insert(label.clone(), RigidOptional(field_type));
 
                     break 'inner label;
@@ -1448,6 +1452,23 @@ fn can_assigned_fields<'a>(
     }
 
     field_types
+}
+
+fn check_record_field_suffix(
+    env: &mut Env,
+    suffix: IdentSuffix,
+    field_type: &Type,
+    region: &Region,
+) {
+    match (suffix, field_type) {
+        (IdentSuffix::None, Type::Function(_, _, _, fx)) if **fx == Type::Effectful => env
+            .problems
+            .push(Problem::UnsuffixedEffectfulRecordField(*region)),
+        (IdentSuffix::Bang, Type::Function(_, _, _, fx)) if **fx == Type::Pure => {
+            env.problems.push(Problem::SuffixedPureRecordField(*region))
+        }
+        _ => {}
+    }
 }
 
 // TODO trim down these arguments!
