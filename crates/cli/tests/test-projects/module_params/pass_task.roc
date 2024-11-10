@@ -1,7 +1,7 @@
-app [main] { pf: platform "../effects/platform/main.roc" }
+app [main!] { pf: platform "../test-platform-effects-zig/main.roc" }
 
-import pf.PlatformTasks
-import Menu { echo: PlatformTasks.putLine }
+import pf.Effect
+import Menu { echo: \str -> Effect.putLine! str }
 
-main =
+main! = \{} ->
     Menu.menu "Agus"

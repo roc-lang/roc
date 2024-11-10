@@ -439,6 +439,7 @@ impl<'a> Normalize<'a> for ValueDef<'a> {
                 IngestedFileImport(ingested_file_import.normalize(arena))
             }
             Stmt(loc_expr) => Stmt(arena.alloc(loc_expr.normalize(arena))),
+            StmtAfterExpr => StmtAfterExpr,
         }
     }
 }
@@ -881,8 +882,9 @@ impl<'a> Normalize<'a> for Pattern<'a> {
 impl<'a> Normalize<'a> for TypeAnnotation<'a> {
     fn normalize(&self, arena: &'a Bump) -> Self {
         match *self {
-            TypeAnnotation::Function(a, b) => TypeAnnotation::Function(
+            TypeAnnotation::Function(a, arrow, b) => TypeAnnotation::Function(
                 arena.alloc(a.normalize(arena)),
+                arrow,
                 arena.alloc(b.normalize(arena)),
             ),
             TypeAnnotation::Apply(a, b, c) => TypeAnnotation::Apply(a, b, c.normalize(arena)),
@@ -1071,7 +1073,6 @@ impl<'a> Normalize<'a> for EExpr<'a> {
             EExpr::IndentEnd(_pos) => EExpr::IndentEnd(Position::zero()),
             EExpr::UnexpectedComma(_pos) => EExpr::UnexpectedComma(Position::zero()),
             EExpr::UnexpectedTopLevelExpr(_pos) => EExpr::UnexpectedTopLevelExpr(Position::zero()),
-            EExpr::StmtAfterExpr(_pos) => EExpr::StmtAfterExpr(Position::zero()),
             EExpr::RecordUpdateOldBuilderField(_pos) => {
                 EExpr::RecordUpdateOldBuilderField(Region::zero())
             }

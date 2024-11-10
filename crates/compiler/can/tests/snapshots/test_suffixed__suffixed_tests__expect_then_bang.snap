@@ -63,7 +63,7 @@ Defs {
                         },
                     ],
                 },
-                @29-31 Var {
+                @29-30 Var {
                     module_name: "",
                     ident: "x",
                 },

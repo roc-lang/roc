@@ -38,6 +38,7 @@ SpaceAfter(
                                             "a",
                                         ),
                                     ],
+                                    Pure,
                                     @26-28 Record {
                                         fields: [],
                                         ext: None,
@@ -75,6 +76,7 @@ SpaceAfter(
                                             "a",
                                         ),
                                     ],
+                                    Pure,
                                     @79-81 Record {
                                         fields: [],
                                         ext: None,

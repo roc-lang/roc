@@ -275,10 +275,6 @@ main =
 
     const UNFORMATTED_ROC: &str = r#"app [main] { pf: platform "platform/main.roc" }
 
-
-import pf.Stdout
-import pf.Stdin
-
 main =
         Stdout.line! "What's your name?"
         name = Stdin.line!

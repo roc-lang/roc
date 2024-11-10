@@ -322,6 +322,81 @@ mod cli_tests {
         insta::assert_snapshot!(cli_test_out.normalize_stdout_and_stderr());
     }
 
+    mod no_platform {
+
+        use super::*;
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        fn roc_check_markdown_docs() {
+            let cli_build = ExecCli::new(
+                CMD_CHECK,
+                file_from_root("crates/cli/tests/markdown", "form.md"),
+            );
+
+            let expected_out =
+                "0 error and 0 warning found in <ignored for test> ms\n0 error and 0 warning found in <ignored for test> ms\n";
+
+            cli_build.run().assert_clean_stdout(expected_out);
+        }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        fn import_in_expect() {
+            let cli_build = ExecCli::new(
+                CMD_TEST,
+                file_from_root(
+                    "crates/cli/tests/test-projects/module_params",
+                    "ImportInExpect.roc",
+                ),
+            );
+
+            let expected_out = r#"
+                    0 failed and 3 passed in <ignored for test> ms.
+                    "#;
+
+            cli_build.run().assert_clean_stdout(expected_out);
+        }
+    }
+
+    mod test_platform_basic_cli {
+
+        use super::*;
+        use roc_cli::CMD_RUN;
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        fn module_params_different_types() {
+            let cli_build = ExecCli::new(
+                CMD_RUN,
+                file_from_root(
+                    "crates/cli/tests/test-projects/module_params",
+                    "different_types.roc",
+                ),
+            );
+
+            let expected_out = "Write something:\n42\n";
+
+            cli_build
+                .run_executable(false, Some("42"), None)
+                .assert_clean_stdout(expected_out);
+        }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        fn module_params_issue_7116() {
+            let cli_build = ExecCli::new(
+                CMD_RUN,
+                file_from_root(
+                    "crates/cli/tests/test-projects/module_params",
+                    "issue_7116.roc",
+                ),
+            );
+
+            cli_build.run().assert_zero_exit();
+        }
+    }
+
     mod test_platform_simple_zig {
         use super::*;
         use roc_cli::{CMD_BUILD, CMD_DEV, CMD_TEST};
@@ -655,7 +730,6 @@ mod cli_tests {
     mod test_platform_effects_zig {
         use super::*;
         use cli_test_utils::helpers::file_from_root;
-        use roc_cli::CMD_BUILD;
 
         static BUILD_PLATFORM_HOST: std::sync::Once = std::sync::Once::new();
 
@@ -665,7 +739,7 @@ mod cli_tests {
                 let cli_build = ExecCli::new(
                     CMD_BUILD,
                     file_from_root(
-                        "crates/cli/tests/test-projects/effects/platform/",
+                        "crates/cli/tests/test-projects/test-platform-effects-zig/",
                         "app-stub.roc",
                     ),
                 )
@@ -692,7 +766,7 @@ mod cli_tests {
 
             let cli_build = ExecCli::new(
                 CMD_BUILD,
-                file_from_root("crates/cli/tests/test-projects/effects", "print-line.roc"),
+                file_from_root("crates/cli/tests/test-projects/effectful", "print-line.roc"),
             );
 
             let expected_output = "You entered: hi there!\nIt is known\n";
@@ -714,7 +788,7 @@ mod cli_tests {
             let cli_build = ExecCli::new(
                 CMD_BUILD,
                 file_from_root(
-                    "crates/cli/tests/test-projects/effects",
+                    "crates/cli/tests/test-projects/effectful",
                     "combine-tasks.roc",
                 ),
             );
@@ -738,7 +812,7 @@ mod cli_tests {
             let cli_build = ExecCli::new(
                 CMD_BUILD,
                 file_from_root(
-                    "crates/cli/tests/test-projects/effects",
+                    "crates/cli/tests/test-projects/effectful",
                     "inspect-logging.roc",
                 ),
             );
@@ -780,18 +854,117 @@ mod cli_tests {
 
         #[test]
         #[cfg_attr(windows, ignore)]
-        fn roc_check_markdown_docs() {
+        fn effectful_form() {
             build_platform_host();
 
             let cli_build = ExecCli::new(
-                CMD_CHECK,
-                file_from_root("crates/cli/tests/markdown", "form.md"),
+                roc_cli::CMD_DEV,
+                file_from_root("crates/cli/tests/test-projects/effectful", "form.roc"),
             );
 
-            let expected_out =
-                "0 error and 0 warning found in <ignored for test> ms\n0 error and 0 warning found in <ignored for test> ms\n";
+            let expected_out = r#"
+            What's your first name?
+            What's your last name?
 
-            cli_build.run().assert_clean_stdout(expected_out);
+            Hi, Agus Zubiaga!
+
+            How old are you?
+
+            Nice! You can vote!
+
+            Bye! 👋
+            "#;
+
+            cli_build
+                .run_executable(false, Some("Agus\nZubiaga\n27\n"), None)
+                .assert_clean_stdout(expected_out);
+        }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        fn effectful_hello() {
+            todo!();
+            // test_roc_app(
+            //     "crates/cli/tests/test-projects/effectful",
+            //     "hello.roc",
+            //     &[],
+            //     &[],
+            //     &[],
+            //     indoc!(
+            //         r#"
+            //             I'm an effect 👻
+            //             "#
+            //     ),
+            //     UseValgrind::No,
+            //     TestCliCommands::Dev,
+            // );
+        }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        fn effectful_loops() {
+            todo!();
+            // test_roc_app(
+            //     "crates/cli/tests/test-projects/effectful",
+            //     "loops.roc",
+            //     &[],
+            //     &[],
+            //     &[],
+            //     indoc!(
+            //         r#"
+            //             Lu
+            //             Marce
+            //             Joaquin
+            //             Chloé
+            //             Mati
+            //             Pedro
+            //             "#
+            //     ),
+            //     UseValgrind::No,
+            //     TestCliCommands::Dev,
+            // );
+        }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        fn effectful_untyped_passed_fx() {
+            todo!();
+            // test_roc_app(
+            //     "crates/cli/tests/test-projects/effectful",
+            //     "untyped_passed_fx.roc",
+            //     &[],
+            //     &[],
+            //     &[],
+            //     indoc!(
+            //         r#"
+            //         Before hello
+            //         Hello, World!
+            //         After hello
+            //         "#
+            //     ),
+            //     UseValgrind::No,
+            //     TestCliCommands::Dev,
+            // );
+        }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        fn effectful_ignore_result() {
+            todo!();
+            // test_roc_app(
+            //     "crates/cli/tests/test-projects/effectful",
+            //     "ignore_result.roc",
+            //     &[],
+            //     &[],
+            //     &[],
+            //     indoc!(
+            //         r#"
+            //         I asked for input and I ignored it. Deal with it! 😎
+            //         "#
+            //     ),
+            //     UseValgrind::No,
+            //     TestCliCommands::Dev,
+            // );
         }
     }
 

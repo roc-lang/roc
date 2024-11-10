@@ -37,6 +37,7 @@ Defs(
                             ext: None,
                         },
                     ],
+                    Pure,
                     @17-27 Tuple {
                         elems: [
                             @18-21 Apply(
