@@ -5,7 +5,7 @@ import pf.Effect
 main! : {} => {}
 main! = \{} ->
     ["Welcome!", "What's your name?"]
-    |> forEach! Effect.putLine!
+    |> List.forEach! Effect.putLine!
 
     line = Effect.getLine! {}
 
@@ -17,11 +17,3 @@ main! = \{} ->
 
     Effect.putLine! "You entered: $(line)"
     Effect.putLine! "It is known"
-
-forEach! : List a, (a => {}) => {}
-forEach! = \l, f! ->
-    when l is
-        [] -> {}
-        [x, .. as xs] ->
-            f! x
-            forEach! xs f!

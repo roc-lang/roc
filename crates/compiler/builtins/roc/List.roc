@@ -70,6 +70,7 @@ module [
     countIf,
     chunksOf,
     concatUtf8,
+    forEach!,
 ]
 
 import Bool exposing [Bool, Eq]
@@ -1383,3 +1384,20 @@ concatUtf8 : List U8, Str -> List U8
 
 expect (List.concatUtf8 [1, 2, 3, 4] "🐦") == [1, 2, 3, 4, 240, 159, 144, 166]
 
+
+## Run an effectful function for each element on the list.
+##
+## ```roc
+## List.forEach! ["Alice", "Bob", "Charlie"] \name ->
+##     createAccount! name
+##     log! "Account created"
+## ```
+forEach! : List a, (a => {}) => {}
+forEach! = \l, f! ->
+    when l is
+        [] ->
+            {}
+
+        [x, .. as xs] ->
+            f! x
+            forEach! xs f!

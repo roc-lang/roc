@@ -1509,7 +1509,7 @@ define_builtins! {
         87 LIST_CLONE: "clone"
         88 LIST_LEN_USIZE: "lenUsize"
         89 LIST_CONCAT_UTF8: "concatUtf8"
-        90 LIST_WALK_FX: "walk!"
+        90 LIST_FOR_EACH_FX: "forEach!"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias
