@@ -4884,6 +4884,18 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r"
+            \ .
+            "
+            ),
+            indoc!(
+                r"
+            \x -> x
+            "
+            ),
+        );
+        expr_formats_to(
+            indoc!(
+                r"
             \ .0
             "
             ),
@@ -4942,12 +4954,12 @@ mod test_fmt {
     fn closure_shortcut_for_field_as_part_of_bin_op() {
         expr_formats_same(indoc!(
             r"
-            \.foo + 1
+            \.foo.bar + 1
             "
         ));
         expr_formats_same(indoc!(
             r"
-            \-.foo + 1
+            \-.foo.bar + 1
             "
         ));
     }
@@ -6305,7 +6317,7 @@ mod test_fmt {
     }
 
     #[test]
-    fn single_line_string_literal_in_pattern_binop() {
+    fn basic_pattern_binop() {
         expr_formats_same(indoc!(
             r#"
             foo ~
@@ -6316,13 +6328,31 @@ mod test_fmt {
     }
 
     #[test]
-    fn single_line_string_literal_in_pattern_binop_with_comment_before_cond() {
+    fn pattern_binop_with_comment_before_cond() {
         expr_formats_same(indoc!(
             r#"
             # Comment Y
             foo ~
                 "abc" -> ""
                 _ -> "abc"
+            "#
+        ));
+    }
+
+    #[test]
+    fn pattern_binop_with_operator_chain_equivalents() {
+        expr_formats_same(indoc!(
+            r#"
+            a + b + c ~
+                42 -> ""
+                _ -> "42"
+            "#
+        ));
+        expr_formats_same(indoc!(
+            r#"
+            (a + b + c) ~
+                42 -> ""
+                _ -> "42"
             "#
         ));
     }
@@ -6383,10 +6413,10 @@ mod test_fmt {
     }
 
     #[test]
-    fn closure_shortcut_access_with_when_binop_chain() {
+    fn closure_shortcut_unary_access_with_binop_chain() {
         expr_formats_same(indoc!(
             r#"
-            \.foo + 5 ~
+            \-.foo.bar + 5 ~
                 42 -> ""
                 _ -> "42"
             "#
