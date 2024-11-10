@@ -2601,7 +2601,7 @@ mod when {
         state: State<'a>,
         min_indent: u32,
     ) -> ParseResult<'a, Expr<'a>, EWhen<'a>> {
-        let (variant, cond, state) = if let Some((cond, what)) = cond {
+        let (shortcut, cond, state) = if let Some((cond, what)) = cond {
             (Some(what), cond, state)
         } else {
             let (_, spaces_before, state) =
@@ -2679,7 +2679,7 @@ mod when {
             }
         }
 
-        let when = Expr::When(arena.alloc(cond), branches.into_bump_slice(), variant);
+        let when = Expr::When(arena.alloc(cond), branches.into_bump_slice(), shortcut);
         Ok((MadeProgress, when, state))
     }
 

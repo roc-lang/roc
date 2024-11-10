@@ -186,12 +186,12 @@ macro_rules! merge_n_spaces {
 
 /// Parse old interface headers so we can format them into module headers
 fn interface_header<'a>() -> impl Parser<'a, ModuleHeader<'a>, EHeader<'a>> {
-    let after_keyword = |arena, state: crate::state::State<'a>, min_indent: u32| {
+    let after_keyword_p = |arena, state: State<'a>, min_indent: u32| {
         let (p, before_name, state) =
             eat_nc_check(EHeader::IndentStart, arena, state, min_indent, false)?;
 
         let name_pos = state.pos();
-        let state = match module_name().parse(arena, state, min_indent) {
+        let state = match parse_module_name(state) {
             Ok((_, _, state)) => state,
             Err((p2, _)) => return Err((p2.or(p), EHeader::ModuleName(name_pos))),
         };
@@ -206,7 +206,7 @@ fn interface_header<'a>() -> impl Parser<'a, ModuleHeader<'a>, EHeader<'a>> {
     };
 
     record!(ModuleHeader {
-        after_keyword: after_keyword,
+        after_keyword: after_keyword_p,
         params: succeed(None),
         exposes: specialize_err(EHeader::Exposes, exposes_list()).trace("exposes_list"),
         interface_imports: imports_option(),
@@ -235,69 +235,88 @@ fn imports_none_if_empty(value: ImportsKeywordItem<'_>) -> Option<ImportsKeyword
     }
 }
 
-#[inline(always)]
 fn hosted_header<'a>() -> impl Parser<'a, HostedHeader<'a>, EHeader<'a>> {
-    record!(HostedHeader {
-        before_name: space0_e(EHeader::IndentStart),
-        name: loc(specialize_err(
-            move |_, pos| EHeader::ModuleName(pos),
-            module_name()
-        )),
-        exposes: specialize_err(EHeader::Exposes, exposes_values_kw()),
-        imports: specialize_err(EHeader::Imports, imports()),
-    })
-    .trace("hosted_header")
+    move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
+        let (_, before_name, state) =
+            eat_nc_check(EHeader::IndentStart, arena, state, min_indent, false)?;
+
+        let name_pos = state.pos();
+        let (_, name, state) = match parse_module_name(state) {
+            Ok(ok) => ok,
+            Err((p, _)) => return Err((p, EHeader::ModuleName(name_pos))),
+        };
+        let name = Loc::pos(name_pos, state.pos(), name);
+
+        let exposes_pos = state.pos();
+        let (_, exposes, state) = match record!(KeywordItem {
+            keyword: exposes_kw(),
+            item: exposes_list()
+        })
+        .parse(arena, state, min_indent)
+        {
+            Ok(ok) => ok,
+            Err((p, fail)) => return Err((p, EHeader::Exposes(fail, exposes_pos))),
+        };
+
+        let imports_pos = state.pos();
+        let (_, imports, state) = match imports().parse(arena, state, min_indent) {
+            Ok(ok) => ok,
+            Err((p, fail)) => return Err((p, EHeader::Imports(fail, imports_pos))),
+        };
+
+        let header = HostedHeader {
+            before_name,
+            name,
+            exposes,
+            imports,
+        };
+        Ok((MadeProgress, header, state))
+    }
 }
 
 pub(crate) fn chomp_module_name(buffer: &[u8]) -> Result<&str, Progress> {
     use encode_unicode::CharExt;
-
-    let mut chomped = 0;
-    if let Ok((first_letter, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
-        if first_letter.is_uppercase() {
-            chomped += width;
-        } else {
-            return Err(Progress::NoProgress);
-        }
-    }
-
-    while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
-        // After the first character, only these are allowed:
-        //
-        // * Unicode alphabetic chars - you might include `鹏` if that's clear to your readers
-        // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
-        // * A '.' separating module parts
-        if ch.is_alphabetic() || ch.is_ascii_digit() {
-            chomped += width;
-        } else if ch == '.' {
-            chomped += width;
-
-            if let Ok((first_letter, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
-                if first_letter.is_uppercase() {
+    match char::from_utf8_slice_start(buffer) {
+        Ok((ch, mut chomped)) if ch.is_uppercase() => {
+            while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
+                // After the first character, only these are allowed:
+                //
+                // * Unicode alphabetic chars - you might include `鹏` if that's clear to your readers
+                // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
+                // * A '.' separating module parts
+                if ch.is_alphabetic() || ch.is_ascii_digit() {
                     chomped += width;
-                } else if first_letter == '{' {
-                    // the .{ starting a `Foo.{ bar, baz }` importing clauses
-                    chomped -= width;
-                    break;
+                } else if ch == '.' {
+                    chomped += width;
+
+                    if let Ok((next, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
+                        if next.is_uppercase() {
+                            chomped += width;
+                        } else if next == '{' {
+                            // the .{ starting a `Foo.{ bar, baz }` importing clauses
+                            chomped -= width;
+                            break;
+                        } else {
+                            return Err(Progress::MadeProgress);
+                        }
+                    }
                 } else {
-                    return Err(Progress::MadeProgress);
+                    // we're done
+                    break;
                 }
             }
-        } else {
-            // we're done
-            break;
+            let name = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
+            Ok(name)
         }
+        _ => Err(Progress::NoProgress),
     }
-
-    let name = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
-    Ok(name)
 }
 
 #[inline(always)]
-pub(crate) fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>, ()> {
-    |_, mut state: State<'a>, _: u32| match chomp_module_name(state.bytes()) {
+pub(crate) fn parse_module_name(state: State<'_>) -> ParseResult<'_, ModuleName<'_>, ()> {
+    match chomp_module_name(state.bytes()) {
         Ok(name) => {
-            state.advance_mut(name.len());
+            let state = state.advance(name.len());
             Ok((MadeProgress, ModuleName::new(name), state))
         }
         Err(p) => Err((p, ())),
@@ -722,18 +741,6 @@ fn requires_typed_ident<'a>(
 }
 
 #[inline(always)]
-fn exposes_values_kw<'a>() -> impl Parser<
-    'a,
-    KeywordItem<'a, ExposesKeyword, Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>>,
-    EExposes,
-> {
-    record!(KeywordItem {
-        keyword: exposes_kw(),
-        item: exposes_list()
-    })
-}
-
-#[inline(always)]
 fn exposes_kw<'a>() -> impl Parser<'a, Spaces<'a, ExposesKeyword>, EExposes> {
     spaces_around_keyword(
         ExposesKeyword,
@@ -827,9 +834,9 @@ fn exposes_module_collection<'a>(
 }
 
 fn exposes_module<'a>() -> impl Parser<'a, Loc<Spaced<'a, ModuleName<'a>>>, EExposes> {
-    move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
+    move |_: &'a bumpalo::Bump, state: State<'a>, _: u32| {
         let start = state.pos();
-        match module_name::<'a>().parse(arena, state, min_indent) {
+        match parse_module_name(state) {
             Ok((p, out, state)) => Ok((p, Loc::pos(start, state.pos(), Spaced::Item(out)), state)),
             Err((p, _)) => Err((p, EExposes::Identifier(start))),
         }
@@ -930,25 +937,24 @@ pub fn typed_ident<'a>() -> impl Parser<'a, Spaced<'a, TypedIdent<'a>>, ETypedId
 
 fn imports_entry<'a>() -> impl Parser<'a, Spaced<'a, ImportsEntry<'a>>, EImports> {
     move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
-        let p_name_module_name =
-            move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
-                let (name, state) = match parse_lowercase_ident(state.clone()) {
-                    Ok((_, name, state)) => {
-                        if state.bytes().first() == Some(&b'.') {
-                            (Some(name), state.inc())
-                        } else {
-                            (None, state)
-                        }
+        let p_name_module_name = move |_: &'a bumpalo::Bump, state: State<'a>, _: u32| {
+            let (name, state) = match parse_lowercase_ident(state.clone()) {
+                Ok((_, name, state)) => {
+                    if state.bytes().first() == Some(&b'.') {
+                        (Some(name), state.inc())
+                    } else {
+                        (None, state)
                     }
-                    Err(_) => (None, state),
-                };
-
-                let module_name_pos = state.pos();
-                match module_name().parse(arena, state, min_indent) {
-                    Ok((p, module_name, state)) => Ok((p, (name, module_name), state)),
-                    Err((p, _)) => Err((p, EImports::ModuleName(module_name_pos))),
                 }
+                Err(_) => (None, state),
             };
+
+            let module_name_pos = state.pos();
+            match parse_module_name(state) {
+                Ok((p, module_name, state)) => Ok((p, (name, module_name), state)),
+                Err((p, _)) => Err((p, EImports::ModuleName(module_name_pos))),
+            }
+        };
 
         // e.g. `.{ Task, after}`
         let p_opt_values = move |arena: &'a bumpalo::Bump, state: State<'a>, _: u32| {
