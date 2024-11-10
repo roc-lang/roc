@@ -211,13 +211,13 @@ fn parse_negative_number<'a>(
         .map(|b| b.is_ascii_whitespace() || *b == b'#')
         .unwrap_or(false)
     {
-        let initial = state.clone();
+        let prev = state.clone();
         let state = state.inc();
         let loc_op = Region::new(start, state.pos());
 
         match parse_term(PARSE_DEFAULT, flags, arena, state, min_indent) {
             Ok((_, out, state)) => {
-                let expr = numeric_negate_expr(arena, &initial, loc_op, out, &[]);
+                let expr = numeric_negate_expr(arena, &prev, loc_op, out, &[]);
                 Ok((MadeProgress, expr, state))
             }
             Err((_, fail)) => Err((MadeProgress, fail)),
@@ -967,16 +967,12 @@ fn numeric_negate_expr<'a>(
 
     let new_expr = match expr.value {
         Expr::Num(string) => {
-            let new_string =
-                unsafe { std::str::from_utf8_unchecked(&state.bytes()[..string.len() + 1]) };
-
-            Expr::Num(new_string)
+            let s = unsafe { std::str::from_utf8_unchecked(&state.bytes()[..string.len() + 1]) };
+            Expr::Num(s)
         }
         Expr::Float(string) => {
-            let new_string =
-                unsafe { std::str::from_utf8_unchecked(&state.bytes()[..string.len() + 1]) };
-
-            Expr::Float(new_string)
+            let s = unsafe { std::str::from_utf8_unchecked(&state.bytes()[..string.len() + 1]) };
+            Expr::Float(s)
         }
         Expr::NonBase10Int {
             string,
@@ -1812,7 +1808,6 @@ fn parse_stmt_multi_backpassing<'a>(
     Ok((MadeProgress, ret, state))
 }
 
-// todo: @ask what is the difference with `parse_negative_number`?
 /// We just saw a unary negation operator, and now we need to parse the expression.
 #[allow(clippy::too_many_arguments)]
 fn parse_negative_term<'a>(
@@ -2295,7 +2290,7 @@ pub(crate) fn reset_unique_closure_shortcut_arg_generator() {
 // todo: @ask is it convention too smart, get feedback from the real usage
 // For the space guided format of the closure shortcut, we use a nice short name for the argument,
 // it is no need to be unique and expected to be modified by the User
-pub const FMT_CLOSURE_SHORTCUT_ARG: &str = "x";
+pub const FMT_EXPAND_CLOSURE_SHORTCUT_ARG: &str = "x";
 
 /// If Ok it always returns MadeProgress
 fn rest_of_closure<'a>(
@@ -2313,19 +2308,27 @@ fn rest_of_closure<'a>(
 
     // @feat entry point for parsing the closure-shortcut
     // Expand the shortcut into the full code guided by presence of space after slash (only if actual shortcut follows)
-    // e.g. this one with th space after slash `\ .foo.bar` will expand to `\x -> x.foo.bar`, but this one `\.foo.bar` will stay as-is in the formatted output
-    let mut fmt_keep_shortcut = true;
-    if state.bytes().first() == Some(&b' ') {
-        state.advance_mut(1);
-        fmt_keep_shortcut = false;
+    // e.g. this one with th space after slash `\ .foo.bar` will expand to `\x -> x.foo.bar`, but this one `\.foo.bar` will stay as-is in the formatted
+    let mut body_pos = after_slash;
+    let fmt_expand = state.bytes().first() == Some(&b' ');
+    if fmt_expand {
+        state.inc_mut();
+        body_pos = state.pos();
     };
+
+    let first_ch = state.bytes().first();
+    let is_negate_op = first_ch == Some(&b'-');
+    let is_not_op = first_ch == Some(&b'!');
+    if is_negate_op | is_not_op {
+        state.inc_mut();
+    }
 
     // Parses `\.foo.bar + 1` into `\p -> p.foo.bar + 1`
     if state.bytes().first() == Some(&b'.') {
-        let ident = if fmt_keep_shortcut {
-            next_unique_closure_shortcut_arg(arena)
+        let ident = if fmt_expand {
+            FMT_EXPAND_CLOSURE_SHORTCUT_ARG
         } else {
-            FMT_CLOSURE_SHORTCUT_ARG
+            next_unique_closure_shortcut_arg(arena)
         };
 
         let param = Loc::at(Region::point(after_slash), Pattern::Identifier { ident });
@@ -2338,17 +2341,17 @@ fn rest_of_closure<'a>(
         let ident_state = state.clone();
         let bytes = state.bytes();
         let pos = state.pos();
-        let module_name = "";
         let (ident, state) = match chomp_access_chain(bytes, &mut parts) {
             Ok(width) => {
                 let parts = parts.into_bump_slice();
-                let ident = Ident::Access { module_name, parts };
+                let ident = Ident::Access {
+                    module_name: "",
+                    parts,
+                };
                 (ident, state.advance(width))
             }
-            Err(1) => {
-                // Handling the identity function `\.`, where the `.` was found but nothing after it, therefore the width is 1.
-                (Ident::Plain(ident), state.inc())
-            }
+            // Handling the identity function `\.`, where the `.` was found but nothing after it, therefore the width is 1.
+            Err(1) => (Ident::Plain(ident), state.inc()),
             Err(width) => {
                 let fail = BadIdent::WeirdDotAccess(pos.bump_offset(width));
                 malformed_ident(bytes, fail, state.advance(width))
@@ -2364,14 +2367,27 @@ fn rest_of_closure<'a>(
         };
 
         let mut closure_shortcut = None;
-        if fmt_keep_shortcut {
+        if !fmt_expand {
             closure_shortcut = Some(AccessShortcut::Closure);
         }
         let mut ident = ident_to_expr(arena, ident, closure_shortcut);
         if !suffixes.is_empty() {
             ident = apply_expr_access_chain(arena, ident, suffixes);
         }
-        let ident = Loc::pos(after_slash, ident_end, ident);
+
+        let ident = if is_negate_op | is_not_op {
+            let unary_op = if is_negate_op {
+                UnaryOp::Negate
+            } else {
+                UnaryOp::Not
+            };
+            let not_neg_op = Loc::pos(body_pos, body_pos.next(), unary_op);
+            let not_neg_ident = Loc::pos(body_pos.next(), ident_end, ident);
+            let not_neg_ident = Expr::UnaryOp(arena.alloc(not_neg_ident), not_neg_op);
+            Loc::pos(body_pos, ident_end, not_neg_ident)
+        } else {
+            Loc::pos(body_pos, ident_end, ident)
+        };
 
         // todo: @wip for the identity function and Unary Negate and Not, should we consider to stop here and return early
         // to avoid putting the lambda in parens in the middle of the Apply list,
@@ -2391,7 +2407,7 @@ fn rest_of_closure<'a>(
             };
 
         let mut shortcut = None;
-        if fmt_keep_shortcut {
+        if !fmt_expand {
             shortcut = Some(ClosureShortcut::Access)
         }
         let closure = Expr::Closure(params.into_bump_slice(), arena.alloc(body), shortcut);
@@ -2400,31 +2416,41 @@ fn rest_of_closure<'a>(
 
     // Either pipe shortcut `\|> f` into `\p -> p |> f`, or the rest of BinOp's, e.g. `\+ 1` into `\p -> p + 1`,
     // Excluding the operators for which the shortcut does not make sense, assignment '=', Type Alias ':', ':=', etc.
-    if let Ok((_, binop, state)) = parse_bin_op(NoProgress, state.clone()) {
-        let ident = if fmt_keep_shortcut {
-            next_unique_closure_shortcut_arg(arena)
+
+    let (binop_shortcut, binop, state) = if is_negate_op {
+        (true, BinOp::Minus, state)
+    } else if let Ok((_, binop, state)) = parse_bin_op(NoProgress, state.clone()) {
+        (true, binop, state)
+    } else {
+        // here Minus does not matter
+        (false, BinOp::Minus, state)
+    };
+
+    if binop_shortcut {
+        let ident = if fmt_expand {
+            FMT_EXPAND_CLOSURE_SHORTCUT_ARG
         } else {
-            FMT_CLOSURE_SHORTCUT_ARG
+            next_unique_closure_shortcut_arg(arena)
         };
 
         let after_binop = state.pos();
         let param = Pattern::Identifier { ident };
         let param = Loc::pos(after_slash, after_binop, param);
-        let mut params = Vec::with_capacity_in(1, arena);
+        let mut params: Vec<'_, Loc<Pattern<'_>>> = Vec::with_capacity_in(1, arena);
         params.push(param);
 
         let inc_indent = slash_indent + 1;
 
         // a single closure parameter is the left value of the binary operator
         let left_var = Expr::new_var("", ident);
-        let left_var = Loc::pos(after_slash, after_binop, left_var);
+        let left_var = Loc::pos(body_pos, after_binop, left_var);
 
         // special handling of the `~` when operator
         let (body, state, what) = if binop == BinOp::When {
-            let what = if fmt_keep_shortcut {
-                WhenShortcut::Closure
-            } else {
+            let what = if fmt_expand {
                 WhenShortcut::BinOp
+            } else {
+                WhenShortcut::Closure
             };
             let cond = Some((left_var, what));
             match when::rest_of_when_expr(cond, flags, arena, state, inc_indent) {
@@ -2441,10 +2467,10 @@ fn rest_of_closure<'a>(
                 arguments: Vec::new_in(arena),
                 expr: left_var,
                 spaces_after: &[],
-                end: after_slash,
+                end: body_pos,
             };
 
-            let loc_op = Loc::pos(after_slash, after_binop, binop);
+            let loc_op = Loc::pos(body_pos, after_binop, binop);
             let (spaces_after_op, state) =
                 match eat_nc_check(EExpr::IndentEnd, arena, state, inc_indent, false) {
                     Ok((_, out, state)) => (out, state),
@@ -2454,7 +2480,7 @@ fn rest_of_closure<'a>(
                 };
 
             match parse_after_binop(
-                after_slash,
+                body_pos,
                 arena,
                 state,
                 inc_indent,
@@ -2473,7 +2499,7 @@ fn rest_of_closure<'a>(
 
         let body = Loc::pos(after_binop, state.pos(), body);
 
-        let shortcut = if fmt_keep_shortcut { Some(what) } else { None };
+        let shortcut = if fmt_expand { None } else { Some(what) };
         let closure = Expr::Closure(params.into_bump_slice(), arena.alloc(body), shortcut);
         return Ok((MadeProgress, closure, state));
     }

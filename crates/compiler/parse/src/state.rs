@@ -86,6 +86,11 @@ impl<'a> State<'a> {
         self
     }
 
+    #[inline(always)]
+    pub(crate) fn inc_mut(&mut self) {
+        self.offset += 1;
+    }
+
     #[must_use]
     #[inline(always)]
     pub(crate) const fn advance_newline(mut self, offset: usize) -> State<'a> {

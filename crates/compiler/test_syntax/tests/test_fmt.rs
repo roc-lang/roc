@@ -4852,7 +4852,7 @@ mod test_fmt {
     }
 
     #[test]
-    fn simple_closure_shortcut_for_field_access() {
+    fn closure_shortcut_for_field_access() {
         expr_formats_same(indoc!(
             r"
             \.foo
@@ -4861,12 +4861,62 @@ mod test_fmt {
     }
 
     #[test]
-    fn simple_closure_shortcut_for_tuple_index_access() {
+    fn closure_shortcut_for_tuple_index_access() {
         expr_formats_same(indoc!(
             r"
             \.0
             "
         ));
+        expr_formats_same(indoc!(
+            r"
+            \-.0
+            "
+        ));
+        expr_formats_same(indoc!(
+            r"
+            \!.0
+            "
+        ));
+    }
+
+    #[test]
+    fn closure_shortcut_for_tuple_index_access_fmt_expand() {
+        expr_formats_to(
+            indoc!(
+                r"
+            \ .0
+            "
+            ),
+            indoc!(
+                r"
+            \x -> x.0
+            "
+            ),
+        );
+        expr_formats_to(
+            indoc!(
+                r"
+            \ -.0
+            "
+            ),
+            indoc!(
+                r"
+            \x -> -x.0
+            "
+            ),
+        );
+        expr_formats_to(
+            indoc!(
+                r"
+            \ !.0
+            "
+            ),
+            indoc!(
+                r"
+            \x -> !x.0
+            "
+            ),
+        );
     }
 
     #[test]
@@ -4874,6 +4924,16 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r"
             \.bru.0
+            "
+        ));
+        expr_formats_same(indoc!(
+            r"
+            \!.bru.0
+            "
+        ));
+        expr_formats_same(indoc!(
+            r"
+            \-.bru.0
             "
         ));
     }
@@ -4885,6 +4945,39 @@ mod test_fmt {
             \.foo + 1
             "
         ));
+        expr_formats_same(indoc!(
+            r"
+            \-.foo + 1
+            "
+        ));
+    }
+
+    #[test]
+    fn closure_shortcut_for_field_as_part_of_bin_op_fmt_expand() {
+        expr_formats_to(
+            indoc!(
+                r"
+            \ .foo + 1
+            "
+            ),
+            indoc!(
+                r"
+            \x -> x.foo + 1
+            "
+            ),
+        );
+        expr_formats_to(
+            indoc!(
+                r"
+            \ -.foo + 1
+            "
+            ),
+            indoc!(
+                r"
+            \x -> -x.foo + 1
+            "
+            ),
+        );
     }
 
     #[test]
@@ -5000,8 +5093,8 @@ mod test_fmt {
         ));
     }
 
-    // #[test]
-    fn _closure_shortcut_for_unary_minus() {
+    #[test]
+    fn closure_shortcut_for_unary_minus() {
         expr_formats_same(indoc!(
             r"
             \-.
@@ -5022,8 +5115,8 @@ mod test_fmt {
         );
     }
 
-    // #[test]
-    fn _closure_shortcut_for_unary_negate() {
+    #[test]
+    fn closure_shortcut_for_unary_negate() {
         expr_formats_same(indoc!(
             r"
             \!.
@@ -6298,6 +6391,33 @@ mod test_fmt {
                 _ -> "42"
             "#
         ));
+    }
+
+    #[test]
+    fn closure_shortcut_unary_access_with_when_binop_chain() {
+        expr_formats_same(indoc!(
+            r#"
+            \-.foo + 5 ~
+                42 -> ""
+                _ -> "42"
+            "#
+        ));
+        expr_formats_to(
+            indoc!(
+                r#"
+            \ -.foo + 5 ~
+                42 -> ""
+                _ -> "42"
+            "#
+            ),
+            indoc!(
+                r#"
+            \x -> -x.foo + 5 ~
+                42 -> ""
+                _ -> "42"
+            "#
+            ),
+        );
     }
 
     #[test]

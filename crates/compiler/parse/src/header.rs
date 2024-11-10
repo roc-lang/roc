@@ -227,14 +227,6 @@ fn imports_option<'a>() -> impl Parser<'a, Option<ImportsKeywordItem<'a>>, EHead
     }
 }
 
-fn imports_none_if_empty(value: ImportsKeywordItem<'_>) -> Option<ImportsKeywordItem<'_>> {
-    if value.item.is_empty() {
-        None
-    } else {
-        Some(value)
-    }
-}
-
 fn hosted_header<'a>() -> impl Parser<'a, HostedHeader<'a>, EHeader<'a>> {
     move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
         let (_, before_name, state) =
@@ -468,7 +460,9 @@ fn old_app_header<'a>() -> impl Parser<'a, AppHeader<'a>, EHeader<'a>> {
                     old.provides.provides_keyword.after,
                 ),
                 packages,
-                old_imports: old.imports.and_then(imports_none_if_empty),
+                old_imports: old
+                    .imports
+                    .and_then(|x| if x.item.is_empty() { None } else { Some(x) }),
                 old_provides_to_new_package: match old.provides.to.value {
                     To::NewPackage(new_pkg) => Some(new_pkg),
                     To::ExistingPackage(_) => None,

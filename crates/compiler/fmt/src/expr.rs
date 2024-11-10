@@ -1302,7 +1302,13 @@ fn fmt_closure<'a>(
 
     let mut skip_arg = false;
     if closure_shortcut.is_some() {
-        match loc_ret.value {
+        let shortcut_expr = if let UnaryOp(operand, _) = loc_ret.value {
+            operand.value
+        } else {
+            loc_ret.value
+        };
+
+        match shortcut_expr {
             RecordAccess(..) | TupleAccess(..) | Var { .. } => {
                 // skip formatting the arguments, and go to the body
                 // the shortcut will be handled in respective expression in the body
