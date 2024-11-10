@@ -1143,6 +1143,31 @@ mod cli_run {
 
     #[test]
     #[cfg_attr(windows, ignore)]
+    #[cfg_attr(target_os = "linux", ignore)]
+    fn effectful_for_each_try() {
+        test_roc_app(
+            "crates/cli/tests/effectful",
+            "for_each_try.roc",
+            &[],
+            &[],
+            &[],
+            indoc!(
+                r#"
+                ✅ 0
+                ✅ 2
+                ✅ 4
+                ✅ 6
+                ✅ 8
+                9 is not even! ABORT!
+                "#
+            ),
+            UseValgrind::No,
+            TestCliCommands::Dev,
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
     fn transitive_expects() {
         test_roc_expect(
             "crates/cli/tests/expects_transitive",
