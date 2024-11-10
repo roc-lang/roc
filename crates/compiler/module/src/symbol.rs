@@ -1522,6 +1522,7 @@ define_builtins! {
         7 RESULT_IS_OK: "isOk"
         8 RESULT_MAP_BOTH: "mapBoth"
         9 RESULT_MAP_TWO: "map2"
+        10 RESULT_ON_ERR_FX: "onErr!"
     }
     8 DICT: "Dict" => {
         0 DICT_DICT: "Dict" exposed_type=true // the Dict.Dict type alias
