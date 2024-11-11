@@ -462,39 +462,9 @@ mod cli_tests {
         use super::*;
         use roc_cli::{CMD_BUILD, CMD_DEV, CMD_TEST};
 
-        static BUILD_PLATFORM_HOST: std::sync::Once = std::sync::Once::new();
-
-        /// Build the platform host once for all tests in this module
-        fn build_platform_host() {
-            BUILD_PLATFORM_HOST.call_once(|| {
-                let cli_build = ExecCli::new(
-                    CMD_BUILD,
-                    file_from_root(
-                        "crates/cli/tests/test-projects/test-platform-simple-zig",
-                        "app.roc",
-                    ),
-                )
-                .arg(BUILD_HOST_FLAG)
-                .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-                .arg(OPTIMIZE_FLAG);
-
-                let cli_build_out = cli_build.run();
-                cli_build_out.assert_clean_success();
-
-                if TEST_LEGACY_LINKER {
-                    let cli_build_legacy = cli_build.arg(LEGACY_LINKER_FLAG);
-
-                    let cli_build_legacy_out = cli_build_legacy.run();
-                    cli_build_legacy_out.assert_clean_success();
-                }
-            });
-        }
-
         #[test]
         #[cfg_attr(windows, ignore)]
         fn run_multi_dep_str() {
-            build_platform_host();
-
             let cli_build_unoptimized = ExecCli::new(
                 CMD_BUILD,
                 file_from_root(
@@ -527,8 +497,6 @@ mod cli_tests {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn run_multi_dep_thunk() {
-            build_platform_host();
-
             let cli_build_unoptimized = ExecCli::new(
                 CMD_BUILD,
                 file_from_root(
@@ -561,8 +529,6 @@ mod cli_tests {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn run_packages() {
-            build_platform_host();
-
             let cli_build_unoptimized = ExecCli::new(
                 CMD_BUILD,
                 file_from_root(
@@ -596,8 +562,6 @@ mod cli_tests {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn run_transitive_deps_app() {
-            build_platform_host();
-
             let cli_build = ExecCli::new(
                 CMD_BUILD,
                 file_from_root(
@@ -620,8 +584,6 @@ mod cli_tests {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn run_transitive_and_direct_dep_app() {
-            build_platform_host();
-
             let cli_build = ExecCli::new(
                 CMD_BUILD,
                 file_from_root(
@@ -644,8 +606,6 @@ mod cli_tests {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn run_double_transitive_dep_app() {
-            build_platform_host();
-
             let cli_build = ExecCli::new(
                 CMD_BUILD,
                 file_from_root(
@@ -668,8 +628,6 @@ mod cli_tests {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn module_params() {
-            build_platform_host();
-
             let cli_dev = ExecCli::new(
                 CMD_DEV,
                 file_from_root("crates/cli/tests/test-projects/module_params", "app.roc"),
@@ -684,8 +642,6 @@ mod cli_tests {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn module_params_arity_mismatch() {
-            build_platform_host();
-
             let cli_dev = ExecCli::new(
                 CMD_DEV,
                 file_from_root(
@@ -703,8 +659,6 @@ mod cli_tests {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn module_params_bad_ann() {
-            build_platform_host();
-
             let cli_dev = ExecCli::new(
                 CMD_DEV,
                 file_from_root(
@@ -722,8 +676,6 @@ mod cli_tests {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn module_params_multiline_pattern() {
-            build_platform_host();
-
             let cli_dev = ExecCli::new(
                 CMD_DEV,
                 file_from_root(
@@ -740,8 +692,6 @@ mod cli_tests {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn module_params_unexpected_fn() {
-            build_platform_host();
-
             let cli_dev = ExecCli::new(
                 CMD_DEV,
                 file_from_root(
@@ -758,8 +708,6 @@ mod cli_tests {
 
         #[test]
         fn expects_dev_failure() {
-            build_platform_host();
-
             let cli_dev = ExecCli::new(
                 CMD_DEV,
                 file_from_root("crates/cli/tests/test-projects/expects", "expects.roc"),
@@ -774,8 +722,6 @@ mod cli_tests {
 
         #[test]
         fn expects_test_failure() {
-            build_platform_host();
-
             let cli_test = ExecCli::new(
                 CMD_TEST,
                 file_from_root("crates/cli/tests/test-projects/expects", "expects.roc"),

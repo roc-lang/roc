@@ -1,4 +1,4 @@
-app [main] { pf: platform "../test-platform-simple-zig/main.roc" }
+app [main] { pf: platform "../../../../test-platform-simple-zig/main.roc" }
 
 makeA =
     a = 1

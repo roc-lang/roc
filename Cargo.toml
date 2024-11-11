@@ -32,6 +32,7 @@ members = [
     "crates/language_server",
     "crates/roc_std_heap",
     "crates/test-platform-effects-zig",
+    "crates/test-platform-simple-zig",
 ]
 
 exclude = [

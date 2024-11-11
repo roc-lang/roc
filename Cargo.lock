@@ -2428,6 +2428,7 @@ dependencies = [
  "target-lexicon",
  "tempfile",
  "test-platform-effects-zig",
+ "test-platform-simple-zig",
  "ven_pretty",
 ]
 
@@ -3785,6 +3786,14 @@ dependencies = [
 
 [[package]]
 name = "test-platform-effects-zig"
+version = "0.0.1"
+dependencies = [
+ "roc_command_utils",
+ "roc_test_utils_dir",
+]
+
+[[package]]
+name = "test-platform-simple-zig"
 version = "0.0.1"
 dependencies = [
  "roc_command_utils",

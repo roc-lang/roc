@@ -20,7 +20,7 @@ fn main() {
 fn host_path() -> std::path::PathBuf {
     roc_test_utils_dir::workspace_root()
         .join("crates")
-        .join("test-platform-effects-zig")
+        .join("test-platform-simple-zig")
         .join("host.zig")
 }
 

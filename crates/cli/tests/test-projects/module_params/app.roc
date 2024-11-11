@@ -1,6 +1,4 @@
-app [main] {
-    pf: platform "../test-platform-simple-zig/main.roc",
-}
+app [main] { pf: platform "../../../../test-platform-simple-zig/main.roc" }
 
 import Api { appId: "one", protocol: https } as App1
 import Api { appId: "two", protocol: http } as App2
