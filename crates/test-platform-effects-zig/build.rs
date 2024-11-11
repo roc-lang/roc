@@ -1,7 +1,7 @@
 fn main() {
-    println!("cargo::rerun-if-changed=./host.zig");
-    println!("cargo::rerun-if-changed=./libhost.a");
-    println!("cargo::rerun-if-changed=./host.lib");
+    println!("cargo:rerun-if-changed=./host.zig");
+    println!("cargo:rerun-if-changed=./libhost.a");
+    println!("cargo:rerun-if-changed=./host.lib");
 
     roc_command_utils::zig()
         .arg("build-lib")
