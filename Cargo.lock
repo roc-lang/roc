@@ -2427,6 +2427,7 @@ dependencies = [
  "strum",
  "target-lexicon",
  "tempfile",
+ "test-platform-effects-zig",
  "ven_pretty",
 ]
 
@@ -3780,6 +3781,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6093bad37da69aab9d123a8091e4be0aa4a03e4d601ec641c327398315f62b64"
 dependencies = [
  "winapi-util",
+]
+
+[[package]]
+name = "test-platform-effects-zig"
+version = "0.0.1"
+dependencies = [
+ "roc_command_utils",
+ "roc_test_utils_dir",
 ]
 
 [[package]]

@@ -1,0 +1,11 @@
+[package]
+name = "test-platform-effects-zig"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+version.workspace = true
+
+[build-dependencies]
+roc_command_utils = { path = "../utils/command" }
+roc_test_utils_dir = { path = "../test_utils_dir" }
