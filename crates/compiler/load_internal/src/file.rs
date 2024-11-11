@@ -1467,7 +1467,6 @@ pub fn load<'a>(
         Many(usize),
     }
 
-    /*
     let threads = {
         if cfg!(target_family = "wasm") {
             // When compiling to wasm, we cannot spawn extra threads
@@ -1485,9 +1484,7 @@ pub fn load<'a>(
                 },
             }
         }
-    };*/
-    // TODO temp for debugging
-    let threads = Threads::Single;
+    };
 
     match threads {
         Threads::Single => load_single_threaded(
