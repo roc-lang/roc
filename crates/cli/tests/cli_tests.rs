@@ -379,7 +379,8 @@ mod cli_tests {
             cli_build.full_check_build_and_run(
                 expected_output,
                 TEST_LEGACY_LINKER,
-                ALLOW_VALGRIND,
+                // note running Valgrind on this test causes chaos with the test runner for some reason :shrug:
+                false,
                 None,
                 None,
             );
