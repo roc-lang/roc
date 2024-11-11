@@ -65,8 +65,6 @@ roc_reporting = { path = "../reporting" }
 roc_target = { path = "../compiler/roc_target" }
 roc_tracing = { path = "../tracing" }
 roc_wasm_interp = { path = "../wasm_interp", optional = true }
-test-platform-effects-zig = { path = "../test-platform-effects-zig" }
-test-platform-simple-zig = { path = "../test-platform-simple-zig" }
 
 ven_pretty = { path = "../vendor/pretty" }
 

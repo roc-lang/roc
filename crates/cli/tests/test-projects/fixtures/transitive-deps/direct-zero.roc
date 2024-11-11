@@ -1,5 +1,5 @@
 app [main] {
-    pf: platform "../../../../../test-platform-simple-zig/main.roc",
+    pf: platform "../../test-platform-simple-zig/main.roc",
     zero: "zero/main.roc",
 }
 
