@@ -757,7 +757,7 @@ mod cli_tests {
             ignore = "running `expect`s does not currently work on windows"
         )]
         #[cfg_attr(
-            linux,
+            unix,
             ignore = "https://roc.zulipchat.com/#narrow/channel/304641-ideas/topic/roc.20dev.20expect.20failure/near/477682063"
         )]
         fn expects_dev_failure() {
