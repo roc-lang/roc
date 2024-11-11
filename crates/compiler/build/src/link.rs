@@ -92,6 +92,16 @@ fn find_zig_glue_path() -> PathBuf {
         return path;
     }
 
+    dbg!(env::var("ROC_ZIG_GLUE_PATH"));
+
+    // TRY ENV VAR
+    if let Ok(path) = env::var("ROC_ZIG_GLUE_PATH") {
+        let path = PathBuf::from(path);
+        if path.exists() {
+            return path;
+        }
+    }
+
     internal_error!("cannot find `glue.zig`. Check the source code in find_zig_glue_path() to show all the paths I tried.")
 }
 

@@ -10,3 +10,12 @@ version.workspace = true
 roc_command_utils = { path = "../utils/command" }
 roc_test_utils_dir = { path = "../test_utils_dir" }
 roc_cli = { path = "../cli" }
+roc_target = { path = "../compiler/roc_target" }
+roc_linker = { path = "../linker" }
+roc_gen_llvm = { path = "../compiler/gen_llvm" }
+roc_load = { path = "../compiler/load" }
+clap.workspace = true
+bumpalo.workspace = true
+roc_mono = { path = "../compiler/mono" }
+roc_build = { path = "../compiler/build" }
+roc_packaging = { path = "../packaging" }

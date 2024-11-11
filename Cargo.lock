@@ -3849,8 +3849,17 @@ dependencies = [
 name = "test-platform-simple-zig"
 version = "0.0.1"
 dependencies = [
+ "bumpalo",
+ "clap 4.4.6",
+ "roc_build",
  "roc_cli",
  "roc_command_utils",
+ "roc_gen_llvm",
+ "roc_linker",
+ "roc_load",
+ "roc_mono",
+ "roc_packaging",
+ "roc_target",
  "roc_test_utils_dir",
 ]
 
