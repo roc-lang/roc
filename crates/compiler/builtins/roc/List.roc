@@ -1259,6 +1259,11 @@ splitAt = \elements, userSplitIndex ->
 
     { before, others }
 
+## Splits the input list on the delimiter element.
+##
+## ```roc
+## List.splitOn [1, 2, 3] 2 == [[1], [2]]
+## ```
 splitOn : List a, a -> List (List a) where a implements Eq
 splitOn = \elements, delimiter ->
     help = \remaining, chunks, currentChunk ->
@@ -1271,6 +1276,11 @@ splitOn = \elements, delimiter ->
                 help rest chunks (List.append currentChunk x)
     help elements [] []
 
+## Splits the input list on the delimiter list.
+##
+## ```roc
+## List.splitOnList [1, 2, 3] [1, 2] == [[], [3]]
+## ```
 splitOnList : List a, List a -> List (List a) where a implements Eq
 splitOnList = \elements, delimiter ->
     if delimiter == [] then
@@ -1280,11 +1290,10 @@ splitOnList = \elements, delimiter ->
     help = \remaining, chunks, currentChunk ->
         when remaining is
             [] -> List.append chunks currentChunk
-            [x, .. as rest] ->
-                if List.startsWith remaining delimiter then
-                    help (List.dropFirst remaining (List.len delimiter)) (List.append chunks currentChunk) []
-                else
-                    help rest chunks (List.append currentChunk x)
+            _ if List.startsWith remaining delimiter ->
+                help (List.dropFirst remaining (List.len delimiter)) (List.append chunks currentChunk) []
+
+            [x, .. as rest] -> help rest chunks (List.append currentChunk x)
     help elements [] []
 
 ## DEPRECATED: will be removed soon
