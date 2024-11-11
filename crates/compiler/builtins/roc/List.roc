@@ -58,6 +58,7 @@ module [
     split,
     splitAt,
     splitOn,
+    splitOnList,
     splitFirst,
     splitLast,
     startsWith,
@@ -1258,15 +1259,32 @@ splitAt = \elements, userSplitIndex ->
 
     { before, others }
 
-splitOn: List a, a -> List (List a) where a implements Eq
+splitOn : List a, a -> List (List a) where a implements Eq
 splitOn = \elements, delimiter ->
     help = \remaining, chunks, currentChunk ->
         when remaining is
             [] -> List.append chunks currentChunk
             [x, .. as rest] if x == delimiter ->
                 help rest (List.append chunks currentChunk) []
+
             [x, .. as rest] ->
                 help rest chunks (List.append currentChunk x)
+    help elements [] []
+
+splitOnList : List a, List a -> List (List a) where a implements Eq
+splitOnList = \elements, delimiter ->
+    if delimiter == [] then
+        [elements]
+        else
+
+    help = \remaining, chunks, currentChunk ->
+        when remaining is
+            [] -> List.append chunks currentChunk
+            [x, .. as rest] ->
+                if List.startsWith remaining delimiter then
+                    help (List.dropFirst remaining (List.len delimiter)) (List.append chunks currentChunk) []
+                else
+                    help rest chunks (List.append currentChunk x)
     help elements [] []
 
 ## DEPRECATED: will be removed soon

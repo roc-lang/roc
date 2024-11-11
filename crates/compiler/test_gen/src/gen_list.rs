@@ -485,6 +485,71 @@ fn list_split_on() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn list_split_on_list() {
+    assert_evals_to!(
+        r"
+        List.splitOnList [] []
+        ",
+        RocList::<RocList<i64>>::from_slice(&[RocList::<i64>::from_slice(&[])]),
+        RocList<RocList<i64>>
+    );
+    assert_evals_to!(
+        r"
+        List.splitOnList [] [1, 2, 3]
+        ",
+        RocList::<RocList<i64>>::from_slice(&[RocList::<i64>::from_slice(&[]),]),
+        RocList<RocList<i64>>
+    );
+    assert_evals_to!(
+        r"
+        List.splitOnList [1, 2, 3] []
+        ",
+        RocList::<RocList<i64>>::from_slice(&[RocList::<i64>::from_slice(&[1, 2, 3]),]),
+        RocList<RocList<i64>>
+    );
+    assert_evals_to!(
+        r"
+        List.splitOnList [1] [1]
+        ",
+        RocList::<RocList<i64>>::from_slice(&[
+            RocList::<i64>::from_slice(&[]),
+            RocList::<i64>::from_slice(&[]),
+        ]),
+        RocList<RocList<i64>>
+    );
+    assert_evals_to!(
+        r"
+        List.splitOnList [1, 2, 3] [47]
+        ",
+        RocList::<RocList<i64>>::from_slice(&[RocList::<i64>::from_slice(&[1, 2, 3])]),
+        RocList<RocList<i64>>
+    );
+    assert_evals_to!(
+        r"
+        List.splitOnList [1, 2, 3, 4, 5] [2, 3]
+        ",
+        RocList::<RocList<i64>>::from_slice(&[
+            RocList::<i64>::from_slice(&[1]),
+            RocList::<i64>::from_slice(&[4, 5]),
+        ]),
+        RocList<RocList<i64>>
+    );
+    assert_evals_to!(
+        r"
+        List.splitOnList [1, 0, 1, 0, 1] [1]
+        ",
+        RocList::<RocList<i64>>::from_slice(&[
+            RocList::<i64>::from_slice(&[]),
+            RocList::<i64>::from_slice(&[0]),
+            RocList::<i64>::from_slice(&[0]),
+            RocList::<i64>::from_slice(&[]),
+        ]),
+        RocList<RocList<i64>>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_split_first() {
     assert_evals_to!(
         r"
