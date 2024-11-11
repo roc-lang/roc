@@ -24,4 +24,4 @@ jobs:
 
         # for skipped tests; see #6946, #6947
         - name: cargo test without --release
-          run: nix develop -c sh -c 'export ROC_CHECK_MONO_IR=1 && cargo test -- --skip tests/exhaustive/match_on_result_with_uninhabited_error_destructuring_in_lambda_syntax.txt --skip tests::identity_lambda --skip tests::issue_2300 --skip tests::issue_2582_specialize_result_value --skip tests::sum_lambda'
+          run: nix develop -c sh -c 'export ROC_CHECK_MONO_IR=1 && cargo test'
