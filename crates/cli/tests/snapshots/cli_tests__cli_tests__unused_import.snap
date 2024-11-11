@@ -1,10 +1,10 @@
 ---
 source: crates/cli/tests/cli_tests.rs
-assertion_line: 915
 expression: cli_check_out.normalize_stdout_and_stderr()
+snapshot_kind: text
 ---
 
-── UNUSED IMPORT in tests/test-projects/known_bad/UnusedImport.roc ─────────────
+── UNUSED IMPORT in tests\test-projects\known_bad\UnusedImport.roc ─────────────
 
 Symbol is imported but not used.
 
@@ -16,4 +16,3 @@ Since Symbol isn't used, you don't need to import it.
 ────────────────────────────────────────────────────────────────────────────────
 
 0 error and 1 warning found in <ignored for test> ms
-

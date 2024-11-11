@@ -1,10 +1,10 @@
 ---
 source: crates/cli/tests/cli_tests.rs
-assertion_line: 899
-expression: cli_check_out.normalize_stdout_and_stderr()
+assertion_line: 1322
+snapshot_kind: text
 ---
 
-── MISSING DEFINITION in tests/test-projects/known_bad/ExposedNotDefined.roc ───
+── MISSING DEFINITION in tests\test-projects\known_bad\ExposedNotDefined.roc ───
 
 bar is listed as exposed, but it isn't defined in this module.
 
@@ -14,4 +14,3 @@ from exposes.
 ────────────────────────────────────────────────────────────────────────────────
 
 1 error and 0 warning found in <ignored for test> ms
-

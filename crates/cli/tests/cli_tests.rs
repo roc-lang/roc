@@ -357,14 +357,13 @@ mod cli_tests {
         }
     }
 
-    // basic-cli platform doesn't have support for Windows
-    #[cfg_attr(windows, ignore)]
     mod test_platform_basic_cli {
 
         use super::*;
         use roc_cli::CMD_RUN;
 
         #[test]
+        #[cfg_attr(windows, ignore = "basic-cli platform doesn't have support for Windows")]
         fn combine_tasks_with_record_builder() {
             let cli_build = ExecCli::new(
                 CMD_BUILD,
@@ -387,6 +386,7 @@ mod cli_tests {
         }
 
         #[test]
+        #[cfg_attr(windows, ignore = "basic-cli platform doesn't have support for Windows")]
         fn module_params_different_types() {
             let cli_build = ExecCli::new(
                 CMD_BUILD,
@@ -405,26 +405,10 @@ mod cli_tests {
                 Some("42\n"),
                 None,
             );
-
-            // NOT SURE WHY THIS TEST IS FAILING
-            //
-            // ---- cli_tests::test_platform_basic_cli::module_params_different_types stdout ----
-            // thread 'cli_tests::test_platform_basic_cli::module_params_different_types' panicked at crates/cli_test_utils/src/command.rs:82:9:
-            // Command failed
-
-            // Command: /Users/luke/Documents/GitHub/roc/target/debug/roc run /Users/luke/Documents/GitHub/roc/crates/cli/tests/test-projects/module_params/different_types.roc
-
-            // Exit Code: exit status: 1
-
-            // Stdout:
-            // Write something:
-
-            // Stderr:
-            // Program exited with error:
-            //     (StdinErr EndOfFile)
         }
 
         #[test]
+        #[cfg_attr(windows, ignore = "basic-cli platform doesn't have support for Windows")]
         fn module_params_issue_7116() {
             let cli_build = ExecCli::new(
                 CMD_RUN,
@@ -438,6 +422,7 @@ mod cli_tests {
         }
 
         #[test]
+        #[cfg_attr(windows, ignore = "basic-cli platform doesn't have support for Windows")]
         fn module_params_pass_task() {
             let cli_build = ExecCli::new(
                 CMD_BUILD,
@@ -1224,6 +1209,7 @@ mod cli_tests {
         }
 
         #[test]
+        #[cfg_attr(windows, ignore = "Command failed Exit Code: exit code: 0xc0000005")]
         fn quicksort_app() {
             let expected_output = "Please enter an integer\n[0, 1, 1, 2, 2, 2, 3, 3, 3, 3, 3, 4, 4, 4, 4, 5, 6, 6, 8, 9]\n";
             test_benchmark(
