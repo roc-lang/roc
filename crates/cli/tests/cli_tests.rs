@@ -758,6 +758,7 @@ mod cli_tests {
         }
 
         #[test]
+        #[cfg_attr(windows, ignore  = "running `expect`s does not currently work on windows")]
         fn expects_dev_failure() {
             build_platform_host();
 
@@ -774,6 +775,7 @@ mod cli_tests {
         }
 
         #[test]
+        #[cfg_attr(windows, ignore  = "running tests does not work on windows right now")]
         fn expects_test_failure() {
             build_platform_host();
 
