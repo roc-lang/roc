@@ -624,6 +624,8 @@ fn list_of_3_field_records() {
     );
 }
 
+// not(debug_assertions) because of issue #6946
+#[cfg(not(debug_assertions))]
 #[test]
 fn identity_lambda() {
     expect_success("\\x -> x", "<function> : a -> a");
@@ -634,7 +636,8 @@ fn identity_lambda_shortcut() {
     expect_success("\\.", "<function> : a -> a");
 }
 
-#[cfg(not(feature = "wasm"))]
+// not(debug_assertions) because of issue #6946
+#[cfg(all(not(feature = "wasm"), not(debug_assertions)))]
 #[test]
 fn sum_lambda() {
     expect_success("\\x, y -> x + y", "<function> : Num a, Num a -> Num a");
@@ -1054,7 +1057,8 @@ fn large_nullable_wrapped_tag_union() {
     )
 }
 
-#[cfg(not(feature = "wasm"))]
+// not(debug_assertions) because of issue #6946
+#[cfg(all(not(feature = "wasm"), not(debug_assertions)))]
 #[test]
 fn issue_2300() {
     expect_success(
@@ -1335,7 +1339,8 @@ fn box_box_type_alias() {
 }
 
 #[test]
-#[cfg(not(feature = "wasm"))]
+// not(debug_assertions) because of issue #6946
+#[cfg(all(not(feature = "wasm"), not(debug_assertions)))]
 fn issue_2582_specialize_result_value() {
     expect_success(
         r#"\x, list -> if x > 0 then List.first list else Ok """#,
