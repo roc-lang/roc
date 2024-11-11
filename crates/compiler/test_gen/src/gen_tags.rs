@@ -1150,7 +1150,7 @@ fn tag_must_be_its_own_type() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn recursive_tag_union_into_flat_tag_union() {
-    // Comprehensive test for correctness in cli/tests/repl_eval
+    // Comprehensive test for correctness in cli_tests/repl_eval
     assert_evals_to!(
         indoc!(
             r#"

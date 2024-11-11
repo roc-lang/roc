@@ -200,7 +200,7 @@ THE SOFTWARE.
 
 * Volta - https://github.com/volta-cli/volta
 
-This source code can be found in cli/tests/helpers.rs and is licensed under the following terms:
+This source code can be found in cli_tests/helpers.rs and is licensed under the following terms:
 
 
 BSD 2-CLAUSE LICENSE

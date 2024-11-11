@@ -5,6 +5,7 @@ members = [
     "crates/fs",
     "crates/glue",
     "crates/cli",
+    "crates/cli_tests",
     "crates/cli_test_utils",
     "crates/highlight",
     "crates/error_macros",

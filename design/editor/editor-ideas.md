@@ -231,7 +231,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 - Automatically keep private local database of terminal output(errors that happened) and actions that were required to solve them. So we can show this to the user if this error pops up again.
 - Similarly; errors file in special dir where people can add errors and some text. The editor will check this dir if errors pop up so that this text can be shown. That way developers know what to do when they see an error that someone else has seen before. The text could be something like: "you need to change this setting to prevent this error".
 - When user is implementing something that is available in the stdlib; show a notification with the relevant stdlib function.
-- Custom commands/aliases for a specific project. For example for navigation; e.g. go to "cli tests"(alias) which is defined to go to `crates/cli/tests/somefile.roc`
+- Custom commands/aliases for a specific project. For example for navigation; e.g. go to "cli tests"(alias) which is defined to go to `crates/cli_tests/somefile.roc`
 - Tool that changes code with duplications to use single source of truth. The reverse operation would also be nice, when changes need to be made for a single case.
 - Ability to search all values of expressions of a run. Search would take you to the line of code that produced the value.
 - Ability to link to other comments to prevent from having to repeat identical comments or having to update all of them when a change is necessary.

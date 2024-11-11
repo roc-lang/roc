@@ -1,0 +1,12 @@
+---
+source: crates/cli_tests/src/lib.rs
+expression: cli_test_out.normalize_stdout_and_stderr()
+---
+── FILE NOT FOUND in tests/test-projects/module_imports_pkg/app.roc ────────────
+
+I am looking for this file, but it's not there:
+
+    tests/test-projects/module_imports_pkg/app.roc
+
+Is the file supposed to be there? Maybe there is a typo in the file
+name?

@@ -20,7 +20,7 @@ If you have a specific question, the [FAQ](/faq) might have an answer, although 
 ## Editor
 
 - [Visual Studio Code](https://visualstudio.microsoft.com/#vscode-section)
-  - syntax highlighting, completion, type hints 
+  - syntax highlighting, completion, type hints
   - install the [Roc Plugin](https://marketplace.visualstudio.com/items?itemName=IvanDemchenko.roc-lang-unofficial)
 - [Zed](https://zed.dev/download), since Version 0.133.5
   - search and install roc extension (action `zed: extensions`)
@@ -36,7 +36,7 @@ cd examples
 roc dev helloWorld.roc
 ```
 
-[crates/cli/tests/benchmarks](https://github.com/roc-lang/roc/tree/main/crates/cli/tests/benchmarks) contains more examples.
+[crates/cli_tests/benchmarks](https://github.com/roc-lang/roc/tree/main/crates/cli_tests/benchmarks) contains more examples.
 
 ## Getting Involved
 

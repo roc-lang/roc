@@ -5,7 +5,7 @@ use std::path::PathBuf;
 pub fn fixtures_dir(dir_name: &str) -> PathBuf {
     let mut path = root_dir();
 
-    // Descend into cli/tests/fixtures/{dir_name}
+    // Descend into cli_tests/fixtures/{dir_name}
     path.push("crates");
     path.push("glue");
     path.push("tests");
