@@ -12,21 +12,14 @@ Full(
                     ],
                     before_packages: [],
                     packages: @11-51 [
-                        @13-49 SpaceAfter(
-                            PackageEntry {
-                                shorthand: "pf",
-                                spaces_after_shorthand: [
-                                    Newline,
-                                ],
-                                platform_marker: None,
-                                package_name: @17-49 PackageName(
-                                    "generic-test-platform/main.roc",
-                                ),
-                            },
-                            [
-                                Newline,
-                            ],
-                        ),
+                        @13-49 PackageEntry {
+                            shorthand: "pf",
+                            spaces_after_shorthand: [],
+                            platform_marker: None,
+                            package_name: @17-49 PackageName(
+                                "generic-test-platform/main.roc",
+                            ),
+                        },
                     ],
                     old_imports: None,
                     old_provides_to_new_package: None,
