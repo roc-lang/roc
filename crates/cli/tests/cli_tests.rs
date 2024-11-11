@@ -378,14 +378,7 @@ mod cli_tests {
 
             let expected_output = "For multiple tasks: {a: 123, b: \"abc\", c: [123]}\n";
 
-            cli_build.full_check_build_and_run(
-                expected_output,
-                TEST_LEGACY_LINKER,
-                // note running Valgrind on this test causes chaos with the test runner for some reason :shrug:
-                false,
-                None,
-                None,
-            );
+            cli_build.check_build_and_run(expected_output, ALLOW_VALGRIND, None, None);
         }
 
         #[test]
@@ -404,13 +397,7 @@ mod cli_tests {
 
             let expected_output = "Write something:\n42\n";
 
-            cli_build.full_check_build_and_run(
-                expected_output,
-                TEST_LEGACY_LINKER,
-                ALLOW_VALGRIND,
-                Some("42\n"),
-                None,
-            );
+            cli_build.check_build_and_run(expected_output, ALLOW_VALGRIND, Some("42\n"), None);
         }
 
         #[test]
@@ -437,7 +424,7 @@ mod cli_tests {
         )]
         fn module_params_pass_task() {
             let cli_build = ExecCli::new(
-                CMD_BUILD,
+                CMD_RUN,
                 file_from_root(
                     "crates/cli/tests/test-projects/module_params",
                     "pass_task.roc",
@@ -446,13 +433,7 @@ mod cli_tests {
 
             let expected_output = "Hi, Agus!\n";
 
-            cli_build.full_check_build_and_run(
-                expected_output,
-                TEST_LEGACY_LINKER,
-                ALLOW_VALGRIND,
-                None,
-                None,
-            );
+            cli_build.check_build_and_run(expected_output, ALLOW_VALGRIND, None, None);
         }
     }
 
