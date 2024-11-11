@@ -57,6 +57,7 @@ module [
     intersperse,
     split,
     splitAt,
+    splitOn,
     splitFirst,
     splitLast,
     startsWith,
@@ -1256,6 +1257,17 @@ splitAt = \elements, userSplitIndex ->
     others = List.sublist elements { start: splitIndex, len: Num.subWrap length splitIndex }
 
     { before, others }
+
+splitOn: List a, a -> List (List a) where a implements Eq
+splitOn = \elements, delimiter ->
+    help = \remaining, chunks, currentChunk ->
+        when remaining is
+            [] -> List.append chunks currentChunk
+            [x, .. as rest] if x == delimiter ->
+                help rest (List.append chunks currentChunk) []
+            [x, .. as rest] ->
+                help rest chunks (List.append currentChunk x)
+    help elements [] []
 
 ## DEPRECATED: will be removed soon
 split : List elem, U64 -> { before : List elem, others : List elem }

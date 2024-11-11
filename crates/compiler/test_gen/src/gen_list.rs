@@ -423,6 +423,68 @@ fn list_split_at() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn list_split_on() {
+    assert_evals_to!(
+        r"
+        List.splitOn [] 1
+        ",
+        RocList::<RocList<i64>>::from_slice(&[RocList::<i64>::from_slice(&[])]),
+        RocList<RocList<i64>>
+    );
+    assert_evals_to!(
+        r"
+        List.splitOn [1] 1
+        ",
+        RocList::<RocList<i64>>::from_slice(&[
+            RocList::<i64>::from_slice(&[]),
+            RocList::<i64>::from_slice(&[]),
+        ]),
+        RocList<RocList<i64>>
+    );
+    assert_evals_to!(
+        r"
+        List.splitOn [1, 2, 3] 47
+        ",
+        RocList::<RocList<i64>>::from_slice(&[RocList::<i64>::from_slice(&[1, 2, 3])]),
+        RocList<RocList<i64>>
+    );
+    assert_evals_to!(
+        r"
+        List.splitOn [1, 2, 3, 4, 5] 3
+        ",
+        RocList::<RocList<i64>>::from_slice(&[
+            RocList::<i64>::from_slice(&[1, 2]),
+            RocList::<i64>::from_slice(&[4, 5]),
+        ]),
+        RocList<RocList<i64>>
+    );
+    assert_evals_to!(
+        r"
+        List.splitOn [1, 0, 1, 0, 1] 1
+        ",
+        RocList::<RocList<i64>>::from_slice(&[
+            RocList::<i64>::from_slice(&[]),
+            RocList::<i64>::from_slice(&[0]),
+            RocList::<i64>::from_slice(&[0]),
+            RocList::<i64>::from_slice(&[]),
+        ]),
+        RocList<RocList<i64>>
+    );
+    assert_evals_to!(
+        r"
+        List.splitOn [1, 0, 1, 0, 1] 0
+        ",
+        RocList::<RocList<i64>>::from_slice(&[
+            RocList::<i64>::from_slice(&[1]),
+            RocList::<i64>::from_slice(&[1]),
+            RocList::<i64>::from_slice(&[1]),
+        ]),
+        RocList<RocList<i64>>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_split_first() {
     assert_evals_to!(
         r"

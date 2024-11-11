@@ -1511,6 +1511,7 @@ define_builtins! {
         89 LIST_CONCAT_UTF8: "concatUtf8"
         90 LIST_WALK_FX: "walk!"
         91 LIST_SPLIT_AT: "splitAt"
+        92 LIST_SPLIT_ON: "splitOn"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias
