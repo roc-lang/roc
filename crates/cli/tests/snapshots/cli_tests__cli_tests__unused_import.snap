@@ -1,10 +1,9 @@
 ---
 source: crates/cli/tests/cli_tests.rs
 expression: cli_check_out.normalize_stdout_and_stderr()
-snapshot_kind: text
 ---
 
-── UNUSED IMPORT in tests\test-projects\known_bad\UnusedImport.roc ─────────────
+── UNUSED IMPORT in tests/test-projects/known_bad/UnusedImport.roc ─────────────
 
 Symbol is imported but not used.
 
