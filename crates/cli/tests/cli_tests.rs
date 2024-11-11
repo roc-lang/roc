@@ -367,6 +367,10 @@ mod cli_tests {
             windows,
             ignore = "basic-cli platform doesn't have support for Windows"
         )]
+        #[cfg_attr(
+            linux,
+            ignore = "broken when running in nix CI, TODO replace with a zig test platform"
+        )]
         fn combine_tasks_with_record_builder() {
             let cli_build = ExecCli::new(
                 CMD_BUILD,
@@ -385,6 +389,10 @@ mod cli_tests {
         #[cfg_attr(
             windows,
             ignore = "basic-cli platform doesn't have support for Windows"
+        )]
+        #[cfg_attr(
+            linux,
+            ignore = "broken when running in nix CI, TODO replace with a zig test platform"
         )]
         fn module_params_different_types() {
             let cli_build = ExecCli::new(
@@ -405,6 +413,10 @@ mod cli_tests {
             windows,
             ignore = "basic-cli platform doesn't have support for Windows"
         )]
+        #[cfg_attr(
+            linux,
+            ignore = "broken when running in nix CI, TODO replace with a zig test platform"
+        )]
         fn module_params_issue_7116() {
             let cli_build = ExecCli::new(
                 CMD_RUN,
@@ -421,6 +433,10 @@ mod cli_tests {
         #[cfg_attr(
             windows,
             ignore = "basic-cli platform doesn't have support for Windows"
+        )]
+        #[cfg_attr(
+            linux,
+            ignore = "broken when running in nix CI, TODO replace with a zig test platform"
         )]
         fn module_params_pass_task() {
             let cli_build = ExecCli::new(
