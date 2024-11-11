@@ -1,7 +1,7 @@
-app [main!] { pf: platform "../test-platform-effects-zig/main.roc" }
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.16.0/O00IPk-Krg_diNS2dVWlI0ZQP794Vctxzv0ha96mK0E.tar.br" }
 
-import pf.Effect
-import Menu { echo: \str -> Effect.putLine! str }
+import pf.Stdout
+import Menu { echo: \str -> Stdout.line str }
 
-main! = \{} ->
+main =
     Menu.menu "Agus"

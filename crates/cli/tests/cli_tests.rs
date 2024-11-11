@@ -351,39 +351,79 @@ mod cli_tests {
                 ),
             );
 
-            let expected_out = r#"
-                    0 failed and 3 passed in <ignored for test> ms.
-                    "#;
+            let expected_out = "0 failed and 3 passed in <ignored for test> ms.\n";
 
             cli_build.run().assert_clean_stdout(expected_out);
         }
     }
 
+    // basic-cli platform doesn't have support for Windows
+    #[cfg_attr(windows, ignore)]
     mod test_platform_basic_cli {
 
         use super::*;
         use roc_cli::CMD_RUN;
 
         #[test]
-        #[cfg_attr(windows, ignore)]
+        fn combine_tasks_with_record_builder() {
+            let cli_build = ExecCli::new(
+                CMD_BUILD,
+                file_from_root(
+                    "crates/cli/tests/test-projects/effectful",
+                    "combine-tasks.roc",
+                ),
+            );
+
+            let expected_output = "For multiple tasks: {a: 123, b: \"abc\", c: [123]}\n";
+
+            cli_build.full_check_build_and_run(
+                expected_output,
+                TEST_LEGACY_LINKER,
+                ALLOW_VALGRIND,
+                None,
+                None,
+            );
+        }
+
+        #[test]
         fn module_params_different_types() {
             let cli_build = ExecCli::new(
-                CMD_RUN,
+                CMD_BUILD,
                 file_from_root(
                     "crates/cli/tests/test-projects/module_params",
                     "different_types.roc",
                 ),
             );
 
-            let expected_out = "Write something:\n42\n";
+            let expected_output = "Write something:\n42\n";
 
-            cli_build
-                .run_executable(false, Some("42"), None)
-                .assert_clean_stdout(expected_out);
+            cli_build.full_check_build_and_run(
+                expected_output,
+                TEST_LEGACY_LINKER,
+                ALLOW_VALGRIND,
+                Some("42\n"),
+                None,
+            );
+
+            // NOT SURE WHY THIS TEST IS FAILING
+            //
+            // ---- cli_tests::test_platform_basic_cli::module_params_different_types stdout ----
+            // thread 'cli_tests::test_platform_basic_cli::module_params_different_types' panicked at crates/cli_test_utils/src/command.rs:82:9:
+            // Command failed
+
+            // Command: /Users/luke/Documents/GitHub/roc/target/debug/roc run /Users/luke/Documents/GitHub/roc/crates/cli/tests/test-projects/module_params/different_types.roc
+
+            // Exit Code: exit status: 1
+
+            // Stdout:
+            // Write something:
+
+            // Stderr:
+            // Program exited with error:
+            //     (StdinErr EndOfFile)
         }
 
         #[test]
-        #[cfg_attr(windows, ignore)]
         fn module_params_issue_7116() {
             let cli_build = ExecCli::new(
                 CMD_RUN,
@@ -394,6 +434,27 @@ mod cli_tests {
             );
 
             cli_build.run().assert_zero_exit();
+        }
+
+        #[test]
+        fn module_params_pass_task() {
+            let cli_build = ExecCli::new(
+                CMD_BUILD,
+                file_from_root(
+                    "crates/cli/tests/test-projects/module_params",
+                    "pass_task.roc",
+                ),
+            );
+
+            let expected_output = "Hi, Agus!\n";
+
+            cli_build.full_check_build_and_run(
+                expected_output,
+                TEST_LEGACY_LINKER,
+                ALLOW_VALGRIND,
+                None,
+                None,
+            );
         }
     }
 
@@ -769,37 +830,14 @@ mod cli_tests {
                 file_from_root("crates/cli/tests/test-projects/effectful", "print-line.roc"),
             );
 
-            let expected_output = "You entered: hi there!\nIt is known\n";
+            let expected_output =
+                "Welcome!\nWhat's your name?\nYou entered: hi there!\nIt is known\n";
 
             cli_build.full_check_build_and_run(
                 expected_output,
                 TEST_LEGACY_LINKER,
                 ALLOW_VALGRIND,
                 Some("hi there!"),
-                None,
-            );
-        }
-
-        #[test]
-        #[cfg_attr(windows, ignore)]
-        fn combine_tasks_with_record_builder() {
-            build_platform_host();
-
-            let cli_build = ExecCli::new(
-                CMD_BUILD,
-                file_from_root(
-                    "crates/cli/tests/test-projects/effectful",
-                    "combine-tasks.roc",
-                ),
-            );
-
-            let expected_output = "For multiple tasks: {a: 123, b: \"abc\", c: [123]}\n";
-
-            cli_build.full_check_build_and_run(
-                expected_output,
-                TEST_LEGACY_LINKER,
-                ALLOW_VALGRIND,
-                None,
                 None,
             );
         }
@@ -830,30 +868,6 @@ mod cli_tests {
 
         #[test]
         #[cfg_attr(windows, ignore)]
-        fn module_params_pass_task() {
-            build_platform_host();
-
-            let cli_build = ExecCli::new(
-                CMD_BUILD,
-                file_from_root(
-                    "crates/cli/tests/test-projects/module_params",
-                    "pass_task.roc",
-                ),
-            );
-
-            let expected_output = "Hi, Agus!\n";
-
-            cli_build.full_check_build_and_run(
-                expected_output,
-                TEST_LEGACY_LINKER,
-                ALLOW_VALGRIND,
-                None,
-                None,
-            );
-        }
-
-        #[test]
-        #[cfg_attr(windows, ignore)]
         fn effectful_form() {
             build_platform_host();
 
@@ -862,109 +876,81 @@ mod cli_tests {
                 file_from_root("crates/cli/tests/test-projects/effectful", "form.roc"),
             );
 
-            let expected_out = r#"
-            What's your first name?
-            What's your last name?
+            let expected_output = "What's your first name?\nWhat's your last name?\n\nHi, Agus Zubiaga!\n\nHow old are you?\n\nNice! You can vote!\n\nBye! 👋\n";
 
-            Hi, Agus Zubiaga!
-
-            How old are you?
-
-            Nice! You can vote!
-
-            Bye! 👋
-            "#;
-
-            cli_build
-                .run_executable(false, Some("Agus\nZubiaga\n27\n"), None)
-                .assert_clean_stdout(expected_out);
+            cli_build.full_check_build_and_run(
+                expected_output,
+                TEST_LEGACY_LINKER,
+                ALLOW_VALGRIND,
+                Some("Agus\nZubiaga\n27\n"),
+                None,
+            );
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn effectful_hello() {
-            todo!();
-            // test_roc_app(
-            //     "crates/cli/tests/test-projects/effectful",
-            //     "hello.roc",
-            //     &[],
-            //     &[],
-            //     &[],
-            //     indoc!(
-            //         r#"
-            //             I'm an effect 👻
-            //             "#
-            //     ),
-            //     UseValgrind::No,
-            //     TestCliCommands::Dev,
-            // );
+            build_platform_host();
+
+            let cli_build = ExecCli::new(
+                roc_cli::CMD_DEV,
+                file_from_root("crates/cli/tests/test-projects/effectful/", "hello.roc"),
+            );
+
+            let expected_out = "I'm an effect 👻\n";
+
+            cli_build.run().assert_clean_stdout(expected_out);
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn effectful_loops() {
-            todo!();
-            // test_roc_app(
-            //     "crates/cli/tests/test-projects/effectful",
-            //     "loops.roc",
-            //     &[],
-            //     &[],
-            //     &[],
-            //     indoc!(
-            //         r#"
-            //             Lu
-            //             Marce
-            //             Joaquin
-            //             Chloé
-            //             Mati
-            //             Pedro
-            //             "#
-            //     ),
-            //     UseValgrind::No,
-            //     TestCliCommands::Dev,
-            // );
+            build_platform_host();
+
+            let cli_build = ExecCli::new(
+                roc_cli::CMD_DEV,
+                file_from_root("crates/cli/tests/test-projects/effectful/", "loops.roc"),
+            );
+
+            let expected_out = "Lu\nMarce\nJoaquin\nChloé\nMati\nPedro\n";
+
+            cli_build.run().assert_clean_stdout(expected_out);
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn effectful_untyped_passed_fx() {
-            todo!();
-            // test_roc_app(
-            //     "crates/cli/tests/test-projects/effectful",
-            //     "untyped_passed_fx.roc",
-            //     &[],
-            //     &[],
-            //     &[],
-            //     indoc!(
-            //         r#"
-            //         Before hello
-            //         Hello, World!
-            //         After hello
-            //         "#
-            //     ),
-            //     UseValgrind::No,
-            //     TestCliCommands::Dev,
-            // );
+            build_platform_host();
+
+            let cli_build = ExecCli::new(
+                roc_cli::CMD_DEV,
+                file_from_root(
+                    "crates/cli/tests/test-projects/effectful/",
+                    "untyped_passed_fx.roc",
+                ),
+            );
+
+            let expected_out = "Before hello\nHello, World!\nAfter hello\n";
+
+            cli_build.run().assert_clean_stdout(expected_out);
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn effectful_ignore_result() {
-            todo!();
-            // test_roc_app(
-            //     "crates/cli/tests/test-projects/effectful",
-            //     "ignore_result.roc",
-            //     &[],
-            //     &[],
-            //     &[],
-            //     indoc!(
-            //         r#"
-            //         I asked for input and I ignored it. Deal with it! 😎
-            //         "#
-            //     ),
-            //     UseValgrind::No,
-            //     TestCliCommands::Dev,
-            // );
+            build_platform_host();
+
+            let cli_build = ExecCli::new(
+                roc_cli::CMD_DEV,
+                file_from_root(
+                    "crates/cli/tests/test-projects/effectful/",
+                    "ignore_result.roc",
+                ),
+            );
+
+            let expected_out = "I asked for input and I ignored it. Deal with it! 😎\n";
+
+            cli_build.run().assert_clean_stdout(expected_out);
         }
     }
 

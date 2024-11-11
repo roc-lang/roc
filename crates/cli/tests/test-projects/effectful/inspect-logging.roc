@@ -3,7 +3,7 @@
 #
 app [main!] { pf: platform "../test-platform-effects-zig/main.roc" }
 
-import pf.PlatformTasks
+import pf.Effect
 import Community
 
 main! = \{} ->
@@ -32,4 +32,4 @@ main! = \{} ->
         |> Community.addFriend 0 2
         |> Community.addFriend 1 2
         |> Inspect.toStr
-        |> PlatformTasks.putLine!
+        |> Effect.putLine!

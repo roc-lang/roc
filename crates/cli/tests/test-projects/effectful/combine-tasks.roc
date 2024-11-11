@@ -1,21 +1,21 @@
-app [main!] { pf: platform "../test-platform-effects-zig/main.roc" }
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.16.0/O00IPk-Krg_diNS2dVWlI0ZQP794Vctxzv0ha96mK0E.tar.br" }
 
-import pf.PlatformTasks
+import pf.Stdout
 
-main! = \{} ->
+main =
     multipleIn =
         { sequential <-
-            a: Ok 123,
-            b: Ok "abc",
-            c: Ok [123],
-            _d: Ok ["abc"],
-            _: Ok (Dict.single "a" "b"),
-        }?
+            a: Task.ok 123,
+            b: Task.ok "abc",
+            c: Task.ok [123],
+            _d: Task.ok ["abc"],
+            _: Task.ok (Dict.single "a" "b"),
+        }!
 
-    PlatformTasks.putLine! "For multiple tasks: $(Inspect.toStr multipleIn)"
+    Stdout.line! "For multiple tasks: $(Inspect.toStr multipleIn)"
 
-sequential : Result a err, Result b err, (a, b -> c) -> Result c err
+sequential : Task a err, Task b err, (a, b -> c) -> Task c err
 sequential = \firstTask, secondTask, mapper ->
-    first = firstTask
-    second = secondTask
-    Ok (mapper first second)
+    first = firstTask!
+    second = secondTask!
+    Task.ok (mapper first second)
