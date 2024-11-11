@@ -363,7 +363,10 @@ mod cli_tests {
         use roc_cli::CMD_RUN;
 
         #[test]
-        #[cfg_attr(windows, ignore = "basic-cli platform doesn't have support for Windows")]
+        #[cfg_attr(
+            windows,
+            ignore = "basic-cli platform doesn't have support for Windows"
+        )]
         fn combine_tasks_with_record_builder() {
             let cli_build = ExecCli::new(
                 CMD_BUILD,
@@ -386,7 +389,10 @@ mod cli_tests {
         }
 
         #[test]
-        #[cfg_attr(windows, ignore = "basic-cli platform doesn't have support for Windows")]
+        #[cfg_attr(
+            windows,
+            ignore = "basic-cli platform doesn't have support for Windows"
+        )]
         fn module_params_different_types() {
             let cli_build = ExecCli::new(
                 CMD_BUILD,
@@ -408,7 +414,10 @@ mod cli_tests {
         }
 
         #[test]
-        #[cfg_attr(windows, ignore = "basic-cli platform doesn't have support for Windows")]
+        #[cfg_attr(
+            windows,
+            ignore = "basic-cli platform doesn't have support for Windows"
+        )]
         fn module_params_issue_7116() {
             let cli_build = ExecCli::new(
                 CMD_RUN,
@@ -422,7 +431,10 @@ mod cli_tests {
         }
 
         #[test]
-        #[cfg_attr(windows, ignore = "basic-cli platform doesn't have support for Windows")]
+        #[cfg_attr(
+            windows,
+            ignore = "basic-cli platform doesn't have support for Windows"
+        )]
         fn module_params_pass_task() {
             let cli_build = ExecCli::new(
                 CMD_BUILD,
@@ -743,7 +755,10 @@ mod cli_tests {
         }
 
         #[test]
-        #[cfg_attr(windows, ignore  = "running `expect`s does not currently work on windows")]
+        #[cfg_attr(
+            windows,
+            ignore = "running `expect`s does not currently work on windows"
+        )]
         fn expects_dev_failure() {
             build_platform_host();
 
@@ -760,7 +775,7 @@ mod cli_tests {
         }
 
         #[test]
-        #[cfg_attr(windows, ignore  = "running tests does not work on windows right now")]
+        #[cfg_attr(windows, ignore = "running tests does not work on windows right now")]
         fn expects_test_failure() {
             build_platform_host();
 
