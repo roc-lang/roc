@@ -368,7 +368,7 @@ mod cli_tests {
             ignore = "basic-cli platform doesn't have support for Windows"
         )]
         #[cfg_attr(
-            linux,
+            unix,
             ignore = "broken when running in nix CI, TODO replace with a zig test platform"
         )]
         fn combine_tasks_with_record_builder() {
@@ -391,7 +391,7 @@ mod cli_tests {
             ignore = "basic-cli platform doesn't have support for Windows"
         )]
         #[cfg_attr(
-            linux,
+            unix,
             ignore = "broken when running in nix CI, TODO replace with a zig test platform"
         )]
         fn module_params_different_types() {
@@ -414,7 +414,7 @@ mod cli_tests {
             ignore = "basic-cli platform doesn't have support for Windows"
         )]
         #[cfg_attr(
-            linux,
+            unix,
             ignore = "broken when running in nix CI, TODO replace with a zig test platform"
         )]
         fn module_params_issue_7116() {
@@ -435,7 +435,7 @@ mod cli_tests {
             ignore = "basic-cli platform doesn't have support for Windows"
         )]
         #[cfg_attr(
-            linux,
+            unix,
             ignore = "broken when running in nix CI, TODO replace with a zig test platform"
         )]
         fn module_params_pass_task() {
