@@ -23,8 +23,8 @@ closure2 = \_ ->
     x = "a long string such that it's malloced"
 
     Task.ok {}
-        |> Task.map (\_ -> x)
-        |> Task.map toUnit
+    |> Task.map (\_ -> x)
+    |> Task.map toUnit
 
 toUnit = \_ -> {}
 
@@ -35,7 +35,7 @@ closure3 = \_ ->
     x = "a long string such that it's malloced"
 
     Task.ok {}
-        |> Task.await (\_ -> Task.ok x |> Task.map (\_ -> {}))
+    |> Task.await (\_ -> Task.ok x |> Task.map (\_ -> {}))
 
 # # ---
 closure4 : {} -> Task {} []
@@ -44,5 +44,5 @@ closure4 = \_ ->
     x = "a long string such that it's malloced"
 
     Task.ok {}
-        |> Task.await (\_ -> Task.ok x)
-        |> Task.map (\_ -> {})
+    |> Task.await (\_ -> Task.ok x)
+    |> Task.map (\_ -> {})

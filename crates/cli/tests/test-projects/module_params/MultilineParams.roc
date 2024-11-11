@@ -1,7 +1,4 @@
-module {
-    sendHttpReq,
-    getEnvVar
-} -> [hi]
+module { sendHttpReq, getEnvVar } -> [hi]
 
 hi : Str
 hi =
