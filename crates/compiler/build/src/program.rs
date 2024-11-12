@@ -454,14 +454,14 @@ fn gen_from_mono_module_dev<'a>(
 
             #[cfg(not(feature = "target-wasm32"))]
             {
-                internal_error!();
+                internal_error!("Compiler was not built with feature 'target-wasm32'.");
             }
         }
         (BuiltHostOpt::None, Architecture::Wasm32) => {
-            internal_error!("Cannot compile wasm32 without a host on the dev compiler backend")
+            internal_error!("Cannot compile wasm32 without a host on the dev compiler backend.")
         }
         (BuiltHostOpt::Legacy(host_path), Architecture::Wasm32) => internal_error!(
-            "Unsupported host files found for use with wasm32 dev compiler backend\n    {}",
+            "Unsupported host files found for use with wasm32 dev compiler backend:\n    {}",
             host_path.display()
         ),
         (
@@ -470,7 +470,7 @@ fn gen_from_mono_module_dev<'a>(
             }),
             Architecture::Wasm32,
         ) => internal_error!(
-            "Unsupported host files found for use with wasm32 dev compiler backend\n    {}",
+            "Unsupported host files found for use with wasm32 dev compiler backend:\n    {}",
             preprocessed_host.display()
         ),
         (_, Architecture::X86_64 | Architecture::Aarch64) => {
@@ -481,7 +481,7 @@ fn gen_from_mono_module_dev<'a>(
 
             #[cfg(feature = "target-wasm32")]
             {
-                internal_error!()
+                internal_error!("Compiler was not built with feature 'target-wasm32'.")
             }
         }
         (_, Architecture::Aarch32) => {
