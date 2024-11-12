@@ -34,16 +34,10 @@ jobs:
 
       # for skipped tests: see issue 6274
       - name: execute tests with --release
-        run: nix develop -c cargo test --locked --release -- --skip cli_run::inspect_gui --skip cli_run::hello_gui
+        run: nix develop -c cargo test --locked --release -- --skip cli_tests::inspect_gui --skip cli_tests::hello_gui
 
       - name: roc test all builtins
         run: nix develop -c ./ci/roc_test_builtins.sh
-
-      - name: make a libapp.so for the next step
-        run: nix develop -c cargo run -- gen-stub-lib examples/platform-switching/rocLovesRust.roc
-
-      - name: check that the platform`s produced dylib is loadable
-        run: cd examples/platform-switching/rust-platform && nix develop -c cargo test --release --locked
 
       - name: test aarch64 dev backend
         run: nix develop -c cargo nextest-gen-dev --locked --release --no-fail-fast

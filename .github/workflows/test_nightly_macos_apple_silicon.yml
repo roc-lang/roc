@@ -29,9 +29,6 @@ jobs:
       - name: test roc hello world
         run: cd roc_nightly && ./roc examples/helloWorld.roc
 
-      - name: test platform switching rust
-        run: cd roc_nightly && ./roc examples/platform-switching/rocLovesRust.roc
-
       - name: test platform switching zig
         run: cd roc_nightly && ./roc examples/platform-switching/rocLovesZig.roc
 
