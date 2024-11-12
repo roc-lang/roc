@@ -4,8 +4,8 @@ use crate::{
     Buf,
 };
 use roc_parse::ast::{
-    AbilityImpls, AssignedField, Collection, Expr, ExtractSpaces, ImplementsAbilities,
-    ImplementsAbility, ImplementsClause, Tag, TypeAnnotation, TypeHeader,
+    AbilityImpls, AssignedField, Collection, Expr, ExtractSpaces, FunctionArrow,
+    ImplementsAbilities, ImplementsAbility, ImplementsClause, Tag, TypeAnnotation, TypeHeader,
 };
 use roc_parse::ident::UppercaseIdent;
 use roc_region::all::Loc;
@@ -149,7 +149,7 @@ impl<'a> Formattable for TypeAnnotation<'a> {
             }
 
             Wildcard | Inferred | BoundVariable(_) | Malformed(_) => false,
-            Function(args, result) => {
+            Function(args, _arrow, result) => {
                 result.value.is_multiline()
                     || args.iter().any(|loc_arg| loc_arg.value.is_multiline())
             }
@@ -195,7 +195,7 @@ impl<'a> Formattable for TypeAnnotation<'a> {
         let self_is_multiline = self.is_multiline();
 
         match self {
-            Function(args, ret) => {
+            Function(args, arrow, ret) => {
                 let needs_parens = parens != Parens::NotNeeded;
 
                 buf.indent(indent);
@@ -236,7 +236,11 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                     buf.spaces(1);
                 }
 
-                buf.push_str("->");
+                match arrow {
+                    FunctionArrow::Pure => buf.push_str("->"),
+                    FunctionArrow::Effectful => buf.push_str("=>"),
+                }
+
                 buf.spaces(1);
 
                 ret.value

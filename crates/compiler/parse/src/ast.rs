@@ -8,11 +8,12 @@ use crate::ident::Accessor;
 use crate::parser::ESingleQuote;
 use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
-use roc_collections::soa::{EitherIndex, Index, Slice};
+use roc_collections::soa::{index_push_new, slice_extend_new};
 use roc_error_macros::internal_error;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
 use roc_module::ident::QualifiedModuleName;
 use roc_region::all::{Loc, Position, Region};
+use soa::{EitherIndex, Slice};
 
 #[derive(Debug, Clone)]
 pub struct FullAst<'a> {
@@ -281,11 +282,10 @@ pub struct WhenPattern<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum StrSegment<'a> {
-    Plaintext(&'a str),       // e.g. "foo"
-    Unicode(Loc<&'a str>),    // e.g. "00A0" in "\u(00A0)"
-    EscapedChar(EscapedChar), // e.g. '\n' in "Hello!\n"
-    Interpolated(Loc<&'a Expr<'a>>),
-    DeprecatedInterpolated(Loc<&'a Expr<'a>>), // The old "$(...)" syntax - will be removed someday
+    Plaintext(&'a str),              // e.g. "foo"
+    Unicode(Loc<&'a str>),           // e.g. "00A0" in "\u(00A0)"
+    EscapedChar(EscapedChar),        // e.g. '\n' in "Hello!\n"
+    Interpolated(Loc<&'a Expr<'a>>), // e.g. "$(expr)"
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -379,7 +379,6 @@ impl<'a> TryFrom<StrSegment<'a>> for SingleQuoteSegment<'a> {
             StrSegment::Unicode(s) => Ok(SingleQuoteSegment::Unicode(s)),
             StrSegment::EscapedChar(s) => Ok(SingleQuoteSegment::EscapedChar(s)),
             StrSegment::Interpolated(_) => Err(ESingleQuote::InterpolationNotAllowed),
-            StrSegment::DeprecatedInterpolated(_) => Err(ESingleQuote::InterpolationNotAllowed),
         }
     }
 }
@@ -395,6 +394,7 @@ pub enum StrLiteral<'a> {
 /// Values that can be tried, extracting success values or "returning early" on failure
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TryTarget {
+    // TODO: Remove when purity inference replaces Task fully
     /// Tasks suffixed with ! are `Task.await`ed
     Task,
     /// Results suffixed with ? are `Result.try`ed
@@ -497,6 +497,9 @@ pub enum Expr<'a> {
     // This form of debug is a desugared call to roc_dbg
     LowLevelDbg(&'a (&'a str, &'a str), &'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
 
+    /// The `try` keyword that performs early return on errors
+    Try,
+
     // Application
     /// To apply by name, do Apply(Var(...), ...)
     /// To apply a tag by name, do Apply(Tag(...), ...)
@@ -519,6 +522,13 @@ pub enum Expr<'a> {
         /// is Option<Expr> because each branch may be preceded by
         /// a guard (".. if ..").
         &'a [&'a WhenBranch<'a>],
+    ),
+
+    Return(
+        /// The return value
+        &'a Loc<Expr<'a>>,
+        /// The unused code after the return statement
+        Option<&'a Loc<Expr<'a>>>,
     ),
 
     // Blank Space (e.g. comments, spaces, newlines) before or after an expression.
@@ -666,9 +676,13 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::Dbg => false,
         Expr::DbgStmt(a, b) => is_expr_suffixed(&a.value) || is_expr_suffixed(&b.value),
         Expr::LowLevelDbg(_, a, b) => is_expr_suffixed(&a.value) || is_expr_suffixed(&b.value),
+        Expr::Try => false,
         Expr::UnaryOp(a, _) => is_expr_suffixed(&a.value),
         Expr::When(cond, branches) => {
             is_expr_suffixed(&cond.value) || branches.iter().any(|x| is_when_branch_suffixed(x))
+        }
+        Expr::Return(a, b) => {
+            is_expr_suffixed(&a.value) || b.is_some_and(|loc_b| is_expr_suffixed(&loc_b.value))
         }
         Expr::SpaceBefore(a, _) => is_expr_suffixed(a),
         Expr::SpaceAfter(a, _) => is_expr_suffixed(a),
@@ -828,6 +842,8 @@ pub enum ValueDef<'a> {
     IngestedFileImport(IngestedFileImport<'a>),
 
     Stmt(&'a Loc<Expr<'a>>),
+
+    StmtAfterExpr,
 }
 
 impl<'a> ValueDef<'a> {
@@ -939,6 +955,15 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                     expr_stack.push(&condition.value);
                     expr_stack.push(&cont.value);
                 }
+                Return(return_value, after_return) => {
+                    if let Some(after_return) = after_return {
+                        expr_stack.reserve(2);
+                        expr_stack.push(&return_value.value);
+                        expr_stack.push(&after_return.value);
+                    } else {
+                        expr_stack.push(&return_value.value);
+                    }
+                }
                 Apply(fun, args, _) => {
                     expr_stack.reserve(args.len() + 1);
                     expr_stack.push(&fun.value);
@@ -1009,6 +1034,7 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                 | Underscore(_)
                 | Crash
                 | Dbg
+                | Try
                 | Tag(_)
                 | OpaqueRef(_)
                 | MalformedIdent(_, _)
@@ -1070,7 +1096,9 @@ impl<'a, 'b> Iterator for RecursiveValueDefIter<'a, 'b> {
                             }
                         }
                         ValueDef::Stmt(loc_expr) => self.push_pending_from_expr(&loc_expr.value),
-                        ValueDef::Annotation(_, _) | ValueDef::IngestedFileImport(_) => {}
+                        ValueDef::Annotation(_, _)
+                        | ValueDef::IngestedFileImport(_)
+                        | ValueDef::StmtAfterExpr => {}
                     }
 
                     self.index += 1;
@@ -1313,10 +1341,10 @@ impl<'a> Defs<'a> {
 
         self.regions.push(region);
 
-        let before = Slice::extend_new(&mut self.spaces, spaces_before.iter().copied());
+        let before = slice_extend_new(&mut self.spaces, spaces_before.iter().copied());
         self.space_before.push(before);
 
-        let after = Slice::extend_new(&mut self.spaces, spaces_after.iter().copied());
+        let after = slice_extend_new(&mut self.spaces, spaces_after.iter().copied());
         self.space_after.push(after);
     }
 
@@ -1327,7 +1355,7 @@ impl<'a> Defs<'a> {
         spaces_before: &[CommentOrNewline<'a>],
         spaces_after: &[CommentOrNewline<'a>],
     ) {
-        let value_def_index = Index::push_new(&mut self.value_defs, value_def);
+        let value_def_index = index_push_new(&mut self.value_defs, value_def);
         let tag = EitherIndex::from_right(value_def_index);
         self.push_def_help(tag, region, spaces_before, spaces_after)
     }
@@ -1361,7 +1389,7 @@ impl<'a> Defs<'a> {
         spaces_before: &[CommentOrNewline<'a>],
         spaces_after: &[CommentOrNewline<'a>],
     ) {
-        let type_def_index = Index::push_new(&mut self.type_defs, type_def);
+        let type_def_index = index_push_new(&mut self.type_defs, type_def);
         let tag = EitherIndex::from_left(type_def_index);
         self.push_def_help(tag, region, spaces_before, spaces_after)
     }
@@ -1376,13 +1404,13 @@ impl<'a> Defs<'a> {
         for (tag_index, tag) in self.tags.iter().enumerate() {
             let region = self.regions[tag_index];
             let space_before = {
-                let start = self.space_before[tag_index].start();
+                let start = self.space_before[tag_index].start() as usize;
                 let len = self.space_before[tag_index].len();
 
                 &self.spaces[start..(start + len)]
             };
             let space_after = {
-                let start = self.space_after[tag_index].start();
+                let start = self.space_after[tag_index].start() as usize;
                 let len = self.space_after[tag_index].len();
 
                 &self.spaces[start..(start + len)]
@@ -1395,13 +1423,13 @@ impl<'a> Defs<'a> {
                     match tag_index.cmp(&target) {
                         std::cmp::Ordering::Less => {
                             // before
-                            let type_def_index = Index::push_new(&mut before.type_defs, type_def);
+                            let type_def_index = index_push_new(&mut before.type_defs, type_def);
                             let tag = EitherIndex::from_left(type_def_index);
                             before.push_def_help(tag, region, space_before, space_after);
                         }
                         std::cmp::Ordering::Greater => {
                             // after
-                            let type_def_index = Index::push_new(&mut after.type_defs, type_def);
+                            let type_def_index = index_push_new(&mut after.type_defs, type_def);
                             let tag = EitherIndex::from_left(type_def_index);
                             after.push_def_help(tag, region, space_before, space_after);
                         }
@@ -1417,14 +1445,14 @@ impl<'a> Defs<'a> {
                         std::cmp::Ordering::Less => {
                             // before
                             let new_value_def_index =
-                                Index::push_new(&mut before.value_defs, value_def);
+                                index_push_new(&mut before.value_defs, value_def);
                             let tag = EitherIndex::from_right(new_value_def_index);
                             before.push_def_help(tag, region, space_before, space_after);
                         }
                         std::cmp::Ordering::Greater => {
                             // after
                             let new_value_def_index =
-                                Index::push_new(&mut after.value_defs, value_def);
+                                index_push_new(&mut after.value_defs, value_def);
                             let tag = EitherIndex::from_right(new_value_def_index);
                             after.push_def_help(tag, region, space_before, space_after);
                         }
@@ -1508,9 +1536,21 @@ impl ImplementsAbilities<'_> {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
+pub enum FunctionArrow {
+    /// ->
+    Pure,
+    /// =>
+    Effectful,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum TypeAnnotation<'a> {
-    /// A function. The types of its arguments, then the type of its return value.
-    Function(&'a [Loc<TypeAnnotation<'a>>], &'a Loc<TypeAnnotation<'a>>),
+    /// A function. The types of its arguments, the type of arrow used, then the type of its return value.
+    Function(
+        &'a [Loc<TypeAnnotation<'a>>],
+        FunctionArrow,
+        &'a Loc<TypeAnnotation<'a>>,
+    ),
 
     /// Applying a type to some arguments (e.g. Map.Map String Int)
     Apply(&'a str, &'a str, &'a [Loc<TypeAnnotation<'a>>]),
@@ -2465,6 +2505,8 @@ impl<'a> Malformed for Expr<'a> {
             Dbg => false,
             DbgStmt(condition, continuation) => condition.is_malformed() || continuation.is_malformed(),
             LowLevelDbg(_, condition, continuation) => condition.is_malformed() || continuation.is_malformed(),
+            Try => false,
+            Return(return_value, after_return) => return_value.is_malformed() || after_return.is_some_and(|ar| ar.is_malformed()),
             Apply(func, args, _) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
             BinOps(firsts, last) => firsts.iter().any(|(expr, _)| expr.is_malformed()) || last.is_malformed(),
             UnaryOp(expr, _) => expr.is_malformed(),
@@ -2516,9 +2558,7 @@ impl<'a> Malformed for StrSegment<'a> {
     fn is_malformed(&self) -> bool {
         match self {
             StrSegment::Plaintext(_) | StrSegment::Unicode(_) | StrSegment::EscapedChar(_) => false,
-            StrSegment::Interpolated(expr) | StrSegment::DeprecatedInterpolated(expr) => {
-                expr.is_malformed()
-            }
+            StrSegment::Interpolated(expr) => expr.is_malformed(),
         }
     }
 }
@@ -2717,6 +2757,7 @@ impl<'a> Malformed for ValueDef<'a> {
                 annotation,
             }) => path.is_malformed() || annotation.is_malformed(),
             ValueDef::Stmt(loc_expr) => loc_expr.is_malformed(),
+            ValueDef::StmtAfterExpr => false,
         }
     }
 }
@@ -2732,7 +2773,7 @@ impl<'a> Malformed for ModuleImportParams<'a> {
 impl<'a> Malformed for TypeAnnotation<'a> {
     fn is_malformed(&self) -> bool {
         match self {
-            TypeAnnotation::Function(args, ret) => {
+            TypeAnnotation::Function(args, _arrow, ret) => {
                 args.iter().any(|arg| arg.is_malformed()) || ret.is_malformed()
             }
             TypeAnnotation::Apply(_, _, args) => args.iter().any(|arg| arg.is_malformed()),

@@ -4233,7 +4233,7 @@ fn expose_function_to_host<'a, 'ctx>(
     return_layout: InLayout<'a>,
     layout_ids: &mut LayoutIds<'a>,
 ) {
-    let ident_string = symbol.as_str(&env.interns);
+    let ident_string = symbol.as_unsuffixed_str(&env.interns);
 
     let proc_layout = ProcLayout {
         arguments,
@@ -5466,7 +5466,7 @@ pub fn build_procedures<'a>(
         let getter_fn = function_value_by_func_spec(env, FuncBorrowSpec::Some(*func_spec), symbol);
 
         let name = getter_fn.get_name().to_str().unwrap();
-        let getter_name = symbol.as_str(&env.interns);
+        let getter_name = symbol.as_unsuffixed_str(&env.interns);
 
         // Add the getter function to the module.
         let _ = expose_function_to_host_help_c_abi(
@@ -5494,7 +5494,7 @@ pub fn build_wasm_test_wrapper<'a, 'ctx>(
         opt_level,
         procedures,
         vec![],
-        EntryPoint::Single(entry_point),
+        EntryPoint::Program(env.arena.alloc([entry_point])),
         Some(&std::env::temp_dir().join("test.ll")),
     );
 
@@ -5521,7 +5521,7 @@ pub fn build_procedures_return_main<'a, 'ctx>(
         opt_level,
         procedures,
         host_exposed_lambda_sets,
-        EntryPoint::Single(entry_point),
+        EntryPoint::Program(env.arena.alloc([entry_point])),
         Some(&std::env::temp_dir().join("test.ll")),
     );
 
@@ -5728,7 +5728,7 @@ fn build_procedures_help<'a>(
         GenTest | WasmGenTest | CliTest => { /* no host, or exposing types is not supported */ }
         Binary | BinaryDev | BinaryGlue => {
             for (proc_name, alias_name, hels) in host_exposed_lambda_sets.iter() {
-                let ident_string = proc_name.name().as_str(&env.interns);
+                let ident_string = proc_name.name().as_unsuffixed_str(&env.interns);
                 let fn_name: String = format!("{}_{}", ident_string, hels.id.0);
 
                 expose_alias_to_host(

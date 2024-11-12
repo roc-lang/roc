@@ -97,6 +97,9 @@ pub fn pretty_header_with_path(title: &str, path: &Path) -> String {
         relative_path.to_string()
     };
 
+    // ensure path conatians only unix slashes
+    let path = path.replace('\\', "/");
+
     let header = format!(
         "── {} {} {} {}",
         title,

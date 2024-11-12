@@ -37,13 +37,10 @@ jobs:
 
       - name: regular rust tests
         # see #5904 for skipped test
-        run: cargo test --locked --release -- --skip cli_run::expects_dev_and_test
+        run: cargo test --locked --release -- --skip cli_tests::expects_dev_and_test
 
       - name: tests examples in docs
-        run:  cargo test --doc --release
-        
-      - name: check that the platform`s produced dylib is loadable
-        run: cd examples/platform-switching/rust-platform && LD_LIBRARY_PATH=. cargo test --release --locked
+        run: cargo test --doc --release
 
       - name: test the dev backend # these tests require an explicit feature flag
         run: cargo test --locked --release --package test_gen --no-default-features --features gen-dev

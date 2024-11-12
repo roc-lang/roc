@@ -515,6 +515,7 @@ impl<'a> RawFunctionLayout<'a> {
                 internal_error!("lambda set should only appear under a function, where it's handled independently.");
             }
             ErasedLambda => internal_error!("erased lambda type should only appear under a function, where it's handled independently"),
+            Pure | Effectful => internal_error!("fx vars should only appear under a function"),
             Structure(flat_type) => Self::layout_from_flat_type(env, flat_type),
             RangedNumber(..) => Layout::new_help(env, var, content).then(Self::ZeroArgumentThunk),
 
@@ -592,7 +593,7 @@ impl<'a> RawFunctionLayout<'a> {
         let arena = env.arena;
 
         match flat_type {
-            Func(args, closure_var, ret_var) => {
+            Func(args, closure_var, ret_var, _fx_var) => {
                 let mut fn_args = Vec::with_capacity_in(args.len(), arena);
 
                 let mut cache_criteria = CACHEABLE;
@@ -1789,7 +1790,7 @@ impl<'a> LambdaSet<'a> {
         // functions, despite not appearing in the lambda set.
         // We don't want to compile them as thunks, so we need to figure out a special-casing for
         // them.
-        // To reproduce: test cli_run
+        // To reproduce: test cli_tests
         //
         // debug_assert!(
         //     self.set
@@ -2150,7 +2151,7 @@ fn lambda_set_size(subs: &Subs, var: Variable) -> (usize, usize, usize) {
                         stack.push((*var, depth_any + 1, depth_lset));
                     }
                 }
-                FlatType::Func(args, lset, ret) => {
+                FlatType::Func(args, lset, ret, _fx_var) => {
                     for var in subs.get_subs_slice(*args) {
                         stack.push((*var, depth_any + 1, depth_lset));
                     }
@@ -2191,7 +2192,7 @@ fn lambda_set_size(subs: &Subs, var: Variable) -> (usize, usize, usize) {
                     }
                     stack.push((ext.var(), depth_any + 1, depth_lset));
                 }
-                FlatType::EmptyRecord | FlatType::EmptyTuple | FlatType::EmptyTagUnion => {}
+                FlatType::EmptyRecord | FlatType::EmptyTagUnion | FlatType::EffectfulFunc => {}
             },
             Content::FlexVar(_)
             | Content::RigidVar(_)
@@ -2199,7 +2200,9 @@ fn lambda_set_size(subs: &Subs, var: Variable) -> (usize, usize, usize) {
             | Content::RigidAbleVar(_, _)
             | Content::RangedNumber(_)
             | Content::Error
-            | Content::ErasedLambda => {}
+            | Content::ErasedLambda
+            | Content::Pure
+            | Content::Effectful => {}
         }
     }
     (max_depth_any_ctor, max_depth_only_lset, total)
@@ -2478,6 +2481,9 @@ impl<'a> Layout<'a> {
             }
             ErasedLambda => {
                 internal_error!("erased lambda type should only appear under a function, where it's handled independently.");
+            }
+            Pure | Effectful => {
+                internal_error!("fx vars should only appear under a function, where they're handled independently.");
             }
             Structure(flat_type) => layout_from_flat_type(env, flat_type),
 
@@ -3315,7 +3321,7 @@ fn layout_from_flat_type<'a>(
                 }
             }
         }
-        Func(args, closure_var, ret_var) => {
+        Func(args, closure_var, ret_var, _fx_var) => {
             if env.is_seen(closure_var) {
                 // TODO(recursive-layouts): after the naked pointer is updated, we can cache `var` to
                 // point to the updated layout.
@@ -3459,7 +3465,9 @@ fn layout_from_flat_type<'a>(
         }
         EmptyTagUnion => cacheable(Ok(Layout::VOID)),
         EmptyRecord => cacheable(Ok(Layout::UNIT)),
-        EmptyTuple => cacheable(Ok(Layout::UNIT)),
+        EffectfulFunc => {
+            internal_error!("Cannot create a layout for an unconstrained EffectfulFunc")
+        }
     }
 }
 
@@ -4599,7 +4607,7 @@ fn layout_from_num_content<'a>(content: &Content) -> Cacheable<LayoutResult<'a>>
         Alias(_, _, _, _) => {
             todo!("TODO recursively resolve type aliases in num_from_content");
         }
-        Structure(_) | RangedNumber(..) | LambdaSet(_) | ErasedLambda => {
+        Structure(_) | RangedNumber(..) | LambdaSet(_) | ErasedLambda | Pure | Effectful => {
             panic!("Invalid Num.Num type application: {content:?}");
         }
         Error => Err(LayoutProblem::Erroneous),
@@ -4641,7 +4649,7 @@ impl LayoutId {
     // Returns something like "#UserApp_foo_1" when given a symbol that interns to "foo"
     // and a LayoutId of 1.
     pub fn to_symbol_string(self, symbol: Symbol, interns: &Interns) -> String {
-        let ident_string = symbol.as_str(interns);
+        let ident_string = symbol.as_unsuffixed_str(interns);
         let module_string = interns.module_ids.get_name(symbol.module_id()).unwrap();
         format!("{}_{}_{}", module_string, ident_string, self.0)
     }
@@ -4649,12 +4657,12 @@ impl LayoutId {
     // Returns something like "roc__foo_1_exposed" when given a symbol that interns to "foo"
     // and a LayoutId of 1.
     pub fn to_exposed_symbol_string(self, symbol: Symbol, interns: &Interns) -> String {
-        let ident_string = symbol.as_str(interns);
+        let ident_string = symbol.as_unsuffixed_str(interns);
         format!("roc__{}_{}_exposed", ident_string, self.0)
     }
 
     pub fn to_exposed_generic_symbol_string(self, symbol: Symbol, interns: &Interns) -> String {
-        let ident_string = symbol.as_str(interns);
+        let ident_string = symbol.as_unsuffixed_str(interns);
         format!("roc__{}_{}_exposed_generic", ident_string, self.0)
     }
 }

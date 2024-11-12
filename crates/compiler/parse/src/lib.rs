@@ -16,7 +16,6 @@ pub mod keyword;
 pub mod normalize;
 pub mod number_literal;
 pub mod pattern;
-pub mod problems;
 pub mod src64;
 pub mod state;
 pub mod string_literal;

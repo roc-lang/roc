@@ -64,6 +64,7 @@ const ABILITY_IMPLEMENTATION_NOT_IDENTIFIER: &str = "ABILITY IMPLEMENTATION NOT 
 const DUPLICATE_IMPLEMENTATION: &str = "DUPLICATE IMPLEMENTATION";
 const UNNECESSARY_IMPLEMENTATIONS: &str = "UNNECESSARY IMPLEMENTATIONS";
 const INCOMPLETE_ABILITY_IMPLEMENTATION: &str = "INCOMPLETE ABILITY IMPLEMENTATION";
+const STATEMENT_AFTER_EXPRESSION: &str = "STATEMENT AFTER EXPRESSION";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -195,7 +196,7 @@ pub fn can_problem<'b>(
                 ]),
                 alloc.region(lines.convert_region(region), severity),
                 alloc.reflow("Builtins are imported automatically, so you can remove this import."),
-                alloc.reflow("Tip: Learn more about builtins in the tutorial:\n\n<https://www.roc-lang.org/tutorial#builtin-modules>"),
+                alloc.reflow("Tip: Learn more about builtins in the tutorial:\n<https://www.roc-lang.org/tutorial#builtin-modules>"),
             ]);
 
             title = EXPLICIT_BUILTIN_IMPORT.to_string();
@@ -213,7 +214,7 @@ pub fn can_problem<'b>(
                     alloc.symbol_unqualified(symbol),
                     alloc.reflow(" from the exposing list.")
                 ]),
-                alloc.reflow("Tip: Learn more about builtins in the tutorial:\n\n<https://www.roc-lang.org/tutorial#builtin-modules>"),
+                alloc.reflow("Tip: Learn more about builtins in the tutorial:\n<https://www.roc-lang.org/tutorial#builtin-modules>"),
             ]);
 
             title = EXPLICIT_BUILTIN_IMPORT.to_string();
@@ -1192,7 +1193,7 @@ pub fn can_problem<'b>(
             doc = alloc.stack([
                 alloc.reflow("This destructure assignment doesn't introduce any new variables:"),
                 alloc.region(lines.convert_region(region), severity),
-                alloc.reflow("If you don't need to use the value on the right-hand-side of this assignment, consider removing the assignment. Since Roc is purely functional, assignments that don't introduce variables cannot affect a program's behavior!"),
+                alloc.reflow("If you don't need to use the value on the right-hand side of this assignment, consider removing the assignment. Since effects are not allowed at the top-level, assignments that don't introduce variables cannot affect a program's behavior"),
             ]);
             title = "UNNECESSARY DEFINITION".to_string();
         }
@@ -1345,6 +1346,86 @@ pub fn can_problem<'b>(
             let report = to_file_problem_report(alloc, filename, error);
             doc = report.doc;
             title = report.title;
+        }
+
+        Problem::ReturnOutsideOfFunction { region } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This "),
+                    alloc.keyword("return"),
+                    alloc.reflow(" statement doesn't belong to a function:"),
+                ]),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.reflow("I wouldn't know where to return to if I used it!"),
+            ]);
+
+            title = "RETURN OUTSIDE OF FUNCTION".to_string();
+        }
+
+        Problem::StatementsAfterReturn { region } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This code won't run because it follows a "),
+                    alloc.keyword("return"),
+                    alloc.reflow(" statement:"),
+                ]),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.concat([
+                    alloc.hint("you can move the "),
+                    alloc.keyword("return"),
+                    alloc.reflow(
+                        " statement below this block to make the code that follows it run.",
+                    ),
+                ]),
+            ]);
+
+            title = "UNREACHABLE CODE".to_string();
+        }
+
+        Problem::ReturnAtEndOfFunction { region } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This "),
+                    alloc.keyword("return"),
+                    alloc.reflow(" keyword is redundant:"),
+                ]),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.concat([
+                    alloc.reflow("The last expression in a function is treated like a "),
+                    alloc.keyword("return"),
+                    alloc.reflow(" statement. You can safely remove "),
+                    alloc.keyword("return"),
+                    alloc.reflow(" here."),
+                ]),
+            ]);
+
+            title = "UNNECESSARY RETURN".to_string();
+        }
+
+        Problem::StmtAfterExpr(region) => {
+            doc = alloc.stack([
+                alloc
+                    .reflow(r"I just finished parsing an expression with a series of definitions,"),
+                alloc.reflow(
+                    r"and this line is indented as if it's intended to be part of that expression:",
+                ),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.concat([alloc.reflow(
+                    "However, I already saw the final expression in that series of definitions.",
+                )]),
+                alloc.tip().append(
+                    alloc.reflow(
+                        "An expression like `4`, `\"hello\"`, or `functionCall MyThing` is like `return 4` in other programming languages. To me, it seems like you did `return 4` followed by more code in the lines after, that code would never be executed!"
+                    )
+                ),
+                alloc.tip().append(
+                    alloc.reflow(
+                        "If you are working with `Task`, this error can happen if you forgot a `!` somewhere."
+                    )
+                )
+            ]);
+
+            title = STATEMENT_AFTER_EXPRESSION.to_string();
         }
     };
 

@@ -6,7 +6,7 @@ mod suffixed_tests {
     use bumpalo::Bump;
     use insta::assert_snapshot;
     use roc_can::desugar::desugar_defs_node_values;
-    use roc_can::env::Env;
+    use roc_can::env::{Env, FxMode};
     use roc_can::scope::Scope;
     use roc_module::symbol::{IdentIds, ModuleIds, PackageModuleIds};
     use roc_parse::test_helpers::parse_defs_with;
@@ -34,6 +34,7 @@ mod suffixed_tests {
                 &dep_idents,
                 &qualified_module_ids,
                 None,
+                FxMode::Task,
             );
 
             let mut defs = parse_defs_with(arena, indoc!($src)).unwrap();

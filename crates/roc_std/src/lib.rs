@@ -289,7 +289,7 @@ impl<T, E> Drop for RocResult<T, E> {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Default)]
 #[repr(C, align(16))]
 pub struct RocDec([u8; 16]);
 
@@ -477,8 +477,20 @@ impl fmt::Display for RocDec {
     }
 }
 
+impl PartialOrd for RocDec {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for RocDec {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.as_i128().cmp(&other.as_i128())
+    }
+}
+
 #[repr(C, align(16))]
-#[derive(Clone, Copy, Eq, Default)]
+#[derive(Clone, Copy, Eq, Default, PartialEq)]
 pub struct I128([u8; 16]);
 
 impl From<i128> for I128 {
@@ -505,12 +517,6 @@ impl fmt::Display for I128 {
     }
 }
 
-impl PartialEq for I128 {
-    fn eq(&self, other: &Self) -> bool {
-        i128::from(*self).eq(&i128::from(*other))
-    }
-}
-
 impl PartialOrd for I128 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
@@ -530,7 +536,7 @@ impl Hash for I128 {
 }
 
 #[repr(C, align(16))]
-#[derive(Clone, Copy, Eq, Default)]
+#[derive(Clone, Copy, Eq, Default, PartialEq)]
 pub struct U128([u8; 16]);
 
 impl From<u128> for U128 {
@@ -554,12 +560,6 @@ impl fmt::Debug for U128 {
 impl fmt::Display for U128 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         Debug::fmt(&u128::from(*self), f)
-    }
-}
-
-impl PartialEq for U128 {
-    fn eq(&self, other: &Self) -> bool {
-        u128::from(*self).eq(&u128::from(*other))
     }
 }
 

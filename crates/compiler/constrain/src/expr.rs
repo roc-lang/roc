@@ -8,9 +8,10 @@ use crate::builtins::{
 use crate::pattern::{constrain_pattern, PatternState};
 use roc_can::annotation::IntroducedVariables;
 use roc_can::constraint::{
-    Constraint, Constraints, ExpectedTypeIndex, Generalizable, OpportunisticResolve, TypeOrVar,
+    Constraint, Constraints, ExpectEffectfulReason, ExpectedTypeIndex, FxCallKind, FxExpectation,
+    Generalizable, OpportunisticResolve, TypeOrVar,
 };
-use roc_can::def::Def;
+use roc_can::def::{Def, DefKind};
 use roc_can::exhaustive::{sketch_pattern_to_rows, sketch_when_branches, ExhaustiveContext};
 use roc_can::expected::Expected::{self, *};
 use roc_can::expected::PExpected;
@@ -22,7 +23,6 @@ use roc_can::expr::{
 use roc_can::pattern::Pattern;
 use roc_can::traverse::symbols_introduced_from_pattern;
 use roc_collections::all::{HumanIndex, MutMap, SendMap};
-use roc_collections::soa::{Index, Slice};
 use roc_collections::VecMap;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::{ModuleId, Symbol};
@@ -33,6 +33,7 @@ use roc_types::types::{
     AliasKind, AnnotationSource, Category, IndexOrField, OptAbleType, PReason, Reason, RecordField,
     TypeExtension, TypeTag, Types,
 };
+use soa::{Index, Slice};
 
 /// This is for constraining Defs
 #[derive(Default, Debug)]
@@ -58,6 +59,30 @@ pub struct Env {
     pub rigids: MutMap<Lowercase, Variable>,
     pub resolutions_to_make: Vec<OpportunisticResolve>,
     pub home: ModuleId,
+    /// The enclosing function's fx var to be unified with inner calls
+    pub fx_expectation: Option<FxExpectation>,
+}
+
+impl Env {
+    pub fn with_fx_expectation<F, T>(
+        &mut self,
+        fx_var: Variable,
+        ann_region: Option<Region>,
+        f: F,
+    ) -> T
+    where
+        F: FnOnce(&mut Env) -> T,
+    {
+        let prev = self.fx_expectation.take();
+
+        self.fx_expectation = Some(FxExpectation { fx_var, ann_region });
+
+        let result = f(self);
+
+        self.fx_expectation = prev;
+
+        result
+    }
 }
 
 fn constrain_untyped_args(
@@ -67,6 +92,7 @@ fn constrain_untyped_args(
     arguments: &[(Variable, AnnotatedMark, Loc<Pattern>)],
     closure_type: Type,
     return_type: Type,
+    fx_type: Type,
 ) -> (Vec<Variable>, PatternState, Type) {
     let mut vars = Vec::with_capacity(arguments.len());
     let mut pattern_types = Vec::with_capacity(arguments.len());
@@ -97,8 +123,12 @@ fn constrain_untyped_args(
         vars.push(*pattern_var);
     }
 
-    let function_type =
-        Type::Function(pattern_types, Box::new(closure_type), Box::new(return_type));
+    let function_type = Type::Function(
+        pattern_types,
+        Box::new(closure_type),
+        Box::new(return_type),
+        Box::new(fx_type),
+    );
 
     (vars, pattern_state, function_type)
 }
@@ -109,10 +139,11 @@ fn constrain_untyped_closure(
     env: &mut Env,
     region: Region,
     expected: ExpectedTypeIndex,
-
     fn_var: Variable,
     closure_var: Variable,
     ret_var: Variable,
+    fx_var: Variable,
+    early_returns: &[(Variable, Region)],
     arguments: &[(Variable, AnnotatedMark, Loc<Pattern>)],
     loc_body_expr: &Loc<Expr>,
     captured_symbols: &[(Symbol, Variable)],
@@ -121,6 +152,7 @@ fn constrain_untyped_closure(
     let closure_type = Type::Variable(closure_var);
     let return_type = Type::Variable(ret_var);
     let return_type_index = constraints.push_variable(ret_var);
+    let fx_type = Type::Variable(fx_var);
     let (mut vars, pattern_state, function_type) = constrain_untyped_args(
         types,
         constraints,
@@ -128,21 +160,45 @@ fn constrain_untyped_closure(
         arguments,
         closure_type,
         return_type,
+        fx_type,
     );
 
     vars.push(ret_var);
+    vars.push(fx_var);
     vars.push(closure_var);
     vars.push(fn_var);
 
-    let body_type = constraints.push_expected_type(NoExpectation(return_type_index));
-    let ret_constraint = constrain_expr(
-        types,
-        constraints,
-        env,
+    let body_type = constraints.push_expected_type(ForReason(
+        Reason::FunctionOutput,
+        return_type_index,
         loc_body_expr.region,
-        &loc_body_expr.value,
-        body_type,
-    );
+    ));
+
+    let ret_constraint = env.with_fx_expectation(fx_var, None, |env| {
+        constrain_expr(
+            types,
+            constraints,
+            env,
+            loc_body_expr.region,
+            &loc_body_expr.value,
+            body_type,
+        )
+    });
+
+    let mut early_return_constraints = Vec::with_capacity(early_returns.len());
+    for (early_return_variable, early_return_region) in early_returns {
+        let early_return_var = constraints.push_variable(*early_return_variable);
+        let early_return_con = constraints.equal_types(
+            early_return_var,
+            body_type,
+            Category::Return,
+            *early_return_region,
+        );
+
+        early_return_constraints.push(early_return_con);
+    }
+
+    let early_returns_constraint = constraints.and_constraint(early_return_constraints);
 
     // make sure the captured symbols are sorted!
     debug_assert_eq!(captured_symbols.to_vec(), {
@@ -178,6 +234,7 @@ fn constrain_untyped_closure(
             ret_constraint,
             Generalizable(true),
         ),
+        constraints.and_constraint(pattern_state.delayed_fx_suffix_constraints),
         constraints.equal_types_with_storage(
             function_type,
             expected,
@@ -185,7 +242,9 @@ fn constrain_untyped_closure(
             region,
             fn_var,
         ),
+        early_returns_constraint,
         closure_constraint,
+        constraints.flex_to_pure(fx_var),
     ];
 
     constraints.exists_many(vars, cons)
@@ -224,6 +283,10 @@ pub fn constrain_expr(
                     let loc_field_expr = &field.loc_expr;
                     let (field_type, field_con) =
                         constrain_field(types, constraints, env, field_var, loc_field_expr);
+
+                    let check_field_con =
+                        constraints.fx_record_field_suffix(label.suffix(), field_var, field.region);
+                    let field_con = constraints.and_constraint([field_con, check_field_con]);
 
                     field_vars.push(field_var);
                     field_types.insert(label.clone(), RecordField::Required(field_type));
@@ -450,7 +513,7 @@ pub fn constrain_expr(
             }
         }
         Call(boxed, loc_args, called_via) => {
-            let (fn_var, loc_fn, closure_var, ret_var) = &**boxed;
+            let (fn_var, loc_fn, closure_var, ret_var, fx_var) = &**boxed;
             // The expression that evaluates to the function being called, e.g. `foo` in
             // (foo) bar baz
             let opt_symbol = if let Var(symbol, _) | AbilityMember(symbol, _, _) = loc_fn.value {
@@ -481,6 +544,9 @@ pub fn constrain_expr(
             // The function's return type
             let ret_type = Variable(*ret_var);
 
+            // The function's effect type
+            let fx_type = Variable(*fx_var);
+
             // type of values captured in the closure
             let closure_type = Variable(*closure_var);
 
@@ -490,6 +556,7 @@ pub fn constrain_expr(
             vars.push(*fn_var);
             vars.push(*ret_var);
             vars.push(*closure_var);
+            vars.push(*fx_var);
 
             let mut arg_types = Vec::with_capacity(loc_args.len());
             let mut arg_cons = Vec::with_capacity(loc_args.len());
@@ -524,7 +591,8 @@ pub fn constrain_expr(
                 let arguments = types.from_old_type_slice(arg_types.iter());
                 let lambda_set = types.from_old_type(&closure_type);
                 let ret = types.from_old_type(&ret_type);
-                let typ = types.function(arguments, lambda_set, ret);
+                let fx = types.from_old_type(&fx_type);
+                let typ = types.function(arguments, lambda_set, ret, fx);
                 constraints.push_type(types, typ)
             };
             let expected_fn_type =
@@ -538,7 +606,18 @@ pub fn constrain_expr(
                 fn_con,
                 constraints.equal_types_var(*fn_var, expected_fn_type, category.clone(), fn_region),
                 constraints.and_constraint(arg_cons),
-                constraints.equal_types_var(*ret_var, expected_final_type, category, region),
+                constraints.equal_types_var(
+                    *ret_var,
+                    expected_final_type,
+                    category.clone(),
+                    region,
+                ),
+                constraints.fx_call(
+                    *fx_var,
+                    FxCallKind::Call(opt_symbol),
+                    region,
+                    env.fx_expectation,
+                ),
             ];
 
             let and_constraint = constraints.and_constraint(and_cons);
@@ -624,6 +703,8 @@ pub fn constrain_expr(
             function_type: fn_var,
             closure_type: closure_var,
             return_type: ret_var,
+            fx_type: fx_var,
+            early_returns,
             arguments,
             loc_body: boxed,
             captured_symbols,
@@ -640,6 +721,8 @@ pub fn constrain_expr(
                 *fn_var,
                 *closure_var,
                 *ret_var,
+                *fx_var,
+                early_returns,
                 arguments,
                 boxed,
                 captured_symbols,
@@ -1264,6 +1347,7 @@ pub fn constrain_expr(
                     vec![record_type],
                     Box::new(closure_type),
                     Box::new(field_type),
+                    Box::new(Type::Variable(Variable::PURE)),
                 ));
                 constraints.push_type(types, typ)
             };
@@ -1373,10 +1457,41 @@ pub fn constrain_expr(
             );
 
             while let Some(def) = stack.pop() {
-                body_con = constrain_def(types, constraints, env, def, body_con)
+                body_con = match def.kind {
+                    DefKind::Let => constrain_let_def(types, constraints, env, def, body_con, None),
+                    DefKind::Stmt(fx_var) => {
+                        constrain_stmt_def(types, constraints, env, def, body_con, fx_var)
+                    }
+                    DefKind::Ignored(fx_var) => {
+                        constrain_let_def(types, constraints, env, def, body_con, Some(fx_var))
+                    }
+                };
             }
 
             body_con
+        }
+        Return {
+            return_value,
+            return_var,
+        } => {
+            let return_type_index = constraints.push_variable(*return_var);
+
+            let expected_return_value = constraints.push_expected_type(ForReason(
+                Reason::FunctionOutput,
+                return_type_index,
+                return_value.region,
+            ));
+
+            let return_con = constrain_expr(
+                types,
+                constraints,
+                env,
+                return_value.region,
+                &return_value.value,
+                expected_return_value,
+            );
+
+            constraints.exists([*return_var], return_con)
         }
         Tag {
             tag_union_var: variant_var,
@@ -1621,6 +1736,7 @@ pub fn constrain_expr(
                         vec![argument_type],
                         Box::new(closure_type),
                         Box::new(opaque_type),
+                        Box::new(Type::Variable(Variable::PURE)),
                     ));
                     constraints.push_type(types, typ)
                 };
@@ -1806,11 +1922,12 @@ fn constrain_function_def(
 
             let signature_index = constraints.push_type(types, signature);
 
-            let (arg_types, _signature_closure_type, ret_type) = match types[signature] {
-                TypeTag::Function(signature_closure_type, ret_type) => (
+            let (arg_types, _signature_closure_type, ret_type, fx_type) = match types[signature] {
+                TypeTag::Function(signature_closure_type, ret_type, fx_type) => (
                     types.get_type_arguments(signature),
                     signature_closure_type,
                     ret_type,
+                    fx_type,
                 ),
                 _ => {
                     // aliases, or just something weird
@@ -1870,6 +1987,8 @@ fn constrain_function_def(
                         expr_var,
                         function_def.closure_type,
                         function_def.return_type,
+                        function_def.fx_type,
+                        &function_def.early_returns,
                         &function_def.arguments,
                         loc_body_expr,
                         &function_def.captured_symbols,
@@ -1901,6 +2020,10 @@ fn constrain_function_def(
                 home: env.home,
                 rigids: ftv,
                 resolutions_to_make: vec![],
+                fx_expectation: Some(FxExpectation {
+                    fx_var: function_def.fx_type,
+                    ann_region: Some(annotation.region),
+                }),
             };
 
             let region = loc_function_def.region;
@@ -1910,14 +2033,17 @@ fn constrain_function_def(
                 vars: Vec::with_capacity(function_def.arguments.len()),
                 constraints: Vec::with_capacity(1),
                 delayed_is_open_constraints: vec![],
+                delayed_fx_suffix_constraints: Vec::with_capacity(function_def.arguments.len()),
             };
             let mut vars = Vec::with_capacity(argument_pattern_state.vars.capacity() + 1);
             let closure_var = function_def.closure_type;
 
             let ret_type_index = constraints.push_type(types, ret_type);
+            let fx_type_index = constraints.push_type(types, fx_type);
 
             vars.push(function_def.return_type);
             vars.push(function_def.closure_type);
+            vars.push(function_def.fx_type);
 
             let mut def_pattern_state = PatternState::default();
 
@@ -1995,8 +2121,9 @@ fn constrain_function_def(
                 );
                 let lambda_set = types.from_old_type(&Type::Variable(function_def.closure_type));
                 let ret_var = types.from_old_type(&Type::Variable(function_def.return_type));
+                let fx_var = types.from_old_type(&Type::Variable(function_def.fx_type));
 
-                let fn_type = types.function(pattern_types, lambda_set, ret_var);
+                let fn_type = types.function(pattern_types, lambda_set, ret_var, fx_var);
                 constraints.push_type(types, fn_type)
             };
 
@@ -2017,6 +2144,13 @@ fn constrain_function_def(
             let defs_constraint = constraints.and_constraint(argument_pattern_state.constraints);
 
             let cons = [
+                // Store fx type first so errors are reported at call site
+                constraints.store(
+                    fx_type_index,
+                    function_def.fx_type,
+                    std::file!(),
+                    std::line!(),
+                ),
                 constraints.let_constraint(
                     [],
                     argument_pattern_state.vars,
@@ -2042,9 +2176,12 @@ fn constrain_function_def(
                     Category::Lambda,
                     region,
                 ),
+                // Check argument suffixes against usage
+                constraints.and_constraint(argument_pattern_state.delayed_fx_suffix_constraints),
                 // Finally put the solved closure type into the dedicated def expr variable.
                 constraints.store(signature_index, expr_var, std::file!(), std::line!()),
                 closure_constraint,
+                constraints.flex_to_pure(function_def.fx_type),
             ];
 
             let expr_con = constraints.exists_many(vars, cons);
@@ -2071,6 +2208,8 @@ fn constrain_function_def(
                 expr_var,
                 function_def.closure_type,
                 function_def.return_type,
+                function_def.fx_type,
+                &function_def.early_returns,
                 &function_def.arguments,
                 loc_expr,
                 &function_def.captured_symbols,
@@ -2141,6 +2280,7 @@ fn constrain_destructure_def(
                 home: env.home,
                 rigids: ftv,
                 resolutions_to_make: vec![],
+                fx_expectation: env.fx_expectation,
             };
 
             let signature_index = constraints.push_type(types, signature);
@@ -2243,6 +2383,7 @@ fn constrain_value_def(
                 home: env.home,
                 rigids: ftv,
                 resolutions_to_make: vec![],
+                fx_expectation: env.fx_expectation,
             };
 
             let loc_pattern = Loc::at(loc_symbol.region, Pattern::Identifier(loc_symbol.value));
@@ -2355,6 +2496,7 @@ fn constrain_when_branch_help(
         vars: Vec::with_capacity(2),
         constraints: Vec::with_capacity(2),
         delayed_is_open_constraints: Vec::new(),
+        delayed_fx_suffix_constraints: Vec::new(),
     };
 
     for (i, loc_pattern) in when_branch.patterns.iter().enumerate() {
@@ -2379,6 +2521,9 @@ fn constrain_when_branch_help(
         state
             .delayed_is_open_constraints
             .extend(partial_state.delayed_is_open_constraints);
+        state
+            .delayed_fx_suffix_constraints
+            .extend(partial_state.delayed_fx_suffix_constraints);
 
         if i == 0 {
             state.headers.extend(partial_state.headers);
@@ -2530,6 +2675,7 @@ pub fn constrain_decls(
         home,
         rigids: MutMap::default(),
         resolutions_to_make: vec![],
+        fx_expectation: None,
     };
 
     debug_assert_eq!(declarations.declarations.len(), declarations.symbols.len());
@@ -2706,6 +2852,7 @@ pub(crate) fn constrain_def_pattern(
         vars: Vec::with_capacity(1),
         constraints: Vec::with_capacity(1),
         delayed_is_open_constraints: vec![],
+        delayed_fx_suffix_constraints: vec![],
     };
 
     constrain_pattern(
@@ -2761,6 +2908,7 @@ fn constrain_typed_def(
         home: env.home,
         resolutions_to_make: vec![],
         rigids: ftv,
+        fx_expectation: env.fx_expectation,
     };
 
     let signature_index = constraints.push_type(types, signature);
@@ -2792,13 +2940,14 @@ fn constrain_typed_def(
                 function_type: fn_var,
                 closure_type: closure_var,
                 return_type: ret_var,
+                fx_type: fx_var,
                 captured_symbols,
                 arguments,
                 loc_body,
                 name,
                 ..
             }),
-            TypeTag::Function(_signature_closure_type, ret_type),
+            TypeTag::Function(_signature_closure_type, ret_type, fx_type),
         ) => {
             let arg_types = types.get_type_arguments(signature);
 
@@ -2813,14 +2962,18 @@ fn constrain_typed_def(
                 vars: Vec::with_capacity(arguments.len()),
                 constraints: Vec::with_capacity(1),
                 delayed_is_open_constraints: vec![],
+                delayed_fx_suffix_constraints: Vec::with_capacity(arguments.len()),
             };
             let mut vars = Vec::with_capacity(argument_pattern_state.vars.capacity() + 1);
             let ret_var = *ret_var;
             let closure_var = *closure_var;
+            let fx_var = *fx_var;
             let ret_type_index = constraints.push_type(types, ret_type);
+            let fx_type_index = constraints.push_type(types, fx_type);
 
             vars.push(ret_var);
             vars.push(closure_var);
+            vars.push(fx_var);
 
             constrain_typed_function_arguments(
                 types,
@@ -2850,8 +3003,9 @@ fn constrain_typed_def(
                     types.from_old_type_slice(arguments.iter().map(|a| Type::Variable(a.0)));
                 let lambda_set = types.from_old_type(&Type::Variable(closure_var));
                 let ret_var = types.from_old_type(&Type::Variable(ret_var));
+                let fx_var = types.from_old_type(&Type::Variable(fx_var));
 
-                let fn_type = types.function(arg_types, lambda_set, ret_var);
+                let fn_type = types.function(arg_types, lambda_set, ret_var, fx_var);
                 constraints.push_type(types, fn_type)
             };
 
@@ -2864,20 +3018,25 @@ fn constrain_typed_def(
                 ret_type_index,
             ));
 
-            let ret_constraint = constrain_expr(
-                types,
-                constraints,
-                env,
-                loc_body_expr.region,
-                &loc_body_expr.value,
-                body_type,
-            );
+            let ret_constraint = env.with_fx_expectation(fx_var, Some(annotation.region), |env| {
+                constrain_expr(
+                    types,
+                    constraints,
+                    env,
+                    loc_body_expr.region,
+                    &loc_body_expr.value,
+                    body_type,
+                )
+            });
+
             let ret_constraint = attach_resolution_constraints(constraints, env, ret_constraint);
 
             vars.push(*fn_var);
             let defs_constraint = constraints.and_constraint(argument_pattern_state.constraints);
 
             let cons = [
+                // Store fx type first so errors are reported at call site
+                constraints.store(fx_type_index, fx_var, std::file!(), std::line!()),
                 constraints.let_constraint(
                     [],
                     argument_pattern_state.vars,
@@ -2887,6 +3046,8 @@ fn constrain_typed_def(
                     // This is a syntactic function, it can be generalized
                     Generalizable(true),
                 ),
+                // Check argument suffixes against usage
+                constraints.and_constraint(argument_pattern_state.delayed_fx_suffix_constraints),
                 // Store the inferred ret var into the function type now, so that
                 // when we check that the solved function type matches the annotation, we can
                 // display the fully inferred return variable.
@@ -2902,6 +3063,7 @@ fn constrain_typed_def(
                 constraints.store(signature_index, *fn_var, std::file!(), std::line!()),
                 constraints.store(signature_index, expr_var, std::file!(), std::line!()),
                 closure_constraint,
+                constraints.flex_to_pure(fx_var),
             ];
 
             let expr_con = constraints.exists_many(vars, cons);
@@ -2969,7 +3131,7 @@ fn constrain_typed_function_arguments(
         None
     };
 
-    let it = arguments.iter().zip(arg_types.into_iter()).enumerate();
+    let it = arguments.iter().zip(arg_types).enumerate();
     for (index, ((pattern_var, annotated_mark, loc_pattern), ann)) in it {
         let pattern_var_index = constraints.push_variable(*pattern_var);
         let ann_index = constraints.push_type(types, ann);
@@ -3123,7 +3285,7 @@ fn constrain_typed_function_arguments_simple(
     arguments: &[(Variable, AnnotatedMark, Loc<Pattern>)],
     arg_types: Slice<TypeTag>,
 ) {
-    let it = arguments.iter().zip(arg_types.into_iter()).enumerate();
+    let it = arguments.iter().zip(arg_types).enumerate();
     for (index, ((pattern_var, annotated_mark, loc_pattern), ann)) in it {
         let pattern_var_index = constraints.push_variable(*pattern_var);
         let ann_index = constraints.push_type(types, ann);
@@ -3269,12 +3431,13 @@ fn attach_resolution_constraints(
     constraints.and_constraint([constraint, resolution_constrs])
 }
 
-fn constrain_def(
+fn constrain_let_def(
     types: &mut Types,
     constraints: &mut Constraints,
     env: &mut Env,
     def: &Def,
     body_con: Constraint,
+    ignored_fx_var: Option<Variable>,
 ) -> Constraint {
     match &def.annotation {
         Some(annotation) => constrain_typed_def(types, constraints, env, def, body_con, annotation),
@@ -3289,14 +3452,49 @@ fn constrain_def(
             // no annotation, so no extra work with rigids
 
             let expected = constraints.push_expected_type(NoExpectation(expr_type_index));
-            let expr_con = constrain_expr(
-                types,
-                constraints,
-                env,
-                def.loc_expr.region,
-                &def.loc_expr.value,
-                expected,
-            );
+
+            let expr_con = match ignored_fx_var {
+                None => constrain_expr(
+                    types,
+                    constraints,
+                    env,
+                    def.loc_expr.region,
+                    &def.loc_expr.value,
+                    expected,
+                ),
+                Some(fx_var) => {
+                    let expr_con = env.with_fx_expectation(fx_var, None, |env| {
+                        constrain_expr(
+                            types,
+                            constraints,
+                            env,
+                            def.loc_expr.region,
+                            &def.loc_expr.value,
+                            expected,
+                        )
+                    });
+
+                    // Ignored def must be effectful, otherwise it's dead code
+                    let effectful_constraint = Constraint::ExpectEffectful(
+                        fx_var,
+                        ExpectEffectfulReason::Ignored,
+                        def.loc_pattern.region,
+                    );
+
+                    let enclosing_fx_constraint = constraints.fx_call(
+                        fx_var,
+                        FxCallKind::Ignored,
+                        def.loc_pattern.region,
+                        env.fx_expectation,
+                    );
+
+                    constraints.and_constraint([
+                        expr_con,
+                        enclosing_fx_constraint,
+                        effectful_constraint,
+                    ])
+                }
+            };
             let expr_con = attach_resolution_constraints(constraints, env, expr_con);
 
             let generalizable = Generalizable(is_generalizable_expr(&def.loc_expr.value));
@@ -3312,6 +3510,77 @@ fn constrain_def(
             )
         }
     }
+}
+
+fn constrain_stmt_def(
+    types: &mut Types,
+    constraints: &mut Constraints,
+    env: &mut Env,
+    def: &Def,
+    body_con: Constraint,
+    fx_var: Variable,
+) -> Constraint {
+    let region = def.loc_expr.region;
+
+    // Try to extract the fn name and region if the stmt is a call to a named function
+    let (fn_name, error_region) = if let Expr::Call(boxed, _, _) = &def.loc_expr.value {
+        let loc_fn_expr = &boxed.1;
+
+        match loc_fn_expr.value {
+            Var(symbol, _) | ParamsVar { symbol, .. } => (Some(symbol), loc_fn_expr.region),
+            _ => (None, def.loc_expr.region),
+        }
+    } else {
+        (None, def.loc_expr.region)
+    };
+
+    // Statement expressions must return an empty record
+    let empty_record_index = constraints.push_type(types, Types::EMPTY_RECORD);
+    let expect_empty_record = constraints.push_expected_type(ForReason(
+        Reason::Stmt(fn_name),
+        empty_record_index,
+        error_region,
+    ));
+
+    let expr_con = env.with_fx_expectation(fx_var, None, |env| {
+        constrain_expr(
+            types,
+            constraints,
+            env,
+            region,
+            &def.loc_expr.value,
+            expect_empty_record,
+        )
+    });
+
+    let expr_con = attach_resolution_constraints(constraints, env, expr_con);
+
+    let generalizable = Generalizable(is_generalizable_expr(&def.loc_expr.value));
+
+    let body_con = constraints.let_constraint(
+        std::iter::empty(),
+        std::iter::empty(),
+        std::iter::empty(),
+        expr_con,
+        body_con,
+        generalizable,
+    );
+
+    // Stmt expr must be effectful, otherwise it's dead code
+    let effectful_constraint =
+        Constraint::ExpectEffectful(fx_var, ExpectEffectfulReason::Stmt, region);
+
+    let fx_call_kind = match fn_name {
+        None => FxCallKind::Stmt,
+        Some(name) => FxCallKind::Call(Some(name)),
+    };
+
+    // We have to unify the stmt fx with the enclosing fx
+    // since we used the former to constrain the expr.
+    let enclosing_fx_constraint =
+        constraints.fx_call(fx_var, fx_call_kind, error_region, env.fx_expectation);
+
+    constraints.and_constraint([body_con, effectful_constraint, enclosing_fx_constraint])
 }
 
 /// Create a let-constraint for a non-recursive def.
@@ -3651,6 +3920,8 @@ fn constraint_recursive_function(
                 expr_var,
                 function_def.closure_type,
                 function_def.return_type,
+                function_def.fx_type,
+                &function_def.early_returns,
                 &function_def.arguments,
                 loc_expr,
                 &function_def.captured_symbols,
@@ -3697,11 +3968,12 @@ fn constraint_recursive_function(
                 signature_index,
             ));
 
-            let (arg_types, _signature_closure_type, ret_type) = match types[signature] {
-                TypeTag::Function(signature_closure_type, ret_type) => (
+            let (arg_types, _signature_closure_type, ret_type, fx_type) = match types[signature] {
+                TypeTag::Function(signature_closure_type, ret_type, fx_type) => (
                     types.get_type_arguments(signature),
                     signature_closure_type,
                     ret_type,
+                    fx_type,
                 ),
                 _ => todo!("TODO {:?}", (loc_symbol, types[signature])),
             };
@@ -3714,14 +3986,18 @@ fn constraint_recursive_function(
                 vars: Vec::with_capacity(function_def.arguments.len()),
                 constraints: Vec::with_capacity(1),
                 delayed_is_open_constraints: vec![],
+                delayed_fx_suffix_constraints: Vec::with_capacity(function_def.arguments.len()),
             };
             let mut vars = Vec::with_capacity(argument_pattern_state.vars.capacity() + 1);
             let ret_var = function_def.return_type;
+            let fx_var = function_def.fx_type;
             let closure_var = function_def.closure_type;
             let ret_type_index = constraints.push_type(types, ret_type);
+            let fx_type_index = constraints.push_type(types, fx_type);
 
             vars.push(ret_var);
             vars.push(closure_var);
+            vars.push(fx_var);
 
             let mut def_pattern_state = PatternState::default();
 
@@ -3769,11 +4045,11 @@ fn constraint_recursive_function(
             let fn_type = {
                 // TODO(types-soa) optimize for Variable
                 let lambda_set = types.from_old_type(&Type::Variable(closure_var));
-                let typ = types.function(pattern_types, lambda_set, ret_type);
+                let typ = types.function(pattern_types, lambda_set, ret_type, fx_type);
                 constraints.push_type(types, typ)
             };
 
-            let expr_con = {
+            let expr_con = env.with_fx_expectation(fx_var, Some(annotation.region), |env| {
                 let expected = constraints.push_expected_type(NoExpectation(ret_type_index));
                 constrain_expr(
                     types,
@@ -3783,13 +4059,14 @@ fn constraint_recursive_function(
                     &loc_body_expr.value,
                     expected,
                 )
-            };
+            });
             let expr_con = attach_resolution_constraints(constraints, env, expr_con);
 
             vars.push(expr_var);
 
             let state_constraints = constraints.and_constraint(argument_pattern_state.constraints);
             let cons = [
+                constraints.store(fx_type_index, fx_var, std::file!(), std::line!()),
                 constraints.let_constraint(
                     [],
                     argument_pattern_state.vars,
@@ -3799,12 +4076,15 @@ fn constraint_recursive_function(
                     // Syntactic function can be generalized
                     Generalizable(true),
                 ),
+                // Check argument suffixes against usage
+                constraints.and_constraint(argument_pattern_state.delayed_fx_suffix_constraints),
                 constraints.equal_types(fn_type, annotation_expected, Category::Lambda, region),
                 // "fn_var is equal to the closure's type" - fn_var is used in code gen
                 // Store type into AST vars. We use Store so errors aren't reported twice
                 constraints.store(signature_index, expr_var, std::file!(), std::line!()),
                 constraints.store(ret_type_index, ret_var, std::file!(), std::line!()),
                 closure_constraint,
+                constraints.flex_to_pure(fx_var),
             ];
 
             let and_constraint = constraints.and_constraint(cons);
@@ -4133,6 +4413,7 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             | Expect { .. }
             | ExpectFx { .. }
             | Dbg { .. }
+            | Return { .. }
             | TypedHole(_)
             | RuntimeError(..)
             | ZeroArgumentTag { .. }
@@ -4254,13 +4535,14 @@ fn rec_defs_help(
                             function_type: fn_var,
                             closure_type: closure_var,
                             return_type: ret_var,
+                            fx_type: fx_var,
                             captured_symbols,
                             arguments,
                             loc_body,
                             name,
                             ..
                         }),
-                        TypeTag::Function(_closure_type, ret_type),
+                        TypeTag::Function(_closure_type, ret_type, fx_type),
                     ) => {
                         // NOTE if we ever have trouble with closure type unification, the ignored
                         // `_closure_type` here is a good place to start investigating
@@ -4276,15 +4558,19 @@ fn rec_defs_help(
                             vars: Vec::with_capacity(arguments.len()),
                             constraints: Vec::with_capacity(1),
                             delayed_is_open_constraints: vec![],
+                            delayed_fx_suffix_constraints: Vec::with_capacity(arguments.len()),
                         };
                         let mut vars =
                             Vec::with_capacity(argument_pattern_state.vars.capacity() + 1);
                         let ret_var = *ret_var;
+                        let fx_var = *fx_var;
                         let closure_var = *closure_var;
                         let ret_type_index = constraints.push_type(types, ret_type);
+                        let fx_type_index = constraints.push_type(types, fx_type);
 
                         vars.push(ret_var);
                         vars.push(closure_var);
+                        vars.push(fx_var);
 
                         constrain_typed_function_arguments(
                             types,
@@ -4313,22 +4599,24 @@ fn rec_defs_help(
                         let fn_type_index = {
                             // TODO(types-soa) optimize for variable
                             let lambda_set = types.from_old_type(&Type::Variable(closure_var));
-                            let typ = types.function(pattern_types, lambda_set, ret_type);
+                            let typ = types.function(pattern_types, lambda_set, ret_type, fx_type);
                             constraints.push_type(types, typ)
                         };
-                        let expr_con = {
-                            let body_type =
-                                constraints.push_expected_type(NoExpectation(ret_type_index));
+                        let expr_con =
+                            env.with_fx_expectation(fx_var, Some(annotation.region), |env| {
+                                let body_type =
+                                    constraints.push_expected_type(NoExpectation(ret_type_index));
 
-                            constrain_expr(
-                                types,
-                                constraints,
-                                env,
-                                loc_body_expr.region,
-                                &loc_body_expr.value,
-                                body_type,
-                            )
-                        };
+                                constrain_expr(
+                                    types,
+                                    constraints,
+                                    env,
+                                    loc_body_expr.region,
+                                    &loc_body_expr.value,
+                                    body_type,
+                                )
+                            });
+
                         let expr_con = attach_resolution_constraints(constraints, env, expr_con);
 
                         vars.push(*fn_var);
@@ -4337,6 +4625,8 @@ fn rec_defs_help(
                             constraints.and_constraint(argument_pattern_state.constraints);
                         let expected_index = constraints.push_expected_type(expected);
                         let cons = [
+                            // Store fx type first so errors are reported at call site
+                            constraints.store(fx_type_index, fx_var, std::file!(), std::line!()),
                             constraints.let_constraint(
                                 [],
                                 argument_pattern_state.vars,
@@ -4344,6 +4634,10 @@ fn rec_defs_help(
                                 state_constraints,
                                 expr_con,
                                 generalizable,
+                            ),
+                            // Check argument suffixes against usage
+                            constraints.and_constraint(
+                                argument_pattern_state.delayed_fx_suffix_constraints,
                             ),
                             constraints.equal_types(
                                 fn_type_index,
@@ -4362,6 +4656,7 @@ fn rec_defs_help(
                             ),
                             constraints.store(ret_type_index, ret_var, std::file!(), std::line!()),
                             closure_constraint,
+                            constraints.flex_to_pure(fx_var),
                         ];
 
                         let and_constraint = constraints.and_constraint(cons);

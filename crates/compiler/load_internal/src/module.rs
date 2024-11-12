@@ -186,7 +186,7 @@ pub struct MonomorphizedModule<'a> {
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
     pub expectations: VecMap<ModuleId, Expectations>,
-    pub uses_prebuilt_platform: bool,
+    pub needs_prebuilt_host: bool,
     pub glue_layouts: GlueLayouts<'a>,
 }
 
@@ -213,7 +213,7 @@ pub struct ParsedModule<'a> {
 #[derive(Debug)]
 pub enum EntryPoint<'a> {
     Executable {
-        exposed_to_host: &'a [(Symbol, ProcLayout<'a>)],
+        exposed_to_host: &'a [(&'a str, Symbol, ProcLayout<'a>)],
         platform_path: PathBuf,
     },
     Test,

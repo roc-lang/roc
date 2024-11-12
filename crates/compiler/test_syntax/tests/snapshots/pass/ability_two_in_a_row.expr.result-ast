@@ -2,20 +2,20 @@ SpaceAfter(
     Defs(
         Defs {
             tags: [
-                Index(0),
-                Index(1),
+                EitherIndex(0),
+                EitherIndex(1),
             ],
             regions: [
                 @0-51,
                 @53-104,
             ],
             space_before: [
-                Slice(start = 0, length = 0),
-                Slice(start = 0, length = 2),
+                Slice { start: 0, length: 0 },
+                Slice { start: 0, length: 2 },
             ],
             space_after: [
-                Slice(start = 0, length = 0),
-                Slice(start = 2, length = 0),
+                Slice { start: 0, length: 0 },
+                Slice { start: 2, length: 0 },
             ],
             spaces: [
                 Newline,
@@ -38,6 +38,7 @@ SpaceAfter(
                                             "a",
                                         ),
                                     ],
+                                    Pure,
                                     @26-28 Record {
                                         fields: [],
                                         ext: None,
@@ -75,6 +76,7 @@ SpaceAfter(
                                             "a",
                                         ),
                                     ],
+                                    Pure,
                                     @79-81 Record {
                                         fields: [],
                                         ext: None,

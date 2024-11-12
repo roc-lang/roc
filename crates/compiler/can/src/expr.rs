@@ -1,7 +1,7 @@
 use crate::abilities::SpecializationId;
 use crate::annotation::{freshen_opaque_def, IntroducedVariables};
 use crate::builtins::builtin_defs_map;
-use crate::def::{can_defs_with_return, Annotation, Def};
+use crate::def::{can_defs_with_return, Annotation, Def, DefKind};
 use crate::env::Env;
 use crate::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_num, float_expr_from_result,
@@ -12,7 +12,7 @@ use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern, PermitS
 use crate::procedure::{QualifiedReference, References};
 use crate::scope::{Scope, SymbolLookup};
 use crate::traverse::{walk_expr, Visitor};
-use roc_collections::soa::Index;
+use roc_collections::soa::index_push_new;
 use roc_collections::{SendMap, VecMap, VecSet};
 use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
@@ -27,6 +27,7 @@ use roc_region::all::{Loc, Region};
 use roc_types::num::SingleQuoteBound;
 use roc_types::subs::{ExhaustiveMark, IllegalCycleMark, RedundantMark, VarStore, Variable};
 use roc_types::types::{Alias, Category, IndexOrField, LambdaSet, OptAbleVar, Type};
+use soa::Index;
 use std::fmt::{Debug, Display};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -38,7 +39,7 @@ pub type PendingDerives = VecMap<Symbol, (Type, Vec<Loc<Symbol>>)>;
 #[derive(Clone, Default, Debug)]
 pub struct Output {
     pub references: References,
-    pub tail_call: Option<Symbol>,
+    pub tail_calls: Vec<Symbol>,
     pub introduced_variables: IntroducedVariables,
     pub aliases: VecMap<Symbol, Alias>,
     pub non_closures: VecSet<Symbol>,
@@ -49,8 +50,8 @@ impl Output {
     pub fn union(&mut self, other: Self) {
         self.references.union_mut(&other.references);
 
-        if let (None, Some(later)) = (self.tail_call, other.tail_call) {
-            self.tail_call = Some(later);
+        if self.tail_calls.is_empty() && !other.tail_calls.is_empty() {
+            self.tail_calls = other.tail_calls;
         }
 
         self.introduced_variables
@@ -154,7 +155,7 @@ pub enum Expr {
     /// This is *only* for calling functions, not for tag application.
     /// The Tag variant contains any applied values inside it.
     Call(
-        Box<(Variable, Loc<Expr>, Variable, Variable)>,
+        Box<(Variable, Loc<Expr>, Variable, Variable, Variable)>,
         Vec<(Variable, Loc<Expr>)>,
         CalledVia,
     ),
@@ -286,6 +287,11 @@ pub enum Expr {
         symbol: Symbol,
     },
 
+    Return {
+        return_value: Box<Loc<Expr>>,
+        return_var: Variable,
+    },
+
     /// Rendered as empty box in editor
     TypedHole(Variable),
 
@@ -360,6 +366,7 @@ impl Expr {
             Self::Expect { .. } => Category::Expect,
             Self::ExpectFx { .. } => Category::Expect,
             Self::Crash { .. } => Category::Crash,
+            Self::Return { .. } => Category::Return,
 
             Self::Dbg { .. } => Category::Expect,
 
@@ -400,6 +407,8 @@ pub struct ClosureData {
     pub function_type: Variable,
     pub closure_type: Variable,
     pub return_type: Variable,
+    pub fx_type: Variable,
+    pub early_returns: Vec<(Variable, Region)>,
     pub name: Symbol,
     pub captured_symbols: Vec<(Symbol, Variable)>,
     pub recursive: Recursive,
@@ -476,6 +485,8 @@ impl StructAccessorData {
             function_type: function_var,
             closure_type: closure_var,
             return_type: field_var,
+            fx_type: Variable::PURE,
+            early_returns: vec![],
             name,
             captured_symbols: vec![],
             recursive: Recursive::NotRecursive,
@@ -549,6 +560,8 @@ impl OpaqueWrapFunctionData {
             function_type: function_var,
             closure_type: closure_var,
             return_type: opaque_var,
+            fx_type: Variable::PURE,
+            early_returns: vec![],
             name: function_name,
             captured_symbols: vec![],
             recursive: Recursive::NotRecursive,
@@ -714,7 +727,6 @@ pub fn canonicalize_expr<'a>(
 
             let output = Output {
                 references,
-                tail_call: None,
                 ..Default::default()
             };
 
@@ -782,7 +794,6 @@ pub fn canonicalize_expr<'a>(
 
                 let output = Output {
                     references,
-                    tail_call: None,
                     ..Default::default()
                 };
 
@@ -899,22 +910,25 @@ pub fn canonicalize_expr<'a>(
                 output.union(fn_expr_output);
 
                 // Default: We're not tail-calling a symbol (by name), we're tail-calling a function value.
-                output.tail_call = None;
+                output.tail_calls = vec![];
 
                 let expr = match fn_expr.value {
                     Var(symbol, _) => {
                         output.references.insert_call(symbol);
 
                         // we're tail-calling a symbol by name, check if it's the tail-callable symbol
-                        output.tail_call = match &env.tailcallable_symbol {
-                            Some(tc_sym) if *tc_sym == symbol => Some(symbol),
-                            Some(_) | None => None,
-                        };
+                        if env
+                            .tailcallable_symbol
+                            .is_some_and(|tc_sym| tc_sym == symbol)
+                        {
+                            output.tail_calls.push(symbol);
+                        }
 
                         Call(
                             Box::new((
                                 var_store.fresh(),
                                 fn_expr,
+                                var_store.fresh(),
                                 var_store.fresh(),
                                 var_store.fresh(),
                             )),
@@ -954,6 +968,7 @@ pub fn canonicalize_expr<'a>(
                             Box::new((
                                 var_store.fresh(),
                                 fn_expr,
+                                var_store.fresh(),
                                 var_store.fresh(),
                                 var_store.fresh(),
                             )),
@@ -1008,7 +1023,7 @@ pub fn canonicalize_expr<'a>(
         }
         ast::Expr::Defs(loc_defs, loc_ret) => {
             // The body expression gets a new scope for canonicalization,
-            scope.inner_scope(|inner_scope| {
+            scope.inner_def_scope(|inner_scope| {
                 let defs: Defs = (*loc_defs).clone();
                 can_defs_with_return(env, var_store, inner_scope, env.arena.alloc(defs), loc_ret)
             })
@@ -1035,12 +1050,12 @@ pub fn canonicalize_expr<'a>(
                 canonicalize_expr(env, var_store, scope, loc_cond.region, &loc_cond.value);
 
             // the condition can never be a tail-call
-            output.tail_call = None;
+            output.tail_calls = vec![];
 
             let mut can_branches = Vec::with_capacity(branches.len());
 
             for branch in branches.iter() {
-                let (can_when_branch, branch_references) = scope.inner_scope(|inner_scope| {
+                let (can_when_branch, branch_references) = scope.inner_def_scope(|inner_scope| {
                     canonicalize_when_branch(
                         env,
                         var_store,
@@ -1060,7 +1075,7 @@ pub fn canonicalize_expr<'a>(
             // if code gen mistakenly thinks this is a tail call just because its condition
             // happened to be one. (The condition gave us our initial output value.)
             if branches.is_empty() {
-                output.tail_call = None;
+                output.tail_calls = vec![];
             }
 
             // Incorporate all three expressions into a combined Output value.
@@ -1122,6 +1137,11 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::TrySuffix { .. } => internal_error!(
             "a Expr::TrySuffix expression was not completely removed in desugar_value_def_suffixed"
         ),
+        ast::Expr::Try => {
+            // Treat remaining `try` keywords as normal variables so that we can continue to support `Result.try`
+            canonicalize_var_lookup(env, var_store, scope, "", "try", region)
+        }
+
         ast::Expr::Tag(tag) => {
             let variant_var = var_store.fresh();
             let ext_var = var_store.fresh();
@@ -1254,6 +1274,40 @@ pub fn canonicalize_expr<'a>(
                     loc_continuation: Box::new(loc_continuation),
                     variable: var_store.fresh(),
                     symbol,
+                },
+                output,
+            )
+        }
+        ast::Expr::Return(return_expr, after_return) => {
+            let mut output = Output::default();
+
+            if let Some(after_return) = after_return {
+                let region_with_return =
+                    Region::span_across(&return_expr.region, &after_return.region);
+
+                env.problem(Problem::StatementsAfterReturn {
+                    region: region_with_return,
+                });
+            }
+
+            let (loc_return_expr, output1) = canonicalize_expr(
+                env,
+                var_store,
+                scope,
+                return_expr.region,
+                &return_expr.value,
+            );
+
+            output.union(output1);
+
+            let return_var = var_store.fresh();
+
+            scope.early_returns.push((return_var, return_expr.region));
+
+            (
+                Return {
+                    return_value: Box::new(loc_return_expr),
+                    return_var,
                 },
                 output,
             )
@@ -1493,7 +1547,7 @@ pub fn canonicalize_closure<'a>(
     loc_body_expr: &'a Loc<ast::Expr<'a>>,
     opt_def_name: Option<Symbol>,
 ) -> (ClosureData, Output) {
-    scope.inner_scope(|inner_scope| {
+    scope.inner_function_scope(|inner_scope| {
         canonicalize_closure_body(
             env,
             var_store,
@@ -1608,6 +1662,17 @@ fn canonicalize_closure_body<'a>(
         }
     }
 
+    let mut final_expr = &loc_body_expr;
+    while let Expr::LetRec(_, inner, _) | Expr::LetNonRec(_, inner) = &final_expr.value {
+        final_expr = inner;
+    }
+
+    if let Expr::Return { return_value, .. } = &final_expr.value {
+        env.problem(Problem::ReturnAtEndOfFunction {
+            region: return_value.region,
+        });
+    }
+
     // store the references of this function in the Env. This information is used
     // when we canonicalize a surrounding def (if it exists)
     env.closures.insert(symbol, output.references.clone());
@@ -1621,10 +1686,14 @@ fn canonicalize_closure_body<'a>(
         output.non_closures.insert(symbol);
     }
 
+    let return_type_var = var_store.fresh();
+
     let closure_data = ClosureData {
         function_type: var_store.fresh(),
         closure_type: var_store.fresh(),
-        return_type: var_store.fresh(),
+        return_type: return_type_var,
+        fx_type: var_store.fresh(),
+        early_returns: scope.early_returns.clone(),
         name: symbol,
         captured_symbols,
         recursive: Recursive::NotRecursive,
@@ -2027,7 +2096,8 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
         | other @ TypedHole { .. }
         | other @ ForeignCall { .. }
         | other @ OpaqueWrapFunction(_)
-        | other @ Crash { .. } => other,
+        | other @ Crash { .. }
+        | other @ Return { .. } => other,
 
         List {
             elem_var,
@@ -2218,6 +2288,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
                     expr_var: def.expr_var,
                     pattern_vars: def.pattern_vars,
                     annotation: def.annotation,
+                    kind: def.kind,
                 });
             }
 
@@ -2239,6 +2310,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
                 expr_var: def.expr_var,
                 pattern_vars: def.pattern_vars,
                 annotation: def.annotation,
+                kind: def.kind,
             };
 
             let loc_expr = Loc {
@@ -2253,6 +2325,8 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
             function_type,
             closure_type,
             return_type,
+            fx_type,
+            early_returns,
             recursive,
             name,
             captured_symbols,
@@ -2269,6 +2343,8 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
                 function_type,
                 closure_type,
                 return_type,
+                fx_type,
+                early_returns,
                 recursive,
                 name,
                 captured_symbols,
@@ -2376,10 +2452,11 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
         }
 
         Call(boxed_tuple, args, called_via) => {
-            let (fn_var, loc_expr, closure_var, expr_var) = *boxed_tuple;
+            let (fn_var, loc_expr, closure_var, expr_var, fx_var) = *boxed_tuple;
 
             match loc_expr.value {
                 Var(symbol, _) if symbol.is_builtin() => {
+                    // NOTE: This assumes builtins are not effectful!
                     match builtin_defs_map(symbol, var_store) {
                         Some(Def {
                             loc_expr:
@@ -2423,6 +2500,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
                                     expr_var,
                                     pattern_vars,
                                     annotation: None,
+                                    kind: DefKind::Let,
                                 };
 
                                 loc_answer = Loc {
@@ -2447,7 +2525,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
                 _ => {
                     // For now, we only inline calls to builtins. Leave this alone!
                     Call(
-                        Box::new((fn_var, loc_expr, closure_var, expr_var)),
+                        Box::new((fn_var, loc_expr, closure_var, expr_var, fx_var)),
                         args,
                         called_via,
                     )
@@ -2486,6 +2564,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         | ast::Expr::RecordUpdater(_)
         | ast::Expr::Crash
         | ast::Expr::Dbg
+        | ast::Expr::Try
         | ast::Expr::Underscore(_)
         | ast::Expr::MalformedIdent(_, _)
         | ast::Expr::Tag(_)
@@ -2495,6 +2574,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         ast::Expr::DbgStmt(_, _)
         | ast::Expr::LowLevelDbg(_, _, _)
         | ast::Expr::Expect(_, _)
+        | ast::Expr::Return(_, _)
         | ast::Expr::When(_, _)
         | ast::Expr::Backpassing(_, _, _)
         | ast::Expr::SpaceBefore(_, _)
@@ -2515,9 +2595,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
                 | ast::StrSegment::Plaintext(_) => true,
                 // Disallow nested interpolation. Alternatively, we could allow it but require
                 // a comment above it apologizing to the next person who has to read the code.
-                ast::StrSegment::Interpolated(_) | ast::StrSegment::DeprecatedInterpolated(_) => {
-                    false
-                }
+                ast::StrSegment::Interpolated(_) => false,
             })
         }
         ast::Expr::Record(fields) => fields.iter().all(|loc_field| match loc_field.value {
@@ -2648,7 +2726,7 @@ fn flatten_str_lines<'a>(
                         );
                     }
                 },
-                Interpolated(loc_expr) | DeprecatedInterpolated(loc_expr) => {
+                Interpolated(loc_expr) => {
                     if is_valid_interpolation(loc_expr.value) {
                         // Interpolations desugar to Str.concat calls
                         output.references.insert_call(Symbol::STR_CONCAT);
@@ -2715,6 +2793,7 @@ fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> 
                         fn_expr,
                         var_store.fresh(),
                         var_store.fresh(),
+                        var_store.fresh(),
                     )),
                     vec![
                         (var_store.fresh(), empty_string),
@@ -2749,6 +2828,7 @@ fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> 
             Box::new((
                 var_store.fresh(),
                 fn_expr,
+                var_store.fresh(),
                 var_store.fresh(),
                 var_store.fresh(),
             )),
@@ -2797,6 +2877,7 @@ impl Declarations {
     pub fn new() -> Self {
         Self::with_capacity(0)
     }
+
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             declarations: Vec::with_capacity(capacity),
@@ -2843,6 +2924,8 @@ impl Declarations {
         let function_def = FunctionDef {
             closure_type: loc_closure_data.value.closure_type,
             return_type: loc_closure_data.value.return_type,
+            fx_type: loc_closure_data.value.fx_type,
+            early_returns: loc_closure_data.value.early_returns,
             captured_symbols: loc_closure_data.value.captured_symbols,
             arguments: loc_closure_data.value.arguments,
         };
@@ -2852,7 +2935,7 @@ impl Declarations {
 
         let loc_function_def = Loc::at(loc_closure_data.region, function_def);
 
-        let function_def_index = Index::push_new(&mut self.function_bodies, loc_function_def);
+        let function_def_index = index_push_new(&mut self.function_bodies, loc_function_def);
 
         let tag = match loc_closure_data.value.recursive {
             Recursive::NotRecursive | Recursive::Recursive => {
@@ -2894,6 +2977,8 @@ impl Declarations {
         let function_def = FunctionDef {
             closure_type: loc_closure_data.value.closure_type,
             return_type: loc_closure_data.value.return_type,
+            fx_type: loc_closure_data.value.fx_type,
+            early_returns: loc_closure_data.value.early_returns,
             captured_symbols: loc_closure_data.value.captured_symbols,
             arguments: loc_closure_data.value.arguments,
         };
@@ -2903,7 +2988,7 @@ impl Declarations {
 
         let loc_function_def = Loc::at(loc_closure_data.region, function_def);
 
-        let function_def_index = Index::push_new(&mut self.function_bodies, loc_function_def);
+        let function_def_index = index_push_new(&mut self.function_bodies, loc_function_def);
 
         if let Some(annotation) = host_annotation {
             self.host_exposed_annotations
@@ -3009,7 +3094,7 @@ impl Declarations {
             pattern_vars,
         };
 
-        let destructure_def_index = Index::push_new(&mut self.destructs, destruct_def);
+        let destructure_def_index = index_push_new(&mut self.destructs, destruct_def);
 
         self.declarations
             .push(DeclarationTag::Destructure(destructure_def_index));
@@ -3074,6 +3159,8 @@ impl Declarations {
                 let function_def = FunctionDef {
                     closure_type: closure_data.closure_type,
                     return_type: closure_data.return_type,
+                    fx_type: closure_data.fx_type,
+                    early_returns: closure_data.early_returns,
                     captured_symbols: closure_data.captured_symbols,
                     arguments: closure_data.arguments,
                 };
@@ -3081,7 +3168,7 @@ impl Declarations {
                 let loc_function_def = Loc::at(def.loc_expr.region, function_def);
 
                 let function_def_index =
-                    Index::push_new(&mut self.function_bodies, loc_function_def);
+                    index_push_new(&mut self.function_bodies, loc_function_def);
 
                 self.declarations[index] = DeclarationTag::Function(function_def_index);
                 self.expressions[index] = *closure_data.loc_body;
@@ -3114,6 +3201,8 @@ impl Declarations {
                     function_type: var_store.fresh(),
                     closure_type: var_store.fresh(),
                     return_type: var_store.fresh(),
+                    fx_type: var_store.fresh(),
+                    early_returns: vec![],
                     name: self.symbols[index].value,
                     captured_symbols: vec![],
                     recursive: Recursive::NotRecursive,
@@ -3126,6 +3215,8 @@ impl Declarations {
                 let function_def = FunctionDef {
                     closure_type: loc_closure_data.value.closure_type,
                     return_type: loc_closure_data.value.return_type,
+                    fx_type: loc_closure_data.value.fx_type,
+                    early_returns: loc_closure_data.value.early_returns,
                     captured_symbols: loc_closure_data.value.captured_symbols,
                     arguments: loc_closure_data.value.arguments,
                 };
@@ -3133,7 +3224,7 @@ impl Declarations {
                 let loc_function_def = Loc::at(region, function_def);
 
                 let function_def_index =
-                    Index::push_new(&mut self.function_bodies, loc_function_def);
+                    index_push_new(&mut self.function_bodies, loc_function_def);
 
                 if let Some(annotation) = &mut self.annotations[index] {
                     annotation.convert_to_fn(new_args_len, var_store);
@@ -3260,6 +3351,8 @@ impl DeclarationTag {
 pub struct FunctionDef {
     pub closure_type: Variable,
     pub return_type: Variable,
+    pub fx_type: Variable,
+    pub early_returns: Vec<(Variable, Region)>,
     pub captured_symbols: Vec<(Symbol, Variable)>,
     pub arguments: Vec<(Variable, AnnotatedMark, Loc<Pattern>)>,
 }
@@ -3403,6 +3496,9 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
 
                 // Intentionally ignore the lookups in the nested `expect` condition itself,
                 // because they couldn't possibly influence the outcome of this `expect`!
+            }
+            Expr::Return { return_value, .. } => {
+                stack.push(&return_value.value);
             }
             Expr::Crash { msg, .. } => stack.push(&msg.value),
             Expr::Num(_, _, _, _)

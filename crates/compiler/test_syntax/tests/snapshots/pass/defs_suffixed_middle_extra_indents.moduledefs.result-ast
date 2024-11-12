@@ -1,19 +1,19 @@
 Defs {
     tags: [
-        Index(2147483648),
-        Index(2147483649),
+        EitherIndex(2147483648),
+        EitherIndex(2147483649),
     ],
     regions: [
         @24-150,
         @176-266,
     ],
     space_before: [
-        Slice(start = 0, length = 0),
-        Slice(start = 0, length = 2),
+        Slice { start: 0, length: 0 },
+        Slice { start: 0, length: 2 },
     ],
     space_after: [
-        Slice(start = 0, length = 0),
-        Slice(start = 2, length = 1),
+        Slice { start: 0, length: 0 },
+        Slice { start: 2, length: 1 },
     ],
     spaces: [
         Newline,
@@ -30,20 +30,20 @@ Defs {
                 Defs(
                     Defs {
                         tags: [
-                            Index(2147483648),
-                            Index(2147483649),
+                            EitherIndex(2147483648),
+                            EitherIndex(2147483649),
                         ],
                         regions: [
                             @59-68,
                             @97-111,
                         ],
                         space_before: [
-                            Slice(start = 0, length = 0),
-                            Slice(start = 0, length = 1),
+                            Slice { start: 0, length: 0 },
+                            Slice { start: 0, length: 1 },
                         ],
                         space_after: [
-                            Slice(start = 0, length = 0),
-                            Slice(start = 1, length = 0),
+                            Slice { start: 0, length: 0 },
+                            Slice { start: 1, length: 0 },
                         ],
                         spaces: [
                             Newline,
@@ -63,7 +63,7 @@ Defs {
                             Stmt(
                                 @97-111 Apply(
                                     @97-108 TrySuffix {
-                                        target: Task,
+                                        target: Result,
                                         expr: Var {
                                             module_name: "Stdout",
                                             ident: "line",
@@ -82,7 +82,7 @@ Defs {
                     },
                     @141-150 SpaceBefore(
                         TrySuffix {
-                            target: Task,
+                            target: Result,
                             expr: Var {
                                 module_name: "",
                                 ident: "printBar",
@@ -107,16 +107,16 @@ Defs {
                 Defs(
                     Defs {
                         tags: [
-                            Index(2147483648),
+                            EitherIndex(2147483648),
                         ],
                         regions: [
                             @215-224,
                         ],
                         space_before: [
-                            Slice(start = 0, length = 0),
+                            Slice { start: 0, length: 0 },
                         ],
                         space_after: [
-                            Slice(start = 0, length = 0),
+                            Slice { start: 0, length: 0 },
                         ],
                         spaces: [],
                         type_defs: [],

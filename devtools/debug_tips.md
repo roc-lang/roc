@@ -64,7 +64,39 @@ $ cargo build --bin roc
 $ ./target/debug/roc build ./examples/platform-switching/rocLovesRust.roc
 # To view in editor
 $ cargo llvm-cov report --lcov  --output-path lcov.info
-# To view in browser
+# To view in browser. This html report also allows you to see how many times each line of code was run. 
 $ cargo llvm-cov report --html
 ```
 Viewing lcov.info will depend on your editor. For vscode, you can use the [coverage gutters](https://marketplace.visualstudio.com/items?itemName=ryanluker.vscode-coverage-gutters) extension. After installing, click `Watch` in the bottom bar and go to a file for which you want to see the coverage, for example `crates/compiler/build/src/link.rs`. `Watch` in the bottom bar will now be replaced with `x% Coverage`.
+
+## Trace all Function Calls
+
+[uftrace](https://github.com/namhyung/uftrace) allows you to trace all functions that were called in the compiler in order. For example, you can use it with `./target/debug/roc build examples/platform-switching/rocLovesRust.roc`. The output looks like this:
+```
+roc::main() {
+  roc_tracing::setup_tracing();
+  roc_cli::build_app();
+  roc_packaging::cache::roc_cache_dir();
+  roc_cli::build() {
+    roc_cli::opt_level_from_flags();
+    roc_linker::supported();
+    roc_target::Target::architecture();
+    roc_build::program::standard_load_config() {
+...
+```
+It can be valuable if you want to compare two compiler versions/commits and see how their function calls differ. It also gives you a nice overview compared to stepping with the debugger.
+
+### Getting started with uftrace
+
+1. [Install uftrace](https://github.com/namhyung/uftrace?tab=readme-ov-file#how-to-build-and-install-uftrace)
+2. In the roc repo in rust-toolchain.toml, switch to the commented out nightly channel
+3. `export RUSTFLAGS="-Awarnings -Z instrument-mcount -C passes=ee-instrument<post-inline>"`
+4. `cargo build --bin roc`
+5. Example usage: `uftrace record --filter 'roc_*' ./target/debug/roc build examples/platform-switching/rocLovesRust.roc`
+6. Show the trace and drop all functions that do not start with `roc`: `uftrace replay -f none --notrace '^[^r]|^r[^o]|^ro[^c]' -D 5`. `-D 5` sets the function call depth, feel free to modify it to best suit your purpose.
+
+Depending on which functions you are interested in, you may also want to set `let threads = Threads::Single;` in the function `load` in `crates/compiler/load_internal/src/file.rs`. That avoids function calls from being obscured between multiple threads.
+
+If you want to compare the outputs of `uftrace replay -f none ...` between two versions/commits of the compiler, you can do so easily with smart_diff_utrace.html in this devtools folder. This tool ignores differences in `{`,`}` and `;`.
+
+uftrace also allows you to log function arguments but I have not played with that yet. Our arguments can contain a lot of data, so that may not be so practical.

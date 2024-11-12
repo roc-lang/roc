@@ -1,8 +1,8 @@
 Defs {
     tags: [
-        Index(2147483648),
-        Index(2147483649),
-        Index(2147483650),
+        EitherIndex(2147483648),
+        EitherIndex(2147483649),
+        EitherIndex(2147483650),
     ],
     regions: [
         @12-19,
@@ -10,14 +10,14 @@ Defs {
         @44-57,
     ],
     space_before: [
-        Slice(start = 0, length = 1),
-        Slice(start = 1, length = 3),
-        Slice(start = 4, length = 1),
+        Slice { start: 0, length: 1 },
+        Slice { start: 1, length: 3 },
+        Slice { start: 4, length: 1 },
     ],
     space_after: [
-        Slice(start = 1, length = 0),
-        Slice(start = 4, length = 0),
-        Slice(start = 5, length = 2),
+        Slice { start: 1, length: 0 },
+        Slice { start: 4, length: 0 },
+        Slice { start: 5, length: 2 },
     ],
     spaces: [
         LineComment(

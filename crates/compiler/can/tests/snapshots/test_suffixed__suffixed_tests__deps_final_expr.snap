@@ -4,16 +4,16 @@ expression: snapshot
 ---
 Defs {
     tags: [
-        Index(2147483648),
+        EitherIndex(2147483648),
     ],
     regions: [
         @0-158,
     ],
     space_before: [
-        Slice(start = 0, length = 0),
+        Slice { start: 0, length: 0 },
     ],
     space_after: [
-        Slice(start = 0, length = 1),
+        Slice { start: 0, length: 1 },
     ],
     spaces: [
         Newline,
@@ -39,16 +39,16 @@ Defs {
                         value: @46-130 Defs(
                             Defs {
                                 tags: [
-                                    Index(2147483648),
+                                    EitherIndex(2147483648),
                                 ],
                                 regions: [
                                     @50-52,
                                 ],
                                 space_before: [
-                                    Slice(start = 0, length = 0),
+                                    Slice { start: 0, length: 0 },
                                 ],
                                 space_after: [
-                                    Slice(start = 0, length = 0),
+                                    Slice { start: 0, length: 0 },
                                 ],
                                 spaces: [],
                                 type_defs: [],
@@ -70,13 +70,13 @@ Defs {
                                             module_name: "",
                                             ident: "a",
                                         },
-                                        @92-94 Var {
+                                        @92-93 Var {
                                             module_name: "",
                                             ident: "b",
                                         },
                                     ),
                                 ],
-                                final_else: @128-130 Var {
+                                final_else: @128-129 Var {
                                     module_name: "",
                                     ident: "c",
                                 },
@@ -91,7 +91,7 @@ Defs {
                                 "B",
                             ),
                         ],
-                        value: @156-158 Var {
+                        value: @156-157 Var {
                             module_name: "",
                             ident: "d",
                         },

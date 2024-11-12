@@ -22,9 +22,9 @@ use crate::{
     parser::{
         EAbility, EClosure, EExpect, EExposes, EExpr, EHeader, EIf, EImport, EImportParams,
         EImports, EInParens, EList, EPackageEntry, EPackageName, EPackages, EParams, EPattern,
-        EProvides, ERecord, ERequires, EString, EType, ETypeAbilityImpl, ETypeApply, ETypeInParens,
-        ETypeInlineAlias, ETypeRecord, ETypeTagUnion, ETypedIdent, EWhen, PInParens, PList,
-        PRecord, SyntaxError,
+        EProvides, ERecord, ERequires, EReturn, EString, EType, ETypeAbilityImpl, ETypeApply,
+        ETypeInParens, ETypeInlineAlias, ETypeRecord, ETypeTagUnion, ETypedIdent, EWhen, PInParens,
+        PList, PRecord, SyntaxError,
     },
 };
 
@@ -254,7 +254,7 @@ impl<'a> Normalize<'a> for PlatformRequires<'a> {
     fn normalize(&self, arena: &'a Bump) -> Self {
         PlatformRequires {
             rigids: self.rigids.normalize(arena),
-            signature: self.signature.normalize(arena),
+            signatures: self.signatures.map_items(arena, |x| x.normalize(arena)),
         }
     }
 }
@@ -439,6 +439,7 @@ impl<'a> Normalize<'a> for ValueDef<'a> {
                 IngestedFileImport(ingested_file_import.normalize(arena))
             }
             Stmt(loc_expr) => Stmt(arena.alloc(loc_expr.normalize(arena))),
+            StmtAfterExpr => StmtAfterExpr,
         }
     }
 }
@@ -649,13 +650,6 @@ fn normalize_str_segments<'a>(
                 }
                 new_segments.push(StrSegment::Interpolated(e.normalize(arena)));
             }
-            StrSegment::DeprecatedInterpolated(e) => {
-                if !last_text.is_empty() {
-                    let text = std::mem::replace(last_text, String::new_in(arena));
-                    new_segments.push(StrSegment::Plaintext(text.into_bump_str()));
-                }
-                new_segments.push(StrSegment::Interpolated(e.normalize(arena)));
-            }
         }
     }
 }
@@ -680,7 +674,6 @@ impl<'a> Normalize<'a> for StrSegment<'a> {
             StrSegment::Unicode(t) => StrSegment::Unicode(t.normalize(arena)),
             StrSegment::EscapedChar(c) => StrSegment::EscapedChar(c),
             StrSegment::Interpolated(t) => StrSegment::Interpolated(t.normalize(arena)),
-            StrSegment::DeprecatedInterpolated(t) => StrSegment::Interpolated(t.normalize(arena)),
         }
     }
 }
@@ -763,6 +756,11 @@ impl<'a> Normalize<'a> for Expr<'a> {
                 x,
                 arena.alloc(a.normalize(arena)),
                 arena.alloc(b.normalize(arena)),
+            ),
+            Expr::Try => Expr::Try,
+            Expr::Return(a, b) => Expr::Return(
+                arena.alloc(a.normalize(arena)),
+                b.map(|loc_b| &*arena.alloc(loc_b.normalize(arena))),
             ),
             Expr::Apply(a, b, c) => {
                 Expr::Apply(arena.alloc(a.normalize(arena)), b.normalize(arena), c)
@@ -884,8 +882,9 @@ impl<'a> Normalize<'a> for Pattern<'a> {
 impl<'a> Normalize<'a> for TypeAnnotation<'a> {
     fn normalize(&self, arena: &'a Bump) -> Self {
         match *self {
-            TypeAnnotation::Function(a, b) => TypeAnnotation::Function(
+            TypeAnnotation::Function(a, arrow, b) => TypeAnnotation::Function(
                 arena.alloc(a.normalize(arena)),
+                arrow,
                 arena.alloc(b.normalize(arena)),
             ),
             TypeAnnotation::Apply(a, b, c) => TypeAnnotation::Apply(a, b, c.normalize(arena)),
@@ -1046,6 +1045,9 @@ impl<'a> Normalize<'a> for EExpr<'a> {
             EExpr::Expect(inner_err, _pos) => {
                 EExpr::Expect(inner_err.normalize(arena), Position::zero())
             }
+            EExpr::Return(inner_err, _pos) => {
+                EExpr::Return(inner_err.normalize(arena), Position::zero())
+            }
             EExpr::Dbg(inner_err, _pos) => EExpr::Dbg(inner_err.normalize(arena), Position::zero()),
             EExpr::Import(inner_err, _pos) => {
                 EExpr::Import(inner_err.normalize(arena), Position::zero())
@@ -1055,6 +1057,7 @@ impl<'a> Normalize<'a> for EExpr<'a> {
             }
             EExpr::Underscore(_pos) => EExpr::Underscore(Position::zero()),
             EExpr::Crash(_pos) => EExpr::Crash(Position::zero()),
+            EExpr::Try(_pos) => EExpr::Try(Position::zero()),
             EExpr::InParens(inner_err, _pos) => {
                 EExpr::InParens(inner_err.normalize(arena), Position::zero())
             }
@@ -1070,7 +1073,6 @@ impl<'a> Normalize<'a> for EExpr<'a> {
             EExpr::IndentEnd(_pos) => EExpr::IndentEnd(Position::zero()),
             EExpr::UnexpectedComma(_pos) => EExpr::UnexpectedComma(Position::zero()),
             EExpr::UnexpectedTopLevelExpr(_pos) => EExpr::UnexpectedTopLevelExpr(Position::zero()),
-            EExpr::StmtAfterExpr(_pos) => EExpr::StmtAfterExpr(Position::zero()),
             EExpr::RecordUpdateOldBuilderField(_pos) => {
                 EExpr::RecordUpdateOldBuilderField(Region::zero())
             }
@@ -1480,6 +1482,20 @@ impl<'a> Normalize<'a> for EExpect<'a> {
         }
     }
 }
+
+impl<'a> Normalize<'a> for EReturn<'a> {
+    fn normalize(&self, arena: &'a Bump) -> Self {
+        match self {
+            EReturn::Space(inner_err, _) => EReturn::Space(*inner_err, Position::zero()),
+            EReturn::Return(_) => EReturn::Return(Position::zero()),
+            EReturn::ReturnValue(inner_err, _) => {
+                EReturn::ReturnValue(arena.alloc(inner_err.normalize(arena)), Position::zero())
+            }
+            EReturn::IndentReturnValue(_) => EReturn::IndentReturnValue(Position::zero()),
+        }
+    }
+}
+
 impl<'a> Normalize<'a> for EIf<'a> {
     fn normalize(&self, arena: &'a Bump) -> Self {
         match self {

@@ -2,11 +2,11 @@ SpaceAfter(
     Defs(
         Defs {
             tags: [
-                Index(2147483648),
-                Index(2147483649),
-                Index(2147483650),
-                Index(2147483651),
-                Index(2147483652),
+                EitherIndex(2147483648),
+                EitherIndex(2147483649),
+                EitherIndex(2147483650),
+                EitherIndex(2147483651),
+                EitherIndex(2147483652),
             ],
             regions: [
                 @0-12,
@@ -16,18 +16,18 @@ SpaceAfter(
                 @75-101,
             ],
             space_before: [
-                Slice(start = 0, length = 0),
-                Slice(start = 0, length = 1),
-                Slice(start = 1, length = 1),
-                Slice(start = 2, length = 1),
-                Slice(start = 3, length = 1),
+                Slice { start: 0, length: 0 },
+                Slice { start: 0, length: 1 },
+                Slice { start: 1, length: 1 },
+                Slice { start: 2, length: 1 },
+                Slice { start: 3, length: 1 },
             ],
             space_after: [
-                Slice(start = 0, length = 0),
-                Slice(start = 1, length = 0),
-                Slice(start = 2, length = 0),
-                Slice(start = 3, length = 0),
-                Slice(start = 4, length = 0),
+                Slice { start: 0, length: 0 },
+                Slice { start: 1, length: 0 },
+                Slice { start: 2, length: 0 },
+                Slice { start: 3, length: 0 },
+                Slice { start: 4, length: 0 },
             ],
             spaces: [
                 Newline,
@@ -96,10 +96,7 @@ SpaceAfter(
                         "",
                     ),
                     @50-74 Apply(
-                        @50-53 Var {
-                            module_name: "",
-                            ident: "try",
-                        },
+                        @50-53 Try,
                         [
                             @54-57 Var {
                                 module_name: "",
@@ -137,16 +134,16 @@ SpaceAfter(
                         Defs(
                             Defs {
                                 tags: [
-                                    Index(2147483648),
+                                    EitherIndex(2147483648),
                                 ],
                                 regions: [
                                     @81-93,
                                 ],
                                 space_before: [
-                                    Slice(start = 0, length = 0),
+                                    Slice { start: 0, length: 0 },
                                 ],
                                 space_after: [
-                                    Slice(start = 0, length = 0),
+                                    Slice { start: 0, length: 0 },
                                 ],
                                 spaces: [],
                                 type_defs: [],

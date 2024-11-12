@@ -469,21 +469,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd7cc57abe963c6d3b9d8be5b06ba7c8957a930305ca90304f24ef040aa6f961"
 
 [[package]]
-name = "cli_utils"
+name = "cli_test_utils"
 version = "0.0.1"
 dependencies = [
  "bumpalo",
  "copy_zig_glue",
+ "const_format",
  "criterion",
+ "lazy_static",
  "regex",
  "rlimit",
+ "roc_cli",
  "roc_collections",
  "roc_command_utils",
  "roc_load",
  "roc_module",
  "roc_reporting",
  "serde",
- "serde-xml-rs",
  "tempfile",
 ]
 
@@ -2371,6 +2373,7 @@ dependencies = [
  "roc_region",
  "roc_serialize",
  "roc_types",
+ "soa",
  "static_assertions",
  "ven_pretty",
 ]
@@ -2403,13 +2406,14 @@ dependencies = [
  "bumpalo",
  "chrono",
  "clap 4.4.6",
- "cli_utils",
+ "cli_test_utils",
  "const_format",
  "criterion",
  "distance",
  "errno",
  "indoc",
  "inkwell",
+ "insta",
  "libc",
  "libloading",
  "mimalloc",
@@ -2438,10 +2442,8 @@ dependencies = [
  "roc_repl_expect",
  "roc_reporting",
  "roc_target",
- "roc_test_utils",
  "roc_tracing",
  "roc_wasm_interp",
- "serial_test",
  "signal-hook",
  "strum",
  "target-lexicon",
@@ -2460,6 +2462,7 @@ dependencies = [
  "im",
  "im-rc",
  "smallvec",
+ "soa",
  "wyhash",
 ]
 
@@ -2480,6 +2483,7 @@ dependencies = [
  "roc_problem",
  "roc_region",
  "roc_types",
+ "soa",
 ]
 
 [[package]]
@@ -2644,7 +2648,7 @@ name = "roc_glue"
 version = "0.0.1"
 dependencies = [
  "bumpalo",
- "cli_utils",
+ "cli_test_utils",
  "dircpy",
  "fnv",
  "indexmap",
@@ -2920,6 +2924,7 @@ dependencies = [
  "roc_error_macros",
  "roc_module",
  "roc_region",
+ "soa",
  "tempfile",
 ]
 
@@ -3132,6 +3137,7 @@ dependencies = [
  "roc_target",
  "roc_types",
  "roc_unify",
+ "soa",
  "tempfile",
  "test_solve_helpers",
 ]
@@ -3223,6 +3229,7 @@ dependencies = [
  "roc_parse",
  "roc_region",
  "roc_serialize",
+ "soa",
  "static_assertions",
  "ven_pretty",
 ]
@@ -3461,18 +3468,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde-xml-rs"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb3aa78ecda1ebc9ec9847d5d3aba7d618823446a049ba2491940506da6e2782"
-dependencies = [
- "log",
- "serde",
- "thiserror",
- "xml-rs",
-]
-
-[[package]]
 name = "serde_cbor"
 version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3627,6 +3622,10 @@ name = "smallvec"
 version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "942b4a808e05215192e39f4ab80813e599068285906cc91aa64f923db842bd5a"
+
+[[package]]
+name = "soa"
+version = "0.0.1"
 
 [[package]]
 name = "socket2"
@@ -4373,7 +4372,7 @@ name = "valgrind"
 version = "0.0.1"
 dependencies = [
  "bumpalo",
- "cli_utils",
+ "cli_test_utils",
  "indoc",
  "roc_build",
  "roc_command_utils",
@@ -4838,12 +4837,6 @@ checksum = "f4686009f71ff3e5c4dbcf1a282d0a44db3f021ba69350cd42086b3e5f1c6985"
 dependencies = [
  "libc",
 ]
-
-[[package]]
-name = "xml-rs"
-version = "0.8.19"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fcb9cbac069e033553e8bb871be2fbdffcab578eb25bd0f7c508cedc6dcd75a"
 
 [[package]]
 name = "yaml-rust"

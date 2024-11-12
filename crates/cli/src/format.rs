@@ -263,7 +263,7 @@ mod tests {
     use std::io::Write;
     use tempfile::{tempdir, TempDir};
 
-    const FORMATTED_ROC: &str = r#"app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.15.0/SlwdbJ-3GR7uBWQo6zlmYWNYOxnvo8r6YABXD-45UOw.tar.br" }
+    const FORMATTED_ROC: &str = r#"app [main] { pf: platform "platform/main.roc" }
 
 import pf.Stdout
 import pf.Stdin
@@ -273,11 +273,7 @@ main =
     name = Stdin.line!
     Stdout.line! "Hi $(name)!""#;
 
-    const UNFORMATTED_ROC: &str = r#"app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.15.0/SlwdbJ-3GR7uBWQo6zlmYWNYOxnvo8r6YABXD-45UOw.tar.br" }
-
-
-import pf.Stdout
-import pf.Stdin
+    const UNFORMATTED_ROC: &str = r#"app [main] { pf: platform "platform/main.roc" }
 
 main =
         Stdout.line! "What's your name?"

@@ -4,16 +4,16 @@ expression: snapshot
 ---
 Defs {
     tags: [
-        Index(2147483648),
+        EitherIndex(2147483648),
     ],
     regions: [
         @0-24,
     ],
     space_before: [
-        Slice(start = 0, length = 0),
+        Slice { start: 0, length: 0 },
     ],
     space_after: [
-        Slice(start = 0, length = 1),
+        Slice { start: 0, length: 1 },
     ],
     spaces: [
         Newline,
@@ -30,28 +30,28 @@ Defs {
                     ident: "await",
                 },
                 [
-                    @15-17 Var {
+                    @15-16 Var {
                         module_name: "",
                         ident: "a",
                     },
                     @11-17 Closure(
                         [
-                            @15-17 Identifier {
+                            @15-16 Identifier {
                                 ident: "#!0_arg",
                             },
                         ],
                         @11-17 LowLevelDbg(
                             (
                                 "test.roc:2",
-                                "in",
+                                "i",
                             ),
-                            @15-17 Apply(
-                                @15-17 Var {
+                            @15-16 Apply(
+                                @15-16 Var {
                                     module_name: "Inspect",
                                     ident: "toStr",
                                 },
                                 [
-                                    @15-17 Var {
+                                    @15-16 Var {
                                         module_name: "",
                                         ident: "#!0_arg",
                                     },

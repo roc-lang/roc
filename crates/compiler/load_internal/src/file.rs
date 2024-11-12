@@ -15,11 +15,13 @@ use parking_lot::Mutex;
 use roc_builtins::roc::module_source;
 use roc_can::abilities::{AbilitiesStore, PendingAbilitiesStore, ResolvedImpl};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints, TypeOrVar};
+use roc_can::env::FxMode;
 use roc_can::expr::{DbgLookup, Declarations, ExpectLookup, PendingDerives};
 use roc_can::module::{
     canonicalize_module_defs, ExposedByModule, ExposedForModule, ExposedModuleTypes, Module,
     ModuleParams, ResolvedImplementations, TypeState,
 };
+use roc_collections::soa::slice_extend_new;
 use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecMap, VecSet};
 use roc_constrain::module::constrain_module;
 use roc_debug_flags::dbg_do;
@@ -32,7 +34,7 @@ use roc_debug_flags::{
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
 use roc_late_solve::{AbilitiesView, WorldAbilities};
-use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
+use roc_module::ident::{Ident, IdentSuffix, ModuleName, QualifiedModuleName};
 use roc_module::symbol::{
     IdentIds, IdentIdsByModule, Interns, ModuleId, ModuleIds, PQModuleName, PackageModuleIds,
     PackageQualified, Symbol,
@@ -51,7 +53,7 @@ use roc_parse::ast::{self, CommentOrNewline, ExtractSpaces, Spaced, ValueDef};
 use roc_parse::header::parse_module_defs;
 use roc_parse::header::{
     self, AppHeader, ExposedName, HeaderType, ImportsKeywordItem, PackageEntry, PackageHeader,
-    PlatformHeader, To, TypedIdent,
+    PlatformHeader, To,
 };
 use roc_parse::parser::{FileError, SourceError, SyntaxError};
 use roc_problem::Severity;
@@ -317,6 +319,7 @@ fn start_phase<'a>(
                     exposed_module_ids: state.exposed_modules,
                     exec_mode: state.exec_mode,
                     imported_module_params,
+                    fx_mode: state.fx_mode,
                 }
             }
 
@@ -667,7 +670,7 @@ enum PlatformPath<'a> {
 #[derive(Debug)]
 struct PlatformData<'a> {
     module_id: ModuleId,
-    provides: &'a [(Loc<ExposedName<'a>>, Loc<TypedIdent<'a>>)],
+    provides: &'a [Loc<ExposedName<'a>>],
     is_prebuilt: bool,
 }
 
@@ -709,6 +712,7 @@ struct State<'a> {
     pub platform_path: PlatformPath<'a>,
     pub target: Target,
     pub(self) function_kind: FunctionKind,
+    pub fx_mode: FxMode,
 
     /// Note: only packages and platforms actually expose any modules;
     /// for all others, this will be empty.
@@ -796,6 +800,7 @@ impl<'a> State<'a> {
             cache_dir,
             target,
             function_kind,
+            fx_mode: FxMode::Task,
             platform_data: None,
             platform_path: PlatformPath::NotSpecified,
             module_cache: ModuleCache::default(),
@@ -899,6 +904,7 @@ enum BuildTask<'a> {
         skip_constraint_gen: bool,
         exec_mode: ExecutionMode,
         imported_module_params: VecMap<ModuleId, ModuleParams>,
+        fx_mode: FxMode,
     },
     Solve {
         module: Module,
@@ -1456,6 +1462,8 @@ pub fn load<'a>(
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     enum Threads {
         Single,
+
+        #[allow(dead_code)]
         Many(usize),
     }
 
@@ -2229,6 +2237,7 @@ fn update<'a>(
                     config_shorthand,
                     provides,
                     exposes_ids,
+                    requires,
                     ..
                 } => {
                     work.extend(state.dependencies.notify_package(config_shorthand));
@@ -2263,6 +2272,12 @@ fn update<'a>(
                     if header.is_root_module {
                         state.exposed_modules = exposes_ids;
                     }
+
+                    if requires.iter().any(|requires| {
+                        IdentSuffix::from_name(requires.value.ident.value).is_bang()
+                    }) {
+                        state.fx_mode = FxMode::PurityInference;
+                    }
                 }
                 Builtin { .. } | Module { .. } => {
                     if header.is_root_module {
@@ -2270,10 +2285,17 @@ fn update<'a>(
                         state.platform_path = PlatformPath::RootIsModule;
                     }
                 }
-                Hosted { .. } => {
+                Hosted { exposes, .. } => {
                     if header.is_root_module {
                         debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
                         state.platform_path = PlatformPath::RootIsHosted;
+                    }
+
+                    if exposes
+                        .iter()
+                        .any(|exposed| exposed.value.is_effectful_fn())
+                    {
+                        state.fx_mode = FxMode::PurityInference;
                     }
                 }
             }
@@ -3171,7 +3193,7 @@ fn finish_specialization<'a>(
                             let proc_layout =
                                 proc_layout_for(state.procedures.keys().copied(), symbol);
 
-                            buf.push((symbol, proc_layout));
+                            buf.push(("", symbol, proc_layout));
                         }
 
                         buf.into_bump_slice()
@@ -3185,13 +3207,14 @@ fn finish_specialization<'a>(
                         let mut buf =
                             bumpalo::collections::Vec::with_capacity_in(provides.len(), arena);
 
-                        for (loc_name, _loc_typed_ident) in provides {
-                            let ident_id = ident_ids.get_or_insert(loc_name.value.as_str());
+                        for loc_name in provides {
+                            let fn_name = loc_name.value.as_str();
+                            let ident_id = ident_ids.get_or_insert(fn_name);
                             let symbol = Symbol::new(module_id, ident_id);
                             let proc_layout =
                                 proc_layout_for(state.procedures.keys().copied(), symbol);
 
-                            buf.push((symbol, proc_layout));
+                            buf.push((fn_name, symbol, proc_layout));
                         }
 
                         buf.into_bump_slice()
@@ -3229,7 +3252,7 @@ fn finish_specialization<'a>(
         .collect();
 
     let module_id = state.root_id;
-    let uses_prebuilt_platform = match platform_data {
+    let needs_prebuilt_host = match platform_data {
         Some(data) => data.is_prebuilt,
         // If there's no platform data (e.g. because we're building a module)
         // then there's no prebuilt platform either!
@@ -3252,7 +3275,7 @@ fn finish_specialization<'a>(
         timings: state.timings,
         toplevel_expects,
         glue_layouts: GlueLayouts { getters: vec![] },
-        uses_prebuilt_platform,
+        needs_prebuilt_host,
     })
 }
 
@@ -4368,7 +4391,7 @@ fn synth_list_len_type(subs: &mut Subs) -> Variable {
 
     // List.len : List a -> U64
     let a = synth_import(subs, Content::FlexVar(None));
-    let a_slice = SubsSlice::extend_new(&mut subs.variables, [a]);
+    let a_slice = slice_extend_new(&mut subs.variables, [a]);
     let list_a = synth_import(
         subs,
         Content::Structure(FlatType::Apply(Symbol::LIST_LIST, a_slice)),
@@ -4384,10 +4407,15 @@ fn synth_list_len_type(subs: &mut Subs) -> Variable {
             ambient_function: fn_var,
         }),
     );
-    let fn_args_slice = SubsSlice::extend_new(&mut subs.variables, [list_a]);
+    let fn_args_slice = slice_extend_new(&mut subs.variables, [list_a]);
     subs.set_content(
         fn_var,
-        Content::Structure(FlatType::Func(fn_args_slice, clos_list_len, Variable::U64)),
+        Content::Structure(FlatType::Func(
+            fn_args_slice,
+            clos_list_len,
+            Variable::U64,
+            Variable::PURE,
+        )),
     );
     fn_var
 }
@@ -4987,15 +5015,16 @@ fn build_platform_header<'a>(
     comments: &'a [CommentOrNewline<'a>],
     module_timing: ModuleTiming,
 ) -> Result<(ModuleId, PQModuleName<'a>, ModuleHeader<'a>), LoadingProblem<'a>> {
-    let requires = arena.alloc([Loc::at(
-        header.requires.item.signature.region,
-        header.requires.item.signature.extract_spaces().item,
-    )]);
+    let requires = header
+        .requires
+        .item
+        .signatures
+        .map_items(arena, |item| {
+            Loc::at(item.region, item.extract_spaces().item)
+        })
+        .items;
     let provides = bumpalo::collections::Vec::from_iter_in(
-        unspace(arena, header.provides.item.items)
-            .iter()
-            .copied()
-            .zip(requires.iter().copied()),
+        unspace(arena, header.provides.item.items).iter().copied(),
         arena,
     );
     let packages = unspace(arena, header.packages.item.items);
@@ -5042,6 +5071,7 @@ fn canonicalize_and_constrain<'a>(
     exposed_module_ids: &[ModuleId],
     exec_mode: ExecutionMode,
     imported_module_params: VecMap<ModuleId, ModuleParams>,
+    fx_mode: FxMode,
 ) -> CanAndCon {
     let canonicalize_start = Instant::now();
 
@@ -5085,6 +5115,7 @@ fn canonicalize_and_constrain<'a>(
         &symbols_from_requires,
         &mut var_store,
         opt_shorthand,
+        fx_mode,
     );
 
     let mut types = Types::new();
@@ -5447,7 +5478,7 @@ fn parse<'a>(
         if let HeaderType::Platform { provides, .. } = header.header_type {
             exposed.reserve(provides.len());
 
-            for (loc_name, _loc_typed_ident) in provides.iter() {
+            for loc_name in provides.iter() {
                 // Use get_or_insert here because the ident_ids may already
                 // created an IdentId for this, when it was imported exposed
                 // in a dependent module.
@@ -6268,6 +6299,7 @@ fn run_task<'a>(
             exposed_module_ids,
             exec_mode,
             imported_module_params,
+            fx_mode,
         } => {
             let can_and_con = canonicalize_and_constrain(
                 arena,
@@ -6281,6 +6313,7 @@ fn run_task<'a>(
                 exposed_module_ids,
                 exec_mode,
                 imported_module_params,
+                fx_mode,
             );
 
             Ok(Msg::CanonicalizedAndConstrained(can_and_con))

@@ -1606,19 +1606,20 @@ fn tail_call_elimination() {
 }
 
 #[test]
-#[cfg(feature = "gen-dev")]
-fn int_negate_dev() {
-    // TODO
-    // dev backend yet to have `Num.maxI64` or `Num.minI64`.
-    // add the "gen-dev" feature to the test below after implementing them both.
-    assert_evals_to!("Num.neg 123", -123, i64);
-    assert_evals_to!("Num.neg -123", 123, i64);
-    assert_evals_to!("Num.neg 0", 0, i64);
-}
-
-#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn int_negate() {
+    assert_evals_to!("Num.neg 123i8", -123, i8);
+    assert_evals_to!("Num.neg Num.maxI8", -i8::MAX, i8);
+    assert_evals_to!("Num.neg (Num.minI8 + 1)", i8::MAX, i8);
+
+    assert_evals_to!("Num.neg 123i16", -123, i16);
+    assert_evals_to!("Num.neg Num.maxI16", -i16::MAX, i16);
+    assert_evals_to!("Num.neg (Num.minI16 + 1)", i16::MAX, i16);
+
+    assert_evals_to!("Num.neg 123i32", -123, i32);
+    assert_evals_to!("Num.neg Num.maxI32", -i32::MAX, i32);
+    assert_evals_to!("Num.neg (Num.minI32 + 1)", i32::MAX, i32);
+
     assert_evals_to!("Num.neg 123", -123, i64);
     assert_evals_to!("Num.neg Num.maxI64", -i64::MAX, i64);
     assert_evals_to!("Num.neg (Num.minI64 + 1)", i64::MAX, i64);

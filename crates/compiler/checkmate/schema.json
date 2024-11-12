@@ -315,6 +315,7 @@
           "type": "object",
           "required": [
             "arguments",
+            "fx",
             "lambda_type",
             "ret",
             "type"
@@ -325,6 +326,9 @@
               "items": {
                 "$ref": "#/definitions/Variable"
               }
+            },
+            "fx": {
+              "$ref": "#/definitions/Variable"
             },
             "lambda_type": {
               "$ref": "#/definitions/Variable"
@@ -505,7 +509,7 @@
             "type": {
               "type": "string",
               "enum": [
-                "EmptyTuple"
+                "EmptyTagUnion"
               ]
             }
           }
@@ -519,7 +523,7 @@
             "type": {
               "type": "string",
               "enum": [
-                "EmptyTagUnion"
+                "EffectfulFunc"
               ]
             }
           }
@@ -538,6 +542,34 @@
               "type": "string",
               "enum": [
                 "RangedNumber"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "Pure"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "Effectful"
               ]
             }
           }
