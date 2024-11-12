@@ -473,8 +473,8 @@ name = "cli_test_utils"
 version = "0.0.1"
 dependencies = [
  "bumpalo",
- "copy_zig_glue",
  "const_format",
+ "copy_zig_glue",
  "criterion",
  "lazy_static",
  "regex",
@@ -2408,6 +2408,7 @@ dependencies = [
  "clap 4.4.6",
  "cli_test_utils",
  "const_format",
+ "copy_zig_glue",
  "criterion",
  "distance",
  "errno",
@@ -4373,6 +4374,7 @@ version = "0.0.1"
 dependencies = [
  "bumpalo",
  "cli_test_utils",
+ "copy_zig_glue",
  "indoc",
  "roc_build",
  "roc_command_utils",

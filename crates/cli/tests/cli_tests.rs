@@ -184,6 +184,8 @@ mod cli_tests {
     #[cfg_attr(windows, ignore)]
     // tea = The Elm Architecture
     fn terminal_ui_tea() {
+        copy_zig_glue::initialize_zig_test_platforms();
+
         let cli_build = ExecCli::new(
             CMD_BUILD,
             file_from_root("crates/cli/tests/test-projects/tui", "main.roc"),
@@ -266,6 +268,8 @@ mod cli_tests {
     #[test]
     #[cfg_attr(windows, ignore)]
     fn multiple_exposed() {
+        copy_zig_glue::initialize_zig_test_platforms();
+
         let cli_build = ExecCli::new(
             CMD_BUILD,
             file_from_root(
@@ -461,6 +465,8 @@ mod cli_tests {
         /// Build the platform host once for all tests in this module
         fn build_platform_host() {
             BUILD_PLATFORM_HOST.call_once(|| {
+                copy_zig_glue::initialize_zig_test_platforms();
+
                 let cli_build = ExecCli::new(
                     CMD_BUILD,
                     file_from_root(
@@ -800,6 +806,8 @@ mod cli_tests {
         /// Build the platform host once for all tests in this module
         fn build_platform_host() {
             BUILD_PLATFORM_HOST.call_once(|| {
+                copy_zig_glue::initialize_zig_test_platforms();
+
                 let cli_build = ExecCli::new(
                     CMD_BUILD,
                     file_from_root(

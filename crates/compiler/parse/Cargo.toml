@@ -15,8 +15,7 @@ roc_collections = { path = "../collections" }
 roc_module = { path = "../module" }
 roc_region = { path = "../region" }
 roc_error_macros = { path = "../../error_macros" }
-
-soa.workspace = true
+soa = { path = "../../soa" }
 
 bumpalo.workspace = true
 encode_unicode.workspace = true

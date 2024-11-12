@@ -61,6 +61,8 @@ fn build_host() {
 }
 
 fn valgrind_test(source: &str) {
+    copy_zig_glue::initialize_zig_test_platforms();
+
     #[cfg(target_os = "linux")]
     {
         valgrind_test_linux(source)

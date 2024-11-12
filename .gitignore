@@ -126,3 +126,5 @@ crates/glue/tests/fixtures/*/test_glue/
 
 # ignore the zig glue files copied into test platforms
 **/*platform/glue/*
+crates/cli/tests/test-projects/test-platform-effects-zig/glue
+crates/cli/tests/test-projects/test-platform-simple-zig/glue
