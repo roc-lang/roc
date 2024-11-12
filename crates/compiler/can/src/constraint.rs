@@ -618,15 +618,10 @@ impl Constraints {
         Constraint::FxSuffix(constraint_index)
     }
 
-    pub fn fx_record_field_suffix(
-        &mut self,
-        suffix: IdentSuffix,
-        variable: Variable,
-        region: Region,
-    ) -> Constraint {
+    pub fn fx_record_field_unsuffixed(&mut self, variable: Variable, region: Region) -> Constraint {
         let type_index = Self::push_type_variable(variable);
         let constraint = FxSuffixConstraint {
-            kind: FxSuffixKind::RecordField(suffix),
+            kind: FxSuffixKind::UnsuffixedRecordField,
             type_index,
             region,
         };
@@ -952,14 +947,14 @@ pub struct FxSuffixConstraint {
 pub enum FxSuffixKind {
     Let(Symbol),
     Pattern(Symbol),
-    RecordField(IdentSuffix),
+    UnsuffixedRecordField,
 }
 
 impl FxSuffixKind {
     pub fn suffix(&self) -> IdentSuffix {
         match self {
             Self::Let(symbol) | Self::Pattern(symbol) => symbol.suffix(),
-            Self::RecordField(suffix) => *suffix,
+            Self::UnsuffixedRecordField => IdentSuffix::None,
         }
     }
 }

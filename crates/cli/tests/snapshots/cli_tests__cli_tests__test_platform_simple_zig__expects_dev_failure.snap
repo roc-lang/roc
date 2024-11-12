@@ -1,0 +1,24 @@
+---
+source: crates/cli/tests/cli_tests.rs
+expression: cli_dev_out.normalize_stdout_and_stderr()
+---
+── EXPECT FAILED in tests/test-projects/expects/expects.roc ────────────────────
+
+This expectation failed:
+
+25│      expect words == []
+                ^^^^^^^^^^^
+
+When it failed, these variables had these values:
+
+words : List Str
+words = ["this", "will", "for", "sure", "be", "a", "large", "string", "so", "when", "we", "split", "it", "it", "will", "use", "seamless", "slices", "which", "affect", "printing"]
+
+Program finished!
+
+[<ignored for tests>:28] x = 42
+[<ignored for tests>:30] "Fjoer en ferdjer frieten oan dyn geve lea" = "Fjoer en ferdjer frieten oan dyn geve lea"
+[<ignored for tests>:32] "this is line 24" = "this is line 24"
+[<ignored for tests>:18] x = "abc"
+[<ignored for tests>:18] x = 10
+[<ignored for tests>:18] x = (A (B C))
