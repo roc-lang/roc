@@ -6,11 +6,9 @@ use std::{fs, io};
 static ZIG_PLATFORM_COPY_GLUE_ONCE: Once = Once::new();
 
 /// Copies the glue source files for zig platforms from the roc builtins
-/// this is only temporary, see comments in crates/copy_zig_glue/src/main.rs
+/// this is only temporary, we should create a zig package for the test platforms
 pub fn initialize_zig_test_platforms() {
     ZIG_PLATFORM_COPY_GLUE_ONCE.call_once(|| {
-        dbg!("ZIG_PLATFORM_COPY_GLUE_ONCE");
-        // initialization code here
         copy_zig_glue();
     });
 }
@@ -20,9 +18,7 @@ pub fn initialize_zig_test_platforms() {
 /// This is a simple way to use these files without creating a zig package,
 /// to support the upgrade from zig 0.11.0 to 0.13.0, and keep the scope of the change smaller.
 ///
-/// Once we have zig 0.13.0, and also removed platform/host rebuilding, we will need to upgrade the
-/// test platforms so they produce their own host binaries, and this will be the best time to
-/// upgrade to a zig package and can also be done incrementally withouth changing all the platforms in one go.
+/// Once we have zig 0.13.0, we should add a zig package for the test platforms.
 pub fn copy_zig_glue() {
     let workspace_dir = roc_test_utils_dir::workspace_root();
     let zig_builtins_source_dir = workspace_dir.join("crates/compiler/builtins/bitcode/src");
