@@ -1,20 +1,28 @@
 use log::{debug, info};
+use roc_can::{
+    def::Def,
+    expr::Expr,
+    traverse::{find_declaration_at, DeclarationInfo, FoundDeclaration},
+};
+use roc_cli::{annotation_edit, annotation_edits};
+use roc_types::subs::Content;
 use std::collections::HashMap;
 
 use bumpalo::Bump;
 
 use roc_module::symbol::{ModuleId, Symbol};
 
-use roc_region::all::LineInfo;
+use roc_region::all::{LineColumn, LineInfo};
 
 use tower_lsp::lsp_types::{
-    CompletionItem, Diagnostic, GotoDefinitionResponse, Hover, HoverContents, LanguageString,
-    Location, MarkedString, Position, Range, SemanticTokens, SemanticTokensResult, TextEdit, Url,
+    CodeAction, CodeActionKind, CompletionItem, Diagnostic, GotoDefinitionResponse, Hover,
+    HoverContents, LanguageString, Location, MarkedString, Position, Range, SemanticTokens,
+    SemanticTokensResult, TextEdit, Url, WorkspaceEdit,
 };
 
 use crate::{
     analysis::completion::{field_completion, get_completion_items, get_module_completion_items},
-    convert::{ToRange, ToRocPosition},
+    convert::{ToRange, ToRegion, ToRocPosition},
 };
 
 use super::{
@@ -307,5 +315,121 @@ impl AnalyzedDocument {
                 Some(completions)
             }
         }
+    }
+
+    pub fn annotate(&self, range: Range) -> Option<CodeAction> {
+        let region = range.to_region(self.line_info());
+        let AnalyzedModule {
+            module_id,
+            interns,
+            subs,
+            abilities,
+            declarations,
+            ..
+        } = self.module()?;
+
+        if let Some(found_decl) = find_declaration_at(region, declarations) {
+            self.annotate_declaration(found_decl)
+        } else {
+            let edits = annotation_edits(
+                declarations,
+                subs,
+                abilities,
+                &self.doc_info.source,
+                *module_id,
+                interns,
+            )
+            .into_iter()
+            .map(|(offset, edit)| {
+                let LineColumn { line, column } = self.line_info().convert_offset(offset as u32);
+                let position = Position::new(line, column);
+                let range = Range::new(position, position);
+
+                TextEdit {
+                    range,
+                    new_text: edit,
+                }
+            })
+            .collect();
+
+            Some(CodeAction {
+                title: "Add top-level signatures".to_owned(),
+                edit: Some(WorkspaceEdit::new(HashMap::from([(
+                    self.url().clone(),
+                    edits,
+                )]))),
+                kind: Some(CodeActionKind::SOURCE),
+                ..Default::default()
+            })
+        }
+    }
+
+    fn annotate_declaration(&self, decl: FoundDeclaration<'_>) -> Option<CodeAction> {
+        let AnalyzedModule {
+            module_id,
+            interns,
+            subs,
+            ..
+        } = self.module()?;
+
+        use DeclarationInfo as DI;
+        use FoundDeclaration as FD;
+        let symbol_range =
+            match decl {
+                FD::Decl(DI::Value { loc_symbol, .. })
+                | FD::Decl(DI::Function { loc_symbol, .. }) => loc_symbol.byte_range(),
+                FD::Decl(DI::Destructure { loc_pattern, .. })
+                | FD::Def(Def { loc_pattern, .. }) => loc_pattern.byte_range(),
+                _ => return None,
+            };
+
+        let expr = match decl {
+            FD::Decl(DI::Value { loc_expr: expr, .. })
+            | FD::Decl(DI::Function { loc_body: expr, .. })
+            | FD::Decl(DI::Destructure { loc_expr: expr, .. })
+            | FD::Def(Def { loc_expr: expr, .. }) => &expr.value,
+            _ => return None,
+        };
+
+        let annotation = match decl {
+            FD::Decl(DI::Value { annotation, .. })
+            | FD::Decl(DI::Function { annotation, .. })
+            | FD::Decl(DI::Destructure { annotation, .. }) => annotation,
+            FD::Def(Def { annotation, .. }) => annotation.as_ref(),
+            _ => return None,
+        };
+
+        if annotation.is_some()
+            | matches!(expr, Expr::ImportParams(..))
+            | matches!(
+                subs.get_content_without_compacting(decl.var()),
+                Content::Error
+            )
+        {
+            return None;
+        }
+
+        let (offset, new_text) = annotation_edit(
+            &self.doc_info.source,
+            subs,
+            interns,
+            *module_id,
+            decl.var(),
+            symbol_range,
+        );
+
+        let LineColumn { line, column } = self.line_info().convert_offset(offset as u32);
+        let position = Position::new(line, column);
+        let range = Range::new(position, position);
+
+        let edit = TextEdit { range, new_text };
+        Some(CodeAction {
+            title: "Add signature".to_owned(),
+            edit: Some(WorkspaceEdit::new(HashMap::from([(
+                self.url().clone(),
+                vec![edit],
+            )]))),
+            ..Default::default()
+        })
     }
 }

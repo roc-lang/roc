@@ -9,8 +9,8 @@ use std::{
 use tokio::sync::{Mutex, MutexGuard};
 
 use tower_lsp::lsp_types::{
-    CompletionResponse, Diagnostic, GotoDefinitionResponse, Hover, Position, SemanticTokensResult,
-    TextEdit, Url,
+    CodeActionOrCommand, CodeActionResponse, CompletionResponse, Diagnostic,
+    GotoDefinitionResponse, Hover, Position, Range, SemanticTokensResult, TextEdit, Url,
 };
 
 use crate::analysis::{AnalyzedDocument, DocInfo};
@@ -216,5 +216,15 @@ impl Registry {
             .completion_items(position, latest_doc_info)?;
 
         Some(CompletionResponse::Array(completions))
+    }
+
+    pub async fn code_actions(&self, url: &Url, range: Range) -> Option<CodeActionResponse> {
+        let document = self.latest_document_by_url(url).await?;
+
+        let mut responses = vec![];
+        if let Some(edit) = document.annotate(range) {
+            responses.push(CodeActionOrCommand::CodeAction(edit));
+        }
+        Some(responses)
     }
 }
