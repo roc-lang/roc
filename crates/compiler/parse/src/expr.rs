@@ -485,7 +485,7 @@ pub(crate) fn parse_expr_start<'a>(
                 // We're part way thru parsing an expression, e.g. `bar foo `.
                 // We just tried parsing an argument and determined we couldn't -
                 // so we're going to try parsing an operator.
-                let op_res = match parse_bin_op(MadeProgress, state.clone()) {
+                let op_res = match parse_bin_op(state.clone()) {
                     Err((NoProgress, _)) => {
                         // roll back space parsing
                         let expr = finalize_expr(expr_state, arena);
@@ -733,7 +733,7 @@ fn parse_stmt_operator_chain<'a>(
                 // we handle the additional case of backpassing, which is valid
                 // at the statement level but not at the expression level.
                 let before_op = state.clone();
-                let op_res = match parse_operator(EExpr::Start, EExpr::BadOperator, state.clone()) {
+                let op_res = match parse_op(state.clone()) {
                     Err((MadeProgress, f)) => Err((MadeProgress, f)),
                     Ok((_, op, state)) => {
                         // adds the spaces before operator to the preceding expression term
@@ -1912,7 +1912,7 @@ fn parse_expr_end<'a>(
             // We just tried parsing an argument and determined we couldn't -
             // so we're going to try parsing an operator.
             let before_op = state.clone();
-            match parse_bin_op(MadeProgress, state) {
+            match parse_bin_op(state) {
                 Err((MadeProgress, f)) => Err((MadeProgress, f)),
                 Ok((_, op, state)) => {
                     let op_start = before_op.pos();
@@ -2419,7 +2419,7 @@ fn rest_of_closure<'a>(
 
     let (binop_shortcut, binop, state) = if is_negate_op {
         (true, BinOp::Minus, state)
-    } else if let Ok((_, binop, state)) = parse_bin_op(NoProgress, state.clone()) {
+    } else if let Ok((_, binop, state)) = parse_bin_op(state.clone()) {
         (true, binop, state)
     } else {
         // here Minus does not matter
@@ -4095,89 +4095,69 @@ enum OperatorOrDef {
     Backpassing,
 }
 
-fn parse_bin_op(err_progress: Progress, state: State<'_>) -> ParseResult<'_, BinOp, EExpr<'_>> {
-    let start = state.pos();
-    let (_, op, state) = parse_operator(EExpr::Start, EExpr::BadOperator, state)?;
-    match op {
-        OperatorOrDef::BinOp(op) => Ok((MadeProgress, op, state)),
-        OperatorOrDef::Assignment => Err((err_progress, EExpr::BadOperator("=", start))),
-        OperatorOrDef::AliasOrOpaque(AliasOrOpaque::Alias) => {
-            Err((err_progress, EExpr::BadOperator(":", start)))
-        }
-        OperatorOrDef::AliasOrOpaque(AliasOrOpaque::Opaque) => {
-            Err((err_progress, EExpr::BadOperator(":=", start)))
-        }
-        OperatorOrDef::Backpassing => Err((err_progress, EExpr::BadOperator("<-", start))),
-    }
-}
+fn parse_bin_op<'a>(state: State<'a>) -> ParseResult<'a, BinOp, EExpr<'a>> {
+    let bytes: &[u8] = state.bytes();
 
-fn parse_operator<'a, F, G, E>(
-    to_expectation: F,
-    to_error: G,
-    state: State<'a>,
-) -> ParseResult<'a, OperatorOrDef, E>
-where
-    F: Fn(Position) -> E,
-    G: Fn(&'a str, Position) -> E,
-    E: 'a,
-{
-    let chomped = chomp_ops(state.bytes());
-
-    macro_rules! good {
-        ($op:expr, $width:expr) => {{
-            Ok((MadeProgress, $op, state.advance($width)))
-        }};
-    }
-
-    match chomped {
-        "" => Err((NoProgress, to_expectation(state.pos()))),
-        "+" => good!(OperatorOrDef::BinOp(BinOp::Plus), 1),
-        "-" => good!(OperatorOrDef::BinOp(BinOp::Minus), 1),
-        "*" => good!(OperatorOrDef::BinOp(BinOp::Star), 1),
-        "/" => good!(OperatorOrDef::BinOp(BinOp::Slash), 1),
-        "%" => good!(OperatorOrDef::BinOp(BinOp::Percent), 1),
-        "^" => good!(OperatorOrDef::BinOp(BinOp::Caret), 1),
-        ">" => good!(OperatorOrDef::BinOp(BinOp::GreaterThan), 1),
-        "<" => good!(OperatorOrDef::BinOp(BinOp::LessThan), 1),
-        "." => {
-            // a `.` makes no progress, so it does not interfere with `.foo` access(or)
-            Err((NoProgress, to_error(".", state.pos())))
-        }
-        "=" => good!(OperatorOrDef::Assignment, 1),
-        ":=" => good!(OperatorOrDef::AliasOrOpaque(AliasOrOpaque::Opaque), 2),
-        ":" => good!(OperatorOrDef::AliasOrOpaque(AliasOrOpaque::Alias), 1),
-        "|>" => good!(OperatorOrDef::BinOp(BinOp::Pizza), 2),
-        "==" => good!(OperatorOrDef::BinOp(BinOp::Equals), 2),
-        "!=" => good!(OperatorOrDef::BinOp(BinOp::NotEquals), 2),
-        ">=" => good!(OperatorOrDef::BinOp(BinOp::GreaterThanOrEq), 2),
-        "<=" => good!(OperatorOrDef::BinOp(BinOp::LessThanOrEq), 2),
-        "&&" => good!(OperatorOrDef::BinOp(BinOp::And), 2),
-        "||" => good!(OperatorOrDef::BinOp(BinOp::Or), 2),
-        "//" => good!(OperatorOrDef::BinOp(BinOp::DoubleSlash), 2),
-        "->" => {
-            // makes no progress, so it does not interfere with `_ if isGood -> ...`
-            Err((NoProgress, to_error("->", state.pos())))
-        }
-        "<-" => good!(OperatorOrDef::Backpassing, 2),
-        "!" => Err((NoProgress, to_error("!", state.pos()))),
-        "~" => good!(OperatorOrDef::BinOp(BinOp::When), 1),
-        _ => Err((MadeProgress, to_error(chomped, state.pos()))),
-    }
-}
-
-fn chomp_ops(bytes: &[u8]) -> &str {
     let mut chomped = 0;
-
-    for c in bytes.iter() {
-        let index = *c as usize;
+    for ch in bytes.iter() {
+        let index = *ch as usize;
         if index > 127 || (BINOP_CHAR_MASK & (1 << index) == 0) {
             break;
         }
         chomped += 1;
     }
 
-    unsafe {
-        // Safe because BINOP_CHAR_SET only contains ascii chars
-        std::str::from_utf8_unchecked(&bytes[..chomped])
+    if chomped == 0 {
+        return Err((NoProgress, EExpr::Start(state.pos())));
+    }
+
+    // Safe because BINOP_CHAR_SET only contains ascii chars
+    let op = unsafe { std::str::from_utf8_unchecked(&bytes[..chomped]) };
+    match op {
+        "+" => Ok((MadeProgress, BinOp::Plus, state.inc())),
+        "-" => Ok((MadeProgress, BinOp::Minus, state.inc())),
+        "*" => Ok((MadeProgress, BinOp::Star, state.inc())),
+        "/" => Ok((MadeProgress, BinOp::Slash, state.inc())),
+        "%" => Ok((MadeProgress, BinOp::Percent, state.inc())),
+        "^" => Ok((MadeProgress, BinOp::Caret, state.inc())),
+        ">" => Ok((MadeProgress, BinOp::GreaterThan, state.inc())),
+        "<" => Ok((MadeProgress, BinOp::LessThan, state.inc())),
+        "~" => Ok((MadeProgress, BinOp::When, state.inc())),
+        "|>" => Ok((MadeProgress, BinOp::Pizza, state.advance(2))),
+        "==" => Ok((MadeProgress, BinOp::Equals, state.advance(2))),
+        "!=" => Ok((MadeProgress, BinOp::NotEquals, state.advance(2))),
+        ">=" => Ok((MadeProgress, BinOp::GreaterThanOrEq, state.advance(2))),
+        "<=" => Ok((MadeProgress, BinOp::LessThanOrEq, state.advance(2))),
+        "&&" => Ok((MadeProgress, BinOp::And, state.advance(2))),
+        "||" => Ok((MadeProgress, BinOp::Or, state.advance(2))),
+        "//" => Ok((MadeProgress, BinOp::DoubleSlash, state.advance(2))),
+
+        // a `.` makes no progress, so it does not interfere with `.foo` access(or)
+        "." => Err((NoProgress, EExpr::BadOperator(".", state.pos()))),
+        "!" => Err((NoProgress, EExpr::BadOperator("!", state.pos()))),
+        // makes no progress, so it does not interfere with `_ if isGood -> ...`
+        "->" => Err((NoProgress, EExpr::BadOperator("->", state.pos()))),
+
+        _ => Err((MadeProgress, EExpr::BadOperator(op, state.pos()))),
+    }
+}
+
+fn parse_op<'a>(state: State<'a>) -> ParseResult<'a, OperatorOrDef, EExpr<'a>> {
+    match parse_bin_op(state.clone()) {
+        Ok((_, op, state)) => Ok((MadeProgress, OperatorOrDef::BinOp(op), state)),
+        Err((MadeProgress, EExpr::BadOperator(op, pos))) => match op {
+            "=" => Ok((MadeProgress, OperatorOrDef::Assignment, state.inc())),
+            ":" => {
+                let def = OperatorOrDef::AliasOrOpaque(AliasOrOpaque::Alias);
+                Ok((MadeProgress, def, state.inc()))
+            }
+            ":=" => {
+                let def = OperatorOrDef::AliasOrOpaque(AliasOrOpaque::Opaque);
+                Ok((MadeProgress, def, state.advance(2)))
+            }
+            "<-" => Ok((MadeProgress, OperatorOrDef::Backpassing, state.advance(2))),
+            _ => Err((MadeProgress, EExpr::BadOperator(op, pos))),
+        },
+        Err(err) => Err(err),
     }
 }
