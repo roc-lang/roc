@@ -955,6 +955,21 @@ mod cli_tests {
 
             cli_build.run().assert_clean_stdout(expected_out);
         }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        fn effectful_echo() {
+            build_platform_host();
+
+            let cli_build = ExecCli::new(
+                roc_cli::CMD_DEV,
+                file_from_root("crates/cli/tests/test-projects/effectful", "echo.roc"),
+            );
+
+            let expected_output = "            hello1     hello    hell   hel  he h\n";
+
+            cli_build.check_build_and_run(expected_output, ALLOW_VALGRIND, Some("hello1"), None);
+        }
     }
 
     // this is for testing the benchmarks (on small inputs), to perform proper benchmarks see crates/cli/benches/README.md
