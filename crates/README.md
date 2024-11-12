@@ -12,9 +12,9 @@ cargo doc --package roc_ast --open
 
 The `roc` binary that brings together all functionality in the Roc toolset.
 
-## `cli_utils/` - `cli_utils`
+## `cli_test_utils/` - `cli_test_utils`
 
-Provides shared code for cli tests and benchmarks.
+Provides shared code for cli tests, cli benchmarks, glue tests, valgrind crate.
 
 ## `compiler/`
 

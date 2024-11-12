@@ -1790,7 +1790,7 @@ impl<'a> LambdaSet<'a> {
         // functions, despite not appearing in the lambda set.
         // We don't want to compile them as thunks, so we need to figure out a special-casing for
         // them.
-        // To reproduce: test cli_run
+        // To reproduce: test cli_tests
         //
         // debug_assert!(
         //     self.set

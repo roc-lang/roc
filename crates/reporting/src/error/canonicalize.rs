@@ -196,7 +196,7 @@ pub fn can_problem<'b>(
                 ]),
                 alloc.region(lines.convert_region(region), severity),
                 alloc.reflow("Builtins are imported automatically, so you can remove this import."),
-                alloc.reflow("Tip: Learn more about builtins in the tutorial:\n\n<https://www.roc-lang.org/tutorial#builtin-modules>"),
+                alloc.reflow("Tip: Learn more about builtins in the tutorial:\n<https://www.roc-lang.org/tutorial#builtin-modules>"),
             ]);
 
             title = EXPLICIT_BUILTIN_IMPORT.to_string();
@@ -214,7 +214,7 @@ pub fn can_problem<'b>(
                     alloc.symbol_unqualified(symbol),
                     alloc.reflow(" from the exposing list.")
                 ]),
-                alloc.reflow("Tip: Learn more about builtins in the tutorial:\n\n<https://www.roc-lang.org/tutorial#builtin-modules>"),
+                alloc.reflow("Tip: Learn more about builtins in the tutorial:\n<https://www.roc-lang.org/tutorial#builtin-modules>"),
             ]);
 
             title = EXPLICIT_BUILTIN_IMPORT.to_string();
