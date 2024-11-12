@@ -955,6 +955,29 @@ mod cli_tests {
 
             cli_build.run().assert_clean_stdout(expected_out);
         }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        fn effectful_suffixed_record_field() {
+            build_platform_host();
+
+            let cli_build = ExecCli::new(
+                roc_cli::CMD_DEV,
+                file_from_root(
+                    "crates/cli/tests/test-projects/effectful",
+                    "suffixed_record_field.roc",
+                ),
+            );
+
+            let expected_output = "notEffectful: hardcoded\neffectful: from stdin\n";
+
+            cli_build.check_build_and_run(
+                expected_output,
+                ALLOW_VALGRIND,
+                Some("from stdin"),
+                None,
+            );
+        }
     }
 
     // this is for testing the benchmarks (on small inputs), to perform proper benchmarks see crates/cli/benches/README.md

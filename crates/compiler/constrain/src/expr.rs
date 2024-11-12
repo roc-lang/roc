@@ -24,7 +24,7 @@ use roc_can::pattern::Pattern;
 use roc_can::traverse::symbols_introduced_from_pattern;
 use roc_collections::all::{HumanIndex, MutMap, SendMap};
 use roc_collections::VecMap;
-use roc_module::ident::Lowercase;
+use roc_module::ident::{IdentSuffix, Lowercase};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{IllegalCycleMark, Variable};
@@ -284,9 +284,14 @@ pub fn constrain_expr(
                     let (field_type, field_con) =
                         constrain_field(types, constraints, env, field_var, loc_field_expr);
 
-                    let check_field_con =
-                        constraints.fx_record_field_suffix(label.suffix(), field_var, field.region);
-                    let field_con = constraints.and_constraint([field_con, check_field_con]);
+                    let field_con = match label.suffix() {
+                        IdentSuffix::None => {
+                            let check_field_con =
+                                constraints.fx_record_field_unsuffixed(field_var, field.region);
+                            constraints.and_constraint([field_con, check_field_con])
+                        }
+                        IdentSuffix::Bang => field_con,
+                    };
 
                     field_vars.push(field_var);
                     field_types.insert(label.clone(), RecordField::Required(field_type));
