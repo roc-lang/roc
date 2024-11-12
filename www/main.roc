@@ -6,10 +6,14 @@ import pf.SSG
 import pf.Types exposing [Args]
 import pf.Html exposing [header, nav, div, link, attribute, text, a, span, html, head, body, meta, script, footer, br]
 import pf.Html.Attributes exposing [id, ariaLabel, ariaHidden, title, href, class, rel, type, content, lang, charset, name, color]
+import "content/tutorial.md" as tutorialMarkdown : Str
+
 import InteractiveExample
 
 main : Args -> Task {} _
 main = \{ inputDir, outputDir } ->
+
+    SSG.writeFile! { outputDir, relpath: Types.toRelPath "llms.txt", content: tutorialMarkdown }
 
     # get the path and url of markdown files in content directory
     files = SSG.files! inputDir
