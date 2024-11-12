@@ -1,11 +1,11 @@
 app [main] { pf: platform "platform/main.roc" }
 
-# see https://github.com/roc-lang/roc/issues/985
 main : Task {} []
-main = closure1 {}
-# |> Task.after (\_ -> closure2 {})
-# |> Task.after (\_ -> closure3 {})
-# |> Task.after (\_ -> closure4 {})
+main =
+    closure1 {}
+    |> Task.await (\_ -> closure2 {})
+    |> Task.await (\_ -> closure3 {})
+    |> Task.await (\_ -> closure4 {})
 # ---
 closure1 : {} -> Task {} []
 closure1 = \_ ->
@@ -17,32 +17,32 @@ toUnitBorrowed = \x -> Str.countUtf8Bytes x
 foo = \f, x -> f x
 
 # ---
-# closure2 : {} -> Task.Task {} []
-# closure2 = \_ ->
-#     x : Str
-#     x = "a long string such that it's malloced"
-#
-#     Task.succeed {}
-#         |> Task.map (\_ -> x)
-#         |> Task.map toUnit
-#
-# toUnit = \_ -> {}
-#
+closure2 : {} -> Task {} []
+closure2 = \_ ->
+    x : Str
+    x = "a long string such that it's malloced"
+
+    Task.ok {}
+    |> Task.map (\_ -> x)
+    |> Task.map toUnit
+
+toUnit = \_ -> {}
+
 # # ---
-# closure3 : {} -> Task.Task {} []
-# closure3 = \_ ->
-#     x : Str
-#     x = "a long string such that it's malloced"
-#
-#     Task.succeed {}
-#         |> Task.after (\_ -> Task.succeed x |> Task.map (\_ -> {}))
-#
+closure3 : {} -> Task {} []
+closure3 = \_ ->
+    x : Str
+    x = "a long string such that it's malloced"
+
+    Task.ok {}
+    |> Task.await (\_ -> Task.ok x |> Task.map (\_ -> {}))
+
 # # ---
-# closure4 : {} -> Task.Task {} []
-# closure4 = \_ ->
-#     x : Str
-#     x = "a long string such that it's malloced"
-#
-#     Task.succeed {}
-#         |> Task.after (\_ -> Task.succeed x)
-#         |> Task.map (\_ -> {})
+closure4 : {} -> Task {} []
+closure4 = \_ ->
+    x : Str
+    x = "a long string such that it's malloced"
+
+    Task.ok {}
+    |> Task.await (\_ -> Task.ok x)
+    |> Task.map (\_ -> {})

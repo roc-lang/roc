@@ -98,7 +98,7 @@ fi
 $roc version
 
 echo 'Generating site markdown content'
-$roc build www/main.roc
+$roc build --linker legacy www/main.roc
 ./www/main www/content/ www/build/
 
 echo "Adding github link to examples' html..."
