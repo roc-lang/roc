@@ -1510,11 +1510,11 @@ define_builtins! {
         88 LIST_LEN_USIZE: "lenUsize"
         89 LIST_CONCAT_UTF8: "concatUtf8"
         90 LIST_WALK_FX: "walk!"
-        90 LIST_FOR_EACH_FX: "forEach!"
-        91 LIST_FOR_EACH_TRY_FX: "forEachTry!"
-        92 LIST_SPLIT_AT: "splitAt"
-        93 LIST_SPLIT_ON: "splitOn"
-        94 LIST_SPLIT_ON_LIST: "splitOnList"
+        91 LIST_FOR_EACH_FX: "forEach!"
+        92 LIST_FOR_EACH_TRY_FX: "forEachTry!"
+        93 LIST_SPLIT_AT: "splitAt"
+        94 LIST_SPLIT_ON: "splitOn"
+        95 LIST_SPLIT_ON_LIST: "splitOnList"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias
