@@ -101,7 +101,7 @@ mod test_reporting {
         use std::fs::File;
         use std::io::Write;
 
-        let module_src = if src.starts_with("app") {
+        let module_src = if src.starts_with("app") || src.starts_with("module") {
             maybe_save_parse_test_case(subdir, src, false);
             // this is already a module
             src.to_string()
@@ -15007,33 +15007,57 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        suffixed_pure_in_record,
+        unsuffixed_fx_in_record_annotation,
         indoc!(
             r#"
-            app [main!] { pf: platform "../../../../../crates/cli/tests/test-projects/test-platform-effects-zig/main.roc" }
+            module [Fx]
 
-            import pf.Effect
-
-            main! = \{} ->
-                notFx = {
-                    trim!: Str.trim
-                }
-                Effect.putLine! (notFx.trim! " hello ")
+            Fx : {
+                getLine: {} => Str
+            }
             "#
         ),
-        @r###"
+        @r"
+    ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
+
+    The type of this record field is an effectful function, but its name
+    does not indicate so:
+
+    4│      getLine: {} => Str
+            ^^^^^^^^^^^^^^^^^^
+
+    Add an exclamation mark at the end, like:
+
+        { readFile!: Str => Str }
+
+    This will help readers identify it as a source of effects.
+    "
+    );
+
+    test_report!(
+        suffixed_pure_fn_in_record_annotation,
+        indoc!(
+            r#"
+            module [Fx]
+
+            Fx : {
+                getLine!: {} -> Str
+            }
+            "#
+        ),
+        @r"
     ── UNNECESSARY EXCLAMATION in /code/proj/Main.roc ──────────────────────────────
 
-    This field's value is a pure function, but its name suggests
-    otherwise:
+    The type of this record field is a pure function, but its name
+    suggests otherwise:
 
-    7│          trim!: Str.trim
-                ^^^^^^^^^^^^^^^
+    4│      getLine!: {} -> Str
+            ^^^^^^^^^^^^^^^^^^^
 
     The exclamation mark at the end is reserved for effectful functions.
 
-    Hint: Did you forget to run an effect? Is the type annotation wrong?
-    "###
+    Hint: Did you mean to use `=>` instead of `->`?
+    "
     );
 
     test_report!(

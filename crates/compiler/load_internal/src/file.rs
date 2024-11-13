@@ -5098,6 +5098,14 @@ fn canonicalize_and_constrain<'a>(
 
     let mut var_store = VarStore::default();
 
+    let fx_mode = if module_id.is_builtin() {
+        // Allow builtins to expose effectful functions
+        // even if platform is `Task`-based
+        FxMode::PurityInference
+    } else {
+        fx_mode
+    };
+
     let mut module_output = canonicalize_module_defs(
         arena,
         parsed_defs,

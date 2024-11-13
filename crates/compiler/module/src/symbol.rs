@@ -1510,9 +1510,11 @@ define_builtins! {
         88 LIST_LEN_USIZE: "lenUsize"
         89 LIST_CONCAT_UTF8: "concatUtf8"
         90 LIST_WALK_FX: "walk!"
-        91 LIST_SPLIT_AT: "splitAt"
-        92 LIST_SPLIT_ON: "splitOn"
-        93 LIST_SPLIT_ON_LIST: "splitOnList"
+        90 LIST_FOR_EACH_FX: "forEach!"
+        91 LIST_FOR_EACH_TRY_FX: "forEachTry!"
+        92 LIST_SPLIT_AT: "splitAt"
+        93 LIST_SPLIT_ON: "splitOn"
+        94 LIST_SPLIT_ON_LIST: "splitOnList"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias
@@ -1525,6 +1527,7 @@ define_builtins! {
         7 RESULT_IS_OK: "isOk"
         8 RESULT_MAP_BOTH: "mapBoth"
         9 RESULT_MAP_TWO: "map2"
+        10 RESULT_ON_ERR_FX: "onErr!"
     }
     8 DICT: "Dict" => {
         0 DICT_DICT: "Dict" exposed_type=true // the Dict.Dict type alias
