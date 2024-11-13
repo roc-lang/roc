@@ -58,7 +58,7 @@ jobs:
 
       - name: test with zig platform
         run: |
-          cd ${{ env.RELEASE_FOLDER_NAME }} && ./roc --build-host --suppress-build-host-warning crates/cli/tests/test-projects/test-platform-simple-zig/app.roc
+          cd ${{ env.RELEASE_FOLDER_NAME }} && ./roc --build-host --suppress-build-host-warning examples/platform-switching/rocLovesZig.roc
 
       - name: print short commit SHA
         run: git rev-parse --short "$GITHUB_SHA"
