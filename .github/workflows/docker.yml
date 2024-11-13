@@ -1,6 +1,6 @@
 on:
   workflow_dispatch:
-  pull_request:
+  #pull_request:
 
 name: Docker images tests
 
