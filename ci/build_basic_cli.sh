@@ -54,6 +54,6 @@ fi
 ./jump-start.sh
 
 # build the basic cli platform
-roc build.roc --prebuilt-platform
+roc build.roc
 
 cd ..
