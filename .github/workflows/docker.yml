@@ -1,7 +1,6 @@
 on:
   workflow_dispatch:
-#  pull_request:
-# TODO remove pull_request trigger
+  pull_request:
 
 name: Docker images tests
 
@@ -20,7 +19,9 @@ jobs:
         run: docker compose -f docker/nightly-ubuntu-latest/docker-compose.yml build
 
       - name: Test with zig example
-        run: docker compose -f docker/nightly-ubuntu-latest/docker-compose.yml run roc --build-host --suppress-build-host-warning examples/platform-switching/rocLovesZig.roc 
+        run: |
+          curl -OL https://raw.githubusercontent.com/roc-lang/examples/refs/heads/main/examples/HelloWorld/main.roc
+          docker compose -f docker/nightly-ubuntu-latest/docker-compose.yml run roc main.roc
 
 
   nightly-ubuntu-2204:
