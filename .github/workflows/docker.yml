@@ -20,7 +20,7 @@ jobs:
         run: docker compose -f docker/nightly-ubuntu-latest/docker-compose.yml build
 
       - name: Run hello world test
-        run: docker compose -f docker/nightly-ubuntu-latest/docker-compose.yml run roc examples/helloWorld.roc
+        run: docker compose -f docker/nightly-ubuntu-latest/docker-compose.yml run roc examples/platform-switching/rocLovesZig.roc
 
 
   nightly-ubuntu-2204:
@@ -37,7 +37,7 @@ jobs:
         run: docker compose -f docker/nightly-ubuntu-2204/docker-compose.yml build
 
       - name: Run hello world test
-        run: docker compose -f docker/nightly-ubuntu-2204/docker-compose.yml run roc examples/helloWorld.roc
+        run: docker compose -f docker/nightly-ubuntu-2204/docker-compose.yml run roc examples/platform-switching/rocLovesZig.roc
 
   nightly-ubuntu-2004:
     name: nightly-ubuntu-2004
@@ -53,7 +53,7 @@ jobs:
         run: docker compose -f docker/nightly-ubuntu-2004/docker-compose.yml build
 
       - name: Run hello world test
-        run: docker compose -f docker/nightly-ubuntu-2004/docker-compose.yml run roc examples/helloWorld.roc
+        run: docker compose -f docker/nightly-ubuntu-2004/docker-compose.yml run roc examples/platform-switching/rocLovesZig.roc
 
   nightly-debian-latest:
     name: nightly-debian-latest
@@ -69,7 +69,7 @@ jobs:
         run: docker compose -f docker/nightly-debian-latest/docker-compose.yml build
 
       - name: Run hello world test
-        run: docker compose -f docker/nightly-debian-latest/docker-compose.yml run roc examples/helloWorld.roc
+        run: docker compose -f docker/nightly-debian-latest/docker-compose.yml run roc examples/platform-switching/rocLovesZig.roc
 
   nightly-debian-bookworm:
     name: nightly-debian-bookworm
@@ -85,7 +85,7 @@ jobs:
         run: docker compose -f docker/nightly-debian-bookworm/docker-compose.yml build
 
       - name: Run hello world test
-        run: docker compose -f docker/nightly-debian-bookworm/docker-compose.yml run roc examples/helloWorld.roc
+        run: docker compose -f docker/nightly-debian-bookworm/docker-compose.yml run roc examples/platform-switching/rocLovesZig.roc
 
   nightly-debian-buster:
     name: nightly-debian-buster
@@ -101,4 +101,4 @@ jobs:
         run: docker compose -f docker/nightly-debian-buster/docker-compose.yml build
 
       - name: Run hello world test
-        run: docker compose -f docker/nightly-debian-buster/docker-compose.yml run roc examples/helloWorld.roc
+        run: docker compose -f docker/nightly-debian-buster/docker-compose.yml run roc examples/platform-switching/rocLovesZig.roc
