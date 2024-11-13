@@ -8,6 +8,7 @@ module [
     map2,
     try,
     onErr,
+    onErr!,
     withDefault,
 ]
 
@@ -119,3 +120,16 @@ onErr = \result, transform ->
     when result is
         Ok v -> Ok v
         Err e -> transform e
+
+## Like [onErr], but it allows the transformation function to produce effects.
+##
+## ```roc
+## Result.onErr (Err "missing user") \msg ->
+##     try Stdout.line! "ERROR: $(msg)"
+##     Err msg
+## ```
+onErr! : Result a err, (err => Result a otherErr) => Result a otherErr
+onErr! = \result, transform! ->
+    when result is
+        Ok v -> Ok v
+        Err e -> transform! e

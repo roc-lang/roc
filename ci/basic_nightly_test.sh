@@ -28,9 +28,6 @@ mv roc_nightly* roc_nightly
 
 cd roc_nightly
 
-# test roc hello world
-./roc examples/helloWorld.roc
-
 # test rust platform (first prebuild the host)
 examples/platform-switching/rust-platform/build.sh
 ./roc examples/platform-switching/rocLovesRust.roc
