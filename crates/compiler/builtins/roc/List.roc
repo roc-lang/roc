@@ -1285,18 +1285,19 @@ splitOn = \elements, delimiter ->
 ## ```
 splitOnList : List a, List a -> List (List a) where a implements Eq
 splitOnList = \elements, delimiter ->
-    if delimiter == [] then
-        [elements]
-        else
-
     help = \remaining, chunks, currentChunk ->
         when remaining is
             [] -> List.append chunks currentChunk
-            _ if List.startsWith remaining delimiter ->
-                help (List.dropFirst remaining (List.len delimiter)) (List.append chunks currentChunk) []
+            [x, .. as rest] ->
+                if List.startsWith remaining delimiter then
+                    help (List.dropFirst remaining (List.len delimiter)) (List.append chunks currentChunk) []
+                else
+                    help rest chunks (List.append currentChunk x)
 
-            [x, .. as rest] -> help rest chunks (List.append currentChunk x)
-    help elements [] []
+    if delimiter == [] then
+        [elements]
+    else
+        help elements [] []
 
 ## DEPRECATED: will be removed soon
 split : List elem, U64 -> { before : List elem, others : List elem }
