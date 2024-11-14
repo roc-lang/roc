@@ -244,16 +244,29 @@ fn lower_var<P: Push<Problem>>(
               | Content::RecursionVar { .. } => Content::Structure(FlatType::EmptyTagUnion),
               Content::LambdaSet(lambda_set) => Content::LambdaSet(lambda_set),
               Content::ErasedLambda => Content::ErasedLambda,
-              Content::Alias(symbol, args, real, kind) => {
-                  let todo = (); // TODO we should unwrap this, but doing that probably means changing this from root_var to other stuff.
-                  let new_real = lower_var(cache, subs, problems, *real);
-                  Content::Alias(*symbol, *args, new_real, *kind)
-              }
               Content::Error => Content::Error,
                */
         },
-        _ => {
+        Content::RangedNumber(range) => {
+            use roc_types::num::NumericRange::*;
+
+            match range {
+                IntAtLeastSigned(int_lit_width) => int_lit_width_to_mono_type_id(int_lit_width),
+                IntAtLeastEitherSign(int_lit_width) => int_lit_width_to_mono_type_id(int_lit_width),
+                NumAtLeastSigned(int_lit_width) => int_lit_width_to_mono_type_id(int_lit_width),
+                NumAtLeastEitherSign(int_lit_width) => int_lit_width_to_mono_type_id(int_lit_width),
+            }
+        }
+        Content::Alias(_symbol, args, real, kind) => {
+            let mono_id = lower_var(env, subs, real)?;
+            // let mono_args = args
+            //     .into_iter()
+            //     .flat_map(|arg| lower_var(env, subs, subs[arg]));
+
             todo!();
+        }
+        content => {
+            todo!("specialize this Content: {content:?}");
         }
     };
 
@@ -262,6 +275,26 @@ fn lower_var<P: Push<Problem>>(
     env.cache.inner.insert(root_var, mono_id);
 
     Some(mono_id)
+}
+
+fn int_lit_width_to_mono_type_id(int_lit_width: roc_can::num::IntLitWidth) -> MonoTypeId {
+    use roc_can::num::IntLitWidth;
+
+    match int_lit_width {
+        IntLitWidth::U8 => MonoTypeId::U8,
+        IntLitWidth::U16 => MonoTypeId::U16,
+        IntLitWidth::U32 => MonoTypeId::U32,
+        IntLitWidth::U64 => MonoTypeId::U64,
+        IntLitWidth::U128 => MonoTypeId::U128,
+        IntLitWidth::I8 => MonoTypeId::I8,
+        IntLitWidth::I16 => MonoTypeId::I16,
+        IntLitWidth::I32 => MonoTypeId::I32,
+        IntLitWidth::I64 => MonoTypeId::I64,
+        IntLitWidth::I128 => MonoTypeId::I128,
+        IntLitWidth::F32 => MonoTypeId::F32,
+        IntLitWidth::F64 => MonoTypeId::F64,
+        IntLitWidth::Dec => MonoTypeId::DEC,
+    }
 }
 
 fn num_args_to_mono_id(

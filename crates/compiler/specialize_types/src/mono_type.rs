@@ -106,8 +106,7 @@ impl MonoTypes {
         }
     }
     pub fn get(&self, id: MonoTypeId) -> &MonoType {
-        todo!("builtins are stored inline");
-        // Overall strategy:
+        // Future strategy:
         // - Look at the three high bits to figure out which of the 8 MonoTypes we're dealing with
         // - The non-parameterized builtins have 000 as their high bits, and the whole MonoTypeId can be cast to a Primitive.
         // - The parameterized builtins don't need to store a length, just an index. We store that index inline.
@@ -116,6 +115,18 @@ impl MonoTypes {
         //    - This means we use 2 bits for discriminant and another 2 bits for which parameterized type it is
         //    - This means we get 29-bit indices, so a maximum of ~500M MonoTypes per module. Should be plenty.
         // - In the future, we can promote common collection types (e.g. List Str, List U8) to Primitives.
+
+        let opt = self.entries.get(id.inner.index());
+
+        #[cfg(debug_assertions)]
+        {
+            opt.expect("A MonoTypeId corresponded to an index that wasn't in MonoTypes. This should never happen!")
+        }
+
+        #[cfg(not(debug_assertions))]
+        unsafe {
+            opt.unwrap_unchecked()
+        }
     }
 
     pub(crate) fn add_primitive(&mut self, primitive: Primitive) -> MonoTypeId {
