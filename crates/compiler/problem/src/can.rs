@@ -251,6 +251,9 @@ pub enum Problem {
     ReturnAtEndOfFunction {
         region: Region,
     },
+    StmtAfterExpr(Region),
+    UnsuffixedEffectfulRecordField(Region),
+    SuffixedPureRecordField(Region),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -335,6 +338,10 @@ impl Problem {
             Problem::ReturnOutsideOfFunction { .. } => Warning,
             Problem::StatementsAfterReturn { .. } => Warning,
             Problem::ReturnAtEndOfFunction { .. } => Warning,
+            Problem::StmtAfterExpr(_) => Fatal,
+            Problem::UnsuffixedEffectfulRecordField(_) | Problem::SuffixedPureRecordField(..) => {
+                Warning
+            }
         }
     }
 
@@ -480,8 +487,8 @@ impl Problem {
             }
             | Problem::NotAnAbility(region)
             | Problem::ImplementsNonRequired { region, .. }
-            | Problem::DoesNotImplementAbility { region, .. }
             | Problem::NoIdentifiersIntroduced(region)
+            | Problem::DoesNotImplementAbility { region, .. }
             | Problem::OverloadedSpecialization {
                 overload: region, ..
             }
@@ -500,11 +507,15 @@ impl Problem {
             | Problem::DefsOnlyUsedInRecursion(_, region)
             | Problem::ReturnOutsideOfFunction { region }
             | Problem::StatementsAfterReturn { region }
-            | Problem::ReturnAtEndOfFunction { region } => Some(*region),
+            | Problem::ReturnAtEndOfFunction { region }
+            | Problem::UnsuffixedEffectfulRecordField(region)
+            | Problem::SuffixedPureRecordField(region) => Some(*region),
             Problem::RuntimeError(RuntimeError::CircularDef(cycle_entries))
             | Problem::BadRecursion(cycle_entries) => {
                 cycle_entries.first().map(|entry| entry.expr_region)
             }
+
+            Problem::StmtAfterExpr(region) => Some(*region),
             Problem::RuntimeError(RuntimeError::UnresolvedTypeVar)
             | Problem::RuntimeError(RuntimeError::ErroneousType)
             | Problem::RuntimeError(RuntimeError::NonExhaustivePattern)

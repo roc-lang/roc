@@ -303,7 +303,6 @@ pub enum EExpr<'a> {
     Start(Position),
     End(Position),
     BadExprEnd(Position),
-    StmtAfterExpr(Position),
     Space(BadInputError, Position),
 
     Dot(Position),
@@ -343,6 +342,7 @@ pub enum EExpr<'a> {
     Closure(EClosure<'a>, Position),
     Underscore(Position),
     Crash(Position),
+    Try(Position),
 
     InParens(EInParens<'a>, Position),
     Record(ERecord<'a>, Position),

@@ -1,5 +1,5 @@
 use crate::{
-    def::Def,
+    def::{Def, DefKind},
     expr::{
         ClosureData, Expr, Field, OpaqueWrapFunctionData, StructAccessorData, WhenBranchPattern,
     },
@@ -378,6 +378,7 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
                          expr_var,
                          pattern_vars,
                          annotation,
+                         kind,
                      }| Def {
                         loc_pattern: loc_pattern.map(|p| deep_copy_pattern_help(env, copied, p)),
                         loc_expr: loc_expr.map(|e| go_help!(e)),
@@ -386,6 +387,11 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
                         // Annotation should only be used in constraining, don't clone before
                         // constraining :)
                         annotation: annotation.clone(),
+                        kind: match kind {
+                            DefKind::Let => DefKind::Let,
+                            DefKind::Stmt(v) => DefKind::Stmt(sub!(*v)),
+                            DefKind::Ignored(v) => DefKind::Ignored(sub!(*v)),
+                        },
                     },
                 )
                 .collect(),
@@ -399,6 +405,7 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
                 expr_var,
                 pattern_vars,
                 annotation,
+                kind,
             } = &**def;
             let def = Def {
                 loc_pattern: loc_pattern.map(|p| deep_copy_pattern_help(env, copied, p)),
@@ -408,18 +415,20 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
                 // Annotation should only be used in constraining, don't clone before
                 // constraining :)
                 annotation: annotation.clone(),
+                kind: *kind,
             };
             LetNonRec(Box::new(def), Box::new(body.map(|e| go_help!(e))))
         }
 
         Call(f, args, called_via) => {
-            let (fn_var, fn_expr, clos_var, ret_var) = &**f;
+            let (fn_var, fn_expr, clos_var, ret_var, fx_var) = &**f;
             Call(
                 Box::new((
                     sub!(*fn_var),
                     fn_expr.map(|e| go_help!(e)),
                     sub!(*clos_var),
                     sub!(*ret_var),
+                    sub!(*fx_var),
                 )),
                 args.iter()
                     .map(|(var, expr)| (sub!(*var), expr.map(|e| go_help!(e))))
@@ -456,6 +465,7 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             function_type,
             closure_type,
             return_type,
+            fx_type,
             early_returns,
             name,
             captured_symbols,
@@ -466,6 +476,7 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             function_type: sub!(*function_type),
             closure_type: sub!(*closure_type),
             return_type: sub!(*return_type),
+            fx_type: sub!(*fx_type),
             early_returns: early_returns
                 .iter()
                 .map(|(var, region)| (sub!(*var), *region))
@@ -974,7 +985,7 @@ fn deep_copy_type_vars<C: CopyEnv>(
 
             // Everything else is a mechanical descent.
             Structure(flat_type) => match flat_type {
-                EmptyRecord | EmptyTagUnion => Structure(flat_type),
+                EmptyRecord | EmptyTagUnion | EffectfulFunc => Structure(flat_type),
                 Apply(symbol, arguments) => {
                     descend_slice!(arguments);
 
@@ -983,15 +994,21 @@ fn deep_copy_type_vars<C: CopyEnv>(
                         Structure(Apply(symbol, new_arguments))
                     })
                 }
-                Func(arguments, closure_var, ret_var) => {
+                Func(arguments, closure_var, ret_var, fx_var) => {
                     descend_slice!(arguments);
 
                     let new_closure_var = descend_var!(closure_var);
                     let new_ret_var = descend_var!(ret_var);
+                    let new_fx_var = descend_var!(fx_var);
 
                     perform_clone!({
                         let new_arguments = clone_var_slice!(arguments);
-                        Structure(Func(new_arguments, new_closure_var, new_ret_var))
+                        Structure(Func(
+                            new_arguments,
+                            new_closure_var,
+                            new_ret_var,
+                            new_fx_var,
+                        ))
                     })
                 }
                 Record(fields, ext_var) => {
@@ -1180,6 +1197,8 @@ fn deep_copy_type_vars<C: CopyEnv>(
                 })
             }
             ErasedLambda => ErasedLambda,
+            Pure => Pure,
+            Effectful => Effectful,
 
             RangedNumber(range) => {
                 perform_clone!(RangedNumber(range))

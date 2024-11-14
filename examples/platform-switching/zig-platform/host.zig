@@ -108,23 +108,15 @@ const Unit = extern struct {};
 
 pub fn main() u8 {
     const stdout = std.io.getStdOut().writer();
-    const stderr = std.io.getStdErr().writer();
-
-    var timer = std.time.Timer.start() catch unreachable;
 
     // actually call roc to populate the callresult
     var callresult = RocStr.empty();
     roc__mainForHost_1_exposed_generic(&callresult);
 
-    const nanos = timer.read();
-    const seconds = (@as(f64, @floatFromInt(nanos)) / 1_000_000_000.0);
-
     // stdout the result
     stdout.print("{s}", .{callresult.asSlice()}) catch unreachable;
 
     callresult.decref();
-
-    stderr.print("runtime: {d:.3}ms\n", .{seconds * 1000}) catch unreachable;
 
     return 0;
 }

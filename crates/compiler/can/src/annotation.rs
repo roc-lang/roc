@@ -2,10 +2,12 @@ use crate::env::Env;
 use crate::procedure::{QualifiedReference, References};
 use crate::scope::{PendingAbilitiesInScope, Scope, SymbolLookup};
 use roc_collections::{ImMap, MutSet, SendMap, VecMap, VecSet};
-use roc_module::ident::{Ident, Lowercase, TagName};
+use roc_module::ident::{Ident, IdentSuffix, Lowercase, TagName};
 use roc_module::symbol::Symbol;
-use roc_parse::ast::{AssignedField, ExtractSpaces, Pattern, Tag, TypeAnnotation, TypeHeader};
-use roc_problem::can::ShadowKind;
+use roc_parse::ast::{
+    AssignedField, ExtractSpaces, FunctionArrow, Pattern, Tag, TypeAnnotation, TypeHeader,
+};
+use roc_problem::can::{Problem, ShadowKind};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{
@@ -448,7 +450,7 @@ pub fn find_type_def_symbols(
                     stack.push(&t.value);
                 }
             }
-            Function(arguments, result) => {
+            Function(arguments, _arrow, result) => {
                 for t in arguments.iter() {
                     stack.push(&t.value);
                 }
@@ -554,7 +556,7 @@ fn can_annotation_help(
     use roc_parse::ast::TypeAnnotation::*;
 
     match annotation {
-        Function(argument_types, return_type) => {
+        Function(argument_types, arrow, return_type) => {
             let mut args = Vec::new();
 
             for arg in *argument_types {
@@ -589,7 +591,12 @@ fn can_annotation_help(
             introduced_variables.insert_lambda_set(lambda_set);
             let closure = Type::Variable(lambda_set);
 
-            Type::Function(args, Box::new(closure), Box::new(ret))
+            let fx_type = match arrow {
+                FunctionArrow::Pure => Type::Pure,
+                FunctionArrow::Effectful => Type::Effectful,
+            };
+
+            Type::Function(args, Box::new(closure), Box::new(ret), Box::new(fx_type))
         }
         Apply(module_name, ident, type_arguments) => {
             let symbol = match make_apply_symbol(env, region, scope, module_name, ident, references)
@@ -1371,6 +1378,8 @@ fn can_assigned_fields<'a>(
                     );
 
                     let label = Lowercase::from(field_name.value);
+                    check_record_field_suffix(env, label.suffix(), &field_type, &loc_field.region);
+
                     field_types.insert(label.clone(), RigidRequired(field_type));
 
                     break 'inner label;
@@ -1389,6 +1398,8 @@ fn can_assigned_fields<'a>(
                     );
 
                     let label = Lowercase::from(field_name.value);
+                    check_record_field_suffix(env, label.suffix(), &field_type, &loc_field.region);
+
                     field_types.insert(label.clone(), RigidOptional(field_type));
 
                     break 'inner label;
@@ -1441,6 +1452,23 @@ fn can_assigned_fields<'a>(
     }
 
     field_types
+}
+
+fn check_record_field_suffix(
+    env: &mut Env,
+    suffix: IdentSuffix,
+    field_type: &Type,
+    region: &Region,
+) {
+    match (suffix, field_type) {
+        (IdentSuffix::None, Type::Function(_, _, _, fx)) if **fx == Type::Effectful => env
+            .problems
+            .push(Problem::UnsuffixedEffectfulRecordField(*region)),
+        (IdentSuffix::Bang, Type::Function(_, _, _, fx)) if **fx == Type::Pure => {
+            env.problems.push(Problem::SuffixedPureRecordField(*region))
+        }
+        _ => {}
+    }
 }
 
 // TODO trim down these arguments!

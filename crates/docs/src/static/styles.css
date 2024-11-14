@@ -556,6 +556,20 @@ pre>samp {
   right: 30px;
 }
 
+#llm-prompt-container {
+  background-color: var(--violet-bg);
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  font-size: initial;
+}
+
+#llm-prompt-copy-button:hover {
+  border-color: var(--link-hover-color);
+  color: var(--link-hover-color);
+}
+
 .builtins-tip {
   padding: 1em;
   font-style: italic;
@@ -594,7 +608,7 @@ pre>samp {
 
 @media only screen and (max-device-width: 480px) and (orientation: portrait) {
   :root {
-      --top-header-height: 140px;
+      --top-header-height: 160px;
   }
 
   #search-shortcut-key {

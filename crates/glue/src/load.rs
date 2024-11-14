@@ -10,7 +10,7 @@ use roc_build::{
     },
 };
 use roc_collections::MutMap;
-use roc_error_macros::todo_lambda_erasure;
+use roc_error_macros::{internal_error, todo_lambda_erasure};
 use roc_gen_llvm::run_roc::RocCallResult;
 use roc_load::{ExecutionMode, FunctionKind, LoadConfig, LoadedModule, LoadingProblem, Threading};
 use roc_mono::ir::{generate_glue_procs, CrashTag, GlueProc, OptLevel};
@@ -42,7 +42,7 @@ pub fn generate(
     backend: CodeGenBackend,
 ) -> io::Result<i32> {
     let target = Triple::host().into();
-    // TODO: Add verification around the paths. Make sure they heav the correct file extension and what not.
+    // TODO: Add verification around the paths. Make sure they have the correct file extension and what not.
     match load_types(
         input_path.to_path_buf(),
         Threading::AllAvailable,
@@ -77,6 +77,11 @@ pub fn generate(
 
             let tempdir_res = tempfile::tempdir();
 
+            // we don't need a host for glue, we will generate a dylib
+            // that will be loaded by the roc compiler/cli
+            let build_host = false;
+            let suppress_build_host_warning = true;
+
             let res_binary_path = match tempdir_res {
                 Ok(dylib_dir) => build_file(
                     &arena,
@@ -86,7 +91,8 @@ pub fn generate(
                     false,
                     link_type,
                     linking_strategy,
-                    true,
+                    build_host,
+                    suppress_build_host_warning,
                     None,
                     RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
                     load_config,
@@ -297,7 +303,13 @@ fn number_lambda_sets(subs: &Subs, initial: Variable) -> Vec<Variable> {
         use roc_types::types::Uls;
 
         match subs.get_content_without_compacting(var) {
-            RigidVar(_) | RigidAbleVar(_, _) | FlexVar(_) | FlexAbleVar(_, _) | Error => (),
+            RigidVar(_)
+            | RigidAbleVar(_, _)
+            | FlexVar(_)
+            | FlexAbleVar(_, _)
+            | Pure
+            | Effectful
+            | Error => (),
 
             RecursionVar { .. } => {
                 // we got here, so we've treated this type already
@@ -308,7 +320,7 @@ fn number_lambda_sets(subs: &Subs, initial: Variable) -> Vec<Variable> {
                     stack.extend(var_slice!(*args));
                 }
 
-                Func(arg_vars, closure_var, ret_var) => {
+                Func(arg_vars, closure_var, ret_var, _fx_var) => {
                     lambda_sets.push(subs.get_root_key_without_compacting(*closure_var));
 
                     stack.push(*ret_var);
@@ -318,6 +330,7 @@ fn number_lambda_sets(subs: &Subs, initial: Variable) -> Vec<Variable> {
 
                 EmptyRecord => (),
                 EmptyTagUnion => (),
+                EffectfulFunc => internal_error!(),
 
                 Record(fields, ext) => {
                     let fields = *fields;

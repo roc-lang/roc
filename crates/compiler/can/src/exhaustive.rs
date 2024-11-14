@@ -141,7 +141,9 @@ fn index_var(
             | Content::RigidAbleVar(_, _)
             | Content::LambdaSet(_)
             | Content::ErasedLambda
-            | Content::RangedNumber(..) => return Err(TypeError),
+            | Content::RangedNumber(..)
+            | Content::Pure
+            | Content::Effectful => return Err(TypeError),
             Content::Error => return Err(TypeError),
             Content::RecursionVar {
                 structure,
@@ -150,7 +152,8 @@ fn index_var(
                 var = *structure;
             }
             Content::Structure(structure) => match structure {
-                FlatType::Func(_, _, _) => return Err(TypeError),
+                FlatType::Func(_, _, _, _) => return Err(TypeError),
+                FlatType::EffectfulFunc => return Err(TypeError),
                 FlatType::Apply(Symbol::LIST_LIST, args) => {
                     match (subs.get_subs_slice(*args), ctor) {
                         ([elem_var], IndexCtor::List) => {

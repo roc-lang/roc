@@ -4,17 +4,16 @@ use roc_build::link::LinkType;
 use roc_build::program::{check_file, CodeGenBackend};
 use roc_cli::{
     build_app, format_files, format_src, test, BuildConfig, FormatMode, CMD_BUILD, CMD_CHECK,
-    CMD_DEV, CMD_DOCS, CMD_FORMAT, CMD_GEN_STUB_LIB, CMD_GLUE, CMD_PREPROCESS_HOST, CMD_REPL,
-    CMD_RUN, CMD_TEST, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_LIB, FLAG_MAIN,
-    FLAG_NO_COLOR, FLAG_NO_HEADER, FLAG_NO_LINK, FLAG_OUTPUT, FLAG_PP_DYLIB, FLAG_PP_HOST,
-    FLAG_PP_PLATFORM, FLAG_STDIN, FLAG_STDOUT, FLAG_TARGET, FLAG_TIME, GLUE_DIR, GLUE_SPEC,
-    ROC_FILE, VERSION,
+    CMD_DEV, CMD_DOCS, CMD_FORMAT, CMD_GLUE, CMD_PREPROCESS_HOST, CMD_REPL, CMD_RUN, CMD_TEST,
+    CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_LIB, FLAG_MAIN, FLAG_NO_COLOR,
+    FLAG_NO_HEADER, FLAG_NO_LINK, FLAG_OUTPUT, FLAG_PP_DYLIB, FLAG_PP_HOST, FLAG_PP_PLATFORM,
+    FLAG_STDIN, FLAG_STDOUT, FLAG_TARGET, FLAG_TIME, GLUE_DIR, GLUE_SPEC, ROC_FILE, VERSION,
 };
 use roc_docs::generate_docs_html;
 use roc_error_macros::user_error;
 use roc_gen_dev::AssemblyBackendMode;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
-use roc_load::{FunctionKind, LoadingProblem, Threading};
+use roc_load::{LoadingProblem, Threading};
 use roc_packaging::cache::{self, RocCacheDir};
 use roc_target::Target;
 use std::fs::{self, FileType};
@@ -120,21 +119,6 @@ fn main() -> io::Result<()> {
                 Ok(1)
             }
         }
-        Some((CMD_GEN_STUB_LIB, matches)) => {
-            let input_path = matches.get_one::<PathBuf>(ROC_FILE).unwrap();
-            let target = matches
-                .get_one::<String>(FLAG_TARGET)
-                .and_then(|s| Target::from_str(s).ok())
-                .unwrap_or_default();
-            let function_kind = FunctionKind::from_env();
-            roc_linker::generate_stub_lib(
-                input_path,
-                RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
-                target,
-                function_kind,
-            );
-            Ok(0)
-        }
         Some((CMD_PREPROCESS_HOST, matches)) => {
             let preprocess_host_err =
                 { |msg: String| user_error!("\n\n ERROR PRE-PROCESSING HOST: {}\n\n", msg) };
@@ -169,10 +153,14 @@ fn main() -> io::Result<()> {
 
             let verbose_and_time = matches.get_one::<bool>(roc_cli::FLAG_VERBOSE).unwrap();
 
+            let preprocessed_path = platform_path.with_file_name(target.prebuilt_surgical_host());
+            let metadata_path = platform_path.with_file_name(target.metadata_file_name());
+
             roc_linker::preprocess_host(
                 target,
                 host_path,
-                platform_path,
+                metadata_path.as_path(),
+                preprocessed_path.as_path(),
                 dylib_path,
                 *verbose_and_time,
                 *verbose_and_time,

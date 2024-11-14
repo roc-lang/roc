@@ -3,7 +3,6 @@ use bumpalo::Bump;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
 
-use crate::parser::EReturn;
 use crate::{
     ast::{
         AbilityImpls, AbilityMember, AssignedField, Collection, Defs, Expr, FullAst, Header,
@@ -23,9 +22,9 @@ use crate::{
     parser::{
         EAbility, EClosure, EExpect, EExposes, EExpr, EHeader, EIf, EImport, EImportParams,
         EImports, EInParens, EList, EPackageEntry, EPackageName, EPackages, EParams, EPattern,
-        EProvides, ERecord, ERequires, EString, EType, ETypeAbilityImpl, ETypeApply, ETypeInParens,
-        ETypeInlineAlias, ETypeRecord, ETypeTagUnion, ETypedIdent, EWhen, PInParens, PList,
-        PRecord, SyntaxError,
+        EProvides, ERecord, ERequires, EReturn, EString, EType, ETypeAbilityImpl, ETypeApply,
+        ETypeInParens, ETypeInlineAlias, ETypeRecord, ETypeTagUnion, ETypedIdent, EWhen, PInParens,
+        PList, PRecord, SyntaxError,
     },
 };
 
@@ -440,6 +439,7 @@ impl<'a> Normalize<'a> for ValueDef<'a> {
                 IngestedFileImport(ingested_file_import.normalize(arena))
             }
             Stmt(loc_expr) => Stmt(arena.alloc(loc_expr.normalize(arena))),
+            StmtAfterExpr => StmtAfterExpr,
         }
     }
 }
@@ -757,6 +757,7 @@ impl<'a> Normalize<'a> for Expr<'a> {
                 arena.alloc(a.normalize(arena)),
                 arena.alloc(b.normalize(arena)),
             ),
+            Expr::Try => Expr::Try,
             Expr::Return(a, b) => Expr::Return(
                 arena.alloc(a.normalize(arena)),
                 b.map(|loc_b| &*arena.alloc(loc_b.normalize(arena))),
@@ -881,8 +882,9 @@ impl<'a> Normalize<'a> for Pattern<'a> {
 impl<'a> Normalize<'a> for TypeAnnotation<'a> {
     fn normalize(&self, arena: &'a Bump) -> Self {
         match *self {
-            TypeAnnotation::Function(a, b) => TypeAnnotation::Function(
+            TypeAnnotation::Function(a, arrow, b) => TypeAnnotation::Function(
                 arena.alloc(a.normalize(arena)),
+                arrow,
                 arena.alloc(b.normalize(arena)),
             ),
             TypeAnnotation::Apply(a, b, c) => TypeAnnotation::Apply(a, b, c.normalize(arena)),
@@ -1055,6 +1057,7 @@ impl<'a> Normalize<'a> for EExpr<'a> {
             }
             EExpr::Underscore(_pos) => EExpr::Underscore(Position::zero()),
             EExpr::Crash(_pos) => EExpr::Crash(Position::zero()),
+            EExpr::Try(_pos) => EExpr::Try(Position::zero()),
             EExpr::InParens(inner_err, _pos) => {
                 EExpr::InParens(inner_err.normalize(arena), Position::zero())
             }
@@ -1070,7 +1073,6 @@ impl<'a> Normalize<'a> for EExpr<'a> {
             EExpr::IndentEnd(_pos) => EExpr::IndentEnd(Position::zero()),
             EExpr::UnexpectedComma(_pos) => EExpr::UnexpectedComma(Position::zero()),
             EExpr::UnexpectedTopLevelExpr(_pos) => EExpr::UnexpectedTopLevelExpr(Position::zero()),
-            EExpr::StmtAfterExpr(_pos) => EExpr::StmtAfterExpr(Position::zero()),
             EExpr::RecordUpdateOldBuilderField(_pos) => {
                 EExpr::RecordUpdateOldBuilderField(Region::zero())
             }

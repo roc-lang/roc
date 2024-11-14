@@ -41,6 +41,7 @@ Defs(
                             ),
                         },
                     ],
+                    Pure,
                     @18-29 Tuple {
                         elems: [
                             @19-22 Apply(

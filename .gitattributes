@@ -1,4 +1,5 @@
 # Require roc files to be checked out with Unix line endings, even on windows
 *.roc  text eol=lf
+* text=auto eol=lf
 
 crates/compiler/test_mono/generated/* linguist-generated=true

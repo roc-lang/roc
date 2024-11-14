@@ -64,6 +64,9 @@ const ABILITY_IMPLEMENTATION_NOT_IDENTIFIER: &str = "ABILITY IMPLEMENTATION NOT 
 const DUPLICATE_IMPLEMENTATION: &str = "DUPLICATE IMPLEMENTATION";
 const UNNECESSARY_IMPLEMENTATIONS: &str = "UNNECESSARY IMPLEMENTATIONS";
 const INCOMPLETE_ABILITY_IMPLEMENTATION: &str = "INCOMPLETE ABILITY IMPLEMENTATION";
+const STATEMENT_AFTER_EXPRESSION: &str = "STATEMENT AFTER EXPRESSION";
+const MISSING_EXCLAMATION: &str = "MISSING EXCLAMATION";
+const UNNECESSARY_EXCLAMATION: &str = "UNNECESSARY EXCLAMATION";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -195,7 +198,7 @@ pub fn can_problem<'b>(
                 ]),
                 alloc.region(lines.convert_region(region), severity),
                 alloc.reflow("Builtins are imported automatically, so you can remove this import."),
-                alloc.reflow("Tip: Learn more about builtins in the tutorial:\n\n<https://www.roc-lang.org/tutorial#builtin-modules>"),
+                alloc.reflow("Tip: Learn more about builtins in the tutorial:\n<https://www.roc-lang.org/tutorial#builtin-modules>"),
             ]);
 
             title = EXPLICIT_BUILTIN_IMPORT.to_string();
@@ -213,7 +216,7 @@ pub fn can_problem<'b>(
                     alloc.symbol_unqualified(symbol),
                     alloc.reflow(" from the exposing list.")
                 ]),
-                alloc.reflow("Tip: Learn more about builtins in the tutorial:\n\n<https://www.roc-lang.org/tutorial#builtin-modules>"),
+                alloc.reflow("Tip: Learn more about builtins in the tutorial:\n<https://www.roc-lang.org/tutorial#builtin-modules>"),
             ]);
 
             title = EXPLICIT_BUILTIN_IMPORT.to_string();
@@ -1192,7 +1195,7 @@ pub fn can_problem<'b>(
             doc = alloc.stack([
                 alloc.reflow("This destructure assignment doesn't introduce any new variables:"),
                 alloc.region(lines.convert_region(region), severity),
-                alloc.reflow("If you don't need to use the value on the right-hand-side of this assignment, consider removing the assignment. Since Roc is purely functional, assignments that don't introduce variables cannot affect a program's behavior!"),
+                alloc.reflow("If you don't need to use the value on the right-hand side of this assignment, consider removing the assignment. Since effects are not allowed at the top-level, assignments that don't introduce variables cannot affect a program's behavior"),
             ]);
             title = "UNNECESSARY DEFINITION".to_string();
         }
@@ -1399,6 +1402,68 @@ pub fn can_problem<'b>(
             ]);
 
             title = "UNNECESSARY RETURN".to_string();
+        }
+
+        Problem::StmtAfterExpr(region) => {
+            doc = alloc.stack([
+                alloc
+                    .reflow(r"I just finished parsing an expression with a series of definitions,"),
+                alloc.reflow(
+                    r"and this line is indented as if it's intended to be part of that expression:",
+                ),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.concat([alloc.reflow(
+                    "However, I already saw the final expression in that series of definitions.",
+                )]),
+                alloc.tip().append(
+                    alloc.reflow(
+                        "An expression like `4`, `\"hello\"`, or `functionCall MyThing` is like `return 4` in other programming languages. To me, it seems like you did `return 4` followed by more code in the lines after, that code would never be executed!"
+                    )
+                ),
+                alloc.tip().append(
+                    alloc.reflow(
+                        "If you are working with `Task`, this error can happen if you forgot a `!` somewhere."
+                    )
+                )
+            ]);
+
+            title = STATEMENT_AFTER_EXPRESSION.to_string();
+        }
+
+        Problem::UnsuffixedEffectfulRecordField(region) => {
+            doc = alloc.stack([
+                alloc.reflow(
+                    "The type of this record field is an effectful function, but its name does not indicate so:",
+                ),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.reflow("Add an exclamation mark at the end, like:"),
+                alloc
+                    .parser_suggestion("{ readFile!: Str => Str }")
+                    .indent(4),
+                alloc.reflow("This will help readers identify it as a source of effects."),
+            ]);
+
+            title = MISSING_EXCLAMATION.to_string();
+        }
+
+        Problem::SuffixedPureRecordField(region) => {
+            doc = alloc.stack([
+                alloc.reflow(
+                    "The type of this record field is a pure function, but its name suggests otherwise:",
+                ),
+                alloc.region(lines.convert_region(region), severity),
+                alloc
+                    .reflow("The exclamation mark at the end is reserved for effectful functions."),
+                alloc.concat([
+                    alloc.hint("Did you mean to use "),
+                    alloc.keyword("=>"),
+                    alloc.text(" instead of "),
+                    alloc.keyword("->"),
+                    alloc.text("?"),
+                ]),
+            ]);
+
+            title = UNNECESSARY_EXCLAMATION.to_string();
         }
     };
 

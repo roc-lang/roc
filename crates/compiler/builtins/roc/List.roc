@@ -70,6 +70,8 @@ module [
     countIf,
     chunksOf,
     concatUtf8,
+    forEach!,
+    forEachTry!,
 ]
 
 import Bool exposing [Bool, Eq]
@@ -1383,3 +1385,44 @@ concatUtf8 : List U8, Str -> List U8
 
 expect (List.concatUtf8 [1, 2, 3, 4] "🐦") == [1, 2, 3, 4, 240, 159, 144, 166]
 
+## Run an effectful function for each element on the list.
+##
+## ```roc
+## List.forEach! ["Alice", "Bob", "Charlie"] \name ->
+##     createAccount! name
+##     log! "Account created"
+## ```
+##
+## If the function might fail or you need to return early, use [forEachTry!].
+forEach! : List a, (a => {}) => {}
+forEach! = \list, func! ->
+    when list is
+        [] ->
+            {}
+
+        [elem, .. as rest] ->
+            func! elem
+            forEach! rest func!
+
+## Run an effectful function that might fail for each element on the list.
+##
+## If the function returns `Err`, the iteration stops and the error is returned.
+##
+## ```roc
+## List.forEachTry! filesToDelete \path ->
+##     try File.delete! path
+##     Stdout.line! "$(path) deleted"
+## ```
+forEachTry! : List a, (a => Result {} err) => Result {} err
+forEachTry! = \list, func! ->
+    when list is
+        [] ->
+            Ok {}
+
+        [elem, .. as rest] ->
+            when func! elem is
+                Ok {} ->
+                    forEachTry! rest func!
+
+                Err err ->
+                    Err err

@@ -30,28 +30,28 @@ Defs {
                     ident: "await",
                 },
                 [
-                    @15-17 Var {
+                    @15-16 Var {
                         module_name: "",
                         ident: "a",
                     },
                     @11-17 Closure(
                         [
-                            @15-17 Identifier {
+                            @15-16 Identifier {
                                 ident: "#!0_arg",
                             },
                         ],
                         @11-17 LowLevelDbg(
                             (
                                 "test.roc:2",
-                                "in",
+                                "i",
                             ),
-                            @15-17 Apply(
-                                @15-17 Var {
+                            @15-16 Apply(
+                                @15-16 Var {
                                     module_name: "Inspect",
                                     ident: "toStr",
                                 },
                                 [
-                                    @15-17 Var {
+                                    @15-16 Var {
                                         module_name: "",
                                         ident: "#!0_arg",
                                     },

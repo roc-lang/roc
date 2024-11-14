@@ -112,8 +112,6 @@ comptime {
 const Unit = extern struct {};
 
 pub fn main() !u8 {
-    const stderr = std.io.getStdErr().writer();
-
     // The size might be zero; if so, make it at least 8 so that we don't have a nullptr
     const size = @max(@as(usize, @intCast(roc__mainForHost_1_exposed_size())), 8);
     const raw_output = roc_alloc(@as(usize, @intCast(size)), @alignOf(u64)).?;
@@ -123,24 +121,13 @@ pub fn main() !u8 {
         roc_dealloc(raw_output, @alignOf(u64));
     }
 
-    var timer = std.time.Timer.start() catch unreachable;
-
     roc__mainForHost_1_exposed_generic(output);
 
     const closure_data_pointer = @as([*]u8, @ptrCast(output));
 
     call_the_closure(closure_data_pointer);
 
-    const nanos = timer.read();
-    const seconds = (@as(f64, @floatFromInt(nanos)) / 1_000_000_000.0);
-
-    stderr.print("runtime: {d:.3}ms\n", .{seconds * 1000}) catch unreachable;
-
     return 0;
-}
-
-fn to_seconds(tms: std.os.timespec) f64 {
-    return @as(f64, @floatFromInt(tms.tv_sec)) + (@as(f64, @floatFromInt(tms.tv_nsec)) / 1_000_000_000.0);
 }
 
 fn call_the_closure(closure_data_pointer: [*]u8) void {

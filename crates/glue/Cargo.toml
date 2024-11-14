@@ -36,7 +36,7 @@ target-lexicon.workspace = true
 tempfile.workspace = true
 
 [dev-dependencies]
-cli_utils = { path = "../cli_utils" }
+cli_test_utils = { path = "../cli_test_utils" }
 dircpy.workspace = true
 
 indoc.workspace = true
