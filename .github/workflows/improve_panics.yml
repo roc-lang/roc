@@ -1,0 +1,58 @@
+on:
+  pull_request:
+
+# Check that the number of panicking function/macro calls has not increased
+# https://github.com/roc-lang/roc/issues/2046
+name: Improve panics
+
+# this cancels workflows currently in progress if you start a new one
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  improve-panics:
+    name: improve panics
+    runs-on: [ubuntu-22.04]
+    timeout-minutes: 15
+    env:
+      FORCE_COLOR: 1
+      RUST_BACKTRACE: 1
+    steps:
+      # install nix
+      - uses: cachix/install-nix-action@v23
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: checkout source branch in separate directory
+        uses: actions/checkout@v4
+        with:
+          clean: true
+          path: source
+          ref: ${{ github.ref }}
+
+      - name: checkout target branch in separate directory
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          path: target
+          ref: ${{ github.base_ref }}
+
+      - name: compare violations
+        run: |
+          for d in source target; do
+            cd $d
+            echo "Cleaning $d..."
+            cargo clean
+            echo "Calculating $d violations..."
+            VIOLATIONS=$(nix develop -c cargo clippy --no-deps -- -W clippy::unwrap_used -W clippy::expect_used -W clippy::panic -W clippy::unreachable 2> >(grep -e "warning: \`panic\`" -e "warning: used" -e "warning: usage of" | wc -l ))
+            echo $VIOLATIONS > violations
+            cd ..
+          done
+          SOURCE_VIOLATIONS=$(cat source/violations)
+          TARGET_VIOLATIONS=$(cat target/violations)
+          if [ "$SOURCE_VIOLATIONS" -gt "$TARGET_VIOLATIONS" ]; then
+            echo "panic/unwrap/expect/unreachable count increased from $TARGET_VIOLATIONS to $SOURCE_VIOLATIONS"
+            echo "We want this to decrease, or at least stay the same"
+            exit 1
+          fi
