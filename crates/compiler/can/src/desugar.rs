@@ -407,7 +407,6 @@ pub fn desugar_expr<'a>(
         | AccessorFunction(_)
         | Underscore { .. }
         | MalformedIdent(_, _)
-        | MalformedClosure
         | MalformedSuffixed(..)
         | PrecedenceConflict { .. }
         | EmptyRecordBuilder(_)
@@ -712,7 +711,6 @@ pub fn desugar_expr<'a>(
                     AssignedField::SpaceBefore(_, _) | AssignedField::SpaceAfter(_, _) => {
                         unreachable!("Should have been desugared in `desugar_field`")
                     }
-                    AssignedField::Malformed(_name) => continue,
                 };
 
                 field_data.push(FieldData {
@@ -1316,8 +1314,6 @@ fn desugar_field<'a>(
         }
         SpaceBefore(field, _spaces) => desugar_field(env, scope, field),
         SpaceAfter(field, _spaces) => desugar_field(env, scope, field),
-
-        Malformed(string) => Malformed(string),
     }
 }
 

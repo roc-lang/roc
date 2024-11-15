@@ -435,7 +435,6 @@ impl Problem {
             | Problem::RuntimeError(RuntimeError::InvalidPrecedence(_, region))
             | Problem::RuntimeError(RuntimeError::MalformedIdentifier(_, _, region))
             | Problem::RuntimeError(RuntimeError::MalformedTypeName(_, region))
-            | Problem::RuntimeError(RuntimeError::MalformedClosure(region))
             | Problem::RuntimeError(RuntimeError::MalformedSuffixed(region))
             | Problem::RuntimeError(RuntimeError::InvalidRecordUpdate { region })
             | Problem::RuntimeError(RuntimeError::InvalidFloat(_, region, _))
@@ -678,7 +677,6 @@ pub enum RuntimeError {
     InvalidPrecedence(PrecedenceProblem, Region),
     MalformedIdentifier(Box<str>, roc_parse::ident::BadIdent, Region),
     MalformedTypeName(Box<str>, Region),
-    MalformedClosure(Region),
     InvalidRecordUpdate {
         region: Region,
     },
@@ -750,7 +748,6 @@ impl RuntimeError {
             | RuntimeError::InvalidPrecedence(_, region)
             | RuntimeError::MalformedIdentifier(_, _, region)
             | RuntimeError::MalformedTypeName(_, region)
-            | RuntimeError::MalformedClosure(region)
             | RuntimeError::MalformedSuffixed(region)
             | RuntimeError::InvalidRecordUpdate { region }
             | RuntimeError::InvalidFloat(_, region, _)

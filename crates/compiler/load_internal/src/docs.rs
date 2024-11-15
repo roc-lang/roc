@@ -476,7 +476,7 @@ fn contains_unexposed_type(
                             return true;
                         }
                     }
-                    AssignedField::Malformed(_) | AssignedField::LabelOnly(_) => {
+                    AssignedField::LabelOnly(_) => {
                         // contains no unexposed types, so continue
                     }
                     AssignedField::SpaceBefore(field, _) | AssignedField::SpaceAfter(field, _) => {
@@ -523,9 +523,6 @@ fn contains_unexposed_type(
                                 return true;
                             }
                         }
-                    }
-                    Tag::Malformed(_) => {
-                        // contains no unexposed types, so continue
                     }
                     Tag::SpaceBefore(tag, _) | Tag::SpaceAfter(tag, _) => {
                         tags_to_process.push(*tag);
@@ -728,7 +725,7 @@ fn record_field_to_doc(
         AssignedField::LabelOnly(label) => Some(RecordField::LabelOnly {
             name: label.value.to_string(),
         }),
-        AssignedField::Malformed(_) | AssignedField::IgnoredValue(_, _, _) => None,
+        AssignedField::IgnoredValue(_, _, _) => None,
     }
 }
 
@@ -749,7 +746,6 @@ fn tag_to_doc(in_func_ann: bool, tag: ast::Tag) -> Option<Tag> {
         }),
         ast::Tag::SpaceBefore(&sub_tag, _) => tag_to_doc(in_func_ann, sub_tag),
         ast::Tag::SpaceAfter(&sub_tag, _) => tag_to_doc(in_func_ann, sub_tag),
-        ast::Tag::Malformed(_) => None,
     }
 }
 
