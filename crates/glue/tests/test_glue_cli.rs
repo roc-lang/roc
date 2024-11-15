@@ -46,8 +46,6 @@ mod glue_cli_tests {
                 fn $test_name() {
                     let dir = fixtures_dir($fixture_dir);
 
-                    dbg!(&dir);
-
                     generate_glue_for(&dir, std::iter::empty());
 
                     fn validate<'a, I: IntoIterator<Item = &'a str> + std::fmt::Debug>(dir: PathBuf, args: I) {
