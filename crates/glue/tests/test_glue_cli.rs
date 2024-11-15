@@ -221,7 +221,7 @@ mod glue_cli_tests {
 
         let fixture_template_dir = fixture_templates_dir.join(fixtures_subfolder_name);
 
-        if fixture_templates_dir.exists() {
+        if fixture_template_dir.exists() {
             // Copy the template from the templates directory into the fixture dir if it exists
             dircpy::CopyBuilder::new(fixture_template_dir, platform_dir)
                 .overwrite(true) // overwrite any files that were already present
