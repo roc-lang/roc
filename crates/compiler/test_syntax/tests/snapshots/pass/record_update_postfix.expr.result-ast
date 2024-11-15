@@ -1,0 +1,28 @@
+SpaceAfter(
+    RecordUpdate {
+        update: @16-27 Var {
+            module_name: "Foo.Bar",
+            ident: "baz",
+        },
+        fields: [
+            @2-6 RequiredValue(
+                @2-3 "x",
+                [],
+                @5-6 Num(
+                    "5",
+                ),
+            ),
+            @8-12 RequiredValue(
+                @8-9 "y",
+                [],
+                @11-12 Num(
+                    "0",
+                ),
+            ),
+        ],
+        kind: Postfix,
+    },
+    [
+        Newline,
+    ],
+)

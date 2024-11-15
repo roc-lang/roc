@@ -701,9 +701,14 @@ impl<'a> Normalize<'a> for Expr<'a> {
                 target,
             },
             Expr::List(a) => Expr::List(a.normalize(arena)),
-            Expr::RecordUpdate { update, fields } => Expr::RecordUpdate {
+            Expr::RecordUpdate {
+                update,
+                fields,
+                kind,
+            } => Expr::RecordUpdate {
                 update: arena.alloc(update.normalize(arena)),
                 fields: fields.normalize(arena),
+                kind,
             },
             Expr::Record(a) => Expr::Record(a.normalize(arena)),
             Expr::RecordBuilder { mapper, fields } => Expr::RecordBuilder {
@@ -1079,6 +1084,9 @@ impl<'a> Normalize<'a> for EExpr<'a> {
             EExpr::RecordBuilderOldBuilderField(_pos) => {
                 EExpr::RecordBuilderOldBuilderField(Region::zero())
             }
+            EExpr::RecordMixedPrefixAndPostfixUpdate(_pos) => {
+                EExpr::RecordMixedPrefixAndPostfixUpdate(Region::zero())
+            }
         }
     }
 }
@@ -1175,6 +1183,8 @@ impl<'a> Normalize<'a> for ERecord<'a> {
             }
             ERecord::Space(inner_err, _) => ERecord::Space(*inner_err, Position::zero()),
             ERecord::Prefix(_) => ERecord::Prefix(Position::zero()),
+            ERecord::Postfix(_) => ERecord::Prefix(Position::zero()),
+            ERecord::Dots(_) => ERecord::Dots(Position::zero()),
         }
     }
 }
@@ -1348,6 +1358,8 @@ impl<'a> Normalize<'a> for ETypeAbilityImpl<'a> {
                 ETypeAbilityImpl::IndentAmpersand(Position::zero())
             }
             ETypeAbilityImpl::Prefix(_) => ETypeAbilityImpl::Prefix(Position::zero()),
+            ETypeAbilityImpl::Postfix(_) => ETypeAbilityImpl::Postfix(Position::zero()),
+            ETypeAbilityImpl::Dots(_) => ETypeAbilityImpl::Dots(Position::zero()),
         }
     }
 }

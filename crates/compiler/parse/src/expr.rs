@@ -2,8 +2,8 @@ use crate::ast::{
     is_expr_suffixed, AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces,
     Implements, ImplementsAbilities, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
     ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport,
-    ModuleImportParams, Pattern, Spaceable, Spaced, Spaces, SpacesBefore, TryTarget,
-    TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    ModuleImportParams, Pattern, RecordUpdateKind, Spaceable, Spaced, Spaces, SpacesBefore,
+    TryTarget, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use crate::blankspace::{
     loc_space0_e, require_newline_or_eof, space0_after_e, space0_around_ee, space0_before_e,
@@ -922,6 +922,12 @@ fn import_params<'a>() -> impl Parser<'a, ModuleImportParams<'a>, EImportParams<
                         ))
                     }
                 }
+            }
+            if let Some(postfix) = loc_record.value.postfix {
+                return Err((
+                    MadeProgress,
+                    EImportParams::RecordUpdateFound(postfix.region),
+                ));
             }
 
             let params = loc_record
@@ -3570,52 +3576,67 @@ fn record_field_expr<'a>() -> impl Parser<'a, Loc<Expr<'a>>, ERecord<'a>> {
     )
 }
 
+#[derive(Debug)]
 enum RecordHelpPrefix {
     Update,
     Mapper,
 }
 
-fn record_prefix_identifier<'a>() -> impl Parser<'a, Expr<'a>, ERecord<'a>> {
+fn record_update_target<'a, F>(err_kind: F) -> impl Parser<'a, Expr<'a>, ERecord<'a>>
+where
+    F: Fn(Position) -> ERecord<'a>,
+{
     specialize_err(
-        |_, pos| ERecord::Prefix(pos),
+        move |_, pos| err_kind(pos),
         map_with_arena(parse_ident, ident_to_expr),
     )
 }
 
+#[derive(Debug)]
 struct RecordHelp<'a> {
     prefix: Option<(Loc<Expr<'a>>, RecordHelpPrefix)>,
     fields: Collection<'a, Loc<RecordField<'a>>>,
+    postfix: Option<Loc<Expr<'a>>>,
 }
 
 fn record_help<'a>() -> impl Parser<'a, RecordHelp<'a>, ERecord<'a>> {
     between(
         byte(b'{', ERecord::Open),
-        reset_min_indent(record!(RecordHelp {
-            // You can optionally have an identifier followed by an '&' to
-            // make this a record update, e.g. { Foo.user & username: "blah" }.
-            prefix: optional(backtrackable(and(
-                // We wrap the ident in an Expr here,
-                // so that we have a Spaceable value to work with,
-                // and then in canonicalization verify that it's an Expr::Var
-                // (and not e.g. an `Expr::Access`) and extract its string.
-                spaces_around(loc(record_prefix_identifier())),
-                map_with_arena(
-                    either(
-                        byte(b'&', ERecord::Ampersand),
-                        two_bytes(b'<', b'-', ERecord::Arrow),
-                    ),
-                    |_arena, output| match output {
-                        Either::First(()) => RecordHelpPrefix::Update,
-                        Either::Second(()) => RecordHelpPrefix::Mapper,
-                    }
+        reset_min_indent(
+            record!(RecordHelp {
+                // You can optionally have an identifier followed by an '&' to
+                // make this a record update, e.g. { Foo.user & username: "blah" }.
+                prefix: optional(backtrackable(and(
+                    // We wrap the ident in an Expr here,
+                    // so that we have a Spaceable value to work with,
+                    // and then in canonicalization verify that it's an Expr::Var
+                    // (and not e.g. an `Expr::Access`) and extract its string.
+                    spaces_around(loc(record_update_target(ERecord::Prefix))),
+                    map_with_arena(
+                        either(
+                            byte(b'&', ERecord::Ampersand),
+                            two_bytes(b'<', b'-', ERecord::Arrow),
+                        ),
+                        |_arena, output| match output {
+                            Either::First(()) => RecordHelpPrefix::Update,
+                            Either::Second(()) => RecordHelpPrefix::Mapper,
+                        }
+                    )
+                ))),
+                fields: collection_inner(
+                    loc(record_field()),
+                    byte(b',', ERecord::End),
+                    RecordField::SpaceBefore
                 )
-            ))),
-            fields: collection_inner(
-                loc(record_field()),
-                byte(b',', ERecord::End),
-                RecordField::SpaceBefore
-            ),
-        })),
+                .trace("record_fields"),
+                postfix: optional(skip_first(
+                    two_bytes(b'.', b'.', ERecord::Dots).trace("dot_dot"),
+                    spaces_around(loc(record_update_target(ERecord::Postfix)))
+                        .trace("record_postfix")
+                )),
+            })
+            .trace("record"),
+        ),
         byte(b'}', ERecord::End),
     )
 }
@@ -3628,14 +3649,34 @@ fn record_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
             record_field_access_chain(),
         ),
         move |arena, state, _, (record, accessors)| {
-            let expr_result = match record.prefix {
-                Some((update, RecordHelpPrefix::Update)) => {
-                    record_update_help(arena, update, record.fields)
+            let expr_result = match (record.prefix, record.postfix) {
+                (Some((update, RecordHelpPrefix::Update)), None) => {
+                    record_update_help(arena, update, record.fields).map(|record_update| {
+                        Expr::RecordUpdate {
+                            update: record_update.update,
+                            fields: record_update.fields,
+                            kind: RecordUpdateKind::Prefix,
+                        }
+                    })
                 }
-                Some((mapper, RecordHelpPrefix::Mapper)) => {
+                (Some((mapper, RecordHelpPrefix::Mapper)), None) => {
                     record_builder_help(arena, mapper, record.fields)
                 }
-                None => {
+                (None, Some(update)) => {
+                    record_update_help(arena, update, record.fields).map(|record_update| {
+                        Expr::RecordUpdate {
+                            update: record_update.update,
+                            fields: record_update.fields,
+                            kind: RecordUpdateKind::Postfix,
+                        }
+                    })
+                }
+                (Some((prefix, _help)), Some(postfix)) => {
+                    Err(EExpr::RecordMixedPrefixAndPostfixUpdate(
+                        Region::span_across(&prefix.region, &postfix.region),
+                    ))
+                }
+                (None, None) => {
                     let special_field_found = record.fields.iter().find_map(|field| {
                         if field.value.is_ignored_value() {
                             Some(Err(EExpr::RecordUpdateIgnoredField(field.region)))
@@ -3666,11 +3707,19 @@ fn record_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     )
 }
 
+/// Can represent either
+/// 1. a prefix update `{ foo & bar:baz }` or
+/// 2. a postfix update like `{bar:baz, ..foo}`
+struct RecordUpdateHelp<'a> {
+    update: &'a Loc<Expr<'a>>,
+    fields: Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>,
+}
+
 fn record_update_help<'a>(
     arena: &'a Bump,
     update: Loc<Expr<'a>>,
     fields: Collection<'a, Loc<RecordField<'a>>>,
-) -> Result<Expr<'a>, EExpr<'a>> {
+) -> Result<RecordUpdateHelp<'a>, EExpr<'a>> {
     let result = fields.map_items_result(arena, |loc_field| {
         match loc_field.value.to_assigned_field(arena) {
             AssignedField::IgnoredValue(_, _, _) => {
@@ -3683,7 +3732,7 @@ fn record_update_help<'a>(
         }
     });
 
-    result.map(|fields| Expr::RecordUpdate {
+    result.map(|fields| RecordUpdateHelp {
         update: &*arena.alloc(update),
         fields,
     })

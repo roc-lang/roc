@@ -349,6 +349,7 @@ pub enum EExpr<'a> {
     RecordUpdateOldBuilderField(Region),
     RecordUpdateIgnoredField(Region),
     RecordBuilderOldBuilderField(Region),
+    RecordMixedPrefixAndPostfixUpdate(Region),
 
     // SingleQuote errors are folded into the EString
     Str(EString<'a>, Position),
@@ -401,6 +402,7 @@ pub enum ERecord<'a> {
     Open(Position),
 
     Prefix(Position),
+    Postfix(Position),
     Field(Position),
     UnderscoreField(Position),
     Colon(Position),
@@ -410,8 +412,9 @@ pub enum ERecord<'a> {
 
     // TODO remove
     Expr(&'a EExpr<'a>, Position),
-
     Space(BadInputError, Position),
+    /// The `..` in `{ foo: 123, bar: "abc", ..record }`
+    Dots(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -728,11 +731,13 @@ pub enum ETypeAbilityImpl<'a> {
     Space(BadInputError, Position),
 
     Prefix(Position),
+    Postfix(Position),
     QuestionMark(Position),
     Ampersand(Position),
     Expr(&'a EExpr<'a>, Position),
     IndentBar(Position),
     IndentAmpersand(Position),
+    Dots(Position),
 }
 
 impl<'a> From<ERecord<'a>> for ETypeAbilityImpl<'a> {
@@ -746,9 +751,11 @@ impl<'a> From<ERecord<'a>> for ETypeAbilityImpl<'a> {
             ERecord::Arrow(p) => ETypeAbilityImpl::Arrow(p),
             ERecord::Space(s, p) => ETypeAbilityImpl::Space(s, p),
             ERecord::Prefix(p) => ETypeAbilityImpl::Prefix(p),
+            ERecord::Postfix(p) => ETypeAbilityImpl::Postfix(p),
             ERecord::QuestionMark(p) => ETypeAbilityImpl::QuestionMark(p),
             ERecord::Ampersand(p) => ETypeAbilityImpl::Ampersand(p),
             ERecord::Expr(e, p) => ETypeAbilityImpl::Expr(e, p),
+            ERecord::Dots(p) => ETypeAbilityImpl::Dots(p),
         }
     }
 }

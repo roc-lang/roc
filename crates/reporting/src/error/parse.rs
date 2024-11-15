@@ -720,7 +720,8 @@ fn to_expr_report<'a>(
         ),
         EExpr::RecordUpdateOldBuilderField(region)
         | EExpr::RecordUpdateIgnoredField(region)
-        | EExpr::RecordBuilderOldBuilderField(region) => to_unhandled_parse_error_report(
+        | EExpr::RecordBuilderOldBuilderField(region)
+        | EExpr::RecordMixedPrefixAndPostfixUpdate(region) => to_unhandled_parse_error_report(
             alloc,
             lines,
             filename,

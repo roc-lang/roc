@@ -667,6 +667,7 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::RecordUpdate {
             fields,
             update: loc_update,
+            kind: _,
         } => {
             let (can_update, update_out) =
                 canonicalize_expr(env, var_store, scope, loc_update.region, &loc_update.value);
@@ -2638,7 +2639,11 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         ast::Expr::List(elems) => elems
             .iter()
             .all(|loc_expr| is_valid_interpolation(&loc_expr.value)),
-        ast::Expr::RecordUpdate { update, fields } => {
+        ast::Expr::RecordUpdate {
+            update,
+            fields,
+            kind: _,
+        } => {
             is_valid_interpolation(&update.value)
                 && fields.iter().all(|loc_field| match loc_field.value {
                     ast::AssignedField::RequiredValue(_label, loc_comments, loc_val)

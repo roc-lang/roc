@@ -10,7 +10,7 @@ use crate::Buf;
 use roc_module::called_via::{self, BinOp};
 use roc_parse::ast::{
     is_expr_suffixed, AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces,
-    Pattern, TryTarget, WhenBranch,
+    Pattern, RecordUpdateKind, TryTarget, WhenBranch,
 };
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_parse::ident::Accessor;
@@ -366,26 +366,42 @@ impl<'a> Formattable for Expr<'a> {
                 fmt_record_like(
                     buf,
                     None,
+                    None,
                     *fields,
                     indent,
                     format_assigned_field_multiline,
                     assigned_field_to_space_before,
                 );
             }
-            RecordUpdate { update, fields } => {
-                fmt_record_like(
+            RecordUpdate {
+                update,
+                fields,
+                kind,
+            } => match kind {
+                RecordUpdateKind::Prefix => fmt_record_like(
                     buf,
                     Some(RecordPrefix::Update(update)),
+                    None,
                     *fields,
                     indent,
                     format_assigned_field_multiline,
                     assigned_field_to_space_before,
-                );
-            }
+                ),
+                RecordUpdateKind::Postfix => fmt_record_like(
+                    buf,
+                    None,
+                    Some(update),
+                    *fields,
+                    indent,
+                    format_assigned_field_multiline,
+                    assigned_field_to_space_before,
+                ),
+            },
             RecordBuilder { mapper, fields } => {
                 fmt_record_like(
                     buf,
                     Some(RecordPrefix::Mapper(mapper)),
+                    None,
                     *fields,
                     indent,
                     format_assigned_field_multiline,
@@ -1481,6 +1497,7 @@ enum RecordPrefix<'a> {
 fn fmt_record_like<'a, Field, Format, ToSpaceBefore>(
     buf: &mut Buf,
     prefix: Option<RecordPrefix<'a>>,
+    postfix: Option<&Loc<Expr>>,
     fields: Collection<'a, Loc<Field>>,
     indent: u16,
     format_field_multiline: Format,
@@ -1493,7 +1510,11 @@ fn fmt_record_like<'a, Field, Format, ToSpaceBefore>(
     let loc_fields = fields.items;
     let final_comments = fields.final_comments();
     buf.indent(indent);
-    if loc_fields.is_empty() && final_comments.iter().all(|c| c.is_newline()) && prefix.is_none() {
+    if loc_fields.is_empty()
+        && final_comments.iter().all(|c| c.is_newline())
+        && prefix.is_none()
+        && postfix.is_none()
+    {
         buf.push_str("{}");
     } else {
         buf.push('{');
@@ -1517,6 +1538,7 @@ fn fmt_record_like<'a, Field, Format, ToSpaceBefore>(
         }
 
         let is_multiline = loc_fields.iter().any(|loc_field| loc_field.is_multiline())
+            || postfix.is_multiline()
             || !final_comments.is_empty();
 
         if is_multiline {
@@ -1552,10 +1574,15 @@ fn fmt_record_like<'a, Field, Format, ToSpaceBefore>(
             if count_leading_newlines(final_comments.iter()) > 1 {
                 buf.newline();
             }
-
             fmt_comments_only(buf, final_comments.iter(), NewlineAt::Top, field_indent);
 
-            buf.newline();
+            if let Some(record_var) = postfix {
+                buf.newline();
+                buf.indent(field_indent);
+                buf.push_str("..");
+                record_var.format(buf, indent);
+            }
+            buf.newline()
         } else {
             // is_multiline == false
             buf.spaces(1);
@@ -1568,6 +1595,14 @@ fn fmt_record_like<'a, Field, Format, ToSpaceBefore>(
                     buf.push_str(",");
                     buf.spaces(1);
                 }
+            }
+            if let Some(record_var) = postfix {
+                if !loc_fields.is_empty() {
+                    buf.push_str(",");
+                    buf.spaces(1);
+                }
+                buf.push_str("..");
+                record_var.format(buf, indent);
             }
             buf.spaces(1);
             // if we are here, that means that `final_comments` is empty, thus we don't have

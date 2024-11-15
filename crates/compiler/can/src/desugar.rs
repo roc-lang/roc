@@ -531,7 +531,11 @@ pub fn desugar_expr<'a>(
                 value: Tuple(fields),
             })
         }
-        RecordUpdate { fields, update } => {
+        RecordUpdate {
+            fields,
+            update,
+            kind,
+        } => {
             // NOTE the `update` field is always a `Var { .. }`, we only desugar it to get rid of
             // any spaces before/after
             let new_update = desugar_expr(env, scope, update);
@@ -551,6 +555,7 @@ pub fn desugar_expr<'a>(
                 value: RecordUpdate {
                     update: new_update,
                     fields: new_fields,
+                    kind: *kind,
                 },
             })
         }
@@ -585,6 +590,7 @@ pub fn desugar_expr<'a>(
                     )
                     .into_bump_slice(),
                 ),
+                kind: roc_parse::ast::RecordUpdateKind::Prefix,
             };
 
             env.arena.alloc(Loc {

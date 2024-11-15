@@ -1986,6 +1986,54 @@ mod test_fmt {
     }
 
     #[test]
+    fn record_postfix_updating() {
+        expr_formats_same(indoc!(r"{ leftShoe: nothing, ..shoes }"));
+        expr_formats_same(indoc!(r"{ ..shoes }"));
+        expr_formats_to(
+            indoc!(
+                r"
+                {    rightShoe :   nothing    ,    .. shoes    }
+                "
+            ),
+            indoc!(
+                r"
+                { rightShoe: nothing, ..shoes }
+                "
+            ),
+        );
+
+        expr_formats_same(indoc!(
+            r"
+            {
+                rightShoe: newRightShoe,
+                leftShoe: newLeftShoe,
+                ..shoes
+            }
+            "
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r"
+                {
+                    rightShoe: bareFoot
+                    , leftShoe: bareFoot,
+                    .. shoes}
+                "
+            ),
+            indoc!(
+                r"
+                {
+                    rightShoe: bareFoot,
+                    leftShoe: bareFoot,
+                    ..shoes
+                }
+                "
+            ),
+        );
+    }
+
+    #[test]
     fn record_builder() {
         expr_formats_same(indoc!(
             r"

@@ -401,6 +401,14 @@ pub enum TryTarget {
     Result,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecordUpdateKind {
+    /// e.g. `{ oldRecord & field: newValue }`
+    Prefix,
+    /// e.g. `{ field: newValue, ..oldRecord }`
+    Postfix,
+}
+
 /// A parsed expression. This uses lifetimes extensively for two reasons:
 ///
 /// 1. It uses Bump::alloc for all allocations, which returns a reference.
@@ -450,8 +458,8 @@ pub enum Expr<'a> {
     RecordUpdate {
         update: &'a Loc<Expr<'a>>,
         fields: Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>,
+        kind: RecordUpdateKind,
     },
-
     Record(Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>),
 
     Tuple(Collection<'a, &'a Loc<Expr<'a>>>),
@@ -653,7 +661,7 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::RecordUpdater(_) => false,
         Expr::TupleAccess(a, _) => is_expr_suffixed(a),
         Expr::List(items) => items.iter().any(|x| is_expr_suffixed(&x.value)),
-        Expr::RecordUpdate { update, fields } => {
+        Expr::RecordUpdate { update, fields, .. } => {
             is_expr_suffixed(&update.value)
                 || fields
                     .iter()
@@ -908,7 +916,7 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                         expr_stack.push(&loc_expr.value);
                     }
                 }
-                RecordUpdate { update, fields } => {
+                RecordUpdate { update, fields, .. } => {
                     expr_stack.reserve(fields.len() + 1);
                     expr_stack.push(&update.value);
                     push_stack_from_record_fields!(fields);
@@ -2482,7 +2490,7 @@ impl<'a> Malformed for Expr<'a> {
 
             List(items) => items.is_malformed(),
 
-            RecordUpdate { update, fields } => update.is_malformed() || fields.is_malformed(),
+            RecordUpdate { update, fields, kind:_ } => update.is_malformed() || fields.is_malformed(),
             Record(items) => items.is_malformed(),
             Tuple(items) => items.is_malformed(),
 
