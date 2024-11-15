@@ -556,7 +556,6 @@ impl<'a, T: Normalize<'a> + Copy + std::fmt::Debug> Normalize<'a> for AssignedFi
                 arena.alloc(c.normalize(arena)),
             ),
             AssignedField::LabelOnly(a) => AssignedField::LabelOnly(a.normalize(arena)),
-            AssignedField::Malformed(a) => AssignedField::Malformed(a),
             AssignedField::SpaceBefore(a, _) => a.normalize(arena),
             AssignedField::SpaceAfter(a, _) => a.normalize(arena),
         }
@@ -784,7 +783,6 @@ impl<'a> Normalize<'a> for Expr<'a> {
                 a.normalize(arena)
             }
             Expr::MalformedIdent(a, b) => Expr::MalformedIdent(a, remove_spaces_bad_ident(b)),
-            Expr::MalformedClosure => Expr::MalformedClosure,
             Expr::MalformedSuffixed(a) => Expr::MalformedSuffixed(a),
             Expr::PrecedenceConflict(a) => Expr::PrecedenceConflict(a),
             Expr::SpaceBefore(a, _) => a.normalize(arena),
@@ -938,7 +936,6 @@ impl<'a> Normalize<'a> for Tag<'a> {
                 name: name.normalize(arena),
                 args: args.normalize(arena),
             },
-            Tag::Malformed(a) => Tag::Malformed(a),
             Tag::SpaceBefore(a, _) => a.normalize(arena),
             Tag::SpaceAfter(a, _) => a.normalize(arena),
         }

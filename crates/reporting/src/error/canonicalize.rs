@@ -2194,9 +2194,6 @@ fn pretty_runtime_error<'b>(
 
             title = SYNTAX_PROBLEM;
         }
-        RuntimeError::MalformedClosure(_) => {
-            todo!("");
-        }
         RuntimeError::MalformedSuffixed(_) => {
             todo!("error for malformed suffix");
         }
