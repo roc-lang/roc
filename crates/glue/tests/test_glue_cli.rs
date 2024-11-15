@@ -221,16 +221,17 @@ mod glue_cli_tests {
 
         let fixtures_subfolder_name = platform_dir.parent().unwrap().file_name().unwrap();
 
-        // Copy the rust template from the templates directory into the fixture dir.
-        dircpy::CopyBuilder::new(
-            fixture_templates_dir.join(fixtures_subfolder_name),
-            platform_dir,
-        )
-        .overwrite(true) // overwrite any files that were already present
-        .run()
-        .unwrap();
+        let fixture_template_dir = fixture_templates_dir.join(fixtures_subfolder_name);
 
-        // Delete the glue file to make sure we're actually regenerating it!
+        if fixture_templates_dir.exists() {
+            // Copy the template from the templates directory into the fixture dir if it exists
+            dircpy::CopyBuilder::new(fixture_template_dir, platform_dir)
+                .overwrite(true) // overwrite any files that were already present
+                .run()
+                .unwrap();
+        }
+
+        // Delete the glue files to make sure we're actually regenerating it!
         if glue_dir.exists() {
             std::fs::remove_dir_all(&glue_dir)
                 .expect("Unable to remove test_glue dir in order to regenerate it in the test");
