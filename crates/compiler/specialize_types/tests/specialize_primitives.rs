@@ -9,17 +9,15 @@ mod helpers;
 mod specialize_primitives {
     use roc_specialize_types::{MonoExpr, Number};
 
-    use super::helpers::{expect_mono_expr, expect_mono_expr_with_interns, expect_no_expr};
+    use super::helpers::{expect_mono_expr, expect_mono_expr_with_interns};
 
     #[test]
     fn string_literal() {
         let string = "foo";
         let expected = format!("\"{string}\"");
-        expect_mono_expr_with_interns(
-            |arena, interns| interns.try_get(arena, string).unwrap(),
-            expected,
-            |id| MonoExpr::Str(id),
-        );
+        expect_mono_expr_with_interns(expected, |arena, interns| {
+            MonoExpr::Str(interns.try_get_id(arena, string).unwrap())
+        });
     }
 
     #[test]

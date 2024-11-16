@@ -247,6 +247,10 @@ impl<T> NonEmptySlice<T> {
             },
         }
     }
+
+    pub fn as_slice(&self) -> Slice<T> {
+        self.inner
+    }
 }
 
 impl<T> IntoIterator for NonEmptySlice<T> {

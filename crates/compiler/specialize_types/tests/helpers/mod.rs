@@ -1,4 +1,5 @@
 use bumpalo::Bump;
+use core::fmt::Write;
 use roc_load::LoadedModule;
 use roc_region::all::Region;
 use roc_solve::FunctionKind;
@@ -107,14 +108,161 @@ pub fn expect_no_expr(input: impl AsRef<str>) {
 
 #[track_caller]
 pub fn expect_mono_expr(input: impl AsRef<str>, mono_expr: MonoExpr) {
-    expect_mono_expr_with_interns(|_, _| {}, input, |_| mono_expr);
+    expect_mono_expr_with_interns(input, |_, _| mono_expr);
 }
 
 #[track_caller]
-pub fn expect_mono_expr_with_interns<T>(
-    from_interns: impl for<'a> FnOnce(&'a Bump, &Interns<'a>) -> T,
+pub fn expect_mono_expr_str(input: impl AsRef<str>, expr_str: impl AsRef<str>) {
+    expect_mono_expr_custom(
+        input,
+        |_, _, _| expr_str.as_ref().to_string(),
+        |arena, mono_exprs, interns, expr| {
+            dbg_mono_expr(arena, mono_exprs, interns, expr).to_string()
+        },
+    );
+}
+
+fn dbg_mono_expr<'a>(
+    arena: &'a Bump,
+    mono_exprs: &MonoExprs,
+    interns: &Interns<'a>,
+    expr: &MonoExpr,
+) -> &'a str {
+    let mut buf = bumpalo::collections::String::new_in(arena);
+
+    dbg_mono_expr_help(arena, mono_exprs, interns, expr, &mut buf);
+
+    buf.into_bump_str()
+}
+
+fn dbg_mono_expr_help<'a>(
+    arena: &'a Bump,
+    mono_exprs: &MonoExprs,
+    interns: &Interns<'a>,
+    expr: &MonoExpr,
+    buf: &mut impl Write,
+) {
+    match expr {
+        MonoExpr::Str(interned_str_id) => {
+            write!(buf, "Str({:?})", interns.get_str(arena, *interned_str_id)).unwrap();
+        }
+        MonoExpr::Number(number) => {
+            write!(buf, "Number({:?})", number).unwrap();
+        }
+        MonoExpr::Struct(expr_ids) => {
+            write!(buf, "Struct([").unwrap();
+
+            for (index, expr) in mono_exprs.iter_slice(expr_ids.as_slice()).enumerate() {
+                if index > 0 {
+                    write!(buf, ", ").unwrap();
+                }
+
+                dbg_mono_expr_help(arena, mono_exprs, interns, expr, buf);
+            }
+
+            write!(buf, "])").unwrap();
+        }
+        // MonoExpr::List { elem_type, elems } => todo!(),
+        // MonoExpr::Lookup(symbol, mono_type_id) => todo!(),
+        // MonoExpr::ParameterizedLookup {
+        //     name,
+        //     lookup_type,
+        //     params_name,
+        //     params_type,
+        // } => todo!(),
+        // MonoExpr::When {
+        //     cond,
+        //     cond_type,
+        //     branch_type,
+        //     branches,
+        // } => todo!(),
+        // MonoExpr::If {
+        //     branch_type,
+        //     branches,
+        //     final_else,
+        // } => todo!(),
+        // MonoExpr::LetRec { defs, ending_expr } => todo!(),
+        // MonoExpr::LetNonRec { def, ending_expr } => todo!(),
+        // MonoExpr::Call {
+        //     fn_type,
+        //     fn_expr,
+        //     args,
+        //     closure_type,
+        // } => todo!(),
+        // MonoExpr::RunLowLevel { op, args, ret_type } => todo!(),
+        // MonoExpr::ForeignCall {
+        //     foreign_symbol,
+        //     args,
+        //     ret_type,
+        // } => todo!(),
+        // MonoExpr::Lambda {
+        //     fn_type,
+        //     arguments,
+        //     body,
+        //     captured_symbols,
+        //     recursive,
+        // } => todo!(),
+        // MonoExpr::Crash { msg, expr_type } => todo!(),
+        // MonoExpr::StructAccess {
+        //     record_expr,
+        //     record_type,
+        //     field_type,
+        //     field_id,
+        // } => todo!(),
+        // MonoExpr::RecordUpdate {
+        //     record_type,
+        //     record_name,
+        //     updates,
+        // } => todo!(),
+        // MonoExpr::SmallTag {
+        //     discriminant,
+        //     tag_union_type,
+        //     args,
+        // } => todo!(),
+        // MonoExpr::BigTag {
+        //     discriminant,
+        //     tag_union_type,
+        //     args,
+        // } => todo!(),
+        // MonoExpr::Expect {
+        //     condition,
+        //     continuation,
+        //     lookups_in_cond,
+        // } => todo!(),
+        // MonoExpr::Dbg {
+        //     source_location,
+        //     source,
+        //     msg,
+        //     continuation,
+        //     expr_type,
+        //     name,
+        // } => todo!(),
+        MonoExpr::CompilerBug(problem) => {
+            write!(buf, "CompilerBug({:?})", problem).unwrap();
+        }
+        other => {
+            todo!("Implement dbg_mono_expr for {:?}", other)
+        }
+    }
+}
+
+#[track_caller]
+pub fn expect_mono_expr_with_interns(
     input: impl AsRef<str>,
-    to_mono_expr: impl FnOnce(T) -> MonoExpr,
+    from_interns: impl for<'a> Fn(&'a Bump, &Interns<'a>) -> MonoExpr,
+) {
+    expect_mono_expr_custom(
+        input,
+        |arena, _exprs, interns| from_interns(arena, interns),
+        |_, _, _, expr| *expr,
+    );
+}
+
+#[track_caller]
+pub fn expect_mono_expr_custom<T: PartialEq + core::fmt::Debug>(
+    input: impl AsRef<str>,
+    to_expected: impl for<'a> Fn(&'a Bump, &MonoExprs, &Interns<'a>) -> T,
+    to_actual: impl for<'a> Fn(&'a Bump, &MonoExprs, &Interns<'a>, &MonoExpr) -> T,
 ) {
     let arena = Bump::new();
     let mut string_interns = Interns::new();
@@ -124,8 +272,8 @@ pub fn expect_mono_expr_with_interns<T>(
             .expect("This input expr should not have been discarded as zero-sized, but it was discarded: {input:?}");
 
     let actual_expr = out.mono_exprs.get_expr(mono_expr_id); // Must run first, to populate string interns!
+    let actual = to_actual(&arena, &out.mono_exprs, &string_interns, actual_expr);
+    let expected = to_expected(&arena, &out.mono_exprs, &string_interns);
 
-    let expected_expr = to_mono_expr(from_interns(&arena, &string_interns));
-
-    assert_eq!(&expected_expr, actual_expr);
+    assert_eq!(expected, actual);
 }

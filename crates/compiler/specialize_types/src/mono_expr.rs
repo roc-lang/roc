@@ -110,7 +110,7 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
                 },
                 None => compiler_bug!(Problem::CharSpecializedToWrongType(None)),
             },
-            Expr::Str(contents) => Some(MonoExpr::Str(self.string_interns.get(
+            Expr::Str(contents) => Some(MonoExpr::Str(self.string_interns.get_id(
                 self.arena,
                 // TODO should be able to remove this alloc_str() once canonical Expr stores an arena-allocated string.
                 self.arena.alloc_str(contents),

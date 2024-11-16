@@ -117,6 +117,18 @@ impl MonoExprs {
             *self.regions.get_unchecked_mut(index) = region;
         }
     }
+
+    pub fn iter_slice(&self, expr_ids: Slice<MonoExprId>) -> impl Iterator<Item = &MonoExpr> {
+        expr_ids.indices().into_iter().map(|index| {
+            debug_assert!(
+                self.exprs.get(index).is_some(),
+                "A Slice index was not found in MonoExprs. This should never happen!"
+            );
+
+            // Safety: we should only ever hand out MonoExprId slices that are valid indices into here.
+            unsafe { self.exprs.get_unchecked(index) }
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

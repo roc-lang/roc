@@ -9,6 +9,8 @@ mod helpers;
 mod specialize_structs {
     use roc_specialize_types::{MonoExpr, Number};
 
+    use crate::helpers::expect_mono_expr_str;
+
     use super::helpers::{expect_mono_expr, expect_mono_expr_with_interns, expect_no_expr};
 
     #[test]
@@ -25,11 +27,9 @@ mod specialize_structs {
     fn one_field_record_string_literal() {
         let string = "foo";
         let expected = format!("{{ discardedField: \"{string}\" }}");
-        expect_mono_expr_with_interns(
-            |arena, interns| interns.try_get(arena, string).unwrap(),
-            expected,
-            |id| MonoExpr::Str(id),
-        );
+        expect_mono_expr_with_interns(expected, |arena, interns| {
+            MonoExpr::Str(interns.try_get_id(arena, string).unwrap())
+        });
     }
 
     #[test]
@@ -37,10 +37,19 @@ mod specialize_structs {
         let string = "foo";
         let expected =
             format!("{{ discarded: {{}}, discardedToo: \"{string}\", alsoDiscarded: {{}} }}");
-        expect_mono_expr_with_interns(
-            |arena, interns| interns.try_get(arena, string).unwrap(),
+        expect_mono_expr_with_interns(expected, |arena, interns| {
+            MonoExpr::Str(interns.try_get_id(arena, string).unwrap())
+        });
+    }
+
+    #[test]
+    fn two_fields() {
+        let one = 42;
+        let two = 50;
+        let expected = format!("{{ one: {one}, two: {two} }}");
+        expect_mono_expr_str(
             expected,
-            |id| MonoExpr::Str(id),
+            format!("Struct([Number(I8({one:?})), Number(I8({two:?}))])"),
         );
     }
 }

@@ -39,7 +39,19 @@ impl<'a> Interns<'a> {
         }
     }
 
-    pub fn get(&mut self, _arena: &'a Bump, string: &'a str) -> InternedStrId {
+    pub fn get_str(&self, _arena: &'a Bump, id: InternedStrId) -> &'a str {
+        let index = id.0 as usize;
+
+        #[cfg(debug_assertions)]
+        {
+            assert!(self.interned.get(index).is_some(), "Got an InternedStringId ({index}) that was outside the bounds of the backing array. This should never happen!");
+        }
+
+        // Safety: We should only ever give out InternedStrId values that are in this range.
+        unsafe { self.interned.get_unchecked(index) }
+    }
+
+    pub fn get_id(&mut self, _arena: &'a Bump, string: &'a str) -> InternedStrId {
         match self
             .interned
             .iter()
@@ -56,7 +68,7 @@ impl<'a> Interns<'a> {
         }
     }
 
-    pub fn try_get(&self, _arena: &'a Bump, string: &'a str) -> Option<InternedStrId> {
+    pub fn try_get_id(&self, _arena: &'a Bump, string: &'a str) -> Option<InternedStrId> {
         match self
             .interned
             .iter()
