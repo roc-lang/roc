@@ -5,11 +5,6 @@ on:
 # https://github.com/roc-lang/roc/issues/2046
 name: Improve panics/unwrap/expect
 
-# this cancels workflows currently in progress if you start a new one
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   improve-panics:
     name: improve panics
