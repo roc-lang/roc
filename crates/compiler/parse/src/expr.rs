@@ -2094,7 +2094,7 @@ pub fn merge_spaces<'a>(
 fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, ()> {
     let mut expr = expr.extract_spaces();
 
-    if let Expr::ParensAround(loc_expr) = &expr.item {
+    while let Expr::ParensAround(loc_expr) = &expr.item {
         let expr_inner = loc_expr.extract_spaces();
 
         expr.before = merge_spaces(arena, expr.before, expr_inner.before);
