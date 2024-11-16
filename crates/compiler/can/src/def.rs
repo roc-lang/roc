@@ -715,10 +715,6 @@ fn canonicalize_claimed_ability_impl<'a>(
             });
             Err(())
         }
-        AssignedField::Malformed(_) => {
-            // An error will already have been reported
-            Err(())
-        }
         AssignedField::SpaceBefore(_, _)
         | AssignedField::SpaceAfter(_, _)
         | AssignedField::IgnoredValue(_, _, _) => {

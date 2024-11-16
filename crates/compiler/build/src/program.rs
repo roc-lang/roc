@@ -525,7 +525,7 @@ fn gen_from_mono_module_dev_wasm32<'a>(
 
     let host_bytes = std::fs::read(built_host_path).unwrap_or_else(|_| {
         internal_error!(
-            "Failed to read host object file {}! Try omitting --prebuilt-platform",
+            "Failed to read host object file {}!",
             built_host_path.display()
         )
     });

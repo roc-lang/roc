@@ -8,12 +8,6 @@ use roc_work::Phase;
 use std::ops::ControlFlow;
 
 #[derive(Debug)]
-pub enum WorkerMsg {
-    Shutdown,
-    TaskAdded,
-}
-
-#[derive(Debug)]
 pub enum ChannelProblem {
     FailedToSendRootMsg,
     FailedToSendWorkerShutdownMsg,
@@ -29,41 +23,31 @@ pub fn worker_task_step<Task>(
     worker: &Worker<Task>,
     injector: &Injector<Task>,
     stealers: &[Stealer<Task>],
-    worker_msg_rx: &Receiver<WorkerMsg>,
+    worker_wakeup_rx: &Receiver<()>,
     run_task: impl Fn(Task) -> Result<(), ChannelProblem>,
 ) -> Result<ControlFlow<(), ()>, ChannelProblem> {
-    match worker_msg_rx.try_recv() {
-        Ok(msg) => {
-            match msg {
-                WorkerMsg::Shutdown => {
-                    // We've finished all our work. It's time to
-                    // shut down the thread, so when the main thread
-                    // blocks on joining with all the worker threads,
-                    // it can finally exit too!
-                    Ok(ControlFlow::Break(()))
-                }
-                WorkerMsg::TaskAdded => {
-                    // Find a task - either from this thread's queue,
-                    // or from the main queue, or from another worker's
-                    // queue - and run it.
-                    //
-                    // There might be no tasks to work on! That could
-                    // happen if another thread is working on a task
-                    // which will later result in more tasks being
-                    // added. In that case, do nothing, and keep waiting
-                    // until we receive a Shutdown message.
-                    if let Some(task) = find_task(worker, injector, stealers) {
-                        run_task(task)?;
-                    }
-
-                    Ok(ControlFlow::Continue(()))
-                }
+    match worker_wakeup_rx.try_recv() {
+        Ok(()) => {
+            // Find a task - either from this thread's queue,
+            // or from the main queue, or from another worker's
+            // queue - and run it.
+            //
+            // There might be no tasks to work on! That could
+            // happen if another thread is working on a task
+            // which will later result in more tasks being
+            // added. In that case, do nothing, and keep waiting
+            // until we receive a Shutdown message.
+            if let Some(task) = find_task(worker, injector, stealers) {
+                run_task(task)?;
             }
+
+            Ok(ControlFlow::Continue(()))
         }
         Err(err) => match err {
             crossbeam::channel::TryRecvError::Empty => Ok(ControlFlow::Continue(())),
             crossbeam::channel::TryRecvError::Disconnected => {
-                Err(ChannelProblem::ChannelDisconnected)
+                // The channel sender has been dropped, which means we want to shut down
+                Ok(ControlFlow::Break(()))
             }
         },
     }
@@ -73,33 +57,22 @@ pub fn worker_task<Task>(
     worker: Worker<Task>,
     injector: &Injector<Task>,
     stealers: &[Stealer<Task>],
-    worker_msg_rx: crossbeam::channel::Receiver<WorkerMsg>,
+    worker_wakeup_rx: crossbeam::channel::Receiver<()>,
     run_task: impl Fn(Task) -> Result<(), ChannelProblem>,
 ) -> Result<(), ChannelProblem> {
     // Keep listening until we receive a Shutdown msg
-    for msg in worker_msg_rx.iter() {
-        match msg {
-            WorkerMsg::Shutdown => {
-                // We've finished all our work. It's time to
-                // shut down the thread, so when the main thread
-                // blocks on joining with all the worker threads,
-                // it can finally exit too!
-                return Ok(());
-            }
-            WorkerMsg::TaskAdded => {
-                // Find a task - either from this thread's queue,
-                // or from the main queue, or from another worker's
-                // queue - and run it.
-                //
-                // There might be no tasks to work on! That could
-                // happen if another thread is working on a task
-                // which will later result in more tasks being
-                // added. In that case, do nothing, and keep waiting
-                // until we receive a Shutdown message.
-                if let Some(task) = find_task(&worker, injector, stealers) {
-                    run_task(task)?;
-                }
-            }
+    for () in worker_wakeup_rx.iter() {
+        // Find a task - either from this thread's queue,
+        // or from the main queue, or from another worker's
+        // queue - and run it.
+        //
+        // There might be no tasks to work on! That could
+        // happen if another thread is working on a task
+        // which will later result in more tasks being
+        // added. In that case, do nothing, and keep waiting
+        // until we receive a Shutdown message.
+        if let Some(task) = find_task(&worker, injector, stealers) {
+            run_task(task)?;
         }
     }
 
@@ -110,17 +83,17 @@ pub fn start_tasks<State, Task, Tasks: IntoIterator<Item = Task>>(
     state: &mut State,
     work: MutSet<(ModuleId, Phase)>,
     injector: &Injector<Task>,
-    worker_listeners: &[Sender<WorkerMsg>],
+    worker_wakers: &[Sender<()>],
     mut start_phase: impl FnMut(ModuleId, Phase, &mut State) -> Tasks,
-) -> Result<(), SendError<WorkerMsg>> {
+) -> Result<(), SendError<()>> {
     for (module_id, phase) in work {
         let tasks = start_phase(module_id, phase, state);
 
         for task in tasks {
             injector.push(task);
 
-            for listener in worker_listeners {
-                listener.send(WorkerMsg::TaskAdded)?;
+            for listener in worker_wakers {
+                listener.send(())?;
             }
         }
     }

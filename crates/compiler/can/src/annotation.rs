@@ -482,7 +482,6 @@ pub fn find_type_def_symbols(
                         AssignedField::LabelOnly(_) => {}
                         AssignedField::SpaceBefore(inner, _)
                         | AssignedField::SpaceAfter(inner, _) => inner_stack.push(inner),
-                        AssignedField::Malformed(_) => {}
                     }
                 }
 
@@ -507,7 +506,6 @@ pub fn find_type_def_symbols(
                         Tag::SpaceBefore(inner, _) | Tag::SpaceAfter(inner, _) => {
                             inner_stack.push(inner)
                         }
-                        Tag::Malformed(_) => {}
                     }
                 }
 
@@ -1355,7 +1353,7 @@ fn can_assigned_fields<'a>(
     // field names we've seen so far in this record
     let mut seen = std::collections::HashMap::with_capacity(fields.len());
 
-    'outer: for loc_field in fields.iter() {
+    for loc_field in fields.iter() {
         let mut field = &loc_field.value;
 
         // use this inner loop to unwrap the SpaceAfter/SpaceBefore
@@ -1429,12 +1427,6 @@ fn can_assigned_fields<'a>(
                     // check the nested field instead
                     field = nested;
                     continue 'inner;
-                }
-                Malformed(string) => {
-                    malformed(env, region, string);
-
-                    // completely skip this element, advance to the next tag
-                    continue 'outer;
                 }
             }
         };
@@ -1522,7 +1514,7 @@ fn can_tags<'a>(
     // tag names we've seen so far in this tag union
     let mut seen = std::collections::HashMap::with_capacity(tags.len());
 
-    'outer: for loc_tag in tags.iter() {
+    for loc_tag in tags.iter() {
         let mut tag = &loc_tag.value;
 
         // use this inner loop to unwrap the SpaceAfter/SpaceBefore
@@ -1560,12 +1552,6 @@ fn can_tags<'a>(
                     // check the nested tag instead
                     tag = nested;
                     continue 'inner;
-                }
-                Tag::Malformed(string) => {
-                    malformed(env, region, string);
-
-                    // completely skip this element, advance to the next tag
-                    continue 'outer;
                 }
             }
         };
