@@ -21,7 +21,7 @@ polyDbg = \x ->
 
 main =
     str = "this will for sure be a large string so when we split it it will use seamless slices which affect printing"
-    words = Str.split str " "
+    words = Str.splitOn str " "
     expect words == []
 
     x = 42

@@ -253,7 +253,7 @@
 ##
 ## The way Roc organizes the `Str` module and supporting packages is designed to help answer this question. Every situation is different, but the following rules of thumb are typical:
 ##
-## * Most often, using `Str` values along with helper functions like [`split`](https://www.roc-lang.org/builtins/Str#split), [`joinWith`](https://www.roc-lang.org/builtins/Str#joinWith), and so on, is the best option.
+## * Most often, using `Str` values along with helper functions like [`splitOn`](https://www.roc-lang.org/builtins/Str#splitOn), [`joinWith`](https://www.roc-lang.org/builtins/Str#joinWith), and so on, is the best option.
 ## * If you are specifically implementing a parser, working in UTF-8 bytes is usually the best option. So functions like [`walkUtf8`](https://www.roc-lang.org/builtins/Str#walkUtf8), [toUtf8](https://www.roc-lang.org/builtins/Str#toUtf8), and so on. (Note that single-quote literals produce number literals, so ASCII-range literals like `'a'` gives an integer literal that works with a UTF-8 `U8`.)
 ## * If you are implementing a Unicode library like [roc-lang/unicode](https://github.com/roc-lang/unicode), working in terms of code points will be unavoidable. Aside from basic readability considerations like `\u(...)` in string literals, if you have the option to avoid working in terms of code points, it is almost always correct to avoid them.
 ## * If it seems like a good idea to split a string into "characters" (graphemes), you should definitely stop and reconsider whether this is really the best design. Almost always, doing this is some combination of more error-prone or slower (usually both) than doing something else that does not require taking graphemes into consideration.
@@ -294,7 +294,7 @@
 ## Try putting this into `roc repl`:
 ##
 ## ```
-## » "foo/bar/baz" |> Str.split "/"
+## » "foo/bar/baz" |> Str.splitOn "/"
 ##
 ## ["foo", "bar", "baz"] : List Str
 ## ```
@@ -304,7 +304,7 @@
 ## Now let's suppose they were long enough that this optimization no longer applied:
 ##
 ## ```
-## » "a much, much, much, much/longer/string compared to the last one!" |> Str.split "/"
+## » "a much, much, much, much/longer/string compared to the last one!" |> Str.splitOn "/"
 ##
 ## ["a much, much, much, much", "longer", "string compared to the last one!"] : List Str
 ## ```
@@ -332,7 +332,7 @@ module [
     concat,
     isEmpty,
     joinWith,
-    split,
+    splitOn,
     repeat,
     countUtf8Bytes,
     toUtf8,
@@ -499,10 +499,10 @@ joinWith : List Str, Str -> Str
 ## Passing `""` for the separator is not useful;
 ## it returns the original string wrapped in a [List].
 ## ```roc
-## expect Str.split "1,2,3" "," == ["1","2","3"]
-## expect Str.split "1,2,3" "" == ["1,2,3"]
+## expect Str.splitOn "1,2,3" "," == ["1","2","3"]
+## expect Str.splitOn "1,2,3" "" == ["1,2,3"]
 ## ```
-split : Str, Str -> List Str
+splitOn : Str, Str -> List Str
 
 ## Repeats a string the given number of times.
 ## ```roc
@@ -518,7 +518,7 @@ repeat : Str, U64 -> Str
 
 ## Returns a [List] of the string's [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit).
 ## (To split the string into a [List] of smaller [Str] values instead of [U8] values,
-## see [Str.split].)
+## see [Str.splitOn].)
 ## ```roc
 ## expect Str.toUtf8 "Roc" == [82, 111, 99]
 ## expect Str.toUtf8 "鹏" == [233, 185, 143]

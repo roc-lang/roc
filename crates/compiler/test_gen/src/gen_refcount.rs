@@ -220,13 +220,13 @@ fn list_str_take_first() {
 
 #[test]
 #[cfg(feature = "gen-wasm")]
-fn list_str_split() {
+fn list_str_split_on() {
     assert_refcounts!(
         indoc!(
             r#"
                 s = Str.concat "A long enough string " "to be heap-allocated"
                 list = [s, s, s]
-                List.split list 1
+                List.splitAt list 1
             "#
         ),
         (RocList<RocStr>, RocList<RocStr>),
@@ -239,13 +239,13 @@ fn list_str_split() {
 
 #[test]
 #[cfg(feature = "gen-wasm")]
-fn list_str_split_zero() {
+fn list_str_split_on_zero() {
     assert_refcounts!(
         indoc!(
             r#"
                 s = Str.concat "A long enough string " "to be heap-allocated"
                 list = [s, s, s]
-                List.split list 0
+                List.splitAt list 0
             "#
         ),
         (RocList<RocStr>, RocList<RocStr>),

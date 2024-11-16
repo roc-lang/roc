@@ -1371,7 +1371,7 @@ define_builtins! {
         2 STR_APPEND: "#append" // unused
         3 STR_CONCAT: "concat"
         4 STR_JOIN_WITH: "joinWith"
-        5 STR_SPLIT: "split"
+        5 STR_SPLIT_ON: "splitOn"
         6 STR_WITH_PREFIX: "withPrefix"
         7 STR_STARTS_WITH: "startsWith"
         8 STR_ENDS_WITH: "endsWith"
@@ -1471,7 +1471,7 @@ define_builtins! {
         49 LIST_SUBLIST: "sublist"
         50 LIST_INTERSPERSE: "intersperse"
         51 LIST_INTERSPERSE_CLOS: "#intersperseClos"
-        52 LIST_SPLIT: "split"
+        52 LIST_SPLIT_AT: "splitAt"
         53 LIST_SPLIT_FIRST: "splitFirst"
         54 LIST_SPLIT_LAST: "splitLast"
         55 LIST_SPLIT_CLOS: "#splitClos"
@@ -1511,6 +1511,9 @@ define_builtins! {
         89 LIST_CONCAT_UTF8: "concatUtf8"
         90 LIST_FOR_EACH_FX: "forEach!"
         91 LIST_FOR_EACH_TRY_FX: "forEachTry!"
+        92 LIST_WALK_FX: "walk!"
+        93 LIST_SPLIT_ON: "splitOn"
+        94 LIST_SPLIT_ON_LIST: "splitOnList"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias

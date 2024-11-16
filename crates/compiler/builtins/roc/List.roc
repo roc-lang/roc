@@ -55,7 +55,9 @@ module [
     findLastIndex,
     sublist,
     intersperse,
-    split,
+    splitAt,
+    splitOn,
+    splitOnList,
     splitFirst,
     splitLast,
     startsWith,
@@ -1028,7 +1030,7 @@ first = \list ->
 ## To remove elements from both the beginning and end of the list,
 ## use `List.sublist`.
 ##
-## To split the list into two lists, use `List.split`.
+## To split the list into two lists, use `List.splitAt`.
 ##
 takeFirst : List elem, U64 -> List elem
 takeFirst = \list, outputLength ->
@@ -1048,7 +1050,7 @@ takeFirst = \list, outputLength ->
 ## To remove elements from both the beginning and end of the list,
 ## use `List.sublist`.
 ##
-## To split the list into two lists, use `List.split`.
+## To split the list into two lists, use `List.splitAt`.
 ##
 takeLast : List elem, U64 -> List elem
 takeLast = \list, outputLength ->
@@ -1249,14 +1251,52 @@ endsWith = \list, suffix ->
 ## than the given index, # and the `others` list will be all the others. (This
 ## means if you give an index of 0, the `before` list will be empty and the
 ## `others` list will have the same elements as the original list.)
-split : List elem, U64 -> { before : List elem, others : List elem }
-split = \elements, userSplitIndex ->
+splitAt : List elem, U64 -> { before : List elem, others : List elem }
+splitAt = \elements, userSplitIndex ->
     length = List.len elements
     splitIndex = if length > userSplitIndex then userSplitIndex else length
     before = List.sublist elements { start: 0, len: splitIndex }
     others = List.sublist elements { start: splitIndex, len: Num.subWrap length splitIndex }
 
     { before, others }
+
+## Splits the input list on the delimiter element.
+##
+## ```roc
+## List.splitOn [1, 2, 3] 2 == [[1], [3]]
+## ```
+splitOn : List a, a -> List (List a) where a implements Eq
+splitOn = \elements, delimiter ->
+    help = \remaining, chunks, currentChunk ->
+        when remaining is
+            [] -> List.append chunks currentChunk
+            [x, .. as rest] if x == delimiter ->
+                help rest (List.append chunks currentChunk) []
+
+            [x, .. as rest] ->
+                help rest chunks (List.append currentChunk x)
+    help elements [] []
+
+## Splits the input list on the delimiter list.
+##
+## ```roc
+## List.splitOnList [1, 2, 3] [1, 2] == [[], [3]]
+## ```
+splitOnList : List a, List a -> List (List a) where a implements Eq
+splitOnList = \elements, delimiter ->
+    help = \remaining, chunks, currentChunk ->
+        when remaining is
+            [] -> List.append chunks currentChunk
+            [x, .. as rest] ->
+                if List.startsWith remaining delimiter then
+                    help (List.dropFirst remaining (List.len delimiter)) (List.append chunks currentChunk) []
+                else
+                    help rest chunks (List.append currentChunk x)
+
+    if delimiter == [] then
+        [elements]
+    else
+        help elements [] []
 
 ## Returns the elements before the first occurrence of a delimiter, as well as the
 ## remaining elements after that occurrence. If the delimiter is not found, returns `Err`.
@@ -1307,7 +1347,7 @@ chunksOfHelp = \listRest, chunkSize, chunks ->
     if List.isEmpty listRest then
         chunks
     else
-        { before, others } = List.split listRest chunkSize
+        { before, others } = List.splitAt listRest chunkSize
         chunksOfHelp others chunkSize (List.append chunks before)
 
 ## Like [List.map], except the transformation function returns a [Result].
