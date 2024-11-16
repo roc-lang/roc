@@ -1263,7 +1263,7 @@ splitAt = \elements, userSplitIndex ->
 ## Splits the input list on the delimiter element.
 ##
 ## ```roc
-## List.splitOn [1, 2, 3] 2 == [[1], [2]]
+## List.splitOn [1, 2, 3] 2 == [[1], [3]]
 ## ```
 splitOn : List a, a -> List (List a) where a implements Eq
 splitOn = \elements, delimiter ->
