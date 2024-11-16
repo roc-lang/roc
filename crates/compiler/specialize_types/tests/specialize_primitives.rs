@@ -1,8 +1,7 @@
 #[macro_use]
 extern crate pretty_assertions;
 
-extern crate bumpalo;
-
+#[cfg(test)]
 mod helpers;
 
 #[cfg(test)]

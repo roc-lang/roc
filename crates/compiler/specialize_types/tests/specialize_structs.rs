@@ -1,17 +1,16 @@
 #[macro_use]
 extern crate pretty_assertions;
 
-extern crate bumpalo;
-
+#[cfg(test)]
 mod helpers;
 
 #[cfg(test)]
 mod specialize_structs {
-    use roc_specialize_types::{MonoExpr, Number};
+    use roc_specialize_types::MonoExpr;
 
     use crate::helpers::expect_mono_expr_str;
 
-    use super::helpers::{expect_mono_expr, expect_mono_expr_with_interns, expect_no_expr};
+    use super::helpers::{expect_mono_expr_with_interns, expect_no_expr};
 
     #[test]
     fn empty_record() {
@@ -46,10 +45,10 @@ mod specialize_structs {
     fn two_fields() {
         let one = 42;
         let two = 50;
-        let expected = format!("{{ one: {one}, two: {two} }}");
+
         expect_mono_expr_str(
-            expected,
-            format!("Struct([Number(I8({one:?})), Number(I8({two:?}))])"),
+            format!("{{ one: {one}, two: {two} }}"),
+            format!("Struct([Number(I8({one})), Number(I8({two}))])"),
         );
     }
 }

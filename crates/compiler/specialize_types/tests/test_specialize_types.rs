@@ -3,8 +3,6 @@ extern crate pretty_assertions;
 #[macro_use]
 extern crate indoc;
 
-extern crate bumpalo;
-
 #[cfg(test)]
 mod specialize_types {
     use roc_load::LoadedModule;

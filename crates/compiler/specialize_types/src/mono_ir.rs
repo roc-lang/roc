@@ -2,10 +2,9 @@ use crate::{
     foreign_symbol::ForeignSymbolId, mono_module::InternedStrId, mono_num::Number,
     mono_struct::MonoFieldId, mono_type::MonoTypeId, specialize_type::Problem,
 };
-use bumpalo::Bump;
-use roc_can::expr::{Field, Recursive};
+use roc_can::expr::Recursive;
+use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
-use roc_module::{ident::Lowercase, low_level::LowLevel};
 use roc_region::all::Region;
 use soa::{Id, Index, NonEmptySlice, Slice, Slice2, Slice3};
 use std::iter;

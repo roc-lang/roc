@@ -9,15 +9,9 @@ use crate::{
     MonoFieldId, MonoType,
 };
 use roc_collections::{Push, VecMap};
-use roc_module::{
-    ident::{Lowercase, TagName},
-    symbol::Symbol,
-};
+use roc_module::{ident::Lowercase, symbol::Symbol};
 use roc_solve::module::Solved;
-use roc_types::subs::{
-    Content, FlatType, RecordFields, Subs, SubsSlice, TagExt, TupleElems, UnionLabels, UnionTags,
-    Variable,
-};
+use roc_types::subs::{Content, FlatType, Subs, SubsSlice, Variable};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Problem {
@@ -409,139 +403,139 @@ fn num_args_to_mono_id(
     MonoTypeId::CRASH
 }
 
-fn resolve_tag_ext(
-    subs: &mut Subs,
-    mono_types: &mut MonoTypes,
-    problems: &mut impl Push<Problem>,
-    mut tags: UnionTags,
-    mut ext: TagExt,
-) -> Vec<(TagName, Vec<Variable>)> {
-    let mut all_tags = Vec::new();
+// fn resolve_tag_ext(
+//     subs: &mut Subs,
+//     mono_types: &mut MonoTypes,
+//     problems: &mut impl Push<Problem>,
+//     mut tags: UnionTags,
+//     mut ext: TagExt,
+// ) -> Vec<(TagName, Vec<Variable>)> {
+//     let mut all_tags = Vec::new();
 
-    // Collapse (recursively) all the tags in ext_var into a flat list of tags.
-    loop {
-        for (tag, vars) in tags.iter_from_subs(subs) {
-            all_tags.push((tag.clone(), vars.to_vec()));
-        }
+//     // Collapse (recursively) all the tags in ext_var into a flat list of tags.
+//     loop {
+//         for (tag, vars) in tags.iter_from_subs(subs) {
+//             all_tags.push((tag.clone(), vars.to_vec()));
+//         }
 
-        match subs.get_content_without_compacting(ext.var()) {
-            Content::Structure(FlatType::TagUnion(new_tags, new_ext)) => {
-                // Update tags and ext and loop back again to process them.
-                tags = *new_tags;
-                ext = *new_ext;
-            }
-            Content::Structure(FlatType::FunctionOrTagUnion(tag_names, _symbols, new_ext)) => {
-                for index in tag_names.into_iter() {
-                    all_tags.push((subs[index].clone(), Vec::new()));
-                }
-                ext = *new_ext;
-            }
-            Content::Structure(FlatType::EmptyTagUnion) => break,
-            Content::FlexVar(_) | Content::FlexAbleVar(_, _) => break,
-            Content::Alias(_, _, real, _) => {
-                // Follow the alias and process it on the next iteration of the loop.
-                ext = TagExt::Any(*real);
+//         match subs.get_content_without_compacting(ext.var()) {
+//             Content::Structure(FlatType::TagUnion(new_tags, new_ext)) => {
+//                 // Update tags and ext and loop back again to process them.
+//                 tags = *new_tags;
+//                 ext = *new_ext;
+//             }
+//             Content::Structure(FlatType::FunctionOrTagUnion(tag_names, _symbols, new_ext)) => {
+//                 for index in tag_names.into_iter() {
+//                     all_tags.push((subs[index].clone(), Vec::new()));
+//                 }
+//                 ext = *new_ext;
+//             }
+//             Content::Structure(FlatType::EmptyTagUnion) => break,
+//             Content::FlexVar(_) | Content::FlexAbleVar(_, _) => break,
+//             Content::Alias(_, _, real, _) => {
+//                 // Follow the alias and process it on the next iteration of the loop.
+//                 ext = TagExt::Any(*real);
 
-                // We just processed these tags, so don't process them again!
-                tags = UnionLabels::default();
-            }
-            _ => {
-                // This should never happen! If it does, record a Problem and break.
-                problems.push(Problem::TagUnionExtWasNotTagUnion);
+//                 // We just processed these tags, so don't process them again!
+//                 tags = UnionLabels::default();
+//             }
+//             _ => {
+//                 // This should never happen! If it does, record a Problem and break.
+//                 problems.push(Problem::TagUnionExtWasNotTagUnion);
 
-                break;
-            }
-        }
-    }
+//                 break;
+//             }
+//         }
+//     }
 
-    all_tags
-}
+//     all_tags
+// }
 
-fn lower_record<P: Push<Problem>>(
-    env: &mut Env<'_, '_, '_, '_, '_, '_, P>,
-    subs: &Subs,
-    mut fields: RecordFields,
-    mut ext: Variable,
-) -> Vec<(Lowercase, Option<MonoTypeId>)> {
-    let mut labeled_mono_ids = Vec::with_capacity(fields.len());
+// fn lower_record<P: Push<Problem>>(
+//     env: &mut Env<'_, '_, '_, '_, '_, '_, P>,
+//     subs: &Subs,
+//     mut fields: RecordFields,
+//     mut ext: Variable,
+// ) -> Vec<(Lowercase, Option<MonoTypeId>)> {
+//     let mut labeled_mono_ids = Vec::with_capacity(fields.len());
 
-    // Collapse (recursively) all the fields in ext into a flat list of fields.
-    loop {
-        // Add all the current fields to the answer.
-        labeled_mono_ids.extend(
-            fields
-                .sorted_iterator(subs, ext)
-                .map(|(label, field)| (label, lower_var(env, subs, *field.as_inner()))),
-        );
+//     // Collapse (recursively) all the fields in ext into a flat list of fields.
+//     loop {
+//         // Add all the current fields to the answer.
+//         labeled_mono_ids.extend(
+//             fields
+//                 .sorted_iterator(subs, ext)
+//                 .map(|(label, field)| (label, lower_var(env, subs, *field.as_inner()))),
+//         );
 
-        // If the ext record is nonempty, set its fields to be the next ones we handle, and loop back.
-        match subs.get_content_without_compacting(ext) {
-            Content::Structure(FlatType::Record(new_fields, new_ext)) => {
-                // Update fields and ext and loop back again to process them.
-                fields = *new_fields;
-                ext = *new_ext;
-            }
-            Content::Structure(FlatType::EmptyRecord)
-            | Content::FlexVar(_)
-            | Content::FlexAbleVar(_, _) => return labeled_mono_ids,
-            Content::Alias(_, _, real, _) => {
-                // Follow the alias and process it on the next iteration of the loop.
-                ext = *real;
+//         // If the ext record is nonempty, set its fields to be the next ones we handle, and loop back.
+//         match subs.get_content_without_compacting(ext) {
+//             Content::Structure(FlatType::Record(new_fields, new_ext)) => {
+//                 // Update fields and ext and loop back again to process them.
+//                 fields = *new_fields;
+//                 ext = *new_ext;
+//             }
+//             Content::Structure(FlatType::EmptyRecord)
+//             | Content::FlexVar(_)
+//             | Content::FlexAbleVar(_, _) => return labeled_mono_ids,
+//             Content::Alias(_, _, real, _) => {
+//                 // Follow the alias and process it on the next iteration of the loop.
+//                 ext = *real;
 
-                // We just processed these fields, so don't process them again!
-                fields = RecordFields::empty();
-            }
-            _ => {
-                // This should never happen! If it does, record a Problem and early return.
-                env.problems.push(Problem::RecordExtWasNotRecord);
+//                 // We just processed these fields, so don't process them again!
+//                 fields = RecordFields::empty();
+//             }
+//             _ => {
+//                 // This should never happen! If it does, record a Problem and early return.
+//                 env.problems.push(Problem::RecordExtWasNotRecord);
 
-                return labeled_mono_ids;
-            }
-        }
-    }
-}
+//                 return labeled_mono_ids;
+//             }
+//         }
+//     }
+// }
 
-fn resolve_tuple_ext(
-    subs: &mut Subs,
-    mono_types: &mut MonoTypes,
-    problems: &mut impl Push<Problem>,
-    mut elems: TupleElems,
-    mut ext: Variable,
-) -> Vec<(usize, Variable)> {
-    let mut all_elems = Vec::new();
+// fn resolve_tuple_ext(
+//     subs: &mut Subs,
+//     mono_types: &mut MonoTypes,
+//     problems: &mut impl Push<Problem>,
+//     mut elems: TupleElems,
+//     mut ext: Variable,
+// ) -> Vec<(usize, Variable)> {
+//     let mut all_elems = Vec::new();
 
-    // Collapse (recursively) all the elements in ext into a flat list of elements.
-    loop {
-        for (idx, var_index) in elems.iter_all() {
-            all_elems.push((idx.index as usize, subs[var_index]));
-        }
+//     // Collapse (recursively) all the elements in ext into a flat list of elements.
+//     loop {
+//         for (idx, var_index) in elems.iter_all() {
+//             all_elems.push((idx.index as usize, subs[var_index]));
+//         }
 
-        match subs.get_content_without_compacting(ext) {
-            Content::Structure(FlatType::Tuple(new_elems, new_ext)) => {
-                // Update elems and ext and loop back again to process them.
-                elems = *new_elems;
-                ext = *new_ext;
-            }
-            Content::Structure(FlatType::EmptyTuple) => break,
-            Content::FlexVar(_) | Content::FlexAbleVar(_, _) => break,
-            Content::Alias(_, _, real, _) => {
-                // Follow the alias and process it on the next iteration of the loop.
-                ext = *real;
+//         match subs.get_content_without_compacting(ext) {
+//             Content::Structure(FlatType::Tuple(new_elems, new_ext)) => {
+//                 // Update elems and ext and loop back again to process them.
+//                 elems = *new_elems;
+//                 ext = *new_ext;
+//             }
+//             Content::Structure(FlatType::EmptyTuple) => break,
+//             Content::FlexVar(_) | Content::FlexAbleVar(_, _) => break,
+//             Content::Alias(_, _, real, _) => {
+//                 // Follow the alias and process it on the next iteration of the loop.
+//                 ext = *real;
 
-                // We just processed these elements, so don't process them again!
-                elems = TupleElems::empty();
-            }
-            _ => {
-                // This should never happen! If it does, record a Problem and break.
-                problems.push(Problem::TupleExtWasNotTuple);
+//                 // We just processed these elements, so don't process them again!
+//                 elems = TupleElems::empty();
+//             }
+//             _ => {
+//                 // This should never happen! If it does, record a Problem and break.
+//                 problems.push(Problem::TupleExtWasNotTuple);
 
-                break;
-            }
-        }
-    }
+//                 break;
+//             }
+//         }
+//     }
 
-    all_elems
-}
+//     all_elems
+// }
 
 // /// Lower the given vars in-place.
 // fn lower_vars<'a>(
