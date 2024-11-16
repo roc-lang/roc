@@ -71,9 +71,7 @@ impl<'a> Formattable for Expr<'a> {
             LowLevelDbg(_, _, _) => unreachable!(
                 "LowLevelDbg should only exist after desugaring, not during formatting"
             ),
-            Return(return_value, after_return) => {
-                return_value.is_multiline() || after_return.is_some()
-            }
+            Return(_return_value, _after_return) => true,
 
             If {
                 if_thens: branches,
@@ -1039,7 +1037,33 @@ fn fmt_dbg_stmt<'a>(
 
     buf.spaces(1);
 
-    condition.format(buf, indent);
+    fn should_outdent(mut expr: &Expr) -> bool {
+        loop {
+            match expr {
+                Expr::ParensAround(_) | Expr::List(_) | Expr::Record(_) | Expr::Tuple(_) => {
+                    return true
+                }
+                Expr::SpaceAfter(inner, _) => {
+                    expr = inner;
+                }
+                _ => return false,
+            }
+        }
+    }
+
+    let inner_indent = if should_outdent(&condition.value) {
+        indent
+    } else {
+        indent + INDENT
+    };
+
+    let cond_value = condition.value.extract_spaces();
+
+    let is_defs = matches!(cond_value.item, Expr::Defs(_, _));
+
+    let newlines = if is_defs { Newlines::Yes } else { Newlines::No };
+
+    condition.format_with_options(buf, Parens::NotNeeded, newlines, inner_indent);
 
     // Always put a blank line after the `dbg` line(s)
     buf.ensure_ends_with_blank_line();
@@ -1097,6 +1121,9 @@ fn fmt_return<'a>(
     return_value.format(buf, return_indent);
 
     if let Some(after_return) = after_return {
+        if after_return.value.extract_spaces().before.is_empty() {
+            buf.ensure_ends_with_newline();
+        }
         after_return.format_with_options(buf, parens, newlines, indent);
     }
 }
@@ -1681,6 +1708,7 @@ fn sub_expr_requests_parens(expr: &Expr<'_>) -> bool {
                 })
         }
         Expr::If { .. } => true,
+        Expr::Defs(_, _) => true,
         Expr::SpaceBefore(e, _) => sub_expr_requests_parens(e),
         Expr::SpaceAfter(e, _) => sub_expr_requests_parens(e),
         _ => false,
