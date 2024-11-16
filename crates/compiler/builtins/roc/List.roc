@@ -55,7 +55,6 @@ module [
     findLastIndex,
     sublist,
     intersperse,
-    split,
     splitAt,
     splitOn,
     splitOnList,
@@ -1298,16 +1297,6 @@ splitOnList = \elements, delimiter ->
         [elements]
     else
         help elements [] []
-
-## DEPRECATED: will be removed soon
-split : List elem, U64 -> { before : List elem, others : List elem }
-split = \elements, userSplitIndex ->
-    length = List.len elements
-    splitIndex = if length > userSplitIndex then userSplitIndex else length
-    before = List.sublist elements { start: 0, len: splitIndex }
-    others = List.sublist elements { start: splitIndex, len: Num.subWrap length splitIndex }
-
-    { before, others }
 
 ## Returns the elements before the first occurrence of a delimiter, as well as the
 ## remaining elements after that occurrence. If the delimiter is not found, returns `Err`.
