@@ -9,6 +9,7 @@ use roc_collections::VecMap;
 use roc_derive::SharedDerivedModule;
 use roc_load::FunctionKind;
 use roc_module::symbol::ModuleId;
+use roc_region::all::Region;
 use roc_solve::{
     module::{SolveConfig, Solved},
     solve, Aliases,
@@ -19,6 +20,7 @@ use roc_types::subs::{Subs, Variable};
 #[derive(Debug)]
 pub struct SolvedExprOut {
     pub expr: Expr,
+    pub region: Region,
     pub problems: Vec<TypeError>,
     pub var: Variable,
     pub subs: Solved<Subs>,
@@ -61,6 +63,7 @@ impl SolvedExpr {
 
         SolvedExprOut {
             expr: constrained_expr_out.expr,
+            region: constrained_expr_out.region,
             problems,
             var: constrained_expr_out.var,
             subs: solve_output.solved,

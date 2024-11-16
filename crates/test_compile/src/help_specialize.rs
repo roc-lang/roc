@@ -1,5 +1,6 @@
 use crate::SolvedExpr;
 use bumpalo::Bump;
+use roc_region::all::Region;
 use roc_specialize_types::{
     DebugInfo, Env, Interns, MonoCache, MonoExprId, MonoExprs, MonoTypes, Problem, RecordFieldIds,
     TupleElemIds,
@@ -8,6 +9,7 @@ use roc_specialize_types::{
 #[derive(Debug)]
 pub struct SpecializedExprOut {
     pub mono_expr_id: Option<MonoExprId>,
+    pub region: Region,
     pub mono_types: MonoTypes,
     pub mono_exprs: MonoExprs,
     pub problems: Vec<Problem>,
@@ -45,11 +47,13 @@ impl SpecializedExpr {
                 &mut problems,
             );
 
-            env.to_mono_expr(solved_out.expr)
+            env.to_mono_expr(&solved_out.expr)
+                .map(|mono_expr| mono_exprs.add(mono_expr, Region::zero()))
         };
 
         SpecializedExprOut {
             mono_expr_id,
+            region: solved_out.region,
             problems,
             mono_types,
             mono_exprs,

@@ -12,11 +12,6 @@ mod specialize_primitives {
     use super::helpers::{expect_mono_expr, expect_mono_expr_with_interns, expect_no_expr};
 
     #[test]
-    fn empty_record() {
-        expect_no_expr("{}");
-    }
-
-    #[test]
     fn string_literal() {
         let string = "foo";
         let expected = format!("\"{string}\"");

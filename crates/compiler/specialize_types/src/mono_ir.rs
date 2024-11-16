@@ -7,7 +7,7 @@ use roc_can::expr::{Field, Recursive};
 use roc_module::symbol::Symbol;
 use roc_module::{ident::Lowercase, low_level::LowLevel};
 use roc_region::all::Region;
-use soa::{Id, NonEmptySlice, Slice, Slice2, Slice3};
+use soa::{Id, Index, NonEmptySlice, Slice, Slice2, Slice3};
 use std::iter;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -71,19 +71,34 @@ impl MonoExprs {
         unsafe { *self.regions.get_unchecked(id.inner.index() as usize) }
     }
 
-    pub fn reserve_ids(&self, len: u16) -> Slice<MonoExprId> {
-        let answer = Slice::new(self.exprs.len() as u32, len);
+    pub fn reserve_id(&mut self) -> MonoExprId {
+        let answer = MonoExprId {
+            inner: Index::new(self.exprs.len() as u32),
+        };
 
         // These should all be overwritten; if they aren't, that's a problem!
-        self.exprs.extend(iter::repeat(MonoExpr::CompilerBug(
-            Problem::UninitializedReservedExpr,
-        )));
-        self.regions.extend(iter::repeat(Region::zero()));
+        self.exprs
+            .push(MonoExpr::CompilerBug(Problem::UninitializedReservedExpr));
+        self.regions.push(Region::zero());
 
         answer
     }
 
-    pub(crate) fn insert(&self, id: MonoExprId, mono_expr: MonoExpr, region: Region) {
+    pub fn reserve_ids(&mut self, len: u16) -> Slice<MonoExprId> {
+        let answer = Slice::new(self.exprs.len() as u32, len);
+
+        // These should all be overwritten; if they aren't, that's a problem!
+        self.exprs.extend(
+            iter::repeat(MonoExpr::CompilerBug(Problem::UninitializedReservedExpr))
+                .take(len as usize),
+        );
+        self.regions
+            .extend(iter::repeat(Region::zero()).take(len as usize));
+
+        answer
+    }
+
+    pub(crate) fn insert(&mut self, id: MonoExprId, mono_expr: MonoExpr, region: Region) {
         debug_assert!(
             self.exprs.get(id.inner.index()).is_some(),
             "A MonoExprId was not found in MonoExprs. This should never happen!"
@@ -299,14 +314,4 @@ pub enum DestructType {
     Required,
     Optional(MonoTypeId, MonoExprId),
     Guard(MonoTypeId, MonoPatternId),
-}
-
-/// Sort the given fields alphabetically by name.
-pub fn sort_fields<'a>(
-    fields: impl IntoIterator<Item = (Lowercase, Field)>,
-    arena: &'a Bump,
-) -> bumpalo::collections::Vec<'a, (Lowercase, Field)> {
-    let mut fields = bumpalo::collections::Vec::from_iter_in(fields.into_iter(), arena);
-    fields.sort_by_key(|(name, _field)| name);
-    fields
 }

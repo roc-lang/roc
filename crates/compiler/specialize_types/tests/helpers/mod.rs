@@ -1,5 +1,6 @@
 use bumpalo::Bump;
 use roc_load::LoadedModule;
+use roc_region::all::Region;
 use roc_solve::FunctionKind;
 use roc_specialize_types::{
     DebugInfo, Env, Interns, MonoCache, MonoExpr, MonoExprs, MonoTypes, RecordFieldIds,
@@ -80,13 +81,17 @@ fn specialize_expr<'a>(
     // This should be our only expr
     assert_eq!(0, home_decls.expressions.len());
 
-    let mono_expr_id = env.to_mono_expr(main_expr);
+    let region = Region::zero();
+    let mono_expr_id = env
+        .to_mono_expr(&main_expr)
+        .map(|mono_expr| mono_exprs.add(mono_expr, region));
 
     SpecializedExprOut {
         mono_expr_id,
         problems,
         mono_types,
         mono_exprs,
+        region,
     }
 }
 
