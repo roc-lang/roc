@@ -3299,7 +3299,7 @@ fn list_join_map() {
     assert_evals_to!(
         indoc!(
             r#"
-            List.joinMap ["guava,apple,pear", "bailey,cyrus"] (\s -> Str.split s ",")
+            List.joinMap ["guava,apple,pear", "bailey,cyrus"] (\s -> Str.splitOn s ",")
             "#
         ),
         RocList::from_slice(&[
@@ -3319,7 +3319,7 @@ fn list_join_map_empty() {
     assert_evals_to!(
         indoc!(
             r#"
-            List.joinMap [] (\s -> Str.split s ",")
+            List.joinMap [] (\s -> Str.splitOn s ",")
             "#
         ),
         RocList::from_slice(&[]),

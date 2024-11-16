@@ -1274,7 +1274,7 @@ pub(crate) fn lowlevel_borrow_signature(op: LowLevel) -> &'static [Ownership] {
         StrTrim => &[OWNED],
         StrTrimStart => &[OWNED],
         StrTrimEnd => &[OWNED],
-        StrSplit => &[BORROWED, BORROWED],
+        StrSplitOn => &[BORROWED, BORROWED],
         StrToNum => &[BORROWED],
         ListPrepend => &[OWNED, OWNED],
         StrJoinWith => &[BORROWED, BORROWED],

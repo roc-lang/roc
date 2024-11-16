@@ -471,8 +471,8 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 bitcode::STR_REPEAT,
             )
         }
-        StrSplit => {
-            // Str.split : Str, Str -> List Str
+        StrSplitOn => {
+            // Str.splitOn : Str, Str -> List Str
             arguments!(string, delimiter);
 
             call_str_bitcode_fn(
@@ -480,7 +480,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 &[string, delimiter],
                 &[],
                 BitcodeReturns::List,
-                bitcode::STR_SPLIT,
+                bitcode::STR_SPLIT_ON,
             )
         }
         StrIsEmpty => {

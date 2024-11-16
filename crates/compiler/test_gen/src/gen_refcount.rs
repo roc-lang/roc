@@ -220,7 +220,7 @@ fn list_str_take_first() {
 
 #[test]
 #[cfg(feature = "gen-wasm")]
-fn list_str_split() {
+fn list_str_split_on() {
     assert_refcounts!(
         indoc!(
             r#"
@@ -239,7 +239,7 @@ fn list_str_split() {
 
 #[test]
 #[cfg(feature = "gen-wasm")]
-fn list_str_split_zero() {
+fn list_str_split_on_zero() {
     assert_refcounts!(
         indoc!(
             r#"

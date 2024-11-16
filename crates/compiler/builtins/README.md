@@ -10,7 +10,7 @@ Next, look towards the bottom of the `compiler/module/src/symbol.rs` file. Insid
 
 For each of the builtin modules, there is a file in `compiler/test_gen/src/` like `gen_num.rs`, `gen_str.rs` etc. Add new tests for the module you are changing to the appropriate file here. You can look at the existing test cases for examples and inspiration.
 
-You can run your new tests locally using `cargo test-gen-llvm`. You can add a filter like `cargo test-gen-llvm gen_str` (to only run tests defined in `gen_str.rs`) or `cargo test-gen-llvm gen_str::str_split` (to only run tests defined in `gen_str` whose names start with `str_split`). More details can be found in the README in the `compiler/test_gen` directory.
+You can run your new tests locally using `cargo test-gen-llvm`. You can add a filter like `cargo test-gen-llvm gen_str` (to only run tests defined in `gen_str.rs`) or `cargo test-gen-llvm gen_str::str_split_on` (to only run tests defined in `gen_str` whose names start with `str_split`). More details can be found in the README in the `compiler/test_gen` directory.
 
 ## A builtin implemented directly as LLVM
 
@@ -22,8 +22,8 @@ Some of these have `#` inside their name (`first#list`, `#lt` ..). This is a tri
 
 But we can use these values and some of these are necessary for implementing builtins. For example, `List.get` returns tags, and it is not easy for us to create tags when composing LLVM. What is easier however, is:
 
--   ..writing `List.#getUnsafe` that has the dangerous signature of `List elem, U64 -> elem` in LLVM
--   ..writing `List elem, U64 -> Result elem [OutOfBounds]*` in a type safe way that uses `getUnsafe` internally, only after it checks if the `elem` at `U64` index exists.
+- ..writing `List.#getUnsafe` that has the dangerous signature of `List elem, U64 -> elem` in LLVM
+- ..writing `List elem, U64 -> Result elem [OutOfBounds]*` in a type safe way that uses `getUnsafe` internally, only after it checks if the `elem` at `U64` index exists.
 
 ### can/src/builtins.rs
 
@@ -123,5 +123,5 @@ But replace `Num.atan`, the return value, and the return type with your new buil
 
 When implementing a new builtin, it is often easy to copy and paste the implementation for an existing builtin. This can take you quite far since many builtins are very similar, but it also risks forgetting to change one small part of what you copy and pasted and losing a lot of time later on when you cant figure out why things don't work. So, speaking from experience, even if you are copying an existing builtin, try and implement it manually without copying and pasting. Two recent instances of this (as of September 7th, 2020):
 
--   `List.keepIf` did not work for a long time because in builtins its `LowLevel` was `ListMap`. This was because I copy and pasted the `List.map` implementation in `builtins.rs
--   `List.walkBackwards` had mysterious memory bugs for a little while because in `unique.rs` its return type was `list_type(flex(b))` instead of `flex(b)` since it was copy and pasted from `List.keepIf`.
+- `List.keepIf` did not work for a long time because in builtins its `LowLevel` was `ListMap`. This was because I copy and pasted the `List.map` implementation in `builtins.rs
+- `List.walkBackwards` had mysterious memory bugs for a little while because in `unique.rs` its return type was `list_type(flex(b))` instead of `flex(b)` since it was copy and pasted from `List.keepIf`.

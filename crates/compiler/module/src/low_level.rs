@@ -10,7 +10,7 @@ pub enum LowLevel {
     StrIsEmpty,
     StrStartsWith,
     StrEndsWith,
-    StrSplit,
+    StrSplitOn,
     StrCountUtf8Bytes,
     StrFromInt,
     StrFromUtf8,
@@ -253,7 +253,7 @@ map_symbol_to_lowlevel! {
     StrIsEmpty <= STR_IS_EMPTY;
     StrStartsWith <= STR_STARTS_WITH;
     StrEndsWith <= STR_ENDS_WITH;
-    StrSplit <= STR_SPLIT;
+    StrSplitOn <= STR_SPLIT_ON;
     StrCountUtf8Bytes <= STR_COUNT_UTF8_BYTES;
     StrFromUtf8 <= STR_FROM_UTF8_LOWLEVEL;
     StrToUtf8 <= STR_TO_UTF8;

@@ -1371,7 +1371,7 @@ define_builtins! {
         2 STR_APPEND: "#append" // unused
         3 STR_CONCAT: "concat"
         4 STR_JOIN_WITH: "joinWith"
-        5 STR_SPLIT: "split"
+        5 STR_SPLIT_ON: "splitOn"
         6 STR_WITH_PREFIX: "withPrefix"
         7 STR_STARTS_WITH: "startsWith"
         8 STR_ENDS_WITH: "endsWith"
