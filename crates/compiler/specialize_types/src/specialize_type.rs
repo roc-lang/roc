@@ -35,6 +35,7 @@ pub enum Problem {
         Option<MonoType>, // `None` means it specialized to Unit
     ),
     BadNumTypeParam,
+    UninitializedReservedExpr,
 }
 
 /// For MonoTypes that are records, store their field indices.

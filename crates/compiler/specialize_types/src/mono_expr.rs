@@ -1,5 +1,5 @@
 use crate::{
-    mono_ir::{MonoExpr, MonoExprId, MonoExprs},
+    mono_ir::{sort_fields, MonoExpr, MonoExprId, MonoExprs},
     mono_module::Interns,
     mono_num::Number,
     mono_type::{MonoType, MonoTypes, Primitive},
@@ -9,8 +9,10 @@ use crate::{
 use bumpalo::Bump;
 use roc_can::expr::{Expr, IntValue};
 use roc_collections::Push;
+use roc_region::all::Region;
 use roc_solve::module::Solved;
 use roc_types::subs::Subs;
+use soa::{Index, Slice};
 
 pub struct Env<'a, 'c, 'd, 'i, 's, 't, P> {
     arena: &'a Bump,
@@ -52,7 +54,12 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
         }
     }
 
-    pub fn to_mono_expr(&mut self, can_expr: Expr) -> Option<MonoExprId> {
+    pub fn to_mono_expr(
+        &mut self,
+        can_expr: Expr,
+        region: Region,
+        get_expr_id: impl FnOnce() -> Option<MonoExprId>,
+    ) -> Option<MonoExprId> {
         let problems = &mut self.problems;
         let mono_types = &mut self.mono_types;
         let mut mono_from_var = |var| {
@@ -67,11 +74,13 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
             )
         };
 
-        let mut add = |expr| self.mono_exprs.add(expr);
         macro_rules! compiler_bug {
-            ($problem:expr) => {{
+            ($problem:expr, $region:expr) => {{
                 problems.push($problem);
-                Some(add(MonoExpr::CompilerBug($problem)))
+                Some(
+                    self.mono_exprs
+                        .add(MonoExpr::CompilerBug($problem), $region),
+                )
             }};
         }
 
@@ -80,11 +89,14 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
                 Some(mono_id) => match mono_types.get(mono_id) {
                     MonoType::Primitive(primitive) => to_frac(*primitive, val, problems),
                     other => {
-                        return compiler_bug!(Problem::NumSpecializedToWrongType(Some(*other)));
+                        return compiler_bug!(
+                            Problem::NumSpecializedToWrongType(Some(*other)),
+                            region
+                        );
                     }
                 },
                 None => {
-                    return compiler_bug!(Problem::NumSpecializedToWrongType(None));
+                    return compiler_bug!(Problem::NumSpecializedToWrongType(None), region);
                 }
             },
             Expr::Num(var, _str, int_value, _) | Expr::Int(var, _, _str, int_value, _) => {
@@ -93,11 +105,14 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
                     Some(mono_id) => match mono_types.get(mono_id) {
                         MonoType::Primitive(primitive) => to_num(*primitive, int_value, problems),
                         other => {
-                            return compiler_bug!(Problem::NumSpecializedToWrongType(Some(*other)));
+                            return compiler_bug!(
+                                Problem::NumSpecializedToWrongType(Some(*other)),
+                                region
+                            );
                         }
                     },
                     None => {
-                        return compiler_bug!(Problem::NumSpecializedToWrongType(None));
+                        return compiler_bug!(Problem::NumSpecializedToWrongType(None), region);
                     }
                 }
             }
@@ -109,11 +124,14 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
                 Some(mono_id) => match mono_types.get(mono_id) {
                     MonoType::Primitive(primitive) => char_to_int(*primitive, char, problems),
                     other => {
-                        return compiler_bug!(Problem::CharSpecializedToWrongType(Some(*other)));
+                        return compiler_bug!(
+                            Problem::CharSpecializedToWrongType(Some(*other)),
+                            region
+                        );
                     }
                 },
                 None => {
-                    return compiler_bug!(Problem::CharSpecializedToWrongType(None));
+                    return compiler_bug!(Problem::CharSpecializedToWrongType(None), region);
                 }
             },
             Expr::Str(contents) => MonoExpr::Str(
@@ -123,6 +141,42 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
             Expr::EmptyRecord => {
                 // Empty records are zero-sized and should be discarded.
                 return None;
+            }
+            Expr::Record { record_var, fields } => {
+                // Sort the fields alphabetically by name.
+                let mut fields = sort_fields(fields, self.arena);
+
+                // Reserve a slice of IDs up front. This is so that we have a contiguous array
+                // of field IDs at the end of this, each corresponding to the appropriate record field.
+                let field_ids: Slice<MonoExprId> = self.mono_exprs.reserve_ids(fields.len() as u16);
+                let mut next_field_id = field_ids.start();
+
+                // Generate a MonoExpr for each field, using the reserved IDs so that we end up with
+                // that Slice being populated with the exprs in the fields, with the correct ordering.
+                fields.retain(|(_name, field)| {
+                    let loc_expr = field.loc_expr;
+                    self.to_mono_expr(loc_expr.value, loc_expr.region, || unsafe {
+                        // Safety: This will run *at most* field.len() times, possibly less,
+                        // so this will never create an index that's out of bounds.
+                        let answer = MonoExprId::new_unchecked(Index::new(next_field_id));
+                        next_field_id += 1;
+                        Some(answer)
+                    })
+                    // Discard all the zero-sized fields as we go. We don't need to keep the contents
+                    // of the Option because we already know it's the ID we passed in.
+                    .is_some()
+                });
+
+                // If we dropped any fields because they were being zero-sized,
+                // drop the same number of reserved IDs so that they still line up.
+                field_ids.truncate(fields.len() as u16);
+
+                // If all fields ended up being zero-sized, this would compile to an empty record; return None.
+                let field_ids = field_ids.into_nonempty_slice()?;
+
+                let todo = (); // TODO: store debuginfo for the record type, including ideally type alias and/or opaque type names.
+
+                MonoExpr::Struct(field_ids)
             }
             _ => todo!(),
             // Expr::List {
@@ -163,10 +217,6 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
             //     ret_var,
             // } => todo!(),
             // Expr::Closure(closure_data) => todo!(),
-            // Expr::Record { record_var, fields } => {
-            //     // TODO *after* having converted to mono (dropping zero-sized fields), if no fields remain, then return None.
-            //     todo!()
-            // }
             // Expr::Tuple { tuple_var, elems } => todo!(),
             // Expr::ImportParams(module_id, region, _) => todo!(),
             // Expr::Crash { msg, ret_var } => todo!(),
@@ -236,7 +286,11 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
             }
         };
 
-        Some(add(mono_expr))
+        let mono_expr_id = get_expr_id()?;
+
+        self.mono_exprs.insert(mono_expr_id, mono_expr, region);
+
+        Some(mono_expr_id)
     }
 }
 

@@ -2,11 +2,13 @@ use crate::{
     foreign_symbol::ForeignSymbolId, mono_module::InternedStrId, mono_num::Number,
     mono_struct::MonoFieldId, mono_type::MonoTypeId, specialize_type::Problem,
 };
-use roc_can::expr::Recursive;
-use roc_collections::soa::Slice;
-use roc_module::low_level::LowLevel;
+use bumpalo::Bump;
+use roc_can::expr::{Field, Recursive};
 use roc_module::symbol::Symbol;
-use soa::{Id, NonEmptySlice, Slice2, Slice3};
+use roc_module::{ident::Lowercase, low_level::LowLevel};
+use roc_region::all::Region;
+use soa::{Id, NonEmptySlice, Slice, Slice2, Slice3};
+use std::iter;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MonoPatternId {
@@ -26,24 +28,30 @@ pub struct Def {
 
 #[derive(Debug)]
 pub struct MonoExprs {
+    // TODO convert to Vec2
     exprs: Vec<MonoExpr>,
+    regions: Vec<Region>,
 }
 
 impl MonoExprs {
     pub fn new() -> Self {
-        Self { exprs: Vec::new() }
+        Self {
+            exprs: Vec::new(),
+            regions: Vec::new(),
+        }
     }
 
-    pub fn add(&mut self, expr: MonoExpr) -> MonoExprId {
+    pub fn add(&mut self, expr: MonoExpr, region: Region) -> MonoExprId {
         let index = self.exprs.len() as u32;
         self.exprs.push(expr);
+        self.regions.push(region);
 
         MonoExprId {
             inner: Id::new(index),
         }
     }
 
-    pub fn get(&self, id: MonoExprId) -> &MonoExpr {
+    pub fn get_expr(&self, id: MonoExprId) -> &MonoExpr {
         debug_assert!(
             self.exprs.get(id.inner.index()).is_some(),
             "A MonoExprId was not found in MonoExprs. This should never happen!"
@@ -52,11 +60,59 @@ impl MonoExprs {
         // Safety: we should only ever hand out MonoExprIds that are valid indices into here.
         unsafe { self.exprs.get_unchecked(id.inner.index() as usize) }
     }
+
+    pub fn get_region(&self, id: MonoExprId) -> Region {
+        debug_assert!(
+            self.regions.get(id.inner.index()).is_some(),
+            "A MonoExprId was not found in MonoExprs. This should never happen!"
+        );
+
+        // Safety: we should only ever hand out MonoExprIds that are valid indices into here.
+        unsafe { *self.regions.get_unchecked(id.inner.index() as usize) }
+    }
+
+    pub fn reserve_ids(&self, len: u16) -> Slice<MonoExprId> {
+        let answer = Slice::new(self.exprs.len() as u32, len);
+
+        // These should all be overwritten; if they aren't, that's a problem!
+        self.exprs.extend(iter::repeat(MonoExpr::CompilerBug(
+            Problem::UninitializedReservedExpr,
+        )));
+        self.regions.extend(iter::repeat(Region::zero()));
+
+        answer
+    }
+
+    pub(crate) fn insert(&self, id: MonoExprId, mono_expr: MonoExpr, region: Region) {
+        debug_assert!(
+            self.exprs.get(id.inner.index()).is_some(),
+            "A MonoExprId was not found in MonoExprs. This should never happen!"
+        );
+
+        debug_assert!(
+            self.regions.get(id.inner.index()).is_some(),
+            "A MonoExprId was not found in MonoExprs. This should never happen!"
+        );
+
+        let index = id.inner.index() as usize;
+
+        // Safety: we should only ever hand out MonoExprIds that are valid indices into here.
+        unsafe {
+            *self.exprs.get_unchecked_mut(index) = mono_expr;
+            *self.regions.get_unchecked_mut(index) = region;
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MonoExprId {
     inner: Id<MonoExpr>,
+}
+
+impl MonoExprId {
+    pub(crate) unsafe fn new_unchecked(inner: Id<MonoExpr>) -> Self {
+        Self { inner }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -136,12 +192,9 @@ pub enum MonoExpr {
         recursive: Recursive,
     },
 
-    /// Either a record literal or a tuple literal.
-    /// Rather than storing field names, we instead store a u16 field index.
-    Struct {
-        struct_type: MonoTypeId,
-        fields: Slice2<MonoFieldId, MonoTypeId>,
-    },
+    /// A record literal or a tuple literal.
+    /// These have already been sorted alphabetically.
+    Struct(NonEmptySlice<MonoExprId>),
 
     /// The "crash" keyword. Importantly, during code gen we must mark this as "nothing happens after this"
     Crash {
@@ -246,4 +299,14 @@ pub enum DestructType {
     Required,
     Optional(MonoTypeId, MonoExprId),
     Guard(MonoTypeId, MonoPatternId),
+}
+
+/// Sort the given fields alphabetically by name.
+pub fn sort_fields<'a>(
+    fields: impl IntoIterator<Item = (Lowercase, Field)>,
+    arena: &'a Bump,
+) -> bumpalo::collections::Vec<'a, (Lowercase, Field)> {
+    let mut fields = bumpalo::collections::Vec::from_iter_in(fields.into_iter(), arena);
+    fields.sort_by_key(|(name, _field)| name);
+    fields
 }

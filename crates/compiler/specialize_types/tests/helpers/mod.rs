@@ -95,7 +95,7 @@ pub fn expect_no_expr(input: impl AsRef<str>) {
     let arena = Bump::new();
     let mut interns = Interns::new();
     let out = specialize_expr(&arena, input.as_ref(), &mut interns);
-    let actual = out.mono_expr_id.map(|id| out.mono_exprs.get(id));
+    let actual = out.mono_expr_id.map(|id| out.mono_exprs.get_expr(id));
 
     assert_eq!(None, actual, "This input expr should have specialized to being dicarded as zero-sized, but it didn't: {:?}", input.as_ref());
 }
@@ -118,7 +118,7 @@ pub fn expect_mono_expr_with_interns<T>(
             .mono_expr_id
             .expect("This input expr should not have been discarded as zero-sized, but it was discarded: {input:?}");
 
-    let actual_expr = out.mono_exprs.get(mono_expr_id); // Must run first, to populate string interns!
+    let actual_expr = out.mono_exprs.get_expr(mono_expr_id); // Must run first, to populate string interns!
 
     let expected_expr = to_mono_expr(from_interns(&arena, &string_interns));
 

@@ -118,6 +118,18 @@ impl<T> Slice<T> {
             _marker: PhantomData,
         }
     }
+
+    pub const fn truncate(&self, length: u16) -> Self {
+        Self {
+            start: self.start,
+            length,
+            _marker: PhantomData,
+        }
+    }
+
+    pub fn into_nonempty_slice(&self) -> Option<NonEmptySlice<T>> {
+        NonZeroU16::new(self.length).map(|nonzero_len| NonEmptySlice::new(self.start, nonzero_len))
+    }
 }
 
 impl<T> IntoIterator for Slice<T> {
@@ -224,6 +236,16 @@ impl<T> NonEmptySlice<T> {
 
     pub const unsafe fn from_slice_unchecked(slice: Slice<T>) -> Self {
         Self::new(slice.start, NonZeroU16::new_unchecked(slice.length))
+    }
+
+    pub const fn truncate(&self, length: NonZeroU16) -> Self {
+        Self {
+            inner: Slice {
+                start: self.inner.start,
+                length: length.get(),
+                _marker: PhantomData,
+            },
+        }
     }
 }
 
