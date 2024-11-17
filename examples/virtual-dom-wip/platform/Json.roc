@@ -163,7 +163,7 @@ encodeStrBytes = \str ->
 
         FoundEscape ->
             { before: bytesBeforeEscape, others: bytesWithEscapes } =
-                List.split bytes firstPassState.bytePos
+                List.splitAt bytes firstPassState.bytePos
 
             # Reserve List with 120% capacity for escaped bytes to reduce
             # allocations, include starting quote, and bytes up to first escape
@@ -584,7 +584,7 @@ parseExactChar = \bytes, char ->
             if
                 c == char
             then
-                { result: Ok {}, rest: (List.split bytes 1).others }
+                { result: Ok {}, rest: (List.splitAt bytes 1).others }
             else
                 { result: Err TooShort, rest: bytes }
 

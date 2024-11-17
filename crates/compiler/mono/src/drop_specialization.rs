@@ -1563,7 +1563,7 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         StrTrim => RC::Rc,
         StrTrimStart => RC::Rc,
         StrTrimEnd => RC::Rc,
-        StrSplit => RC::NoRc,
+        StrSplitOn => RC::NoRc,
         StrToNum => RC::NoRc,
         ListPrepend => RC::Rc,
         StrJoinWith => RC::NoRc,

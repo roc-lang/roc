@@ -1641,9 +1641,9 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
-            LowLevel::StrSplit => self.build_fn_call(
+            LowLevel::StrSplitOn => self.build_fn_call(
                 sym,
-                bitcode::STR_SPLIT.to_string(),
+                bitcode::STR_SPLIT_ON.to_string(),
                 args,
                 arg_layouts,
                 ret_layout,
