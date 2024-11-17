@@ -77,7 +77,7 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
 
         match can_expr {
             Expr::Float(var, _precision_var, _str, val, _bound) => {
-                match dbg!(self.subs.get_content_without_compacting(*var)) {
+                match self.subs.get_content_without_compacting(*var) {
                     Content::FlexVar(_) => {
                         // Plain decimal number literals like `4.2` can still have an unbound var.
                         Some(MonoExpr::Number(Number::Dec(*val)))
@@ -159,7 +159,7 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
                 // Generate a MonoExpr for each field, using the reserved IDs so that we end up with
                 // that Slice being populated with the exprs in the fields, with the correct ordering.
                 fields.retain(|(_name, field)| {
-                    match dbg!(self.to_mono_expr(&field.loc_expr.value)) {
+                    match self.to_mono_expr(&field.loc_expr.value) {
                         Some(mono_expr) => {
                             // Safety: This will run *at most* field.len() times, possibly less,
                             // so this will never create an index that's out of bounds.
@@ -171,11 +171,11 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
                             self.mono_exprs
                                 .insert(mono_expr_id, mono_expr, field.loc_expr.region);
 
-                            dbg!(true)
+                            true
                         }
                         None => {
                             // Discard all the zero-sized fields as we go.
-                            dbg!(false)
+                            false
                         }
                     }
                 });
