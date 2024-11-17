@@ -227,14 +227,6 @@ fn lower_var<P: Push<Problem>>(
                   FlatType::EmptyTuple |
                   FlatType::EmptyTagUnion => None,
               },
-              Content::RangedNumber(_) // RangedNumber goes in Num's type parameter slot, so monomorphize it to []
-              | Content::FlexVar(_)
-              | Content::RigidVar(_)
-              | Content::FlexAbleVar(_, _)
-              | Content::RigidAbleVar(_, _)
-              | Content::RecursionVar { .. } => Content::Structure(FlatType::EmptyTagUnion),
-              Content::LambdaSet(lambda_set) => Content::LambdaSet(lambda_set),
-              Content::ErasedLambda => Content::ErasedLambda,
               Content::Error => Content::Error,
                */
         },
@@ -268,6 +260,11 @@ fn lower_var<P: Push<Problem>>(
         | Content::RigidAbleVar(_, _) => {
             // The only way we should reach this branch is in something like a `crash`.
             MonoTypeId::CRASH
+        }
+        Content::ErasedLambda | Content::LambdaSet(_) => {
+            unreachable!(
+                "This new monomorphization implementation must not do anything with lambda sets, because they'll be handled later!"
+            );
         }
         content => {
             todo!("specialize this Content: {content:?}");
