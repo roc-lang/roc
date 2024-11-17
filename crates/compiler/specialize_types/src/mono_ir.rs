@@ -289,6 +289,7 @@ pub struct WhenBranch {
     pub guard: Option<MonoExprId>,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 pub enum MonoPattern {
     Identifier(IdentId),
@@ -320,6 +321,7 @@ pub enum MonoPattern {
     Underscore,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 pub enum DestructType {
     Required,

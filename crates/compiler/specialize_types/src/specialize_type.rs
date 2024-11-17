@@ -11,7 +11,10 @@ use crate::{
 use roc_collections::{Push, VecMap};
 use roc_module::{ident::Lowercase, symbol::Symbol};
 use roc_solve::module::Solved;
-use roc_types::subs::{Content, FlatType, Subs, SubsSlice, Variable};
+use roc_types::{
+    subs::{Content, FlatType, Subs, SubsSlice, Variable},
+    types::AliasKind,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Problem {
@@ -81,10 +84,14 @@ impl MonoCache {
 
 struct Env<'c, 'd, 'e, 'f, 'm, 'p, P: Push<Problem>> {
     cache: &'c mut MonoCache,
+    #[allow(dead_code)]
     mono_types: &'m mut MonoTypes,
+    #[allow(dead_code)]
     field_ids: &'f mut RecordFieldIds,
+    #[allow(dead_code)]
     elem_ids: &'e mut TupleElemIds,
     problems: &'p mut P,
+    #[allow(dead_code)]
     debug_info: &'d mut Option<DebugInfo>,
 }
 
@@ -104,22 +111,11 @@ fn lower_var<P: Push<Problem>>(
     }
 
     // Convert the Content to a MonoType, often by passing an iterator. None of these iterators introduce allocations.
-    let mono_id = match *subs.get_content_without_compacting(root_var) {
+    let mono_id = match dbg!(*subs.get_content_without_compacting(root_var)) {
         Content::Structure(flat_type) => match flat_type {
             FlatType::Apply(symbol, args) => {
                 if symbol.is_builtin() {
-                    if symbol == Symbol::NUM_NUM {
-                        num_args_to_mono_id(args, subs, env.problems)
-                    } else if symbol == Symbol::LIST_LIST {
-                        todo!();
-                        // let mut new_args = args
-                        //     .into_iter()
-                        //     .flat_map(|var_index| lower_var(env, subs, subs[var_index]));
-
-                        // let arg = new_args.next();
-                    } else {
-                        todo!()
-                    }
+                    lower_builtin(env, subs, symbol, args)
                 } else {
                     todo!("handle non-builtin Apply");
                 }
@@ -252,13 +248,26 @@ fn lower_var<P: Push<Problem>>(
                 NumAtLeastEitherSign(int_lit_width) => int_lit_width_to_mono_type_id(int_lit_width),
             }
         }
-        Content::Alias(_symbol, args, real, kind) => {
-            let mono_id = lower_var(env, subs, real)?;
-            // let mono_args = args
-            //     .into_iter()
-            //     .flat_map(|arg| lower_var(env, subs, subs[arg]));
+        Content::Alias(symbol, args, real, kind) => {
+            match kind {
+                AliasKind::Opaque if symbol.is_builtin() => {
+                    let args_slice = SubsSlice::new(args.variables_start, args.type_variables_len);
+                    lower_builtin(env, subs, symbol, args_slice)
+                }
+                _ => {
+                    let mono_id = lower_var(env, subs, real)?;
+                    let todo = (); // TODO record in debuginfo the alias name for whatever we're lowering.
 
-            todo!();
+                    mono_id
+                }
+            }
+        }
+        Content::FlexVar(_)
+        | Content::RigidVar(_)
+        | Content::FlexAbleVar(_, _)
+        | Content::RigidAbleVar(_, _) => {
+            // The only way we should reach this branch is in something like a `crash`.
+            MonoTypeId::CRASH
         }
         content => {
             todo!("specialize this Content: {content:?}");
@@ -292,107 +301,157 @@ fn int_lit_width_to_mono_type_id(int_lit_width: roc_can::num::IntLitWidth) -> Mo
     }
 }
 
-fn num_args_to_mono_id(
+/// This works on the arg(s) to a Num.Num
+fn num_num_args_to_mono_id(
+    outer_symbol: Symbol,
     args: SubsSlice<Variable>,
     subs: &Subs,
     problems: &mut impl Push<Problem>,
 ) -> MonoTypeId {
     match args.into_iter().next() {
         Some(arg_index) if args.len() == 1 => {
-            match subs.get_content_without_compacting(subs[arg_index]) {
-                Content::Structure(flat_type) => {
-                    if let FlatType::Apply(outer_symbol, args) = flat_type {
-                        let outer_symbol = *outer_symbol;
+            let mut content = subs.get_content_without_compacting(subs[arg_index]);
 
-                        match args.into_iter().next() {
-                            Some(arg_index) if args.len() == 1 => {
-                                match subs.get_content_without_compacting(subs[arg_index]) {
-                                    Content::Structure(flat_type) => {
-                                        if let FlatType::Apply(inner_symbol, args) = flat_type {
-                                            let inner_symbol = *inner_symbol;
+            // Unroll aliases in this loop, as many aliases as we encounter.
+            loop {
+                match content {
+                    Content::Structure(flat_type) => {
+                        if let FlatType::Apply(inner_symbol, args) = flat_type {
+                            let inner_symbol = *inner_symbol;
 
-                                            if args.is_empty() {
-                                                if outer_symbol == Symbol::NUM_INTEGER {
-                                                    if inner_symbol == Symbol::NUM_UNSIGNED8 {
-                                                        return MonoTypeId::U8;
-                                                    } else if inner_symbol == Symbol::NUM_SIGNED8 {
-                                                        return MonoTypeId::I8;
-                                                    } else if inner_symbol == Symbol::NUM_UNSIGNED16
-                                                    {
-                                                        return MonoTypeId::U16;
-                                                    } else if inner_symbol == Symbol::NUM_SIGNED16 {
-                                                        return MonoTypeId::I16;
-                                                    } else if inner_symbol == Symbol::NUM_UNSIGNED32
-                                                    {
-                                                        return MonoTypeId::U32;
-                                                    } else if inner_symbol == Symbol::NUM_SIGNED32 {
-                                                        return MonoTypeId::I32;
-                                                    } else if inner_symbol == Symbol::NUM_UNSIGNED64
-                                                    {
-                                                        return MonoTypeId::U64;
-                                                    } else if inner_symbol == Symbol::NUM_SIGNED64 {
-                                                        return MonoTypeId::I64;
-                                                    } else if inner_symbol
-                                                        == Symbol::NUM_UNSIGNED128
-                                                    {
-                                                        return MonoTypeId::U128;
-                                                    } else if inner_symbol == Symbol::NUM_SIGNED128
-                                                    {
-                                                        return MonoTypeId::I128;
-                                                    }
-                                                } else if outer_symbol == Symbol::NUM_FLOATINGPOINT
-                                                {
-                                                    if inner_symbol == Symbol::NUM_BINARY32 {
-                                                        return MonoTypeId::F32;
-                                                    } else if inner_symbol == Symbol::NUM_BINARY64 {
-                                                        return MonoTypeId::F64;
-                                                    } else if inner_symbol == Symbol::NUM_DECIMAL {
-                                                        return MonoTypeId::DEC;
-                                                    }
-                                                }
-                                            }
-                                        }
+                            if args.is_empty() {
+                                if outer_symbol == Symbol::NUM_INTEGER {
+                                    if inner_symbol == Symbol::NUM_UNSIGNED8 {
+                                        return MonoTypeId::U8;
+                                    } else if inner_symbol == Symbol::NUM_SIGNED8 {
+                                        return MonoTypeId::I8;
+                                    } else if inner_symbol == Symbol::NUM_UNSIGNED16 {
+                                        return MonoTypeId::U16;
+                                    } else if inner_symbol == Symbol::NUM_SIGNED16 {
+                                        return MonoTypeId::I16;
+                                    } else if inner_symbol == Symbol::NUM_UNSIGNED32 {
+                                        return MonoTypeId::U32;
+                                    } else if inner_symbol == Symbol::NUM_SIGNED32 {
+                                        return MonoTypeId::I32;
+                                    } else if inner_symbol == Symbol::NUM_UNSIGNED64 {
+                                        return MonoTypeId::U64;
+                                    } else if inner_symbol == Symbol::NUM_SIGNED64 {
+                                        return MonoTypeId::I64;
+                                    } else if inner_symbol == Symbol::NUM_UNSIGNED128 {
+                                        return MonoTypeId::U128;
+                                    } else if inner_symbol == Symbol::NUM_SIGNED128 {
+                                        return MonoTypeId::I128;
                                     }
-                                    Content::FlexVar(_) => {
-                                        if outer_symbol == Symbol::NUM_INTEGER {
-                                            // Int *
-                                            return MonoTypeId::DEFAULT_INT;
-                                        } else if outer_symbol == Symbol::NUM_FLOATINGPOINT {
-                                            // Frac *
-                                            return MonoTypeId::DEFAULT_FRAC;
-                                        }
-                                    }
-                                    Content::Alias(
-                                        symbol,
-                                        alias_variables,
-                                        variable,
-                                        alias_kind,
-                                    ) => todo!(),
-                                    Content::RangedNumber(numeric_range) => todo!(),
-                                    _ => {
-                                        // no-op
+                                } else if outer_symbol == Symbol::NUM_FLOATINGPOINT {
+                                    if inner_symbol == Symbol::NUM_BINARY32 {
+                                        return MonoTypeId::F32;
+                                    } else if inner_symbol == Symbol::NUM_BINARY64 {
+                                        return MonoTypeId::F64;
+                                    } else if inner_symbol == Symbol::NUM_DECIMAL {
+                                        return MonoTypeId::DEC;
                                     }
                                 }
                             }
-                            _ => {
-                                // no-op
+                        }
+                    }
+                    Content::FlexVar(_) => {
+                        if outer_symbol == Symbol::NUM_INTEGER {
+                            // Int *
+                            return MonoTypeId::DEFAULT_INT;
+                        } else if outer_symbol == Symbol::NUM_FLOATINGPOINT {
+                            // Frac *
+                            return MonoTypeId::DEFAULT_FRAC;
+                        }
+                    }
+                    Content::Alias(_symbol, _alias_variables, variable, alias_kind) => {
+                        match alias_kind {
+                            AliasKind::Structural => {
+                                // Unwrap the alias and continue the loop.
+                                //
+                                // (Unlike in most aliases, here we don't care about the name
+                                // for debug info purposes; all we care about is determining
+                                // whether it's one of the builtin types.)
+                                content = subs.get_content_without_compacting(*variable);
+                            }
+                            AliasKind::Opaque => {
+                                // This should never happen (type-checking should have caught it),
+                                // so if an opaque type made it here, it's definitely a compiler bug!
+                                break;
                             }
                         }
                     }
-                }
-                Content::FlexVar(subs_index) => {
-                    // Num *
-                    return MonoTypeId::DEFAULT_INT;
-                }
-                Content::Alias(symbol, alias_variables, variable, alias_kind) => todo!(),
-                Content::RangedNumber(numeric_range) => todo!(),
-                _ => {
-                    // fall through
+                    Content::RangedNumber(numeric_range) => todo!(),
+                    _ => {
+                        // This is an invalid number type, so break out of
+                        // the alias-unrolling loop in order to return an error.
+                        break;
+                    }
                 }
             }
         }
         _ => {
-            // fall through
+            // This is an invalid number type, so fall through to the error case.
+        }
+    }
+
+    // If we got here, it's because the Num type parameter(s) don't fit the form we expect.
+    // Specialize to a crash!
+    problems.push(Problem::BadNumTypeParam);
+
+    MonoTypeId::CRASH
+}
+
+fn number_args_to_mono_id(
+    args: SubsSlice<Variable>,
+    subs: &Subs,
+    problems: &mut impl Push<Problem>,
+) -> MonoTypeId {
+    match args.into_iter().next() {
+        Some(arg_index) if args.len() == 1 => {
+            let mut content = subs.get_content_without_compacting(subs[arg_index]);
+
+            // Unroll aliases in this loop, as many aliases as we encounter.
+            loop {
+                match content {
+                    Content::Structure(flat_type) => {
+                        if let FlatType::Apply(outer_symbol, args) = flat_type {
+                            return num_num_args_to_mono_id(*outer_symbol, *args, subs, problems);
+                        } else {
+                            break;
+                        }
+                    }
+                    Content::FlexVar(_) => {
+                        // Num *
+                        return MonoTypeId::DEFAULT_INT;
+                    }
+                    Content::Alias(_symbol, _alias_variables, variable, alias_kind) => {
+                        match alias_kind {
+                            AliasKind::Structural => {
+                                // Unwrap the alias and continue the loop.
+                                //
+                                // (Unlike in most aliases, here we don't care about the name
+                                // for debug info purposes; all we care about is determining
+                                // whether it's one of the builtin types.)
+                                content = subs.get_content_without_compacting(*variable);
+                            }
+                            AliasKind::Opaque => {
+                                // This should never happen (type-checking should have caught it),
+                                // so if an opaque type made it here, it's definitely a compiler bug!
+                                break;
+                            }
+                        }
+                    }
+                    Content::RangedNumber(numeric_range) => todo!(),
+                    _ => {
+                        // This is an invalid number type, so break out of
+                        // the alias-unrolling loop in order to return an error.
+                        break;
+                    }
+                }
+            }
+        }
+        _ => {
+            // The Num type did not have exactly 1 type parameter; fall through to the error case.
         }
     }
 
@@ -550,3 +609,25 @@ fn num_args_to_mono_id(
 //         *var = ;
 //     }
 // }
+
+fn lower_builtin<P: Push<Problem>>(
+    env: &mut Env<'_, '_, '_, '_, '_, '_, P>,
+    subs: &Subs,
+    symbol: Symbol,
+    args: SubsSlice<Variable>,
+) -> MonoTypeId {
+    if symbol == Symbol::NUM_NUM {
+        number_args_to_mono_id(args, subs, env.problems)
+    } else if symbol == Symbol::NUM_FLOATINGPOINT {
+        num_num_args_to_mono_id(symbol, args, subs, env.problems)
+    } else if symbol == Symbol::LIST_LIST {
+        todo!();
+        // let mut new_args = args
+        //     .into_iter()
+        //     .flat_map(|var_index| lower_var(env, subs, subs[var_index]));
+
+        // let arg = new_args.next();
+    } else {
+        todo!("implement lower_builtin for symbol {symbol:?} - or, if all the builtins are already in here, report a compiler bug instead of panicking like this.");
+    }
+}

@@ -3,7 +3,7 @@ pub struct MonoFieldId {
     inner: u16,
 }
 impl MonoFieldId {
-    pub(crate) fn new(index: u16) -> Self {
+    pub fn new(index: u16) -> Self {
         Self { inner: index }
     }
 

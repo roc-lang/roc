@@ -10,7 +10,7 @@ use bumpalo::{collections::Vec, Bump};
 use roc_can::expr::{Expr, IntValue};
 use roc_collections::Push;
 use roc_solve::module::Solved;
-use roc_types::subs::Subs;
+use roc_types::subs::{Content, Subs};
 use soa::{Index, NonEmptySlice, Slice};
 
 pub struct Env<'a, 'c, 'd, 'i, 's, 't, P> {
@@ -76,15 +76,27 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
         }
 
         match can_expr {
-            Expr::Float(var, _precision_var, _str, val, _bound) => match mono_from_var(*var) {
-                Some(mono_id) => match mono_types.get(mono_id) {
-                    MonoType::Primitive(primitive) => Some(to_frac(*primitive, *val, problems)),
-                    other => compiler_bug!(Problem::NumSpecializedToWrongType(Some(*other))),
-                },
-                None => {
-                    compiler_bug!(Problem::NumSpecializedToWrongType(None))
+            Expr::Float(var, _precision_var, _str, val, _bound) => {
+                match dbg!(self.subs.get_content_without_compacting(*var)) {
+                    Content::FlexVar(_) => {
+                        // Plain decimal number literals like `4.2` can still have an unbound var.
+                        Some(MonoExpr::Number(Number::Dec(*val)))
+                    }
+                    _ => match mono_from_var(*var) {
+                        Some(mono_id) => match mono_types.get(mono_id) {
+                            MonoType::Primitive(primitive) => {
+                                Some(to_frac(*primitive, *val, problems))
+                            }
+                            other => {
+                                compiler_bug!(Problem::NumSpecializedToWrongType(Some(*other)))
+                            }
+                        },
+                        None => {
+                            compiler_bug!(Problem::NumSpecializedToWrongType(None))
+                        }
+                    },
                 }
-            },
+            }
             Expr::Num(var, _, int_value, _) | Expr::Int(var, _, _, int_value, _) => {
                 // Number literals and int literals both specify integer numbers, so to_num() can work on both.
                 match mono_from_var(*var) {

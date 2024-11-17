@@ -12,7 +12,7 @@ impl ForeignSymbols {
         unsafe { self.inner.get_unchecked(id.inner.index()) }
     }
 
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             inner: Default::default(),
         }

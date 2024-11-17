@@ -96,6 +96,7 @@ fn specialize_expr<'a>(
     }
 }
 
+#[allow(dead_code)]
 #[track_caller]
 pub fn expect_no_expr(input: impl AsRef<str>) {
     let arena = Bump::new();
@@ -106,11 +107,13 @@ pub fn expect_no_expr(input: impl AsRef<str>) {
     assert_eq!(None, actual, "This input expr should have specialized to being dicarded as zero-sized, but it didn't: {:?}", input.as_ref());
 }
 
+#[allow(dead_code)]
 #[track_caller]
 pub fn expect_mono_expr(input: impl AsRef<str>, mono_expr: MonoExpr) {
     expect_mono_expr_with_interns(input, |_, _| mono_expr);
 }
 
+#[allow(dead_code)]
 #[track_caller]
 pub fn expect_mono_expr_str(input: impl AsRef<str>, expr_str: impl AsRef<str>) {
     expect_mono_expr_custom(

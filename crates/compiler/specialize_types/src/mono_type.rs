@@ -77,10 +77,13 @@ impl MonoTypeId {
 #[derive(Debug)]
 pub struct MonoTypes {
     entries: Vec<MonoType>,
+    #[allow(dead_code)]
     ids: Vec<MonoTypeId>,
+    #[allow(dead_code)]
     slices: Vec<(NonZeroU16, MonoTypeId)>, // TODO make this a Vec2
 }
 
+#[allow(dead_code)]
 impl MonoTypes {
     pub fn new() -> Self {
         Self {

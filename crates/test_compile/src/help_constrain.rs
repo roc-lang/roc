@@ -23,6 +23,7 @@ pub struct ConstrainedExprOut {
     pub region: Region,
 }
 
+#[allow(dead_code)]
 #[derive(Default)]
 pub struct ConstrainedExpr {
     can_expr: CanExpr,

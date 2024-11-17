@@ -4,6 +4,7 @@ use roc_types::subs::Subs;
 
 use crate::{foreign_symbol::ForeignSymbols, mono_type::MonoTypes, DebugInfo};
 
+#[allow(dead_code)]
 pub struct MonoModule {
     mono_types: MonoTypes,
     foreign_symbols: ForeignSymbols,
@@ -11,8 +12,9 @@ pub struct MonoModule {
     debug_info: DebugInfo,
 }
 
+#[allow(dead_code)]
 impl MonoModule {
-    pub fn from_typed_can_module(subs: &Solved<Subs>) -> Self {
+    pub fn from_typed_can_module(_subs: &Solved<Subs>) -> Self {
         Self {
             mono_types: MonoTypes::new(),
             foreign_symbols: ForeignSymbols::new(),
