@@ -30,7 +30,6 @@ pub(crate) fn add_numeric_bound_constr(
     match range {
         NumericBound::None => {
             // no additional constraints, just a Num *
-            num_num(Variable(num_var))
         }
         NumericBound::FloatExact(width) => {
             let actual_type = constraints.push_variable(float_width_to_variable(width));
@@ -41,8 +40,6 @@ pub(crate) fn add_numeric_bound_constr(
                 constraints.equal_types(type_index, expected_index, category, region);
 
             num_constraints.extend([because_suffix]);
-
-            Variable(num_var)
         }
         NumericBound::IntExact(width) => {
             let actual_type = constraints.push_variable(int_lit_width_to_variable(width));
@@ -53,8 +50,6 @@ pub(crate) fn add_numeric_bound_constr(
                 constraints.equal_types(type_index, expected_index, category, region);
 
             num_constraints.extend([because_suffix]);
-
-            Variable(num_var)
         }
         NumericBound::Range(range) => {
             let precision_type = constraints.push_variable(precision_var);
@@ -66,10 +61,10 @@ pub(crate) fn add_numeric_bound_constr(
             let constr = constraints.equal_types(precision_type, expected_index, category, region);
 
             num_constraints.extend([constr]);
-
-            num_num(Variable(num_var))
         }
     }
+
+    num_num(Variable(num_var))
 }
 
 #[inline(always)]
