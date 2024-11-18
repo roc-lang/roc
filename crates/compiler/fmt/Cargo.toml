@@ -15,3 +15,4 @@ roc_region = { path = "../region" }
 roc_error_macros = { path = "../../error_macros" }
 
 bumpalo.workspace = true
+soa.workspace = true
