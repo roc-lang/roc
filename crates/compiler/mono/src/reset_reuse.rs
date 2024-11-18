@@ -625,31 +625,6 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 remainder: new_remainder,
             })
         }
-        Stmt::ExpectFx {
-            condition,
-            region,
-            lookups,
-            variables,
-            remainder,
-        } => {
-            let new_remainder = insert_reset_reuse_operations_stmt(
-                arena,
-                layout_interner,
-                home,
-                ident_ids,
-                update_mode_ids,
-                environment,
-                remainder,
-            );
-
-            arena.alloc(Stmt::ExpectFx {
-                condition: *condition,
-                region: *region,
-                lookups,
-                variables,
-                remainder: new_remainder,
-            })
-        }
         Stmt::Dbg {
             source_location,
             source,

@@ -55,7 +55,6 @@ fn nixos_error_if_dynamic(url: &str, dest_dir: &Path) {
                         You can:\n\n\t\
                             - Download the source of the platform and build it locally, like in this example:\n\t  \
                                 https://github.com/roc-lang/roc/blob/main/examples/platform-switching/rocLovesRust.roc.\n\t  \
-                                When building your roc application, you can use the flag `--prebuilt-platform` to prevent the platform from being rebuilt every time.\n\t  \
                                 For some graphical platforms you may need to use https://github.com/guibou/nixGL.\n\n\t\
                             - Contact the author of the platform to ask them to statically link their platform.\n\t  \
                                 musl can be used to prevent a dynamic dependency on the systems' libc.\n\t  \

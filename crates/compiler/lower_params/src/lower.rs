@@ -361,15 +361,6 @@ impl<'a> LowerParams<'a> {
                     expr_stack.push(&mut loc_condition.value);
                     expr_stack.push(&mut loc_continuation.value);
                 }
-                ExpectFx {
-                    loc_condition,
-                    loc_continuation,
-                    lookups_in_cond: _,
-                } => {
-                    expr_stack.reserve(2);
-                    expr_stack.push(&mut loc_condition.value);
-                    expr_stack.push(&mut loc_continuation.value);
-                }
                 Dbg {
                     loc_message,
                     loc_continuation,

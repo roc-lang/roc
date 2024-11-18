@@ -13,7 +13,7 @@ pub fn parse_benchmark(c: &mut Criterion) {
         path.push("examples");
         path.push("cli");
         path.push("false-interpreter");
-        path.push("False.roc");
+        path.push("main.roc");
         let src = std::fs::read_to_string(&path).unwrap();
 
         b.iter(|| {

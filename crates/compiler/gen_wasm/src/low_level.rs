@@ -200,7 +200,7 @@ impl<'a> LowLevelCall<'a> {
             },
             StrStartsWith => self.load_args_and_call_zig(backend, bitcode::STR_STARTS_WITH),
             StrEndsWith => self.load_args_and_call_zig(backend, bitcode::STR_ENDS_WITH),
-            StrSplit => self.load_args_and_call_zig(backend, bitcode::STR_SPLIT),
+            StrSplitOn => self.load_args_and_call_zig(backend, bitcode::STR_SPLIT_ON),
             StrCountUtf8Bytes => {
                 self.load_args_and_call_zig(backend, bitcode::STR_COUNT_UTF8_BYTES)
             }

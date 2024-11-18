@@ -443,7 +443,6 @@ where
             AssignedField::SpaceBefore(af, _) | AssignedField::SpaceAfter(af, _) => {
                 af.iter_tokens(arena)
             }
-            AssignedField::Malformed(_) => bumpvec![in arena;],
         }
     }
 }
@@ -461,7 +460,6 @@ impl IterTokens for Tag<'_> {
                 .chain(args.iter_tokens(arena))
                 .collect_in(arena),
             Tag::SpaceBefore(t, _) | Tag::SpaceAfter(t, _) => t.iter_tokens(arena),
-            Tag::Malformed(_) => bumpvec![in arena;],
         }
     }
 }
@@ -631,10 +629,6 @@ impl IterTokens for ValueDef<'_> {
             | ValueDef::Expect {
                 preceding_comment,
                 condition,
-            }
-            | ValueDef::ExpectFx {
-                preceding_comment,
-                condition,
             } => (onetoken(Token::Comment, *preceding_comment, arena).into_iter())
                 .chain(condition.iter_tokens(arena))
                 .collect_in(arena),
@@ -735,7 +729,6 @@ impl IterTokens for Loc<Expr<'_>> {
             Expr::SingleFieldRecordBuilder(e) => e.iter_tokens(arena),
             Expr::OptionalFieldInRecordBuilder(_name, e) => e.iter_tokens(arena),
             Expr::MalformedIdent(_, _)
-            | Expr::MalformedClosure
             | Expr::PrecedenceConflict(_)
             | Expr::MalformedSuffixed(_) => {
                 bumpvec![in arena;]

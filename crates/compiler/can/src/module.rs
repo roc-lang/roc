@@ -956,11 +956,6 @@ fn fix_values_captured_in_closure_expr(
             loc_continuation,
             ..
         }
-        | ExpectFx {
-            loc_condition,
-            loc_continuation,
-            ..
-        }
         | Dbg {
             loc_message: loc_condition,
             loc_continuation,

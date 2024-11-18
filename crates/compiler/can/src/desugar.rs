@@ -167,16 +167,6 @@ fn desugar_value_def<'a>(
                 preceding_comment: *preceding_comment,
             }
         }
-        ExpectFx {
-            condition,
-            preceding_comment,
-        } => {
-            let desugared_condition = &*env.arena.alloc(desugar_expr(env, scope, condition));
-            ExpectFx {
-                condition: desugared_condition,
-                preceding_comment: *preceding_comment,
-            }
-        }
         ModuleImport(roc_parse::ast::ModuleImport {
             before_name,
             name,
@@ -380,8 +370,8 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
             }
         },
 
-        // TODO support desugaring of Dbg and ExpectFx
-        Dbg { .. } | ExpectFx { .. } => value_def,
+        // TODO support desugaring of Dbg
+        Dbg { .. } => value_def,
         ModuleImport { .. } | IngestedFileImport(_) | StmtAfterExpr => value_def,
 
         Stmt(..) => {
@@ -407,7 +397,6 @@ pub fn desugar_expr<'a>(
         | AccessorFunction(_)
         | Underscore { .. }
         | MalformedIdent(_, _)
-        | MalformedClosure
         | MalformedSuffixed(..)
         | PrecedenceConflict { .. }
         | EmptyRecordBuilder(_)
@@ -712,7 +701,6 @@ pub fn desugar_expr<'a>(
                     AssignedField::SpaceBefore(_, _) | AssignedField::SpaceAfter(_, _) => {
                         unreachable!("Should have been desugared in `desugar_field`")
                     }
-                    AssignedField::Malformed(_name) => continue,
                 };
 
                 field_data.push(FieldData {
@@ -1316,8 +1304,6 @@ fn desugar_field<'a>(
         }
         SpaceBefore(field, _spaces) => desugar_field(env, scope, field),
         SpaceAfter(field, _spaces) => desugar_field(env, scope, field),
-
-        Malformed(string) => Malformed(string),
     }
 }
 

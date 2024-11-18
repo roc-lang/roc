@@ -3863,7 +3863,7 @@ mod solve_expr {
     #[test]
     fn list_split() {
         infer_eq_without_problem(
-            indoc!("List.split"),
+            indoc!("List.splitAt"),
             "List elem, U64 -> { before : List elem, others : List elem }",
         );
     }

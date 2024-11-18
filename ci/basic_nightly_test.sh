@@ -5,14 +5,14 @@ set -euxo pipefail
 
 # if to prevent unset vars errror
 if [ -n "$(ls | grep -v "roc_nightly.*tar\.gz"  | grep -v "^ci$")" ]; then
-  
+
   # Remove everything in this dir except the tar and ci folder.
   # We want to test like a user who would have downloaded the release, so we clean up all files from the repo checkout.
   to_delete=$(ls | grep -v "roc_nightly.*tar\.gz"  | grep -v "^ci$")
 
   for file_or_dir in $to_delete
   do
-    echo "Removing: $file_or_dir" 
+    echo "Removing: $file_or_dir"
     rm -rf "$file_or_dir"
   done
 fi
@@ -28,10 +28,8 @@ mv roc_nightly* roc_nightly
 
 cd roc_nightly
 
-# test roc hello world
-./roc examples/helloWorld.roc
-
-# test rust platform
+# test rust platform (first prebuild the host)
+examples/platform-switching/rust-platform/build.sh
 ./roc examples/platform-switching/rocLovesRust.roc
 
 # test zig platform

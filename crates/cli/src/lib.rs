@@ -54,7 +54,6 @@ pub const CMD_VERSION: &str = "version";
 pub const CMD_FORMAT: &str = "format";
 pub const CMD_TEST: &str = "test";
 pub const CMD_GLUE: &str = "glue";
-pub const CMD_GEN_STUB_LIB: &str = "gen-stub-lib";
 pub const CMD_PREPROCESS_HOST: &str = "preprocess-host";
 
 pub const FLAG_EMIT_LLVM_IR: &str = "emit-llvm-ir";
@@ -72,7 +71,8 @@ pub const FLAG_VERBOSE: &str = "verbose";
 pub const FLAG_NO_COLOR: &str = "no-color";
 pub const FLAG_NO_HEADER: &str = "no-header";
 pub const FLAG_LINKER: &str = "linker";
-pub const FLAG_PREBUILT: &str = "prebuilt-platform";
+pub const FLAG_BUILD_HOST: &str = "build-host";
+pub const FLAG_SUPPRESS_BUILD_HOST_WARNING: &str = "suppress-build-host-warning";
 pub const FLAG_CHECK: &str = "check";
 pub const FLAG_STDIN: &str = "stdin";
 pub const FLAG_STDOUT: &str = "stdout";
@@ -142,9 +142,15 @@ pub fn build_app() -> Command {
         .value_parser(["surgical", "legacy"])
         .required(false);
 
-    let flag_prebuilt = Arg::new(FLAG_PREBUILT)
-        .long(FLAG_PREBUILT)
-        .help("Assume the platform has been prebuilt and skip rebuilding the platform\n(This is enabled implicitly when using `roc build` with a --target other than `--target <current machine>`, unless the target is wasm.)")
+    let flag_build_host = Arg::new(FLAG_BUILD_HOST)
+        .long(FLAG_BUILD_HOST)
+        .help("WARNING: platforms are responsible for building hosts, this flag will be removed when internal test platforms have a build script")
+        .action(ArgAction::SetTrue)
+        .required(false);
+
+    let flag_suppress_build_host_warning = Arg::new(FLAG_SUPPRESS_BUILD_HOST_WARNING)
+        .long(FLAG_SUPPRESS_BUILD_HOST_WARNING)
+        .help("WARNING: platforms are responsible for building hosts, this flag will be removed when internal test platforms have a build script")
         .action(ArgAction::SetTrue)
         .required(false);
 
@@ -201,7 +207,8 @@ pub fn build_app() -> Command {
             .arg(flag_profiling.clone())
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
-            .arg(flag_prebuilt.clone())
+            .arg(flag_build_host.clone())
+            .arg(flag_suppress_build_host_warning.clone())
             .arg(flag_fuzz.clone())
             .arg(flag_wasm_stack_size_kb)
             .arg(
@@ -253,7 +260,8 @@ pub fn build_app() -> Command {
             .arg(flag_profiling.clone())
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
-            .arg(flag_prebuilt.clone())
+            .arg(flag_build_host.clone())
+            .arg(flag_suppress_build_host_warning.clone())
             .arg(flag_fuzz.clone())
             .arg(
                 Arg::new(FLAG_VERBOSE)
@@ -266,6 +274,7 @@ pub fn build_app() -> Command {
                 Arg::new(ROC_FILE)
                     .help("The .roc file to test")
                     .value_parser(value_parser!(PathBuf))
+                    .num_args(0..)
                     .required(false)
                     .default_value(DEFAULT_ROC_FILENAME)
             )
@@ -298,7 +307,8 @@ pub fn build_app() -> Command {
             .arg(flag_profiling.clone())
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
-            .arg(flag_prebuilt.clone())
+            .arg(flag_build_host.clone())
+            .arg(flag_suppress_build_host_warning.clone())
             .arg(flag_fuzz.clone())
             .arg(roc_file_to_run.clone())
             .arg(args_for_app.clone().last(true))
@@ -313,7 +323,8 @@ pub fn build_app() -> Command {
             .arg(flag_profiling.clone())
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
-            .arg(flag_prebuilt.clone())
+            .arg(flag_build_host.clone())
+            .arg(flag_suppress_build_host_warning.clone())
             .arg(flag_fuzz.clone())
             .arg(roc_file_to_run.clone())
             .arg(args_for_app.clone().last(true))
@@ -404,23 +415,6 @@ pub fn build_app() -> Command {
                     .default_value(DEFAULT_ROC_FILENAME)
             )
         )
-        .subcommand(Command::new(CMD_GEN_STUB_LIB)
-            .about("Generate a stubbed shared library that can be used for linking a platform binary.\nThe stubbed library has prototypes, but no function bodies.\n\nNote: This command will be removed in favor of just using `roc build` once all platforms support the surgical linker")
-            .arg(
-                Arg::new(ROC_FILE)
-                    .help("The .roc file for an app using the platform")
-                    .value_parser(value_parser!(PathBuf))
-                    .required(true)
-            )
-            .arg(
-                Arg::new(FLAG_TARGET)
-                    .long(FLAG_TARGET)
-                    .help("Choose a different target")
-                    .default_value(Into::<&'static str>::into(Target::default()))
-                    .value_parser(build_target_values_parser.clone())
-                    .required(false),
-            )
-        )
         .subcommand(Command::new(CMD_PREPROCESS_HOST)
             .about("Runs the surgical linker preprocessor to generate `.rh` and `.rm` files.")
             .arg(
@@ -465,7 +459,8 @@ pub fn build_app() -> Command {
         .arg(flag_profiling)
         .arg(flag_time)
         .arg(flag_linker)
-        .arg(flag_prebuilt)
+        .arg(flag_build_host)
+        .arg(flag_suppress_build_host_warning)
         .arg(flag_fuzz)
         .arg(roc_file_to_run)
         .arg(args_for_app.trailing_var_arg(true))
@@ -522,18 +517,21 @@ pub fn test(matches: &ArgMatches, target: Target) -> io::Result<i32> {
         Some(n) => Threading::AtMost(*n),
     };
 
-    let path = matches.get_one::<PathBuf>(ROC_FILE).unwrap();
+    let paths: Vec<_> = matches.get_many::<PathBuf>(ROC_FILE).unwrap().collect();
 
-    // Spawn the root task
-    if !path.exists() {
-        let current_dir = env::current_dir().unwrap();
-        let expected_file_path = current_dir.join(path);
+    let paths: Vec<_> = {
+        let mut flatten_paths: Vec<_> = vec![];
+        for path in paths.into_iter() {
+            // Spawn the root task
+            if !path.exists() {
+                let current_dir = env::current_dir().unwrap();
+                let expected_file_path = current_dir.join(path);
 
-        let current_dir_string = current_dir.display();
-        let expected_file_path_string = expected_file_path.display();
+                let current_dir_string = current_dir.display();
+                let expected_file_path_string = expected_file_path.display();
 
-        // TODO these should use roc_reporting to display nicer error messages.
-        match matches.value_source(ROC_FILE) {
+                // TODO these should use roc_reporting to display nicer error messages.
+                match matches.value_source(ROC_FILE) {
             Some(ValueSource::DefaultValue) => {
                 eprintln!(
                     "\nThe current directory ({current_dir_string}) does not contain a {DEFAULT_ROC_FILENAME} file to use as a default.\n\nYou can run `roc help` for more information on how to provide a .roc file.\n"
@@ -541,116 +539,141 @@ pub fn test(matches: &ArgMatches, target: Target) -> io::Result<i32> {
             }
             _ => eprintln!("\nThis file was not found: {expected_file_path_string}\n\nYou can run `roc help` for more information on how to provide a .roc file.\n"),
         }
-
-        process::exit(1);
-    }
-
-    let arena = &arena;
-    let function_kind = FunctionKind::from_env();
-
-    let opt_main_path = matches.get_one::<PathBuf>(FLAG_MAIN);
-
-    // Step 1: compile the app and generate the .o file
-    let load_config = LoadConfig {
-        target,
-        function_kind,
-        // TODO: expose this from CLI?
-        render: roc_reporting::report::RenderTarget::ColorTerminal,
-        palette: roc_reporting::report::DEFAULT_PALETTE,
-        threading,
-        exec_mode: ExecutionMode::Test,
-    };
-    let load_result = roc_load::load_and_monomorphize(
-        arena,
-        path.to_path_buf(),
-        opt_main_path.cloned(),
-        RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
-        load_config,
-    );
-
-    let mut loaded = match load_result {
-        Ok(loaded) => loaded,
-        Err(LoadMonomorphizedError::LoadingProblem(problem)) => {
-            return handle_loading_problem(problem);
+                process::exit(1);
+            } else if path.is_dir() {
+                find_all_roc_files(path, &mut flatten_paths);
+            } else {
+                flatten_paths.push(path.clone());
+            }
         }
-        Err(LoadMonomorphizedError::ErrorModule(module)) => {
-            return handle_error_module(module, start_time.elapsed(), path.as_os_str(), false);
-        }
+        flatten_paths
     };
-    let problems = report_problems_monomorphized(&mut loaded);
 
-    let mut expectations = std::mem::take(&mut loaded.expectations);
+    let mut all_files_total_failed_count = 0;
+    let mut all_files_total_passed_count = 0;
 
-    let interns = loaded.interns.clone();
-    let sources = loaded.sources.clone();
+    for path in paths.iter() {
+        let arena = &arena;
+        let function_kind = FunctionKind::from_env();
 
-    let (dyn_lib, expects_by_module, layout_interner) =
-        roc_repl_expect::run::expect_mono_module_to_dylib(
-            arena,
+        let opt_main_path = matches.get_one::<PathBuf>(FLAG_MAIN);
+
+        // Step 1: compile the app and generate the .o file
+        let load_config = LoadConfig {
             target,
-            loaded,
-            opt_level,
-            LlvmBackendMode::CliTest,
-        )
-        .unwrap();
-
-    // Print warnings before running tests.
-    {
-        debug_assert_eq!(
-            problems.errors, 0,
-            "if there were errors, we would have already exited."
+            function_kind,
+            // TODO: expose this from CLI?
+            render: roc_reporting::report::RenderTarget::ColorTerminal,
+            palette: roc_reporting::report::DEFAULT_PALETTE,
+            threading,
+            exec_mode: ExecutionMode::Test,
+        };
+        let load_result = roc_load::load_and_monomorphize(
+            arena,
+            path.to_path_buf(),
+            opt_main_path.cloned(),
+            RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
+            load_config,
         );
-        if problems.warnings > 0 {
-            problems.print_error_warning_count(start_time.elapsed());
-            println!(".\n\nRunning tests…\n\n\x1B[36m{}\x1B[39m", "─".repeat(80));
+
+        let mut loaded = match load_result {
+            Ok(loaded) => loaded,
+            Err(LoadMonomorphizedError::LoadingProblem(problem)) => {
+                return handle_loading_problem(problem);
+            }
+            Err(LoadMonomorphizedError::ErrorModule(module)) => {
+                return handle_error_module(module, start_time.elapsed(), path.as_os_str(), false);
+            }
+        };
+        let problems = report_problems_monomorphized(&mut loaded);
+
+        let mut expectations = std::mem::take(&mut loaded.expectations);
+
+        let interns = loaded.interns.clone();
+        let sources = loaded.sources.clone();
+
+        let (dyn_lib, expects_by_module, layout_interner) =
+            roc_repl_expect::run::expect_mono_module_to_dylib(
+                arena,
+                target,
+                loaded,
+                opt_level,
+                LlvmBackendMode::CliTest,
+            )
+            .unwrap();
+
+        // Print warnings before running tests.
+        {
+            debug_assert_eq!(
+                problems.errors, 0,
+                "if there were errors, we would have already exited."
+            );
+            if problems.warnings > 0 {
+                problems.print_error_warning_count(start_time.elapsed());
+                println!(".\n\nRunning tests…\n\n\x1B[36m{}\x1B[39m", "─".repeat(80));
+            }
+        }
+
+        // Run the tests.
+        let arena = &bumpalo::Bump::new();
+        let interns = arena.alloc(interns);
+
+        let mut writer = std::io::stdout();
+
+        let mut total_failed_count = 0;
+        let mut total_passed_count = 0;
+
+        let mut results_by_module = Vec::new();
+        let global_layout_interner = layout_interner.into_global();
+
+        let compilation_duration = start_time.elapsed();
+
+        for (module_id, expects) in expects_by_module.into_iter() {
+            let test_start_time = Instant::now();
+
+            let (failed_count, passed_count) = roc_repl_expect::run::run_toplevel_expects(
+                &mut writer,
+                roc_reporting::report::RenderTarget::ColorTerminal,
+                arena,
+                interns,
+                &global_layout_interner,
+                &dyn_lib,
+                &mut expectations,
+                expects,
+            )
+            .unwrap();
+
+            let tests_duration = test_start_time.elapsed();
+
+            results_by_module.push(ModuleTestResults {
+                module_id,
+                failed_count,
+                passed_count,
+                tests_duration,
+            });
+
+            total_failed_count += failed_count;
+            total_passed_count += passed_count;
+        }
+
+        let total_duration = start_time.elapsed();
+        all_files_total_failed_count += total_failed_count;
+        all_files_total_passed_count += total_passed_count;
+        if total_failed_count == 0 && total_passed_count == 0 {
+            // Only report no expectations found once.
+            continue;
+        } else if matches.get_flag(FLAG_VERBOSE) {
+            println!("Compiled in {} ms.", compilation_duration.as_millis());
+            for module_test_results in results_by_module {
+                print_test_results(module_test_results, &sources);
+            }
+        } else {
+            let test_summary_str =
+                test_summary(total_failed_count, total_passed_count, total_duration);
+            println!("{test_summary_str}");
         }
     }
-
-    // Run the tests.
-    let arena = &bumpalo::Bump::new();
-    let interns = arena.alloc(interns);
-
-    let mut writer = std::io::stdout();
-
-    let mut total_failed_count = 0;
-    let mut total_passed_count = 0;
-
-    let mut results_by_module = Vec::new();
-    let global_layout_interner = layout_interner.into_global();
-
-    let compilation_duration = start_time.elapsed();
-
-    for (module_id, expects) in expects_by_module.into_iter() {
-        let test_start_time = Instant::now();
-
-        let (failed_count, passed_count) = roc_repl_expect::run::run_toplevel_expects(
-            &mut writer,
-            roc_reporting::report::RenderTarget::ColorTerminal,
-            arena,
-            interns,
-            &global_layout_interner,
-            &dyn_lib,
-            &mut expectations,
-            expects,
-        )
-        .unwrap();
-
-        let tests_duration = test_start_time.elapsed();
-
-        results_by_module.push(ModuleTestResults {
-            module_id,
-            failed_count,
-            passed_count,
-            tests_duration,
-        });
-
-        total_failed_count += failed_count;
-        total_passed_count += passed_count;
-    }
-
-    let total_duration = start_time.elapsed();
-
-    if total_failed_count == 0 && total_passed_count == 0 {
+    if all_files_total_failed_count == 0 && all_files_total_passed_count == 0 {
         // TODO print this in a more nicely formatted way!
         println!("No expectations were found.");
 
@@ -661,18 +684,32 @@ pub fn test(matches: &ArgMatches, target: Target) -> io::Result<i32> {
         // running tests altogether!
         Ok(2)
     } else {
-        if matches.get_flag(FLAG_VERBOSE) {
-            println!("Compiled in {} ms.", compilation_duration.as_millis());
-            for module_test_results in results_by_module {
-                print_test_results(module_test_results, &sources);
-            }
-        } else {
-            let test_summary_str =
-                test_summary(total_failed_count, total_passed_count, total_duration);
-            println!("{test_summary_str}");
-        }
+        Ok((all_files_total_failed_count > 0) as i32)
+    }
+}
 
-        Ok((total_failed_count > 0) as i32)
+fn find_all_roc_files(path: &PathBuf, flatten_paths: &mut Vec<PathBuf>) {
+    if path.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(path) {
+            entries.for_each(|entry| {
+                if let Ok(entry) = entry {
+                    let entry_path = entry.path();
+                    find_all_roc_files(&entry_path, flatten_paths);
+                }
+            });
+        } else {
+            eprintln!(
+                "\nSomething went wrong opening the directory {}\n",
+                path.display()
+            );
+        }
+    } else if path.is_file() {
+        match path.extension() {
+            Some(extension) if extension == "roc" => {
+                flatten_paths.push(path.clone());
+            }
+            _ => {}
+        }
     }
 }
 
@@ -731,7 +768,6 @@ pub fn build(
     roc_cache_dir: RocCacheDir<'_>,
     link_type: LinkType,
 ) -> io::Result<i32> {
-    use roc_build::program::build_file;
     use BuildConfig::*;
 
     let path = matches.get_one::<PathBuf>(ROC_FILE).unwrap();
@@ -879,17 +915,10 @@ pub fn build(
         LinkingStrategy::Surgical
     };
 
-    let prebuilt = {
-        let cross_compile = target != Target::default();
-        let targeting_wasm = matches!(target.architecture(), Architecture::Wasm32);
-
-        matches.get_flag(FLAG_PREBUILT) ||
-            // When compiling for a different target, assume a prebuilt platform.
-            // Otherwise compilation would most likely fail because many toolchains
-            // assume you're compiling for the current machine. We make an exception
-            // for Wasm, because cross-compiling is the norm in that case.
-            (cross_compile && !targeting_wasm)
-    };
+    // All hosts should be prebuilt, this flag keeps the rebuilding behvaiour
+    // as required for internal tests
+    let build_host = matches.get_flag(FLAG_BUILD_HOST);
+    let suppress_build_host_warning = matches.get_flag(FLAG_SUPPRESS_BUILD_HOST_WARNING);
 
     let fuzz = matches.get_flag(FLAG_FUZZ);
     if fuzz && !matches!(code_gen_backend, CodeGenBackend::Llvm(_)) {
@@ -917,7 +946,7 @@ pub fn build(
 
     let load_config = standard_load_config(target, build_ordering, threading);
 
-    let res_binary_path = build_file(
+    let res_binary_path = roc_build::program::build_file(
         &arena,
         target,
         path.to_owned(),
@@ -925,7 +954,8 @@ pub fn build(
         emit_timings,
         link_type,
         linking_strategy,
-        prebuilt,
+        build_host,
+        suppress_build_host_warning,
         wasm_dev_stack_bytes,
         roc_cache_dir,
         load_config,

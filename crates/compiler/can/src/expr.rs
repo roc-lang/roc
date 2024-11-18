@@ -271,13 +271,6 @@ pub enum Expr {
         lookups_in_cond: Vec<ExpectLookup>,
     },
 
-    // not parsed, but is generated when lowering toplevel effectful expects
-    ExpectFx {
-        loc_condition: Box<Loc<Expr>>,
-        loc_continuation: Box<Loc<Expr>>,
-        lookups_in_cond: Vec<ExpectLookup>,
-    },
-
     Dbg {
         source_location: Box<str>,
         source: Box<str>,
@@ -364,7 +357,6 @@ impl Expr {
                 Category::OpaqueWrap(opaque_name)
             }
             Self::Expect { .. } => Category::Expect,
-            Self::ExpectFx { .. } => Category::Expect,
             Self::Crash { .. } => Category::Crash,
             Self::Return { .. } => Category::Return,
 
@@ -1391,10 +1383,6 @@ pub fn canonicalize_expr<'a>(
                 Output::default(),
             )
         }
-        ast::Expr::MalformedClosure => {
-            use roc_problem::can::RuntimeError::*;
-            (RuntimeError(MalformedClosure(region)), Output::default())
-        }
         ast::Expr::MalformedIdent(name, bad_ident) => {
             use roc_problem::can::RuntimeError::*;
 
@@ -1976,10 +1964,6 @@ fn canonicalize_field<'a>(
         SpaceBefore(sub_field, _) | SpaceAfter(sub_field, _) => {
             canonicalize_field(env, var_store, scope, sub_field)
         }
-
-        Malformed(_string) => {
-            internal_error!("TODO canonicalize malformed record field");
-        }
     }
 }
 
@@ -2219,28 +2203,6 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
             };
 
             Expect {
-                loc_condition: Box::new(loc_condition),
-                loc_continuation: Box::new(loc_continuation),
-                lookups_in_cond,
-            }
-        }
-
-        ExpectFx {
-            loc_condition,
-            loc_continuation,
-            lookups_in_cond,
-        } => {
-            let loc_condition = Loc {
-                region: loc_condition.region,
-                value: inline_calls(var_store, loc_condition.value),
-            };
-
-            let loc_continuation = Loc {
-                region: loc_continuation.region,
-                value: inline_calls(var_store, loc_continuation.value),
-            };
-
-            ExpectFx {
                 loc_condition: Box::new(loc_condition),
                 loc_continuation: Box::new(loc_continuation),
                 lookups_in_cond,
@@ -2568,8 +2530,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         | ast::Expr::Underscore(_)
         | ast::Expr::MalformedIdent(_, _)
         | ast::Expr::Tag(_)
-        | ast::Expr::OpaqueRef(_)
-        | ast::Expr::MalformedClosure => true,
+        | ast::Expr::OpaqueRef(_) => true,
         // Newlines are disallowed inside interpolation, and these all require newlines
         ast::Expr::DbgStmt(_, _)
         | ast::Expr::LowLevelDbg(_, _, _)
@@ -2604,7 +2565,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
             | ast::AssignedField::IgnoredValue(_label, loc_comments, loc_val) => {
                 loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
             }
-            ast::AssignedField::Malformed(_) | ast::AssignedField::LabelOnly(_) => true,
+            ast::AssignedField::LabelOnly(_) => true,
             ast::AssignedField::SpaceBefore(_, _) | ast::AssignedField::SpaceAfter(_, _) => false,
         }),
         ast::Expr::Tuple(fields) => fields
@@ -2655,7 +2616,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
                     | ast::AssignedField::IgnoredValue(_label, loc_comments, loc_val) => {
                         loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
                     }
-                    ast::AssignedField::Malformed(_) | ast::AssignedField::LabelOnly(_) => true,
+                    ast::AssignedField::LabelOnly(_) => true,
                     ast::AssignedField::SpaceBefore(_, _)
                     | ast::AssignedField::SpaceAfter(_, _) => false,
                 })
@@ -2668,7 +2629,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
                     | ast::AssignedField::IgnoredValue(_label, loc_comments, loc_val) => {
                         loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
                     }
-                    ast::AssignedField::Malformed(_) | ast::AssignedField::LabelOnly(_) => true,
+                    ast::AssignedField::LabelOnly(_) => true,
                     ast::AssignedField::SpaceBefore(_, _)
                     | ast::AssignedField::SpaceAfter(_, _) => false,
                 })
@@ -3019,24 +2980,6 @@ impl Declarations {
         let index = self.declarations.len();
 
         self.declarations.push(DeclarationTag::Expectation);
-        self.variables.push(Variable::BOOL);
-        self.symbols.push(Loc::at(preceding_comment, name));
-        self.annotations.push(None);
-
-        self.expressions.push(loc_expr);
-
-        index
-    }
-
-    pub fn push_expect_fx(
-        &mut self,
-        preceding_comment: Region,
-        name: Symbol,
-        loc_expr: Loc<Expr>,
-    ) -> usize {
-        let index = self.declarations.len();
-
-        self.declarations.push(DeclarationTag::ExpectationFx);
         self.variables.push(Variable::BOOL);
         self.symbols.push(Loc::at(preceding_comment, name));
         self.annotations.push(None);
@@ -3486,9 +3429,6 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
             Expr::Expect {
                 loc_continuation, ..
             }
-            | Expr::ExpectFx {
-                loc_continuation, ..
-            }
             | Expr::Dbg {
                 loc_continuation, ..
             } => {
@@ -3590,18 +3530,11 @@ fn toplevel_expect_to_inline_expect_help(mut loc_expr: Loc<Expr>, has_effects: b
     }
 
     let expect_region = loc_expr.region;
-    let expect = if has_effects {
-        Expr::ExpectFx {
-            loc_condition: Box::new(loc_expr),
-            loc_continuation: Box::new(Loc::at_zero(Expr::EmptyRecord)),
-            lookups_in_cond,
-        }
-    } else {
-        Expr::Expect {
-            loc_condition: Box::new(loc_expr),
-            loc_continuation: Box::new(Loc::at_zero(Expr::EmptyRecord)),
-            lookups_in_cond,
-        }
+    assert!(!has_effects);
+    let expect = Expr::Expect {
+        loc_condition: Box::new(loc_expr),
+        loc_continuation: Box::new(Loc::at_zero(Expr::EmptyRecord)),
+        lookups_in_cond,
     };
 
     let mut loc_expr = Loc::at(expect_region, expect);
@@ -3630,11 +3563,6 @@ impl crate::traverse::Visitor for ExpectCollector {
     fn visit_expr(&mut self, expr: &Expr, _region: Region, var: Variable) {
         match expr {
             Expr::Expect {
-                lookups_in_cond,
-                loc_condition,
-                ..
-            }
-            | Expr::ExpectFx {
                 lookups_in_cond,
                 loc_condition,
                 ..

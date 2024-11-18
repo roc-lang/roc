@@ -11,22 +11,15 @@ Full(
                         ),
                     ],
                     before_packages: [],
-                    packages: @11-134 [
-                        @13-132 SpaceAfter(
-                            PackageEntry {
-                                shorthand: "pf",
-                                spaces_after_shorthand: [
-                                    Newline,
-                                ],
-                                platform_marker: None,
-                                package_name: @17-132 PackageName(
-                                    "https://github.com/roc-lang/basic-cli/releases/download/0.16.0/O00IPk-Krg_diNS2dVWlI0ZQP794Vctxzv0ha96mK0E.tar.br",
-                                ),
-                            },
-                            [
-                                Newline,
-                            ],
-                        ),
+                    packages: @11-51 [
+                        @13-49 PackageEntry {
+                            shorthand: "pf",
+                            spaces_after_shorthand: [],
+                            platform_marker: None,
+                            package_name: @17-49 PackageName(
+                                "generic-test-platform/main.roc",
+                            ),
+                        },
                     ],
                     old_imports: None,
                     old_provides_to_new_package: None,
@@ -38,7 +31,7 @@ Full(
                 EitherIndex(2147483648),
             ],
             regions: [
-                @136-183,
+                @53-100,
             ],
             space_before: [
                 Slice { start: 0, length: 2 },
@@ -54,17 +47,17 @@ Full(
             type_defs: [],
             value_defs: [
                 Body(
-                    @136-140 Identifier {
+                    @53-57 Identifier {
                         ident: "main",
                     },
-                    @147-183 SpaceBefore(
+                    @64-100 SpaceBefore(
                         Apply(
-                            @147-158 Var {
+                            @64-75 Var {
                                 module_name: "Stdout",
                                 ident: "line",
                             },
                             [
-                                @159-183 Str(
+                                @76-100 Str(
                                     PlainLine(
                                         "I'm a Roc application!",
                                     ),

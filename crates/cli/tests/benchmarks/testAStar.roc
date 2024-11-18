@@ -3,7 +3,6 @@ app [main] { pf: platform "platform/main.roc" }
 import pf.PlatformTasks
 import AStar
 
-#main : Task {} *
 main =
     PlatformTasks.putLine! (showBool test1)
 

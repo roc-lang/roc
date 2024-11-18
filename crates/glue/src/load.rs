@@ -42,7 +42,7 @@ pub fn generate(
     backend: CodeGenBackend,
 ) -> io::Result<i32> {
     let target = Triple::host().into();
-    // TODO: Add verification around the paths. Make sure they heav the correct file extension and what not.
+    // TODO: Add verification around the paths. Make sure they have the correct file extension and what not.
     match load_types(
         input_path.to_path_buf(),
         Threading::AllAvailable,
@@ -77,6 +77,11 @@ pub fn generate(
 
             let tempdir_res = tempfile::tempdir();
 
+            // we don't need a host for glue, we will generate a dylib
+            // that will be loaded by the roc compiler/cli
+            let build_host = false;
+            let suppress_build_host_warning = true;
+
             let res_binary_path = match tempdir_res {
                 Ok(dylib_dir) => build_file(
                     &arena,
@@ -86,7 +91,8 @@ pub fn generate(
                     false,
                     link_type,
                     linking_strategy,
-                    true,
+                    build_host,
+                    suppress_build_host_warning,
                     None,
                     RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
                     load_config,
