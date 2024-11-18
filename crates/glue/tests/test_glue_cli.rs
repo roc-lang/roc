@@ -67,7 +67,7 @@ mod glue_cli_tests {
                     let test_name_str = stringify!($test_name);
 
                     // TODO after #5924 is fixed; remove this
-                    let skip_on_linux_surgical_linker = ["closures", "option", "nullable_wrapped", "nullable_unwrapped", "nonnullable_unwrapped", "enumeration", "nested_record", "advanced_recursive_union"];
+                    let skip_on_linux_surgical_linker = ["rust_closures", "rust_option", "rust_nullable_wrapped", "rust_nullable_unwrapped", "rust_nonnullable_unwrapped", "rust_enumeration", "rust_nested_record", "rust_advanced_recursive_union"];
 
                     // Validate linux with the default linker.
                     if !(cfg!(target_os = "linux") && (skip_on_linux_surgical_linker.contains(&test_name_str))) {
