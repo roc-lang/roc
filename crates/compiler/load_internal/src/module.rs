@@ -167,7 +167,6 @@ pub(crate) struct LateSpecializationsModule<'a> {
 #[derive(Debug, Default)]
 pub struct ToplevelExpects {
     pub pure: VecMap<Symbol, Region>,
-    pub fx: VecMap<Symbol, Region>,
 }
 
 #[derive(Debug)]
