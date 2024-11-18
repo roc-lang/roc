@@ -427,13 +427,6 @@ impl<'a> Normalize<'a> for ValueDef<'a> {
                 condition: arena.alloc(condition.normalize(arena)),
                 preceding_comment: Region::zero(),
             },
-            ExpectFx {
-                condition,
-                preceding_comment: _,
-            } => ExpectFx {
-                condition: arena.alloc(condition.normalize(arena)),
-                preceding_comment: Region::zero(),
-            },
             ModuleImport(module_import) => ModuleImport(module_import.normalize(arena)),
             IngestedFileImport(ingested_file_import) => {
                 IngestedFileImport(ingested_file_import.normalize(arena))

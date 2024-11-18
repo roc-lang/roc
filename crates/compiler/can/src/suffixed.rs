@@ -680,7 +680,7 @@ pub fn unwrap_suffixed_expression_defs_help<'a>(
                 };
 
                 let maybe_suffixed_value_def = match current_value_def {
-                    Annotation(..) | Dbg{..} | Expect{..} | ExpectFx{..} | Stmt(..) | ModuleImport{..} | IngestedFileImport(_) => None,
+                    Annotation(..) | Dbg{..} | Expect{..} | Stmt(..) | ModuleImport{..} | IngestedFileImport(_) => None,
                     AnnotatedBody { body_pattern, body_expr, ann_type, ann_pattern, .. } => Some((body_pattern, body_expr, Some((ann_pattern, ann_type)))),
                     Body (def_pattern, def_expr) => Some((def_pattern, def_expr, None)),
                     StmtAfterExpr => None,

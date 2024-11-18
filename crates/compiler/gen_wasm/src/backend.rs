@@ -607,7 +607,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
             Stmt::Dbg { .. } => todo!("dbg is not implemented in the wasm backend"),
             Stmt::Expect { .. } => todo!("expect is not implemented in the wasm backend"),
-            Stmt::ExpectFx { .. } => todo!("expect-fx is not implemented in the wasm backend"),
 
             Stmt::Crash(sym, tag) => self.stmt_crash(*sym, *tag),
         }

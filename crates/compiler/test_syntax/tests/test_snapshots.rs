@@ -333,7 +333,6 @@ mod test_snapshots {
         pass/equals_with_spaces.expr,
         pass/expect.expr,
         pass/expect_defs.moduledefs,
-        pass/expect_fx.moduledefs,
         pass/expect_single_line.expr,
         pass/extra_newline.expr,
         pass/extra_newline_in_parens.expr,
