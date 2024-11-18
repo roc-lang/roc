@@ -279,7 +279,6 @@ impl<'a> LastSeenMap<'a> {
 
             Stmt::Dbg { .. } => todo!("dbg not implemented in the dev backend"),
             Stmt::Expect { .. } => todo!("expect is not implemented in the dev backend"),
-            Stmt::ExpectFx { .. } => todo!("expect-fx is not implemented in the dev backend"),
 
             Stmt::Crash(msg, _crash_tag) => {
                 self.set_last_seen(*msg, stmt);

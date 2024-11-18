@@ -351,13 +351,6 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 lookups,
                 variables: _,
                 remainder,
-            }
-            | &Stmt::ExpectFx {
-                condition,
-                region: _,
-                lookups,
-                variables: _,
-                remainder,
             } => {
                 self.check_sym_layout(condition, Layout::BOOL, UseKind::ExpectCond);
                 for sym in lookups.iter() {

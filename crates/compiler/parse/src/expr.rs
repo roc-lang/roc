@@ -2619,11 +2619,9 @@ fn expect_help<'a>(
     preceding_comment: Region,
 ) -> impl Parser<'a, Stmt<'a>, EExpect<'a>> {
     move |arena: &'a Bump, state: State<'a>, min_indent| {
-        let parse_expect_vanilla = crate::parser::keyword(crate::keyword::EXPECT, EExpect::Expect);
-        let parse_expect_fx = crate::parser::keyword(crate::keyword::EXPECT_FX, EExpect::Expect);
-        let parse_expect = either(parse_expect_vanilla, parse_expect_fx);
+        let parse_expect = crate::parser::keyword(crate::keyword::EXPECT, EExpect::Expect);
 
-        let (_, kw, state) = parse_expect.parse(arena, state, min_indent)?;
+        let (_, _kw, state) = parse_expect.parse(arena, state, min_indent)?;
 
         let (_, condition, state) = parse_block(
             options,
@@ -2635,15 +2633,9 @@ fn expect_help<'a>(
         )
         .map_err(|(_, f)| (MadeProgress, f))?;
 
-        let vd = match kw {
-            Either::First(_) => ValueDef::Expect {
-                condition: arena.alloc(condition),
-                preceding_comment,
-            },
-            Either::Second(_) => ValueDef::ExpectFx {
-                condition: arena.alloc(condition),
-                preceding_comment,
-            },
+        let vd = ValueDef::Expect {
+            condition: arena.alloc(condition),
+            preceding_comment,
         };
 
         Ok((MadeProgress, Stmt::ValueDef(vd), state))
