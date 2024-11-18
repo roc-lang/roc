@@ -792,63 +792,6 @@ pub fn constrain_expr(
             constraints.exists_many(vars, all_constraints)
         }
 
-        ExpectFx {
-            loc_condition,
-            loc_continuation,
-            lookups_in_cond,
-        } => {
-            let expected_bool = {
-                let bool_type = constraints.push_variable(Variable::BOOL);
-                constraints.push_expected_type(Expected::ForReason(
-                    Reason::ExpectCondition,
-                    bool_type,
-                    loc_condition.region,
-                ))
-            };
-
-            let cond_con = constrain_expr(
-                types,
-                constraints,
-                env,
-                loc_condition.region,
-                &loc_condition.value,
-                expected_bool,
-            );
-
-            let continuation_con = constrain_expr(
-                types,
-                constraints,
-                env,
-                loc_continuation.region,
-                &loc_continuation.value,
-                expected,
-            );
-
-            // + 2 for cond_con and continuation_con
-            let mut all_constraints = Vec::with_capacity(lookups_in_cond.len() + 2);
-
-            all_constraints.push(cond_con);
-            all_constraints.push(continuation_con);
-
-            let mut vars = Vec::with_capacity(lookups_in_cond.len());
-
-            for ExpectLookup {
-                symbol,
-                var,
-                ability_info: _,
-            } in lookups_in_cond.iter()
-            {
-                vars.push(*var);
-
-                let var_index = constraints.push_variable(*var);
-                let store_into = constraints.push_expected_type(NoExpectation(var_index));
-
-                all_constraints.push(constraints.lookup(*symbol, store_into, Region::zero()));
-            }
-
-            constraints.exists_many(vars, all_constraints)
-        }
-
         Dbg {
             source_location: _,
             source: _,
@@ -4416,7 +4359,6 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             | TupleAccess { .. }
             | RecordUpdate { .. }
             | Expect { .. }
-            | ExpectFx { .. }
             | Dbg { .. }
             | Return { .. }
             | TypedHole(_)

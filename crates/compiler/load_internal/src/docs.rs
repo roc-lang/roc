@@ -273,9 +273,6 @@ fn generate_entry_docs(
                     // Don't generate docs for `expect`s
                 }
 
-                ValueDef::ExpectFx { .. } => {
-                    // Don't generate docs for `expect-fx`s
-                }
                 ValueDef::ModuleImport { .. } => {
                     // Don't generate docs for module imports
                 }

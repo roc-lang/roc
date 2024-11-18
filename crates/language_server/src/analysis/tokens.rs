@@ -629,10 +629,6 @@ impl IterTokens for ValueDef<'_> {
             | ValueDef::Expect {
                 preceding_comment,
                 condition,
-            }
-            | ValueDef::ExpectFx {
-                preceding_comment,
-                condition,
             } => (onetoken(Token::Comment, *preceding_comment, arena).into_iter())
                 .chain(condition.iter_tokens(arena))
                 .collect_in(arena),

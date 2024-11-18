@@ -182,9 +182,7 @@ impl<'a, 'i> SymbolRcTypesEnv<'a, 'i> {
             Stmt::Refcounting(_, _) => unreachable!(
                 "Refcounting operations should not be present in the AST at this point."
             ),
-            Stmt::Expect { remainder, .. }
-            | Stmt::ExpectFx { remainder, .. }
-            | Stmt::Dbg { remainder, .. } => {
+            Stmt::Expect { remainder, .. } | Stmt::Dbg { remainder, .. } => {
                 self.insert_symbols_rc_type_stmt(remainder);
             }
             Stmt::Join {
@@ -673,30 +671,6 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             );
 
             arena.alloc(Stmt::Expect {
-                condition: *condition,
-                region: *region,
-                lookups,
-                variables,
-                remainder: newer_remainder,
-            })
-        }
-        Stmt::ExpectFx {
-            condition,
-            region,
-            lookups,
-            variables,
-            remainder,
-        } => {
-            let new_remainder = insert_refcount_operations_stmt(arena, environment, remainder);
-
-            let newer_remainder = consume_and_insert_dec_stmts(
-                arena,
-                environment,
-                environment.borrowed_usages(lookups.iter().copied()),
-                new_remainder,
-            );
-
-            arena.alloc(Stmt::ExpectFx {
                 condition: *condition,
                 region: *region,
                 lookups,

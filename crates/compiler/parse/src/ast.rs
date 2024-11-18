@@ -827,11 +827,6 @@ pub enum ValueDef<'a> {
         preceding_comment: Region,
     },
 
-    ExpectFx {
-        condition: &'a Loc<Expr<'a>>,
-        preceding_comment: Region,
-    },
-
     /// e.g. `import InternalHttp as Http exposing [Req]`.
     ModuleImport(ModuleImport<'a>),
 
@@ -1068,10 +1063,6 @@ impl<'a, 'b> Iterator for RecursiveValueDefIter<'a, 'b> {
                             preceding_comment: _,
                         }
                         | ValueDef::Expect {
-                            condition,
-                            preceding_comment: _,
-                        }
-                        | ValueDef::ExpectFx {
                             condition,
                             preceding_comment: _,
                         } => self.push_pending_from_expr(&condition.value),
@@ -2724,10 +2715,6 @@ impl<'a> Malformed for ValueDef<'a> {
                 preceding_comment: _,
             }
             | ValueDef::Expect {
-                condition,
-                preceding_comment: _,
-            }
-            | ValueDef::ExpectFx {
                 condition,
                 preceding_comment: _,
             } => condition.is_malformed(),

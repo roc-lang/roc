@@ -385,18 +385,6 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
                 Variable::NULL,
             );
         }
-        Expr::ExpectFx {
-            loc_condition,
-            loc_continuation,
-            lookups_in_cond: _,
-        } => {
-            visitor.visit_expr(&loc_condition.value, loc_condition.region, Variable::BOOL);
-            visitor.visit_expr(
-                &loc_continuation.value,
-                loc_continuation.region,
-                Variable::NULL,
-            );
-        }
         Expr::Dbg {
             variable,
             source: _,

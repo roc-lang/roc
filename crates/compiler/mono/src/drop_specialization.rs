@@ -611,25 +611,6 @@ fn specialize_drops_stmt<'a, 'i>(
                 remainder,
             ),
         }),
-        Stmt::ExpectFx {
-            condition,
-            region,
-            lookups,
-            variables,
-            remainder,
-        } => arena.alloc(Stmt::ExpectFx {
-            condition: *condition,
-            region: *region,
-            lookups,
-            variables,
-            remainder: specialize_drops_stmt(
-                arena,
-                layout_interner,
-                ident_ids,
-                environment,
-                remainder,
-            ),
-        }),
         Stmt::Dbg {
             source_location,
             source,
