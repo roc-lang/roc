@@ -94,7 +94,7 @@ impl Default for ModuleCache<'_> {
             HASH,
             INSPECT,
             TASK,
-            CRYPT,
+            CRYPTO,
         }
 
         Self {

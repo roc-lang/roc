@@ -2163,12 +2163,14 @@ impl<'a> LowLevelCall<'a> {
             NumF64ToParts => self.load_args_and_call_zig(backend, bitcode::NUM_F64_TO_PARTS),
             NumF32FromParts => self.load_args_and_call_zig(backend, bitcode::NUM_F32_FROM_PARTS),
             NumF64FromParts => self.load_args_and_call_zig(backend, bitcode::NUM_F64_FROM_PARTS),
-            // Crypt
-            CryptEmptySha256 => self.load_args_and_call_zig(backend, bitcode::CRYPT_EMPTY_SHA256),
-            CryptSha256AddBytes => {
-                self.load_args_and_call_zig(backend, bitcode::CRYPT_SHA256_ADD_BYTES)
+            // Crypto
+            CryptoEmptySha256 => self.load_args_and_call_zig(backend, bitcode::CRYPTO_EMPTY_SHA256),
+            CryptoSha256AddBytes => {
+                self.load_args_and_call_zig(backend, bitcode::CRYPTO_SHA256_ADD_BYTES)
             }
-            CryptSha256Digest => self.load_args_and_call_zig(backend, bitcode::CRYPT_SHA256_DIGEST),
+            CryptoSha256Digest => {
+                self.load_args_and_call_zig(backend, bitcode::CRYPTO_SHA256_DIGEST)
+            }
 
             And => {
                 self.load_args(backend);

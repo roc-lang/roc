@@ -26,7 +26,7 @@ const MODULES: &[(ModuleId, &str)] = &[
     (ModuleId::HASH, "Hash.roc"),
     (ModuleId::INSPECT, "Inspect.roc"),
     (ModuleId::TASK, "Task.roc"),
-    (ModuleId::CRYPT, "Crypt.roc"),
+    (ModuleId::CRYPTO, "Crypto.roc"),
 ];
 
 fn main() {
