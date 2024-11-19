@@ -2657,7 +2657,7 @@ fn update<'a>(
 
             let subs = solved_subs.into_inner();
 
-            if !toplevel_expects.pure.is_empty() || !toplevel_expects.fx.is_empty() {
+            if !toplevel_expects.pure.is_empty() {
                 state.toplevel_expects.insert(module_id, toplevel_expects);
             }
 
@@ -6008,78 +6008,6 @@ fn build_pending_specializations<'a>(
                 let region = Region::span_across(&name_region, &expr_region);
 
                 toplevel_expects.pure.insert(symbol, region);
-                procs_base.partial_procs.insert(symbol, proc);
-            }
-            ExpectationFx => {
-                // skip expectations if we're not going to run them
-                if !build_expects {
-                    continue;
-                }
-
-                // mark this symbol as a top-level thunk before any other work on the procs
-                module_thunks.push(symbol);
-
-                let expr_var = Variable::EMPTY_RECORD;
-
-                let is_host_exposed = true;
-
-                // If this is an exposed symbol, we need to
-                // register it as such. Otherwise, since it
-                // never gets called by Roc code, it will never
-                // get specialized!
-                if is_host_exposed {
-                    let layout_result =
-                        layout_cache.raw_from_var(mono_env.arena, expr_var, mono_env.subs);
-
-                    // cannot specialize when e.g. main's type contains type variables
-                    if let Err(e) = layout_result {
-                        match e {
-                            LayoutProblem::Erroneous => {
-                                let message = "top level function has erroneous type";
-                                procs_base.runtime_errors.insert(symbol, message);
-                                continue;
-                            }
-                            LayoutProblem::UnresolvedTypeVar(v) => {
-                                let message = format!(
-                                    "top level function has unresolved type variable {v:?}"
-                                );
-                                procs_base
-                                    .runtime_errors
-                                    .insert(symbol, mono_env.arena.alloc(message));
-                                continue;
-                            }
-                        }
-                    }
-
-                    procs_base.host_specializations.insert_host_exposed(
-                        mono_env.subs,
-                        LambdaName::no_niche(symbol),
-                        None,
-                        expr_var,
-                    );
-                }
-
-                let body = roc_can::expr::toplevel_expect_to_inline_expect_fx(body);
-
-                let proc = PartialProc {
-                    annotation: expr_var,
-                    // This is a 0-arity thunk, so it has no arguments.
-                    pattern_symbols: &[],
-                    // This is a top-level definition, so it cannot capture anything
-                    captured_symbols: CapturedSymbols::None,
-                    body: body.value,
-                    body_var: expr_var,
-                    // This is a 0-arity thunk, so it cannot be recursive
-                    is_self_recursive: false,
-                };
-
-                // extend the region of the expect expression with the region of the preceding
-                // comment, so it is shown in failure/panic messages
-                let name_region = declarations.symbols[index].region;
-                let expr_region = declarations.expressions[index].region;
-                let region = Region::span_across(&name_region, &expr_region);
-
-                toplevel_expects.fx.insert(symbol, region);
                 procs_base.partial_procs.insert(symbol, proc);
             }
         }

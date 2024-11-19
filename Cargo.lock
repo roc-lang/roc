@@ -3007,7 +3007,6 @@ dependencies = [
  "roc_std",
  "roc_target",
  "roc_types",
- "signal-hook",
  "strip-ansi-escapes",
  "target-lexicon",
  "tempfile",

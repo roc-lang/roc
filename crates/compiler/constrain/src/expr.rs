@@ -2747,34 +2747,6 @@ pub fn constrain_decls(
                     Generalizable(false),
                 )
             }
-            ExpectationFx => {
-                let loc_expr = &declarations.expressions[index];
-
-                let bool_type = constraints.push_variable(Variable::BOOL);
-                let expected = constraints.push_expected_type(Expected::ForReason(
-                    Reason::ExpectCondition,
-                    bool_type,
-                    loc_expr.region,
-                ));
-
-                let expect_constraint = constrain_expr(
-                    types,
-                    constraints,
-                    &mut env,
-                    loc_expr.region,
-                    &loc_expr.value,
-                    expected,
-                );
-
-                constraint = constraints.let_constraint(
-                    [],
-                    [],
-                    [],
-                    expect_constraint,
-                    constraint,
-                    Generalizable(false),
-                )
-            }
         }
 
         index += 1;

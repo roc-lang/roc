@@ -3241,12 +3241,6 @@ impl Declarations {
 
                     collector.visit_expr(&loc_expr.value, loc_expr.region, var);
                 }
-                ExpectationFx => {
-                    let loc_expr =
-                        toplevel_expect_to_inline_expect_fx(self.expressions[index].clone());
-
-                    collector.visit_expr(&loc_expr.value, loc_expr.region, var);
-                }
             }
         }
 
@@ -3265,7 +3259,6 @@ roc_error_macros::assert_sizeof_default!(DeclarationTag, 8);
 pub enum DeclarationTag {
     Value,
     Expectation,
-    ExpectationFx,
     Function(Index<Loc<FunctionDef>>),
     Recursive(Index<Loc<FunctionDef>>),
     TailRecursive(Index<Loc<FunctionDef>>),
@@ -3283,7 +3276,7 @@ impl DeclarationTag {
         match self {
             Function(_) | Recursive(_) | TailRecursive(_) => 1,
             Value => 1,
-            Expectation | ExpectationFx => 1,
+            Expectation => 1,
             Destructure(_) => 1,
             MutualRecursion { length, .. } => length as usize + 1,
         }
@@ -3484,15 +3477,7 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
 /// This is supposed to happen just before monomorphization:
 /// all type errors and such are generated from the user source,
 /// but this transformation means that we don't need special codegen for toplevel expects
-pub fn toplevel_expect_to_inline_expect_pure(loc_expr: Loc<Expr>) -> Loc<Expr> {
-    toplevel_expect_to_inline_expect_help(loc_expr, false)
-}
-
-pub fn toplevel_expect_to_inline_expect_fx(loc_expr: Loc<Expr>) -> Loc<Expr> {
-    toplevel_expect_to_inline_expect_help(loc_expr, true)
-}
-
-fn toplevel_expect_to_inline_expect_help(mut loc_expr: Loc<Expr>, has_effects: bool) -> Loc<Expr> {
+pub fn toplevel_expect_to_inline_expect_pure(mut loc_expr: Loc<Expr>) -> Loc<Expr> {
     enum StoredDef {
         NonRecursive(Region, Box<Def>),
         Recursive(Region, Vec<Def>, IllegalCycleMark),
@@ -3530,7 +3515,6 @@ fn toplevel_expect_to_inline_expect_help(mut loc_expr: Loc<Expr>, has_effects: b
     }
 
     let expect_region = loc_expr.region;
-    assert!(!has_effects);
     let expect = Expr::Expect {
         loc_condition: Box::new(loc_expr),
         loc_continuation: Box::new(Loc::at_zero(Expr::EmptyRecord)),

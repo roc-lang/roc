@@ -1,9 +1,6 @@
-use std::{
-    os::unix::process::parent_id,
-    sync::{
-        atomic::{AtomicBool, AtomicU32},
-        Arc,
-    },
+use std::sync::{
+    atomic::{AtomicBool, AtomicU32},
+    Arc,
 };
 
 use bumpalo::collections::Vec as BumpVec;
@@ -32,7 +29,6 @@ use roc_types::subs::Subs;
 pub struct ExpectMemory<'a> {
     ptr: *mut u8,
     length: usize,
-    shm_name: Option<std::ffi::CString>,
     _marker: std::marker::PhantomData<&'a ()>,
 }
 
@@ -44,7 +40,6 @@ impl<'a> ExpectMemory<'a> {
         Self {
             ptr: slice.as_mut_ptr(),
             length: slice.len(),
-            shm_name: None,
             _marker: std::marker::PhantomData,
         }
     }
@@ -52,11 +47,6 @@ impl<'a> ExpectMemory<'a> {
     pub fn create_or_reuse_mmap(shm_name: &str) -> Self {
         let cstring = std::ffi::CString::new(shm_name).unwrap();
         Self::mmap_help(cstring, libc::O_RDWR | libc::O_CREAT)
-    }
-
-    fn reuse_mmap(&mut self) -> Option<Self> {
-        let shm_name = self.shm_name.as_ref()?.clone();
-        Some(Self::mmap_help(shm_name, libc::O_RDWR))
     }
 
     fn mmap_help(cstring: std::ffi::CString, shm_flags: i32) -> Self {
@@ -102,7 +92,6 @@ impl<'a> ExpectMemory<'a> {
         Self {
             ptr: ptr.cast(),
             length: Self::SHM_SIZE,
-            shm_name: Some(cstring),
             _marker: std::marker::PhantomData,
         }
     }
@@ -122,33 +111,6 @@ impl<'a> ExpectMemory<'a> {
         let mut sequence = ExpectSequence { ptr: self.ptr };
         sequence.reset();
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn run_inline_expects<'a, W: std::io::Write>(
-    writer: &mut W,
-    render_target: RenderTarget,
-    arena: &'a Bump,
-    interns: &'a Interns,
-    layout_interner: &GlobalLayoutInterner<'a>,
-    lib: &libloading::Library,
-    expectations: &mut VecMap<ModuleId, Expectations>,
-    expects: ExpectFunctions<'_>,
-) -> std::io::Result<(usize, usize)> {
-    let shm_name = format!("/roc_expect_buffer_{}", std::process::id());
-    let mut memory = ExpectMemory::create_or_reuse_mmap(&shm_name);
-
-    run_expects_with_memory(
-        writer,
-        render_target,
-        arena,
-        interns,
-        layout_interner,
-        lib,
-        expectations,
-        expects,
-        &mut memory,
-    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -192,25 +154,6 @@ pub(crate) fn run_expects_with_memory<'a, W: std::io::Write>(
 ) -> std::io::Result<(usize, usize)> {
     let mut failed = 0;
     let mut passed = 0;
-
-    for expect in expects.fx {
-        let result = run_expect_fx(
-            writer,
-            render_target,
-            arena,
-            interns,
-            layout_interner,
-            lib,
-            expectations,
-            memory,
-            expect,
-        )?;
-
-        match result {
-            true => passed += 1,
-            false => failed += 1,
-        }
-    }
 
     memory.set_shared_buffer(lib);
 
@@ -291,107 +234,6 @@ fn run_expect_pure<'a, W: std::io::Write>(
         Ok(false)
     } else {
         Ok(true)
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn run_expect_fx<'a, W: std::io::Write>(
-    writer: &mut W,
-    render_target: RenderTarget,
-    arena: &'a Bump,
-    interns: &'a Interns,
-    layout_interner: &GlobalLayoutInterner<'a>,
-    lib: &libloading::Library,
-    expectations: &mut VecMap<ModuleId, Expectations>,
-    parent_memory: &mut ExpectMemory,
-    expect: ToplevelExpect<'_>,
-) -> std::io::Result<bool> {
-    use signal_hook::{consts::signal::SIGCHLD, consts::signal::SIGUSR1, iterator::Signals};
-
-    let mut signals = Signals::new([SIGCHLD, SIGUSR1]).unwrap();
-
-    match unsafe { libc::fork() } {
-        0 => unsafe {
-            // we are the child
-
-            use roc_gen_llvm::try_run_jit_function;
-
-            let mut child_memory = parent_memory.reuse_mmap().unwrap();
-
-            let sequence = ExpectSequence::new(child_memory.ptr);
-
-            child_memory.set_shared_buffer(lib);
-
-            let result: Result<(), (String, _)> =
-                try_run_jit_function!(lib, expect.name, (), |v: ()| v);
-
-            if let Err((msg, _)) = result {
-                internal_error!("roc panic {msg}");
-            }
-
-            if sequence.count_failures() > 0 {
-                libc::kill(parent_id() as _, SIGUSR1);
-            }
-
-            std::process::exit(0)
-        },
-        -1 => {
-            // something failed
-
-            // Display a human-friendly error message
-            println!("Error {:?}", std::io::Error::last_os_error());
-
-            std::process::exit(1)
-        }
-        1.. => {
-            let mut has_succeeded = true;
-
-            for sig in &mut signals {
-                match sig {
-                    SIGCHLD => {
-                        // done!
-                        return Ok(has_succeeded);
-                    }
-                    SIGUSR1 => {
-                        // this is the signal we use for an expect failure. Let's see what the child told us
-                        has_succeeded = false;
-
-                        let frame =
-                            ExpectFrame::at_offset(parent_memory.ptr, ExpectSequence::START_OFFSET);
-                        let module_id = frame.module_id;
-
-                        let data = expectations.get_mut(&module_id).unwrap();
-                        let filename = data.path.to_owned();
-                        let source = std::fs::read_to_string(&data.path).unwrap();
-
-                        let renderer = Renderer::new(
-                            arena,
-                            interns,
-                            render_target,
-                            module_id,
-                            filename,
-                            &source,
-                        );
-
-                        render_expect_failure(
-                            writer,
-                            &renderer,
-                            arena,
-                            None,
-                            expectations,
-                            interns,
-                            layout_interner,
-                            parent_memory.ptr,
-                            ExpectSequence::START_OFFSET,
-                        )?;
-                    }
-                    _ => println!("received signal {sig}"),
-                }
-            }
-
-            Ok(true)
-        }
-        _ => unreachable!(),
     }
 }
 
@@ -607,7 +449,6 @@ pub struct ToplevelExpect<'a> {
 #[derive(Debug)]
 pub struct ExpectFunctions<'a> {
     pub pure: BumpVec<'a, ToplevelExpect<'a>>,
-    pub fx: BumpVec<'a, ToplevelExpect<'a>>,
 }
 
 pub fn expect_mono_module_to_dylib<'a>(
@@ -668,14 +509,7 @@ pub fn expect_mono_module_to_dylib<'a>(
         .map(|(module_id, expects)| {
             (
                 *module_id,
-                bumpalo::collections::Vec::from_iter_in(
-                    expects
-                        .pure
-                        .keys()
-                        .copied()
-                        .chain(expects.fx.keys().copied()),
-                    env.arena,
-                ),
+                bumpalo::collections::Vec::from_iter_in(expects.pure.keys().copied(), env.arena),
             )
         })
         .collect();
@@ -693,19 +527,6 @@ pub fn expect_mono_module_to_dylib<'a>(
     for (module_id, expects) in toplevel_expects.into_iter() {
         let expect_names = expect_names.get(&module_id).unwrap();
 
-        let expects_fx = bumpalo::collections::Vec::from_iter_in(
-            expects
-                .fx
-                .into_iter()
-                .zip(expect_names.iter().skip(expects.pure.len()))
-                .map(|((symbol, region), name)| ToplevelExpect {
-                    symbol,
-                    region,
-                    name,
-                }),
-            env.arena,
-        );
-
         let expects_pure =
             bumpalo::collections::Vec::from_iter_in(
                 expects.pure.into_iter().zip(expect_names.iter()).map(
@@ -718,10 +539,7 @@ pub fn expect_mono_module_to_dylib<'a>(
                 env.arena,
             );
 
-        let expect_funs = ExpectFunctions {
-            pure: expects_pure,
-            fx: expects_fx,
-        };
+        let expect_funs = ExpectFunctions { pure: expects_pure };
 
         modules_expects.insert(module_id, expect_funs);
     }
