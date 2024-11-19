@@ -1,4 +1,5 @@
 on:
+  pull_request:
   workflow_dispatch:
 
 name: Test latest nightly releases for macOS and Linux x86_64
