@@ -131,7 +131,7 @@ impl ModuleName {
     pub const HASH: &'static str = "Hash";
     pub const INSPECT: &'static str = "Inspect";
     pub const TASK: &'static str = "Task";
-    pub const CRYPT: &'static str = "Crypt";
+    pub const CRYPTO: &'static str = "Crypto";
 
     pub fn as_str(&self) -> &str {
         self.0.as_str()

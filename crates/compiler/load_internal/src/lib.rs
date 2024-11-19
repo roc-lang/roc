@@ -26,5 +26,5 @@ pub const BUILTIN_MODULES: &[(ModuleId, &str)] = &[
     (ModuleId::HASH, "Hash"),
     (ModuleId::INSPECT, "Inspect"),
     (ModuleId::TASK, "Task"),
-    (ModuleId::CRYPT, "Crypt"),
+    (ModuleId::CRYPTO, "Crypto"),
 ];

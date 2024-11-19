@@ -210,9 +210,9 @@ map_symbol_to_lowlevel_and_arity! {
     NumF32FromParts; NUM_F32_FROM_PARTS; 1,
     NumF64FromParts; NUM_F64_FROM_PARTS; 1,
 
-    CryptEmptySha256;  CRYPT_EMPTY_SHA_256; 1,
-    CryptSha256AddBytes;  CRYPT_SHA256_ADD_BYTES; 2,
-    CryptSha256Digest; CRYPT_SHA256_DIGEST; 1,
+    CryptoEmptySha256;  CRYPTO_EMPTY_SHA_256; 1,
+    CryptoSha256AddBytes;  CRYPTO_SHA256_ADD_BYTES; 2,
+    CryptoSha256Digest; CRYPTO_SHA256_DIGEST; 1,
 
     Eq; BOOL_STRUCTURAL_EQ; 2,
     NotEq; BOOL_STRUCTURAL_NOT_EQ; 2,

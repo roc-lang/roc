@@ -1431,14 +1431,14 @@ pub(crate) fn run_low_level<'a, 'ctx>(
 
             call_bitcode_fn(env, &[], bitcode::UTILS_DICT_PSEUDO_SEED)
         }
-        CryptEmptySha256 => call_bitcode_fn(env, &[], bitcode::CRYPT_EMPTY_SHA256),
-        CryptSha256AddBytes => {
+        CryptoEmptySha256 => call_bitcode_fn(env, &[], bitcode::CRYPTO_EMPTY_SHA256),
+        CryptoSha256AddBytes => {
             arguments!(sha, data);
-            call_bitcode_fn(env, &[sha, data], bitcode::CRYPT_SHA256_ADD_BYTES)
+            call_bitcode_fn(env, &[sha, data], bitcode::CRYPTO_SHA256_ADD_BYTES)
         }
-        CryptSha256Digest => {
+        CryptoSha256Digest => {
             arguments!(sha);
-            call_bitcode_fn(env, &[sha], bitcode::CRYPT_SHA256_DIGEST)
+            call_bitcode_fn(env, &[sha], bitcode::CRYPTO_SHA256_DIGEST)
         }
 
         ListIncref | ListDecref | SetJmp | LongJmp | SetLongJmpBuffer => {
