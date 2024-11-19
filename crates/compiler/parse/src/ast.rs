@@ -489,7 +489,6 @@ pub enum Expr<'a> {
     Defs(&'a Defs<'a>, &'a Loc<Expr<'a>>),
 
     Backpassing(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
-    Expect(&'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
 
     Dbg,
     DbgStmt(&'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
@@ -539,7 +538,6 @@ pub enum Expr<'a> {
 
     // Problems
     MalformedIdent(&'a str, crate::ident::BadIdent),
-    MalformedClosure,
     MalformedSuffixed(&'a Loc<Expr<'a>>),
     // Both operators were non-associative, e.g. (True == False == False).
     // We should tell the author to disambiguate by grouping them with parens.
@@ -672,7 +670,6 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::Tag(_) => false,
         Expr::OpaqueRef(_) => false,
         Expr::Backpassing(_, _, _) => false, // TODO: we might want to check this?
-        Expr::Expect(a, b) => is_expr_suffixed(&a.value) || is_expr_suffixed(&b.value),
         Expr::Dbg => false,
         Expr::DbgStmt(a, b) => is_expr_suffixed(&a.value) || is_expr_suffixed(&b.value),
         Expr::LowLevelDbg(_, a, b) => is_expr_suffixed(&a.value) || is_expr_suffixed(&b.value),
@@ -687,7 +684,6 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::SpaceBefore(a, _) => is_expr_suffixed(a),
         Expr::SpaceAfter(a, _) => is_expr_suffixed(a),
         Expr::MalformedIdent(_, _) => false,
-        Expr::MalformedClosure => false,
         Expr::MalformedSuffixed(_) => false,
         Expr::PrecedenceConflict(_) => false,
         Expr::EmptyRecordBuilder(_) => false,
@@ -713,7 +709,6 @@ fn is_assigned_value_suffixed<'a>(value: &AssignedField<'a, Expr<'a>>) -> bool {
         AssignedField::SpaceBefore(a, _) | AssignedField::SpaceAfter(a, _) => {
             is_assigned_value_suffixed(a)
         }
-        AssignedField::Malformed(_) => false,
     }
 }
 
@@ -830,11 +825,6 @@ pub enum ValueDef<'a> {
         preceding_comment: Region,
     },
 
-    ExpectFx {
-        condition: &'a Loc<Expr<'a>>,
-        preceding_comment: Region,
-    },
-
     /// e.g. `import InternalHttp as Http exposing [Req]`.
     ModuleImport(ModuleImport<'a>),
 
@@ -889,7 +879,7 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                             | OptionalValue(_, _, loc_val)
                             | IgnoredValue(_, _, loc_val) => break expr_stack.push(&loc_val.value),
                             SpaceBefore(next, _) | SpaceAfter(next, _) => current = *next,
-                            LabelOnly(_) | Malformed(_) => break,
+                            LabelOnly(_) => break,
                         }
                     }
                 }
@@ -939,11 +929,6 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                     expr_stack.reserve(2);
                     expr_stack.push(&a.value);
                     expr_stack.push(&b.value);
-                }
-                Expect(condition, cont) => {
-                    expr_stack.reserve(2);
-                    expr_stack.push(&condition.value);
-                    expr_stack.push(&cont.value);
                 }
                 DbgStmt(condition, cont) => {
                     expr_stack.reserve(2);
@@ -1038,7 +1023,6 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                 | Tag(_)
                 | OpaqueRef(_)
                 | MalformedIdent(_, _)
-                | MalformedClosure
                 | PrecedenceConflict(_)
                 | MalformedSuffixed(_) => { /* terminal */ }
             }
@@ -1072,10 +1056,6 @@ impl<'a, 'b> Iterator for RecursiveValueDefIter<'a, 'b> {
                             preceding_comment: _,
                         }
                         | ValueDef::Expect {
-                            condition,
-                            preceding_comment: _,
-                        }
-                        | ValueDef::ExpectFx {
                             condition,
                             preceding_comment: _,
                         } => self.push_pending_from_expr(&condition.value),
@@ -1614,9 +1594,6 @@ pub enum Tag<'a> {
     // We preserve this for the formatter; canonicalization ignores it.
     SpaceBefore(&'a Tag<'a>, &'a [CommentOrNewline<'a>]),
     SpaceAfter(&'a Tag<'a>, &'a [CommentOrNewline<'a>]),
-
-    /// A malformed tag, which will code gen to a runtime error
-    Malformed(&'a str),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1639,9 +1616,6 @@ pub enum AssignedField<'a, Val> {
     // We preserve this for the formatter; canonicalization ignores it.
     SpaceBefore(&'a AssignedField<'a, Val>, &'a [CommentOrNewline<'a>]),
     SpaceAfter(&'a AssignedField<'a, Val>, &'a [CommentOrNewline<'a>]),
-
-    /// A malformed assigned field, which will code gen to a runtime error
-    Malformed(&'a str),
 }
 
 impl<'a, Val> AssignedField<'a, Val> {
@@ -1653,7 +1627,7 @@ impl<'a, Val> AssignedField<'a, Val> {
                 Self::RequiredValue(_, _, val)
                 | Self::OptionalValue(_, _, val)
                 | Self::IgnoredValue(_, _, val) => break Some(val),
-                Self::LabelOnly(_) | Self::Malformed(_) => break None,
+                Self::LabelOnly(_) => break None,
                 Self::SpaceBefore(next, _) | Self::SpaceAfter(next, _) => current = *next,
             }
         }
@@ -2501,7 +2475,6 @@ impl<'a> Malformed for Expr<'a> {
             Closure(args, body) => args.iter().any(|arg| arg.is_malformed()) || body.is_malformed(),
             Defs(defs, body) => defs.is_malformed() || body.is_malformed(),
             Backpassing(args, call, body) => args.iter().any(|arg| arg.is_malformed()) || call.is_malformed() || body.is_malformed(),
-            Expect(condition, continuation) => condition.is_malformed() || continuation.is_malformed(),
             Dbg => false,
             DbgStmt(condition, continuation) => condition.is_malformed() || continuation.is_malformed(),
             LowLevelDbg(_, condition, continuation) => condition.is_malformed() || continuation.is_malformed(),
@@ -2518,7 +2491,6 @@ impl<'a> Malformed for Expr<'a> {
             ParensAround(expr) => expr.is_malformed(),
 
             MalformedIdent(_, _) |
-            MalformedClosure |
             MalformedSuffixed(..) |
             PrecedenceConflict(_) |
             EmptyRecordBuilder(_) |
@@ -2593,7 +2565,6 @@ impl<'a, T: Malformed> Malformed for AssignedField<'a, T> {
             AssignedField::SpaceBefore(field, _) | AssignedField::SpaceAfter(field, _) => {
                 field.is_malformed()
             }
-            AssignedField::Malformed(_) => true,
         }
     }
 }
@@ -2738,10 +2709,6 @@ impl<'a> Malformed for ValueDef<'a> {
             | ValueDef::Expect {
                 condition,
                 preceding_comment: _,
-            }
-            | ValueDef::ExpectFx {
-                condition,
-                preceding_comment: _,
             } => condition.is_malformed(),
             ValueDef::ModuleImport(ModuleImport {
                 before_name: _,
@@ -2815,7 +2782,6 @@ impl<'a> Malformed for Tag<'a> {
         match self {
             Tag::Apply { name: _, args } => args.iter().any(|arg| arg.is_malformed()),
             Tag::SpaceBefore(tag, _) | Tag::SpaceAfter(tag, _) => tag.is_malformed(),
-            Tag::Malformed(_) => true,
         }
     }
 }

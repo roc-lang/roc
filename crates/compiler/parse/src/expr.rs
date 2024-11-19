@@ -2094,7 +2094,7 @@ pub fn merge_spaces<'a>(
 fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, ()> {
     let mut expr = expr.extract_spaces();
 
-    if let Expr::ParensAround(loc_expr) = &expr.item {
+    while let Expr::ParensAround(loc_expr) = &expr.item {
         let expr_inner = loc_expr.extract_spaces();
 
         expr.before = merge_spaces(arena, expr.before, expr_inner.before);
@@ -2175,12 +2175,10 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::Defs(_, _)
         | Expr::If { .. }
         | Expr::When(_, _)
-        | Expr::Expect(_, _)
         | Expr::Dbg
         | Expr::DbgStmt(_, _)
         | Expr::LowLevelDbg(_, _, _)
         | Expr::Return(_, _)
-        | Expr::MalformedClosure
         | Expr::MalformedSuffixed(..)
         | Expr::PrecedenceConflict { .. }
         | Expr::EmptyRecordBuilder(_)
@@ -2254,7 +2252,6 @@ fn assigned_expr_field_to_pattern_help<'a>(
             arena.alloc(assigned_expr_field_to_pattern_help(arena, nested)?),
             spaces,
         ),
-        AssignedField::Malformed(string) => Pattern::Malformed(string),
         AssignedField::IgnoredValue(_, _, _) => return Err(()),
     })
 }
@@ -2621,11 +2618,9 @@ fn expect_help<'a>(
     preceding_comment: Region,
 ) -> impl Parser<'a, Stmt<'a>, EExpect<'a>> {
     move |arena: &'a Bump, state: State<'a>, min_indent| {
-        let parse_expect_vanilla = crate::parser::keyword(crate::keyword::EXPECT, EExpect::Expect);
-        let parse_expect_fx = crate::parser::keyword(crate::keyword::EXPECT_FX, EExpect::Expect);
-        let parse_expect = either(parse_expect_vanilla, parse_expect_fx);
+        let parse_expect = crate::parser::keyword(crate::keyword::EXPECT, EExpect::Expect);
 
-        let (_, kw, state) = parse_expect.parse(arena, state, min_indent)?;
+        let (_, _kw, state) = parse_expect.parse(arena, state, min_indent)?;
 
         let (_, condition, state) = parse_block(
             options,
@@ -2637,15 +2632,9 @@ fn expect_help<'a>(
         )
         .map_err(|(_, f)| (MadeProgress, f))?;
 
-        let vd = match kw {
-            Either::First(_) => ValueDef::Expect {
-                condition: arena.alloc(condition),
-                preceding_comment,
-            },
-            Either::Second(_) => ValueDef::ExpectFx {
-                condition: arena.alloc(condition),
-                preceding_comment,
-            },
+        let vd = ValueDef::Expect {
+            condition: arena.alloc(condition),
+            preceding_comment,
         };
 
         Ok((MadeProgress, Stmt::ValueDef(vd), state))

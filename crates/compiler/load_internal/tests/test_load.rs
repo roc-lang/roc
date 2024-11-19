@@ -359,10 +359,6 @@ fn expect_types(mut loaded_module: LoadedModule, mut expected_types: HashMap<&st
                 // at least at the moment this does not happen
                 panic!("Unexpected expectation in module declarations");
             }
-            ExpectationFx => {
-                // at least at the moment this does not happen
-                panic!("Unexpected expectation in module declarations");
-            }
         };
     }
 
@@ -462,7 +458,7 @@ fn module_with_deps() {
                 def_count += 1;
             }
             MutualRecursion { .. } => { /* do nothing, not a def */ }
-            Expectation | ExpectationFx => { /* do nothing, not a def */ }
+            Expectation => { /* do nothing, not a def */ }
         }
     }
 

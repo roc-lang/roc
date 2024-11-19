@@ -377,30 +377,6 @@ fn insert_jumps<'a>(
             None => None,
         },
 
-        ExpectFx {
-            condition,
-            region,
-            lookups,
-            variables,
-            remainder,
-        } => match insert_jumps(
-            arena,
-            remainder,
-            goal_id,
-            needle,
-            needle_arguments,
-            needle_result,
-        ) {
-            Some(cont) => Some(arena.alloc(ExpectFx {
-                condition: *condition,
-                region: *region,
-                lookups,
-                variables,
-                remainder: cont,
-            })),
-            None => None,
-        },
-
         Ret(_) => None,
         Jump(_, _) => None,
         Crash(..) => None,
@@ -551,9 +527,9 @@ fn trmc_candidates_help(
             }
         }
         Stmt::Refcounting(_, next) => trmc_candidates_help(function_name, next, candidates),
-        Stmt::Expect { remainder, .. }
-        | Stmt::ExpectFx { remainder, .. }
-        | Stmt::Dbg { remainder, .. } => trmc_candidates_help(function_name, remainder, candidates),
+        Stmt::Expect { remainder, .. } | Stmt::Dbg { remainder, .. } => {
+            trmc_candidates_help(function_name, remainder, candidates)
+        }
         Stmt::Join {
             body, remainder, ..
         } => {
@@ -1010,19 +986,6 @@ impl<'a> TrmcEnv<'a> {
                 variables,
                 remainder: arena.alloc(self.walk_stmt(env, remainder)),
             },
-            Stmt::ExpectFx {
-                condition,
-                region,
-                lookups,
-                variables,
-                remainder,
-            } => Stmt::Expect {
-                condition: *condition,
-                region: *region,
-                lookups,
-                variables,
-                remainder: arena.alloc(self.walk_stmt(env, remainder)),
-            },
             Stmt::Dbg {
                 source_location,
                 source,
@@ -1127,9 +1090,6 @@ fn stmt_contains_symbol_nonrec(stmt: &Stmt, needle: Symbol) -> bool {
             matches!( modify, Inc(symbol, _) | Dec(symbol) | DecRef(symbol)  if needle == *symbol  )
         }
         Stmt::Expect {
-            condition, lookups, ..
-        }
-        | Stmt::ExpectFx {
             condition, lookups, ..
         } => needle == *condition || lookups.contains(&needle),
         Stmt::Dbg { symbol, .. } => needle == *symbol,

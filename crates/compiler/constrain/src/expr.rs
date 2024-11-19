@@ -24,7 +24,7 @@ use roc_can::pattern::Pattern;
 use roc_can::traverse::symbols_introduced_from_pattern;
 use roc_collections::all::{HumanIndex, MutMap, SendMap};
 use roc_collections::VecMap;
-use roc_module::ident::Lowercase;
+use roc_module::ident::{IdentSuffix, Lowercase};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{IllegalCycleMark, Variable};
@@ -284,9 +284,14 @@ pub fn constrain_expr(
                     let (field_type, field_con) =
                         constrain_field(types, constraints, env, field_var, loc_field_expr);
 
-                    let check_field_con =
-                        constraints.fx_record_field_suffix(label.suffix(), field_var, field.region);
-                    let field_con = constraints.and_constraint([field_con, check_field_con]);
+                    let field_con = match label.suffix() {
+                        IdentSuffix::None => {
+                            let check_field_con =
+                                constraints.fx_record_field_unsuffixed(field_var, field.region);
+                            constraints.and_constraint([field_con, check_field_con])
+                        }
+                        IdentSuffix::Bang => field_con,
+                    };
 
                     field_vars.push(field_var);
                     field_types.insert(label.clone(), RecordField::Required(field_type));
@@ -731,63 +736,6 @@ pub fn constrain_expr(
         }
 
         Expect {
-            loc_condition,
-            loc_continuation,
-            lookups_in_cond,
-        } => {
-            let expected_bool = {
-                let bool_type = constraints.push_variable(Variable::BOOL);
-                constraints.push_expected_type(Expected::ForReason(
-                    Reason::ExpectCondition,
-                    bool_type,
-                    loc_condition.region,
-                ))
-            };
-
-            let cond_con = constrain_expr(
-                types,
-                constraints,
-                env,
-                loc_condition.region,
-                &loc_condition.value,
-                expected_bool,
-            );
-
-            let continuation_con = constrain_expr(
-                types,
-                constraints,
-                env,
-                loc_continuation.region,
-                &loc_continuation.value,
-                expected,
-            );
-
-            // + 2 for cond_con and continuation_con
-            let mut all_constraints = Vec::with_capacity(lookups_in_cond.len() + 2);
-
-            all_constraints.push(cond_con);
-            all_constraints.push(continuation_con);
-
-            let mut vars = Vec::with_capacity(lookups_in_cond.len());
-
-            for ExpectLookup {
-                symbol,
-                var,
-                ability_info: _,
-            } in lookups_in_cond.iter()
-            {
-                vars.push(*var);
-
-                let var_index = constraints.push_variable(*var);
-                let store_into = constraints.push_expected_type(NoExpectation(var_index));
-
-                all_constraints.push(constraints.lookup(*symbol, store_into, Region::zero()));
-            }
-
-            constraints.exists_many(vars, all_constraints)
-        }
-
-        ExpectFx {
             loc_condition,
             loc_continuation,
             lookups_in_cond,
@@ -2799,34 +2747,6 @@ pub fn constrain_decls(
                     Generalizable(false),
                 )
             }
-            ExpectationFx => {
-                let loc_expr = &declarations.expressions[index];
-
-                let bool_type = constraints.push_variable(Variable::BOOL);
-                let expected = constraints.push_expected_type(Expected::ForReason(
-                    Reason::ExpectCondition,
-                    bool_type,
-                    loc_expr.region,
-                ));
-
-                let expect_constraint = constrain_expr(
-                    types,
-                    constraints,
-                    &mut env,
-                    loc_expr.region,
-                    &loc_expr.value,
-                    expected,
-                );
-
-                constraint = constraints.let_constraint(
-                    [],
-                    [],
-                    [],
-                    expect_constraint,
-                    constraint,
-                    Generalizable(false),
-                )
-            }
         }
 
         index += 1;
@@ -4411,7 +4331,6 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             | TupleAccess { .. }
             | RecordUpdate { .. }
             | Expect { .. }
-            | ExpectFx { .. }
             | Dbg { .. }
             | Return { .. }
             | TypedHole(_)

@@ -171,7 +171,6 @@ pub(crate) struct CanDefs {
     defs: Vec<Option<Def>>,
     dbgs: ExpectsOrDbgs,
     expects: ExpectsOrDbgs,
-    expects_fx: ExpectsOrDbgs,
     def_ordering: DefOrdering,
     aliases: VecMap<Symbol, Alias>,
 }
@@ -343,7 +342,6 @@ pub enum Declaration {
     DeclareRec(Vec<Def>, IllegalCycleMark),
     Builtin(Def),
     Expects(ExpectsOrDbgs),
-    ExpectsFx(ExpectsOrDbgs),
     /// If we know a cycle is illegal during canonicalization.
     /// Otherwise we will try to detect this during solving; see [`IllegalCycleMark`].
     InvalidCycle(Vec<CycleEntry>),
@@ -358,7 +356,6 @@ impl Declaration {
             InvalidCycle { .. } => 0,
             Builtin(_) => 0,
             Expects(_) => 0,
-            ExpectsFx(_) => 0,
         }
     }
 
@@ -374,7 +371,7 @@ impl Declaration {
                 &cycles.first().unwrap().expr_region,
                 &cycles.last().unwrap().expr_region,
             ),
-            Declaration::Expects(expects) | Declaration::ExpectsFx(expects) => Region::span_across(
+            Declaration::Expects(expects) => Region::span_across(
                 expects.regions.first().unwrap(),
                 expects.regions.last().unwrap(),
             ),
@@ -713,10 +710,6 @@ fn canonicalize_claimed_ability_impl<'a>(
                 ability,
                 region: loc_impl.region,
             });
-            Err(())
-        }
-        AssignedField::Malformed(_) => {
-            // An error will already have been reported
             Err(())
         }
         AssignedField::SpaceBefore(_, _)
@@ -1174,7 +1167,6 @@ fn canonicalize_value_defs<'a>(
     let mut pending_value_defs = Vec::with_capacity(value_defs.len());
     let mut pending_dbgs = Vec::with_capacity(value_defs.len());
     let mut pending_expects = Vec::with_capacity(value_defs.len());
-    let mut pending_expect_fx = Vec::with_capacity(value_defs.len());
 
     let mut imports_introduced = Vec::with_capacity(value_defs.len());
 
@@ -1193,9 +1185,6 @@ fn canonicalize_value_defs<'a>(
             }
             PendingValue::Expect(pending_expect) => {
                 pending_expects.push(pending_expect);
-            }
-            PendingValue::ExpectFx(pending_expect) => {
-                pending_expect_fx.push(pending_expect);
             }
             PendingValue::ModuleImport(PendingModuleImport {
                 module_id,
@@ -1282,7 +1271,6 @@ fn canonicalize_value_defs<'a>(
 
     let mut dbgs = ExpectsOrDbgs::with_capacity(pending_dbgs.len());
     let mut expects = ExpectsOrDbgs::with_capacity(pending_expects.len());
-    let mut expects_fx = ExpectsOrDbgs::with_capacity(pending_expects.len());
 
     for pending in pending_dbgs {
         let (loc_can_condition, can_output) = canonicalize_expr(
@@ -1312,25 +1300,10 @@ fn canonicalize_value_defs<'a>(
         output.union(can_output);
     }
 
-    for pending in pending_expect_fx {
-        let (loc_can_condition, can_output) = canonicalize_expr(
-            env,
-            var_store,
-            scope,
-            pending.condition.region,
-            &pending.condition.value,
-        );
-
-        expects_fx.push(loc_can_condition, pending.preceding_comment);
-
-        output.union(can_output);
-    }
-
     let can_defs = CanDefs {
         defs,
         dbgs,
         expects,
-        expects_fx,
         def_ordering,
         aliases,
     };
@@ -1738,7 +1711,6 @@ pub(crate) fn sort_top_level_can_defs(
         defs,
         dbgs: _,
         expects,
-        expects_fx,
         def_ordering,
         aliases,
     } = defs;
@@ -1767,19 +1739,6 @@ pub(crate) fn sort_top_level_can_defs(
         let name = scope.gen_unique_symbol();
 
         declarations.push_expect(preceding_comment, name, Loc::at(region, condition));
-    }
-
-    let it = expects_fx
-        .conditions
-        .into_iter()
-        .zip(expects_fx.regions)
-        .zip(expects_fx.preceding_comment);
-
-    for ((condition, region), preceding_comment) in it {
-        // an `expect` does not have a user-defined name, but we'll need a name to call the expectation
-        let name = scope.gen_unique_symbol();
-
-        declarations.push_expect_fx(preceding_comment, name, Loc::at(region, condition));
     }
 
     for (symbol, alias) in aliases.into_iter() {
@@ -2019,7 +1978,6 @@ pub(crate) fn sort_can_defs(
         mut defs,
         dbgs,
         expects,
-        expects_fx,
         def_ordering,
         aliases,
     } = defs;
@@ -2151,10 +2109,6 @@ pub(crate) fn sort_can_defs(
 
     if !expects.conditions.is_empty() {
         declarations.push(Declaration::Expects(expects));
-    }
-
-    if !expects_fx.conditions.is_empty() {
-        declarations.push(Declaration::ExpectsFx(expects_fx));
     }
 
     (declarations, output)
@@ -2879,10 +2833,6 @@ fn decl_to_let(decl: Declaration, loc_ret: Loc<Expr>) -> Loc<Expr> {
 
             loc_ret
         }
-        Declaration::ExpectsFx(expects) => {
-            // Expects should only be added to top-level decls, not to let-exprs!
-            unreachable!("{:?}", &expects)
-        }
     }
 }
 
@@ -3082,7 +3032,6 @@ enum PendingValue<'a> {
     Def(PendingValueDef<'a>),
     Dbg(PendingExpectOrDbg<'a>),
     Expect(PendingExpectOrDbg<'a>),
-    ExpectFx(PendingExpectOrDbg<'a>),
     ModuleImport(PendingModuleImport<'a>),
     SignatureDefMismatch,
     InvalidIngestedFile,
@@ -3218,14 +3167,6 @@ fn to_pending_value_def<'a>(
             condition,
             preceding_comment,
         } => PendingValue::Expect(PendingExpectOrDbg {
-            condition,
-            preceding_comment: *preceding_comment,
-        }),
-
-        ExpectFx {
-            condition,
-            preceding_comment,
-        } => PendingValue::ExpectFx(PendingExpectOrDbg {
             condition,
             preceding_comment: *preceding_comment,
         }),

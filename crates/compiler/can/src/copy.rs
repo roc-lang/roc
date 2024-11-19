@@ -694,16 +694,6 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             lookups_in_cond: lookups_in_cond.to_vec(),
         },
 
-        ExpectFx {
-            loc_condition,
-            loc_continuation,
-            lookups_in_cond,
-        } => ExpectFx {
-            loc_condition: Box::new(loc_condition.map(|e| go_help!(e))),
-            loc_continuation: Box::new(loc_continuation.map(|e| go_help!(e))),
-            lookups_in_cond: lookups_in_cond.to_vec(),
-        },
-
         Return {
             return_value,
             return_var,

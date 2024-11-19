@@ -427,13 +427,6 @@ impl<'a> Normalize<'a> for ValueDef<'a> {
                 condition: arena.alloc(condition.normalize(arena)),
                 preceding_comment: Region::zero(),
             },
-            ExpectFx {
-                condition,
-                preceding_comment: _,
-            } => ExpectFx {
-                condition: arena.alloc(condition.normalize(arena)),
-                preceding_comment: Region::zero(),
-            },
             ModuleImport(module_import) => ModuleImport(module_import.normalize(arena)),
             IngestedFileImport(ingested_file_import) => {
                 IngestedFileImport(ingested_file_import.normalize(arena))
@@ -556,7 +549,6 @@ impl<'a, T: Normalize<'a> + Copy + std::fmt::Debug> Normalize<'a> for AssignedFi
                 arena.alloc(c.normalize(arena)),
             ),
             AssignedField::LabelOnly(a) => AssignedField::LabelOnly(a.normalize(arena)),
-            AssignedField::Malformed(a) => AssignedField::Malformed(a),
             AssignedField::SpaceBefore(a, _) => a.normalize(arena),
             AssignedField::SpaceAfter(a, _) => a.normalize(arena),
         }
@@ -743,10 +735,6 @@ impl<'a> Normalize<'a> for Expr<'a> {
                 arena.alloc(b.normalize(arena)),
                 arena.alloc(c.normalize(arena)),
             ),
-            Expr::Expect(a, b) => Expr::Expect(
-                arena.alloc(a.normalize(arena)),
-                arena.alloc(b.normalize(arena)),
-            ),
             Expr::Dbg => Expr::Dbg,
             Expr::DbgStmt(a, b) => Expr::DbgStmt(
                 arena.alloc(a.normalize(arena)),
@@ -784,7 +772,6 @@ impl<'a> Normalize<'a> for Expr<'a> {
                 a.normalize(arena)
             }
             Expr::MalformedIdent(a, b) => Expr::MalformedIdent(a, remove_spaces_bad_ident(b)),
-            Expr::MalformedClosure => Expr::MalformedClosure,
             Expr::MalformedSuffixed(a) => Expr::MalformedSuffixed(a),
             Expr::PrecedenceConflict(a) => Expr::PrecedenceConflict(a),
             Expr::SpaceBefore(a, _) => a.normalize(arena),
@@ -938,7 +925,6 @@ impl<'a> Normalize<'a> for Tag<'a> {
                 name: name.normalize(arena),
                 args: args.normalize(arena),
             },
-            Tag::Malformed(a) => Tag::Malformed(a),
             Tag::SpaceBefore(a, _) => a.normalize(arena),
             Tag::SpaceAfter(a, _) => a.normalize(arena),
         }

@@ -30,7 +30,6 @@ bumpalo.workspace = true
 inkwell.workspace = true
 libc.workspace = true
 libloading.workspace = true
-signal-hook.workspace = true
 target-lexicon.workspace = true
 
 [dev-dependencies]

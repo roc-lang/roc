@@ -62,7 +62,7 @@ getPageInfo = \pagePathStr ->
         Ok pageInfo -> pageInfo
         Err KeyNotFound ->
             if Str.contains pagePathStr "/examples/" then
-                Str.split pagePathStr "/"
+                Str.splitOn pagePathStr "/"
                 |> List.takeLast 2
                 |> List.first # we use the folder for name for the page title, e.g. Json from examples/Json/README.html
                 |> unwrapOrCrash "This List.first should never fail. pagePathStr ($(pagePathStr)) did not contain any `/`."

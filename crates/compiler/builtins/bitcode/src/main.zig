@@ -185,7 +185,7 @@ comptime {
 const str = @import("str.zig");
 comptime {
     exportStrFn(str.init, "init");
-    exportStrFn(str.strSplit, "str_split");
+    exportStrFn(str.strSplitOn, "str_split_on");
     exportStrFn(str.countSegments, "count_segments");
     exportStrFn(str.countUtf8Bytes, "count_utf8_bytes");
     exportStrFn(str.isEmpty, "is_empty");

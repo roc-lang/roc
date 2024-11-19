@@ -232,7 +232,7 @@ fn str_capacity_concat() {
 fn split_not_present() {
     valgrind_test(indoc!(
         r#"
-        Str.split (Str.concat "a string that is stored on the heap" "!") "\n"
+        Str.splitOn (Str.concat "a string that is stored on the heap" "!") "\n"
             |> Str.joinWith ""
         "#
     ));

@@ -1,0 +1,70 @@
+SpaceAfter(
+    DbgStmt(
+        @5-10 SpaceBefore(
+            Defs(
+                Defs {
+                    tags: [
+                        EitherIndex(2147483648),
+                    ],
+                    regions: [
+                        @5-6,
+                    ],
+                    space_before: [
+                        Slice { start: 0, length: 0 },
+                    ],
+                    space_after: [
+                        Slice { start: 0, length: 0 },
+                    ],
+                    spaces: [],
+                    type_defs: [],
+                    value_defs: [
+                        Stmt(
+                            @5-6 Var {
+                                module_name: "",
+                                ident: "q",
+                            },
+                        ),
+                    ],
+                },
+                @8-10 SpaceBefore(
+                    Var {
+                        module_name: "",
+                        ident: "qt",
+                    },
+                    [
+                        Newline,
+                    ],
+                ),
+            ),
+            [
+                Newline,
+            ],
+        ),
+        @11-16 SpaceBefore(
+            Apply(
+                @11-12 Var {
+                    module_name: "",
+                    ident: "g",
+                },
+                [
+                    @14-16 SpaceBefore(
+                        Var {
+                            module_name: "",
+                            ident: "qt",
+                        },
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                Space,
+            ),
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)
