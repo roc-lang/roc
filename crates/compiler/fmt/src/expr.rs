@@ -64,9 +64,6 @@ impl<'a> Formattable for Expr<'a> {
                 loc_expr.is_multiline() || args.iter().any(|loc_arg| loc_arg.is_multiline())
             }
 
-            Expect(condition, continuation) => {
-                condition.is_multiline() || continuation.is_multiline()
-            }
             DbgStmt(condition, _) => condition.is_multiline(),
             LowLevelDbg(_, _, _) => unreachable!(
                 "LowLevelDbg should only exist after desugaring, not during formatting"
@@ -444,9 +441,6 @@ impl<'a> Formattable for Expr<'a> {
                     buf.indent(indent);
                     buf.push(')');
                 }
-            }
-            Expect(condition, continuation) => {
-                fmt_expect(buf, condition, continuation, self.is_multiline(), indent);
             }
             Dbg => {
                 buf.indent(indent);
@@ -1066,33 +1060,6 @@ fn fmt_dbg_stmt<'a>(
     condition.format_with_options(buf, Parens::NotNeeded, newlines, inner_indent);
 
     // Always put a blank line after the `dbg` line(s)
-    buf.ensure_ends_with_blank_line();
-
-    continuation.format(buf, indent);
-}
-
-fn fmt_expect<'a>(
-    buf: &mut Buf,
-    condition: &'a Loc<Expr<'a>>,
-    continuation: &'a Loc<Expr<'a>>,
-    is_multiline: bool,
-    indent: u16,
-) {
-    buf.ensure_ends_with_newline();
-    buf.indent(indent);
-    buf.push_str("expect");
-
-    let return_indent = if is_multiline {
-        buf.newline();
-        indent + INDENT
-    } else {
-        buf.spaces(1);
-        indent
-    };
-
-    condition.format(buf, return_indent);
-
-    // Always put a blank line after the `expect` line(s)
     buf.ensure_ends_with_blank_line();
 
     continuation.format(buf, indent);
