@@ -5,6 +5,7 @@ import pf.Types exposing [Types]
 import pf.File exposing [File]
 # import pf.TypeId exposing [TypeId]
 
+## generate placeholder glue for now that only works for our one C test
 makeGlue : List Types -> Result (List File) Str
 makeGlue = \_typesByArch ->
     Ok ([{ name: "roc_app.h", content: placeholderGlue }])
