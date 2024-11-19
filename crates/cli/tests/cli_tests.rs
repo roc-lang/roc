@@ -50,7 +50,6 @@ mod cli_tests {
     const TEST_LEGACY_LINKER: bool = false;
 
     #[test]
-    #[ignore = "Works when run manually, but not in CI"]
     fn platform_switching_rust() {
         // pre-build the platform
         std::process::Command::new("bash")

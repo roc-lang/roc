@@ -8,4 +8,4 @@ cd "$(dirname "$0")"
 
 cargo build -p rust-platform
 
-cp ../../../target/debug/librustplatform.a ./libhost.a
+cp ./target/debug/librustplatform.a ./libhost.a
