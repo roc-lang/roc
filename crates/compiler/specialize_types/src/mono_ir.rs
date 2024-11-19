@@ -117,8 +117,8 @@ impl MonoExprs {
         }
     }
 
-    pub fn iter_slice(&self, expr_ids: Slice<MonoExprId>) -> impl Iterator<Item = &MonoExpr> {
-        expr_ids.indices().into_iter().map(|index| {
+    pub fn iter_slice(&self, exprs: Slice<MonoExpr>) -> impl Iterator<Item = &MonoExpr> {
+        exprs.indices().into_iter().map(|index| {
             debug_assert!(
                 self.exprs.get(index).is_some(),
                 "A Slice index was not found in MonoExprs. This should never happen!"
@@ -127,6 +127,20 @@ impl MonoExprs {
             // Safety: we should only ever hand out MonoExprId slices that are valid indices into here.
             unsafe { self.exprs.get_unchecked(index) }
         })
+    }
+
+    pub fn extend(
+        &mut self,
+        exprs: impl Iterator<Item = (MonoExpr, Region)> + Clone,
+    ) -> Slice<MonoExpr> {
+        let start = self.exprs.len();
+
+        self.exprs.extend(exprs.clone().map(|(expr, _region)| expr));
+        self.regions.extend(exprs.map(|(_expr, region)| region));
+
+        let len = self.exprs.len() - start;
+
+        Slice::new(start as u32, len as u16)
     }
 }
 
@@ -139,6 +153,82 @@ impl MonoExprId {
     pub(crate) unsafe fn new_unchecked(inner: Id<MonoExpr>) -> Self {
         Self { inner }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MonoStmtId {
+    inner: Id<MonoStmt>,
+}
+
+impl MonoStmtId {
+    pub(crate) unsafe fn new_unchecked(inner: Id<MonoStmt>) -> Self {
+        Self { inner }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MonoStmt {
+    /// Assign to a variable.
+    Assign(IdentId, MonoExprId),
+    AssignRec(IdentId, MonoExprId),
+
+    /// Introduce a variable, e.g. `var foo_` (we'll MonoStmt::Assign to it later.)
+    Declare(IdentId),
+
+    /// The `return` statement
+    Return(MonoExprId),
+
+    /// The "crash" keyword. Importantly, during code gen we must mark this as "nothing happens after this"
+    Crash {
+        msg: MonoExprId,
+        /// The type of the `crash` expression (which will have unified to whatever's around it)
+        expr_type: MonoTypeId,
+    },
+
+    Expect {
+        condition: MonoExprId,
+        /// If the expectation fails, we print the values of all the named variables
+        /// in the final expr. These are those values.
+        lookups_in_cond: Slice2<MonoTypeId, IdentId>,
+    },
+
+    Dbg {
+        source_location: InternedStrId,
+        source: InternedStrId,
+        expr: MonoExprId,
+        expr_type: MonoTypeId,
+        name: IdentId,
+    },
+
+    // Call a function that has no return value (or which we are discarding due to an underscore pattern).
+    CallVoid {
+        fn_type: MonoTypeId,
+        fn_expr: MonoExprId,
+        args: Slice2<MonoTypeId, MonoExprId>,
+        /// This is the type of the closure based only on canonical IR info,
+        /// not considering what other closures might later influence it.
+        /// Lambda set specialization may change this type later!
+        capture_type: MonoTypeId,
+    },
+
+    // Branching
+    When {
+        /// The actual condition of the when expression.
+        cond: MonoExprId,
+        cond_type: MonoTypeId,
+        /// Type of each branch (and therefore the type of the entire `when` expression)
+        branch_type: MonoTypeId,
+        /// Note: if the branches weren't exhaustive, we will have already generated a default
+        /// branch which crashes if it's reached. (The compiler will have reported an error already;
+        /// this is for if you want to run anyway.)
+        branches: NonEmptySlice<WhenBranch>,
+    },
+    If {
+        /// Type of each branch (and therefore the type of the entire `if` expression)
+        branch_type: MonoTypeId,
+        branches: Slice<(MonoStmtId, MonoStmtId)>,
+        final_else: Option<MonoTypeId>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -159,35 +249,6 @@ pub enum MonoExpr {
         params_type: MonoTypeId,
     },
 
-    // Branching
-    When {
-        /// The actual condition of the when expression.
-        cond: MonoExprId,
-        cond_type: MonoTypeId,
-        /// Type of each branch (and therefore the type of the entire `when` expression)
-        branch_type: MonoTypeId,
-        /// Note: if the branches weren't exhaustive, we will have already generated a default
-        /// branch which crashes if it's reached. (The compiler will have reported an error already;
-        /// this is for if you want to run anyway.)
-        branches: NonEmptySlice<WhenBranch>,
-    },
-    If {
-        /// Type of each branch (and therefore the type of the entire `if` expression)
-        branch_type: MonoTypeId,
-        branches: Slice<(MonoExprId, MonoExprId)>,
-        final_else: Option<MonoTypeId>,
-    },
-
-    // Let
-    LetRec {
-        defs: Slice<Def>,
-        ending_expr: MonoExprId,
-    },
-    LetNonRec {
-        def: Def,
-        ending_expr: MonoExprId,
-    },
-
     /// This is *only* for calling functions, not for tag application.
     /// The Tag variant contains any applied values inside it.
     Call {
@@ -197,7 +258,7 @@ pub enum MonoExpr {
         /// This is the type of the closure based only on canonical IR info,
         /// not considering what other closures might later influence it.
         /// Lambda set specialization may change this type later!
-        closure_type: MonoTypeId,
+        capture_type: MonoTypeId,
     },
     RunLowLevel {
         op: LowLevel,
@@ -220,14 +281,7 @@ pub enum MonoExpr {
 
     /// A record literal or a tuple literal.
     /// These have already been sorted alphabetically.
-    Struct(NonEmptySlice<MonoExprId>),
-
-    /// The "crash" keyword. Importantly, during code gen we must mark this as "nothing happens after this"
-    Crash {
-        msg: MonoExprId,
-        /// The type of the `crash` expression (which will have unified to whatever's around it)
-        expr_type: MonoTypeId,
-    },
+    Struct(NonEmptySlice<MonoExpr>),
 
     /// Look up exactly one field on a record, tuple, or tag payload.
     /// At this point we've already unified those concepts and have
@@ -264,28 +318,18 @@ pub enum MonoExpr {
         args: Slice2<MonoTypeId, MonoExprId>,
     },
 
-    Expect {
-        condition: MonoExprId,
-        continuation: MonoExprId,
-        /// If the expectation fails, we print the values of all the named variables
-        /// in the final expr. These are those values.
-        lookups_in_cond: Slice2<MonoTypeId, IdentId>,
+    Block {
+        stmts: Slice<MonoStmtId>,
+        final_expr: MonoExprId,
     },
-    Dbg {
-        source_location: InternedStrId,
-        source: InternedStrId,
-        msg: MonoExprId,
-        continuation: MonoExprId,
-        expr_type: MonoTypeId,
-        name: IdentId,
-    },
+
     CompilerBug(Problem),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WhenBranch {
     pub patterns: Slice<MonoPatternId>,
-    pub body: MonoExprId,
+    pub body: Slice<MonoStmtId>,
     pub guard: Option<MonoExprId>,
 }
 

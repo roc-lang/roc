@@ -1,22 +1,52 @@
 use crate::{
-    mono_ir::{MonoExpr, MonoExprId, MonoExprs},
+    mono_ir::{MonoExpr, MonoExprId, MonoExprs, MonoStmt, MonoStmtId},
     mono_module::Interns,
     mono_num::Number,
     mono_type::{MonoType, MonoTypes, Primitive},
-    specialize_type::{MonoCache, Problem, RecordFieldIds, TupleElemIds},
-    DebugInfo,
+    specialize_type::{MonoTypeCache, Problem, RecordFieldIds, TupleElemIds},
+    DebugInfo, MonoTypeId,
 };
 use bumpalo::{collections::Vec, Bump};
 use roc_can::expr::{Expr, IntValue};
-use roc_collections::Push;
+use roc_collections::{Push, VecMap};
+use roc_module::{ident::Lowercase, symbol::ModuleId};
+use roc_region::all::Region;
 use roc_solve::module::Solved;
-use roc_types::subs::{Content, Subs};
-use soa::{Index, NonEmptySlice, Slice};
+use roc_types::subs::{Content, FlatType, Subs, Variable};
+use soa::NonEmptySlice;
+
+/// Function bodies that have already been specialized.
+pub struct MonoFnCache {
+    inner: VecMap<(ModuleId, Variable, MonoTypeId), MonoExprId>,
+}
+
+impl MonoFnCache {
+    pub fn monomorphize_fn<'a, F: 'a + FnOnce(ModuleId, Variable) -> &'a Expr>(
+        &mut self,
+        // Sometimes we need to create specializations of functions that are defined in other modules.
+        module_id: ModuleId,
+        // The function Variable stored in the original function's canonical Expr. We use this as a way to
+        // uniquely identify the function expr within its module, since each fn Expr gets its own unique var.
+        // Doing it with Variable instead of IdentId lets us cache specializations of anonymous functions too.
+        fn_var: Variable,
+        // Given a ModuleId and Variable (to uniquely identify the canonical fn Expr within its module),
+        // get the canonical Expr of the function itself. We need this to create a specialization of it.
+        get_fn_expr: F,
+        // This tells us which specialization of the function we want.
+        mono_type_id: MonoTypeId,
+    ) -> MonoExprId {
+        *self
+            .inner
+            .get_or_insert((module_id, fn_var, mono_type_id), || {
+                todo!("TODO lower the fn_expr using Env etc. (May need to add args to this method, not sure.)");
+            })
+    }
+}
 
 pub struct Env<'a, 'c, 'd, 'i, 's, 't, P> {
     arena: &'a Bump,
     subs: &'s mut Subs,
-    types_cache: &'c mut MonoCache,
+    types_cache: &'c mut MonoTypeCache,
     mono_types: &'t mut MonoTypes,
     mono_exprs: &'t mut MonoExprs,
     record_field_ids: RecordFieldIds,
@@ -30,7 +60,7 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
     pub fn new(
         arena: &'a Bump,
         subs: &'s mut Solved<Subs>,
-        types_cache: &'c mut MonoCache,
+        types_cache: &'c mut MonoTypeCache,
         mono_types: &'t mut MonoTypes,
         mono_exprs: &'t mut MonoExprs,
         record_field_ids: RecordFieldIds,
@@ -58,6 +88,7 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
         let mono_types = &mut self.mono_types;
         let mut mono_from_var = |var| {
             self.types_cache.monomorphize_var(
+                self.arena,
                 self.subs,
                 mono_types,
                 &mut self.record_field_ids,
@@ -151,59 +182,116 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
 
                 fields.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
 
-                // Reserve a slice of IDs up front. This is so that we have a contiguous array
-                // of field IDs at the end of this, each corresponding to the appropriate record field.
-                let field_ids: Slice<MonoExprId> = self.mono_exprs.reserve_ids(fields.len() as u16);
-                let mut next_field_id = field_ids.start();
+                // We want to end up with a Slice<MonoExpr> of these, so accumulate a buffer of them
+                // and then add them to MonoExprs all at once, so they're added as one contiguous slice
+                // regardless of what else got added to MonoExprs as we were monomorphizing them.
+                let mut buf: Vec<(MonoExpr, Region)> =
+                    Vec::with_capacity_in(fields.len(), self.arena);
 
-                // Generate a MonoExpr for each field, using the reserved IDs so that we end up with
-                // that Slice being populated with the exprs in the fields, with the correct ordering.
-                fields.retain(|(_name, field)| {
-                    match self.to_mono_expr(&field.loc_expr.value) {
-                        Some(mono_expr) => {
-                            // Safety: This will run *at most* field.len() times, possibly less,
-                            // so this will never create an index that's out of bounds.
-                            let mono_expr_id =
-                                unsafe { MonoExprId::new_unchecked(Index::new(next_field_id)) };
+                buf.extend(
+                    // flat_map these so we discard all the fields that monomorphized to None
+                    fields.into_iter().flat_map(|(_name, field)| {
+                        self.to_mono_expr(&field.loc_expr.value)
+                            .map(|mono_expr| (mono_expr, field.loc_expr.region))
+                    }),
+                );
 
-                            next_field_id += 1;
-
-                            self.mono_exprs
-                                .insert(mono_expr_id, mono_expr, field.loc_expr.region);
-
-                            true
-                        }
-                        None => {
-                            // Discard all the zero-sized fields as we go.
-                            false
-                        }
-                    }
-                });
-
-                // Check for zero-sized and single-field records again now that we've discarded zero-sized fields,
-                // because we might have ended up with 0 or 1 remaining fields.
-                if fields.len() > 1 {
-                    // Safety: We just verified that there's more than 1 field.
-                    unsafe {
-                        Some(MonoExpr::Struct(NonEmptySlice::new_unchecked(
-                            field_ids.start,
-                            fields.len() as u16,
-                        )))
-                    }
-                } else {
-                    // If there are 0 fields remaining, return None. If there's 1, unwrap it.
-                    fields
-                        .first()
-                        .and_then(|(_, field)| self.to_mono_expr(&field.loc_expr.value))
+                // If we ended up with exactly 1 field, return it unwrapped.
+                if buf.len() == 1 {
+                    return buf.pop().map(|(expr, _region)| expr);
                 }
+
+                NonEmptySlice::from_slice(self.mono_exprs.extend(buf.iter().copied()))
+                    .map(MonoExpr::Struct)
             }
+            // Expr::Call((fn_var, fn_expr, capture_var, ret_var), args, called_via) => {
+            //     let opt_ret_type = mono_from_var(*var);
+
+            //     if opt_ret_type.is_none() {
+            //         let fn_type = match self.subs.get_content_without_compacting(fn_var) {
+            //             Content::Structure(FlatType::Func(arg_vars, closure_var, ret_var)) => {
+            //                 let todo = (); // TODO make is_effectful actually use the function's effectfulness!
+            //                 let is_effectful = false;
+
+            //                 // Calls to pure functions that return zero-sized types should be discarded.
+            //                 if !is_effectful {
+            //                     return None;
+            //                 }
+
+            //                 // Use the Content we already have to directly monomorphize the function, rather than
+            //                 // calling monomorphize_var and having it redo the Subs lookup and conditionals we just did.
+            //                 self.types_cache.monomorphize_fn(
+            //                     self.subs,
+            //                     self.mono_types,
+            //                     &mut self.record_field_ids,
+            //                     &mut self.tuple_elem_ids,
+            //                     &mut self.problems,
+            //                     self.debug_info,
+            //                     *arg_vars,
+            //                     *ret_var,
+            //                 )?
+            //             }
+            //             _ => {
+            //                 // This function didn't have a function type. Compiler bug!
+            //                 return Some(MonoExpr::CompilerBug(Problem::FnDidNotHaveFnType));
+            //             }
+            //         };
+
+            //         let todo = (); // TODO this is where we need to specialize, which means...duplicating the fn expr body maybe? and caching it under the mono type?
+            //         let fn_expr = self.to_mono_expr(can_expr, stmts)?;
+            //         let args = todo!(); // TODO compute the args. This is tricky because of preallocated slices!
+            //         let capture_type = mono_from_var(*capture_var);
+
+            //         let todo = (); // How do we pre-reserve the statements? Is that possible? It does seem necessary...might not be possible though. Maybe we just need to make Vec rather than Slice on these.
+
+            //         // We aren't returning anything, and this is an effectful function, so just push a statement to call it and move on.
+            //         stmts.push(self.mono_stmts.add(MonoStmt::CallVoid {
+            //             fn_type,
+            //             fn_expr,
+            //             args,
+            //             capture_type,
+            //         }));
+
+            //         None
+            //     } else {
+            //         let fn_type = mono_from_var(*fn_var)?;
+            //         let todo = (); // TODO this is where we need to specialize, which means...duplicating the fn expr body maybe? and caching it under the mono type?
+            //         let fn_expr = self.to_mono_expr(can_expr, stmts)?;
+            //         let args = todo!(); // TODO compute the args. This is tricky because of preallocated slices!
+            //         let capture_type = mono_from_var(*capture_var);
+
+            //         Some(MonoExpr::Call {
+            //             fn_type,
+            //             fn_expr,
+            //             args,
+            //             capture_type,
+            //         })
+            //     }
+            // }
+            // Expr::Var(symbol, var) => Some(MonoExpr::Lookup(*symbol, mono_from_var(*var)?)),
+            // Expr::LetNonRec(def, loc) => {
+            //     let expr = self.to_mono_expr(def.loc_expr.value, stmts)?;
+            //     let todo = (); // TODO if this is an underscore pattern and we're doing a fn call, convert it to Stmt::CallVoid
+            //     let pattern = self.to_mono_pattern(def.loc_pattern.value);
+
+            //     // TODO do we need to use any of these other fields? e.g. for the types?
+            //     // pub struct Def {
+            //     //     pub loc_pattern: Loc<Pattern>,
+            //     //     pub loc_expr: Loc<Expr>,
+            //     //     pub expr_var: Variable,
+            //     //     pub pattern_vars: SendMap<Symbol, Variable>,
+            //     //     pub annotation: Option<Annotation>,
+            //     // }
+
+            //     todo!("split up the pattern into various Assign statements.");
+            // }
+            // Expr::LetRec(vec, loc, illegal_cycle_mark) => todo!(),
             _ => todo!(),
             // Expr::List {
             //     elem_var,
             //     loc_elems,
             // } => todo!(),
             // Expr::IngestedFile(path_buf, arc, variable) => todo!(),
-            // Expr::Var(symbol, variable) => todo!(),
             // Expr::ParamsVar {
             //     symbol,
             //     var,
@@ -226,8 +314,6 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
             //     branches,
             //     final_else,
             // } => todo!(),
-            // Expr::LetRec(vec, loc, illegal_cycle_mark) => todo!(),
-            // Expr::LetNonRec(def, loc) => todo!(),
             // Expr::Call(_, vec, called_via) => todo!(),
             // Expr::RunLowLevel { op, args, ret_var } => todo!(),
             // Expr::ForeignCall {

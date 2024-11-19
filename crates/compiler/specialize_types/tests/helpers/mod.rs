@@ -4,7 +4,7 @@ use roc_load::LoadedModule;
 use roc_region::all::Region;
 use roc_solve::FunctionKind;
 use roc_specialize_types::{
-    DebugInfo, Env, Interns, MonoCache, MonoExpr, MonoExprs, MonoTypes, RecordFieldIds,
+    DebugInfo, Env, Interns, MonoExpr, MonoExprs, MonoTypeCache, MonoTypes, RecordFieldIds,
     TupleElemIds,
 };
 use test_compile::{trim_and_deindent, SpecializedExprOut};
@@ -59,7 +59,7 @@ fn specialize_expr<'a>(
 
     let mut problems = Vec::new();
     let mut debug_info: Option<DebugInfo> = None;
-    let mut types_cache = MonoCache::from_solved_subs(&solved);
+    let mut types_cache = MonoTypeCache::from_solved_subs(&solved);
     let mut mono_types = MonoTypes::new();
     let mut mono_exprs = MonoExprs::new();
 
@@ -152,10 +152,10 @@ fn dbg_mono_expr_help<'a>(
         MonoExpr::Number(number) => {
             write!(buf, "Number({:?})", number).unwrap();
         }
-        MonoExpr::Struct(expr_ids) => {
+        MonoExpr::Struct(field_exprs) => {
             write!(buf, "Struct([").unwrap();
 
-            for (index, expr) in mono_exprs.iter_slice(expr_ids.as_slice()).enumerate() {
+            for (index, expr) in mono_exprs.iter_slice(field_exprs.as_slice()).enumerate() {
                 if index > 0 {
                     write!(buf, ", ").unwrap();
                 }

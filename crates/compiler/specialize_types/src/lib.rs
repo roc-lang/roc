@@ -17,4 +17,4 @@ pub use mono_module::{InternedStrId, Interns};
 pub use mono_num::Number;
 pub use mono_struct::MonoFieldId;
 pub use mono_type::{MonoType, MonoTypeId, MonoTypes};
-pub use specialize_type::{MonoCache, Problem, RecordFieldIds, TupleElemIds};
+pub use specialize_type::{MonoTypeCache, Problem, RecordFieldIds, TupleElemIds};

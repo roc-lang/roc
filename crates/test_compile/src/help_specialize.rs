@@ -2,8 +2,8 @@ use crate::SolvedExpr;
 use bumpalo::Bump;
 use roc_region::all::Region;
 use roc_specialize_types::{
-    DebugInfo, Env, Interns, MonoCache, MonoExprId, MonoExprs, MonoTypes, Problem, RecordFieldIds,
-    TupleElemIds,
+    DebugInfo, Env, Interns, MonoExprId, MonoExprs, MonoTypeCache, MonoTypes, Problem,
+    RecordFieldIds, TupleElemIds,
 };
 
 #[derive(Debug)]
@@ -29,7 +29,7 @@ impl SpecializedExpr {
         let mut solved_out = self.solved_expr.solve_expr(input);
         let mut problems = Vec::new();
         let mut debug_info: Option<DebugInfo> = None;
-        let mut types_cache = MonoCache::from_solved_subs(&solved_out.subs);
+        let mut types_cache = MonoTypeCache::from_solved_subs(&solved_out.subs);
         let mut mono_types = MonoTypes::new();
         let mut mono_exprs = MonoExprs::new();
 
