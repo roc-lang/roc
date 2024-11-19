@@ -5,11 +5,11 @@ name: Test latest nightly releases for macOS and Linux x86_64
 
 jobs:
   test-nightly:
-    name: test nightly macos 11/12/13, ubuntu 20.04/22.04
+    name: test nightly macos 13 (x64), ubuntu 20.04/22.04
     strategy:
       fail-fast: false
       matrix:
-        os: [ macos-12, macos-13, ubuntu-20.04, ubuntu-22.04, ubuntu-24.04]
+        os: [ macos-13, ubuntu-20.04, ubuntu-22.04, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     steps:
