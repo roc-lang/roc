@@ -107,7 +107,7 @@ pub fn walk_decls<V: Visitor>(visitor: &mut V, decls: &Declarations) {
                     annotation: decls.annotations[index].as_ref(),
                 }
             }
-            Expectation | ExpectationFx => {
+            Expectation => {
                 let loc_condition = &decls.expressions[index];
 
                 DeclarationInfo::Expectation { loc_condition }

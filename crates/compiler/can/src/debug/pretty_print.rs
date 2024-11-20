@@ -62,7 +62,6 @@ fn print_declarations_help<'a>(
                 toplevel_function(c, f, symbol, function_def, &body.value)
             }
             DeclarationTag::Expectation => todo!(),
-            DeclarationTag::ExpectationFx => todo!(),
             DeclarationTag::Destructure(_) => todo!(),
             DeclarationTag::MutualRecursion { .. } => {
                 // the defs will be printed next

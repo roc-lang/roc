@@ -342,7 +342,6 @@ pub enum Declaration {
     DeclareRec(Vec<Def>, IllegalCycleMark),
     Builtin(Def),
     Expects(ExpectsOrDbgs),
-    ExpectsFx(ExpectsOrDbgs),
     /// If we know a cycle is illegal during canonicalization.
     /// Otherwise we will try to detect this during solving; see [`IllegalCycleMark`].
     InvalidCycle(Vec<CycleEntry>),
@@ -357,7 +356,6 @@ impl Declaration {
             InvalidCycle { .. } => 0,
             Builtin(_) => 0,
             Expects(_) => 0,
-            ExpectsFx(_) => 0,
         }
     }
 
@@ -373,7 +371,7 @@ impl Declaration {
                 &cycles.first().unwrap().expr_region,
                 &cycles.last().unwrap().expr_region,
             ),
-            Declaration::Expects(expects) | Declaration::ExpectsFx(expects) => Region::span_across(
+            Declaration::Expects(expects) => Region::span_across(
                 expects.regions.first().unwrap(),
                 expects.regions.last().unwrap(),
             ),
@@ -2834,10 +2832,6 @@ fn decl_to_let(decl: Declaration, loc_ret: Loc<Expr>) -> Loc<Expr> {
             }
 
             loc_ret
-        }
-        Declaration::ExpectsFx(expects) => {
-            // Expects should only be added to top-level decls, not to let-exprs!
-            unreachable!("{:?}", &expects)
         }
     }
 }

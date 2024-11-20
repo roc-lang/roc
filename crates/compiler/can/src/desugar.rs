@@ -1100,15 +1100,6 @@ pub fn desugar_expr<'a>(
                 region: loc_expr.region,
             })
         }
-        Expect(condition, continuation) => {
-            let desugared_condition = &*env.arena.alloc(desugar_expr(env, scope, condition));
-            let desugared_continuation = &*env.arena.alloc(desugar_expr(env, scope, continuation));
-
-            env.arena.alloc(Loc {
-                value: Expect(desugared_condition, desugared_continuation),
-                region: loc_expr.region,
-            })
-        }
         Dbg => {
             // Allow naked dbg, necessary for piping values into dbg with the `Pizza` binop
             loc_expr
