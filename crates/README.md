@@ -72,6 +72,10 @@ Provides a binary that is only used for static build servers.
 
 Provides macros for consistent reporting of errors in Roc's rust code.
 
+## `init/` - `roc_init`
+
+The `roc_init` crate generates code needed to initialize an application based on the `init.roc` file of an platform.
+
 ## `glue/` - `roc_glue`
 
 The `roc_glue` crate generates code needed for platform hosts to communicate with Roc apps. This tool is not necessary for writing a platform in another language, however, it's a great convenience! Currently supports Rust platforms, and the plan is to support any language via a plugin model.

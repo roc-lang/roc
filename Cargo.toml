@@ -4,6 +4,7 @@ members = [
     "crates/vendor/*",
     "crates/fs",
     "crates/glue",
+    "crates/init",
     "crates/cli",
     "crates/cli_utils",
     "crates/highlight",
