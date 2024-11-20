@@ -6020,25 +6020,6 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        closure_underscore_ident,
-        indoc!(
-            r"
-            \the_answer -> 100
-            "
-        ),
-        @r"
-    ── NAMING PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
-
-    I am trying to parse an identifier here:
-
-    4│      \the_answer -> 100
-                ^
-
-    Underscores are not allowed in identifiers. Use camelCase instead!
-    "
-    );
-
-    test_report!(
         #[ignore]
         double_binop,
         indoc!(
@@ -10697,26 +10678,26 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        underscore_in_middle_of_identifier,
+        call_with_declared_identifier_with_more_than_one_underscore,
         indoc!(
             r"
-            f = \x, y, z -> x + y + z
+            f__arg = \x, y, z -> x + y + z
 
-            \a, _b -> f a var_name 1
+            \a, b -> f__arg a b 1
             "
         ),
         |golden| pretty_assertions::assert_eq!(
             golden,
             indoc!(
-                r"
-                ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
+                r"── NAMING PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
-                Underscores are not allowed in identifier names:
+                I am trying to parse an identifier here:
 
-                6│      \a, _b -> f a var_name 1
-                                      ^^^^^^^^
+                4│      f__arg = \x, y, z -> x + y + z
+                        ^^^^^^
 
-                I recommend using camelCase. It's the standard style in Roc code!
+                While snake case is allowed here, only a single consecutive underscore
+                should be used.
                 "
             ),
         )

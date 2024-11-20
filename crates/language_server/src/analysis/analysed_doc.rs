@@ -1,4 +1,5 @@
 use log::{debug, info};
+use roc_fmt::annotation::MigrationFlags;
 use std::collections::HashMap;
 
 use bumpalo::Bump;
@@ -92,7 +93,8 @@ impl DocInfo {
         let arena = &Bump::new();
 
         let ast = Ast::parse(arena, source).ok()?;
-        let fmt = ast.fmt();
+        let flags = MigrationFlags::new(false);
+        let fmt = ast.fmt(&flags);
 
         if source == fmt.as_str() {
             None

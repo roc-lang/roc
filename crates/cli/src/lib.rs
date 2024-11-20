@@ -89,6 +89,7 @@ pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
 pub const FLAG_PP_HOST: &str = "host";
 pub const FLAG_PP_PLATFORM: &str = "platform";
 pub const FLAG_PP_DYLIB: &str = "lib";
+pub const FLAG_MIGRATE: &str = "migrate";
 
 pub const VERSION: &str = env!("ROC_VERSION");
 const DEFAULT_GENERATED_DOCS_DIR: &str = "generated-docs";
@@ -341,6 +342,13 @@ pub fn build_app() -> Command {
                 Arg::new(FLAG_CHECK)
                     .long(FLAG_CHECK)
                     .help("Checks that specified files are formatted\n(If formatting is needed, return a non-zero exit code.)")
+                    .action(ArgAction::SetTrue)
+                    .required(false),
+            )
+            .arg(
+                Arg::new(FLAG_MIGRATE)
+                    .long(FLAG_MIGRATE)
+                    .help("Will fixup syntax to match the latest preferred style.  This can cause changes to variable names and more.")
                     .action(ArgAction::SetTrue)
                     .required(false),
             )

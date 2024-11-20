@@ -4,6 +4,7 @@ extern crate indoc;
 #[cfg(test)]
 mod test_fmt {
     use bumpalo::Bump;
+    use roc_fmt::annotation::MigrationFlags;
     use roc_fmt::def::fmt_defs;
     use roc_fmt::header::fmt_header;
     use roc_fmt::Buf;
@@ -36,11 +37,12 @@ mod test_fmt {
         state: State<'a>,
         buf: &mut Buf<'_>,
     ) {
-        fmt_header(buf, header);
+        let flags = MigrationFlags::new(false);
+        fmt_header(buf, header, &flags);
 
         match parse_module_defs(arena, state, Defs::default()) {
             Ok(loc_defs) => {
-                fmt_defs(buf, &loc_defs, 0);
+                fmt_defs(buf, &loc_defs, &flags, 0);
             }
             Err(error) => {
                 let src = if src.len() > 1000 {
@@ -1492,7 +1494,7 @@ mod test_fmt {
     fn parenthetical_def() {
         expr_formats_same(indoc!(
             r"
-            (UserId userId) = 5
+            (UserId user_id) = 5
             y = 10
 
             42
@@ -1502,7 +1504,7 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r"
             # A
-            (UserId userId) = 5
+            (UserId user_id) = 5
             # B
             y = 10
 
@@ -1539,13 +1541,13 @@ mod test_fmt {
     fn lambda_returns_record() {
         expr_formats_same(indoc!(
             r"
-                toRecord = \_ -> {
+                to_record = \_ -> {
                     x: 1,
                     y: 2,
                     z: 3,
                 }
 
-                toRecord
+                to_record
             "
         ));
 
@@ -1560,7 +1562,7 @@ mod test_fmt {
 
         expr_formats_same(indoc!(
             r"
-                toRecord = \_ ->
+                to_record = \_ ->
                     val = 0
 
                     {
@@ -1569,32 +1571,32 @@ mod test_fmt {
                         z: 3,
                     }
 
-                toRecord
+                to_record
             "
         ));
 
         expr_formats_to(
             indoc!(
                 r"
-                    toRecord = \_ ->
+                    to_record = \_ ->
                         {
                             x: 1,
                             y: 2,
                             z: 3,
                         }
 
-                    toRecord
+                    to_record
                 "
             ),
             indoc!(
                 r"
-                    toRecord = \_ -> {
+                    to_record = \_ -> {
                         x: 1,
                         y: 2,
                         z: 3,
                     }
 
-                    toRecord
+                    to_record
                 "
             ),
         );
@@ -1604,13 +1606,13 @@ mod test_fmt {
     fn lambda_returns_list() {
         expr_formats_same(indoc!(
             r"
-                toList = \_ -> [
+                to_list = \_ -> [
                     1,
                     2,
                     3,
                 ]
 
-                toList
+                to_list
             "
         ));
 
@@ -1625,7 +1627,7 @@ mod test_fmt {
 
         expr_formats_same(indoc!(
             r"
-                toList = \_ ->
+                to_list = \_ ->
                     val = 0
 
                     [
@@ -1634,32 +1636,32 @@ mod test_fmt {
                         3,
                     ]
 
-                toList
+                to_list
             "
         ));
 
         expr_formats_to(
             indoc!(
                 r"
-                    toList = \_ ->
+                    to_list = \_ ->
                         [
                             1,
                             2,
                             3,
                         ]
 
-                    toList
+                    to_list
                 "
             ),
             indoc!(
                 r"
-                    toList = \_ -> [
+                    to_list = \_ -> [
                         1,
                         2,
                         3,
                     ]
 
-                    toList
+                    to_list
                 "
             ),
         );
@@ -3116,7 +3118,7 @@ mod test_fmt {
 
         expr_formats_same(indoc!(
             r"
-                myDef =
+                my_def =
                     list = [
                         a,
                         b,
@@ -3127,7 +3129,7 @@ mod test_fmt {
                         d,
                     }
 
-                myDef
+                my_def
             "
         ));
 
@@ -3672,7 +3674,7 @@ mod test_fmt {
     fn def_when() {
         expr_formats_same(indoc!(
             r"
-            myLongFunctionName = \x ->
+            my_long_function_name = \x ->
                 when b is
                     1 | 2 ->
                         when c is
@@ -4974,10 +4976,10 @@ mod test_fmt {
                         exposes []
                         packages {}
                         imports []
-                        provides [ mainForHost ]
+                        provides [ main_for_host ]
 
-                    mainForHost : { init : ({} -> Model) as Init, update : (Model, Str -> Model) as Update, view : (Model -> Str) as View }
-                    mainForHost = main
+                    main_for_host : { init : ({} -> Model) as Init, update : (Model, Str -> Model) as Update, view : (Model -> Str) as View }
+                    main_for_host = main
                 "#
             ),
             indoc!(
@@ -4987,10 +4989,10 @@ mod test_fmt {
                         exposes []
                         packages {}
                         imports []
-                        provides [mainForHost]
+                        provides [main_for_host]
 
-                    mainForHost : { init : ({} -> Model) as Init, update : (Model, Str -> Model) as Update, view : (Model -> Str) as View }
-                    mainForHost = main
+                    main_for_host : { init : ({} -> Model) as Init, update : (Model, Str -> Model) as Update, view : (Model -> Str) as View }
+                    main_for_host = main
                 "#
             ),
         );
@@ -5313,8 +5315,8 @@ mod test_fmt {
     fn backpassing_simple() {
         expr_formats_same(indoc!(
             r"
-                getChar = \ctx ->
-                    x <- Task.await (getCharScope scope)
+                get_char = \ctx ->
+                    x <- Task.await (get_char_scope scope)
                     42
 
                 42
@@ -5326,8 +5328,8 @@ mod test_fmt {
     fn backpassing_apply_tag() {
         expr_formats_same(indoc!(
             r"
-                getChar = \ctx ->
-                    (T val newScope) <- Task.await (getCharScope scope)
+                get_char = \ctx ->
+                    (T val new_scope) <- Task.await (get_char_scope scope)
                     42
 
                 42
@@ -5406,9 +5408,9 @@ mod test_fmt {
     fn backpassing_body_on_newline() {
         expr_formats_same(indoc!(
             r"
-                getChar = \ctx ->
+                get_char = \ctx ->
                     x <-
-                        Task.await (getCharScope scope)
+                        Task.await (get_char_scope scope)
                     42
 
                 42

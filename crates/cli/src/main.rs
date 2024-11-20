@@ -5,12 +5,14 @@ use roc_build::program::{check_file, CodeGenBackend};
 use roc_cli::{
     build_app, format_files, format_src, test, BuildConfig, FormatMode, CMD_BUILD, CMD_CHECK,
     CMD_DEV, CMD_DOCS, CMD_FORMAT, CMD_GLUE, CMD_PREPROCESS_HOST, CMD_REPL, CMD_RUN, CMD_TEST,
-    CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_LIB, FLAG_MAIN, FLAG_NO_COLOR,
-    FLAG_NO_HEADER, FLAG_NO_LINK, FLAG_OUTPUT, FLAG_PP_DYLIB, FLAG_PP_HOST, FLAG_PP_PLATFORM,
-    FLAG_STDIN, FLAG_STDOUT, FLAG_TARGET, FLAG_TIME, GLUE_DIR, GLUE_SPEC, ROC_FILE, VERSION,
+    CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_LIB, FLAG_MAIN, FLAG_MIGRATE,
+    FLAG_NO_COLOR, FLAG_NO_HEADER, FLAG_NO_LINK, FLAG_OUTPUT, FLAG_PP_DYLIB, FLAG_PP_HOST,
+    FLAG_PP_PLATFORM, FLAG_STDIN, FLAG_STDOUT, FLAG_TARGET, FLAG_TIME, GLUE_DIR, GLUE_SPEC,
+    ROC_FILE, VERSION,
 };
 use roc_docs::generate_docs_html;
 use roc_error_macros::user_error;
+use roc_fmt::annotation::MigrationFlags;
 use roc_gen_dev::AssemblyBackendMode;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_load::{LoadingProblem, Threading};
@@ -310,6 +312,7 @@ fn main() -> io::Result<()> {
         Some((CMD_FORMAT, matches)) => {
             let from_stdin = matches.get_flag(FLAG_STDIN);
             let to_stdout = matches.get_flag(FLAG_STDOUT);
+            let migrate = matches.get_flag(FLAG_MIGRATE);
             let format_mode = if to_stdout {
                 FormatMode::WriteToStdout
             } else {
@@ -318,6 +321,7 @@ fn main() -> io::Result<()> {
                     false => FormatMode::WriteToFile,
                 }
             };
+            let flags = MigrationFlags::new(migrate);
 
             if from_stdin && matches!(format_mode, FormatMode::WriteToFile) {
                 eprintln!("When using the --stdin flag, either the --check or the --stdout flag must also be specified. (Otherwise, it's unclear what filename to write to!)");
@@ -370,7 +374,7 @@ fn main() -> io::Result<()> {
                     std::process::exit(1);
                 });
 
-                match format_src(&arena, src) {
+                match format_src(&arena, src, &flags) {
                     Ok(formatted_src) => {
                         match format_mode {
                             FormatMode::CheckOnly => {
@@ -402,7 +406,7 @@ fn main() -> io::Result<()> {
                     }
                 }
             } else {
-                match format_files(roc_files, format_mode) {
+                match format_files(roc_files, format_mode, &flags) {
                     Ok(()) => 0,
                     Err(message) => {
                         eprintln!("{message}");
