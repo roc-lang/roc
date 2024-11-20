@@ -1433,12 +1433,30 @@ pub(crate) fn run_low_level<'a, 'ctx>(
         }
         CryptoEmptySha256 => call_bitcode_fn(env, &[], bitcode::CRYPTO_EMPTY_SHA256),
         CryptoSha256AddBytes => {
+            // Crypto.sha256AddBytes : Sha256, List U8 -> Sha256
             arguments!(sha, data);
-            call_bitcode_fn(env, &[sha, data], bitcode::CRYPTO_SHA256_ADD_BYTES)
+
+            let list_ptr = create_entry_block_alloca(env, data.get_type(), "list_alloca");
+            env.builder.new_build_store(list_ptr, data);
+
+            call_bitcode_fn(
+                env,
+                &[sha, list_ptr.into()],
+                bitcode::CRYPTO_SHA256_ADD_BYTES,
+            )
         }
         CryptoSha256Digest => {
+            // Crypto.sha256Digest : Sha256 -> Digest256
             arguments!(sha);
-            call_bitcode_fn(env, &[sha], bitcode::CRYPTO_SHA256_DIGEST)
+
+            call_bitcode_fn_fixing_for_convention(
+                env,
+                layout_interner,
+                env.module.get_struct_type("crypto.Digest256").unwrap(),
+                &[sha],
+                layout,
+                bitcode::CRYPTO_SHA256_DIGEST,
+            )
         }
 
         ListIncref | ListDecref | SetJmp | LongJmp | SetLongJmpBuffer => {
