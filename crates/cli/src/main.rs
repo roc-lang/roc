@@ -102,13 +102,14 @@ fn main() -> io::Result<()> {
             }
         }
         Some((CMD_INIT, matches)) => {
-            let _platform_path = matches.get_one::<PathBuf>(ROC_PLATFORM).unwrap();
+            let platform_path = matches.get_one::<PathBuf>(ROC_PLATFORM).unwrap();
             let output_path = matches.get_one::<PathBuf>(INIT_DIR).unwrap();
+
+            let backend = CodeGenBackend::Llvm(LlvmBackendMode::BinaryGlue);
 
             if !output_path.exists() || output_path.is_dir() {
                 // TODO: implement
-                eprintln!("This feature is currently being implemented");
-                Ok(0)
+                roc_init::generate(platform_path, output_path, backend)
             } else {
                 eprintln!("`roc init` must be given a directory to output into, because the init might generate multiple files.");
 
