@@ -456,6 +456,7 @@ mod test_snapshots {
         pass/record_builder.expr,
         pass/record_builder_ignored_fields.expr,
         pass/record_destructure_def.expr,
+        pass/record_destructure_spread.expr,
         pass/record_func_type_decl.expr,
         pass/record_type_with_function.expr,
         pass/record_update.expr,
