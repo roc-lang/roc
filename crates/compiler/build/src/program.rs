@@ -872,7 +872,7 @@ fn build_loaded_file<'a>(
 
     let built_host_opt =
         // Not sure if this is correct for all calls with LinkType::Dylib...
-        if link_type == LinkType::Dylib || target == Target::Wasm32 {
+        if link_type == LinkType::None || link_type == LinkType::Dylib || target == Target::Wasm32 {
             BuiltHostOpt::None
         } else {
             let prebuilt_host = determine_built_host_path(&platform_main_roc_path, target, build_host_requested, link_type, linking_strategy, suppress_build_host_warning);
