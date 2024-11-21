@@ -14656,6 +14656,169 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
+        try_in_bare_statement,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../crates/cli/tests/test-projects/test-platform-effects-zig/main.roc" }
+
+            import pf.Effect
+
+            validateNum = \num ->
+                if num > 5 then
+                    Ok {}
+                else
+                    Err TooBig
+
+            main! = \{} ->
+                Effect.putLine! "hello"
+
+                # this returns {}, so it's ignored
+                try validateNum 10
+
+                # this returns a value, so we are incorrectly
+                # dropping the parsed value
+                try List.get [1, 2, 3] 5
+
+                Ok {}
+            "#
+        ),
+        @r###"
+        ── IGNORED RESULT in /code/proj/Main.roc ───────────────────────────────────────
+        
+        The result of this expression is ignored:
+        
+        19│      try List.get [1, 2, 3] 5
+                 ^^^^^^^^^^^^^^^^^^^^^^^^
+        
+        Standalone statements are required to produce an empty record, but the
+        type of this one is:
+        
+            Num *
+        
+        If you still want to ignore it, assign it to `_`, like this:
+        
+            _ = File.delete! "data.json"
+        "###
+    );
+
+    test_report!(
+        try_with_ignored_output,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../crates/cli/tests/test-projects/test-platform-effects-zig/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                Effect.putLine! "hello"
+
+                # not ignored, warning
+                try List.get [1, 2, 3] 5
+
+                # ignored, OK
+                _ = try List.get [1, 2, 3] 5
+                _ignored = try List.get [1, 2, 3] 5
+
+                Ok {}
+            "#
+        ),
+        @r###"
+        ── IGNORED RESULT in /code/proj/Main.roc ───────────────────────────────────────
+        
+        The result of this expression is ignored:
+        
+        9│      try List.get [1, 2, 3] 5
+                ^^^^^^^^^^^^^^^^^^^^^^^^
+        
+        Standalone statements are required to produce an empty record, but the
+        type of this one is:
+        
+            Num *
+        
+        If you still want to ignore it, assign it to `_`, like this:
+        
+            _ = File.delete! "data.json"
+        "###
+    );
+
+    test_report!(
+        no_early_return_in_bare_statement,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../crates/cli/tests/test-projects/test-platform-effects-zig/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                Effect.putLine! "hello"
+
+                Num.toStr 123
+
+                Ok {}
+            "#
+        ),
+        @r#"
+    ── IGNORED RESULT in /code/proj/Main.roc ───────────────────────────────────────
+
+    The result of this call to `Num.toStr` is ignored:
+
+    8│      Num.toStr 123
+            ^^^^^^^^^
+
+    Standalone statements are required to produce an empty record, but the
+    type of this one is:
+
+        Str
+
+    If you still want to ignore it, assign it to `_`, like this:
+
+        _ = File.delete! "data.json"
+
+    ── LEFTOVER STATEMENT in /code/proj/Main.roc ───────────────────────────────────
+
+    This statement does not produce any effects:
+
+    8│      Num.toStr 123
+            ^^^^^^^^^^^^^
+
+    Standalone statements are only useful if they call effectful
+    functions.
+
+    Did you forget to use its result? If not, feel free to remove it.
+    "#
+    );
+
+    test_report!(
+        no_early_return_in_ignored_statement,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../crates/cli/tests/test-projects/test-platform-effects-zig/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                Effect.putLine! "hello"
+
+                _ignored = Num.toStr 123
+
+                Ok {}
+            "#
+        ),
+        @r"
+    ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
+
+    This assignment doesn't introduce any new variables:
+
+    8│      _ignored = Num.toStr 123
+            ^^^^^^^^
+
+    Since it doesn't call any effectful functions, this assignment cannot
+    affect the program's behavior. If you don't need to use the value on
+    the right-hand side, consider removing the assignment.
+    "
+    );
+
+    test_report!(
         leftover_statement,
         indoc!(
             r#"
