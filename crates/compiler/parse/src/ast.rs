@@ -1687,6 +1687,10 @@ pub enum Pattern<'a> {
     /// In practice, these patterns will always be Identifier
     RecordDestructure(Collection<'a, Loc<Pattern<'a>>>),
 
+    /// A record spread pattern ".."
+    /// Can only occur inside of a [Pattern::Record]
+    RecordRest(Option<(&'a [CommentOrNewline<'a>])>),
+
     /// A required field pattern, e.g. { x: Just 0 } -> ...
     /// Can only occur inside of a RecordDestructure
     RequiredField(&'a str, &'a Loc<Pattern<'a>>),
@@ -1782,6 +1786,13 @@ impl<'a> Pattern<'a> {
                 } else {
                     false
                 }
+            }
+            RecordRest(pattern_as) => match other {
+                RecordRest(other_pattern_as) => match (pattern_as, other_pattern_as) {
+                    (Some((_, a)), Some((_, b))) => a.equivalent(b),
+                    _ => false,
+                },
+                _ => false,
             }
             RequiredField(x, inner_x) => {
                 if let RequiredField(y, inner_y) = other {

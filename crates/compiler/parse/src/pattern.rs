@@ -475,18 +475,39 @@ fn lowercase_ident_pattern<'a>() -> impl Parser<'a, &'a str, EPattern<'a>> {
 
 #[inline(always)]
 fn record_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, PRecord<'a>> {
-    map(record_pattern_fields(), Pattern::RecordDestructure)
+    map(
+        collection_trailing_sep_e(
+            byte(b'{', PRecord::Open),
+            record_element_pattern(),
+            byte(b',', PRecord::End),
+            byte(b'}', PRecord::End),
+            Pattern::SpaceBefore,
+        ),
+        Pattern::RecordDestructure
+    )
 }
 
-pub fn record_pattern_fields<'a>() -> impl Parser<'a, Collection<'a, Loc<Pattern<'a>>>, PRecord<'a>>
-{
-    collection_trailing_sep_e(
-        byte(b'{', PRecord::Open),
-        record_pattern_field(),
-        byte(b',', PRecord::End),
-        byte(b'}', PRecord::End),
-        Pattern::SpaceBefore,
+fn record_element_pattern<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> {
+    one_of!(
+        three_record_rest_pattern_error(),
+        record_rest_pattern(),
+        record_pattern_fields(),
     )
+}
+
+fn three_record_rest_pattern_error<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> {
+    fail_when(PRecord::Rest, loc(three_bytes(b'.', b'.', b'.', PRecord::Rest)))
+}
+
+fn record_rest_pattern<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> {
+    move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
+        let (_, loc_word, state) =
+            loc(two_bytes(b'.', b'.', PRecord::Open)).parse(arena, state, min_indent)?;
+
+        let no_as = Loc::at(loc_word.region, Pattern::RecordRest(None));
+
+        Ok((MadeProgress, no_as, state))
+    }
 }
 
 fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> {
