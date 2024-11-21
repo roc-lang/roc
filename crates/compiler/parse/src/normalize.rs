@@ -3,6 +3,7 @@ use bumpalo::Bump;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
 
+use crate::ast::{SpacesAfter, Stmt};
 use crate::{
     ast::{
         AbilityImpls, AbilityMember, AssignedField, Collection, Defs, Expr, FullAst, Header,
@@ -109,11 +110,31 @@ impl<'a, V: Normalize<'a>> Normalize<'a> for SpacesBefore<'a, V> {
     }
 }
 
+impl<'a, V: Normalize<'a>> Normalize<'a> for SpacesAfter<'a, V> {
+    fn normalize(&self, arena: &'a Bump) -> Self {
+        SpacesAfter {
+            item: self.item.normalize(arena),
+            after: &[],
+        }
+    }
+}
+
 impl<'a> Normalize<'a> for FullAst<'a> {
     fn normalize(&self, arena: &'a Bump) -> Self {
         FullAst {
             header: self.header.normalize(arena),
-            defs: self.defs.normalize(arena),
+            stmts: self.stmts.normalize(arena),
+        }
+    }
+}
+
+impl<'a> Normalize<'a> for Stmt<'a> {
+    fn normalize(&self, arena: &'a Bump) -> Self {
+        match self {
+            Stmt::Expr(expr) => Stmt::Expr(expr.normalize(arena)),
+            Stmt::Backpassing(a, b) => Stmt::Backpassing(a.normalize(arena), b.normalize(arena)),
+            Stmt::TypeDef(type_def) => Stmt::TypeDef(type_def.normalize(arena)),
+            Stmt::ValueDef(value_def) => Stmt::ValueDef(value_def.normalize(arena)),
         }
     }
 }
@@ -730,6 +751,7 @@ impl<'a> Normalize<'a> for Expr<'a> {
 
                 Expr::Defs(arena.alloc(defs), arena.alloc(b.normalize(arena)))
             }
+            Expr::Stmts(stmts) => Expr::Stmts(stmts.normalize(arena)),
             Expr::Backpassing(a, b, c) => Expr::Backpassing(
                 arena.alloc(a.normalize(arena)),
                 arena.alloc(b.normalize(arena)),

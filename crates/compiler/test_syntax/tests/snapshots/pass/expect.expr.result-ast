@@ -1,21 +1,7 @@
 SpaceAfter(
-    Defs(
-        Defs {
-            tags: [
-                EitherIndex(2147483648),
-            ],
-            regions: [
-                @0-13,
-            ],
-            space_before: [
-                Slice { start: 0, length: 0 },
-            ],
-            space_after: [
-                Slice { start: 0, length: 0 },
-            ],
-            spaces: [],
-            type_defs: [],
-            value_defs: [
+    Stmts(
+        [
+            @0-13 ValueDef(
                 Expect {
                     condition: @7-13 BinOps(
                         [
@@ -32,17 +18,19 @@ SpaceAfter(
                     ),
                     preceding_comment: …,
                 },
-            ],
-        },
-        @15-16 SpaceBefore(
-            Num(
-                "4",
             ),
-            [
-                Newline,
-                Newline,
-            ],
-        ),
+            SpacesBefore(
+                [
+                    Newline,
+                    Newline,
+                ],
+                @15-16 Expr(
+                    Num(
+                        "4",
+                    ),
+                ),
+            ),
+        ],
     ),
     [
         Newline,

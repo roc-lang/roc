@@ -50,10 +50,9 @@ use roc_mono::reset_reuse;
 use roc_mono::{drop_specialization, inc_dec};
 use roc_packaging::cache::RocCacheDir;
 use roc_parse::ast::{self, CommentOrNewline, ExtractSpaces, Spaced, ValueDef};
-use roc_parse::header::parse_module_defs;
+use roc_parse::header::parse_full_ast;
 use roc_parse::header::{
-    self, AppHeader, ExposedName, HeaderType, ImportsKeywordItem, PackageEntry, PackageHeader,
-    PlatformHeader, To,
+    self, AppHeader, ExposedName, HeaderType, PackageEntry, PackageHeader, PlatformHeader, To,
 };
 use roc_parse::parser::{FileError, SourceError, SyntaxError};
 use roc_problem::Severity;
@@ -3581,7 +3580,6 @@ fn load_builtin_module_help<'a>(
                     opt_params: header.params,
                 },
                 module_comments: comments,
-                header_imports: header.interface_imports,
             };
 
             (info, parse_state)
@@ -3869,7 +3867,6 @@ fn parse_header<'a>(
                     opt_params: header.params,
                 },
                 module_comments: comments,
-                header_imports: header.interface_imports,
             };
 
             let (module_id, _, header) =
@@ -3898,7 +3895,6 @@ fn parse_header<'a>(
                     exposes: unspace(arena, header.exposes.item.items),
                 },
                 module_comments: comments,
-                header_imports: Some(header.imports),
             };
 
             let (module_id, _, header) =
@@ -3985,7 +3981,6 @@ fn parse_header<'a>(
                     to_platform,
                 },
                 module_comments: comments,
-                header_imports: header.old_imports,
             };
 
             let (module_id, _, resolved_header) =
@@ -4240,7 +4235,6 @@ struct HeaderInfo<'a> {
     packages: &'a [Loc<PackageEntry<'a>>],
     header_type: HeaderType<'a>,
     module_comments: &'a [CommentOrNewline<'a>],
-    header_imports: Option<ImportsKeywordItem<'a>>,
 }
 
 fn build_header<'a>(
@@ -4256,7 +4250,6 @@ fn build_header<'a>(
         packages,
         header_type,
         module_comments: header_comments,
-        header_imports,
     } = info;
 
     let declared_name: ModuleName = match &header_type {
@@ -4307,7 +4300,6 @@ fn build_header<'a>(
             header_comments,
             module_timing,
             opt_shorthand,
-            header_imports,
         },
     ))
 }
@@ -4982,7 +4974,6 @@ fn build_package_header<'a>(
         packages,
         header_type,
         module_comments: comments,
-        header_imports: None,
     };
 
     build_header(info, parse_state, module_ids, module_timing)
@@ -5038,7 +5029,6 @@ fn build_platform_header<'a>(
         packages,
         header_type,
         module_comments: comments,
-        header_imports: Some(header.imports),
     };
 
     build_header(info, parse_state, module_ids, module_timing)
@@ -5079,7 +5069,6 @@ fn canonicalize_and_constrain<'a>(
     // _before has an underscore because it's unused in --release builds
     let _before = roc_types::types::get_type_clone_count();
 
-    let parsed_defs_for_docs = parsed_defs.clone();
     let parsed_defs = arena.alloc(parsed_defs);
 
     let mut var_store = VarStore::default();
@@ -5094,7 +5083,7 @@ fn canonicalize_and_constrain<'a>(
 
     let mut module_output = canonicalize_module_defs(
         arena,
-        parsed_defs,
+        *parsed_defs,
         &header_type,
         module_id,
         &*arena.alloc(module_path.to_string_lossy()),
@@ -5141,7 +5130,7 @@ fn canonicalize_and_constrain<'a>(
                 module_id,
                 arena.alloc(qualified_module_ids.clone().into_module_ids()),
                 module_name.into(),
-                &parsed_defs_for_docs,
+                parsed_defs,
                 exposed_module_ids,
                 module_output.exposed_symbols.clone(),
                 parsed.header_comments,
@@ -5276,16 +5265,12 @@ fn parse<'a>(
     let mut module_timing = header.module_timing;
     let parse_start = Instant::now();
     let source = header.parse_state.original_bytes();
-    let parse_state = header.parse_state;
 
-    let header_import_defs =
-        roc_parse::ast::Header::header_imports_to_defs(arena, header.header_imports);
-
-    let parsed_defs = match parse_module_defs(arena, parse_state.clone(), header_import_defs) {
-        Ok(success) => success,
+    let parsed_defs = match parse_full_ast(arena, roc_parse::state::State::new(source)) {
+        Ok(success) => success.stmts,
         Err(fail) => {
             return Err(LoadingProblem::ParsingFailed(
-                fail.into_file_error(header.module_path, &parse_state),
+                fail.into_file_error(header.module_path, &header.parse_state),
             ));
         }
     };
@@ -5293,6 +5278,7 @@ fn parse<'a>(
     // SAFETY: By this point we've already incrementally verified that there
     // are no UTF-8 errors in these bytes. If there had been any UTF-8 errors,
     // we'd have bailed out before now.
+    debug_assert!(std::str::from_utf8(source).is_ok());
     let src = unsafe { from_utf8_unchecked(source) };
 
     // Record the parse end time once, to avoid checking the time a second time

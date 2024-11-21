@@ -1,28 +1,8 @@
 SpaceBefore(
     SpaceAfter(
-        Defs(
-            Defs {
-                tags: [
-                    EitherIndex(2147483648),
-                    EitherIndex(2147483649),
-                ],
-                regions: [
-                    @18-23,
-                    @24-29,
-                ],
-                space_before: [
-                    Slice { start: 0, length: 0 },
-                    Slice { start: 0, length: 1 },
-                ],
-                space_after: [
-                    Slice { start: 0, length: 0 },
-                    Slice { start: 1, length: 0 },
-                ],
-                spaces: [
-                    Newline,
-                ],
-                type_defs: [],
-                value_defs: [
+        Stmts(
+            [
+                @18-23 ValueDef(
                     Body(
                         @18-19 Identifier {
                             ident: "x",
@@ -31,25 +11,34 @@ SpaceBefore(
                             "5",
                         ),
                     ),
-                    Body(
-                        @24-25 Identifier {
-                            ident: "y",
-                        },
-                        @28-29 Num(
-                            "6",
+                ),
+                SpacesBefore(
+                    [
+                        Newline,
+                    ],
+                    @24-29 ValueDef(
+                        Body(
+                            @24-25 Identifier {
+                                ident: "y",
+                            },
+                            @28-29 Num(
+                                "6",
+                            ),
                         ),
                     ),
-                ],
-            },
-            @31-33 SpaceBefore(
-                Num(
-                    "42",
                 ),
-                [
-                    Newline,
-                    Newline,
-                ],
-            ),
+                SpacesBefore(
+                    [
+                        Newline,
+                        Newline,
+                    ],
+                    @31-33 Expr(
+                        Num(
+                            "42",
+                        ),
+                    ),
+                ),
+            ],
         ),
         [
             Newline,

@@ -1,20 +1,7 @@
 SpaceAfter(
-    Defs(
-        Defs {
-            tags: [
-                EitherIndex(0),
-            ],
-            regions: [
-                @0-43,
-            ],
-            space_before: [
-                Slice { start: 0, length: 0 },
-            ],
-            space_after: [
-                Slice { start: 0, length: 0 },
-            ],
-            spaces: [],
-            type_defs: [
+    Stmts(
+        [
+            @0-43 TypeDef(
                 Ability {
                     header: TypeHeader {
                         name: @0-4 "Hash",
@@ -50,18 +37,19 @@ SpaceAfter(
                         },
                     ],
                 },
-            ],
-            value_defs: [],
-        },
-        @45-46 SpaceBefore(
-            Num(
-                "1",
             ),
-            [
-                Newline,
-                Newline,
-            ],
-        ),
+            SpacesBefore(
+                [
+                    Newline,
+                    Newline,
+                ],
+                @45-46 Expr(
+                    Num(
+                        "1",
+                    ),
+                ),
+            ),
+        ],
     ),
     [
         Newline,

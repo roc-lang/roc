@@ -1,21 +1,7 @@
 SpaceAfter(
-    Defs(
-        Defs {
-            tags: [
-                EitherIndex(2147483648),
-            ],
-            regions: [
-                @0-22,
-            ],
-            space_before: [
-                Slice { start: 0, length: 0 },
-            ],
-            space_after: [
-                Slice { start: 0, length: 0 },
-            ],
-            spaces: [],
-            type_defs: [],
-            value_defs: [
+    Stmts(
+        [
+            @0-22 ValueDef(
                 Body(
                     @0-1 Identifier {
                         ident: "x",
@@ -59,17 +45,19 @@ SpaceAfter(
                         Space,
                     ),
                 ),
-            ],
-        },
-        @23-24 SpaceBefore(
-            Var {
-                module_name: "",
-                ident: "x",
-            },
-            [
-                Newline,
-            ],
-        ),
+            ),
+            SpacesBefore(
+                [
+                    Newline,
+                ],
+                @23-24 Expr(
+                    Var {
+                        module_name: "",
+                        ident: "x",
+                    },
+                ),
+            ),
+        ],
     ),
     [
         Newline,

@@ -1,29 +1,41 @@
 SpaceAfter(
-    DbgStmt(
-        @4-16 Tuple(
-            [
-                @5-6 Num(
-                    "5",
-                ),
-                @12-15 SpaceBefore(
-                    Num(
-                        "666",
-                    ),
+    Stmts(
+        [
+            @0-16 Expr(
+                Apply(
+                    @0-3 Dbg,
                     [
-                        Newline,
+                        @4-16 Tuple(
+                            [
+                                @5-6 Num(
+                                    "5",
+                                ),
+                                @12-15 SpaceBefore(
+                                    Num(
+                                        "666",
+                                    ),
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                            ],
+                        ),
                     ],
+                    Space,
                 ),
-            ],
-        ),
-        @18-19 SpaceBefore(
-            Num(
-                "4",
             ),
-            [
-                Newline,
-                Newline,
-            ],
-        ),
+            SpacesBefore(
+                [
+                    Newline,
+                    Newline,
+                ],
+                @18-19 Expr(
+                    Num(
+                        "4",
+                    ),
+                ),
+            ),
+        ],
     ),
     [
         Newline,

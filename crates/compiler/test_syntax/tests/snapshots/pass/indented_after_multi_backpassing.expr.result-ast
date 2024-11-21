@@ -1,21 +1,7 @@
 SpaceAfter(
-    Defs(
-        Defs {
-            tags: [
-                EitherIndex(2147483648),
-            ],
-            regions: [
-                @0-288,
-            ],
-            space_before: [
-                Slice { start: 0, length: 0 },
-            ],
-            space_after: [
-                Slice { start: 0, length: 0 },
-            ],
-            spaces: [],
-            type_defs: [],
-            value_defs: [
+    Stmts(
+        [
+            @0-288 ValueDef(
                 Body(
                     @0-19 Identifier {
                         ident: "fillBucketsFromData",
@@ -33,61 +19,50 @@ SpaceAfter(
                             },
                         ],
                         @53-288 SpaceBefore(
-                            Backpassing(
+                            Stmts(
                                 [
-                                    @53-61 Identifier {
-                                        ident: "buckets1",
-                                    },
-                                    @63-71 Tuple(
+                                    @53-118 Backpassing(
                                         [
-                                            @64-67 Identifier {
-                                                ident: "key",
+                                            @53-61 Identifier {
+                                                ident: "buckets1",
                                             },
-                                            @69-70 Underscore(
-                                                "",
+                                            @63-71 Tuple(
+                                                [
+                                                    @64-67 Identifier {
+                                                        ident: "key",
+                                                    },
+                                                    @69-70 Underscore(
+                                                        "",
+                                                    ),
+                                                ],
                                             ),
+                                            @73-82 Identifier {
+                                                ident: "dataIndex",
+                                            },
                                         ],
+                                        @86-118 Apply(
+                                            @86-104 Var {
+                                                module_name: "List",
+                                                ident: "walkWithIndex",
+                                            },
+                                            [
+                                                @105-109 Var {
+                                                    module_name: "",
+                                                    ident: "data",
+                                                },
+                                                @110-118 Var {
+                                                    module_name: "",
+                                                    ident: "buckets0",
+                                                },
+                                            ],
+                                            Space,
+                                        ),
                                     ),
-                                    @73-82 Identifier {
-                                        ident: "dataIndex",
-                                    },
-                                ],
-                                @86-118 Apply(
-                                    @86-104 Var {
-                                        module_name: "List",
-                                        ident: "walkWithIndex",
-                                    },
-                                    [
-                                        @105-109 Var {
-                                            module_name: "",
-                                            ident: "data",
-                                        },
-                                        @110-118 Var {
-                                            module_name: "",
-                                            ident: "buckets0",
-                                        },
-                                    ],
-                                    Space,
-                                ),
-                                @123-288 Defs(
-                                    Defs {
-                                        tags: [
-                                            EitherIndex(2147483648),
-                                        ],
-                                        regions: [
-                                            @123-192,
-                                        ],
-                                        space_before: [
-                                            Slice { start: 0, length: 1 },
-                                        ],
-                                        space_after: [
-                                            Slice { start: 1, length: 0 },
-                                        ],
-                                        spaces: [
+                                    SpacesBefore(
+                                        [
                                             Newline,
                                         ],
-                                        type_defs: [],
-                                        value_defs: [
+                                        @123-192 ValueDef(
                                             Body(
                                                 @123-156 Tuple(
                                                     [
@@ -121,55 +96,57 @@ SpaceAfter(
                                                     Space,
                                                 ),
                                             ),
-                                        ],
-                                    },
-                                    @197-288 SpaceBefore(
-                                        Apply(
-                                            @197-212 Var {
-                                                module_name: "",
-                                                ident: "placeAndShiftUp",
-                                            },
-                                            [
-                                                @213-221 Var {
-                                                    module_name: "",
-                                                    ident: "buckets1",
-                                                },
-                                                @222-276 Record(
-                                                    [
-                                                        @224-242 LabelOnly(
-                                                            @224-242 "distAndFingerprint",
-                                                        ),
-                                                        @244-274 RequiredValue(
-                                                            @244-253 "dataIndex",
-                                                            [],
-                                                            @255-274 Apply(
-                                                                @255-264 Var {
-                                                                    module_name: "Num",
-                                                                    ident: "toU32",
-                                                                },
-                                                                [
-                                                                    @265-274 Var {
-                                                                        module_name: "",
-                                                                        ident: "dataIndex",
-                                                                    },
-                                                                ],
-                                                                Space,
-                                                            ),
-                                                        ),
-                                                    ],
-                                                ),
-                                                @277-288 Var {
-                                                    module_name: "",
-                                                    ident: "bucketIndex",
-                                                },
-                                            ],
-                                            Space,
                                         ),
+                                    ),
+                                    SpacesBefore(
                                         [
                                             Newline,
                                         ],
+                                        @197-288 Expr(
+                                            Apply(
+                                                @197-212 Var {
+                                                    module_name: "",
+                                                    ident: "placeAndShiftUp",
+                                                },
+                                                [
+                                                    @213-221 Var {
+                                                        module_name: "",
+                                                        ident: "buckets1",
+                                                    },
+                                                    @222-276 Record(
+                                                        [
+                                                            @224-242 LabelOnly(
+                                                                @224-242 "distAndFingerprint",
+                                                            ),
+                                                            @244-274 RequiredValue(
+                                                                @244-253 "dataIndex",
+                                                                [],
+                                                                @255-274 Apply(
+                                                                    @255-264 Var {
+                                                                        module_name: "Num",
+                                                                        ident: "toU32",
+                                                                    },
+                                                                    [
+                                                                        @265-274 Var {
+                                                                            module_name: "",
+                                                                            ident: "dataIndex",
+                                                                        },
+                                                                    ],
+                                                                    Space,
+                                                                ),
+                                                            ),
+                                                        ],
+                                                    ),
+                                                    @277-288 Var {
+                                                        module_name: "",
+                                                        ident: "bucketIndex",
+                                                    },
+                                                ],
+                                                Space,
+                                            ),
+                                        ),
                                     ),
-                                ),
+                                ],
                             ),
                             [
                                 Newline,
@@ -177,18 +154,20 @@ SpaceAfter(
                         ),
                     ),
                 ),
-            ],
-        },
-        @290-293 SpaceBefore(
-            Var {
-                module_name: "",
-                ident: "foo",
-            },
-            [
-                Newline,
-                Newline,
-            ],
-        ),
+            ),
+            SpacesBefore(
+                [
+                    Newline,
+                    Newline,
+                ],
+                @290-293 Expr(
+                    Var {
+                        module_name: "",
+                        ident: "foo",
+                    },
+                ),
+            ),
+        ],
     ),
     [
         Newline,

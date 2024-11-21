@@ -1,25 +1,11 @@
-Defs(
-    Defs {
-        tags: [
-            EitherIndex(2147483648),
-        ],
-        regions: [
-            @0-89,
-        ],
-        space_before: [
-            Slice { start: 0, length: 0 },
-        ],
-        space_after: [
-            Slice { start: 0, length: 0 },
-        ],
-        spaces: [],
-        type_defs: [],
-        value_defs: [
-            AnnotatedBody {
-                ann_pattern: @0-5 Identifier {
+Stmts(
+    [
+        @0-44 ValueDef(
+            Annotation(
+                @0-5 Identifier {
                     ident: "table",
                 },
-                ann_type: @8-44 Function(
+                @8-44 Function(
                     [
                         @8-35 Record {
                             fields: [
@@ -53,44 +39,52 @@ Defs(
                         [],
                     ),
                 ),
-                lines_between: [
-                    Newline,
-                ],
-                body_pattern: @45-50 Identifier {
-                    ident: "table",
-                },
-                body_expr: @53-89 Closure(
-                    [
-                        @54-62 RecordDestructure(
-                            [
-                                @55-61 Identifier {
-                                    ident: "height",
-                                },
-                            ],
-                        ),
-                    ],
-                    @66-89 Apply(
-                        @66-71 Crash,
+            ),
+        ),
+        SpacesBefore(
+            [
+                Newline,
+            ],
+            @45-89 ValueDef(
+                Body(
+                    @45-50 Identifier {
+                        ident: "table",
+                    },
+                    @53-89 Closure(
                         [
-                            @72-89 Str(
-                                PlainLine(
-                                    "not implemented",
-                                ),
+                            @54-62 RecordDestructure(
+                                [
+                                    @55-61 Identifier {
+                                        ident: "height",
+                                    },
+                                ],
                             ),
                         ],
-                        Space,
+                        @66-89 Apply(
+                            @66-71 Crash,
+                            [
+                                @72-89 Str(
+                                    PlainLine(
+                                        "not implemented",
+                                    ),
+                                ),
+                            ],
+                            Space,
+                        ),
                     ),
                 ),
-            },
-        ],
-    },
-    @90-95 SpaceBefore(
-        Var {
-            module_name: "",
-            ident: "table",
-        },
-        [
-            Newline,
-        ],
-    ),
+            ),
+        ),
+        SpacesBefore(
+            [
+                Newline,
+            ],
+            @90-95 Expr(
+                Var {
+                    module_name: "",
+                    ident: "table",
+                },
+            ),
+        ),
+    ],
 )

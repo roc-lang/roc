@@ -187,7 +187,6 @@ mod test_snapshots {
         fail/ability_first_demand_not_indented_enough.expr,
         fail/ability_non_signature_expression.expr,
         fail/alias_or_opaque_fail.expr,
-        fail/backpassing_after_annotation.expr,
         fail/bound_variable.expr,
         fail/comment_with_tab.expr,
         fail/def_missing_final_expression.expr,

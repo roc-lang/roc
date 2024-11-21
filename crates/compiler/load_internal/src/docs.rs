@@ -4,7 +4,7 @@ use roc_can::scope::Scope;
 use roc_collections::VecSet;
 use roc_module::ident::ModuleName;
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
-use roc_parse::ast::{self, ExtractSpaces, TypeHeader};
+use roc_parse::ast::{self, ExtractSpaces, Stmt, TypeHeader};
 use roc_parse::ast::{AssignedField, FunctionArrow};
 use roc_parse::ast::{CommentOrNewline, TypeDef, ValueDef};
 
@@ -128,7 +128,7 @@ pub fn generate_module_docs(
     home: ModuleId,
     module_ids: &ModuleIds,
     module_name: ModuleName,
-    parsed_defs: &roc_parse::ast::Defs,
+    parsed_defs: &roc_parse::ast::TopLevelDefs<'_>,
     exposed_module_ids: &[ModuleId],
     exposed_symbols: VecSet<Symbol>,
     header_comments: &[CommentOrNewline<'_>],
@@ -181,13 +181,13 @@ fn generate_entry_docs(
     home: ModuleId,
     ident_ids: &IdentIds,
     module_ids: &ModuleIds,
-    defs: &roc_parse::ast::Defs<'_>,
+    defs: &roc_parse::ast::TopLevelDefs<'_>,
     exposed_module_ids: &[ModuleId],
     header_comments: &[CommentOrNewline<'_>],
 ) -> Vec<DocEntry> {
     use roc_parse::ast::Pattern;
 
-    let mut doc_entries = Vec::with_capacity(defs.tags.len() + 1);
+    let mut doc_entries = Vec::with_capacity(defs.item.len() + 1);
 
     if let Some(docs) = comments_or_new_lines_to_docs(header_comments) {
         doc_entries.push(DocEntry::ModuleDoc(docs));
@@ -196,8 +196,10 @@ fn generate_entry_docs(
     let mut before_comments_or_new_lines: Option<&[CommentOrNewline]> = None;
     let mut scratchpad = Vec::new();
 
-    for (index, either_index) in defs.tags.iter().enumerate() {
-        let spaces_before = &defs.spaces[defs.space_before[index].indices()];
+    let mut just_saw_annotation_for = None;
+
+    for item in defs.item.iter() {
+        let spaces_before = item.before;
 
         scratchpad.clear();
         scratchpad.extend(
@@ -210,10 +212,12 @@ fn generate_entry_docs(
 
         let docs = comments_or_new_lines_to_docs(&scratchpad);
 
-        match either_index.split() {
-            Err(value_index) => match &defs.value_defs[value_index.index()] {
+        match item.item.value {
+            Stmt::ValueDef(vd) => match vd {
                 ValueDef::Annotation(loc_pattern, loc_ann) => {
+                    just_saw_annotation_for = None;
                     if let Pattern::Identifier { ident: identifier } = loc_pattern.value {
+                        just_saw_annotation_for = Some(identifier);
                         // Check if this module exposes the def
                         if let Some(ident_id) = ident_ids.get_id(identifier) {
                             let name = identifier.to_string();
@@ -234,6 +238,7 @@ fn generate_entry_docs(
                     ann_type,
                     ..
                 } => {
+                    just_saw_annotation_for = None;
                     if let Pattern::Identifier { ident: identifier } = ann_pattern.value {
                         // Check if this module exposes the def
                         if let Some(ident_id) = ident_ids.get_id(identifier) {
@@ -251,6 +256,12 @@ fn generate_entry_docs(
 
                 ValueDef::Body(pattern, _) => {
                     if let Pattern::Identifier { ident: identifier } = pattern.value {
+                        if just_saw_annotation_for == Some(identifier) {
+                            // We already documented this def
+                            just_saw_annotation_for = None;
+                            continue;
+                        }
+                        just_saw_annotation_for = None;
                         // Check if this module exposes the def
                         if let Some(ident_id) = ident_ids.get_id(identifier) {
                             let doc_def = DocDef {
@@ -266,25 +277,31 @@ fn generate_entry_docs(
                 }
 
                 ValueDef::Dbg { .. } => {
+                    just_saw_annotation_for = None;
                     // Don't generate docs for `dbg`s
                 }
 
                 ValueDef::Expect { .. } => {
+                    just_saw_annotation_for = None;
                     // Don't generate docs for `expect`s
                 }
 
                 ValueDef::ModuleImport { .. } => {
+                    just_saw_annotation_for = None;
                     // Don't generate docs for module imports
                 }
                 ValueDef::IngestedFileImport { .. } => {
+                    just_saw_annotation_for = None;
                     // Don't generate docs for ingested file imports
                 }
 
                 ValueDef::StmtAfterExpr { .. } => {
+                    just_saw_annotation_for = None;
                     // Ignore. Canonicalization will produce an error.
                 }
 
                 ValueDef::Stmt(loc_expr) => {
+                    just_saw_annotation_for = None;
                     if let roc_parse::ast::Expr::Var {
                         ident: identifier, ..
                     } = loc_expr.value
@@ -304,7 +321,7 @@ fn generate_entry_docs(
                 }
             },
 
-            Ok(type_index) => match &defs.type_defs[type_index.index()] {
+            Stmt::TypeDef(td) => match td {
                 TypeDef::Alias {
                     header: TypeHeader { name, vars },
                     ann,
@@ -402,13 +419,11 @@ fn generate_entry_docs(
                     doc_entries.push(DocEntry::DocDef(doc_def));
                 }
             },
+            _ => {}
         }
-
-        let spaces_after = &defs.spaces[defs.space_after[index].indices()];
-        before_comments_or_new_lines = Some(spaces_after);
     }
 
-    let it = before_comments_or_new_lines.iter().flat_map(|e| e.iter());
+    let it = defs.after.iter();
 
     for detached_doc in detached_docs_from_comments_and_new_lines(it) {
         doc_entries.push(DetachedDoc(detached_doc));

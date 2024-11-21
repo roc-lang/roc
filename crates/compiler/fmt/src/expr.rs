@@ -1,6 +1,6 @@
 use crate::annotation::{except_last, is_collection_multiline, Formattable, Newlines, Parens};
 use crate::collection::{fmt_collection, Braces};
-use crate::def::fmt_defs;
+use crate::def::{fmt_defs, fmt_stmts};
 use crate::pattern::fmt_pattern;
 use crate::spaces::{
     count_leading_newlines, fmt_comments_only, fmt_spaces, fmt_spaces_no_blank_lines, NewlineAt,
@@ -10,7 +10,7 @@ use crate::Buf;
 use roc_module::called_via::{self, BinOp};
 use roc_parse::ast::{
     is_expr_suffixed, AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces,
-    Pattern, TryTarget, WhenBranch,
+    Pattern, SpacesAfter, TryTarget, WhenBranch,
 };
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_parse::ident::Accessor;
@@ -55,7 +55,7 @@ impl<'a> Formattable for Expr<'a> {
             }
 
             // These expressions always have newlines
-            Defs(_, _) | When(_, _) => true,
+            Defs(_, _) | Stmts(_) | When(_, _) => true,
 
             List(items) => is_collection_multiline(items),
 
@@ -394,6 +394,60 @@ impl<'a> Formattable for Expr<'a> {
             }
             Backpassing(loc_patterns, loc_body, loc_ret) => {
                 fmt_backpassing(buf, loc_patterns, loc_body, loc_ret, indent);
+            }
+            Stmts(stmts) => {
+                {
+                    let indent = if parens == Parens::InOperator {
+                        buf.indent(indent);
+                        buf.push('(');
+                        buf.newline();
+                        indent + INDENT
+                    } else {
+                        indent
+                    };
+
+                    // It should theoretically be impossible to *parse* an empty defs list.
+                    // (Canonicalization can remove defs later, but that hasn't happened yet!)
+                    debug_assert!(stmts.len() > 1);
+
+                    fmt_stmts(
+                        buf,
+                        &SpacesAfter {
+                            item: stmts,
+                            after: &[],
+                        },
+                        indent,
+                    );
+
+                    // match &ret.value {
+                    //     SpaceBefore(sub_expr, spaces) => {
+                    //         buf.spaces(1);
+                    //         fmt_spaces(buf, spaces.iter(), indent);
+
+                    //         buf.indent(indent);
+
+                    //         sub_expr.format_with_options(
+                    //             buf,
+                    //             Parens::NotNeeded,
+                    //             Newlines::Yes,
+                    //             indent,
+                    //         );
+                    //     }
+                    //     _ => {
+                    //         buf.ensure_ends_with_newline();
+                    //         buf.indent(indent);
+                    //         // Even if there were no defs, which theoretically should never happen,
+                    //         // still print the return value.
+                    //         ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
+                    //     }
+                    // }
+                }
+
+                if parens == Parens::InOperator {
+                    buf.ensure_ends_with_newline();
+                    buf.indent(indent);
+                    buf.push(')');
+                }
             }
             Defs(defs, ret) => {
                 {
@@ -1430,7 +1484,7 @@ fn fmt_backpassing<'a>(
     loc_ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
 }
 
-fn pattern_needs_parens_when_backpassing(pat: &Pattern) -> bool {
+pub fn pattern_needs_parens_when_backpassing(pat: &Pattern) -> bool {
     match pat {
         Pattern::Apply(_, _) => true,
         Pattern::SpaceBefore(a, _) | Pattern::SpaceAfter(a, _) => {

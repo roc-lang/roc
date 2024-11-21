@@ -13,7 +13,7 @@ use roc_module::symbol::{
 };
 use roc_mono::ir::{GlueLayouts, HostExposedLambdaSets, LambdaSetId, Proc, ProcLayout, ProcsBase};
 use roc_mono::layout::{LayoutCache, STLayoutInterner};
-use roc_parse::ast::{CommentOrNewline, Defs, TypeAnnotation};
+use roc_parse::ast::{CommentOrNewline, TopLevelDefs, TypeAnnotation};
 use roc_parse::header::{HeaderType, PackageName};
 use roc_region::all::{Loc, Region};
 use roc_solve::module::Solved;
@@ -100,7 +100,6 @@ pub(crate) struct ModuleHeader<'a> {
     pub(crate) parse_state: roc_parse::state::State<'a>,
     pub(crate) header_type: HeaderType<'a>,
     pub(crate) header_comments: &'a [CommentOrNewline<'a>],
-    pub(crate) header_imports: Option<roc_parse::header::ImportsKeywordItem<'a>>,
     pub(crate) module_timing: ModuleTiming,
     pub(crate) opt_shorthand: Option<&'a str>,
 }
@@ -197,7 +196,7 @@ pub struct ParsedModule<'a> {
     pub module_timing: ModuleTiming,
     pub deps_by_name: MutMap<PQModuleName<'a>, ModuleId>,
     pub exposed_ident_ids: IdentIds,
-    pub parsed_defs: Defs<'a>,
+    pub parsed_defs: TopLevelDefs<'a>,
     pub symbols_from_requires: Vec<(Loc<Symbol>, Loc<TypeAnnotation<'a>>)>,
     pub header_type: HeaderType<'a>,
     pub header_comments: &'a [CommentOrNewline<'a>],

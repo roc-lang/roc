@@ -1,7 +1,7 @@
 use crate::ast;
-use crate::ast::Defs;
 use crate::ast::Header;
 use crate::ast::SpacesBefore;
+use crate::ast::TopLevelDefs;
 use crate::header::parse_module_defs;
 use crate::parser::SourceError;
 use crate::parser::SyntaxError;
@@ -32,10 +32,13 @@ pub fn parse_loc_with<'a>(
     }
 }
 
-pub fn parse_defs_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Defs<'a>, SyntaxError<'a>> {
+pub fn parse_defs_with<'a>(
+    arena: &'a Bump,
+    input: &'a str,
+) -> Result<TopLevelDefs<'a>, SyntaxError<'a>> {
     let state = State::new(input.as_bytes());
 
-    parse_module_defs(arena, state, Defs::default())
+    parse_module_defs(arena, state)
 }
 
 pub fn parse_header_with<'a>(

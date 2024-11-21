@@ -1,68 +1,45 @@
-Defs {
-    tags: [
-        EitherIndex(2147483648),
-    ],
-    regions: [
-        @0-24,
-    ],
-    space_before: [
-        Slice { start: 0, length: 0 },
-    ],
-    space_after: [
-        Slice { start: 0, length: 1 },
-    ],
-    spaces: [
-        Newline,
-    ],
-    type_defs: [],
-    value_defs: [
-        Body(
-            @0-4 Identifier {
-                ident: "main",
-            },
-            @11-24 SpaceBefore(
-                Defs(
-                    Defs {
-                        tags: [
-                            EitherIndex(2147483648),
-                        ],
-                        regions: [
-                            @11-17,
-                        ],
-                        space_before: [
-                            Slice { start: 0, length: 0 },
-                        ],
-                        space_after: [
-                            Slice { start: 0, length: 0 },
-                        ],
-                        spaces: [],
-                        type_defs: [],
-                        value_defs: [
-                            Body(
-                                @11-12 Identifier {
-                                    ident: "i",
-                                },
-                                @15-17 Num(
-                                    "64",
+SpacesAfter(
+    [
+        @0-24 ValueDef(
+            Body(
+                @0-4 Identifier {
+                    ident: "main",
+                },
+                @11-24 SpaceBefore(
+                    Stmts(
+                        [
+                            @11-17 ValueDef(
+                                Body(
+                                    @11-12 Identifier {
+                                        ident: "i",
+                                    },
+                                    @15-17 Num(
+                                        "64",
+                                    ),
+                                ),
+                            ),
+                            SpacesBefore(
+                                [
+                                    Newline,
+                                    Newline,
+                                ],
+                                @23-24 Expr(
+                                    Var {
+                                        module_name: "",
+                                        ident: "i",
+                                    },
                                 ),
                             ),
                         ],
-                    },
-                    @23-24 SpaceBefore(
-                        Var {
-                            module_name: "",
-                            ident: "i",
-                        },
-                        [
-                            Newline,
-                            Newline,
-                        ],
                     ),
+                    [
+                        Newline,
+                    ],
                 ),
-                [
-                    Newline,
-                ],
             ),
         ),
     ],
-}
+    [
+        Newline,
+    ],
+)

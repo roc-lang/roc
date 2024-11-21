@@ -1,32 +1,29 @@
-SpacesBefore {
-    before: [],
-    item: App(
-        AppHeader {
-            before_provides: [],
-            provides: [
-                @5-14 ExposedName(
-                    "quicksort",
+App(
+    AppHeader {
+        before_provides: [],
+        provides: [
+            @5-14 ExposedName(
+                "quicksort",
+            ),
+            @16-21 ExposedName(
+                "Flags",
+            ),
+            @23-28 ExposedName(
+                "Model",
+            ),
+        ],
+        before_packages: [],
+        packages: @30-50 [
+            @32-48 PackageEntry {
+                shorthand: "pf",
+                spaces_after_shorthand: [],
+                platform_marker: None,
+                package_name: @36-48 PackageName(
+                    "./platform",
                 ),
-                @16-21 ExposedName(
-                    "Flags",
-                ),
-                @23-28 ExposedName(
-                    "Model",
-                ),
-            ],
-            before_packages: [],
-            packages: @30-50 [
-                @32-48 PackageEntry {
-                    shorthand: "pf",
-                    spaces_after_shorthand: [],
-                    platform_marker: None,
-                    package_name: @36-48 PackageName(
-                        "./platform",
-                    ),
-                },
-            ],
-            old_imports: None,
-            old_provides_to_new_package: None,
-        },
-    ),
-}
+            },
+        ],
+        old_imports: None,
+        old_provides_to_new_package: None,
+    },
+)

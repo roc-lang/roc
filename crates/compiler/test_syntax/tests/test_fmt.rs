@@ -4,10 +4,10 @@ extern crate indoc;
 #[cfg(test)]
 mod test_fmt {
     use bumpalo::Bump;
-    use roc_fmt::def::fmt_defs;
+    use roc_fmt::def::fmt_stmts;
     use roc_fmt::header::fmt_header;
     use roc_fmt::Buf;
-    use roc_parse::ast::{Defs, Header, SpacesBefore};
+    use roc_parse::ast::{Header, SpacesBefore};
     use roc_parse::header::{self, parse_module_defs};
     use roc_parse::state::State;
     use roc_test_utils::assert_multiline_str_eq;
@@ -38,9 +38,9 @@ mod test_fmt {
     ) {
         fmt_header(buf, header);
 
-        match parse_module_defs(arena, state, Defs::default()) {
-            Ok(loc_defs) => {
-                fmt_defs(buf, &loc_defs, 0);
+        match parse_module_defs(arena, state) {
+            Ok(stmts) => {
+                fmt_stmts(buf, &stmts, 0);
             }
             Err(error) => {
                 let src = if src.len() > 1000 {

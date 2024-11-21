@@ -1,49 +1,55 @@
 SpaceAfter(
-    Backpassing(
+    Stmts(
         [
-            @0-1 Identifier {
-                ident: "x",
-            },
-            @3-4 Identifier {
-                ident: "y",
-            },
-        ],
-        @8-23 Apply(
-            @8-17 Var {
-                module_name: "List",
-                ident: "map2",
-            },
-            [
-                @18-20 List(
-                    [],
-                ),
-                @21-23 List(
-                    [],
-                ),
-            ],
-            Space,
-        ),
-        @25-30 SpaceBefore(
-            BinOps(
+            @0-23 Backpassing(
                 [
-                    (
-                        @25-26 Var {
-                            module_name: "",
-                            ident: "x",
-                        },
-                        @27-28 Plus,
-                    ),
+                    @0-1 Identifier {
+                        ident: "x",
+                    },
+                    @3-4 Identifier {
+                        ident: "y",
+                    },
                 ],
-                @29-30 Var {
-                    module_name: "",
-                    ident: "y",
-                },
+                @8-23 Apply(
+                    @8-17 Var {
+                        module_name: "List",
+                        ident: "map2",
+                    },
+                    [
+                        @18-20 List(
+                            [],
+                        ),
+                        @21-23 List(
+                            [],
+                        ),
+                    ],
+                    Space,
+                ),
             ),
-            [
-                Newline,
-                Newline,
-            ],
-        ),
+            SpacesBefore(
+                [
+                    Newline,
+                    Newline,
+                ],
+                @25-30 Expr(
+                    BinOps(
+                        [
+                            (
+                                @25-26 Var {
+                                    module_name: "",
+                                    ident: "x",
+                                },
+                                @27-28 Plus,
+                            ),
+                        ],
+                        @29-30 Var {
+                            module_name: "",
+                            ident: "y",
+                        },
+                    ),
+                ),
+            ),
+        ],
     ),
     [
         Newline,

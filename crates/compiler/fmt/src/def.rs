@@ -1,6 +1,6 @@
 use crate::annotation::{is_collection_multiline, Formattable, Newlines, Parens};
 use crate::collection::{fmt_collection, Braces};
-use crate::expr::fmt_str_literal;
+use crate::expr::{fmt_str_literal, pattern_needs_parens_when_backpassing};
 use crate::pattern::fmt_pattern;
 use crate::spaces::{fmt_default_newline, fmt_default_spaces, fmt_spaces, INDENT};
 use crate::Buf;
@@ -8,12 +8,143 @@ use roc_error_macros::internal_error;
 use roc_parse::ast::{
     AbilityMember, Defs, Expr, ExtractSpaces, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
     ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport,
-    ModuleImportParams, Pattern, Spaces, StrLiteral, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    ModuleImportParams, Pattern, Spaces, Stmt, StrLiteral, TopLevelDefs, TypeAnnotation, TypeDef,
+    TypeHeader, ValueDef,
 };
 use roc_parse::header::Keyword;
 use roc_region::all::Loc;
 
 /// A Located formattable value is also formattable
+
+pub fn fmt_stmts(buf: &mut Buf<'_>, stmts: &TopLevelDefs<'_>, indent: u16) {
+    let mut last_ann = None;
+
+    let mut first = true;
+
+    for stmt in stmts.item {
+        let mut stmt = *stmt;
+
+        if let Some((was_first, before_ann, ann_pattern, ann_type)) = last_ann.take() {
+            if let Stmt::ValueDef(ValueDef::Body(body_pattern, body_expr)) = stmt.item.value {
+                let spaces_middle = std::mem::replace(&mut stmt.before, before_ann);
+                let arena = buf.text.bump();
+                stmt.item.value = Stmt::ValueDef(ValueDef::AnnotatedBody {
+                    ann_pattern: arena.alloc(ann_pattern),
+                    ann_type: arena.alloc(ann_type),
+                    lines_between: spaces_middle,
+                    body_pattern,
+                    body_expr,
+                });
+                first = was_first;
+            } else {
+                if was_first {
+                    fmt_spaces(buf, before_ann.iter(), indent);
+                } else {
+                    fmt_default_newline(buf, before_ann, indent);
+                }
+                ValueDef::Annotation(ann_pattern, ann_type).format(buf, indent)
+            }
+        }
+
+        if let Stmt::ValueDef(ValueDef::Annotation(header, ann_ty)) = stmt.item.value {
+            last_ann = Some((first, stmt.before, header, ann_ty));
+            continue;
+        }
+
+        if first {
+            fmt_spaces(buf, stmt.before.iter(), indent);
+        } else {
+            fmt_default_newline(buf, stmt.before, indent);
+        }
+
+        first = false;
+
+        match stmt.item.value {
+            Stmt::Expr(expr) => expr.format(buf, indent),
+            Stmt::Backpassing(loc_patterns, loc_body) => {
+                use self::Expr::*;
+
+                let arguments_are_multiline = loc_patterns
+                    .iter()
+                    .any(|loc_pattern| loc_pattern.is_multiline());
+
+                // If the arguments are multiline, go down a line and indent.
+                let indent = if arguments_are_multiline {
+                    indent + INDENT
+                } else {
+                    indent
+                };
+
+                let mut it = loc_patterns.iter().peekable();
+
+                while let Some(loc_pattern) = it.next() {
+                    let needs_parens = if pattern_needs_parens_when_backpassing(&loc_pattern.value)
+                    {
+                        Parens::InApply
+                    } else {
+                        Parens::NotNeeded
+                    };
+
+                    loc_pattern.format_with_options(buf, needs_parens, Newlines::No, indent);
+
+                    if it.peek().is_some() {
+                        if arguments_are_multiline {
+                            buf.push(',');
+                            buf.newline();
+                        } else {
+                            buf.push_str(",");
+                            buf.spaces(1);
+                        }
+                    }
+                }
+
+                if arguments_are_multiline {
+                    buf.newline();
+                    buf.indent(indent);
+                } else {
+                    buf.spaces(1);
+                }
+
+                buf.push_str("<-");
+
+                let body_indent = if loc_body.is_multiline() {
+                    indent + INDENT
+                } else {
+                    indent
+                };
+
+                // the body of the Backpass can be on the same line, or
+                // on a new line. If it's on the same line, insert a space.
+
+                match &loc_body.value {
+                    SpaceBefore(_, _) => {
+                        // the body starts with (first comment and then) a newline
+                        // do nothing
+                    }
+                    _ => {
+                        // add a space after the `<-`
+                        buf.spaces(1);
+                    }
+                };
+
+                loc_body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, body_indent);
+            }
+            Stmt::TypeDef(type_def) => type_def.format(buf, indent),
+            Stmt::ValueDef(value_def) => value_def.format(buf, indent),
+        }
+    }
+
+    if let Some((first, before_ann, header, ann_ty)) = last_ann {
+        if first {
+            fmt_spaces(buf, before_ann.iter(), indent);
+        } else {
+            fmt_default_newline(buf, before_ann, indent);
+        }
+        ValueDef::Annotation(header, ann_ty).format(buf, indent)
+    }
+
+    fmt_spaces(buf, stmts.after.iter(), indent);
+}
 
 impl<'a> Formattable for Defs<'a> {
     fn is_multiline(&self) -> bool {

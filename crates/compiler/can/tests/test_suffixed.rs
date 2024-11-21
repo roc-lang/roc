@@ -5,7 +5,7 @@ extern crate indoc;
 mod suffixed_tests {
     use bumpalo::Bump;
     use insta::assert_snapshot;
-    use roc_can::desugar::desugar_defs_node_values;
+    use roc_can::desugar::desugar_defs_node_values_top_level;
     use roc_can::env::{Env, FxMode};
     use roc_can::scope::Scope;
     use roc_module::symbol::{IdentIds, ModuleIds, PackageModuleIds};
@@ -37,8 +37,8 @@ mod suffixed_tests {
                 FxMode::Task,
             );
 
-            let mut defs = parse_defs_with(arena, indoc!($src)).unwrap();
-            desugar_defs_node_values(&mut env, &mut scope, &mut defs, true);
+            let stmts = parse_defs_with(arena, indoc!($src)).unwrap();
+            let defs = desugar_defs_node_values_top_level(&mut env, &mut scope, stmts);
 
             let snapshot = format!("{:#?}", &defs);
             println!("{}", snapshot);

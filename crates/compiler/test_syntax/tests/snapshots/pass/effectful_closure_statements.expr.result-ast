@@ -6,62 +6,47 @@ SpaceAfter(
             ),
         ],
         @11-222 SpaceBefore(
-            Defs(
-                Defs {
-                    tags: [
-                        EitherIndex(2147483648),
-                        EitherIndex(2147483649),
-                        EitherIndex(2147483650),
-                    ],
-                    regions: [
-                        @11-37,
-                        @42-55,
-                        @61-154,
-                    ],
-                    space_before: [
-                        Slice { start: 0, length: 0 },
-                        Slice { start: 0, length: 1 },
-                        Slice { start: 1, length: 2 },
-                    ],
-                    space_after: [
-                        Slice { start: 0, length: 0 },
-                        Slice { start: 1, length: 0 },
-                        Slice { start: 3, length: 0 },
-                    ],
-                    spaces: [
-                        Newline,
-                        Newline,
-                        Newline,
-                    ],
-                    type_defs: [],
-                    value_defs: [
-                        Stmt(
-                            @11-37 Apply(
-                                @11-15 Var {
-                                    module_name: "",
-                                    ident: "echo",
-                                },
-                                [
-                                    @16-37 Str(
-                                        PlainLine(
-                                            "Welcome to the DMV!",
-                                        ),
+            Stmts(
+                [
+                    @11-37 Expr(
+                        Apply(
+                            @11-15 Var {
+                                module_name: "",
+                                ident: "echo",
+                            },
+                            [
+                                @16-37 Str(
+                                    PlainLine(
+                                        "Welcome to the DMV!",
                                     ),
-                                ],
-                                Space,
+                                ),
+                            ],
+                            Space,
+                        ),
+                    ),
+                    SpacesBefore(
+                        [
+                            Newline,
+                        ],
+                        @42-55 ValueDef(
+                            Body(
+                                @42-45 Identifier {
+                                    ident: "age",
+                                },
+                                @48-55 Var {
+                                    module_name: "",
+                                    ident: "readInt",
+                                },
                             ),
                         ),
-                        Body(
-                            @42-45 Identifier {
-                                ident: "age",
-                            },
-                            @48-55 Var {
-                                module_name: "",
-                                ident: "readInt",
-                            },
-                        ),
-                        Stmt(
-                            @61-154 If {
+                    ),
+                    SpacesBefore(
+                        [
+                            Newline,
+                            Newline,
+                        ],
+                        @61-154 Expr(
+                            If {
                                 if_thens: [
                                     (
                                         @64-72 BinOps(
@@ -80,58 +65,44 @@ SpaceAfter(
                                         ),
                                         @86-134 SpaceBefore(
                                             SpaceAfter(
-                                                Defs(
-                                                    Defs {
-                                                        tags: [
-                                                            EitherIndex(2147483648),
-                                                        ],
-                                                        regions: [
-                                                            @86-119,
-                                                        ],
-                                                        space_before: [
-                                                            Slice { start: 0, length: 0 },
-                                                        ],
-                                                        space_after: [
-                                                            Slice { start: 0, length: 0 },
-                                                        ],
-                                                        spaces: [],
-                                                        type_defs: [],
-                                                        value_defs: [
-                                                            Stmt(
-                                                                @86-119 Apply(
-                                                                    @86-90 Var {
+                                                Stmts(
+                                                    [
+                                                        @86-119 Expr(
+                                                            Apply(
+                                                                @86-90 Var {
+                                                                    module_name: "",
+                                                                    ident: "echo",
+                                                                },
+                                                                [
+                                                                    @91-119 Str(
+                                                                        PlainLine(
+                                                                            "You're too young to drive!",
+                                                                        ),
+                                                                    ),
+                                                                ],
+                                                                Space,
+                                                            ),
+                                                        ),
+                                                        SpacesBefore(
+                                                            [
+                                                                Newline,
+                                                            ],
+                                                            @128-134 Expr(
+                                                                Apply(
+                                                                    @128-132 Var {
                                                                         module_name: "",
-                                                                        ident: "echo",
+                                                                        ident: "exit",
                                                                     },
                                                                     [
-                                                                        @91-119 Str(
-                                                                            PlainLine(
-                                                                                "You're too young to drive!",
-                                                                            ),
+                                                                        @133-134 Num(
+                                                                            "1",
                                                                         ),
                                                                     ],
                                                                     Space,
                                                                 ),
                                                             ),
-                                                        ],
-                                                    },
-                                                    @128-134 SpaceBefore(
-                                                        Apply(
-                                                            @128-132 Var {
-                                                                module_name: "",
-                                                                ident: "exit",
-                                                            },
-                                                            [
-                                                                @133-134 Num(
-                                                                    "1",
-                                                                ),
-                                                            ],
-                                                            Space,
                                                         ),
-                                                        [
-                                                            Newline,
-                                                        ],
-                                                    ),
+                                                    ],
                                                 ),
                                                 [
                                                     Newline,
@@ -154,28 +125,30 @@ SpaceAfter(
                                 indented_else: false,
                             },
                         ),
-                    ],
-                },
-                @160-222 SpaceBefore(
-                    Apply(
-                        @160-164 Var {
-                            module_name: "",
-                            ident: "echo",
-                        },
-                        [
-                            @165-222 Str(
-                                PlainLine(
-                                    "Let's get started on your driver's license application.",
-                                ),
-                            ),
-                        ],
-                        Space,
                     ),
-                    [
-                        Newline,
-                        Newline,
-                    ],
-                ),
+                    SpacesBefore(
+                        [
+                            Newline,
+                            Newline,
+                        ],
+                        @160-222 Expr(
+                            Apply(
+                                @160-164 Var {
+                                    module_name: "",
+                                    ident: "echo",
+                                },
+                                [
+                                    @165-222 Str(
+                                        PlainLine(
+                                            "Let's get started on your driver's license application.",
+                                        ),
+                                    ),
+                                ],
+                                Space,
+                            ),
+                        ),
+                    ),
+                ],
             ),
             [
                 Newline,

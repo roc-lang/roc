@@ -1,25 +1,11 @@
-Defs(
-    Defs {
-        tags: [
-            EitherIndex(2147483648),
-        ],
-        regions: [
-            @0-39,
-        ],
-        space_before: [
-            Slice { start: 0, length: 0 },
-        ],
-        space_after: [
-            Slice { start: 0, length: 0 },
-        ],
-        spaces: [],
-        type_defs: [],
-        value_defs: [
-            AnnotatedBody {
-                ann_pattern: @0-3 Identifier {
+Stmts(
+    [
+        @0-28 ValueDef(
+            Annotation(
+                @0-3 Identifier {
                     ident: "foo",
                 },
-                ann_type: @6-28 TagUnion {
+                @6-28 TagUnion {
                     ext: Some(
                         @27-28 Wildcard,
                     ),
@@ -40,25 +26,33 @@ Defs(
                         },
                     ],
                 },
-                lines_between: [
-                    Newline,
-                ],
-                body_pattern: @29-32 Identifier {
-                    ident: "foo",
-                },
-                body_expr: @35-39 Tag(
-                    "True",
-                ),
-            },
-        ],
-    },
-    @41-43 SpaceBefore(
-        Num(
-            "42",
+            ),
         ),
-        [
-            Newline,
-            Newline,
-        ],
-    ),
+        SpacesBefore(
+            [
+                Newline,
+            ],
+            @29-39 ValueDef(
+                Body(
+                    @29-32 Identifier {
+                        ident: "foo",
+                    },
+                    @35-39 Tag(
+                        "True",
+                    ),
+                ),
+            ),
+        ),
+        SpacesBefore(
+            [
+                Newline,
+                Newline,
+            ],
+            @41-43 Expr(
+                Num(
+                    "42",
+                ),
+            ),
+        ),
+    ],
 )

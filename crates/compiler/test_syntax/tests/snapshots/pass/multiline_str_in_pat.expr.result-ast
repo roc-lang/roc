@@ -1,21 +1,7 @@
 SpaceAfter(
-    Defs(
-        Defs {
-            tags: [
-                EitherIndex(2147483648),
-            ],
-            regions: [
-                @0-13,
-            ],
-            space_before: [
-                Slice { start: 0, length: 0 },
-            ],
-            space_after: [
-                Slice { start: 0, length: 0 },
-            ],
-            spaces: [],
-            type_defs: [],
-            value_defs: [
+    Stmts(
+        [
+            @0-13 ValueDef(
                 Annotation(
                     @0-1 Apply(
                         @0-1 NumLiteral(
@@ -43,18 +29,20 @@ SpaceAfter(
                         [],
                     ),
                 ),
-            ],
-        },
-        @14-16 SpaceBefore(
-            Str(
-                PlainLine(
-                    "",
+            ),
+            SpacesBefore(
+                [
+                    Newline,
+                ],
+                @14-16 Expr(
+                    Str(
+                        PlainLine(
+                            "",
+                        ),
+                    ),
                 ),
             ),
-            [
-                Newline,
-            ],
-        ),
+        ],
     ),
     [
         Newline,

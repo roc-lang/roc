@@ -1,8 +1,8 @@
 use crate::ast::{
-    is_expr_suffixed, AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces,
-    Implements, ImplementsAbilities, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
-    ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport,
-    ModuleImportParams, Pattern, Spaceable, Spaced, Spaces, SpacesBefore, TryTarget,
+    is_expr_suffixed, AssignedField, Collection, CommentOrNewline, Expr, ExtractSpaces, Implements,
+    ImplementsAbilities, ImportAlias, ImportAsKeyword, ImportExposingKeyword, ImportedModuleName,
+    IngestedFileAnnotation, IngestedFileImport, ModuleImport, ModuleImportParams, Pattern,
+    Spaceable, Spaced, Spaces, SpacesAfter, SpacesBefore, Stmt, TopLevelDefs, TryTarget,
     TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use crate::blankspace::{
@@ -28,7 +28,6 @@ use crate::type_annotation;
 use crate::{header, keyword};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_collections::soa::slice_extend_new;
 use roc_error_macros::internal_error;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
@@ -491,10 +490,10 @@ fn expr_to_stmt(expr: Loc<Expr<'_>>) -> Loc<Stmt<'_>> {
 pub fn parse_repl_defs_and_optional_expr<'a>(
     arena: &'a Bump,
     state: State<'a>,
-) -> ParseResult<'a, (Defs<'a>, Option<Loc<Expr<'a>>>), EExpr<'a>> {
+) -> ParseResult<'a, &'a [SpacesBefore<'a, Loc<Stmt<'a>>>], EExpr<'a>> {
     let initial_state = state.clone();
     let (spaces_before, state) = match loc(space0_e(EExpr::IndentEnd)).parse(arena, state, 0) {
-        Err((NoProgress, _)) => return Ok((NoProgress, (Defs::default(), None), initial_state)),
+        Err((NoProgress, _)) => return Ok((NoProgress, &[], initial_state)),
         Err((MadeProgress, e)) => return Err((MadeProgress, e)),
         Ok((_, sp, state)) => (sp, state),
     };
@@ -522,10 +521,10 @@ pub fn parse_repl_defs_and_optional_expr<'a>(
         return Err((MadeProgress, EExpr::End(state.pos())));
     }
 
-    let (defs, last_expr) =
-        stmts_to_defs(&stmts, Defs::default(), false, arena).map_err(|e| (MadeProgress, e))?;
+    // let (defs, last_expr) =
+    //     stmts_to_defs(&stmts, Defs::default(), false, arena).map_err(|e| (MadeProgress, e))?;
 
-    Ok((MadeProgress, (defs, last_expr), state))
+    Ok((MadeProgress, stmts.into_bump_slice(), state))
 }
 
 fn stmt_start<'a>(
@@ -544,10 +543,6 @@ fn stmt_start<'a>(
         loc(specialize_err(
             EExpr::Expect,
             expect_help(options, preceding_comment)
-        )),
-        loc(specialize_err(
-            EExpr::Dbg,
-            dbg_stmt_help(options, preceding_comment)
         )),
         loc(specialize_err(EExpr::Return, return_help(options))),
         loc(specialize_err(EExpr::Import, map(import(), Stmt::ValueDef))),
@@ -1404,24 +1399,6 @@ fn finish_parsing_ability_def_help<'a>(
     Ok((MadeProgress, (type_def, def_region), state))
 }
 
-/// A Stmt is an intermediate representation used only during parsing.
-/// It consists of a fragment of code that hasn't been fully stitched together yet.
-/// For example, each of the following lines is a Stmt:
-/// - `foo bar` (Expr)
-/// - `foo, bar <- baz` (Backpassing)
-/// - `Foo : [A, B, C]` (TypeDef)
-/// - `foo = \x -> x + 1` (ValueDef)
-///
-/// Note in particular that the Backpassing Stmt doesn't make any sense on its own;
-/// we need to link it up with the following stmts to make a complete expression.
-#[derive(Debug, Clone, Copy)]
-pub enum Stmt<'a> {
-    Expr(Expr<'a>),
-    Backpassing(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>),
-    TypeDef(TypeDef<'a>),
-    ValueDef(ValueDef<'a>),
-}
-
 /// Having just parsed an operator, we need to dispatch to the appropriate
 /// parsing function based on the operator.
 ///
@@ -2173,6 +2150,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::Backpassing(_, _, _)
         | Expr::BinOps { .. }
         | Expr::Defs(_, _)
+        | Expr::Stmts(_)
         | Expr::If { .. }
         | Expr::When(_, _)
         | Expr::Dbg
@@ -2259,8 +2237,7 @@ fn assigned_expr_field_to_pattern_help<'a>(
 pub fn parse_top_level_defs<'a>(
     arena: &'a bumpalo::Bump,
     state: State<'a>,
-    output: Defs<'a>,
-) -> ParseResult<'a, Defs<'a>, EExpr<'a>> {
+) -> ParseResult<'a, TopLevelDefs<'a>, EExpr<'a>> {
     let (_, loc_first_space, state) = loc_space0_e(EExpr::IndentStart).parse(arena, state, 0)?;
 
     let (_, stmts, state) = parse_stmt_seq(
@@ -2278,26 +2255,33 @@ pub fn parse_top_level_defs<'a>(
 
     let (_, last_space, state) = space0_e(EExpr::IndentStart).parse(arena, state, 0)?;
 
-    let existing_len = output.tags.len();
+    // let existing_len = output.tags.len();
 
-    let (mut output, last_expr) =
-        stmts_to_defs(&stmts, output, false, arena).map_err(|e| (MadeProgress, e))?;
+    // let (mut output, last_expr) =
+    //     stmts_to_defs(&stmts, output, false, arena).map_err(|e| (MadeProgress, e))?;
 
-    if let Some(expr) = last_expr {
-        return Err((
-            MadeProgress,
-            EExpr::UnexpectedTopLevelExpr(expr.region.start()),
-        ));
-    }
+    // if let Some(expr) = last_expr {
+    //     return Err((
+    //         MadeProgress,
+    //         EExpr::UnexpectedTopLevelExpr(expr.region.start()),
+    //     ));
+    // }
 
-    if output.tags.len() > existing_len {
-        let after = slice_extend_new(&mut output.spaces, last_space.iter().copied());
-        let last = output.tags.len() - 1;
-        debug_assert!(output.space_after[last].is_empty() || after.is_empty());
-        output.space_after[last] = after;
-    }
+    // if output.tags.len() > existing_len {
+    //     let after = slice_extend_new(&mut output.spaces, last_space.iter().copied());
+    //     let last = output.tags.len() - 1;
+    //     debug_assert!(output.space_after[last].is_empty() || after.is_empty());
+    //     output.space_after[last] = after;
+    // }
 
-    Ok((MadeProgress, output, state))
+    Ok((
+        MadeProgress,
+        SpacesAfter {
+            item: stmts.into_bump_slice(),
+            after: last_space,
+        },
+        state,
+    ))
 }
 
 // PARSER HELPERS
@@ -2668,34 +2652,6 @@ fn return_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Stmt<'a>, ERetu
     .trace("return_help")
 }
 
-fn dbg_stmt_help<'a>(
-    options: ExprParseOptions,
-    preceding_comment: Region,
-) -> impl Parser<'a, Stmt<'a>, EExpect<'a>> {
-    (move |arena: &'a Bump, state: State<'a>, min_indent| {
-        let (_, _, state) =
-            parser::keyword(keyword::DBG, EExpect::Dbg).parse(arena, state, min_indent)?;
-
-        let (_, condition, state) = parse_block(
-            options,
-            arena,
-            state,
-            true,
-            EExpect::IndentCondition,
-            EExpect::Condition,
-        )
-        .map_err(|(_, f)| (MadeProgress, f))?;
-
-        let stmt = Stmt::ValueDef(ValueDef::Dbg {
-            condition: arena.alloc(condition),
-            preceding_comment,
-        });
-
-        Ok((MadeProgress, stmt, state))
-    })
-    .trace("dbg_stmt_help")
-}
-
 fn dbg_kw<'a>() -> impl Parser<'a, Expr<'a>, EExpect<'a>> {
     (move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
         let (_, _, next_state) =
@@ -2892,10 +2848,73 @@ where
             ));
         }
 
-        let last_pos = state.pos();
+        debug_assert!(!stmts.is_empty());
 
-        let loc_expr = stmts_to_expr(&stmts, arena)
-            .map_err(|e| (MadeProgress, wrap_error(arena.alloc(e), last_pos)))?;
+        let loc_expr = if stmts.len() > 1 {
+            let region = Region::new(
+                stmts
+                    .first()
+                    .map(|s| s.item.region.start())
+                    .unwrap_or(Position::zero()),
+                stmts
+                    .last()
+                    .map(|s| s.item.region.end())
+                    .unwrap_or(Position::zero()),
+            );
+            Loc::at(region, Expr::Stmts(stmts.into_bump_slice()))
+        } else {
+            let SpacesBefore {
+                before: space,
+                item: loc_stmt,
+            } = *stmts.last().unwrap();
+            let expr = match loc_stmt.value {
+                Stmt::Expr(e) => {
+                    if space.is_empty() {
+                        e
+                    } else {
+                        arena.alloc(e).before(space)
+                    }
+                }
+                Stmt::ValueDef(ValueDef::Dbg { condition, .. }) => {
+                    // If we parse a `dbg` as the last thing in a series of statements then it's
+                    // actually an expression.
+                    Expr::Apply(
+                        arena.alloc(Loc {
+                            value: Expr::Dbg,
+                            region: loc_stmt.region,
+                        }),
+                        arena.alloc([condition]),
+                        CalledVia::Space,
+                    )
+                }
+                Stmt::ValueDef(ValueDef::Expect { .. }) => {
+                    return Err((
+                        MadeProgress,
+                        wrap_error(
+                            arena.alloc(EExpr::Expect(
+                                EExpect::Continuation(
+                                    arena.alloc(EExpr::IndentEnd(loc_stmt.region.end())),
+                                    loc_stmt.region.end(),
+                                ),
+                                loc_stmt.region.start(),
+                            )),
+                            state.pos(),
+                        ),
+                    ));
+                }
+                Stmt::Backpassing(..) | Stmt::TypeDef(_) | Stmt::ValueDef(_) => {
+                    return Err((
+                        MadeProgress,
+                        wrap_error(
+                            arena.alloc(EExpr::IndentEnd(loc_stmt.region.end())),
+                            state.pos(),
+                        ),
+                    ))
+                }
+            };
+
+            Loc::at(loc_stmt.region, expr)
+        };
 
         let loc_expr = if first_space.value.is_empty() {
             loc_expr
@@ -3012,271 +3031,271 @@ fn at_terminator(state: &State<'_>) -> bool {
 
 /// Convert a sequence of statements into a `Expr::Defs` expression
 /// (which is itself a Defs struct and final expr)
-fn stmts_to_expr<'a>(
-    stmts: &[SpacesBefore<'a, Loc<Stmt<'a>>>],
-    arena: &'a Bump,
-) -> Result<Loc<Expr<'a>>, EExpr<'a>> {
-    if stmts.len() > 1 {
-        let first_pos = stmts.first().unwrap().item.region.start();
-        let last_pos = stmts.last().unwrap().item.region.end();
+// fn stmts_to_expr<'a>(
+//     stmts: &[SpacesBefore<'a, Loc<Stmt<'a>>>],
+//     arena: &'a Bump,
+// ) -> Result<Loc<Expr<'a>>, EExpr<'a>> {
+//     if stmts.len() > 1 {
+//         let first_pos = stmts.first().unwrap().item.region.start();
+//         let last_pos = stmts.last().unwrap().item.region.end();
 
-        let (defs, last_expr) = stmts_to_defs(stmts, Defs::default(), true, arena)?;
+//         let (defs, last_expr) = stmts_to_defs(stmts, Defs::default(), true, arena)?;
 
-        let final_expr = match last_expr {
-            Some(e) => e,
-            None => return Err(EExpr::DefMissingFinalExpr(last_pos)),
-        };
+//         let final_expr = match last_expr {
+//             Some(e) => e,
+//             None => return Err(EExpr::DefMissingFinalExpr(last_pos)),
+//         };
 
-        let region = Region::new(first_pos, last_pos);
+//         let region = Region::new(first_pos, last_pos);
 
-        if defs.is_empty() {
-            Ok(final_expr)
-        } else {
-            Ok(Loc::at(
-                region,
-                Expr::Defs(arena.alloc(defs), arena.alloc(final_expr)),
-            ))
-        }
-    } else {
-        let SpacesBefore {
-            before: space,
-            item: loc_stmt,
-        } = *stmts.last().unwrap();
-        let expr = match loc_stmt.value {
-            Stmt::Expr(e) => {
-                if space.is_empty() {
-                    e
-                } else {
-                    arena.alloc(e).before(space)
-                }
-            }
-            Stmt::ValueDef(ValueDef::Dbg { condition, .. }) => {
-                // If we parse a `dbg` as the last thing in a series of statements then it's
-                // actually an expression.
-                Expr::Apply(
-                    arena.alloc(Loc {
-                        value: Expr::Dbg,
-                        region: loc_stmt.region,
-                    }),
-                    arena.alloc([condition]),
-                    CalledVia::Space,
-                )
-            }
-            Stmt::ValueDef(ValueDef::Expect { .. }) => {
-                return Err(EExpr::Expect(
-                    EExpect::Continuation(
-                        arena.alloc(EExpr::IndentEnd(loc_stmt.region.end())),
-                        loc_stmt.region.end(),
-                    ),
-                    loc_stmt.region.start(),
-                ));
-            }
-            Stmt::Backpassing(..) | Stmt::TypeDef(_) | Stmt::ValueDef(_) => {
-                return Err(EExpr::IndentEnd(loc_stmt.region.end()))
-            }
-        };
+//         if defs.is_empty() {
+//             Ok(final_expr)
+//         } else {
+//             // Ok(Loc::at(
+//             //     region,
+//             //     Expr::Defs(arena.alloc(defs), arena.alloc(final_expr)),
+//             // ))
+//         }
+//     } else {
+//         let SpacesBefore {
+//             before: space,
+//             item: loc_stmt,
+//         } = *stmts.last().unwrap();
+//         let expr = match loc_stmt.value {
+//             Stmt::Expr(e) => {
+//                 if space.is_empty() {
+//                     e
+//                 } else {
+//                     arena.alloc(e).before(space)
+//                 }
+//             }
+//             Stmt::ValueDef(ValueDef::Dbg { condition, .. }) => {
+//                 // If we parse a `dbg` as the last thing in a series of statements then it's
+//                 // actually an expression.
+//                 Expr::Apply(
+//                     arena.alloc(Loc {
+//                         value: Expr::Dbg,
+//                         region: loc_stmt.region,
+//                     }),
+//                     arena.alloc([condition]),
+//                     CalledVia::Space,
+//                 )
+//             }
+//             Stmt::ValueDef(ValueDef::Expect { .. }) => {
+//                 return Err(EExpr::Expect(
+//                     EExpect::Continuation(
+//                         arena.alloc(EExpr::IndentEnd(loc_stmt.region.end())),
+//                         loc_stmt.region.end(),
+//                     ),
+//                     loc_stmt.region.start(),
+//                 ));
+//             }
+//             Stmt::Backpassing(..) | Stmt::TypeDef(_) | Stmt::ValueDef(_) => {
+//                 return Err(EExpr::IndentEnd(loc_stmt.region.end()))
+//             }
+//         };
 
-        Ok(loc_stmt.with_value(expr))
-    }
-}
+//         Ok(loc_stmt.with_value(expr))
+//     }
+// }
 
 /// Convert a sequence of `Stmt` into a Defs and an optional final expression.
 /// Future refactoring opportunity: push this logic directly into where we're
 /// parsing the statements.
-fn stmts_to_defs<'a>(
-    stmts: &[SpacesBefore<'a, Loc<Stmt<'a>>>],
-    mut defs: Defs<'a>,
-    exprify_dbg: bool,
-    arena: &'a Bump,
-) -> Result<(Defs<'a>, Option<Loc<Expr<'a>>>), EExpr<'a>> {
-    let mut last_expr = None;
-    let mut i = 0;
-    while i < stmts.len() {
-        let sp_stmt = stmts[i];
-        match sp_stmt.item.value {
-            Stmt::Expr(Expr::Return(return_value, _after_return)) => {
-                if i == stmts.len() - 1 {
-                    last_expr = Some(Loc::at_zero(Expr::Return(return_value, None)));
-                } else {
-                    let rest = stmts_to_expr(&stmts[i + 1..], arena)?;
-                    last_expr = Some(Loc::at_zero(Expr::Return(
-                        return_value,
-                        Some(arena.alloc(rest)),
-                    )));
-                }
+// fn stmts_to_defs<'a>(
+//     stmts: &[SpacesBefore<'a, Loc<Stmt<'a>>>],
+//     mut defs: Defs<'a>,
+//     exprify_dbg: bool,
+//     arena: &'a Bump,
+// ) -> Result<(Defs<'a>, Option<Loc<Expr<'a>>>), EExpr<'a>> {
+//     let mut last_expr = None;
+//     let mut i = 0;
+//     while i < stmts.len() {
+//         let sp_stmt = stmts[i];
+//         match sp_stmt.item.value {
+//             Stmt::Expr(Expr::Return(return_value, _after_return)) => {
+//                 if i == stmts.len() - 1 {
+//                     last_expr = Some(Loc::at_zero(Expr::Return(return_value, None)));
+//                 } else {
+//                     let rest = stmts_to_expr(&stmts[i + 1..], arena)?;
+//                     last_expr = Some(Loc::at_zero(Expr::Return(
+//                         return_value,
+//                         Some(arena.alloc(rest)),
+//                     )));
+//                 }
 
-                // don't re-process the rest of the statements, they got consumed by the early return
-                break;
-            }
-            Stmt::Expr(e) => {
-                if i + 1 < stmts.len() {
-                    defs.push_value_def(
-                        ValueDef::Stmt(arena.alloc(Loc::at(sp_stmt.item.region, e))),
-                        sp_stmt.item.region,
-                        sp_stmt.before,
-                        &[],
-                    );
-                } else {
-                    let e = if sp_stmt.before.is_empty() {
-                        e
-                    } else {
-                        arena.alloc(e).before(sp_stmt.before)
-                    };
+//                 // don't re-process the rest of the statements, they got consumed by the early return
+//                 break;
+//             }
+//             Stmt::Expr(e) => {
+//                 if i + 1 < stmts.len() {
+//                     defs.push_value_def(
+//                         ValueDef::Stmt(arena.alloc(Loc::at(sp_stmt.item.region, e))),
+//                         sp_stmt.item.region,
+//                         sp_stmt.before,
+//                         &[],
+//                     );
+//                 } else {
+//                     let e = if sp_stmt.before.is_empty() {
+//                         e
+//                     } else {
+//                         arena.alloc(e).before(sp_stmt.before)
+//                     };
 
-                    last_expr = Some(sp_stmt.item.with_value(e));
-                }
-            }
-            Stmt::Backpassing(pats, call) => {
-                if i + 1 >= stmts.len() {
-                    return Err(EExpr::BackpassContinue(sp_stmt.item.region.end()));
-                }
+//                     last_expr = Some(sp_stmt.item.with_value(e));
+//                 }
+//             }
+//             Stmt::Backpassing(pats, call) => {
+//                 if i + 1 >= stmts.len() {
+//                     return Err(EExpr::BackpassContinue(sp_stmt.item.region.end()));
+//                 }
 
-                let rest = stmts_to_expr(&stmts[i + 1..], arena)?;
+//                 let rest = stmts_to_expr(&stmts[i + 1..], arena)?;
 
-                let e = Expr::Backpassing(arena.alloc(pats), arena.alloc(call), arena.alloc(rest));
+//                 let e = Expr::Backpassing(arena.alloc(pats), arena.alloc(call), arena.alloc(rest));
 
-                let e = if sp_stmt.before.is_empty() {
-                    e
-                } else {
-                    arena.alloc(e).before(sp_stmt.before)
-                };
+//                 let e = if sp_stmt.before.is_empty() {
+//                     e
+//                 } else {
+//                     arena.alloc(e).before(sp_stmt.before)
+//                 };
 
-                let region = Region::new(sp_stmt.item.region.start(), rest.region.end());
+//                 let region = Region::new(sp_stmt.item.region.start(), rest.region.end());
 
-                last_expr = Some(Loc::at(region, e));
+//                 last_expr = Some(Loc::at(region, e));
 
-                // don't re-process the rest of the statements; they got consumed by the backpassing
-                break;
-            }
+//                 // don't re-process the rest of the statements; they got consumed by the backpassing
+//                 break;
+//             }
 
-            Stmt::TypeDef(td) => {
-                if let (
-                    TypeDef::Alias {
-                        header,
-                        ann: ann_type,
-                    },
-                    Some((
-                        spaces_middle,
-                        Stmt::ValueDef(ValueDef::Body(loc_pattern, loc_def_expr)),
-                    )),
-                ) = (td, stmts.get(i + 1).map(|s| (s.before, s.item.value)))
-                {
-                    if spaces_middle.len() <= 1
-                        || header
-                            .vars
-                            .first()
-                            .map(|var| var.value.equivalent(&loc_pattern.value))
-                            .unwrap_or(false)
-                    {
-                        // This is a case like
-                        //   UserId x : [UserId Int]
-                        //   UserId x = UserId 42
-                        // We optimistically parsed the first line as an alias; we now turn it
-                        // into an annotation.
+//             Stmt::TypeDef(td) => {
+//                 if let (
+//                     TypeDef::Alias {
+//                         header,
+//                         ann: ann_type,
+//                     },
+//                     Some((
+//                         spaces_middle,
+//                         Stmt::ValueDef(ValueDef::Body(loc_pattern, loc_def_expr)),
+//                     )),
+//                 ) = (td, stmts.get(i + 1).map(|s| (s.before, s.item.value)))
+//                 {
+//                     if spaces_middle.len() <= 1
+//                         || header
+//                             .vars
+//                             .first()
+//                             .map(|var| var.value.equivalent(&loc_pattern.value))
+//                             .unwrap_or(false)
+//                     {
+//                         // This is a case like
+//                         //   UserId x : [UserId Int]
+//                         //   UserId x = UserId 42
+//                         // We optimistically parsed the first line as an alias; we now turn it
+//                         // into an annotation.
 
-                        let region = Region::span_across(&loc_pattern.region, &loc_def_expr.region);
+//                         let region = Region::span_across(&loc_pattern.region, &loc_def_expr.region);
 
-                        let value_def = join_alias_to_body(
-                            arena,
-                            header,
-                            ann_type,
-                            spaces_middle,
-                            loc_pattern,
-                            loc_def_expr,
-                        );
+//                         let value_def = join_alias_to_body(
+//                             arena,
+//                             header,
+//                             ann_type,
+//                             spaces_middle,
+//                             loc_pattern,
+//                             loc_def_expr,
+//                         );
 
-                        defs.push_value_def(
-                            value_def,
-                            Region::span_across(&header.name.region, &region),
-                            sp_stmt.before,
-                            &[],
-                        );
+//                         defs.push_value_def(
+//                             value_def,
+//                             Region::span_across(&header.name.region, &region),
+//                             sp_stmt.before,
+//                             &[],
+//                         );
 
-                        i += 1;
-                    } else {
-                        defs.push_type_def(td, sp_stmt.item.region, sp_stmt.before, &[])
-                    }
-                } else {
-                    defs.push_type_def(td, sp_stmt.item.region, sp_stmt.before, &[])
-                }
-            }
-            Stmt::ValueDef(vd) => {
-                // NOTE: it shouldn't be necessary to convert ValueDef::Dbg into an expr, but
-                // it turns out that ValueDef::Dbg exposes some bugs in the rest of the compiler.
-                // In particular, it seems that the solver thinks the dbg expr must be a bool.
-                if let ValueDef::Dbg {
-                    condition,
-                    preceding_comment: _,
-                } = vd
-                {
-                    if exprify_dbg {
-                        let e = if i + 1 < stmts.len() {
-                            let rest = stmts_to_expr(&stmts[i + 1..], arena)?;
-                            Expr::DbgStmt(arena.alloc(condition), arena.alloc(rest))
-                        } else {
-                            Expr::Apply(
-                                arena.alloc(Loc {
-                                    value: Expr::Dbg,
-                                    region: sp_stmt.item.region,
-                                }),
-                                arena.alloc([condition]),
-                                CalledVia::Space,
-                            )
-                        };
+//                         i += 1;
+//                     } else {
+//                         defs.push_type_def(td, sp_stmt.item.region, sp_stmt.before, &[])
+//                     }
+//                 } else {
+//                     defs.push_type_def(td, sp_stmt.item.region, sp_stmt.before, &[])
+//                 }
+//             }
+//             Stmt::ValueDef(vd) => {
+//                 // NOTE: it shouldn't be necessary to convert ValueDef::Dbg into an expr, but
+//                 // it turns out that ValueDef::Dbg exposes some bugs in the rest of the compiler.
+//                 // In particular, it seems that the solver thinks the dbg expr must be a bool.
+//                 if let ValueDef::Dbg {
+//                     condition,
+//                     preceding_comment: _,
+//                 } = vd
+//                 {
+//                     if exprify_dbg {
+//                         let e = if i + 1 < stmts.len() {
+//                             let rest = stmts_to_expr(&stmts[i + 1..], arena)?;
+//                             Expr::DbgStmt(arena.alloc(condition), arena.alloc(rest))
+//                         } else {
+//                             Expr::Apply(
+//                                 arena.alloc(Loc {
+//                                     value: Expr::Dbg,
+//                                     region: sp_stmt.item.region,
+//                                 }),
+//                                 arena.alloc([condition]),
+//                                 CalledVia::Space,
+//                             )
+//                         };
 
-                        let e = if sp_stmt.before.is_empty() {
-                            e
-                        } else {
-                            arena.alloc(e).before(sp_stmt.before)
-                        };
+//                         let e = if sp_stmt.before.is_empty() {
+//                             e
+//                         } else {
+//                             arena.alloc(e).before(sp_stmt.before)
+//                         };
 
-                        last_expr = Some(Loc::at(sp_stmt.item.region, e));
+//                         last_expr = Some(Loc::at(sp_stmt.item.region, e));
 
-                        // don't re-process the rest of the statements; they got consumed by the dbg expr
-                        break;
-                    }
-                }
+//                         // don't re-process the rest of the statements; they got consumed by the dbg expr
+//                         break;
+//                     }
+//                 }
 
-                if let (
-                    ValueDef::Annotation(ann_pattern, ann_type),
-                    Some((
-                        spaces_middle,
-                        Stmt::ValueDef(ValueDef::Body(loc_pattern, loc_def_expr)),
-                    )),
-                ) = (vd, stmts.get(i + 1).map(|s| (s.before, s.item.value)))
-                {
-                    if spaces_middle.len() <= 1 || ann_pattern.value.equivalent(&loc_pattern.value)
-                    {
-                        let region = Region::span_across(&loc_pattern.region, &loc_def_expr.region);
+//                 if let (
+//                     ValueDef::Annotation(ann_pattern, ann_type),
+//                     Some((
+//                         spaces_middle,
+//                         Stmt::ValueDef(ValueDef::Body(loc_pattern, loc_def_expr)),
+//                     )),
+//                 ) = (vd, stmts.get(i + 1).map(|s| (s.before, s.item.value)))
+//                 {
+//                     if spaces_middle.len() <= 1 || ann_pattern.value.equivalent(&loc_pattern.value)
+//                     {
+//                         let region = Region::span_across(&loc_pattern.region, &loc_def_expr.region);
 
-                        let value_def = ValueDef::AnnotatedBody {
-                            ann_pattern: arena.alloc(ann_pattern),
-                            ann_type: arena.alloc(ann_type),
-                            lines_between: spaces_middle,
-                            body_pattern: loc_pattern,
-                            body_expr: loc_def_expr,
-                        };
+//                         let value_def = ValueDef::AnnotatedBody {
+//                             ann_pattern: arena.alloc(ann_pattern),
+//                             ann_type: arena.alloc(ann_type),
+//                             lines_between: spaces_middle,
+//                             body_pattern: loc_pattern,
+//                             body_expr: loc_def_expr,
+//                         };
 
-                        defs.push_value_def(
-                            value_def,
-                            roc_region::all::Region::span_across(&ann_pattern.region, &region),
-                            sp_stmt.before,
-                            &[],
-                        );
-                        i += 1;
-                    } else {
-                        defs.push_value_def(vd, sp_stmt.item.region, sp_stmt.before, &[])
-                    }
-                } else {
-                    defs.push_value_def(vd, sp_stmt.item.region, sp_stmt.before, &[])
-                }
-            }
-        }
+//                         defs.push_value_def(
+//                             value_def,
+//                             roc_region::all::Region::span_across(&ann_pattern.region, &region),
+//                             sp_stmt.before,
+//                             &[],
+//                         );
+//                         i += 1;
+//                     } else {
+//                         defs.push_value_def(vd, sp_stmt.item.region, sp_stmt.before, &[])
+//                     }
+//                 } else {
+//                     defs.push_value_def(vd, sp_stmt.item.region, sp_stmt.before, &[])
+//                 }
+//             }
+//         }
 
-        i += 1;
-    }
-    Ok((defs, last_expr))
-}
+//         i += 1;
+//     }
+//     Ok((defs, last_expr))
+// }
 
 /// Given a type alias and a value definition, join them into a AnnotatedBody
 pub fn join_alias_to_body<'a>(

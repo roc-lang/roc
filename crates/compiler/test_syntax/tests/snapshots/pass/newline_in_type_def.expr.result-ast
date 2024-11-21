@@ -1,19 +1,6 @@
-Defs(
-    Defs {
-        tags: [
-            EitherIndex(0),
-        ],
-        regions: [
-            @0-4,
-        ],
-        space_before: [
-            Slice { start: 0, length: 0 },
-        ],
-        space_after: [
-            Slice { start: 0, length: 0 },
-        ],
-        spaces: [],
-        type_defs: [
+Stmts(
+    [
+        @0-4 TypeDef(
             Alias {
                 header: TypeHeader {
                     name: @0-1 "R",
@@ -25,16 +12,17 @@ Defs(
                     [],
                 ),
             },
-        ],
-        value_defs: [],
-    },
-    @5-6 SpaceBefore(
-        Var {
-            module_name: "",
-            ident: "a",
-        },
-        [
-            Newline,
-        ],
-    ),
+        ),
+        SpacesBefore(
+            [
+                Newline,
+            ],
+            @5-6 Expr(
+                Var {
+                    module_name: "",
+                    ident: "a",
+                },
+            ),
+        ),
+    ],
 )

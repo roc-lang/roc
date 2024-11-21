@@ -19,7 +19,7 @@ use roc_error_macros::internal_error;
 use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::{IdentId, IdentIds, IdentIdsByModule, ModuleId, PackageModuleIds, Symbol};
-use roc_parse::ast::{Defs, TypeAnnotation};
+use roc_parse::ast::{TopLevelDefs, TypeAnnotation};
 use roc_parse::header::HeaderType;
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
@@ -211,7 +211,7 @@ fn has_no_implementation(expr: &Expr) -> bool {
 #[allow(clippy::too_many_arguments)]
 pub fn canonicalize_module_defs<'a>(
     arena: &'a Bump,
-    loc_defs: &'a mut Defs<'a>,
+    stmts: TopLevelDefs<'a>,
     header_type: &'a roc_parse::header::HeaderType,
     home: ModuleId,
     module_path: &'a str,
@@ -270,7 +270,8 @@ pub fn canonicalize_module_defs<'a>(
     // operators, and then again on *their* nested operators, ultimately applying the
     // rules multiple times unnecessarily.
 
-    crate::desugar::desugar_defs_node_values(&mut env, &mut scope, loc_defs, true);
+    let mut loc_defs =
+        crate::desugar::desugar_defs_node_values_top_level(&mut env, &mut scope, stmts);
 
     let mut rigid_variables = RigidVariables::default();
 
@@ -367,7 +368,7 @@ pub fn canonicalize_module_defs<'a>(
         output,
         var_store,
         &mut scope,
-        loc_defs,
+        &mut loc_defs,
         PatternType::TopLevelDef,
     );
 

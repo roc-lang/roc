@@ -1,71 +1,48 @@
-SpacesBefore {
-    before: [],
-    item: Platform(
-        PlatformHeader {
-            before_name: [],
-            name: @9-25 PackageName(
-                "rtfeldman/blah",
-            ),
-            requires: KeywordItem {
-                keyword: Spaces {
-                    before: [],
-                    item: RequiresKeyword,
-                    after: [],
-                },
-                item: PlatformRequires {
-                    rigids: [],
-                    signatures: [
-                        @40-49 TypedIdent {
-                            ident: @40-44 "init",
-                            spaces_before_colon: [],
-                            ann: @47-49 Record {
-                                fields: [],
-                                ext: None,
-                            },
+Platform(
+    PlatformHeader {
+        before_name: [],
+        name: @9-25 PackageName(
+            "rtfeldman/blah",
+        ),
+        requires: KeywordItem {
+            keyword: RequiresKeyword,
+            item: PlatformRequires {
+                rigids: [],
+                signatures: [
+                    @40-49 TypedIdent {
+                        ident: @40-44 "init",
+                        spaces_before_colon: [],
+                        ann: @47-49 Record {
+                            fields: [],
+                            ext: None,
                         },
-                        @51-62 TypedIdent {
-                            ident: @51-57 "update",
-                            spaces_before_colon: [],
-                            ann: @60-62 Record {
-                                fields: [],
-                                ext: None,
-                            },
+                    },
+                    @51-62 TypedIdent {
+                        ident: @51-57 "update",
+                        spaces_before_colon: [],
+                        ann: @60-62 Record {
+                            fields: [],
+                            ext: None,
                         },
-                    ],
-                },
-            },
-            exposes: KeywordItem {
-                keyword: Spaces {
-                    before: [],
-                    item: ExposesKeyword,
-                    after: [],
-                },
-                item: [],
-            },
-            packages: KeywordItem {
-                keyword: Spaces {
-                    before: [],
-                    item: PackagesKeyword,
-                    after: [],
-                },
-                item: [],
-            },
-            imports: KeywordItem {
-                keyword: Spaces {
-                    before: [],
-                    item: ImportsKeyword,
-                    after: [],
-                },
-                item: [],
-            },
-            provides: KeywordItem {
-                keyword: Spaces {
-                    before: [],
-                    item: ProvidesKeyword,
-                    after: [],
-                },
-                item: [],
+                    },
+                ],
             },
         },
-    ),
-}
+        exposes: KeywordItem {
+            keyword: ExposesKeyword,
+            item: [],
+        },
+        packages: KeywordItem {
+            keyword: PackagesKeyword,
+            item: [],
+        },
+        imports: KeywordItem {
+            keyword: ImportsKeyword,
+            item: [],
+        },
+        provides: KeywordItem {
+            keyword: ProvidesKeyword,
+            item: [],
+        },
+    },
+)

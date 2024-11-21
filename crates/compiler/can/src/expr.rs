@@ -1013,6 +1013,7 @@ pub fn canonicalize_expr<'a>(
                 Output::default(),
             )
         }
+        ast::Expr::Stmts(_) => panic!("Should have been desugared"),
         ast::Expr::Defs(loc_defs, loc_ret) => {
             // The body expression gets a new scope for canonicalization,
             scope.inner_def_scope(|inner_scope| {
@@ -2508,6 +2509,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         | ast::Expr::When(_, _)
         | ast::Expr::Backpassing(_, _, _)
         | ast::Expr::SpaceBefore(_, _)
+        | ast::Expr::Stmts(_)
         | ast::Expr::Str(StrLiteral::Block(_))
         | ast::Expr::SpaceAfter(_, _) => false,
         // Desugared dbg expression

@@ -1,26 +1,12 @@
 SpaceAfter(
-    Defs(
-        Defs {
-            tags: [
-                EitherIndex(2147483648),
-            ],
-            regions: [
-                @0-89,
-            ],
-            space_before: [
-                Slice { start: 0, length: 0 },
-            ],
-            space_after: [
-                Slice { start: 0, length: 0 },
-            ],
-            spaces: [],
-            type_defs: [],
-            value_defs: [
-                AnnotatedBody {
-                    ann_pattern: @0-14 Identifier {
+    Stmts(
+        [
+            @0-48 ValueDef(
+                Annotation(
+                    @0-14 Identifier {
                         ident: "launchTheNukes",
                     },
-                    ann_type: @17-48 Function(
+                    @17-48 Function(
                         [
                             @17-19 Record {
                                 fields: [],
@@ -45,48 +31,56 @@ SpaceAfter(
                             ],
                         ),
                     ),
-                    lines_between: [
-                        Newline,
-                    ],
-                    body_pattern: @49-63 Identifier {
-                        ident: "launchTheNukes",
-                    },
-                    body_expr: @66-89 Closure(
-                        [
-                            @67-69 RecordDestructure(
-                                [],
-                            ),
-                        ],
-                        @77-89 SpaceBefore(
-                            Apply(
-                                @77-82 Crash,
-                                [
-                                    @83-89 Str(
-                                        PlainLine(
-                                            "todo",
-                                        ),
-                                    ),
-                                ],
-                                Space,
-                            ),
+                ),
+            ),
+            SpacesBefore(
+                [
+                    Newline,
+                ],
+                @49-89 ValueDef(
+                    Body(
+                        @49-63 Identifier {
+                            ident: "launchTheNukes",
+                        },
+                        @66-89 Closure(
                             [
-                                Newline,
+                                @67-69 RecordDestructure(
+                                    [],
+                                ),
                             ],
+                            @77-89 SpaceBefore(
+                                Apply(
+                                    @77-82 Crash,
+                                    [
+                                        @83-89 Str(
+                                            PlainLine(
+                                                "todo",
+                                            ),
+                                        ),
+                                    ],
+                                    Space,
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
                         ),
                     ),
-                },
-            ],
-        },
-        @91-105 SpaceBefore(
-            Var {
-                module_name: "",
-                ident: "launchTheNukes",
-            },
-            [
-                Newline,
-                Newline,
-            ],
-        ),
+                ),
+            ),
+            SpacesBefore(
+                [
+                    Newline,
+                    Newline,
+                ],
+                @91-105 Expr(
+                    Var {
+                        module_name: "",
+                        ident: "launchTheNukes",
+                    },
+                ),
+            ),
+        ],
     ),
     [
         Newline,

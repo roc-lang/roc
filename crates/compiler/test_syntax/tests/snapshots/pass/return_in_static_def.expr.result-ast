@@ -1,43 +1,15 @@
 SpaceAfter(
-    Defs(
-        Defs {
-            tags: [
-                EitherIndex(2147483648),
-            ],
-            regions: [
-                @0-142,
-            ],
-            space_before: [
-                Slice { start: 0, length: 0 },
-            ],
-            space_after: [
-                Slice { start: 0, length: 0 },
-            ],
-            spaces: [],
-            type_defs: [],
-            value_defs: [
+    Stmts(
+        [
+            @0-142 ValueDef(
                 Body(
                     @0-14 Identifier {
                         ident: "staticValueDef",
                     },
                     @21-142 SpaceBefore(
-                        Defs(
-                            Defs {
-                                tags: [
-                                    EitherIndex(2147483648),
-                                ],
-                                regions: [
-                                    @21-125,
-                                ],
-                                space_before: [
-                                    Slice { start: 0, length: 0 },
-                                ],
-                                space_after: [
-                                    Slice { start: 0, length: 0 },
-                                ],
-                                spaces: [],
-                                type_defs: [],
-                                value_defs: [
+                        Stmts(
+                            [
+                                @21-125 ValueDef(
                                     Body(
                                         @21-28 Identifier {
                                             ident: "someVal",
@@ -61,23 +33,9 @@ SpaceAfter(
                                                         ),
                                                         @67-97 SpaceBefore(
                                                             SpaceAfter(
-                                                                Defs(
-                                                                    Defs {
-                                                                        tags: [
-                                                                            EitherIndex(2147483648),
-                                                                        ],
-                                                                        regions: [
-                                                                            @67-72,
-                                                                        ],
-                                                                        space_before: [
-                                                                            Slice { start: 0, length: 0 },
-                                                                        ],
-                                                                        space_after: [
-                                                                            Slice { start: 0, length: 0 },
-                                                                        ],
-                                                                        spaces: [],
-                                                                        type_defs: [],
-                                                                        value_defs: [
+                                                                Stmts(
+                                                                    [
+                                                                        @67-72 ValueDef(
                                                                             Body(
                                                                                 @67-68 Identifier {
                                                                                     ident: "x",
@@ -86,15 +44,22 @@ SpaceAfter(
                                                                                     "5",
                                                                                 ),
                                                                             ),
-                                                                        ],
-                                                                    },
-                                                                    Return(
-                                                                        @86-97 Var {
-                                                                            module_name: "",
-                                                                            ident: "x",
-                                                                        },
-                                                                        None,
-                                                                    ),
+                                                                        ),
+                                                                        SpacesBefore(
+                                                                            [
+                                                                                Newline,
+                                                                            ],
+                                                                            @86-97 Expr(
+                                                                                Return(
+                                                                                    @86-97 Var {
+                                                                                        module_name: "",
+                                                                                        ident: "x",
+                                                                                    },
+                                                                                    None,
+                                                                                ),
+                                                                            ),
+                                                                        ),
+                                                                    ],
                                                                 ),
                                                                 [
                                                                     Newline,
@@ -121,47 +86,51 @@ SpaceAfter(
                                             ],
                                         ),
                                     ),
-                                ],
-                            },
-                            @131-142 SpaceBefore(
-                                BinOps(
+                                ),
+                                SpacesBefore(
                                     [
-                                        (
-                                            @131-138 Var {
-                                                module_name: "",
-                                                ident: "someVal",
-                                            },
-                                            @139-140 Plus,
-                                        ),
+                                        Newline,
+                                        Newline,
                                     ],
-                                    @141-142 Num(
-                                        "2",
+                                    @131-142 Expr(
+                                        BinOps(
+                                            [
+                                                (
+                                                    @131-138 Var {
+                                                        module_name: "",
+                                                        ident: "someVal",
+                                                    },
+                                                    @139-140 Plus,
+                                                ),
+                                            ],
+                                            @141-142 Num(
+                                                "2",
+                                            ),
+                                        ),
                                     ),
                                 ),
-                                [
-                                    Newline,
-                                    Newline,
-                                ],
-                            ),
+                            ],
                         ),
                         [
                             Newline,
                         ],
                     ),
                 ),
-            ],
-        },
-        @145-159 SpaceBefore(
-            Var {
-                module_name: "",
-                ident: "staticValueDef",
-            },
-            [
-                Newline,
-                Newline,
-                Newline,
-            ],
-        ),
+            ),
+            SpacesBefore(
+                [
+                    Newline,
+                    Newline,
+                    Newline,
+                ],
+                @145-159 Expr(
+                    Var {
+                        module_name: "",
+                        ident: "staticValueDef",
+                    },
+                ),
+            ),
+        ],
     ),
     [
         Newline,

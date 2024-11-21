@@ -1,21 +1,7 @@
 SpaceAfter(
-    Defs(
-        Defs {
-            tags: [
-                EitherIndex(2147483648),
-            ],
-            regions: [
-                @0-33,
-            ],
-            space_before: [
-                Slice { start: 0, length: 0 },
-            ],
-            space_after: [
-                Slice { start: 0, length: 0 },
-            ],
-            spaces: [],
-            type_defs: [],
-            value_defs: [
+    Stmts(
+        [
+            @0-33 ValueDef(
                 IngestedFileImport(
                     IngestedFileImport {
                         before_path: [],
@@ -23,11 +9,7 @@ SpaceAfter(
                             "users.json",
                         ),
                         name: KeywordItem {
-                            keyword: Spaces {
-                                before: [],
-                                item: ImportAsKeyword,
-                                after: [],
-                            },
+                            keyword: ImportAsKeyword,
                             item: @23-27 "data",
                         },
                         annotation: Some(
@@ -42,27 +24,29 @@ SpaceAfter(
                         ),
                     },
                 ),
-            ],
-        },
-        @35-49 SpaceBefore(
-            Apply(
-                @35-44 Var {
-                    module_name: "",
-                    ident: "parseJson",
-                },
-                [
-                    @45-49 Var {
-                        module_name: "",
-                        ident: "data",
-                    },
-                ],
-                Space,
             ),
-            [
-                Newline,
-                Newline,
-            ],
-        ),
+            SpacesBefore(
+                [
+                    Newline,
+                    Newline,
+                ],
+                @35-49 Expr(
+                    Apply(
+                        @35-44 Var {
+                            module_name: "",
+                            ident: "parseJson",
+                        },
+                        [
+                            @45-49 Var {
+                                module_name: "",
+                                ident: "data",
+                            },
+                        ],
+                        Space,
+                    ),
+                ),
+            ),
+        ],
     ),
     [
         Newline,

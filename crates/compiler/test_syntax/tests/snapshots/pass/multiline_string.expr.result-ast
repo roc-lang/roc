@@ -1,32 +1,7 @@
 SpaceAfter(
-    Defs(
-        Defs {
-            tags: [
-                EitherIndex(2147483648),
-                EitherIndex(2147483649),
-                EitherIndex(2147483650),
-            ],
-            regions: [
-                @0-22,
-                @23-49,
-                @50-92,
-            ],
-            space_before: [
-                Slice { start: 0, length: 0 },
-                Slice { start: 0, length: 1 },
-                Slice { start: 1, length: 1 },
-            ],
-            space_after: [
-                Slice { start: 0, length: 0 },
-                Slice { start: 1, length: 0 },
-                Slice { start: 2, length: 0 },
-            ],
-            spaces: [
-                Newline,
-                Newline,
-            ],
-            type_defs: [],
-            value_defs: [
+    Stmts(
+        [
+            @0-22 ValueDef(
                 Body(
                     @0-1 Identifier {
                         ident: "a",
@@ -50,45 +25,28 @@ SpaceAfter(
                         ),
                     ),
                 ),
-                Body(
-                    @23-24 Identifier {
-                        ident: "b",
-                    },
-                    @27-49 Str(
-                        Block(
-                            [
-                                [
-                                    Plaintext(
-                                        "Hello,",
-                                    ),
-                                    EscapedChar(
-                                        Newline,
-                                    ),
-                                    EscapedChar(
-                                        Newline,
-                                    ),
-                                    Plaintext(
-                                        "World!",
-                                    ),
-                                ],
-                            ],
-                        ),
-                    ),
-                ),
-                Body(
-                    @50-51 Identifier {
-                        ident: "c",
-                    },
-                    @58-92 SpaceBefore(
-                        Str(
+            ),
+            SpacesBefore(
+                [
+                    Newline,
+                ],
+                @23-49 ValueDef(
+                    Body(
+                        @23-24 Identifier {
+                            ident: "b",
+                        },
+                        @27-49 Str(
                             Block(
                                 [
                                     [
                                         Plaintext(
-                                            "Hello,\n",
+                                            "Hello,",
                                         ),
-                                        Plaintext(
-                                            "\n",
+                                        EscapedChar(
+                                            Newline,
+                                        ),
+                                        EscapedChar(
+                                            Newline,
                                         ),
                                         Plaintext(
                                             "World!",
@@ -97,21 +55,54 @@ SpaceAfter(
                                 ],
                             ),
                         ),
-                        [
-                            Newline,
-                        ],
                     ),
                 ),
-            ],
-        },
-        @93-95 SpaceBefore(
-            Num(
-                "42",
             ),
-            [
-                Newline,
-            ],
-        ),
+            SpacesBefore(
+                [
+                    Newline,
+                ],
+                @50-92 ValueDef(
+                    Body(
+                        @50-51 Identifier {
+                            ident: "c",
+                        },
+                        @58-92 SpaceBefore(
+                            Str(
+                                Block(
+                                    [
+                                        [
+                                            Plaintext(
+                                                "Hello,\n",
+                                            ),
+                                            Plaintext(
+                                                "\n",
+                                            ),
+                                            Plaintext(
+                                                "World!",
+                                            ),
+                                        ],
+                                    ],
+                                ),
+                            ),
+                            [
+                                Newline,
+                            ],
+                        ),
+                    ),
+                ),
+            ),
+            SpacesBefore(
+                [
+                    Newline,
+                ],
+                @93-95 Expr(
+                    Num(
+                        "42",
+                    ),
+                ),
+            ),
+        ],
     ),
     [
         Newline,

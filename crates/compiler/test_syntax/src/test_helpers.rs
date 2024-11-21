@@ -1,10 +1,10 @@
 use bumpalo::Bump;
-use roc_fmt::{annotation::Formattable, header::fmt_header};
+use roc_fmt::{annotation::Formattable, def::fmt_stmts, header::fmt_header};
 use roc_parse::{
-    ast::{Defs, Expr, FullAst, Header, Malformed, SpacesBefore},
-    header::parse_module_defs,
+    ast::{Expr, FullAst, Header, Malformed, SpacesBefore, TopLevelDefs},
+    header::parse_full_ast,
     normalize::Normalize,
-    parser::{Parser, SyntaxError},
+    parser::SyntaxError,
     state::State,
     test_helpers::{parse_defs_with, parse_expr_with, parse_header_with},
 };
@@ -72,7 +72,7 @@ impl InputOwned {
 pub enum Output<'a> {
     Header(SpacesBefore<'a, Header<'a>>),
 
-    ModuleDefs(Defs<'a>),
+    ModuleDefs(TopLevelDefs<'a>),
 
     Expr(Expr<'a>),
 
@@ -89,8 +89,8 @@ impl<'a> Output<'a> {
                 buf.fmt_end_of_file();
                 InputOwned::Header(buf.as_str().to_string())
             }
-            Output::ModuleDefs(defs) => {
-                defs.format(&mut buf, 0);
+            Output::ModuleDefs(stmts) => {
+                fmt_stmts(&mut buf, stmts, 0);
                 buf.fmt_end_of_file();
                 InputOwned::ModuleDefs(buf.as_str().to_string())
             }
@@ -100,7 +100,7 @@ impl<'a> Output<'a> {
             }
             Output::Full(full) => {
                 fmt_header(&mut buf, &full.header);
-                full.defs.format(&mut buf, 0);
+                fmt_stmts(&mut buf, &full.stmts, 0);
                 buf.fmt_end_of_file();
                 InputOwned::Full(buf.as_str().to_string())
             }
@@ -168,21 +168,8 @@ impl<'a> Input<'a> {
 
             Input::Full(input) => {
                 let state = State::new(input.as_bytes());
-
-                let min_indent = 0;
-                let (_, header, state) = roc_parse::header::header()
-                    .parse(arena, state.clone(), min_indent)
-                    .map_err(|(_, fail)| SyntaxError::Header(fail))?;
-
-                let (new_header, defs) = header.item.upgrade_header_imports(arena);
-                let header = SpacesBefore {
-                    before: header.before,
-                    item: new_header,
-                };
-
-                let defs = parse_module_defs(arena, state, defs)?;
-
-                Ok(Output::Full(FullAst { header, defs }))
+                let full = parse_full_ast(arena, state)?;
+                Ok(Output::Full(full))
             }
         }
     }

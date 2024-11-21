@@ -1,27 +1,7 @@
 SpaceAfter(
-    Defs(
-        Defs {
-            tags: [
-                EitherIndex(2147483648),
-                EitherIndex(2147483649),
-            ],
-            regions: [
-                @0-26,
-                @27-51,
-            ],
-            space_before: [
-                Slice { start: 0, length: 0 },
-                Slice { start: 0, length: 1 },
-            ],
-            space_after: [
-                Slice { start: 0, length: 0 },
-                Slice { start: 1, length: 0 },
-            ],
-            spaces: [
-                Newline,
-            ],
-            type_defs: [],
-            value_defs: [
+    Stmts(
+        [
+            @0-26 ValueDef(
                 ModuleImport(
                     ModuleImport {
                         before_name: [],
@@ -35,11 +15,7 @@ SpaceAfter(
                         alias: None,
                         exposed: Some(
                             KeywordItem {
-                                keyword: Spaces {
-                                    before: [],
-                                    item: ImportExposingKeyword,
-                                    after: [],
-                                },
+                                keyword: ImportExposingKeyword,
                                 item: [
                                     @22-25 ExposedName(
                                         "int",
@@ -49,62 +25,67 @@ SpaceAfter(
                         ),
                     },
                 ),
-                ModuleImport(
-                    ModuleImport {
-                        before_name: [],
-                        name: @34-45 ImportedModuleName {
-                            package: None,
-                            name: ModuleName(
-                                "Json.Encode",
-                            ),
-                        },
-                        params: None,
-                        alias: Some(
-                            KeywordItem {
-                                keyword: Spaces {
-                                    before: [],
-                                    item: ImportAsKeyword,
-                                    after: [],
-                                },
-                                item: @49-51 ImportAlias(
-                                    "JE",
-                                ),
-                            },
-                        ),
-                        exposed: None,
-                    },
-                ),
-            ],
-        },
-        @53-71 SpaceBefore(
-            Apply(
-                @53-62 Var {
-                    module_name: "JE",
-                    ident: "encode",
-                },
-                [
-                    @64-70 ParensAround(
-                        Apply(
-                            @64-67 Var {
-                                module_name: "",
-                                ident: "int",
-                            },
-                            [
-                                @68-70 Num(
-                                    "42",
-                                ),
-                            ],
-                            Space,
-                        ),
-                    ),
-                ],
-                Space,
             ),
-            [
-                Newline,
-                Newline,
-            ],
-        ),
+            SpacesBefore(
+                [
+                    Newline,
+                ],
+                @27-51 ValueDef(
+                    ModuleImport(
+                        ModuleImport {
+                            before_name: [],
+                            name: @34-45 ImportedModuleName {
+                                package: None,
+                                name: ModuleName(
+                                    "Json.Encode",
+                                ),
+                            },
+                            params: None,
+                            alias: Some(
+                                KeywordItem {
+                                    keyword: ImportAsKeyword,
+                                    item: @49-51 ImportAlias(
+                                        "JE",
+                                    ),
+                                },
+                            ),
+                            exposed: None,
+                        },
+                    ),
+                ),
+            ),
+            SpacesBefore(
+                [
+                    Newline,
+                    Newline,
+                ],
+                @53-71 Expr(
+                    Apply(
+                        @53-62 Var {
+                            module_name: "JE",
+                            ident: "encode",
+                        },
+                        [
+                            @64-70 ParensAround(
+                                Apply(
+                                    @64-67 Var {
+                                        module_name: "",
+                                        ident: "int",
+                                    },
+                                    [
+                                        @68-70 Num(
+                                            "42",
+                                        ),
+                                    ],
+                                    Space,
+                                ),
+                            ),
+                        ],
+                        Space,
+                    ),
+                ),
+            ),
+        ],
     ),
     [
         Newline,

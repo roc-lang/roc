@@ -1,20 +1,6 @@
-Defs(
-    Defs {
-        tags: [
-            EitherIndex(2147483648),
-        ],
-        regions: [
-            @0-15,
-        ],
-        space_before: [
-            Slice { start: 0, length: 0 },
-        ],
-        space_after: [
-            Slice { start: 0, length: 0 },
-        ],
-        spaces: [],
-        type_defs: [],
-        value_defs: [
+Stmts(
+    [
+        @0-15 ValueDef(
             Body(
                 @0-3 Identifier {
                     ident: "abc",
@@ -33,18 +19,20 @@ Defs(
                     ],
                 ),
             ),
-        ],
-    },
-    @16-21 SpaceBefore(
-        TupleAccess(
-            Var {
-                module_name: "",
-                ident: "abc",
-            },
-            "0",
         ),
-        [
-            Newline,
-        ],
-    ),
+        SpacesBefore(
+            [
+                Newline,
+            ],
+            @16-21 Expr(
+                TupleAccess(
+                    Var {
+                        module_name: "",
+                        ident: "abc",
+                    },
+                    "0",
+                ),
+            ),
+        ),
+    ],
 )

@@ -1,25 +1,11 @@
-Defs(
-    Defs {
-        tags: [
-            EitherIndex(2147483648),
-        ],
-        regions: [
-            @0-41,
-        ],
-        space_before: [
-            Slice { start: 0, length: 0 },
-        ],
-        space_after: [
-            Slice { start: 0, length: 0 },
-        ],
-        spaces: [],
-        type_defs: [],
-        value_defs: [
-            AnnotatedBody {
-                ann_pattern: @0-1 Identifier {
+Stmts(
+    [
+        @0-29 ValueDef(
+            Annotation(
+                @0-1 Identifier {
                     ident: "f",
                 },
-                ann_type: @3-29 Function(
+                @3-29 Function(
                     [
                         @3-14 Tuple {
                             elems: [
@@ -62,49 +48,57 @@ Defs(
                         ),
                     },
                 ),
-                lines_between: [
-                    Newline,
-                ],
-                body_pattern: @30-31 Identifier {
-                    ident: "f",
-                },
-                body_expr: @34-41 Closure(
-                    [
-                        @35-36 Identifier {
+            ),
+        ),
+        SpacesBefore(
+            [
+                Newline,
+            ],
+            @30-41 ValueDef(
+                Body(
+                    @30-31 Identifier {
+                        ident: "f",
+                    },
+                    @34-41 Closure(
+                        [
+                            @35-36 Identifier {
+                                ident: "x",
+                            },
+                        ],
+                        @40-41 Var {
+                            module_name: "",
                             ident: "x",
                         },
-                    ],
-                    @40-41 Var {
-                        module_name: "",
-                        ident: "x",
-                    },
+                    ),
                 ),
-            },
-        ],
-    },
-    @43-51 SpaceBefore(
-        Apply(
-            @43-44 Var {
-                module_name: "",
-                ident: "f",
-            },
-            [
-                @45-51 Tuple(
-                    [
-                        @46-47 Num(
-                            "1",
-                        ),
-                        @49-50 Num(
-                            "2",
-                        ),
-                    ],
-                ),
-            ],
-            Space,
+            ),
         ),
-        [
-            Newline,
-            Newline,
-        ],
-    ),
+        SpacesBefore(
+            [
+                Newline,
+                Newline,
+            ],
+            @43-51 Expr(
+                Apply(
+                    @43-44 Var {
+                        module_name: "",
+                        ident: "f",
+                    },
+                    [
+                        @45-51 Tuple(
+                            [
+                                @46-47 Num(
+                                    "1",
+                                ),
+                                @49-50 Num(
+                                    "2",
+                                ),
+                            ],
+                        ),
+                    ],
+                    Space,
+                ),
+            ),
+        ),
+    ],
 )

@@ -1,21 +1,7 @@
 SpaceAfter(
-    Defs(
-        Defs {
-            tags: [
-                EitherIndex(2147483648),
-            ],
-            regions: [
-                @0-25,
-            ],
-            space_before: [
-                Slice { start: 0, length: 0 },
-            ],
-            space_after: [
-                Slice { start: 0, length: 0 },
-            ],
-            spaces: [],
-            type_defs: [],
-            value_defs: [
+    Stmts(
+        [
+            @0-25 ValueDef(
                 Body(
                     @0-6 Identifier {
                         ident: "myList",
@@ -46,16 +32,18 @@ SpaceAfter(
                         ],
                     ),
                 ),
-            ],
-        },
-        @26-28 SpaceBefore(
-            Num(
-                "42",
             ),
-            [
-                Newline,
-            ],
-        ),
+            SpacesBefore(
+                [
+                    Newline,
+                ],
+                @26-28 Expr(
+                    Num(
+                        "42",
+                    ),
+                ),
+            ),
+        ],
     ),
     [
         Newline,

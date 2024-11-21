@@ -1,28 +1,7 @@
 SpaceAfter(
-    Defs(
-        Defs {
-            tags: [
-                EitherIndex(2147483648),
-                EitherIndex(2147483649),
-            ],
-            regions: [
-                @0-73,
-                @75-154,
-            ],
-            space_before: [
-                Slice { start: 0, length: 0 },
-                Slice { start: 0, length: 2 },
-            ],
-            space_after: [
-                Slice { start: 0, length: 0 },
-                Slice { start: 2, length: 0 },
-            ],
-            spaces: [
-                Newline,
-                Newline,
-            ],
-            type_defs: [],
-            value_defs: [
+    Stmts(
+        [
+            @0-73 ValueDef(
                 Annotation(
                     @0-1 Identifier {
                         ident: "f",
@@ -78,83 +57,93 @@ SpaceAfter(
                         ],
                     ),
                 ),
-                Annotation(
-                    @75-76 Identifier {
-                        ident: "f",
-                    },
-                    @79-154 Where(
-                        @79-85 SpaceAfter(
-                            Function(
-                                [
-                                    @79-80 BoundVariable(
-                                        "a",
+            ),
+            SpacesBefore(
+                [
+                    Newline,
+                    Newline,
+                ],
+                @75-154 ValueDef(
+                    Annotation(
+                        @75-76 Identifier {
+                            ident: "f",
+                        },
+                        @79-154 Where(
+                            @79-85 SpaceAfter(
+                                Function(
+                                    [
+                                        @79-80 BoundVariable(
+                                            "a",
+                                        ),
+                                    ],
+                                    Pure,
+                                    @84-85 BoundVariable(
+                                        "b",
                                     ),
-                                ],
-                                Pure,
-                                @84-85 BoundVariable(
-                                    "b",
                                 ),
+                                [
+                                    Newline,
+                                ],
                             ),
                             [
-                                Newline,
+                                @94-116 ImplementsClause {
+                                    var: @94-95 "a",
+                                    abilities: [
+                                        @107-111 Apply(
+                                            "",
+                                            "Hash",
+                                            [],
+                                        ),
+                                        @114-116 Apply(
+                                            "",
+                                            "Eq",
+                                            [],
+                                        ),
+                                    ],
+                                },
+                                @122-154 ImplementsClause {
+                                    var: @122-123 SpaceBefore(
+                                        "b",
+                                        [
+                                            Newline,
+                                        ],
+                                    ),
+                                    abilities: [
+                                        @135-139 Apply(
+                                            "",
+                                            "Hash",
+                                            [],
+                                        ),
+                                        @142-149 Apply(
+                                            "",
+                                            "Display",
+                                            [],
+                                        ),
+                                        @152-154 Apply(
+                                            "",
+                                            "Eq",
+                                            [],
+                                        ),
+                                    ],
+                                },
                             ],
                         ),
-                        [
-                            @94-116 ImplementsClause {
-                                var: @94-95 "a",
-                                abilities: [
-                                    @107-111 Apply(
-                                        "",
-                                        "Hash",
-                                        [],
-                                    ),
-                                    @114-116 Apply(
-                                        "",
-                                        "Eq",
-                                        [],
-                                    ),
-                                ],
-                            },
-                            @122-154 ImplementsClause {
-                                var: @122-123 SpaceBefore(
-                                    "b",
-                                    [
-                                        Newline,
-                                    ],
-                                ),
-                                abilities: [
-                                    @135-139 Apply(
-                                        "",
-                                        "Hash",
-                                        [],
-                                    ),
-                                    @142-149 Apply(
-                                        "",
-                                        "Display",
-                                        [],
-                                    ),
-                                    @152-154 Apply(
-                                        "",
-                                        "Eq",
-                                        [],
-                                    ),
-                                ],
-                            },
-                        ],
                     ),
                 ),
-            ],
-        },
-        @156-157 SpaceBefore(
-            Var {
-                module_name: "",
-                ident: "f",
-            },
-            [
-                Newline,
-                Newline,
-            ],
-        ),
+            ),
+            SpacesBefore(
+                [
+                    Newline,
+                    Newline,
+                ],
+                @156-157 Expr(
+                    Var {
+                        module_name: "",
+                        ident: "f",
+                    },
+                ),
+            ),
+        ],
     ),
     [
         Newline,

@@ -18,20 +18,26 @@ use soa::{EitherIndex, Slice};
 #[derive(Debug, Clone)]
 pub struct FullAst<'a> {
     pub header: SpacesBefore<'a, Header<'a>>,
-    pub defs: Defs<'a>,
+    pub stmts: TopLevelDefs<'a>,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub struct Spaces<'a, T> {
     pub before: &'a [CommentOrNewline<'a>],
     pub item: T,
     pub after: &'a [CommentOrNewline<'a>],
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub struct SpacesBefore<'a, T> {
     pub before: &'a [CommentOrNewline<'a>],
     pub item: T,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub struct SpacesAfter<'a, T> {
+    pub item: T,
+    pub after: &'a [CommentOrNewline<'a>],
 }
 
 #[derive(Copy, Clone, PartialEq)]
@@ -94,6 +100,46 @@ impl<'a, T: Debug> Debug for Spaced<'a, T> {
     }
 }
 
+impl<'a, T: Debug> Debug for SpacesBefore<'a, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.before.is_empty() {
+            self.item.fmt(f)
+        } else {
+            f.debug_tuple("SpacesBefore")
+                .field(&self.before)
+                .field(&self.item)
+                .finish()
+        }
+    }
+}
+
+impl<'a, T: Debug> Debug for SpacesAfter<'a, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.after.is_empty() {
+            self.item.fmt(f)
+        } else {
+            f.debug_tuple("SpacesAfter")
+                .field(&self.item)
+                .field(&self.after)
+                .finish()
+        }
+    }
+}
+
+impl<'a, T: Debug> Debug for Spaces<'a, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.before.is_empty() && self.after.is_empty() {
+            self.item.fmt(f)
+        } else {
+            f.debug_tuple("Spaces")
+                .field(&self.before)
+                .field(&self.item)
+                .field(&self.after)
+                .finish()
+        }
+    }
+}
+
 pub trait ExtractSpaces<'a>: Sized + Copy {
     type Item;
     fn extract_spaces(&self) -> Spaces<'a, Self::Item>;
@@ -118,9 +164,11 @@ impl<'a, T: ExtractSpaces<'a>> ExtractSpaces<'a> for Loc<T> {
     }
 }
 
+pub type TopLevelDefs<'a> = SpacesAfter<'a, &'a [SpacesBefore<'a, Loc<Stmt<'a>>>]>;
+
 impl<'a> Header<'a> {
-    pub fn upgrade_header_imports(self, arena: &'a Bump) -> (Self, Defs<'a>) {
-        let (header, defs) = match self {
+    pub fn upgrade_header_imports(self, arena: &'a Bump) -> (Self, TopLevelDefs<'a>) {
+        match self {
             Header::Module(header) => (
                 Header::Module(ModuleHeader {
                     interface_imports: None,
@@ -135,10 +183,14 @@ impl<'a> Header<'a> {
                 }),
                 Self::header_imports_to_defs(arena, header.old_imports),
             ),
-            Header::Package(_) | Header::Platform(_) | Header::Hosted(_) => (self, Defs::default()),
-        };
-
-        (header, defs)
+            Header::Package(_) | Header::Platform(_) | Header::Hosted(_) => (
+                self,
+                SpacesAfter {
+                    item: &[],
+                    after: &[],
+                },
+            ),
+        }
     }
 
     pub fn header_imports_to_defs(
@@ -146,8 +198,10 @@ impl<'a> Header<'a> {
         imports: Option<
             header::KeywordItem<'a, header::ImportsKeyword, header::ImportsCollection<'a>>,
         >,
-    ) -> Defs<'a> {
-        let mut defs = Defs::default();
+    ) -> TopLevelDefs<'a> {
+        let mut stmts = Vec::new_in(arena);
+
+        let mut last_spaces: &'a [CommentOrNewline<'a>] = &[];
 
         if let Some(imports) = imports {
             let len = imports.item.len();
@@ -196,29 +250,38 @@ impl<'a> Header<'a> {
                     }
                 };
 
-                defs.push_value_def(
-                    value_def,
-                    import.region,
-                    if index == 0 {
-                        let mut before = vec![CommentOrNewline::Newline, CommentOrNewline::Newline];
-                        before.extend(spaced.before);
-                        arena.alloc(before)
-                    } else {
-                        spaced.before
-                    },
-                    if index == len - 1 {
-                        let mut after = spaced.after.to_vec();
-                        after.extend_from_slice(imports.item.final_comments());
-                        after.push(CommentOrNewline::Newline);
-                        after.push(CommentOrNewline::Newline);
-                        arena.alloc(after)
-                    } else {
-                        spaced.after
-                    },
-                );
+                let before = if index == 0 {
+                    merge_spaces(
+                        arena,
+                        &[CommentOrNewline::Newline, CommentOrNewline::Newline],
+                        spaced.before,
+                    )
+                } else {
+                    spaced.before
+                };
+
+                let stmt_spaced = SpacesBefore {
+                    before: merge_spaces(arena, last_spaces, before),
+                    item: Loc::at(import.region, Stmt::ValueDef(value_def)),
+                };
+
+                last_spaces = if index == len - 1 {
+                    merge_spaces(
+                        arena,
+                        spaced.after,
+                        &[CommentOrNewline::Newline, CommentOrNewline::Newline],
+                    )
+                } else {
+                    spaced.after
+                };
+
+                stmts.push(stmt_spaced);
             }
         }
-        defs
+        SpacesAfter {
+            item: stmts.into_bump_slice(),
+            after: last_spaces,
+        }
     }
 
     fn header_import_to_value_def(
@@ -485,8 +548,12 @@ pub enum Expr<'a> {
 
     // Pattern Matching
     Closure(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>),
-    /// Multiple defs in a row
+
+    /// Multiple defs in a row (only used in canonicalization, not in parsing)
     Defs(&'a Defs<'a>, &'a Loc<Expr<'a>>),
+
+    /// Multiple statements in a row
+    Stmts(&'a [SpacesBefore<'a, Loc<Stmt<'a>>>]),
 
     Backpassing(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
 
@@ -641,6 +708,20 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
             });
 
             any_defs_suffixed || is_expr_suffixed(&expr.value)
+        }
+
+        Expr::Stmts(stmts) => {
+            let any_defs_suffixed = stmts.iter().any(|s| match s.item.value {
+                Stmt::Expr(expr) => is_expr_suffixed(&expr),
+                Stmt::Backpassing(_pats, expr) => is_expr_suffixed(&expr.value),
+                Stmt::ValueDef(ValueDef::Body(_, loc_expr)) => is_expr_suffixed(&loc_expr.value),
+                Stmt::ValueDef(ValueDef::AnnotatedBody { body_expr, .. }) => {
+                    is_expr_suffixed(&body_expr.value)
+                }
+                _ => false,
+            });
+
+            any_defs_suffixed
         }
         Expr::Float(_) => false,
         Expr::Num(_) => false,
@@ -847,15 +928,15 @@ impl<'a> ValueDef<'a> {
 }
 
 pub struct RecursiveValueDefIter<'a, 'b> {
-    current: &'b Defs<'a>,
+    current: &'b [SpacesBefore<'a, Loc<Stmt<'a>>>],
     index: usize,
-    pending: std::vec::Vec<&'b Defs<'a>>,
+    pending: std::vec::Vec<&'b [SpacesBefore<'a, Loc<Stmt<'a>>>]>,
 }
 
 impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
-    pub fn new(defs: &'b Defs<'a>) -> Self {
+    pub fn new(stmts: &TopLevelDefs<'a>) -> Self {
         Self {
-            current: defs,
+            current: stmts.item,
             index: 0,
             pending: vec![],
         }
@@ -888,12 +969,16 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
 
         while let Some(next) = expr_stack.pop() {
             match next {
-                Defs(defs, cont) => {
-                    self.pending.push(defs);
-                    // We purposefully don't push the exprs inside defs here
-                    // because they will be traversed when the iterator
-                    // gets to their parent def.
-                    expr_stack.push(&cont.value);
+                Defs(_defs, _cont) => {
+                    panic!("only used after can")
+                    // self.pending.push(defs);
+                    // // We purposefully don't push the exprs inside defs here
+                    // // because they will be traversed when the iterator
+                    // // gets to their parent def.
+                    // expr_stack.push(&cont.value);
+                }
+                Stmts(stmts) => {
+                    self.pending.push(stmts);
                 }
                 List(list) => {
                     expr_stack.reserve(list.len());
@@ -1034,60 +1119,67 @@ impl<'a, 'b> Iterator for RecursiveValueDefIter<'a, 'b> {
     type Item = (&'b ValueDef<'a>, &'b Region);
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self.current.tags.get(self.index) {
-            Some(tag) => {
-                if let Err(def_index) = tag.split() {
-                    let def = &self.current.value_defs[def_index.index()];
-                    let region = &self.current.regions[self.index];
+        match self.current.get(self.index) {
+            Some(stmt) => {
+                match &stmt.item.value {
+                    Stmt::Expr(expr) => {
+                        self.push_pending_from_expr(expr);
+                        self.index += 1;
+                        self.next()
+                    }
+                    Stmt::Backpassing(_, _) | Stmt::TypeDef(_) => {
+                        // Not a value def, try next
+                        self.index += 1;
+                        self.next()
+                    }
+                    Stmt::ValueDef(def) => {
+                        match def {
+                            ValueDef::Body(_, body) => self.push_pending_from_expr(&body.value),
 
-                    match def {
-                        ValueDef::Body(_, body) => self.push_pending_from_expr(&body.value),
+                            ValueDef::AnnotatedBody {
+                                ann_pattern: _,
+                                ann_type: _,
+                                lines_between: _,
+                                body_pattern: _,
+                                body_expr,
+                            } => self.push_pending_from_expr(&body_expr.value),
 
-                        ValueDef::AnnotatedBody {
-                            ann_pattern: _,
-                            ann_type: _,
-                            lines_between: _,
-                            body_pattern: _,
-                            body_expr,
-                        } => self.push_pending_from_expr(&body_expr.value),
+                            ValueDef::Dbg {
+                                condition,
+                                preceding_comment: _,
+                            }
+                            | ValueDef::Expect {
+                                condition,
+                                preceding_comment: _,
+                            } => self.push_pending_from_expr(&condition.value),
 
-                        ValueDef::Dbg {
-                            condition,
-                            preceding_comment: _,
-                        }
-                        | ValueDef::Expect {
-                            condition,
-                            preceding_comment: _,
-                        } => self.push_pending_from_expr(&condition.value),
-
-                        ValueDef::ModuleImport(ModuleImport {
-                            before_name: _,
-                            name: _,
-                            alias: _,
-                            exposed: _,
-                            params,
-                        }) => {
-                            if let Some(ModuleImportParams { before: _, params }) = params {
-                                for loc_assigned_field in params.value.items {
-                                    if let Some(expr) = loc_assigned_field.value.value() {
-                                        self.push_pending_from_expr(&expr.value);
+                            ValueDef::ModuleImport(ModuleImport {
+                                before_name: _,
+                                name: _,
+                                alias: _,
+                                exposed: _,
+                                params,
+                            }) => {
+                                if let Some(ModuleImportParams { before: _, params }) = params {
+                                    for loc_assigned_field in params.value.items {
+                                        if let Some(expr) = loc_assigned_field.value.value() {
+                                            self.push_pending_from_expr(&expr.value);
+                                        }
                                     }
                                 }
                             }
+                            ValueDef::Stmt(loc_expr) => {
+                                self.push_pending_from_expr(&loc_expr.value)
+                            }
+                            ValueDef::Annotation(_, _)
+                            | ValueDef::IngestedFileImport(_)
+                            | ValueDef::StmtAfterExpr => {}
                         }
-                        ValueDef::Stmt(loc_expr) => self.push_pending_from_expr(&loc_expr.value),
-                        ValueDef::Annotation(_, _)
-                        | ValueDef::IngestedFileImport(_)
-                        | ValueDef::StmtAfterExpr => {}
+
+                        self.index += 1;
+
+                        Some((&def, &stmt.item.region))
                     }
-
-                    self.index += 1;
-
-                    Some((def, region))
-                } else {
-                    // Not a value def, try next
-                    self.index += 1;
-                    self.next()
                 }
             }
 
@@ -1181,6 +1273,23 @@ impl<'a> ImportAlias<'a> {
     pub const fn as_str(&'a self) -> &'a str {
         self.0
     }
+}
+
+/// A Stmt consists of a fragment of code that hasn't been fully stitched together yet.
+/// For example, each of the following lines is a Stmt:
+/// - `foo bar` (Expr)
+/// - `foo, bar <- baz` (Backpassing)
+/// - `Foo : [A, B, C]` (TypeDef)
+/// - `foo = \x -> x + 1` (ValueDef)
+///
+/// Note in for example that the Backpassing Stmt doesn't make any sense on its own;
+/// we need to link it up with the following stmts to make a complete expression.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Stmt<'a> {
+    Expr(Expr<'a>),
+    Backpassing(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>),
+    TypeDef(TypeDef<'a>),
+    ValueDef(ValueDef<'a>),
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -2413,7 +2522,20 @@ pub trait Malformed {
 
 impl<'a> Malformed for FullAst<'a> {
     fn is_malformed(&self) -> bool {
-        self.header.item.is_malformed() || self.defs.is_malformed()
+        self.header.item.is_malformed() || self.stmts.item.iter().any(|s| s.is_malformed())
+    }
+}
+
+impl<'a> Malformed for Stmt<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            Stmt::Expr(expr) => expr.is_malformed(),
+            Stmt::Backpassing(patterns, expr) => {
+                patterns.iter().any(|pattern| pattern.is_malformed()) || expr.is_malformed()
+            }
+            Stmt::TypeDef(type_def) => type_def.is_malformed(),
+            Stmt::ValueDef(value_def) => value_def.is_malformed(),
+        }
     }
 }
 
@@ -2438,6 +2560,18 @@ impl<'a, T: Malformed> Malformed for Spaces<'a, T> {
 impl<'a, T: Malformed> Malformed for SpacesBefore<'a, T> {
     fn is_malformed(&self) -> bool {
         self.item.is_malformed()
+    }
+}
+
+impl<'a, T: Malformed> Malformed for SpacesAfter<'a, T> {
+    fn is_malformed(&self) -> bool {
+        self.item.is_malformed()
+    }
+}
+
+impl<'a, T: Malformed> Malformed for &'a [T] {
+    fn is_malformed(&self) -> bool {
+        self.iter().any(|item| item.is_malformed())
     }
 }
 
@@ -2474,6 +2608,7 @@ impl<'a> Malformed for Expr<'a> {
 
             Closure(args, body) => args.iter().any(|arg| arg.is_malformed()) || body.is_malformed(),
             Defs(defs, body) => defs.is_malformed() || body.is_malformed(),
+            Stmts(stmts) => stmts.iter().any(|s| s.is_malformed()),
             Backpassing(args, call, body) => args.iter().any(|arg| arg.is_malformed()) || call.is_malformed() || body.is_malformed(),
             Dbg => false,
             DbgStmt(condition, continuation) => condition.is_malformed() || continuation.is_malformed(),

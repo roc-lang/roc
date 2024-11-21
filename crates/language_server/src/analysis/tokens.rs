@@ -6,7 +6,7 @@ use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::{
     ast::{
         AbilityImpls, AbilityMember, AssignedField, Collection, Defs, Expr, Header, Implements,
-        ImplementsAbilities, ImplementsAbility, ImplementsClause, Pattern, PatternAs, Spaced,
+        ImplementsAbilities, ImplementsAbility, ImplementsClause, Pattern, PatternAs, Spaced, Stmt,
         StrLiteral, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef, WhenBranch,
     },
     header::{
@@ -500,6 +500,19 @@ impl IterTokens for Defs<'_> {
     }
 }
 
+impl IterTokens for Loc<Stmt<'_>> {
+    fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
+        match self.value {
+            Stmt::Expr(expr) => Loc::at(self.region, expr).iter_tokens(arena),
+            Stmt::Backpassing(pats, body) => (pats.iter_tokens(arena).into_iter())
+                .chain(body.iter_tokens(arena))
+                .collect_in(arena),
+            Stmt::TypeDef(type_def) => type_def.iter_tokens(arena),
+            Stmt::ValueDef(value_def) => value_def.iter_tokens(arena),
+        }
+    }
+}
+
 impl IterTokens for TypeDef<'_> {
     fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
         match self {
@@ -681,6 +694,10 @@ impl IterTokens for Loc<Expr<'_>> {
                 .collect_in(arena),
             Expr::Defs(defs, exprs) => (defs.iter_tokens(arena).into_iter())
                 .chain(exprs.iter_tokens(arena))
+                .collect_in(arena),
+            Expr::Stmts(stmts) => stmts
+                .iter()
+                .flat_map(|s| s.item.iter_tokens(arena))
                 .collect_in(arena),
             Expr::Backpassing(patterns, e1, e2) => (patterns.iter_tokens(arena).into_iter())
                 .chain(e1.iter_tokens(arena))

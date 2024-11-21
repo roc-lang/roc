@@ -13,11 +13,9 @@ Defs {
         Slice { start: 0, length: 0 },
     ],
     space_after: [
-        Slice { start: 0, length: 1 },
+        Slice { start: 0, length: 0 },
     ],
-    spaces: [
-        Newline,
-    ],
+    spaces: [],
     type_defs: [],
     value_defs: [
         Body(
@@ -37,13 +35,13 @@ Defs {
                     @11-120 Closure(
                         [
                             @16-23 Identifier {
-                                ident: "#!2_arg",
+                                ident: "#!1_arg",
                             },
                         ],
                         @11-120 When(
                             @16-23 Var {
                                 module_name: "",
-                                ident: "#!2_arg",
+                                ident: "#!1_arg",
                             },
                             [
                                 WhenBranch {
@@ -52,93 +50,55 @@ Defs {
                                             [],
                                         ),
                                     ],
-                                    value: @54-65 Apply(
-                                        @54-65 Var {
-                                            module_name: "Task",
-                                            ident: "await",
-                                        },
-                                        [
-                                            @54-65 Defs(
-                                                Defs {
-                                                    tags: [
-                                                        EitherIndex(2147483648),
-                                                    ],
-                                                    regions: [
-                                                        @54-65,
-                                                    ],
-                                                    space_before: [
-                                                        Slice { start: 0, length: 0 },
-                                                    ],
-                                                    space_after: [
-                                                        Slice { start: 0, length: 0 },
-                                                    ],
-                                                    spaces: [],
-                                                    type_defs: [],
-                                                    value_defs: [
-                                                        AnnotatedBody {
-                                                            ann_pattern: @54-65 Identifier {
-                                                                ident: "#!1_stmt",
-                                                            },
-                                                            ann_type: @54-65 Apply(
-                                                                "",
-                                                                "Task",
-                                                                [
-                                                                    @54-65 Record {
-                                                                        fields: [],
-                                                                        ext: None,
-                                                                    },
-                                                                    @54-65 Inferred,
-                                                                ],
-                                                            ),
-                                                            lines_between: [],
-                                                            body_pattern: @54-65 Identifier {
-                                                                ident: "#!1_stmt",
-                                                            },
-                                                            body_expr: @54-65 Apply(
-                                                                @54-65 Var {
-                                                                    module_name: "",
-                                                                    ident: "line",
-                                                                },
-                                                                [
-                                                                    @60-65 Str(
-                                                                        PlainLine(
-                                                                            "foo",
-                                                                        ),
-                                                                    ),
-                                                                ],
-                                                                Space,
-                                                            ),
+                                    value: @54-89 Defs(
+                                        Defs {
+                                            tags: [
+                                                EitherIndex(2147483648),
+                                            ],
+                                            regions: [
+                                                @54-65,
+                                            ],
+                                            space_before: [
+                                                Slice { start: 0, length: 0 },
+                                            ],
+                                            space_after: [
+                                                Slice { start: 0, length: 0 },
+                                            ],
+                                            spaces: [],
+                                            type_defs: [],
+                                            value_defs: [
+                                                Stmt(
+                                                    @54-65 Apply(
+                                                        @54-59 Var {
+                                                            module_name: "",
+                                                            ident: "line!",
                                                         },
-                                                    ],
-                                                },
-                                                @54-65 Var {
-                                                    module_name: "",
-                                                    ident: "#!1_stmt",
-                                                },
-                                            ),
-                                            @54-65 Closure(
-                                                [
-                                                    @54-65 Underscore(
-                                                        "#!stmt",
-                                                    ),
-                                                ],
-                                                @78-89 Apply(
-                                                    @78-89 Var {
-                                                        module_name: "",
-                                                        ident: "line",
-                                                    },
-                                                    [
-                                                        @84-89 Str(
-                                                            PlainLine(
-                                                                "bar",
+                                                        [
+                                                            @60-65 Str(
+                                                                PlainLine(
+                                                                    "foo",
+                                                                ),
                                                             ),
-                                                        ),
-                                                    ],
-                                                    Space,
+                                                        ],
+                                                        Space,
+                                                    ),
                                                 ),
-                                            ),
-                                        ],
-                                        BangSuffix,
+                                            ],
+                                        },
+                                        @78-89 Apply(
+                                            @78-89 Var {
+                                                module_name: "",
+                                                ident: "line",
+                                            },
+                                            [
+                                                @84-89 Str(
+                                                    PlainLine(
+                                                        "bar",
+                                                    ),
+                                                ),
+                                            ],
+                                            Space,
+                                        ),
                                     ),
                                     guard: None,
                                 },

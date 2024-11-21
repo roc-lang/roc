@@ -1,11 +1,11 @@
 use std::fmt::Debug;
 
 use crate::ast::{
-    Collection, CommentOrNewline, Defs, Header, Malformed, Pattern, Spaced, Spaces, SpacesBefore,
-    StrLiteral, TypeAnnotation,
+    Collection, CommentOrNewline, FullAst, Header, Malformed, Pattern, Spaced, Spaces, SpacesAfter,
+    SpacesBefore, StrLiteral, TopLevelDefs, TypeAnnotation,
 };
 use crate::blankspace::{space0_before_e, space0_e};
-use crate::expr::merge_spaces;
+use crate::expr::{merge_spaces, parse_top_level_defs};
 use crate::ident::{self, lowercase_ident, unqualified_ident, UppercaseIdent};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
@@ -36,10 +36,9 @@ fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
 pub fn parse_module_defs<'a>(
     arena: &'a bumpalo::Bump,
     state: State<'a>,
-    defs: Defs<'a>,
-) -> Result<Defs<'a>, SyntaxError<'a>> {
+) -> Result<TopLevelDefs<'a>, SyntaxError<'a>> {
     let min_indent = 0;
-    match crate::expr::parse_top_level_defs(arena, state.clone(), defs) {
+    match crate::expr::parse_top_level_defs(arena, state.clone()) {
         Ok((_, defs, state)) => match end_of_file().parse(arena, state, min_indent) {
             Ok(_) => Ok(defs),
             Err((_, fail)) => Err(fail),
@@ -57,6 +56,68 @@ pub fn parse_header<'a>(
         Ok((_, module, state)) => Ok((module, state)),
         Err((_, fail)) => Err(SourceError::new(fail, &state)),
     }
+}
+
+pub fn parse_full_ast<'a>(
+    arena: &'a bumpalo::Bump,
+    state: State<'a>,
+) -> Result<FullAst<'a>, SyntaxError<'a>> {
+    let min_indent = 0;
+
+    let (_, header, state) = header()
+        .parse(arena, state.clone(), min_indent)
+        .map_err(|(_, fail)| SyntaxError::Header(fail))?;
+
+    let (new_header, generated_import_stmts) = header.item.upgrade_header_imports(arena);
+
+    let header = SpacesBefore {
+        before: header.before,
+        item: new_header,
+    };
+
+    // TODO: this pos is probably useless and
+    // we should remove it from SyntaxError::Expr
+    let pos = state.pos();
+    let (_, defs, state) = parse_top_level_defs(arena, state.clone())
+        .map_err(|(_, fail)| SyntaxError::Expr(fail, pos))?;
+
+    let _ = end_of_file()
+        .parse(arena, state, min_indent)
+        .map_err(|(_, fail)| fail)?;
+
+    let stmts = if generated_import_stmts.item.is_empty() && generated_import_stmts.after.is_empty()
+    {
+        defs
+    } else {
+        let mut new_stmts = bumpalo::collections::Vec::with_capacity_in(
+            generated_import_stmts.item.len() + defs.item.len(),
+            arena,
+        );
+
+        new_stmts.extend(generated_import_stmts.item.iter().copied());
+
+        let mut it = defs.item.iter();
+        let after = if !generated_import_stmts.after.is_empty() {
+            if let Some(mut first) = it.next().copied() {
+                first.before = merge_spaces(arena, generated_import_stmts.after, first.before);
+                new_stmts.push(first);
+
+                new_stmts.extend(it);
+                defs.after
+            } else {
+                merge_spaces(arena, generated_import_stmts.after, defs.after)
+            }
+        } else {
+            new_stmts.extend(it);
+            defs.after
+        };
+
+        SpacesAfter {
+            item: new_stmts.into_bump_slice(),
+            after,
+        }
+    };
+    Ok(FullAst { header, stmts })
 }
 
 pub fn header<'a>() -> impl Parser<'a, SpacesBefore<'a, Header<'a>>, EHeader<'a>> {

@@ -13,17 +13,13 @@ Defs {
     ],
     space_before: [
         Slice { start: 0, length: 0 },
-        Slice { start: 0, length: 2 },
+        Slice { start: 0, length: 0 },
     ],
     space_after: [
         Slice { start: 0, length: 0 },
-        Slice { start: 2, length: 1 },
+        Slice { start: 0, length: 0 },
     ],
-    spaces: [
-        Newline,
-        Newline,
-        Newline,
-    ],
+    spaces: [],
     type_defs: [],
     value_defs: [
         Body(
@@ -34,14 +30,18 @@ Defs {
                 Defs {
                     tags: [
                         EitherIndex(2147483648),
+                        EitherIndex(2147483649),
                     ],
                     regions: [
                         @15-20,
+                        @25-39,
                     ],
                     space_before: [
                         Slice { start: 0, length: 0 },
+                        Slice { start: 0, length: 0 },
                     ],
                     space_after: [
+                        Slice { start: 0, length: 0 },
                         Slice { start: 0, length: 0 },
                     ],
                     spaces: [],
@@ -57,85 +57,27 @@ Defs {
                                 ),
                             ),
                         ),
-                    ],
-                },
-                @11-54 Apply(
-                    @11-54 Var {
-                        module_name: "Task",
-                        ident: "await",
-                    },
-                    [
-                        @25-39 Defs(
-                            Defs {
-                                tags: [
-                                    EitherIndex(2147483648),
-                                ],
-                                regions: [
-                                    @25-39,
-                                ],
-                                space_before: [
-                                    Slice { start: 0, length: 0 },
-                                ],
-                                space_after: [
-                                    Slice { start: 0, length: 0 },
-                                ],
-                                spaces: [],
-                                type_defs: [],
-                                value_defs: [
-                                    AnnotatedBody {
-                                        ann_pattern: @25-39 Identifier {
-                                            ident: "#!1_stmt",
-                                        },
-                                        ann_type: @25-39 Apply(
-                                            "",
-                                            "Task",
-                                            [
-                                                @25-39 Record {
-                                                    fields: [],
-                                                    ext: None,
-                                                },
-                                                @25-39 Inferred,
-                                            ],
-                                        ),
-                                        lines_between: [],
-                                        body_pattern: @25-39 Identifier {
-                                            ident: "#!1_stmt",
-                                        },
-                                        body_expr: @25-39 Apply(
-                                            @25-39 Var {
-                                                module_name: "Stdout",
-                                                ident: "line",
-                                            },
-                                            [
-                                                @38-39 Var {
-                                                    module_name: "",
-                                                    ident: "a",
-                                                },
-                                            ],
-                                            Space,
-                                        ),
+                        Stmt(
+                            @25-39 Apply(
+                                @25-37 Var {
+                                    module_name: "Stdout",
+                                    ident: "line!",
+                                },
+                                [
+                                    @38-39 Var {
+                                        module_name: "",
+                                        ident: "a",
                                     },
                                 ],
-                            },
-                            @11-54 Var {
-                                module_name: "",
-                                ident: "#!1_stmt",
-                            },
-                        ),
-                        @11-54 Closure(
-                            [
-                                @25-39 Underscore(
-                                    "#!stmt",
-                                ),
-                            ],
-                            @45-53 Var {
-                                module_name: "",
-                                ident: "printBar",
-                            },
+                                Space,
+                            ),
                         ),
                     ],
-                    BangSuffix,
-                ),
+                },
+                @45-53 Var {
+                    module_name: "",
+                    ident: "printBar",
+                },
             ),
         ),
         Body(

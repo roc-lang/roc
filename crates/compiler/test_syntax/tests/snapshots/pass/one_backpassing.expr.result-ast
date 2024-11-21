@@ -1,34 +1,40 @@
 SpaceBefore(
     SpaceAfter(
-        Backpassing(
+        Stmts(
             [
-                @18-19 Identifier {
-                    ident: "x",
-                },
-            ],
-            @23-32 ParensAround(
-                Closure(
+                @18-32 Backpassing(
                     [
-                        @25-26 Identifier {
-                            ident: "y",
+                        @18-19 Identifier {
+                            ident: "x",
                         },
                     ],
-                    @30-31 Var {
-                        module_name: "",
-                        ident: "y",
-                    },
+                    @23-32 ParensAround(
+                        Closure(
+                            [
+                                @25-26 Identifier {
+                                    ident: "y",
+                                },
+                            ],
+                            @30-31 Var {
+                                module_name: "",
+                                ident: "y",
+                            },
+                        ),
+                    ),
                 ),
-            ),
-            @34-35 SpaceBefore(
-                Var {
-                    module_name: "",
-                    ident: "x",
-                },
-                [
-                    Newline,
-                    Newline,
-                ],
-            ),
+                SpacesBefore(
+                    [
+                        Newline,
+                        Newline,
+                    ],
+                    @34-35 Expr(
+                        Var {
+                            module_name: "",
+                            ident: "x",
+                        },
+                    ),
+                ),
+            ],
         ),
         [
             Newline,

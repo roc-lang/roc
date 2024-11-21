@@ -22,9 +22,9 @@ pub fn parse_benchmark(c: &mut Criterion) {
             let (_actual, state) =
                 header::parse_header(&arena, State::new(src.as_bytes())).unwrap();
 
-            let res = parse_module_defs(&arena, state, Defs::default()).unwrap();
+            let res = parse_module_defs(&arena, state).unwrap();
 
-            black_box(res.len());
+            black_box(res.item.len());
         })
     });
 
@@ -43,9 +43,9 @@ pub fn parse_benchmark(c: &mut Criterion) {
             let (_actual, state) =
                 header::parse_header(&arena, State::new(src.as_bytes())).unwrap();
 
-            let res = parse_module_defs(&arena, state, Defs::default()).unwrap();
+            let res = parse_module_defs(&arena, state).unwrap();
 
-            black_box(res.len());
+            black_box(res.item.len());
         })
     });
 }

@@ -1,73 +1,63 @@
 Full(
     FullAst {
-        header: SpacesBefore {
-            before: [],
-            item: App(
-                AppHeader {
-                    before_provides: [],
-                    provides: [
-                        @6-10 ExposedName(
-                            "main",
+        header: App(
+            AppHeader {
+                before_provides: [],
+                provides: [
+                    @6-10 ExposedName(
+                        "main",
+                    ),
+                ],
+                before_packages: [],
+                packages: @13-37 [
+                    @15-35 PackageEntry {
+                        shorthand: "pf",
+                        spaces_after_shorthand: [],
+                        platform_marker: Some(
+                            [],
                         ),
-                    ],
-                    before_packages: [],
-                    packages: @13-37 [
-                        @15-35 PackageEntry {
-                            shorthand: "pf",
-                            spaces_after_shorthand: [],
-                            platform_marker: Some(
-                                [],
-                            ),
-                            package_name: @29-35 PackageName(
-                                "path",
-                            ),
-                        },
-                    ],
-                    old_imports: None,
-                    old_provides_to_new_package: None,
-                },
-            ),
-        },
-        defs: Defs {
-            tags: [
-                EitherIndex(2147483648),
-            ],
-            regions: [
-                @39-65,
-            ],
-            space_before: [
-                Slice { start: 0, length: 2 },
-            ],
-            space_after: [
-                Slice { start: 2, length: 1 },
-            ],
-            spaces: [
-                Newline,
-                Newline,
-                Newline,
-            ],
-            type_defs: [],
-            value_defs: [
-                Body(
-                    @39-43 Identifier {
-                        ident: "main",
+                        package_name: @29-35 PackageName(
+                            "path",
+                        ),
                     },
-                    @46-65 Apply(
-                        @46-57 Var {
-                            module_name: "Stdout",
-                            ident: "line",
-                        },
-                        [
-                            @58-65 Str(
-                                PlainLine(
-                                    "Hello",
-                                ),
+                ],
+                old_imports: None,
+                old_provides_to_new_package: None,
+            },
+        ),
+        stmts: SpacesAfter(
+            [
+                SpacesBefore(
+                    [
+                        Newline,
+                        Newline,
+                    ],
+                    @39-65 ValueDef(
+                        Body(
+                            @39-43 Identifier {
+                                ident: "main",
+                            },
+                            @46-65 Apply(
+                                @46-57 Var {
+                                    module_name: "Stdout",
+                                    ident: "line",
+                                },
+                                [
+                                    @58-65 Str(
+                                        PlainLine(
+                                            "Hello",
+                                        ),
+                                    ),
+                                ],
+                                Space,
                             ),
-                        ],
-                        Space,
+                        ),
                     ),
                 ),
             ],
-        },
+            [
+                Newline,
+            ],
+        ),
     },
 )

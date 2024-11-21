@@ -1,11 +1,8 @@
-SpacesBefore {
-    before: [],
-    item: Package(
-        PackageHeader {
-            before_exposes: [],
-            exposes: [],
-            before_packages: [],
-            packages: @11-13 [],
-        },
-    ),
-}
+Package(
+    PackageHeader {
+        before_exposes: [],
+        exposes: [],
+        before_packages: [],
+        packages: @11-13 [],
+    },
+)

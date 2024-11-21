@@ -1,20 +1,6 @@
-Defs(
-    Defs {
-        tags: [
-            EitherIndex(2147483648),
-        ],
-        regions: [
-            @0-43,
-        ],
-        space_before: [
-            Slice { start: 0, length: 0 },
-        ],
-        space_after: [
-            Slice { start: 0, length: 0 },
-        ],
-        spaces: [],
-        type_defs: [],
-        value_defs: [
+Stmts(
+    [
+        @0-43 ValueDef(
             Body(
                 @0-4 Identifier {
                     ident: "func",
@@ -51,14 +37,16 @@ Defs(
                     ),
                 ),
             ),
-        ],
-    },
-    @44-46 SpaceBefore(
-        Num(
-            "42",
         ),
-        [
-            Newline,
-        ],
-    ),
+        SpacesBefore(
+            [
+                Newline,
+            ],
+            @44-46 Expr(
+                Num(
+                    "42",
+                ),
+            ),
+        ),
+    ],
 )

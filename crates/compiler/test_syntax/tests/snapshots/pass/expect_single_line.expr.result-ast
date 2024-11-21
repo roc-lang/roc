@@ -1,34 +1,7 @@
 SpaceAfter(
-    Defs(
-        Defs {
-            tags: [
-                EitherIndex(2147483648),
-                EitherIndex(2147483649),
-                EitherIndex(2147483650),
-            ],
-            regions: [
-                @0-5,
-                @7-20,
-                @22-35,
-            ],
-            space_before: [
-                Slice { start: 0, length: 0 },
-                Slice { start: 0, length: 2 },
-                Slice { start: 2, length: 2 },
-            ],
-            space_after: [
-                Slice { start: 0, length: 0 },
-                Slice { start: 2, length: 0 },
-                Slice { start: 4, length: 0 },
-            ],
-            spaces: [
-                Newline,
-                Newline,
-                Newline,
-                Newline,
-            ],
-            type_defs: [],
-            value_defs: [
+    Stmts(
+        [
+            @0-5 ValueDef(
                 Body(
                     @0-1 Identifier {
                         ident: "x",
@@ -37,53 +10,71 @@ SpaceAfter(
                         "5",
                     ),
                 ),
-                Expect {
-                    condition: @14-20 BinOps(
-                        [
-                            (
-                                @14-15 Var {
-                                    module_name: "",
-                                    ident: "x",
-                                },
-                                @16-18 Equals,
-                            ),
-                        ],
-                        @19-20 Var {
-                            module_name: "",
-                            ident: "y",
-                        },
-                    ),
-                    preceding_comment: @7-7,
-                },
-                Expect {
-                    condition: @29-35 BinOps(
-                        [
-                            (
-                                @29-30 Var {
-                                    module_name: "",
-                                    ident: "y",
-                                },
-                                @31-33 Equals,
-                            ),
-                        ],
-                        @34-35 Var {
-                            module_name: "",
-                            ident: "z",
-                        },
-                    ),
-                    preceding_comment: @22-22,
-                },
-            ],
-        },
-        @37-39 SpaceBefore(
-            Num(
-                "42",
             ),
-            [
-                Newline,
-                Newline,
-            ],
-        ),
+            SpacesBefore(
+                [
+                    Newline,
+                    Newline,
+                ],
+                @7-20 ValueDef(
+                    Expect {
+                        condition: @14-20 BinOps(
+                            [
+                                (
+                                    @14-15 Var {
+                                        module_name: "",
+                                        ident: "x",
+                                    },
+                                    @16-18 Equals,
+                                ),
+                            ],
+                            @19-20 Var {
+                                module_name: "",
+                                ident: "y",
+                            },
+                        ),
+                        preceding_comment: @7-7,
+                    },
+                ),
+            ),
+            SpacesBefore(
+                [
+                    Newline,
+                    Newline,
+                ],
+                @22-35 ValueDef(
+                    Expect {
+                        condition: @29-35 BinOps(
+                            [
+                                (
+                                    @29-30 Var {
+                                        module_name: "",
+                                        ident: "y",
+                                    },
+                                    @31-33 Equals,
+                                ),
+                            ],
+                            @34-35 Var {
+                                module_name: "",
+                                ident: "z",
+                            },
+                        ),
+                        preceding_comment: @22-22,
+                    },
+                ),
+            ),
+            SpacesBefore(
+                [
+                    Newline,
+                    Newline,
+                ],
+                @37-39 Expr(
+                    Num(
+                        "42",
+                    ),
+                ),
+            ),
+        ],
     ),
     [
         Newline,

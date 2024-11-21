@@ -1,20 +1,7 @@
 SpaceAfter(
-    Defs(
-        Defs {
-            tags: [
-                EitherIndex(0),
-            ],
-            regions: [
-                @0-164,
-            ],
-            space_before: [
-                Slice { start: 0, length: 0 },
-            ],
-            space_after: [
-                Slice { start: 0, length: 0 },
-            ],
-            spaces: [],
-            type_defs: [
+    Stmts(
+        [
+            @0-164 TypeDef(
                 Alias {
                     header: TypeHeader {
                         name: @0-5 "Model",
@@ -110,19 +97,20 @@ SpaceAfter(
                         ext: None,
                     },
                 },
-            ],
-            value_defs: [],
-        },
-        @166-167 SpaceBefore(
-            Var {
-                module_name: "",
-                ident: "a",
-            },
-            [
-                Newline,
-                Newline,
-            ],
-        ),
+            ),
+            SpacesBefore(
+                [
+                    Newline,
+                    Newline,
+                ],
+                @166-167 Expr(
+                    Var {
+                        module_name: "",
+                        ident: "a",
+                    },
+                ),
+            ),
+        ],
     ),
     [
         Newline,

@@ -254,6 +254,7 @@ pub enum Problem {
     StmtAfterExpr(Region),
     UnsuffixedEffectfulRecordField(Region),
     SuffixedPureRecordField(Region),
+    MissingFinalExpression(Region),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -339,6 +340,7 @@ impl Problem {
             Problem::StatementsAfterReturn { .. } => Warning,
             Problem::ReturnAtEndOfFunction { .. } => Warning,
             Problem::StmtAfterExpr(_) => Fatal,
+            Problem::MissingFinalExpression(_) => Fatal,
             Problem::UnsuffixedEffectfulRecordField(_) | Problem::SuffixedPureRecordField(..) => {
                 Warning
             }
@@ -514,7 +516,9 @@ impl Problem {
                 cycle_entries.first().map(|entry| entry.expr_region)
             }
 
-            Problem::StmtAfterExpr(region) => Some(*region),
+            Problem::StmtAfterExpr(region) | Problem::MissingFinalExpression(region) => {
+                Some(*region)
+            }
             Problem::RuntimeError(RuntimeError::UnresolvedTypeVar)
             | Problem::RuntimeError(RuntimeError::ErroneousType)
             | Problem::RuntimeError(RuntimeError::NonExhaustivePattern)

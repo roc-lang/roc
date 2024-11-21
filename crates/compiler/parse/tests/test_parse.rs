@@ -345,7 +345,7 @@ mod test_parse {
                     List.map list isTest
             "
         );
-        let actual = parse_module_defs(&arena, State::new(src.as_bytes()), ast::Defs::default());
+        let actual = parse_module_defs(&arena, State::new(src.as_bytes()));
 
         // It should occur twice in the debug output - once for the pattern,
         // and then again for the lookup.
@@ -369,7 +369,7 @@ mod test_parse {
         );
 
         let state = State::new(src.as_bytes());
-        let parsed = parse_module_defs(arena, state, ast::Defs::default());
+        let parsed = parse_module_defs(arena, state);
         match parsed {
             Ok(_) => {
                 // dbg!(_state);

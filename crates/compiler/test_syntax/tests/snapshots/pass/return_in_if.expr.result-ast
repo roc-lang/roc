@@ -1,21 +1,7 @@
 SpaceAfter(
-    Defs(
-        Defs {
-            tags: [
-                EitherIndex(2147483648),
-            ],
-            regions: [
-                @0-127,
-            ],
-            space_before: [
-                Slice { start: 0, length: 0 },
-            ],
-            space_after: [
-                Slice { start: 0, length: 0 },
-            ],
-            spaces: [],
-            type_defs: [],
-            value_defs: [
+    Stmts(
+        [
+            @0-127 ValueDef(
                 Body(
                     @0-16 Identifier {
                         ident: "maybeEarlyReturn",
@@ -27,23 +13,9 @@ SpaceAfter(
                             },
                         ],
                         @29-127 SpaceBefore(
-                            Defs(
-                                Defs {
-                                    tags: [
-                                        EitherIndex(2147483648),
-                                    ],
-                                    regions: [
-                                        @29-110,
-                                    ],
-                                    space_before: [
-                                        Slice { start: 0, length: 0 },
-                                    ],
-                                    space_after: [
-                                        Slice { start: 0, length: 0 },
-                                    ],
-                                    spaces: [],
-                                    type_defs: [],
-                                    value_defs: [
+                            Stmts(
+                                [
+                                    @29-110 ValueDef(
                                         Body(
                                             @29-30 Identifier {
                                                 ident: "y",
@@ -112,27 +84,29 @@ SpaceAfter(
                                                 ],
                                             ),
                                         ),
-                                    ],
-                                },
-                                @116-127 SpaceBefore(
-                                    Apply(
-                                        @116-125 Var {
-                                            module_name: "Num",
-                                            ident: "toStr",
-                                        },
-                                        [
-                                            @126-127 Var {
-                                                module_name: "",
-                                                ident: "y",
-                                            },
-                                        ],
-                                        Space,
                                     ),
-                                    [
-                                        Newline,
-                                        Newline,
-                                    ],
-                                ),
+                                    SpacesBefore(
+                                        [
+                                            Newline,
+                                            Newline,
+                                        ],
+                                        @116-127 Expr(
+                                            Apply(
+                                                @116-125 Var {
+                                                    module_name: "Num",
+                                                    ident: "toStr",
+                                                },
+                                                [
+                                                    @126-127 Var {
+                                                        module_name: "",
+                                                        ident: "y",
+                                                    },
+                                                ],
+                                                Space,
+                                            ),
+                                        ),
+                                    ),
+                                ],
                             ),
                             [
                                 Newline,
@@ -140,26 +114,28 @@ SpaceAfter(
                         ),
                     ),
                 ),
-            ],
-        },
-        @129-148 SpaceBefore(
-            Apply(
-                @129-145 Var {
-                    module_name: "",
-                    ident: "maybeEarlyReturn",
-                },
-                [
-                    @146-148 Num(
-                        "10",
-                    ),
-                ],
-                Space,
             ),
-            [
-                Newline,
-                Newline,
-            ],
-        ),
+            SpacesBefore(
+                [
+                    Newline,
+                    Newline,
+                ],
+                @129-148 Expr(
+                    Apply(
+                        @129-145 Var {
+                            module_name: "",
+                            ident: "maybeEarlyReturn",
+                        },
+                        [
+                            @146-148 Num(
+                                "10",
+                            ),
+                        ],
+                        Space,
+                    ),
+                ),
+            ),
+        ],
     ),
     [
         Newline,

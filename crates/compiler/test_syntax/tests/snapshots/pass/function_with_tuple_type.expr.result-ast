@@ -1,26 +1,12 @@
 SpaceAfter(
-    Defs(
-        Defs {
-            tags: [
-                EitherIndex(2147483648),
-            ],
-            regions: [
-                @0-42,
-            ],
-            space_before: [
-                Slice { start: 0, length: 0 },
-            ],
-            space_after: [
-                Slice { start: 0, length: 0 },
-            ],
-            spaces: [],
-            type_defs: [],
-            value_defs: [
-                AnnotatedBody {
-                    ann_pattern: @0-1 Identifier {
+    Stmts(
+        [
+            @0-21 ValueDef(
+                Annotation(
+                    @0-1 Identifier {
                         ident: "f",
                     },
-                    ann_type: @4-21 Function(
+                    @4-21 Function(
                         [
                             @4-7 Apply(
                                 "",
@@ -45,62 +31,70 @@ SpaceAfter(
                             ext: None,
                         },
                     ),
-                    lines_between: [
-                        Newline,
-                    ],
-                    body_pattern: @22-23 Identifier {
-                        ident: "f",
-                    },
-                    body_expr: @26-42 Closure(
-                        [
-                            @27-28 Identifier {
-                                ident: "x",
-                            },
-                        ],
-                        @32-42 Tuple(
+                ),
+            ),
+            SpacesBefore(
+                [
+                    Newline,
+                ],
+                @22-42 ValueDef(
+                    Body(
+                        @22-23 Identifier {
+                            ident: "f",
+                        },
+                        @26-42 Closure(
                             [
-                                @33-34 Var {
-                                    module_name: "",
+                                @27-28 Identifier {
                                     ident: "x",
                                 },
-                                @36-41 BinOps(
-                                    [
-                                        (
-                                            @36-37 Var {
-                                                module_name: "",
-                                                ident: "x",
-                                            },
-                                            @38-39 Plus,
-                                        ),
-                                    ],
-                                    @40-41 Num(
-                                        "1",
-                                    ),
-                                ),
                             ],
+                            @32-42 Tuple(
+                                [
+                                    @33-34 Var {
+                                        module_name: "",
+                                        ident: "x",
+                                    },
+                                    @36-41 BinOps(
+                                        [
+                                            (
+                                                @36-37 Var {
+                                                    module_name: "",
+                                                    ident: "x",
+                                                },
+                                                @38-39 Plus,
+                                            ),
+                                        ],
+                                        @40-41 Num(
+                                            "1",
+                                        ),
+                                    ),
+                                ],
+                            ),
                         ),
                     ),
-                },
-            ],
-        },
-        @44-48 SpaceBefore(
-            Apply(
-                @44-45 Var {
-                    module_name: "",
-                    ident: "f",
-                },
-                [
-                    @46-48 Num(
-                        "42",
-                    ),
-                ],
-                Space,
+                ),
             ),
-            [
-                Newline,
-                Newline,
-            ],
-        ),
+            SpacesBefore(
+                [
+                    Newline,
+                    Newline,
+                ],
+                @44-48 Expr(
+                    Apply(
+                        @44-45 Var {
+                            module_name: "",
+                            ident: "f",
+                        },
+                        [
+                            @46-48 Num(
+                                "42",
+                            ),
+                        ],
+                        Space,
+                    ),
+                ),
+            ),
+        ],
     ),
     [
         Newline,

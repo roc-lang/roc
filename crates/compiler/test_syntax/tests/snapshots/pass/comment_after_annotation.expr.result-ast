@@ -1,19 +1,6 @@
-Defs(
-    Defs {
-        tags: [
-            EitherIndex(0),
-        ],
-        regions: [
-            @0-3,
-        ],
-        space_before: [
-            Slice { start: 0, length: 0 },
-        ],
-        space_after: [
-            Slice { start: 0, length: 0 },
-        ],
-        spaces: [],
-        type_defs: [
+Stmts(
+    [
+        @0-3 TypeDef(
             Alias {
                 header: TypeHeader {
                     name: @0-1 "F",
@@ -23,20 +10,21 @@ Defs(
                     "e",
                 ),
             },
-        ],
-        value_defs: [],
-    },
-    @7-8 SpaceBefore(
-        Var {
-            module_name: "",
-            ident: "q",
-        },
-        [
-            LineComment(
-                "",
+        ),
+        SpacesBefore(
+            [
+                LineComment(
+                    "",
+                ),
+                Newline,
+                Newline,
+            ],
+            @7-8 Expr(
+                Var {
+                    module_name: "",
+                    ident: "q",
+                },
             ),
-            Newline,
-            Newline,
-        ],
-    ),
+        ),
+    ],
 )

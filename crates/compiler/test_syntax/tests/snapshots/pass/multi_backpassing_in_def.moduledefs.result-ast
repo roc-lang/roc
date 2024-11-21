@@ -1,69 +1,64 @@
-Defs {
-    tags: [
-        EitherIndex(2147483648),
-    ],
-    regions: [
-        @0-50,
-    ],
-    space_before: [
-        Slice { start: 0, length: 0 },
-    ],
-    space_after: [
-        Slice { start: 0, length: 1 },
-    ],
-    spaces: [
-        Newline,
-    ],
-    type_defs: [],
-    value_defs: [
-        Body(
-            @0-4 Identifier {
-                ident: "main",
-            },
-            @12-50 SpaceBefore(
-                Backpassing(
-                    [
-                        @12-16 Identifier {
-                            ident: "arg1",
-                        },
-                        @18-22 Identifier {
-                            ident: "arg2",
-                        },
-                    ],
-                    @26-30 Apply(
-                        @26-27 Var {
-                            module_name: "",
-                            ident: "f",
-                        },
+SpacesAfter(
+    [
+        @0-50 ValueDef(
+            Body(
+                @0-4 Identifier {
+                    ident: "main",
+                },
+                @12-50 SpaceBefore(
+                    Stmts(
                         [
-                            @28-30 Record(
-                                [],
-                            ),
-                        ],
-                        Space,
-                    ),
-                    @35-50 SpaceBefore(
-                        Str(
-                            Line(
+                            @12-30 Backpassing(
                                 [
-                                    Plaintext(
-                                        "Roc <3 Zig!",
-                                    ),
-                                    EscapedChar(
-                                        Newline,
-                                    ),
+                                    @12-16 Identifier {
+                                        ident: "arg1",
+                                    },
+                                    @18-22 Identifier {
+                                        ident: "arg2",
+                                    },
                                 ],
+                                @26-30 Apply(
+                                    @26-27 Var {
+                                        module_name: "",
+                                        ident: "f",
+                                    },
+                                    [
+                                        @28-30 Record(
+                                            [],
+                                        ),
+                                    ],
+                                    Space,
+                                ),
                             ),
-                        ),
-                        [
-                            Newline,
+                            SpacesBefore(
+                                [
+                                    Newline,
+                                ],
+                                @35-50 Expr(
+                                    Str(
+                                        Line(
+                                            [
+                                                Plaintext(
+                                                    "Roc <3 Zig!",
+                                                ),
+                                                EscapedChar(
+                                                    Newline,
+                                                ),
+                                            ],
+                                        ),
+                                    ),
+                                ),
+                            ),
                         ],
                     ),
+                    [
+                        Newline,
+                    ],
                 ),
-                [
-                    Newline,
-                ],
             ),
         ),
     ],
-}
+    [
+        Newline,
+    ],
+)

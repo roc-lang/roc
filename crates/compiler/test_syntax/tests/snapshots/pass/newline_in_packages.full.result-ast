@@ -1,76 +1,66 @@
 Full(
     FullAst {
-        header: SpacesBefore {
-            before: [],
-            item: App(
-                AppHeader {
-                    before_provides: [],
-                    provides: [
-                        @5-9 ExposedName(
-                            "main",
+        header: App(
+            AppHeader {
+                before_provides: [],
+                provides: [
+                    @5-9 ExposedName(
+                        "main",
+                    ),
+                ],
+                before_packages: [],
+                packages: @11-51 [
+                    @13-49 PackageEntry {
+                        shorthand: "pf",
+                        spaces_after_shorthand: [],
+                        platform_marker: None,
+                        package_name: @17-49 PackageName(
+                            "generic-test-platform/main.roc",
                         ),
-                    ],
-                    before_packages: [],
-                    packages: @11-51 [
-                        @13-49 PackageEntry {
-                            shorthand: "pf",
-                            spaces_after_shorthand: [],
-                            platform_marker: None,
-                            package_name: @17-49 PackageName(
-                                "generic-test-platform/main.roc",
-                            ),
-                        },
-                    ],
-                    old_imports: None,
-                    old_provides_to_new_package: None,
-                },
-            ),
-        },
-        defs: Defs {
-            tags: [
-                EitherIndex(2147483648),
-            ],
-            regions: [
-                @53-100,
-            ],
-            space_before: [
-                Slice { start: 0, length: 2 },
-            ],
-            space_after: [
-                Slice { start: 2, length: 1 },
-            ],
-            spaces: [
-                Newline,
-                Newline,
-                Newline,
-            ],
-            type_defs: [],
-            value_defs: [
-                Body(
-                    @53-57 Identifier {
-                        ident: "main",
                     },
-                    @64-100 SpaceBefore(
-                        Apply(
-                            @64-75 Var {
-                                module_name: "Stdout",
-                                ident: "line",
+                ],
+                old_imports: None,
+                old_provides_to_new_package: None,
+            },
+        ),
+        stmts: SpacesAfter(
+            [
+                SpacesBefore(
+                    [
+                        Newline,
+                        Newline,
+                    ],
+                    @53-100 ValueDef(
+                        Body(
+                            @53-57 Identifier {
+                                ident: "main",
                             },
-                            [
-                                @76-100 Str(
-                                    PlainLine(
-                                        "I'm a Roc application!",
-                                    ),
+                            @64-100 SpaceBefore(
+                                Apply(
+                                    @64-75 Var {
+                                        module_name: "Stdout",
+                                        ident: "line",
+                                    },
+                                    [
+                                        @76-100 Str(
+                                            PlainLine(
+                                                "I'm a Roc application!",
+                                            ),
+                                        ),
+                                    ],
+                                    Space,
                                 ),
-                            ],
-                            Space,
+                                [
+                                    Newline,
+                                ],
+                            ),
                         ),
-                        [
-                            Newline,
-                        ],
                     ),
                 ),
             ],
-        },
+            [
+                Newline,
+            ],
+        ),
     },
 )

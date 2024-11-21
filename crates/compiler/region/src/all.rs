@@ -78,6 +78,10 @@ impl Region {
     pub const fn between(start: Position, end: Position) -> Self {
         Self::new(start, end)
     }
+
+    pub fn byte_range(&self) -> std::ops::Range<usize> {
+        self.start.byte_offset()..self.end.byte_offset()
+    }
 }
 
 // Region is used all over the place. Avoid increasing its size!

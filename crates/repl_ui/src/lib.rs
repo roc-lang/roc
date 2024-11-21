@@ -7,7 +7,7 @@ use bumpalo::Bump;
 use colors::{CYAN, END_COL, GREEN};
 use const_format::concatcp;
 use repl_state::{parse_src, ParseOutcome};
-use roc_parse::ast::{Expr, ExtractSpaces, ValueDef};
+use roc_parse::ast::{Expr, Stmt, ValueDef};
 use roc_repl_eval::gen::{Problems, ReplOutput};
 use roc_reporting::report::StyleCodes;
 
@@ -63,25 +63,20 @@ pub fn is_incomplete(input: &str) -> bool {
 
     match parse_src(&arena, input) {
         ParseOutcome::Incomplete => !input.ends_with('\n'),
-        ParseOutcome::DefsAndExpr(defs, None) => {
+        ParseOutcome::Stmts(stmts) => {
             // Standalone annotations are default incomplete, because we can't know
             // whether they're about to annotate a body on the next line
             // (or if not, meaning they stay standalone) until you press Enter again!
             //
             // So it's Incomplete until you've pressed Enter again (causing the input to end in "\n")
-            if matches!(defs.last(), Some(Err(ValueDef::Annotation(_, _)))) {
-                !input.ends_with('\n')
-            } else {
-                false
-            }
-        }
-        ParseOutcome::DefsAndExpr(_, Some(expr)) => {
-            if matches!(expr.extract_spaces().item, Expr::When(..)) {
-                // There might be lots of `when` branches, so don't assume the user is done entering
-                // them until they enter a blank line!
-                !input.ends_with('\n')
-            } else {
-                false
+            //
+            // Likewise...
+            // There might be lots of `when` branches, so don't assume the user is done entering
+            // them until they enter a blank line!
+            match stmts.last().map(|s| &s.item.value) {
+                Some(Stmt::ValueDef(ValueDef::Annotation(_, _)))
+                | Some(Stmt::Expr(Expr::When(..))) => !input.ends_with('\n'),
+                _ => false,
             }
         }
         ParseOutcome::Empty | ParseOutcome::Help | ParseOutcome::Exit | ParseOutcome::SyntaxErr => {

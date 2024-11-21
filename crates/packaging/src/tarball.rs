@@ -2,10 +2,10 @@ use brotli::enc::BrotliEncoderParams;
 use bumpalo::Bump;
 use flate2::write::GzEncoder;
 use roc_parse::ast::{
-    Header, IngestedFileImport, RecursiveValueDefIter, SpacesBefore, StrLiteral, ValueDef,
+    FullAst, Header, IngestedFileImport, RecursiveValueDefIter, SpacesBefore, StrLiteral, ValueDef,
 };
-use roc_parse::header::PlatformHeader;
-use roc_parse::header::{parse_header, parse_module_defs};
+use roc_parse::header::parse_header;
+use roc_parse::header::{parse_full_ast, PlatformHeader};
 use roc_parse::state::State;
 use std::ffi::OsStr;
 use std::fs::File;
@@ -262,20 +262,30 @@ fn read_header<'a>(
     buf: &'a mut Vec<u8>,
     path: &'a Path,
 ) -> io::Result<(SpacesBefore<'a, Header<'a>>, State<'a>)> {
-    // Read all the bytes into the buffer.
+    let parse_state = begin_read(path, buf, arena)?;
+    parse_header(arena, parse_state).map_err(|_err| {
+        todo!(); // TODO report a nice error and exit 1 - or maybe just return Err, for better testability?
+    })
+}
+
+fn begin_read<'a>(path: &Path, buf: &mut Vec<u8>, arena: &'a Bump) -> Result<State<'a>, io::Error> {
     {
         let mut file = File::open(path)?;
         buf.clear();
         file.read_to_end(buf)?;
     }
-
-    // TODO avoid copying the contents of the file into a Bumpalo arena by doing multiple
-    // https://doc.rust-lang.org/std/io/trait.Read.html#tymethod.read calls instead of
-    // using the much more convenient file.read_to_end - which requires a std::vec::Vec.
-    // (We can't use that for the parser state and still return Module<'a> unfortunately.)
     let arena_buf = bumpalo::collections::Vec::from_iter_in(buf.iter().copied(), arena);
     let parse_state = State::new(arena_buf.into_bump_slice());
-    parse_header(arena, parse_state).map_err(|_err| {
+    Ok(parse_state)
+}
+
+fn read_header_and_defs<'a>(
+    arena: &'a Bump,
+    buf: &'a mut Vec<u8>,
+    path: &'a Path,
+) -> io::Result<FullAst<'a>> {
+    let parse_state = begin_read(path, buf, arena)?;
+    parse_full_ast(arena, parse_state).map_err(|_err| {
         todo!(); // TODO report a nice error and exit 1 - or maybe just return Err, for better testability?
     })
 }
@@ -287,14 +297,11 @@ fn add_ingested_files<W: Write>(
     builder: &mut tar::Builder<W>,
 ) -> io::Result<()> {
     let mut buf = Vec::new();
-    let (header, state) = read_header(arena, &mut buf, dot_roc_path)?;
-    let (_, defs) = header.item.upgrade_header_imports(arena);
+    let full = read_header_and_defs(arena, &mut buf, dot_roc_path)?;
 
-    let defs = parse_module_defs(arena, state, defs).unwrap_or_else(|err| {
-        panic!("{} failed to parse: {:?}", dot_roc_path.display(), err);
-    });
+    let stmts = full.stmts;
 
-    RecursiveValueDefIter::new(&defs).try_for_each(|(def, _)| {
+    RecursiveValueDefIter::new(&stmts).try_for_each(|(def, _)| {
         if let ValueDef::IngestedFileImport(IngestedFileImport { path, .. }) = def {
             if let StrLiteral::PlainLine(relative_path_str) = path.value {
                 let relative_path: PathBuf = relative_path_str.into();

@@ -1465,6 +1465,24 @@ pub fn can_problem<'b>(
 
             title = UNNECESSARY_EXCLAMATION.to_string();
         }
+        Problem::MissingFinalExpression(region) => {
+            doc = alloc.stack([
+                alloc.reflow(r"I am partway through parsing a definition, but I got stuck here:"),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.concat([
+                    alloc.reflow("This definition is missing a final expression."),
+                    alloc.reflow(" A nested definition must be followed by"),
+                    alloc.reflow(" either another definition, or an expression"),
+                ]),
+                alloc.vcat(vec![
+                    alloc.text("x = 4").indent(4),
+                    alloc.text("y = 2").indent(4),
+                    alloc.text(""),
+                    alloc.text("x + y").indent(4),
+                ]),
+            ]);
+            title = "MISSING FINAL EXPRESSION".to_string();
+        }
     };
 
     Report {

@@ -1,28 +1,40 @@
 SpaceBefore(
     SpaceAfter(
-        DbgStmt(
-            @5-11 BinOps(
-                [
-                    (
-                        @5-6 Num(
+        Stmts(
+            [
+                @1-11 Expr(
+                    BinOps(
+                        [
+                            (
+                                @1-6 Apply(
+                                    @1-4 Dbg,
+                                    [
+                                        @5-6 Num(
+                                            "1",
+                                        ),
+                                    ],
+                                    Space,
+                                ),
+                                @7-9 Equals,
+                            ),
+                        ],
+                        @10-11 Num(
                             "1",
                         ),
-                        @7-9 Equals,
                     ),
-                ],
-                @10-11 Num(
-                    "1",
                 ),
-            ),
-            @13-14 SpaceBefore(
-                Num(
-                    "4",
+                SpacesBefore(
+                    [
+                        Newline,
+                        Newline,
+                    ],
+                    @13-14 Expr(
+                        Num(
+                            "4",
+                        ),
+                    ),
                 ),
-                [
-                    Newline,
-                    Newline,
-                ],
-            ),
+            ],
         ),
         [
             Newline,

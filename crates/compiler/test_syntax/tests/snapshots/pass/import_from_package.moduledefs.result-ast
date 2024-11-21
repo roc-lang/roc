@@ -1,163 +1,142 @@
-Defs {
-    tags: [
-        EitherIndex(2147483648),
-        EitherIndex(2147483649),
-        EitherIndex(2147483650),
-        EitherIndex(2147483651),
-    ],
-    regions: [
-        @0-19,
-        @20-44,
-        @45-92,
-        @93-146,
-    ],
-    space_before: [
-        Slice { start: 0, length: 0 },
-        Slice { start: 0, length: 1 },
-        Slice { start: 1, length: 1 },
-        Slice { start: 2, length: 1 },
-    ],
-    space_after: [
-        Slice { start: 0, length: 0 },
-        Slice { start: 1, length: 0 },
-        Slice { start: 2, length: 0 },
-        Slice { start: 3, length: 1 },
-    ],
-    spaces: [
-        Newline,
-        Newline,
-        Newline,
-        Newline,
-    ],
-    type_defs: [],
-    value_defs: [
-        ModuleImport(
-            ModuleImport {
-                before_name: [],
-                name: @8-19 ImportedModuleName {
-                    package: Some(
-                        "json",
-                    ),
-                    name: ModuleName(
-                        "Decode",
-                    ),
+SpacesAfter(
+    [
+        @0-19 ValueDef(
+            ModuleImport(
+                ModuleImport {
+                    before_name: [],
+                    name: @8-19 ImportedModuleName {
+                        package: Some(
+                            "json",
+                        ),
+                        name: ModuleName(
+                            "Decode",
+                        ),
+                    },
+                    params: None,
+                    alias: None,
+                    exposed: None,
                 },
-                params: None,
-                alias: None,
-                exposed: None,
-            },
+            ),
         ),
-        ModuleImport(
-            ModuleImport {
-                before_name: [],
-                name: @27-38 ImportedModuleName {
-                    package: Some(
-                        "json",
-                    ),
-                    name: ModuleName(
-                        "Decode",
-                    ),
-                },
-                params: None,
-                alias: Some(
-                    KeywordItem {
-                        keyword: Spaces {
-                            before: [],
-                            item: ImportAsKeyword,
-                            after: [],
+        SpacesBefore(
+            [
+                Newline,
+            ],
+            @20-44 ValueDef(
+                ModuleImport(
+                    ModuleImport {
+                        before_name: [],
+                        name: @27-38 ImportedModuleName {
+                            package: Some(
+                                "json",
+                            ),
+                            name: ModuleName(
+                                "Decode",
+                            ),
                         },
-                        item: @42-44 ImportAlias(
-                            "JD",
+                        params: None,
+                        alias: Some(
+                            KeywordItem {
+                                keyword: ImportAsKeyword,
+                                item: @42-44 ImportAlias(
+                                    "JD",
+                                ),
+                            },
+                        ),
+                        exposed: None,
+                    },
+                ),
+            ),
+        ),
+        SpacesBefore(
+            [
+                Newline,
+            ],
+            @45-92 ValueDef(
+                ModuleImport(
+                    ModuleImport {
+                        before_name: [],
+                        name: @52-63 ImportedModuleName {
+                            package: Some(
+                                "json",
+                            ),
+                            name: ModuleName(
+                                "Decode",
+                            ),
+                        },
+                        params: None,
+                        alias: None,
+                        exposed: Some(
+                            KeywordItem {
+                                keyword: ImportExposingKeyword,
+                                item: [
+                                    @74-81 ExposedName(
+                                        "Decoder",
+                                    ),
+                                    @88-91 SpaceBefore(
+                                        ExposedName(
+                                            "map",
+                                        ),
+                                        [
+                                            Newline,
+                                        ],
+                                    ),
+                                ],
+                            },
                         ),
                     },
                 ),
-                exposed: None,
-            },
+            ),
         ),
-        ModuleImport(
-            ModuleImport {
-                before_name: [],
-                name: @52-63 ImportedModuleName {
-                    package: Some(
-                        "json",
-                    ),
-                    name: ModuleName(
-                        "Decode",
-                    ),
-                },
-                params: None,
-                alias: None,
-                exposed: Some(
-                    KeywordItem {
-                        keyword: Spaces {
-                            before: [],
-                            item: ImportExposingKeyword,
-                            after: [],
-                        },
-                        item: [
-                            @74-81 ExposedName(
-                                "Decoder",
+        SpacesBefore(
+            [
+                Newline,
+            ],
+            @93-146 ValueDef(
+                ModuleImport(
+                    ModuleImport {
+                        before_name: [],
+                        name: @100-111 ImportedModuleName {
+                            package: Some(
+                                "json",
                             ),
-                            @88-91 SpaceBefore(
-                                ExposedName(
-                                    "map",
+                            name: ModuleName(
+                                "Decode",
+                            ),
+                        },
+                        params: None,
+                        alias: Some(
+                            KeywordItem {
+                                keyword: ImportAsKeyword,
+                                item: @115-117 ImportAlias(
+                                    "JD",
                                 ),
-                                [
-                                    Newline,
+                            },
+                        ),
+                        exposed: Some(
+                            KeywordItem {
+                                keyword: ImportExposingKeyword,
+                                item: [
+                                    @128-135 ExposedName(
+                                        "Decoder",
+                                    ),
+                                    @142-145 SpaceBefore(
+                                        ExposedName(
+                                            "map",
+                                        ),
+                                        [
+                                            Newline,
+                                        ],
+                                    ),
                                 ],
-                            ),
-                        ],
-                    },
-                ),
-            },
-        ),
-        ModuleImport(
-            ModuleImport {
-                before_name: [],
-                name: @100-111 ImportedModuleName {
-                    package: Some(
-                        "json",
-                    ),
-                    name: ModuleName(
-                        "Decode",
-                    ),
-                },
-                params: None,
-                alias: Some(
-                    KeywordItem {
-                        keyword: Spaces {
-                            before: [],
-                            item: ImportAsKeyword,
-                            after: [],
-                        },
-                        item: @115-117 ImportAlias(
-                            "JD",
+                            },
                         ),
                     },
                 ),
-                exposed: Some(
-                    KeywordItem {
-                        keyword: Spaces {
-                            before: [],
-                            item: ImportExposingKeyword,
-                            after: [],
-                        },
-                        item: [
-                            @128-135 ExposedName(
-                                "Decoder",
-                            ),
-                            @142-145 SpaceBefore(
-                                ExposedName(
-                                    "map",
-                                ),
-                                [
-                                    Newline,
-                                ],
-                            ),
-                        ],
-                    },
-                ),
-            },
+            ),
         ),
     ],
-}
+    [
+        Newline,
+    ],
+)

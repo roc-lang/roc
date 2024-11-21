@@ -4,11 +4,10 @@ use std::path::{Path, PathBuf};
 
 use bumpalo::Bump;
 use roc_error_macros::{internal_error, user_error};
-use roc_fmt::def::fmt_defs;
+use roc_fmt::def::fmt_stmts;
 use roc_fmt::header::fmt_header;
 use roc_fmt::Buf;
-use roc_parse::ast::{FullAst, SpacesBefore};
-use roc_parse::header::parse_module_defs;
+use roc_parse::ast::FullAst;
 use roc_parse::normalize::Normalize;
 use roc_parse::{header, parser::SyntaxError, state::State};
 
@@ -232,26 +231,13 @@ pub fn format_src(arena: &Bump, src: &str) -> Result<String, FormatProblem> {
 }
 
 fn parse_all<'a>(arena: &'a Bump, src: &'a str) -> Result<FullAst<'a>, SyntaxError<'a>> {
-    let (header, state) = header::parse_header(arena, State::new(src.as_bytes()))
-        .map_err(|e| SyntaxError::Header(e.problem))?;
-
-    let (h, defs) = header.item.upgrade_header_imports(arena);
-
-    let defs = parse_module_defs(arena, state, defs)?;
-
-    Ok(FullAst {
-        header: SpacesBefore {
-            before: header.before,
-            item: h,
-        },
-        defs,
-    })
+    header::parse_full_ast(arena, State::new(src.as_bytes()))
 }
 
 fn fmt_all<'a>(buf: &mut Buf<'a>, ast: &'a FullAst) {
     fmt_header(buf, &ast.header);
 
-    fmt_defs(buf, &ast.defs, 0);
+    fmt_stmts(buf, &ast.stmts, 0);
 
     buf.fmt_end_of_file();
 }

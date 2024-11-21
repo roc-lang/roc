@@ -11,9 +11,11 @@ use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
 use roc_parse::ast::{
-    is_expr_suffixed, AssignedField, Collection, Defs, ModuleImportParams, Pattern, StrLiteral,
-    StrSegment, TypeAnnotation, ValueDef, WhenBranch,
+    is_expr_suffixed, AssignedField, Collection, Defs, ExtractSpaces, ModuleImportParams, Pattern,
+    SpacesBefore, Stmt, StrLiteral, StrSegment, TopLevelDefs, TypeAnnotation, TypeDef, ValueDef,
+    WhenBranch,
 };
+use roc_parse::expr::join_alias_to_body;
 use roc_problem::can::Problem;
 use roc_region::all::{Loc, Region};
 
@@ -120,11 +122,7 @@ fn without_spaces<'a>(expr: &'a Expr<'a>) -> &'a Expr<'a> {
     }
 }
 
-fn desugar_value_def<'a>(
-    env: &mut Env<'a>,
-    scope: &mut Scope,
-    def: &'a ValueDef<'a>,
-) -> ValueDef<'a> {
+fn desugar_value_def<'a>(env: &mut Env<'a>, scope: &mut Scope, def: &ValueDef<'a>) -> ValueDef<'a> {
     use ValueDef::*;
 
     match def {
@@ -235,26 +233,487 @@ fn desugar_value_def<'a>(
     }
 }
 
-pub fn desugar_defs_node_values<'a>(
+fn desugar_stmts_to_expr<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
-    defs: &mut roc_parse::ast::Defs<'a>,
-    top_level_def: bool,
-) {
-    for value_def in defs.value_defs.iter_mut() {
-        *value_def = desugar_value_def(env, scope, env.arena.alloc(*value_def));
-    }
+    stmts: &[SpacesBefore<'a, Loc<Stmt<'a>>>],
+) -> Loc<Expr<'a>> {
+    let first_pos = stmts.first().unwrap().item.region.start();
+    let last_pos = stmts.last().unwrap().item.region.end();
 
-    // `desugar_defs_node_values` is called recursively in `desugar_expr`
-    // and we only want to unwrap suffixed nodes if they are a top level def.
-    //
-    // check here first so we only unwrap the expressions once, and after they have
-    // been desugared
-    if top_level_def {
-        for value_def in defs.value_defs.iter_mut() {
-            *value_def = desugar_value_def_suffixed(env.arena, *value_def);
+    let (defs, last_expr) = desugar_stmts_to_defs(env, scope, stmts, Defs::default(), true);
+
+    let final_expr = match last_expr {
+        Some(e) => e,
+        None => {
+            env.problem(Problem::MissingFinalExpression(
+                stmts.last().unwrap().item.region,
+            ));
+            Loc::at(
+                Region::new(last_pos, last_pos),
+                Expr::Record(Collection::empty()),
+            )
+        }
+    };
+
+    let region = Region::new(first_pos, last_pos);
+
+    Loc::at(
+        region,
+        Expr::Defs(env.arena.alloc(defs), env.arena.alloc(final_expr)),
+    )
+}
+
+fn desugar_stmts_to_defs<'a>(
+    env: &mut Env<'a>,
+    scope: &mut Scope,
+    stmts: &[SpacesBefore<'a, Loc<Stmt<'a>>>],
+    mut defs: Defs<'a>,
+    exprify_dbg: bool,
+) -> (Defs<'a>, Option<Loc<Expr<'a>>>) {
+    let mut last_expr = None;
+    let mut i = 0;
+    while i < stmts.len() {
+        let sp_stmt = stmts[i];
+        match sp_stmt.item.value {
+            Stmt::Expr(Expr::Return(return_value, _after_return)) => {
+                let return_value = desugar_expr(env, scope, return_value);
+                if i == stmts.len() - 1 {
+                    last_expr = Some(Loc::at(
+                        sp_stmt.item.region,
+                        Expr::Return(return_value, None),
+                    ));
+                } else {
+                    let rest = desugar_stmts_to_expr(env, scope, &stmts[i + 1..]);
+                    last_expr = Some(Loc::at(
+                        sp_stmt.item.region,
+                        Expr::Return(return_value, Some(env.arena.alloc(rest))),
+                    ));
+                }
+
+                // don't re-process the rest of the statements, they got consumed by the early return
+                break;
+            }
+            Stmt::Expr(e) => {
+                if i + 1 < stmts.len() {
+                    if let Some(condition) = check_for_dbg_apply(env, e) {
+                        let condition = desugar_expr(env, scope, condition);
+                        if exprify_dbg {
+                            let rest = desugar_stmts_to_expr(env, scope, &stmts[i + 1..]);
+
+                            let e = desugar_dbg_stmt(
+                                env,
+                                env.arena.alloc(condition),
+                                env.arena.alloc(rest),
+                            );
+
+                            last_expr = Some(Loc::at(sp_stmt.item.region, e));
+
+                            // don't re-process the rest of the statements; they got consumed by the dbg expr
+                            break;
+                        } else {
+                            defs.push_value_def(
+                                ValueDef::Dbg {
+                                    condition: env.arena.alloc(condition),
+                                    preceding_comment: Region::zero(),
+                                },
+                                sp_stmt.item.region,
+                                &[],
+                                &[],
+                            );
+                        }
+                    } else {
+                        defs.push_value_def(
+                            ValueDef::Stmt(env.arena.alloc(Loc::at(sp_stmt.item.region, e))),
+                            sp_stmt.item.region,
+                            &[],
+                            &[],
+                        );
+                    }
+                } else {
+                    last_expr = Some(*desugar_expr(
+                        env,
+                        scope,
+                        env.arena.alloc(sp_stmt.item.with_value(e)),
+                    ));
+                }
+            }
+            Stmt::Backpassing(pats, call) => {
+                if i + 1 >= stmts.len() {
+                    // return Err(EExpr::BackpassContinue(sp_stmt.item.region.end()));
+                    todo!();
+                }
+
+                let rest = desugar_stmts_to_expr(env, scope, &stmts[i + 1..]);
+
+                let call = desugar_expr(env, scope, call);
+
+                let e = Expr::Backpassing(
+                    env.arena.alloc(pats),
+                    env.arena.alloc(call),
+                    env.arena.alloc(rest),
+                );
+
+                let region = Region::new(sp_stmt.item.region.start(), rest.region.end());
+
+                last_expr = Some(Loc::at(region, e));
+
+                // don't re-process the rest of the statements; they got consumed by the backpassing
+                break;
+            }
+
+            Stmt::TypeDef(td) => {
+                if let (
+                    TypeDef::Alias {
+                        header,
+                        ann: ann_type,
+                    },
+                    Some((
+                        spaces_middle,
+                        Stmt::ValueDef(ValueDef::Body(loc_pattern, loc_def_expr)),
+                    )),
+                ) = (td, stmts.get(i + 1).map(|s| (s.before, s.item.value)))
+                {
+                    if spaces_middle.len() <= 1
+                        || header
+                            .vars
+                            .first()
+                            .map(|var| var.value.equivalent(&loc_pattern.value))
+                            .unwrap_or(false)
+                    {
+                        // This is a case like
+                        //   UserId x : [UserId Int]
+                        //   UserId x = UserId 42
+                        // We optimistically parsed the first line as an alias; we now turn it
+                        // into an annotation.
+
+                        let region = Region::span_across(&loc_pattern.region, &loc_def_expr.region);
+
+                        let value_def = join_alias_to_body(
+                            env.arena,
+                            header,
+                            ann_type,
+                            spaces_middle,
+                            loc_pattern,
+                            loc_def_expr,
+                        );
+
+                        let value_def = desugar_value_def(env, scope, &value_def);
+
+                        defs.push_value_def(
+                            value_def,
+                            Region::span_across(&header.name.region, &region),
+                            &[],
+                            &[],
+                        );
+
+                        i += 1;
+                    } else {
+                        defs.push_type_def(td, sp_stmt.item.region, &[], &[])
+                    }
+                } else {
+                    defs.push_type_def(td, sp_stmt.item.region, &[], &[])
+                }
+            }
+            Stmt::ValueDef(vd) => {
+                match vd {
+                    ValueDef::Annotation(ann_pattern, ann_type) => {
+                        if let Some((
+                            spaces_middle,
+                            Stmt::ValueDef(ValueDef::Body(loc_pattern, loc_def_expr)),
+                        )) = stmts.get(i + 1).map(|s| (s.before, s.item.value))
+                        {
+                            if spaces_middle.len() <= 1
+                                || ann_pattern.value.equivalent(&loc_pattern.value)
+                            {
+                                let region =
+                                    Region::span_across(&loc_pattern.region, &loc_def_expr.region);
+
+                                let value_def = ValueDef::AnnotatedBody {
+                                    ann_pattern: env.arena.alloc(ann_pattern),
+                                    ann_type: env.arena.alloc(ann_type),
+                                    lines_between: spaces_middle,
+                                    body_pattern: desugar_loc_pattern(env, scope, loc_pattern),
+                                    body_expr: desugar_expr(env, scope, loc_def_expr),
+                                };
+
+                                defs.push_value_def(
+                                    value_def,
+                                    roc_region::all::Region::span_across(
+                                        &ann_pattern.region,
+                                        &region,
+                                    ),
+                                    &[],
+                                    &[],
+                                );
+                                i += 1;
+                            } else {
+                                let vd = desugar_value_def(env, scope, &vd);
+                                defs.push_value_def(vd, sp_stmt.item.region, &[], &[])
+                            }
+                        } else {
+                            let vd = desugar_value_def(env, scope, &vd);
+                            defs.push_value_def(vd, sp_stmt.item.region, &[], &[])
+                        }
+                    }
+                    ValueDef::Body(loc_pattern, loc_expr) => {
+                        defs.push_value_def(
+                            ValueDef::Body(
+                                desugar_loc_pattern(env, scope, loc_pattern),
+                                desugar_expr(env, scope, loc_expr),
+                            ),
+                            sp_stmt.item.region,
+                            &[],
+                            &[],
+                        );
+                    }
+                    ValueDef::AnnotatedBody {
+                        ann_pattern,
+                        ann_type,
+                        lines_between,
+                        body_pattern,
+                        body_expr,
+                    } => {
+                        defs.push_value_def(
+                            ValueDef::AnnotatedBody {
+                                ann_pattern,
+                                ann_type,
+                                lines_between,
+                                body_pattern: desugar_loc_pattern(env, scope, body_pattern),
+                                body_expr: desugar_expr(env, scope, body_expr),
+                            },
+                            sp_stmt.item.region,
+                            &[],
+                            &[],
+                        );
+                    }
+                    ValueDef::Dbg {
+                        condition,
+                        preceding_comment,
+                    } => {
+                        if exprify_dbg {
+                            let e = if i + 1 < stmts.len() {
+                                let rest = desugar_stmts_to_expr(env, scope, &stmts[i + 1..]);
+
+                                let condition =
+                                    &*env.arena.alloc(desugar_expr(env, scope, condition));
+                                let rest = &*env.arena.alloc(desugar_expr(
+                                    env,
+                                    scope,
+                                    env.arena.alloc(rest),
+                                ));
+
+                                desugar_dbg_stmt(env, condition, rest)
+                            } else {
+                                Expr::Apply(
+                                    env.arena.alloc(Loc {
+                                        value: Expr::Dbg,
+                                        region: sp_stmt.item.region,
+                                    }),
+                                    env.arena.alloc([condition]),
+                                    CalledVia::Space,
+                                )
+                            };
+
+                            last_expr = Some(Loc::at(sp_stmt.item.region, e));
+
+                            // don't re-process the rest of the statements; they got consumed by the dbg expr
+                            break;
+                        } else {
+                            defs.push_value_def(
+                                ValueDef::Dbg {
+                                    condition: desugar_expr(env, scope, env.arena.alloc(condition)),
+                                    preceding_comment,
+                                },
+                                sp_stmt.item.region,
+                                &[],
+                                &[],
+                            );
+                        }
+                    }
+                    ValueDef::Expect {
+                        condition,
+                        preceding_comment,
+                    } => {
+                        defs.push_value_def(
+                            ValueDef::Expect {
+                                condition: desugar_expr(env, scope, env.arena.alloc(condition)),
+                                preceding_comment,
+                            },
+                            sp_stmt.item.region,
+                            &[],
+                            &[],
+                        );
+                    }
+                    ValueDef::ModuleImport(roc_parse::ast::ModuleImport {
+                        before_name,
+                        name,
+                        params,
+                        alias,
+                        exposed,
+                    }) => {
+                        let desugared_params =
+                            params.map(|ModuleImportParams { before, params }| {
+                                ModuleImportParams {
+                                    before,
+                                    params: params.map(|params| {
+                                        desugar_field_collection(env, scope, *params)
+                                    }),
+                                }
+                            });
+
+                        defs.push_value_def(
+                            ValueDef::ModuleImport(roc_parse::ast::ModuleImport {
+                                before_name,
+                                name,
+                                params: desugared_params,
+                                alias,
+                                exposed,
+                            }),
+                            sp_stmt.item.region,
+                            &[],
+                            &[],
+                        );
+                    }
+                    ValueDef::IngestedFileImport(i) => {
+                        defs.push_value_def(
+                            ValueDef::IngestedFileImport(i),
+                            sp_stmt.item.region,
+                            &[],
+                            &[],
+                        );
+                    }
+
+                    ValueDef::Stmt(stmt_expr) => {
+                        if env.fx_mode == FxMode::PurityInference {
+                            // In purity inference mode, statements aren't fully desugared here
+                            // so we can provide better errors
+                            defs.push_value_def(
+                                ValueDef::Stmt(desugar_expr(env, scope, stmt_expr)),
+                                sp_stmt.item.region,
+                                &[],
+                                &[],
+                            );
+                        } else {
+
+                            // desugar `stmt_expr!` to
+                            // _ : {}
+                            // _ = stmt_expr!
+
+                            let desugared_expr = desugar_expr(env, scope, stmt_expr);
+
+                            if !is_expr_suffixed(&desugared_expr.value) {
+                                env.problems.push(Problem::StmtAfterExpr(stmt_expr.region));
+
+                                defs.push_value_def(
+                                    ValueDef::StmtAfterExpr,
+                                    sp_stmt.item.region,
+                                    &[],
+                                    &[],
+                                );
+                            } else {
+
+                                let region = stmt_expr.region;
+                                let new_pat = env
+                                    .arena
+                                    .alloc(Loc::at(region, Pattern::Underscore("#!stmt")));
+
+                                defs.push_value_def(
+                                    ValueDef::AnnotatedBody {
+                                        ann_pattern: new_pat,
+                                        ann_type: env.arena.alloc(Loc::at(
+                                            region,
+                                            TypeAnnotation::Record {
+                                                fields: Collection::empty(),
+                                                ext: None,
+                                            },
+                                        )),
+                                        lines_between: &[],
+                                        body_pattern: new_pat,
+                                        body_expr: desugared_expr,
+                                    },
+                                    sp_stmt.item.region,
+                                    &[],
+                                    &[],
+                                );
+                            }
+                        }
+                    },
+
+                    ValueDef::StmtAfterExpr => internal_error!(
+                        "StmtAfterExpression is only created during desugaring, so it shouldn't exist here."
+                    ),
+                }
+            }
+        }
+
+        i += 1;
+    }
+    (defs, last_expr)
+}
+
+fn check_for_dbg_apply<'a>(env: &mut Env<'a>, e: Expr<'a>) -> Option<&'a Loc<Expr<'a>>> {
+    if let Expr::Apply(loc_expr, loc_args, _) = e.extract_spaces().item {
+        if let Expr::Dbg = loc_expr.extract_spaces().item {
+            if loc_args.len() == 1 {
+                return Some(loc_args[0]);
+            } else {
+                debug_assert!(!loc_args.is_empty());
+
+                let args_region = Region::span_across(
+                    &loc_args.first().unwrap().region,
+                    &loc_args.last().unwrap().region,
+                );
+                env.problem(Problem::OverAppliedDbg {
+                    region: args_region,
+                });
+
+                env.arena.alloc(Loc {
+                    value: Expr::Record(Collection::empty()),
+                    region: loc_expr.region,
+                });
+
+                return Some(env.arena.alloc(Loc::at(loc_expr.region, Expr::Dbg)));
+            }
         }
     }
+    None
+}
+
+// pub fn desugar_defs_node_values<'a>(env: &mut Env<'a>, scope: &mut Scope, stmts: TopLevelDefs<'a>) {
+//     let expr = desugar_stmts_to_expr(env, scope, stmts.item, env.arena);
+
+//     for value_def in defs.value_defs.iter_mut() {
+//         *value_def = desugar_value_def(env, scope, env.arena.alloc(*value_def));
+//     }
+// }
+
+pub fn desugar_defs_node_values_top_level<'a>(
+    env: &mut Env<'a>,
+    scope: &mut Scope,
+    stmts: TopLevelDefs<'a>,
+) -> Defs<'a> {
+    let (mut defs, last_expr) =
+        desugar_stmts_to_defs(env, scope, stmts.item, Defs::default(), false);
+
+    if let Some(_expr) = last_expr {
+        todo!();
+        // env.problem(Problem::UnexpectedExprInModule {
+        //     region: last_expr.unwrap().region,
+        // });
+    }
+
+    // for value_def in defs.value_defs.iter_mut() {
+    //     *value_def = desugar_value_def(env, scope, env.arena.alloc(*value_def));
+    // }
+
+    // check here first so we only unwrap the expressions once, and after they have
+    // been desugared
+    for value_def in defs.value_defs.iter_mut() {
+        *value_def = desugar_value_def_suffixed(env.arena, *value_def);
+    }
+
+    defs
 }
 
 /// For each top-level ValueDef in our module, we will unwrap any suffixed
@@ -905,16 +1364,18 @@ pub fn desugar_expr<'a>(
             })
         }
         BinOps(lefts, right) => desugar_bin_ops(env, scope, loc_expr.region, lefts, right),
-        Defs(defs, loc_ret) => {
-            let mut defs = (*defs).clone();
-            desugar_defs_node_values(env, scope, &mut defs, false);
-            let loc_ret = desugar_expr(env, scope, loc_ret);
+        // Defs(defs, loc_ret) => {
+        //     let mut defs = (*defs).clone();
+        //     desugar_defs_node_values(env, scope, &mut defs, false);
+        //     let loc_ret = desugar_expr(env, scope, loc_ret);
 
-            env.arena.alloc(Loc::at(
-                loc_expr.region,
-                Defs(env.arena.alloc(defs), loc_ret),
-            ))
-        }
+        //     env.arena.alloc(Loc::at(
+        //         loc_expr.region,
+        //         Defs(env.arena.alloc(defs), loc_ret),
+        //     ))
+        // }
+        Defs(_, _) => loc_expr, // defs come from the desugaring so they must already be desugared.
+        Stmts(stmts) => env.arena.alloc(desugar_stmts_to_expr(env, scope, stmts)),
         Apply(Loc { value: Dbg, .. }, loc_args, _called_via) => {
             debug_assert!(!loc_args.is_empty());
 
@@ -1109,7 +1570,7 @@ pub fn desugar_expr<'a>(
             let desugared_continuation = &*env.arena.alloc(desugar_expr(env, scope, continuation));
 
             env.arena.alloc(Loc {
-                value: *desugar_dbg_stmt(env, desugared_condition, desugared_continuation),
+                value: desugar_dbg_stmt(env, desugared_condition, desugared_continuation),
                 region: loc_expr.region,
             })
         }
@@ -1452,7 +1913,7 @@ fn desugar_dbg_expr<'a>(
 
     // LowLevelDbg
     let dbg_stmt = env.arena.alloc(Loc {
-        value: *desugar_dbg_stmt(env, tmp_var, tmp_var),
+        value: desugar_dbg_stmt(env, tmp_var, tmp_var),
         region: outer_region,
     });
 
@@ -1479,7 +1940,7 @@ fn desugar_dbg_stmt<'a>(
     env: &mut Env<'a>,
     condition: &'a Loc<Expr<'a>>,
     continuation: &'a Loc<Expr<'a>>,
-) -> &'a Expr<'a> {
+) -> Expr<'a> {
     let region = condition.region;
 
     let inspect_fn = Var {
@@ -1509,7 +1970,7 @@ fn desugar_dbg_stmt<'a>(
     let module_path_str = env.module_path.to_string_lossy();
 
     // |> LowLevelDbg
-    env.arena.alloc(LowLevelDbg(
+    LowLevelDbg(
         env.arena.alloc((
             &*env
                 .arena
@@ -1518,7 +1979,7 @@ fn desugar_dbg_stmt<'a>(
         )),
         dbg_str,
         continuation,
-    ))
+    )
 }
 
 // TODO move this desugaring to canonicalization, so we can use Symbols instead of strings

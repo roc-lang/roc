@@ -13,11 +13,9 @@ Defs {
         Slice { start: 0, length: 0 },
     ],
     space_after: [
-        Slice { start: 0, length: 1 },
+        Slice { start: 0, length: 0 },
     ],
-    spaces: [
-        Newline,
-    ],
+    spaces: [],
     type_defs: [],
     value_defs: [
         Body(
@@ -40,36 +38,37 @@ Defs {
                                 ident: "foo",
                             },
                         ],
-                        @29-36 LowLevelDbg(
-                            (
-                                "test.roc:3",
-                                "   ",
-                            ),
-                            @33-36 Apply(
-                                @33-36 Var {
-                                    module_name: "Inspect",
-                                    ident: "toStr",
+                        @29-36 DbgStmt(
+                            @33-36 Var {
+                                module_name: "",
+                                ident: "foo",
+                            },
+                            @41-49 Defs(
+                                Defs {
+                                    tags: [],
+                                    regions: [],
+                                    space_before: [],
+                                    space_after: [],
+                                    spaces: [],
+                                    type_defs: [],
+                                    value_defs: [],
                                 },
-                                [
-                                    @33-36 Var {
-                                        module_name: "",
-                                        ident: "foo",
+                                @41-49 Apply(
+                                    @41-44 TrySuffix {
+                                        target: Task,
+                                        expr: Var {
+                                            module_name: "",
+                                            ident: "bar",
+                                        },
                                     },
-                                ],
-                                Space,
-                            ),
-                            @41-49 Apply(
-                                @41-49 Var {
-                                    module_name: "",
-                                    ident: "bar",
-                                },
-                                [
-                                    @46-49 Var {
-                                        module_name: "",
-                                        ident: "foo",
-                                    },
-                                ],
-                                Space,
+                                    [
+                                        @46-49 Var {
+                                            module_name: "",
+                                            ident: "foo",
+                                        },
+                                    ],
+                                    Space,
+                                ),
                             ),
                         ),
                     ),

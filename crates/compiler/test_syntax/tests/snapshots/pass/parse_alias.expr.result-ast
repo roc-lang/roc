@@ -1,20 +1,7 @@
 SpaceAfter(
-    Defs(
-        Defs {
-            tags: [
-                EitherIndex(0),
-            ],
-            regions: [
-                @0-26,
-            ],
-            space_before: [
-                Slice { start: 0, length: 0 },
-            ],
-            space_after: [
-                Slice { start: 0, length: 0 },
-            ],
-            spaces: [],
-            type_defs: [
+    Stmts(
+        [
+            @0-26 TypeDef(
                 Alias {
                     header: TypeHeader {
                         name: @0-4 "Blah",
@@ -40,18 +27,19 @@ SpaceAfter(
                         ],
                     ),
                 },
-            ],
-            value_defs: [],
-        },
-        @28-30 SpaceBefore(
-            Num(
-                "42",
             ),
-            [
-                Newline,
-                Newline,
-            ],
-        ),
+            SpacesBefore(
+                [
+                    Newline,
+                    Newline,
+                ],
+                @28-30 Expr(
+                    Num(
+                        "42",
+                    ),
+                ),
+            ),
+        ],
     ),
     [
         Newline,

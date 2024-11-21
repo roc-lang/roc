@@ -1,26 +1,12 @@
 SpaceAfter(
-    Defs(
-        Defs {
-            tags: [
-                EitherIndex(2147483648),
-            ],
-            regions: [
-                @0-39,
-            ],
-            space_before: [
-                Slice { start: 0, length: 0 },
-            ],
-            space_after: [
-                Slice { start: 0, length: 0 },
-            ],
-            spaces: [],
-            type_defs: [],
-            value_defs: [
-                AnnotatedBody {
-                    ann_pattern: @0-5 Identifier {
+    Stmts(
+        [
+            @0-20 ValueDef(
+                Annotation(
+                    @0-5 Identifier {
                         ident: "where",
                     },
-                    ann_type: @8-20 Record {
+                    @8-20 Record {
                         fields: [
                             @9-19 RequiredValue(
                                 @9-14 "where",
@@ -34,39 +20,47 @@ SpaceAfter(
                         ],
                         ext: None,
                     },
-                    lines_between: [
-                        Newline,
-                    ],
-                    body_pattern: @21-26 Identifier {
-                        ident: "where",
-                    },
-                    body_expr: @29-39 Record(
-                        [
-                            @30-38 RequiredValue(
-                                @30-35 "where",
-                                [],
-                                @37-38 Num(
-                                    "1",
-                                ),
-                            ),
-                        ],
-                    ),
-                },
-            ],
-        },
-        @41-52 SpaceBefore(
-            RecordAccess(
-                Var {
-                    module_name: "",
-                    ident: "where",
-                },
-                "where",
+                ),
             ),
-            [
-                Newline,
-                Newline,
-            ],
-        ),
+            SpacesBefore(
+                [
+                    Newline,
+                ],
+                @21-39 ValueDef(
+                    Body(
+                        @21-26 Identifier {
+                            ident: "where",
+                        },
+                        @29-39 Record(
+                            [
+                                @30-38 RequiredValue(
+                                    @30-35 "where",
+                                    [],
+                                    @37-38 Num(
+                                        "1",
+                                    ),
+                                ),
+                            ],
+                        ),
+                    ),
+                ),
+            ),
+            SpacesBefore(
+                [
+                    Newline,
+                    Newline,
+                ],
+                @41-52 Expr(
+                    RecordAccess(
+                        Var {
+                            module_name: "",
+                            ident: "where",
+                        },
+                        "where",
+                    ),
+                ),
+            ),
+        ],
     ),
     [
         Newline,

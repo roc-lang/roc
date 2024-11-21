@@ -4,12 +4,12 @@ use std::{fs, io};
 use bumpalo::Bump;
 use roc_collections::MutSet;
 use roc_load::MonomorphizedModule;
-use roc_parse::ast::{Defs, Expr, Pattern, StrLiteral, TypeDef, TypeHeader, ValueDef};
+use roc_parse::ast::{Pattern, SpacesBefore, Stmt, StrLiteral, TypeDef, TypeHeader, ValueDef};
 use roc_parse::expr::parse_repl_defs_and_optional_expr;
 use roc_parse::parser::EWhen;
 use roc_parse::parser::{EClosure, EExpr, EPattern};
 use roc_parse::state::State;
-use roc_region::all::Loc;
+use roc_region::all::{Loc, Region};
 use roc_repl_eval::gen::{compile_to_mono, Problems};
 use roc_reporting::report::Palette;
 use roc_target::Target;
@@ -74,7 +74,9 @@ impl ReplState {
                 // proceed as normal and let the error reporting happen during eval.
                 line
             }
-            ParseOutcome::DefsAndExpr(_defs, Some(_expr)) => {
+            ParseOutcome::Stmts(stmts)
+                if matches!(stmts.last().map(|s| s.item.value), Some(Stmt::Expr(_))) =>
+            {
                 // For now if we have a expr, we bundle everything together into a single
                 // Defs expr, matching the older behavior of the parser. If we instead
                 // use the branch below, it would trigger a bug further in the compiler.
@@ -82,13 +84,15 @@ impl ReplState {
                 pending_past_def = None;
                 line
             }
-            ParseOutcome::DefsAndExpr(defs, None) => {
+            ParseOutcome::Stmts(stmts) => {
                 let mut last_src = None;
 
-                for def in defs.loc_defs() {
-                    match def {
-                        Ok(td) => {
-                            match td.value {
+                let mut last_annotation: Option<(String, Region)> = None;
+
+                for stmt in stmts {
+                    match stmt.item.value {
+                        Stmt::TypeDef(td) => {
+                            match td {
                                 TypeDef::Alias {
                                     header:
                                         TypeHeader {
@@ -116,17 +120,17 @@ impl ReplState {
                                     // Record the type for future use.
                                     self.add_past_def(
                                         ident.trim_end().to_string(),
-                                        line[td.byte_range()].to_string(),
+                                        line[stmt.item.byte_range()].to_string(),
                                     );
 
                                     // Return early without running eval, since none of these
                                     // can be evaluated as expressions.
-                                    return ReplAction::Nothing;
+                                    // return ReplAction::Nothing;
                                 }
                             }
                         }
-                        Err(vd) => {
-                            match vd.value {
+                        Stmt::ValueDef(vd) => {
+                            match vd {
                                 ValueDef::Annotation(
                                     Loc {
                                         // TODO is this right for suffixed
@@ -135,15 +139,30 @@ impl ReplState {
                                     },
                                     _,
                                 ) => {
-                                    // Record the standalone type annotation for future use.
-                                    self.add_past_def(
-                                        ident.trim_end().to_string(),
-                                        line[vd.byte_range()].to_string(),
-                                    );
+                                    if let Some((ident, region)) = last_annotation.take() {
+                                        self.add_past_def(
+                                            ident,
+                                            line[region.byte_range()].to_string(),
+                                        );
 
-                                    // Return early without running eval, since standalone annotations
-                                    // cannot be evaluated as expressions.
-                                    return ReplAction::Nothing;
+                                        // Return early without running eval, since standalone annotations
+                                        // cannot be evaluated as expressions.
+                                        // TODO: we probably want to keep processing this Body, no?
+                                        // Preserving this behavior for now.
+                                        return ReplAction::Nothing;
+                                    }
+
+                                    last_annotation =
+                                        Some((ident.trim_end().to_string(), stmt.item.region))
+                                    // // Record the standalone type annotation for future use.
+                                    // self.add_past_def(
+                                    //     ident.trim_end().to_string(),
+                                    //     line[stmt.item.byte_range()].to_string(),
+                                    // );
+
+                                    // // Return early without running eval, since standalone annotations
+                                    // // cannot be evaluated as expressions.
+                                    // return ReplAction::Nothing;
                                 }
                                 ValueDef::Body(
                                     Loc {
@@ -152,8 +171,52 @@ impl ReplState {
                                         ..
                                     },
                                     _,
-                                )
-                                | ValueDef::AnnotatedBody {
+                                ) => {
+                                    let combined = if let Some((ann_ident, region)) =
+                                        last_annotation.take()
+                                    {
+                                        if ann_ident == *ident {
+                                            Some((
+                                                ident,
+                                                Region::new(region.start(), stmt.item.region.end()),
+                                            ))
+                                        } else {
+                                            self.add_past_def(
+                                                ident.trim_end().to_string(),
+                                                line[stmt.item.byte_range()].to_string(),
+                                            );
+                                            None
+                                        }
+                                    } else {
+                                        Some((ident, stmt.item.region))
+                                    };
+
+                                    if let Some((ident, region)) = combined {
+                                        let region =
+                                            Region::new(region.start(), stmt.item.region.end());
+                                        pending_past_def = Some((
+                                            ident.to_string(),
+                                            line[region.byte_range()].to_string(),
+                                        ));
+
+                                        // Recreate the body of the def and then evaluate it as a lookup.
+                                        // We do this so that any errors will get reported as part of this expr;
+                                        // if we just did a lookup on the past def, then errors wouldn't get
+                                        // reported because we filter out errors whose regions are in past defs.
+                                        let mut buf =
+                                            bumpalo::collections::string::String::with_capacity_in(
+                                                ident.len() + line.len() + 1,
+                                                arena,
+                                            );
+
+                                        buf.push_str(line);
+                                        buf.push('\n');
+                                        buf.push_str(ident);
+
+                                        last_src = Some(buf.into_bump_str());
+                                    }
+                                }
+                                ValueDef::AnnotatedBody {
                                     body_pattern:
                                         Loc {
                                             // TODO is this right for suffixed
@@ -162,9 +225,16 @@ impl ReplState {
                                         },
                                     ..
                                 } => {
+                                    if let Some((ident, region)) = last_annotation.take() {
+                                        self.add_past_def(
+                                            ident,
+                                            line[region.byte_range()].to_string(),
+                                        );
+                                    }
+
                                     pending_past_def = Some((
                                         ident.to_string(),
-                                        line[vd.byte_range()].to_string(),
+                                        line[stmt.item.byte_range()].to_string(),
                                     ));
 
                                     // Recreate the body of the def and then evaluate it as a lookup.
@@ -196,37 +266,50 @@ impl ReplState {
                                 ValueDef::Expect { .. } => {
                                     todo!("handle receiving an `expect` - what should the repl do for that?")
                                 }
-                                ValueDef::ModuleImport(import) => match import.name.value.package {
-                                    Some(_) => {
-                                        todo!("handle importing a module from a package")
+                                ValueDef::ModuleImport(import) => {
+                                    if let Some((ident, region)) = last_annotation.take() {
+                                        self.add_past_def(
+                                            ident,
+                                            line[region.byte_range()].to_string(),
+                                        );
                                     }
-                                    None => {
-                                        let mut filename = PathBuf::new();
-
-                                        for part in import.name.value.name.parts() {
-                                            filename.push(part);
+                                    match import.name.value.package {
+                                        Some(_) => {
+                                            todo!("handle importing a module from a package")
                                         }
+                                        None => {
+                                            let mut filename = PathBuf::new();
 
-                                        filename.set_extension("roc");
+                                            for part in import.name.value.name.parts() {
+                                                filename.push(part);
+                                            }
 
-                                        // Check we can read the file before we add it to past defs.
-                                        // If we didn't do this, the bad import would remain in past_defs
-                                        // and we'd report it on every subsequent evaluation.
-                                        if let Err(err) = fs::metadata(&filename) {
-                                            return ReplAction::FileProblem {
-                                                filename,
-                                                error: err.kind(),
-                                            };
+                                            filename.set_extension("roc");
+
+                                            // Check we can read the file before we add it to past defs.
+                                            // If we didn't do this, the bad import would remain in past_defs
+                                            // and we'd report it on every subsequent evaluation.
+                                            if let Err(err) = fs::metadata(&filename) {
+                                                return ReplAction::FileProblem {
+                                                    filename,
+                                                    error: err.kind(),
+                                                };
+                                            }
+
+                                            self.past_defs.push(PastDef::Import(
+                                                line[stmt.item.byte_range()].to_string(),
+                                            ));
                                         }
-
-                                        self.past_defs.push(PastDef::Import(
-                                            line[vd.byte_range()].to_string(),
-                                        ));
-
-                                        return ReplAction::Nothing;
                                     }
-                                },
+                                }
                                 ValueDef::IngestedFileImport(file) => {
+                                    if let Some((ident, region)) = last_annotation.take() {
+                                        self.add_past_def(
+                                            ident,
+                                            line[region.byte_range()].to_string(),
+                                        );
+                                    }
+
                                     if let StrLiteral::PlainLine(path) = file.path.value {
                                         let filename = PathBuf::from(path);
                                         if let Err(err) = fs::metadata(&filename) {
@@ -237,14 +320,19 @@ impl ReplState {
                                         }
                                     }
 
-                                    self.past_defs
-                                        .push(PastDef::Import(line[vd.byte_range()].to_string()));
-
-                                    return ReplAction::Nothing;
+                                    self.past_defs.push(PastDef::Import(
+                                        line[stmt.item.byte_range()].to_string(),
+                                    ));
                                 }
                                 ValueDef::Stmt(_) => todo!(),
                                 ValueDef::StmtAfterExpr => todo!("effects in repl"),
                             }
+                        }
+                        Stmt::Backpassing(..) => todo!("backpassing in repl"),
+                        Stmt::Expr(_) => {
+                            // note we would have fallen into the outer branch above if
+                            // this was the last statement in the input
+                            todo!("exprs not-at-the-end in repl")
                         }
                     }
                 }
@@ -286,7 +374,7 @@ impl ReplState {
 
 #[derive(Debug, PartialEq)]
 pub enum ParseOutcome<'a> {
-    DefsAndExpr(Defs<'a>, Option<Loc<Expr<'a>>>),
+    Stmts(&'a [SpacesBefore<'a, Loc<Stmt<'a>>>]),
     Incomplete,
     SyntaxErr,
     Empty,
@@ -320,11 +408,11 @@ pub fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
 
             match parse_repl_defs_and_optional_expr(arena, State::new(src_bytes)) {
                 Err((_, e)) => parse_outcome_for_error(e),
-                Ok((_, (defs, opt_last_expr), _state)) => {
-                    if defs.is_empty() && opt_last_expr.is_none() {
+                Ok((_, stmts, _state)) => {
+                    if stmts.is_empty() {
                         ParseOutcome::Empty
                     } else {
-                        ParseOutcome::DefsAndExpr(defs, opt_last_expr)
+                        ParseOutcome::Stmts(stmts)
                     }
                 }
             }

@@ -1,33 +1,17 @@
 SpaceAfter(
-    Defs(
-        Defs {
-            tags: [
-                EitherIndex(2147483648),
-            ],
-            regions: [
-                @0-46,
-            ],
-            space_before: [
-                Slice { start: 0, length: 0 },
-            ],
-            space_after: [
-                Slice { start: 0, length: 0 },
-            ],
-            spaces: [],
-            type_defs: [],
-            value_defs: [
-                AnnotatedBody {
-                    ann_pattern: @0-8 Apply(
-                        @0-6 Tag(
-                            "UserId",
-                        ),
-                        [
+    Stmts(
+        [
+            @0-25 TypeDef(
+                Alias {
+                    header: TypeHeader {
+                        name: @0-6 "UserId",
+                        vars: [
                             @7-8 Identifier {
                                 ident: "x",
                             },
                         ],
-                    ),
-                    ann_type: @11-25 TagUnion {
+                    },
+                    ann: @11-25 TagUnion {
                         ext: None,
                         tags: [
                             @13-23 Apply {
@@ -42,43 +26,51 @@ SpaceAfter(
                             },
                         ],
                     },
-                    lines_between: [
-                        Newline,
-                    ],
-                    body_pattern: @26-34 Apply(
-                        @26-32 Tag(
-                            "UserId",
-                        ),
-                        [
-                            @33-34 Identifier {
-                                ident: "x",
-                            },
-                        ],
-                    ),
-                    body_expr: @37-46 Apply(
-                        @37-43 Tag(
-                            "UserId",
-                        ),
-                        [
-                            @44-46 Num(
-                                "42",
-                            ),
-                        ],
-                        Space,
-                    ),
                 },
-            ],
-        },
-        @48-49 SpaceBefore(
-            Var {
-                module_name: "",
-                ident: "x",
-            },
-            [
-                Newline,
-                Newline,
-            ],
-        ),
+            ),
+            SpacesBefore(
+                [
+                    Newline,
+                ],
+                @26-46 ValueDef(
+                    Body(
+                        @26-34 Apply(
+                            @26-32 Tag(
+                                "UserId",
+                            ),
+                            [
+                                @33-34 Identifier {
+                                    ident: "x",
+                                },
+                            ],
+                        ),
+                        @37-46 Apply(
+                            @37-43 Tag(
+                                "UserId",
+                            ),
+                            [
+                                @44-46 Num(
+                                    "42",
+                                ),
+                            ],
+                            Space,
+                        ),
+                    ),
+                ),
+            ),
+            SpacesBefore(
+                [
+                    Newline,
+                    Newline,
+                ],
+                @48-49 Expr(
+                    Var {
+                        module_name: "",
+                        ident: "x",
+                    },
+                ),
+            ),
+        ],
     ),
     [
         Newline,
