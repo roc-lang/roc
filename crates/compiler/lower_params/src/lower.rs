@@ -101,7 +101,7 @@ impl<'a> LowerParams<'a> {
                     self.lower_expr(&mut decls.expressions[index].value);
                 }
 
-                Destructure(_) | Expectation | ExpectationFx => {
+                Destructure(_) | Expectation => {
                     self.lower_expr(&mut decls.expressions[index].value);
                 }
                 MutualRecursion { .. } => {}

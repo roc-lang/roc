@@ -62,7 +62,7 @@ mod cli_tests {
             .unwrap();
 
         let cli_build = ExecCli::new(
-            roc_cli::CMD_RUN,
+            roc_cli::CMD_DEV,
             file_from_root("examples/platform-switching", "rocLovesRust.roc"),
         );
 
@@ -359,7 +359,7 @@ mod cli_tests {
     mod test_platform_basic_cli {
 
         use super::*;
-        use roc_cli::CMD_RUN;
+        use roc_cli::CMD_DEV;
 
         #[test]
         #[cfg_attr(
@@ -418,7 +418,7 @@ mod cli_tests {
         )]
         fn module_params_issue_7116() {
             let cli_build = ExecCli::new(
-                CMD_RUN,
+                CMD_DEV,
                 file_from_root(
                     "crates/cli/tests/test-projects/module_params",
                     "issue_7116.roc",
@@ -439,7 +439,7 @@ mod cli_tests {
         )]
         fn module_params_pass_task() {
             let cli_build = ExecCli::new(
-                CMD_RUN,
+                CMD_DEV,
                 file_from_root(
                     "crates/cli/tests/test-projects/module_params",
                     "pass_task.roc",

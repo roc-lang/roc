@@ -1,13 +1,10 @@
-app "zig-glue"
-    packages { pf: "../platform/main.roc" }
-    imports [
-        pf.Types.{ Types },
-        pf.File.{ File },
-        "../../compiler/builtins/bitcode/src/list.zig" as rocStdList : Str,
-        "../../compiler/builtins/bitcode/src/str.zig" as rocStdStr : Str,
-        "../../compiler/builtins/bitcode/src/utils.zig" as rocStdUtils : Str,
-    ]
-    provides [makeGlue] to pf
+app [makeGlue] { pf: platform "../platform/main.roc" }
+
+import pf.Types exposing [Types]
+import pf.File exposing [File]
+import "../../compiler/builtins/bitcode/src/list.zig" as rocStdList : Str
+import "../../compiler/builtins/bitcode/src/str.zig" as rocStdStr : Str
+import "../../compiler/builtins/bitcode/src/utils.zig" as rocStdUtils : Str
 
 makeGlue : List Types -> Result (List File) Str
 makeGlue = \typesByArch ->

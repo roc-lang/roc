@@ -1188,36 +1188,6 @@ pub fn canonicalize_expr<'a>(
                 }
             }
         }
-        ast::Expr::Expect(condition, continuation) => {
-            let mut output = Output::default();
-
-            let (loc_condition, output1) =
-                canonicalize_expr(env, var_store, scope, condition.region, &condition.value);
-
-            // Get all the lookups that were referenced in the condition,
-            // so we can print their values later.
-            let lookups_in_cond = get_lookup_symbols(&loc_condition.value);
-
-            let (loc_continuation, output2) = canonicalize_expr(
-                env,
-                var_store,
-                scope,
-                continuation.region,
-                &continuation.value,
-            );
-
-            output.union(output1);
-            output.union(output2);
-
-            (
-                Expect {
-                    loc_condition: Box::new(loc_condition),
-                    loc_continuation: Box::new(loc_continuation),
-                    lookups_in_cond,
-                },
-                output,
-            )
-        }
         ast::Expr::Dbg => {
             // Dbg was not desugared as either part of an `Apply` or a `Pizza` binop, so it's
             // invalid.
@@ -2534,7 +2504,6 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         // Newlines are disallowed inside interpolation, and these all require newlines
         ast::Expr::DbgStmt(_, _)
         | ast::Expr::LowLevelDbg(_, _, _)
-        | ast::Expr::Expect(_, _)
         | ast::Expr::Return(_, _)
         | ast::Expr::When(_, _)
         | ast::Expr::Backpassing(_, _, _)
@@ -3241,12 +3210,6 @@ impl Declarations {
 
                     collector.visit_expr(&loc_expr.value, loc_expr.region, var);
                 }
-                ExpectationFx => {
-                    let loc_expr =
-                        toplevel_expect_to_inline_expect_fx(self.expressions[index].clone());
-
-                    collector.visit_expr(&loc_expr.value, loc_expr.region, var);
-                }
             }
         }
 
@@ -3265,7 +3228,6 @@ roc_error_macros::assert_sizeof_default!(DeclarationTag, 8);
 pub enum DeclarationTag {
     Value,
     Expectation,
-    ExpectationFx,
     Function(Index<Loc<FunctionDef>>),
     Recursive(Index<Loc<FunctionDef>>),
     TailRecursive(Index<Loc<FunctionDef>>),
@@ -3283,7 +3245,7 @@ impl DeclarationTag {
         match self {
             Function(_) | Recursive(_) | TailRecursive(_) => 1,
             Value => 1,
-            Expectation | ExpectationFx => 1,
+            Expectation => 1,
             Destructure(_) => 1,
             MutualRecursion { length, .. } => length as usize + 1,
         }
@@ -3484,15 +3446,7 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
 /// This is supposed to happen just before monomorphization:
 /// all type errors and such are generated from the user source,
 /// but this transformation means that we don't need special codegen for toplevel expects
-pub fn toplevel_expect_to_inline_expect_pure(loc_expr: Loc<Expr>) -> Loc<Expr> {
-    toplevel_expect_to_inline_expect_help(loc_expr, false)
-}
-
-pub fn toplevel_expect_to_inline_expect_fx(loc_expr: Loc<Expr>) -> Loc<Expr> {
-    toplevel_expect_to_inline_expect_help(loc_expr, true)
-}
-
-fn toplevel_expect_to_inline_expect_help(mut loc_expr: Loc<Expr>, has_effects: bool) -> Loc<Expr> {
+pub fn toplevel_expect_to_inline_expect_pure(mut loc_expr: Loc<Expr>) -> Loc<Expr> {
     enum StoredDef {
         NonRecursive(Region, Box<Def>),
         Recursive(Region, Vec<Def>, IllegalCycleMark),
@@ -3530,7 +3484,6 @@ fn toplevel_expect_to_inline_expect_help(mut loc_expr: Loc<Expr>, has_effects: b
     }
 
     let expect_region = loc_expr.region;
-    assert!(!has_effects);
     let expect = Expr::Expect {
         loc_condition: Box::new(loc_expr),
         loc_continuation: Box::new(Loc::at_zero(Expr::EmptyRecord)),
