@@ -663,7 +663,9 @@ trait Backend<'a> {
                 cond_layout,
                 branches,
                 default_branch,
-                ret_layout,
+                // always use the proc's ret_layout, as early returns can make
+                // this ret_layout inaccurate
+                ret_layout: _,
             } => {
                 self.load_literal_symbols(&[*cond_symbol]);
                 self.build_switch(

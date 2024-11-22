@@ -3695,3 +3695,18 @@ fn dec_refcount_for_usage_after_early_return_in_if() {
         "#
     )
 }
+
+#[mono_test]
+fn return_annotated() {
+    indoc!(
+        r#"
+        validateInput : Str -> Result U64 _
+        validateInput = \str ->
+            num = try Str.toU64 str
+
+            Ok num
+
+        validateInput "123"
+        "#
+    )
+}
