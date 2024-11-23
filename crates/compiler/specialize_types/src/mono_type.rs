@@ -118,12 +118,8 @@ impl MonoTypes {
 
         let opt = self.entries.get(id.inner.index());
 
-        #[cfg(debug_assertions)]
-        {
-            opt.expect("A MonoTypeId corresponded to an index that wasn't in MonoTypes. This should never happen!")
-        }
+        debug_assert!(opt.is_some(), "A MonoTypeId corresponded to an index that wasn't in MonoTypes. This should never happen!");
 
-        #[cfg(not(debug_assertions))]
         unsafe {
             opt.unwrap_unchecked()
         }
