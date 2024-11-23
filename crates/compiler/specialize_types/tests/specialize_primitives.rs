@@ -164,7 +164,7 @@ mod specialize_primitives {
 
     #[test]
     fn unbound_f64() {
-        let expected = 3.14159265359;
+        let expected = std::f64::consts::PI;
         expect_mono_expr(
             format!("{expected}"),
             MonoExpr::Number(Number::Dec(expected)),

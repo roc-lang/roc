@@ -1,5 +1,5 @@
 use crate::{
-    mono_ir::{MonoExpr, MonoExprId, MonoExprs, MonoStmt, MonoStmtId},
+    mono_ir::{MonoExpr, MonoExprId, MonoExprs},
     mono_module::Interns,
     mono_num::Number,
     mono_type::{MonoType, MonoTypes, Primitive},
@@ -9,10 +9,10 @@ use crate::{
 use bumpalo::{collections::Vec, Bump};
 use roc_can::expr::{Expr, IntValue};
 use roc_collections::{Push, VecMap};
-use roc_module::{ident::Lowercase, symbol::ModuleId};
+use roc_module::symbol::ModuleId;
 use roc_region::all::Region;
 use roc_solve::module::Solved;
-use roc_types::subs::{Content, FlatType, Subs, Variable};
+use roc_types::subs::{Content, Subs, Variable};
 use soa::NonEmptySlice;
 
 /// Function bodies that have already been specialized.
@@ -31,7 +31,8 @@ impl MonoFnCache {
         fn_var: Variable,
         // Given a ModuleId and Variable (to uniquely identify the canonical fn Expr within its module),
         // get the canonical Expr of the function itself. We need this to create a specialization of it.
-        get_fn_expr: F,
+        // TODO [mono2]
+        _get_fn_expr: F,
         // This tells us which specialization of the function we want.
         mono_type_id: MonoTypeId,
     ) -> MonoExprId {
@@ -94,7 +95,7 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
                 &mut self.record_field_ids,
                 &mut self.tuple_elem_ids,
                 problems,
-                &mut self.debug_info,
+                self.debug_info,
                 var,
             )
         };
@@ -160,13 +161,13 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
             ))),
             Expr::EmptyRecord => {
                 // Empty records are zero-sized and should be discarded.
-                return None;
+                None
             }
             Expr::Record {
                 record_var: _,
                 fields,
             } => {
-                let todo = (); // TODO: store debuginfo for the record type, including ideally type alias and/or opaque type names. Do this before early-returning for single-field records.
+                // TODO [mono2]: store debuginfo for the record type, including ideally type alias and/or opaque type names. Do this before early-returning for single-field records.
 
                 // Check for records with 0-1 fields before sorting or reserving a slice of IDs (which might be unnecessary).
                 // We'll check again after discarding zero-sized fields, because we might end up with 0 or 1 fields remaining.
@@ -178,7 +179,7 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
                 }
 
                 // Sort the fields alphabetically by name.
-                let mut fields = Vec::from_iter_in(fields.into_iter(), self.arena);
+                let mut fields = Vec::from_iter_in(fields, self.arena);
 
                 fields.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
 

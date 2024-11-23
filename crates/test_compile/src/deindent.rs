@@ -60,7 +60,7 @@ pub fn trim_and_deindent<'a>(arena: &'a Bump, input: &'a str) -> &'a str {
     let mut final_str_len = 0;
 
     lines.iter_mut().for_each(|line| {
-        if line.starts_with(" ") {
+        if line.starts_with(' ') {
             *line = line.get(smallest_indent..).unwrap_or("");
         }
         final_str_len += line.len() + 1; // +1 for the newline that will be added to the end of this line.

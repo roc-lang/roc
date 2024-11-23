@@ -74,16 +74,13 @@ impl MonoTypeId {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct MonoTypes {
     entries: Vec<MonoType>,
-    #[allow(dead_code)]
     ids: Vec<MonoTypeId>,
-    #[allow(dead_code)]
     slices: Vec<(NonZeroU16, MonoTypeId)>, // TODO make this a Vec2
 }
 
-#[allow(dead_code)]
 impl MonoTypes {
     pub fn new() -> Self {
         Self {
@@ -132,7 +129,7 @@ impl MonoTypes {
         }
     }
 
-    pub(crate) fn add_primitive(&mut self, primitive: Primitive) -> MonoTypeId {
+    pub(crate) fn add_primitive(&mut self, _primitive: Primitive) -> MonoTypeId {
         todo!("if it's one of the hardcoded ones, find the associated MonoTypeId; otherwise, store it etc.");
     }
 

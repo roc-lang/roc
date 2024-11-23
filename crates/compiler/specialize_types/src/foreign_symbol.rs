@@ -1,7 +1,7 @@
 use roc_module::ident::ForeignSymbol;
 use soa::Id;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ForeignSymbols {
     inner: Vec<ForeignSymbol>,
 }

@@ -223,6 +223,9 @@ impl<T> NonEmptySlice<T> {
         }
     }
 
+    /// # Safety
+    ///
+    /// The caller must ensure that the length is nonzero
     pub const unsafe fn new_unchecked(start: u32, length: u16) -> Self {
         Self {
             inner: Slice {
@@ -241,6 +244,9 @@ impl<T> NonEmptySlice<T> {
         }
     }
 
+    /// # Safety
+    ///
+    /// The caller must ensure that the length is nonzero
     pub const unsafe fn from_slice_unchecked(slice: Slice<T>) -> Self {
         Self::new(slice.start, NonZeroU16::new_unchecked(slice.length))
     }

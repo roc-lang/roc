@@ -4,7 +4,6 @@ use roc_types::subs::Subs;
 
 use crate::{foreign_symbol::ForeignSymbols, mono_type::MonoTypes, DebugInfo};
 
-#[allow(dead_code)]
 pub struct MonoModule {
     mono_types: MonoTypes,
     foreign_symbols: ForeignSymbols,
@@ -12,7 +11,6 @@ pub struct MonoModule {
     debug_info: DebugInfo,
 }
 
-#[allow(dead_code)]
 impl MonoModule {
     pub fn from_typed_can_module(_subs: &Solved<Subs>) -> Self {
         Self {
@@ -29,7 +27,7 @@ impl MonoModule {
 pub struct InternedStrId(u32);
 
 /// TODO move this to its own crate
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Interns<'a> {
     interned: Vec<&'a str>,
 }
@@ -71,13 +69,9 @@ impl<'a> Interns<'a> {
     }
 
     pub fn try_get_id(&self, _arena: &'a Bump, string: &'a str) -> Option<InternedStrId> {
-        match self
-            .interned
+        self.interned
             .iter()
             .position(|&interned| interned == string)
-        {
-            Some(index) => Some(InternedStrId(index as u32)),
-            None => None,
-        }
+            .map(|index| InternedStrId(index as u32))
     }
 }

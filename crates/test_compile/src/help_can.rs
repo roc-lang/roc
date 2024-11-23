@@ -64,7 +64,7 @@ impl CanExpr {
 
                 let dep_idents = IdentIds::exposed_builtins(0);
                 let mut env = Env::new(
-                    &self.arena(),
+                    self.arena(),
                     input,
                     home,
                     Path::new("Test.roc"),
@@ -133,7 +133,7 @@ impl CanExpr {
     }
 
     pub fn arena(&self) -> &Bump {
-        &self.parse_expr.arena()
+        self.parse_expr.arena()
     }
 
     pub fn home(&self) -> ModuleId {

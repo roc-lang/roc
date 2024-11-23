@@ -72,7 +72,7 @@ impl ConstrainedExpr {
     }
 
     pub fn arena(&self) -> &Bump {
-        &self.can_expr.arena()
+        self.can_expr.arena()
     }
 
     pub fn home(&self) -> ModuleId {

@@ -11,10 +11,10 @@ pub use help_parse::ParseExpr;
 pub use help_solve::{SolvedExpr, SolvedExprOut};
 pub use help_specialize::{SpecializedExpr, SpecializedExprOut};
 
-pub fn can_expr<'a>(input: &'a str) -> CanExprOut {
+pub fn can_expr(input: &str) -> CanExprOut {
     CanExpr::default().can_expr(input)
 }
 
-pub fn solve_expr<'a>(input: &'a str) -> SolvedExprOut {
+pub fn solve_expr(input: &str) -> SolvedExprOut {
     SolvedExpr::default().solve_expr(input)
 }

@@ -65,6 +65,6 @@ impl SpecializedExpr {
     }
 
     pub fn arena(&self) -> &Bump {
-        &self.solved_expr.arena()
+        self.solved_expr.arena()
     }
 }

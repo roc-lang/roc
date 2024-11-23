@@ -89,14 +89,10 @@ impl MonoTypeCache {
 struct Env<'a, 'c, 'd, 'e, 'f, 'm, 'p, P> {
     arena: &'a Bump,
     cache: &'c mut MonoTypeCache,
-    #[allow(dead_code)]
     mono_types: &'m mut MonoTypes,
-    #[allow(dead_code)]
     field_ids: &'f mut RecordFieldIds,
-    #[allow(dead_code)]
     elem_ids: &'e mut TupleElemIds,
     problems: &'p mut P,
-    #[allow(dead_code)]
     debug_info: &'d mut Option<DebugInfo>,
 }
 
@@ -130,7 +126,8 @@ impl<'a, 'c, 'd, 'e, 'f, 'm, 'p, P: Push<Problem>> Env<'a, 'c, 'd, 'e, 'f, 'm, '
         subs: &Subs,
         arg_vars: SubsSlice<Variable>,
         ret_var: Variable,
-        fx_var: Variable,
+        // TODO [mono2]
+        _fx_var: Variable,
     ) -> MonoTypeId {
         let func = self.lower_var(subs, ret_var);
         let mut mono_args = Vec::with_capacity_in(arg_vars.len(), self.arena);
@@ -141,7 +138,7 @@ impl<'a, 'c, 'd, 'e, 'f, 'm, 'p, P: Push<Problem>> Env<'a, 'c, 'd, 'e, 'f, 'm, '
                 .flat_map(|var_index| self.lower_var(subs, subs[var_index])),
         );
 
-        let todo = (); // TODO populate debuginfo as appropriate
+        // TODO [mono2] populate debuginfo as appropriate
 
         self.mono_types.add_function(func, mono_args)
     }
@@ -293,10 +290,8 @@ impl<'a, 'c, 'd, 'e, 'f, 'm, 'p, P: Push<Problem>> Env<'a, 'c, 'd, 'e, 'f, 'm, '
                         self.lower_builtin(subs, symbol, args_slice)
                     }
                     _ => {
-                        let mono_id = self.lower_var(subs, real)?;
-                        let todo = (); // TODO record in debuginfo the alias name for whatever we're lowering.
-
-                        mono_id
+                        // TODO [mono2] record in debuginfo the alias name for whatever we're lowering.
+                        self.lower_var(subs, real)?
                     }
                 }
             }
@@ -424,7 +419,7 @@ fn num_num_args_to_mono_id(
                             }
                         }
                     }
-                    Content::RangedNumber(numeric_range) => todo!(),
+                    Content::RangedNumber(_numeric_range) => todo!(),
                     _ => {
                         // This is an invalid number type, so break out of
                         // the alias-unrolling loop in order to return an error.
@@ -485,7 +480,7 @@ fn number_args_to_mono_id(
                             }
                         }
                     }
-                    Content::RangedNumber(numeric_range) => todo!(),
+                    Content::RangedNumber(_numeric_range) => todo!(),
                     _ => {
                         // This is an invalid number type, so break out of
                         // the alias-unrolling loop in order to return an error.

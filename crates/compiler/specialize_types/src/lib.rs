@@ -1,3 +1,7 @@
+// TODO [mono2]: re-enable when ready
+#![allow(dead_code)]
+#![allow(clippy::too_many_arguments)]
+
 mod debug_info;
 mod foreign_symbol;
 mod mono_expr;

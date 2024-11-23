@@ -75,7 +75,7 @@ impl SolvedExpr {
     }
 
     pub fn arena(&self) -> &Bump {
-        &self.constrained_expr.arena()
+        self.constrained_expr.arena()
     }
 
     pub fn home(&self) -> ModuleId {

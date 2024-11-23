@@ -1,3 +1,6 @@
+// TODO [mono2]: re-enable when ready
+#![allow(dead_code)]
+
 use bumpalo::Bump;
 use core::fmt::Write;
 use roc_load::LoadedModule;
@@ -29,7 +32,7 @@ fn specialize_expr<'a>(
         },
         src,
     ) = run_load_and_infer(
-        trim_and_deindent(&arena, src),
+        trim_and_deindent(arena, src),
         [],
         false,
         FunctionKind::LambdaSet,
@@ -64,7 +67,7 @@ fn specialize_expr<'a>(
     let mut mono_exprs = MonoExprs::new();
 
     let mut env = Env::new(
-        &arena,
+        arena,
         &mut solved,
         &mut types_cache,
         &mut mono_types,
@@ -96,7 +99,6 @@ fn specialize_expr<'a>(
     }
 }
 
-#[allow(dead_code)]
 #[track_caller]
 pub fn expect_no_expr(input: impl AsRef<str>) {
     let arena = Bump::new();
@@ -107,13 +109,11 @@ pub fn expect_no_expr(input: impl AsRef<str>) {
     assert_eq!(None, actual, "This input expr should have specialized to being dicarded as zero-sized, but it didn't: {:?}", input.as_ref());
 }
 
-#[allow(dead_code)]
 #[track_caller]
 pub fn expect_mono_expr(input: impl AsRef<str>, mono_expr: MonoExpr) {
     expect_mono_expr_with_interns(input, |_, _| mono_expr);
 }
 
-#[allow(dead_code)]
 #[track_caller]
 pub fn expect_mono_expr_str(input: impl AsRef<str>, expr_str: impl AsRef<str>) {
     expect_mono_expr_custom(

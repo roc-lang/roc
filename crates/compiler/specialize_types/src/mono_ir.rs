@@ -25,7 +25,7 @@ pub struct Def {
     pub expr_type: MonoTypeId,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct MonoExprs {
     // TODO convert to Vec2
     exprs: Vec<MonoExpr>,
@@ -57,7 +57,7 @@ impl MonoExprs {
         );
 
         // Safety: we should only ever hand out MonoExprIds that are valid indices into here.
-        unsafe { self.exprs.get_unchecked(id.inner.index() as usize) }
+        unsafe { self.exprs.get_unchecked(id.inner.index()) }
     }
 
     pub fn get_region(&self, id: MonoExprId) -> Region {
@@ -67,7 +67,7 @@ impl MonoExprs {
         );
 
         // Safety: we should only ever hand out MonoExprIds that are valid indices into here.
-        unsafe { *self.regions.get_unchecked(id.inner.index() as usize) }
+        unsafe { *self.regions.get_unchecked(id.inner.index()) }
     }
 
     pub fn reserve_id(&mut self) -> MonoExprId {
@@ -108,7 +108,7 @@ impl MonoExprs {
             "A MonoExprId was not found in MonoExprs. This should never happen!"
         );
 
-        let index = id.inner.index() as usize;
+        let index = id.inner.index();
 
         // Safety: we should only ever hand out MonoExprIds that are valid indices into here.
         unsafe {
@@ -118,7 +118,7 @@ impl MonoExprs {
     }
 
     pub fn iter_slice(&self, exprs: Slice<MonoExpr>) -> impl Iterator<Item = &MonoExpr> {
-        exprs.indices().into_iter().map(|index| {
+        exprs.indices().map(|index| {
             debug_assert!(
                 self.exprs.get(index).is_some(),
                 "A Slice index was not found in MonoExprs. This should never happen!"
@@ -333,7 +333,6 @@ pub struct WhenBranch {
     pub guard: Option<MonoExprId>,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 pub enum MonoPattern {
     Identifier(IdentId),
@@ -365,7 +364,6 @@ pub enum MonoPattern {
     Underscore,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 pub enum DestructType {
     Required,
