@@ -24,7 +24,7 @@ pub enum Problem {
     RecordExtWasNotRecord,
     TupleExtWasNotTuple,
     /// This can be either an integer specializing to a fractional number type (or vice versa),
-    /// or the type paramter specializing to a non-numeric type (e.g. Num Str), which should
+    /// or the type parameter specializing to a non-numeric type (e.g. Num Str), which should
     /// have been caught during type-checking and changed to an Error type.
     NumSpecializedToWrongType(
         Option<MonoType>, // `None` means it specialized to Unit
