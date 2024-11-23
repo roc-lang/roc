@@ -18,3 +18,5 @@ roc_region = { path = "../region" }
 roc_types = { path = "../types" }
 
 arrayvec.workspace = true
+
+soa.workspace = true

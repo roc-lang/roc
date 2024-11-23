@@ -98,6 +98,16 @@ pub enum CalledVia {
 
     /// This call is a result of lowering a reference to a module-params-extended def
     NakedParamsVar,
+
+    /// This call is the result of desugaring a `try` expression into an early return on Err
+    /// e.g. `try parseDate input` becomes:
+    ///
+    /// ```roc
+    /// when parseDate input is
+    ///     Err err -> return Err err
+    ///     Ok value -> value
+    /// ```
+    Try,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -24,6 +24,9 @@
       monospace;
   --top-header-height: 67px;
   --sidebar-width: 280px;
+  --module-search-height: 48px;
+  --module-search-padding-height: 12px;
+  --module-search-form-padding-width: 20px;
 }
 
 a {
@@ -439,46 +442,95 @@ pre>samp {
   display: none !important;
 }
 
-#module-search:placeholder-shown {
-  padding: 0;
-  opacity: 0;
-  height: 0;
+#module-search-form {
+  display: flex;
+  align-items: center;
+  align-content: center;
+  height: 100%;
+  background-color: var(--violet-bg);
+  position: relative;
+  max-width: 500px;
+  flex-grow: 1;
+  box-sizing: border-box;
+  padding: 0px var(--module-search-form-padding-width);
 }
 
 #module-search,
 #module-search:focus {
   opacity: 1;
   padding: 12px 16px;
-  height: 48px;
-}
-
-/* Show the "Search" label link when the text input has a placeholder */
-#module-search:placeholder-shown + #search-link {
-  display: flex;
-}
-
-/* Hide the "Search" label link when the text input has focus */
-#module-search:focus + #search-link {
-  display: none;
+  height: var(--module-search-height);
 }
 
 #module-search {
   display: block;
+  position: relative;
   box-sizing: border-box;
   width: 100%;
   box-sizing: border-box;
   font-size: 18px;
   line-height: 18px;
-  margin-top: 6px;
   border: none;
   color: var(--faded-color);
-  background-color: var(--code-bg);
+  background-color: var(--body-bg-color);
   font-family: var(--font-serif);
 }
 
 #module-search::placeholder {
   color: var(--faded-color);
   opacity: 1;
+}
+
+#search-type-ahead {
+  display: flex;
+  gap: 20px;
+  flex-direction: column;
+  position: absolute;
+  top: calc(var(--module-search-padding-height) + var(--module-search-height));
+  left: var(--module-search-form-padding-width);
+  width: calc(100% - 2 * var(--module-search-form-padding-width));
+  box-sizing: border-box;
+  z-index: 100;
+  background-color: var(--body-bg-color);
+  border-width: 1px;
+  border-style: solid;
+  border-color: var(--border-color);
+  list-style-type: none;
+  margin: 0;
+  padding: 10px;
+}
+
+#search-type-ahead .type-ahead-link {
+  font-size: 0.875rem;
+  color: var(--text-color);
+  p {
+    margin: 0px;
+  }
+
+  p.type-ahead-def-name {
+    color: var(--violet);
+    font-size: 1rem;
+  }
+  p.type-ahead-doc-path {
+    font-size: 0.75rem;
+    color: var(--faded-color);
+  }
+}
+#search-type-ahead li {
+  box-sizing: border-box;
+  padding: 4px;
+}
+
+/*use browser defaults for focus outline*/
+#search-type-ahead li:focus-within {
+  /*firefox*/
+  outline: 5px auto Highlight;
+  /*chrome and safari*/
+  outline: 5px auto -webkit-focus-ring-color;
+}
+
+.type-ahead-link:focus-visible {
+  outline: none;
 }
 
 #search-link {
@@ -492,21 +544,30 @@ pre>samp {
   cursor: pointer;
 }
 
-#search-link:hover #search-link-text {
-  text-decoration: underline;
-}
-
-#search-link-hint {
-  margin-left: 1em;
-  opacity: 0.6;
-}
-
 #search-shortcut-key {
   font-family: monospace;
   border: 1px solid #666;
+  border-radius: 5px;
   padding: 1px 3px 3px;
   font-style: normal;
   line-height: 15px;
+  opacity: 0.6;
+  position: absolute;
+  right: 30px;
+}
+
+#llm-prompt-container {
+  background-color: var(--violet-bg);
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  font-size: initial;
+}
+
+#llm-prompt-copy-button:hover {
+  border-color: var(--link-hover-color);
+  color: var(--link-hover-color);
 }
 
 .builtins-tip {
@@ -546,7 +607,11 @@ pre>samp {
 }
 
 @media only screen and (max-device-width: 480px) and (orientation: portrait) {
-  #search-link-hint {
+  :root {
+      --top-header-height: 160px;
+  }
+
+  #search-shortcut-key {
       display: none;
   }
 
@@ -555,8 +620,9 @@ pre>samp {
   }
 
   .top-header {
+      flex-direction: column;
+      height: auto;
       justify-content: space-between;
-      width: auto;
       /* min-width must be set to something (even 0) for text-overflow: ellipsis to work in descendants. */
       min-width: 0;
   }

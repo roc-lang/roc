@@ -19,7 +19,7 @@ use crate::parser::{
     map_with_arena, optional, reset_min_indent, sep_by1, sep_by1_e, set_min_indent, skip_first,
     skip_second, specialize_err, specialize_err_ref, then, two_bytes, zero_or_more, EClosure,
     EExpect, EExpr, EIf, EImport, EImportParams, EInParens, EList, ENumber, EPattern, ERecord,
-    EString, EType, EWhen, Either, ParseResult, Parser, SpaceProblem,
+    EReturn, EString, EType, EWhen, Either, ParseResult, Parser, SpaceProblem,
 };
 use crate::pattern::closure_param;
 use crate::state::State;
@@ -28,7 +28,7 @@ use crate::type_annotation;
 use crate::{header, keyword};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_collections::soa::Slice;
+use roc_collections::soa::slice_extend_new;
 use roc_error_macros::internal_error;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
@@ -195,6 +195,7 @@ fn loc_term_or_underscore_or_conditional<'a>(
         loc(specialize_err(EExpr::Closure, closure_help(options))),
         loc(crash_kw()),
         loc(specialize_err(EExpr::Dbg, dbg_kw())),
+        loc(try_kw()),
         loc(underscore_expression()),
         loc(record_literal_help()),
         loc(specialize_err(EExpr::List, list_literal_help())),
@@ -217,6 +218,7 @@ fn loc_term_or_underscore<'a>(
         )),
         loc(specialize_err(EExpr::Closure, closure_help(options))),
         loc(specialize_err(EExpr::Dbg, dbg_kw())),
+        loc(try_kw()),
         loc(underscore_expression()),
         loc(record_literal_help()),
         loc(specialize_err(EExpr::List, list_literal_help())),
@@ -235,6 +237,7 @@ fn loc_term<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr<'a>>, EEx
         )),
         loc(specialize_err(EExpr::Closure, closure_help(options))),
         loc(specialize_err(EExpr::Dbg, dbg_kw())),
+        loc(try_kw()),
         loc(record_literal_help()),
         loc(specialize_err(EExpr::List, list_literal_help())),
         ident_seq(),
@@ -546,6 +549,7 @@ fn stmt_start<'a>(
             EExpr::Dbg,
             dbg_stmt_help(options, preceding_comment)
         )),
+        loc(specialize_err(EExpr::Return, return_help(options))),
         loc(specialize_err(EExpr::Import, map(import(), Stmt::ValueDef))),
         map(
             loc(specialize_err(EExpr::Closure, closure_help(options))),
@@ -1443,6 +1447,7 @@ fn parse_stmt_operator<'a>(
     let op_start = loc_op.region.start();
     let op_end = loc_op.region.end();
     let new_start = state.pos();
+
     match op {
         OperatorOrDef::BinOp(BinOp::Minus) if expr_state.end != op_start && op_end == new_start => {
             parse_negated_term(
@@ -2089,7 +2094,7 @@ pub fn merge_spaces<'a>(
 fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, ()> {
     let mut expr = expr.extract_spaces();
 
-    if let Expr::ParensAround(loc_expr) = &expr.item {
+    while let Expr::ParensAround(loc_expr) = &expr.item {
         let expr_inner = loc_expr.extract_spaces();
 
         expr.before = merge_spaces(arena, expr.before, expr_inner.before);
@@ -2126,6 +2131,8 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
 
             pattern
         }
+
+        Expr::Try => Pattern::Identifier { ident: "try" },
 
         Expr::SpaceBefore(..) | Expr::SpaceAfter(..) | Expr::ParensAround(..) => unreachable!(),
 
@@ -2168,11 +2175,10 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::Defs(_, _)
         | Expr::If { .. }
         | Expr::When(_, _)
-        | Expr::Expect(_, _)
         | Expr::Dbg
         | Expr::DbgStmt(_, _)
         | Expr::LowLevelDbg(_, _, _)
-        | Expr::MalformedClosure
+        | Expr::Return(_, _)
         | Expr::MalformedSuffixed(..)
         | Expr::PrecedenceConflict { .. }
         | Expr::EmptyRecordBuilder(_)
@@ -2246,7 +2252,6 @@ fn assigned_expr_field_to_pattern_help<'a>(
             arena.alloc(assigned_expr_field_to_pattern_help(arena, nested)?),
             spaces,
         ),
-        AssignedField::Malformed(string) => Pattern::Malformed(string),
         AssignedField::IgnoredValue(_, _, _) => return Err(()),
     })
 }
@@ -2286,7 +2291,7 @@ pub fn parse_top_level_defs<'a>(
     }
 
     if output.tags.len() > existing_len {
-        let after = Slice::extend_new(&mut output.spaces, last_space.iter().copied());
+        let after = slice_extend_new(&mut output.spaces, last_space.iter().copied());
         let last = output.tags.len() - 1;
         debug_assert!(output.space_after[last].is_empty() || after.is_empty());
         output.space_after[last] = after;
@@ -2613,11 +2618,9 @@ fn expect_help<'a>(
     preceding_comment: Region,
 ) -> impl Parser<'a, Stmt<'a>, EExpect<'a>> {
     move |arena: &'a Bump, state: State<'a>, min_indent| {
-        let parse_expect_vanilla = crate::parser::keyword(crate::keyword::EXPECT, EExpect::Expect);
-        let parse_expect_fx = crate::parser::keyword(crate::keyword::EXPECT_FX, EExpect::Expect);
-        let parse_expect = either(parse_expect_vanilla, parse_expect_fx);
+        let parse_expect = crate::parser::keyword(crate::keyword::EXPECT, EExpect::Expect);
 
-        let (_, kw, state) = parse_expect.parse(arena, state, min_indent)?;
+        let (_, _kw, state) = parse_expect.parse(arena, state, min_indent)?;
 
         let (_, condition, state) = parse_block(
             options,
@@ -2629,19 +2632,40 @@ fn expect_help<'a>(
         )
         .map_err(|(_, f)| (MadeProgress, f))?;
 
-        let vd = match kw {
-            Either::First(_) => ValueDef::Expect {
-                condition: arena.alloc(condition),
-                preceding_comment,
-            },
-            Either::Second(_) => ValueDef::ExpectFx {
-                condition: arena.alloc(condition),
-                preceding_comment,
-            },
+        let vd = ValueDef::Expect {
+            condition: arena.alloc(condition),
+            preceding_comment,
         };
 
         Ok((MadeProgress, Stmt::ValueDef(vd), state))
     }
+}
+
+fn return_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Stmt<'a>, EReturn<'a>> {
+    (move |arena: &'a Bump, state: State<'a>, min_indent| {
+        let (_, return_kw, state) = loc(parser::keyword(keyword::RETURN, EReturn::Return))
+            .parse(arena, state, min_indent)?;
+
+        let (_, return_value, state) = parse_block(
+            options,
+            arena,
+            state,
+            true,
+            EReturn::IndentReturnValue,
+            EReturn::ReturnValue,
+        )
+        .map_err(|(_, f)| (MadeProgress, f))?;
+
+        let region = Region::span_across(&return_kw.region, &return_value.region);
+
+        let stmt = Stmt::Expr(Expr::Return(
+            arena.alloc(Loc::at(region, return_value.value)),
+            None,
+        ));
+
+        Ok((MadeProgress, stmt, state))
+    })
+    .trace("return_help")
 }
 
 fn dbg_stmt_help<'a>(
@@ -2680,6 +2704,16 @@ fn dbg_kw<'a>() -> impl Parser<'a, Expr<'a>, EExpect<'a>> {
         Ok((MadeProgress, Expr::Dbg, next_state))
     })
     .trace("dbg_kw")
+}
+
+fn try_kw<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
+    (move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
+        let (_, _, next_state) =
+            parser::keyword("try", EExpr::Try).parse(arena, state, min_indent)?;
+
+        Ok((MadeProgress, Expr::Try, next_state))
+    })
+    .trace("try_kw")
 }
 
 fn import<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>> {
@@ -3060,8 +3094,22 @@ fn stmts_to_defs<'a>(
     while i < stmts.len() {
         let sp_stmt = stmts[i];
         match sp_stmt.item.value {
+            Stmt::Expr(Expr::Return(return_value, _after_return)) => {
+                if i == stmts.len() - 1 {
+                    last_expr = Some(Loc::at_zero(Expr::Return(return_value, None)));
+                } else {
+                    let rest = stmts_to_expr(&stmts[i + 1..], arena)?;
+                    last_expr = Some(Loc::at_zero(Expr::Return(
+                        return_value,
+                        Some(arena.alloc(rest)),
+                    )));
+                }
+
+                // don't re-process the rest of the statements, they got consumed by the early return
+                break;
+            }
             Stmt::Expr(e) => {
-                if is_expr_suffixed(&e) && i + 1 < stmts.len() {
+                if i + 1 < stmts.len() {
                     defs.push_value_def(
                         ValueDef::Stmt(arena.alloc(Loc::at(sp_stmt.item.region, e))),
                         sp_stmt.item.region,
@@ -3069,10 +3117,6 @@ fn stmts_to_defs<'a>(
                         &[],
                     );
                 } else {
-                    if last_expr.is_some() {
-                        return Err(EExpr::StmtAfterExpr(sp_stmt.item.region.start()));
-                    }
-
                     let e = if sp_stmt.before.is_empty() {
                         e
                     } else {
@@ -3083,10 +3127,6 @@ fn stmts_to_defs<'a>(
                 }
             }
             Stmt::Backpassing(pats, call) => {
-                if last_expr.is_some() {
-                    return Err(EExpr::StmtAfterExpr(sp_stmt.item.region.start()));
-                }
-
                 if i + 1 >= stmts.len() {
                     return Err(EExpr::BackpassContinue(sp_stmt.item.region.end()));
                 }
@@ -3110,10 +3150,6 @@ fn stmts_to_defs<'a>(
             }
 
             Stmt::TypeDef(td) => {
-                if last_expr.is_some() {
-                    return Err(EExpr::StmtAfterExpr(sp_stmt.item.region.start()));
-                }
-
                 if let (
                     TypeDef::Alias {
                         header,
@@ -3165,10 +3201,6 @@ fn stmts_to_defs<'a>(
                 }
             }
             Stmt::ValueDef(vd) => {
-                if last_expr.is_some() {
-                    return Err(EExpr::StmtAfterExpr(sp_stmt.item.region.start()));
-                }
-
                 // NOTE: it shouldn't be necessary to convert ValueDef::Dbg into an expr, but
                 // it turns out that ValueDef::Dbg exposes some bugs in the rest of the compiler.
                 // In particular, it seems that the solver thinks the dbg expr must be a bool.

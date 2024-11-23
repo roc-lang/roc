@@ -14,6 +14,7 @@ use roc_parse::ast::{
 };
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_parse::ident::Accessor;
+use roc_parse::keyword;
 use roc_region::all::Loc;
 
 impl<'a> Formattable for Expr<'a> {
@@ -43,11 +44,11 @@ impl<'a> Formattable for Expr<'a> {
             | Var { .. }
             | Underscore { .. }
             | MalformedIdent(_, _)
-            | MalformedClosure
             | Tag(_)
             | OpaqueRef(_)
             | Crash
-            | Dbg => false,
+            | Dbg
+            | Try => false,
 
             RecordAccess(inner, _) | TupleAccess(inner, _) | TrySuffix { expr: inner, .. } => {
                 inner.is_multiline()
@@ -63,13 +64,11 @@ impl<'a> Formattable for Expr<'a> {
                 loc_expr.is_multiline() || args.iter().any(|loc_arg| loc_arg.is_multiline())
             }
 
-            Expect(condition, continuation) => {
-                condition.is_multiline() || continuation.is_multiline()
-            }
             DbgStmt(condition, _) => condition.is_multiline(),
             LowLevelDbg(_, _, _) => unreachable!(
                 "LowLevelDbg should only exist after desugaring, not during formatting"
             ),
+            Return(_return_value, _after_return) => true,
 
             If {
                 if_thens: branches,
@@ -194,6 +193,10 @@ impl<'a> Formattable for Expr<'a> {
             Crash => {
                 buf.indent(indent);
                 buf.push_str("crash");
+            }
+            Try => {
+                buf.indent(indent);
+                buf.push_str("try");
             }
             Apply(loc_expr, loc_args, _) => {
                 // Sadly this assertion fails in practice. The fact that the parser produces code like this is going to
@@ -439,9 +442,6 @@ impl<'a> Formattable for Expr<'a> {
                     buf.push(')');
                 }
             }
-            Expect(condition, continuation) => {
-                fmt_expect(buf, condition, continuation, self.is_multiline(), indent);
-            }
             Dbg => {
                 buf.indent(indent);
                 buf.push_str("dbg");
@@ -452,6 +452,9 @@ impl<'a> Formattable for Expr<'a> {
             LowLevelDbg(_, _, _) => unreachable!(
                 "LowLevelDbg should only exist after desugaring, not during formatting"
             ),
+            Return(return_value, after_return) => {
+                fmt_return(buf, return_value, after_return, parens, newlines, indent);
+            }
             If {
                 if_thens: branches,
                 final_else,
@@ -545,7 +548,6 @@ impl<'a> Formattable for Expr<'a> {
                 buf.indent(indent);
                 loc_expr.format_with_options(buf, parens, newlines, indent);
             }
-            MalformedClosure => {}
             PrecedenceConflict { .. } => {}
             EmptyRecordBuilder { .. } => {}
             SingleFieldRecordBuilder { .. } => {}
@@ -662,7 +664,7 @@ fn format_str_segment(seg: &StrSegment, buf: &mut Buf, indent: u16) {
             buf.push('\\');
             buf.push(escaped.to_parsed_char());
         }
-        DeprecatedInterpolated(loc_expr) | Interpolated(loc_expr) => {
+        Interpolated(loc_expr) => {
             buf.push_str("$(");
             // e.g. (name) in "Hi, $(name)!"
             loc_expr.value.format_with_options(
@@ -1029,7 +1031,33 @@ fn fmt_dbg_stmt<'a>(
 
     buf.spaces(1);
 
-    condition.format(buf, indent);
+    fn should_outdent(mut expr: &Expr) -> bool {
+        loop {
+            match expr {
+                Expr::ParensAround(_) | Expr::List(_) | Expr::Record(_) | Expr::Tuple(_) => {
+                    return true
+                }
+                Expr::SpaceAfter(inner, _) => {
+                    expr = inner;
+                }
+                _ => return false,
+            }
+        }
+    }
+
+    let inner_indent = if should_outdent(&condition.value) {
+        indent
+    } else {
+        indent + INDENT
+    };
+
+    let cond_value = condition.value.extract_spaces();
+
+    let is_defs = matches!(cond_value.item, Expr::Defs(_, _));
+
+    let newlines = if is_defs { Newlines::Yes } else { Newlines::No };
+
+    condition.format_with_options(buf, Parens::NotNeeded, newlines, inner_indent);
 
     // Always put a blank line after the `dbg` line(s)
     buf.ensure_ends_with_blank_line();
@@ -1037,31 +1065,34 @@ fn fmt_dbg_stmt<'a>(
     continuation.format(buf, indent);
 }
 
-fn fmt_expect<'a>(
+fn fmt_return<'a>(
     buf: &mut Buf,
-    condition: &'a Loc<Expr<'a>>,
-    continuation: &'a Loc<Expr<'a>>,
-    is_multiline: bool,
+    return_value: &'a Loc<Expr<'a>>,
+    after_return: &Option<&'a Loc<Expr<'a>>>,
+    parens: Parens,
+    newlines: Newlines,
     indent: u16,
 ) {
     buf.ensure_ends_with_newline();
     buf.indent(indent);
-    buf.push_str("expect");
+    buf.push_str(keyword::RETURN);
 
-    let return_indent = if is_multiline {
-        buf.newline();
+    buf.spaces(1);
+
+    let return_indent = if return_value.is_multiline() {
         indent + INDENT
     } else {
-        buf.spaces(1);
         indent
     };
 
-    condition.format(buf, return_indent);
+    return_value.format(buf, return_indent);
 
-    // Always put a blank line after the `expect` line(s)
-    buf.ensure_ends_with_blank_line();
-
-    continuation.format(buf, indent);
+    if let Some(after_return) = after_return {
+        if after_return.value.extract_spaces().before.is_empty() {
+            buf.ensure_ends_with_newline();
+        }
+        after_return.format_with_options(buf, parens, newlines, indent);
+    }
 }
 
 fn fmt_if<'a>(
@@ -1607,9 +1638,6 @@ fn format_assigned_field_multiline<T>(
             format_assigned_field_multiline(buf, sub_field, indent, separator_prefix);
             fmt_comments_only(buf, spaces.iter(), NewlineAt::Top, indent);
         }
-        Malformed(raw) => {
-            buf.push_str(raw);
-        }
     }
 }
 
@@ -1647,6 +1675,7 @@ fn sub_expr_requests_parens(expr: &Expr<'_>) -> bool {
                 })
         }
         Expr::If { .. } => true,
+        Expr::Defs(_, _) => true,
         Expr::SpaceBefore(e, _) => sub_expr_requests_parens(e),
         Expr::SpaceAfter(e, _) => sub_expr_requests_parens(e),
         _ => false,

@@ -1,17 +1,17 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 use crate::types::{
-    name_type_var, AbilitySet, AliasKind, ErrorType, ExtImplicitOpenness, Polarity, RecordField,
-    RecordFieldsError, TupleElemsError, TypeExt, Uls,
+    name_type_var, AbilitySet, AliasKind, ErrorFunctionFx, ErrorType, ExtImplicitOpenness,
+    Polarity, RecordField, RecordFieldsError, TupleElemsError, TypeExt, Uls,
 };
+use crate::unification_table::{self, UnificationTable};
 use roc_collections::all::{FnvMap, ImMap, ImSet, MutSet, SendMap};
 use roc_collections::{VecMap, VecSet};
 use roc_error_macros::internal_error;
 use roc_module::ident::{Lowercase, TagName, Uppercase};
 use roc_module::symbol::{ModuleId, Symbol};
+use soa::{Index, Slice};
 use std::fmt;
-use std::iter::{once, Iterator, Map};
-
-use crate::unification_table::{self, UnificationTable};
+use std::iter::{self, Iterator};
 
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
@@ -150,8 +150,14 @@ impl Subs {
         let mut slices: Vec<SubsSlice<u8>> = Vec::new();
 
         for field_name in lowercases {
-            let slice =
-                SubsSlice::extend_new(&mut buf, field_name.as_str().as_bytes().iter().copied());
+            let bytes = field_name.as_str().as_bytes();
+            let slice = {
+                let start = buf.len() as u32;
+
+                buf.extend(bytes.iter().copied());
+
+                SubsSlice::new(start, bytes.len() as u16)
+            };
             slices.push(slice);
         }
 
@@ -170,8 +176,14 @@ impl Subs {
         let mut slices: Vec<SerializedTagName> = Vec::new();
 
         for TagName(uppercase) in tag_names {
-            let slice =
-                SubsSlice::extend_new(&mut buf, uppercase.as_str().as_bytes().iter().copied());
+            let bytes = uppercase.as_str().as_bytes();
+            let slice = {
+                let start = buf.len() as u32;
+
+                buf.extend(bytes.iter().copied());
+
+                SubsSlice::new(start, bytes.len() as u16)
+            };
             let serialized = SerializedTagName(slice);
             slices.push(serialized);
         }
@@ -413,32 +425,10 @@ impl Default for Subs {
 }
 
 /// A slice into the Vec<T> of subs
-///
-/// The starting position is a u32 which should be plenty
-/// We limit slices to u16::MAX = 65535 elements
-pub struct SubsSlice<T> {
-    pub start: u32,
-    pub length: u16,
-    _marker: std::marker::PhantomData<T>,
-}
-
-impl<T> PartialEq for SubsSlice<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.start == other.start && self.length == other.length
-    }
-}
+pub type SubsSlice<T> = Slice<T>;
 
 /// An index into the Vec<T> of subs
-pub struct SubsIndex<T> {
-    pub index: u32,
-    _marker: std::marker::PhantomData<T>,
-}
-
-impl<T> PartialEq for SubsIndex<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.index == other.index
-    }
-}
+pub type SubsIndex<T> = Index<T>;
 
 // make `subs[some_index]` work. The types/trait resolution make sure we get the
 // element from the right vector
@@ -447,13 +437,13 @@ impl std::ops::Index<SubsIndex<Variable>> for Subs {
     type Output = Variable;
 
     fn index(&self, index: SubsIndex<Variable>) -> &Self::Output {
-        &self.variables[index.index as usize]
+        &self.variables[index.index()]
     }
 }
 
 impl std::ops::IndexMut<SubsIndex<Variable>> for Subs {
     fn index_mut(&mut self, index: SubsIndex<Variable>) -> &mut Self::Output {
-        &mut self.variables[index.index as usize]
+        &mut self.variables[index.index()]
     }
 }
 
@@ -461,7 +451,7 @@ impl std::ops::Index<SubsIndex<Lowercase>> for Subs {
     type Output = Lowercase;
 
     fn index(&self, index: SubsIndex<Lowercase>) -> &Self::Output {
-        &self.field_names[index.index as usize]
+        &self.field_names[index.index()]
     }
 }
 
@@ -469,7 +459,7 @@ impl std::ops::Index<SubsIndex<usize>> for Subs {
     type Output = usize;
 
     fn index(&self, index: SubsIndex<usize>) -> &Self::Output {
-        &self.tuple_elem_indices[index.index as usize]
+        &self.tuple_elem_indices[index.index()]
     }
 }
 
@@ -477,13 +467,13 @@ impl std::ops::Index<SubsIndex<TagName>> for Subs {
     type Output = TagName;
 
     fn index(&self, index: SubsIndex<TagName>) -> &Self::Output {
-        &self.tag_names[index.index as usize]
+        &self.tag_names[index.index()]
     }
 }
 
 impl std::ops::IndexMut<SubsIndex<TagName>> for Subs {
     fn index_mut(&mut self, index: SubsIndex<TagName>) -> &mut Self::Output {
-        &mut self.tag_names[index.index as usize]
+        &mut self.tag_names[index.index()]
     }
 }
 
@@ -491,13 +481,13 @@ impl std::ops::Index<SubsIndex<Symbol>> for Subs {
     type Output = Symbol;
 
     fn index(&self, index: SubsIndex<Symbol>) -> &Self::Output {
-        &self.symbol_names[index.index as usize]
+        &self.symbol_names[index.index()]
     }
 }
 
 impl std::ops::IndexMut<SubsIndex<Symbol>> for Subs {
     fn index_mut(&mut self, index: SubsIndex<Symbol>) -> &mut Self::Output {
-        &mut self.symbol_names[index.index as usize]
+        &mut self.symbol_names[index.index()]
     }
 }
 
@@ -505,19 +495,19 @@ impl std::ops::Index<SubsIndex<Uls>> for Subs {
     type Output = Uls;
 
     fn index(&self, index: SubsIndex<Uls>) -> &Self::Output {
-        &self.unspecialized_lambda_sets[index.index as usize]
+        &self.unspecialized_lambda_sets[index.index()]
     }
 }
 
 impl std::ops::IndexMut<SubsIndex<Uls>> for Subs {
     fn index_mut(&mut self, index: SubsIndex<Uls>) -> &mut Self::Output {
-        &mut self.unspecialized_lambda_sets[index.index as usize]
+        &mut self.unspecialized_lambda_sets[index.index()]
     }
 }
 
 impl std::ops::IndexMut<SubsIndex<Lowercase>> for Subs {
     fn index_mut(&mut self, index: SubsIndex<Lowercase>) -> &mut Self::Output {
-        &mut self.field_names[index.index as usize]
+        &mut self.field_names[index.index()]
     }
 }
 
@@ -525,13 +515,13 @@ impl std::ops::Index<SubsIndex<RecordField<()>>> for Subs {
     type Output = RecordField<()>;
 
     fn index(&self, index: SubsIndex<RecordField<()>>) -> &Self::Output {
-        &self.record_fields[index.index as usize]
+        &self.record_fields[index.index()]
     }
 }
 
 impl std::ops::IndexMut<SubsIndex<RecordField<()>>> for Subs {
     fn index_mut(&mut self, index: SubsIndex<RecordField<()>>) -> &mut Self::Output {
-        &mut self.record_fields[index.index as usize]
+        &mut self.record_fields[index.index()]
     }
 }
 
@@ -539,185 +529,13 @@ impl std::ops::Index<SubsIndex<VariableSubsSlice>> for Subs {
     type Output = VariableSubsSlice;
 
     fn index(&self, index: SubsIndex<VariableSubsSlice>) -> &Self::Output {
-        &self.variable_slices[index.index as usize]
+        &self.variable_slices[index.index()]
     }
 }
 
 impl std::ops::IndexMut<SubsIndex<VariableSubsSlice>> for Subs {
     fn index_mut(&mut self, index: SubsIndex<VariableSubsSlice>) -> &mut Self::Output {
-        &mut self.variable_slices[index.index as usize]
-    }
-}
-
-// custom debug
-
-impl<T> std::fmt::Debug for SubsIndex<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "SubsIndex<{}>({})",
-            std::any::type_name::<T>(),
-            self.index
-        )
-    }
-}
-
-impl<T> std::fmt::Debug for SubsSlice<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "SubsSlice {{ start: {}, length: {} }}",
-            self.start, self.length
-        )
-    }
-}
-
-// derive of copy and clone does not play well with PhantomData
-
-impl<T> Copy for SubsIndex<T> {}
-
-impl<T> Clone for SubsIndex<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T> Copy for SubsSlice<T> {}
-
-impl<T> Clone for SubsSlice<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T> Default for SubsSlice<T> {
-    fn default() -> Self {
-        Self::empty()
-    }
-}
-
-impl<T> SubsSlice<T> {
-    pub fn empty() -> Self {
-        Self {
-            start: 0,
-            length: 0,
-            _marker: Default::default(),
-        }
-    }
-
-    pub fn get_slice<'a>(&self, slice: &'a [T]) -> &'a [T] {
-        &slice[self.indices()]
-    }
-
-    pub fn get_slice_mut<'a>(&self, slice: &'a mut [T]) -> &'a mut [T] {
-        &mut slice[self.indices()]
-    }
-
-    #[inline(always)]
-    pub fn indices(&self) -> std::ops::Range<usize> {
-        self.start as usize..(self.start as usize + self.length as usize)
-    }
-
-    pub const fn len(&self) -> usize {
-        self.length as usize
-    }
-
-    pub const fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    pub const fn new(start: u32, length: u16) -> Self {
-        Self {
-            start,
-            length,
-            _marker: std::marker::PhantomData,
-        }
-    }
-
-    pub fn extend_new(vec: &mut Vec<T>, it: impl IntoIterator<Item = T>) -> Self {
-        let start = vec.len();
-
-        vec.extend(it);
-
-        let end = vec.len();
-
-        Self::new(start as u32, (end - start) as u16)
-    }
-}
-
-impl SubsSlice<VariableSubsSlice> {
-    pub fn reserve_variable_slices(subs: &mut Subs, length: usize) -> Self {
-        let start = subs.variable_slices.len() as u32;
-
-        subs.variable_slices.reserve(length);
-
-        let value = VariableSubsSlice::default();
-        for _ in 0..length {
-            subs.variable_slices.push(value);
-        }
-
-        Self::new(start, length as u16)
-    }
-}
-
-impl SubsSlice<TagName> {
-    pub fn reserve_tag_names(subs: &mut Subs, length: usize) -> Self {
-        let start = subs.tag_names.len() as u32;
-
-        subs.tag_names
-            .extend(std::iter::repeat(TagName(Uppercase::default())).take(length));
-
-        Self::new(start, length as u16)
-    }
-}
-
-impl SubsSlice<Uls> {
-    pub fn reserve_uls_slice(subs: &mut Subs, length: usize) -> Self {
-        let start = subs.unspecialized_lambda_sets.len() as u32;
-
-        subs.unspecialized_lambda_sets
-            .extend(std::iter::repeat(Uls(Variable::NULL, Symbol::UNDERSCORE, 0)).take(length));
-
-        Self::new(start, length as u16)
-    }
-}
-
-impl<T> SubsIndex<T> {
-    pub const fn new(start: u32) -> Self {
-        Self {
-            index: start,
-            _marker: std::marker::PhantomData,
-        }
-    }
-
-    pub fn push_new(vector: &mut Vec<T>, value: T) -> Self {
-        let index = Self::new(vector.len() as _);
-
-        vector.push(value);
-
-        index
-    }
-
-    pub const fn as_slice(self) -> SubsSlice<T> {
-        SubsSlice::new(self.index, 1)
-    }
-}
-
-impl<T> IntoIterator for SubsSlice<T> {
-    type Item = SubsIndex<T>;
-
-    #[allow(clippy::type_complexity)]
-    type IntoIter = Map<std::ops::Range<u32>, fn(u32) -> Self::Item>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        (self.start..(self.start + self.length as u32)).map(u32_to_index)
-    }
-}
-
-fn u32_to_index<T>(i: u32) -> SubsIndex<T> {
-    SubsIndex {
-        index: i,
-        _marker: std::marker::PhantomData,
+        &mut self.variable_slices[index.index()]
     }
 }
 
@@ -893,6 +711,8 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
             write!(f, ", ^<{ambient_function_var:?}>)")
         }
         Content::ErasedLambda => write!(f, "ErasedLambda"),
+        Content::Pure => write!(f, "Pure"),
+        Content::Effectful => write!(f, "Effectful"),
         Content::RangedNumber(range) => {
             write!(f, "RangedNumber( {range:?})")
         }
@@ -915,7 +735,7 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
 
             write!(f, "Apply({name:?}, {slice:?})")
         }
-        FlatType::Func(arguments, lambda_set, result) => {
+        FlatType::Func(arguments, lambda_set, result, fx) => {
             let slice = subs.get_subs_slice(*arguments);
             write!(f, "Func([")?;
             for var in slice {
@@ -923,15 +743,18 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
                 write!(f, "<{:?}>{:?},", *var, SubsFmtContent(content, subs))?;
             }
             let result_content = subs.get_content_without_compacting(*result);
+            let fx_content = subs.get_content_without_compacting(*fx);
             let lambda_content = subs.get_content_without_compacting(*lambda_set);
             write!(
                 f,
-                "], <{:?}={:?}>{:?}, <{:?}>{:?})",
+                "], <{:?}={:?}>{:?}, <{:?}>{:?}, <{:?}>{:?})",
                 lambda_set,
                 subs.get_root_key_without_compacting(*lambda_set),
                 SubsFmtContent(lambda_content, subs),
                 *result,
-                SubsFmtContent(result_content, subs)
+                SubsFmtContent(result_content, subs),
+                *fx,
+                SubsFmtContent(fx_content, subs),
             )
         }
         FlatType::Record(fields, ext) => {
@@ -1009,8 +832,8 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
             write!(f, "]<{new_ext:?}> as <{rec:?}>")
         }
         FlatType::EmptyRecord => write!(f, "EmptyRecord"),
-        FlatType::EmptyTuple => write!(f, "EmptyTuple"),
         FlatType::EmptyTagUnion => write!(f, "EmptyTagUnion"),
+        FlatType::EffectfulFunc => write!(f, "EffectfulFunc"),
     }
 }
 
@@ -1354,6 +1177,10 @@ define_const_var! {
 
     /// The erased lambda type.
     :pub ERASED_LAMBDA,
+
+    /// Kind of function
+    :pub PURE,
+    :pub EFFECTFUL,
 }
 
 impl Variable {
@@ -1807,14 +1634,15 @@ impl Subs {
             ))
         });
 
-        let u8_slice =
-            VariableSubsSlice::insert_into_subs(&mut subs, std::iter::once(Variable::U8));
+        let u8_slice = subs.insert_into_vars(iter::once(Variable::U8));
         subs.set_content(
             Variable::LIST_U8,
             Content::Structure(FlatType::Apply(Symbol::LIST_LIST, u8_slice)),
         );
 
         subs.set_content(Variable::ERASED_LAMBDA, Content::ErasedLambda);
+        subs.set_content(Variable::PURE, Content::Pure);
+        subs.set_content(Variable::EFFECTFUL, Content::Effectful);
 
         subs
     }
@@ -1827,6 +1655,124 @@ impl Subs {
 
     pub fn extend_by(&mut self, entries: usize) {
         self.utable.reserve(entries);
+    }
+
+    pub fn push_field_name(&mut self, name: Lowercase) -> Index<Lowercase> {
+        let index = SubsIndex::new(self.field_names.len() as u32);
+        self.field_names.push(name);
+        index
+    }
+
+    pub fn push_tag_name(&mut self, name: TagName) -> Index<TagName> {
+        let index = SubsIndex::new(self.tag_names.len() as u32);
+        self.tag_names.push(name);
+        index
+    }
+
+    pub fn push_symbol_name(&mut self, name: Symbol) -> Index<Symbol> {
+        let index = SubsIndex::new(self.symbol_names.len() as u32);
+        self.symbol_names.push(name);
+        index
+    }
+
+    pub fn extend_tag_names<I>(&mut self, values: I) -> Slice<TagName>
+    where
+        I: IntoIterator<Item = TagName>,
+    {
+        let start = self.tag_names.len() as u32;
+
+        self.tag_names.extend(values);
+
+        let end = self.tag_names.len() as u32;
+
+        Slice::new(start, (end - start) as u16)
+    }
+
+    pub fn extend_field_names<I>(&mut self, values: I) -> Slice<Lowercase>
+    where
+        I: IntoIterator<Item = Lowercase>,
+    {
+        let start = self.field_names.len() as u32;
+
+        self.field_names.extend(values);
+
+        let end = self.field_names.len() as u32;
+
+        Slice::new(start, (end - start) as u16)
+    }
+
+    pub fn extend_symbol_names<I>(&mut self, values: I) -> Slice<Symbol>
+    where
+        I: IntoIterator<Item = Symbol>,
+    {
+        let start = self.symbol_names.len() as u32;
+
+        self.symbol_names.extend(values);
+
+        let end = self.symbol_names.len() as u32;
+
+        Slice::new(start, (end - start) as u16)
+    }
+
+    /// Reserve space for `length` variables in our `variables`
+    ///
+    /// This is useful when we know how many variables e.g. a loop will produce,
+    /// but the loop itself also produces new variables. We often want to work
+    /// with slices, and the loop itself would break up our contiguous slice of variables
+    ///
+    /// This function often helps prevent an intermediate array. See also `indices` above
+    /// to conveniently get a slice or iterator over the indices
+    pub fn reserve_into_vars(&mut self, length: usize) -> VariableSubsSlice {
+        let start = self.variables.len() as u32;
+
+        self.variables
+            .extend(std::iter::repeat(Variable::NULL).take(length));
+
+        Slice::new(start, length as u16)
+    }
+
+    pub fn insert_into_vars<I>(&mut self, input: I) -> VariableSubsSlice
+    where
+        I: IntoIterator<Item = Variable>,
+    {
+        let start = self.variables.len() as u32;
+
+        self.variables.extend(input);
+
+        let length = (self.variables.len() as u32 - start) as u16;
+
+        Slice::new(start, length)
+    }
+
+    pub fn reserve_variable_slices(&mut self, length: usize) -> SubsSlice<VariableSubsSlice> {
+        let start = self.variable_slices.len() as u32;
+
+        self.variable_slices.reserve(length);
+
+        let value = VariableSubsSlice::default();
+        for _ in 0..length {
+            self.variable_slices.push(value);
+        }
+
+        Slice::new(start, length as u16)
+    }
+
+    pub fn reserve_tag_names(&mut self, length: usize) -> SubsSlice<TagName> {
+        let start = self.tag_names.len() as u32;
+
+        self.tag_names
+            .extend(std::iter::repeat(TagName(Uppercase::default())).take(length));
+
+        Slice::new(start, length as u16)
+    }
+
+    pub fn reserve_uls_slice(&mut self, length: usize) -> SubsSlice<Uls> {
+        let start = self.unspecialized_lambda_sets.len() as u32;
+
+        self.unspecialized_lambda_sets
+            .extend(std::iter::repeat(Uls(Variable::NULL, Symbol::UNDERSCORE, 0)).take(length));
+
+        Slice::new(start, length as u16)
     }
 
     #[inline(always)]
@@ -1843,7 +1789,7 @@ impl Subs {
     }
 
     pub fn rigid_var(&mut self, var: Variable, name: Lowercase) {
-        let name_index = SubsIndex::push_new(&mut self.field_names, name);
+        let name_index = self.push_field_name(name);
         let content = Content::RigidVar(name_index);
         let desc = Descriptor::from(content);
 
@@ -1851,8 +1797,8 @@ impl Subs {
     }
 
     pub fn rigid_able_var(&mut self, var: Variable, name: Lowercase, abilities: AbilitySet) {
-        let name_index = SubsIndex::push_new(&mut self.field_names, name);
-        let abilities = SubsSlice::extend_new(&mut self.symbol_names, abilities.into_sorted_iter());
+        let name_index = self.push_field_name(name);
+        let abilities = self.extend_symbol_names(abilities.into_sorted_iter());
         let content = Content::RigidAbleVar(name_index, abilities);
         let desc = Descriptor::from(content);
 
@@ -2075,13 +2021,13 @@ impl Subs {
             },
         );
 
-        let new_variable_slices = SubsSlice::reserve_variable_slices(self, tags.len());
+        let new_variable_slices = self.reserve_variable_slices(tags.len());
 
         let it = new_variable_slices.indices().zip(tags.iter_all());
         for (variable_slice_index, (_, slice_index)) in it {
             let slice = self[slice_index];
 
-            let new_variables = VariableSubsSlice::reserve_into_subs(self, slice.len());
+            let new_variables = self.reserve_into_vars(slice.len());
             for (target_index, var_index) in new_variables.indices().zip(slice) {
                 let var = self[var_index];
                 self.variables[target_index] = self.explicit_substitute(recursive, rec_var, var);
@@ -2213,6 +2159,7 @@ impl Subs {
                 | Content::RangedNumber(_)
                 | Content::Error => return false,
                 Content::LambdaSet(_) | Content::ErasedLambda => return false,
+                Content::Pure | Content::Effectful => return false,
                 Content::Structure(FlatType::Func(..)) => return true,
                 Content::Structure(_) => return false,
                 Content::Alias(_, _, real_var, _) => {
@@ -2384,6 +2331,9 @@ pub enum Content {
     Alias(Symbol, AliasVariables, Variable, AliasKind),
     RangedNumber(crate::num::NumericRange),
     Error,
+    /// The fx type variable for a given function
+    Pure,
+    Effectful,
 }
 
 /// Stores the lambdas an arrow might pass through; for example
@@ -2634,7 +2584,9 @@ impl TagExt {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum FlatType {
     Apply(Symbol, VariableSubsSlice),
-    Func(VariableSubsSlice, Variable, Variable),
+    Func(VariableSubsSlice, Variable, Variable, Variable),
+    /// A function that we know nothing about yet except that it's effectful
+    EffectfulFunc,
     Record(RecordFields, Variable),
     Tuple(TupleElems, Variable),
     TagUnion(UnionTags, TagExt),
@@ -2646,7 +2598,6 @@ pub enum FlatType {
 
     RecursiveTagUnion(Variable, UnionTags, TagExt),
     EmptyRecord,
-    EmptyTuple,
     EmptyTagUnion,
 }
 
@@ -2679,44 +2630,6 @@ pub enum Builtin {
 
 pub type VariableSubsSlice = SubsSlice<Variable>;
 
-impl VariableSubsSlice {
-    /// Reserve space for `length` variables in the subs.variables array
-    ///
-    /// This is useful when we know how many variables e.g. a loop will produce,
-    /// but the loop itself also produces new variables. We often want to work
-    /// with slices, and the loop itself would break up our contiguous slice of variables
-    ///
-    /// This function often helps prevent an intermediate array. See also `indices` above
-    /// to conveniently get a slice or iterator over the indices
-    pub fn reserve_into_subs(subs: &mut Subs, length: usize) -> Self {
-        let start = subs.variables.len() as u32;
-
-        subs.variables
-            .extend(std::iter::repeat(Variable::NULL).take(length));
-
-        Self::new(start, length as u16)
-    }
-
-    pub fn insert_into_subs<I>(subs: &mut Subs, input: I) -> Self
-    where
-        I: IntoIterator<Item = Variable>,
-    {
-        let start = subs.variables.len() as u32;
-
-        subs.variables.extend(input);
-
-        let length = (subs.variables.len() as u32 - start) as u16;
-
-        Self::new(start, length)
-    }
-}
-
-impl From<Variable> for VariableSubsSlice {
-    fn from(var: Variable) -> Self {
-        Self::new(var.0, 1)
-    }
-}
-
 pub trait Label: Sized + Clone {
     fn index_subs(subs: &Subs, idx: SubsIndex<Self>) -> &Self;
     fn get_subs_slice(subs: &Subs, slice: SubsSlice<Self>) -> &[Self];
@@ -2733,15 +2646,13 @@ pub type UnionLambdas = UnionLabels<Symbol>;
 impl UnionTags {
     pub fn for_result(subs: &mut Subs, ok_payload: Variable, err_payload: Variable) -> Self {
         let ok_tuple = {
-            let variables_slice =
-                VariableSubsSlice::insert_into_subs(subs, std::iter::once(ok_payload));
+            let variables_slice = subs.insert_into_vars(iter::once(ok_payload));
 
             ("Ok".into(), variables_slice)
         };
 
         let err_tuple = {
-            let variables_slice =
-                VariableSubsSlice::insert_into_subs(subs, std::iter::once(err_payload));
+            let variables_slice = subs.insert_into_vars(iter::once(err_payload));
 
             ("Err".into(), variables_slice)
         };
@@ -2758,10 +2669,10 @@ impl Label for TagName {
         subs.get_subs_slice(slice)
     }
     fn push_new(subs: &mut Subs, name: Self) -> SubsIndex<Self> {
-        SubsIndex::push_new(&mut subs.tag_names, name)
+        subs.push_tag_name(name)
     }
     fn extend_new(subs: &mut Subs, slice: impl IntoIterator<Item = Self>) -> SubsSlice<Self> {
-        SubsSlice::extend_new(&mut subs.tag_names, slice)
+        subs.extend_tag_names(slice)
     }
     fn reserve(subs: &mut Subs, size_hint: usize) -> u32 {
         let tag_names_start = subs.tag_names.len() as u32;
@@ -2777,10 +2688,10 @@ impl Label for Symbol {
         subs.get_subs_slice(slice)
     }
     fn push_new(subs: &mut Subs, name: Self) -> SubsIndex<Self> {
-        SubsIndex::push_new(&mut subs.symbol_names, name)
+        subs.push_symbol_name(name)
     }
     fn extend_new(subs: &mut Subs, slice: impl IntoIterator<Item = Self>) -> SubsSlice<Self> {
-        SubsSlice::extend_new(&mut subs.symbol_names, slice)
+        subs.extend_symbol_names(slice)
     }
     fn reserve(subs: &mut Subs, size_hint: usize) -> u32 {
         let symbol_names_start = subs.symbol_names.len() as u32;
@@ -2820,13 +2731,13 @@ where
         }
 
         let slice = subs.variable_slices[self.values_start as usize];
-        slice.length == 1
+        slice.len() == 1
     }
 
     pub fn from_tag_name_index(index: SubsIndex<L>) -> Self {
         Self::from_slices(
-            SubsSlice::new(index.index, 1),
-            SubsSlice::new(0, 1), // the first variablesubsslice is the empty slice
+            index.as_slice(),
+            SubsSlice::new(0, 1), // the first VariableSubsSlice is the empty slice
         )
     }
 
@@ -2839,8 +2750,8 @@ where
 
         Self {
             length: labels.len() as u16,
-            labels_start: labels.start,
-            values_start: variables.start,
+            labels_start: labels.start(),
+            values_start: variables.start(),
             _marker: Default::default(),
         }
     }
@@ -2876,7 +2787,7 @@ where
 
         let mut length = 0;
         for (k, v) in it {
-            let variables = VariableSubsSlice::insert_into_subs(subs, v.into_iter());
+            let variables = subs.insert_into_vars(v.into_iter());
 
             L::push_new(subs, k);
             subs.variable_slices.push(variables);
@@ -2895,7 +2806,7 @@ where
 
         Self {
             length: 1,
-            labels_start: idx.index,
+            labels_start: idx.index() as u32,
             values_start: 0,
             _marker: Default::default(),
         }
@@ -3548,23 +3459,24 @@ fn occurs(
                     ctx,
                     safe!([Variable], subs.get_subs_slice(*args)).iter(),
                 ),
-                Func(arg_vars, closure_var, ret_var) => {
-                    let it = once(safe!(Variable, ret_var))
-                        .chain(once(safe!(Variable, closure_var)))
-                        .chain(safe!([Variable], subs.get_subs_slice(*arg_vars)).iter());
+                Func(arg_vars, closure_var, ret_var, fx_var) => {
+                    let it = iter::once(safe!(Variable, ret_var))
+                        .chain(iter::once(safe!(Variable, closure_var)))
+                        .chain(safe!([Variable], subs.get_subs_slice(*arg_vars)).iter())
+                        .chain(iter::once(safe!(Variable, fx_var)));
                     short_circuit(subs, root_var, ctx, it)
                 }
                 Record(vars_by_field, ext) => {
                     let slice =
                         VariableSubsSlice::new(vars_by_field.variables_start, vars_by_field.length);
-                    let it = once(safe!(Variable, ext))
+                    let it = iter::once(safe!(Variable, ext))
                         .chain(safe!([Variable], subs.get_subs_slice(slice)).iter());
                     short_circuit(subs, root_var, ctx, it)
                 }
                 Tuple(vars_by_elem, ext) => {
                     let slice =
                         VariableSubsSlice::new(vars_by_elem.variables_start, vars_by_elem.length);
-                    let it = once(safe!(Variable, ext))
+                    let it = iter::once(safe!(Variable, ext))
                         .chain(safe!([Variable], subs.get_subs_slice(slice)).iter());
                     short_circuit(subs, root_var, ctx, it)
                 }
@@ -3575,7 +3487,7 @@ fn occurs(
                     short_circuit_help(subs, root_var, ctx, ext_var)
                 }
                 FunctionOrTagUnion(_, _, ext) => {
-                    short_circuit(subs, root_var, ctx, once(&ext.var()))
+                    short_circuit(subs, root_var, ctx, iter::once(&ext.var()))
                 }
                 RecursiveTagUnion(_, tags, ext) => {
                     let ext_var = ext.var();
@@ -3583,7 +3495,7 @@ fn occurs(
 
                     short_circuit_help(subs, root_var, ctx, ext_var)
                 }
-                EmptyRecord | EmptyTuple | EmptyTagUnion => Ok(()),
+                EmptyRecord | EmptyTagUnion | EffectfulFunc => Ok(()),
             },
             Alias(_, args, _, _) => {
                 // THEORY: we only need to explore the args, as that is the surface of all
@@ -3610,6 +3522,7 @@ fn occurs(
                 occurs_union(subs, root_var, ctx, safe!(UnionLabels<Symbol>, solved))
             }
             ErasedLambda => Ok(()),
+            Pure | Effectful => Ok(()),
             RangedNumber(_range_vars) => Ok(()),
         })();
 
@@ -3696,7 +3609,9 @@ fn explicit_substitute(
             | RigidAbleVar(_, _)
             | RecursionVar { .. }
             | Error
-            | ErasedLambda => in_var,
+            | ErasedLambda
+            | Pure
+            | Effectful => in_var,
 
             Structure(flat_type) => {
                 match flat_type {
@@ -3709,7 +3624,7 @@ fn explicit_substitute(
 
                         subs.set_content(in_var, Structure(Apply(symbol, args)));
                     }
-                    Func(arg_vars, closure_var, ret_var) => {
+                    Func(arg_vars, closure_var, ret_var, fx_var) => {
                         for var_index in arg_vars.into_iter() {
                             let var = subs[var_index];
                             let answer = explicit_substitute(subs, from, to, var, seen);
@@ -3719,10 +3634,11 @@ fn explicit_substitute(
                         let new_ret_var = explicit_substitute(subs, from, to, ret_var, seen);
                         let new_closure_var =
                             explicit_substitute(subs, from, to, closure_var, seen);
+                        let new_fx_var = explicit_substitute(subs, from, to, fx_var, seen);
 
                         subs.set_content(
                             in_var,
-                            Structure(Func(arg_vars, new_closure_var, new_ret_var)),
+                            Structure(Func(arg_vars, new_closure_var, new_ret_var, new_fx_var)),
                         );
                     }
                     TagUnion(tags, ext) => {
@@ -3773,7 +3689,7 @@ fn explicit_substitute(
                         subs.set_content(in_var, Structure(Tuple(vars_by_elem, new_ext)));
                     }
 
-                    EmptyRecord | EmptyTuple | EmptyTagUnion => {}
+                    EmptyRecord | EmptyTagUnion | EffectfulFunc => {}
                 }
 
                 in_var
@@ -3877,7 +3793,9 @@ fn get_var_names(
         subs.set_mark(var, Mark::GET_VAR_NAMES);
 
         match desc.content {
-            Error | FlexVar(None) | FlexAbleVar(None, _) | ErasedLambda => taken_names,
+            Error | FlexVar(None) | FlexAbleVar(None, _) | ErasedLambda | Pure | Effectful => {
+                taken_names
+            }
 
             FlexVar(Some(name_index)) | FlexAbleVar(Some(name_index), _) => add_name(
                 subs,
@@ -3941,9 +3859,10 @@ fn get_var_names(
                     })
                 }
 
-                FlatType::Func(arg_vars, closure_var, ret_var) => {
+                FlatType::Func(arg_vars, closure_var, ret_var, fx_var) => {
                     let taken_names = get_var_names(subs, ret_var, taken_names);
                     let taken_names = get_var_names(subs, closure_var, taken_names);
+                    debug_assert!(get_var_names(subs, fx_var, Default::default()).is_empty());
 
                     let mut accum = taken_names;
 
@@ -3956,7 +3875,7 @@ fn get_var_names(
                     accum
                 }
 
-                FlatType::EmptyRecord | FlatType::EmptyTuple | FlatType::EmptyTagUnion => {
+                FlatType::EmptyRecord | FlatType::EmptyTagUnion | FlatType::EffectfulFunc => {
                     taken_names
                 }
 
@@ -4028,7 +3947,7 @@ fn add_name<F>(
 where
     F: FnOnce(SubsIndex<Lowercase>) -> Content,
 {
-    let given_name = subs.field_names[given_name_index.index as usize].clone();
+    let given_name = subs.field_names[given_name_index.index()].clone();
 
     let indexed_name = if index == 0 {
         given_name.clone()
@@ -4041,8 +3960,7 @@ where
     match taken_names.get(&indexed_name) {
         None => {
             if indexed_name != given_name {
-                let indexed_name_index =
-                    SubsIndex::push_new(&mut subs.field_names, indexed_name.clone());
+                let indexed_name_index = subs.push_field_name(indexed_name.clone());
                 subs.set_content(var, content_from_name(indexed_name_index));
             }
 
@@ -4104,11 +4022,11 @@ fn content_to_err_type(
 
         FlexVar(opt_name) => {
             let name = match opt_name {
-                Some(name_index) => subs.field_names[name_index.index as usize].clone(),
+                Some(name_index) => subs.field_names[name_index.index()].clone(),
                 None => {
                     // set the name so when this variable occurs elsewhere in the type it gets the same name
                     let name = get_fresh_error_var_name(state);
-                    let name_index = SubsIndex::push_new(&mut subs.field_names, name.clone());
+                    let name_index = subs.push_field_name(name.clone());
 
                     subs.set_content(var, FlexVar(Some(name_index)));
 
@@ -4120,17 +4038,17 @@ fn content_to_err_type(
         }
 
         RigidVar(name_index) => {
-            let name = subs.field_names[name_index.index as usize].clone();
+            let name = subs.field_names[name_index.index()].clone();
             ErrorType::RigidVar(name)
         }
 
         FlexAbleVar(opt_name, abilities) => {
             let name = match opt_name {
-                Some(name_index) => subs.field_names[name_index.index as usize].clone(),
+                Some(name_index) => subs.field_names[name_index.index()].clone(),
                 None => {
                     // set the name so when this variable occurs elsewhere in the type it gets the same name
                     let name = get_fresh_error_var_name(state);
-                    let name_index = SubsIndex::push_new(&mut subs.field_names, name.clone());
+                    let name_index = subs.push_field_name(name.clone());
 
                     subs.set_content(var, FlexVar(Some(name_index)));
 
@@ -4143,7 +4061,7 @@ fn content_to_err_type(
         }
 
         RigidAbleVar(name_index, abilities) => {
-            let name = subs.field_names[name_index.index as usize].clone();
+            let name = subs.field_names[name_index.index()].clone();
             let ability_set = AbilitySet::from_iter(subs.get_subs_slice(abilities).iter().copied());
             ErrorType::RigidAbleVar(name, ability_set)
         }
@@ -4153,10 +4071,10 @@ fn content_to_err_type(
             structure,
         } => {
             let name = match opt_name {
-                Some(name_index) => subs.field_names[name_index.index as usize].clone(),
+                Some(name_index) => subs.field_names[name_index.index()].clone(),
                 None => {
                     let name = get_fresh_error_var_name(state);
-                    let name_index = SubsIndex::push_new(&mut subs.field_names, name.clone());
+                    let name_index = subs.push_field_name(name.clone());
 
                     subs.set_content(var, FlexVar(Some(name_index)));
 
@@ -4196,6 +4114,11 @@ fn content_to_err_type(
 
         LambdaSet(..) | ErasedLambda => {
             // Don't print lambda sets since we don't expect them to be exposed to the user
+            ErrorType::Error
+        }
+
+        Pure | Effectful => {
+            // Not exposed directly
             ErrorType::Error
         }
 
@@ -4288,7 +4211,7 @@ fn flat_type_to_err_type(
             ErrorType::Type(symbol, arg_types)
         }
 
-        Func(arg_vars, closure_var, ret_var) => {
+        Func(arg_vars, closure_var, ret_var, fx_var) => {
             let args = arg_vars
                 .into_iter()
                 .map(|index| {
@@ -4299,12 +4222,27 @@ fn flat_type_to_err_type(
 
             let ret = var_to_err_type(subs, state, ret_var, Polarity::Pos);
             let closure = var_to_err_type(subs, state, closure_var, pol);
+            let fx = match subs.get_content_without_compacting(fx_var) {
+                Content::Pure | Content::FlexVar(_) | Content::Error => ErrorFunctionFx::Pure,
+                Content::Effectful => ErrorFunctionFx::Effectful,
+                Content::RigidVar(_)
+                | Content::FlexAbleVar(_, _)
+                | Content::RigidAbleVar(_, _)
+                | Content::RecursionVar { .. }
+                | Content::LambdaSet(_)
+                | Content::ErasedLambda
+                | Content::Structure(_)
+                | Content::Alias(_, _, _, _)
+                | Content::RangedNumber(_) => {
+                    internal_error!("Unexpected content in fx var")
+                }
+            };
 
-            ErrorType::Function(args, Box::new(closure), Box::new(ret))
+            ErrorType::Function(args, Box::new(closure), fx, Box::new(ret))
         }
 
+        EffectfulFunc => ErrorType::EffectfulFunc,
         EmptyRecord => ErrorType::Record(SendMap::default(), TypeExt::Closed),
-        EmptyTuple => ErrorType::Tuple(Vec::default(), TypeExt::Closed),
         EmptyTagUnion => ErrorType::TagUnion(SendMap::default(), TypeExt::Closed, pol),
 
         Record(vars_by_field, ext) => {
@@ -4732,10 +4670,11 @@ impl StorageSubs {
             FlatType::Apply(symbol, arguments) => {
                 FlatType::Apply(*symbol, Self::offset_variable_slice(offsets, *arguments))
             }
-            FlatType::Func(arguments, lambda_set, result) => FlatType::Func(
+            FlatType::Func(arguments, lambda_set, result, fx) => FlatType::Func(
                 Self::offset_variable_slice(offsets, *arguments),
                 Self::offset_variable(offsets, *lambda_set),
                 Self::offset_variable(offsets, *result),
+                Self::offset_variable(offsets, *fx),
             ),
             FlatType::Record(record_fields, ext) => FlatType::Record(
                 Self::offset_record_fields(offsets, *record_fields),
@@ -4760,8 +4699,8 @@ impl StorageSubs {
                 ext.map(|v| Self::offset_variable(offsets, v)),
             ),
             FlatType::EmptyRecord => FlatType::EmptyRecord,
-            FlatType::EmptyTuple => FlatType::EmptyTuple,
             FlatType::EmptyTagUnion => FlatType::EmptyTagUnion,
+            FlatType::EffectfulFunc => FlatType::EffectfulFunc,
         }
     }
 
@@ -4803,6 +4742,8 @@ impl StorageSubs {
                 ambient_function: Self::offset_variable(offsets, *ambient_function_var),
             }),
             ErasedLambda => ErasedLambda,
+            Pure => Pure,
+            Effectful => Effectful,
             RangedNumber(range) => RangedNumber(*range),
             Error => Content::Error,
         }
@@ -4828,7 +4769,7 @@ impl StorageSubs {
         offsets: &StorageSubsOffsets,
         mut ability_names: SubsSlice<Symbol>,
     ) -> SubsSlice<Symbol> {
-        ability_names.start += offsets.symbol_names;
+        ability_names.advance(offsets.symbol_names);
 
         ability_names
     }
@@ -4865,7 +4806,7 @@ impl StorageSubs {
         offsets: &StorageSubsOffsets,
         mut tag_names: SubsSlice<TagName>,
     ) -> SubsSlice<TagName> {
-        tag_names.start += offsets.tag_names;
+        tag_names.advance(offsets.tag_names);
 
         tag_names
     }
@@ -4883,13 +4824,13 @@ impl StorageSubs {
         offsets: &StorageSubsOffsets,
         mut slice: VariableSubsSlice,
     ) -> VariableSubsSlice {
-        slice.start += offsets.variables;
+        slice.advance(offsets.variables);
 
         slice
     }
 
     fn offset_uls_slice(offsets: &StorageSubsOffsets, mut slice: SubsSlice<Uls>) -> SubsSlice<Uls> {
-        slice.start += offsets.unspecialized_lambda_sets;
+        slice.advance(offsets.unspecialized_lambda_sets);
 
         slice
     }
@@ -4954,13 +4895,13 @@ fn storage_copy_union<L: Label>(
     env: &mut StorageCopyVarToEnv<'_>,
     tags: UnionLabels<L>,
 ) -> UnionLabels<L> {
-    let new_variable_slices = SubsSlice::reserve_variable_slices(env.target, tags.len());
+    let new_variable_slices = env.target.reserve_variable_slices(tags.len());
 
     let it = (new_variable_slices.indices()).zip(tags.variables());
     for (target_index, index) in it {
         let slice = env.source[index];
 
-        let new_variables = SubsSlice::reserve_into_subs(env.target, slice.len());
+        let new_variables = env.target.reserve_into_vars(slice.len());
         let it = (new_variables.indices()).zip(slice);
         for (target_index, var_index) in it {
             let var = env.source[var_index];
@@ -5028,7 +4969,7 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
         Structure(flat_type) => {
             let new_flat_type = match flat_type {
                 Apply(symbol, arguments) => {
-                    let new_arguments = SubsSlice::reserve_into_subs(env.target, arguments.len());
+                    let new_arguments = env.target.reserve_into_vars(arguments.len());
 
                     for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
                         let var = env.source[var_index];
@@ -5039,12 +4980,14 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
                     Apply(symbol, new_arguments)
                 }
 
-                Func(arguments, closure_var, ret_var) => {
+                Func(arguments, closure_var, ret_var, fx_var) => {
                     let new_ret_var = storage_copy_var_to_help(env, ret_var);
 
                     let new_closure_var = storage_copy_var_to_help(env, closure_var);
 
-                    let new_arguments = SubsSlice::reserve_into_subs(env.target, arguments.len());
+                    let new_fx_var = storage_copy_var_to_help(env, fx_var);
+
+                    let new_arguments = env.target.reserve_into_vars(arguments.len());
 
                     for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
                         let var = env.source[var_index];
@@ -5052,15 +4995,14 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
                         env.target.variables[target_index] = copy_var;
                     }
 
-                    Func(new_arguments, new_closure_var, new_ret_var)
+                    Func(new_arguments, new_closure_var, new_ret_var, new_fx_var)
                 }
 
-                same @ EmptyRecord | same @ EmptyTuple | same @ EmptyTagUnion => same,
+                same @ EmptyRecord | same @ EmptyTagUnion => same,
 
                 Record(fields, ext) => {
                     let record_fields = {
-                        let new_variables =
-                            VariableSubsSlice::reserve_into_subs(env.target, fields.len());
+                        let new_variables = env.target.reserve_into_vars(fields.len());
 
                         let it = (new_variables.indices()).zip(fields.iter_variables());
                         for (target_index, var_index) in it {
@@ -5082,9 +5024,9 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
                             .extend(record_fields.iter().copied());
 
                         RecordFields {
-                            length: fields.len() as _,
+                            length: fields.len() as u16,
                             field_names_start,
-                            variables_start: new_variables.start,
+                            variables_start: new_variables.start(),
                             field_types_start,
                         }
                     };
@@ -5094,8 +5036,7 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
 
                 Tuple(elems, ext) => {
                     let tuple_elems = {
-                        let new_variables =
-                            VariableSubsSlice::reserve_into_subs(env.target, elems.len());
+                        let new_variables = env.target.reserve_into_vars(elems.len());
 
                         let it = (new_variables.indices()).zip(elems.iter_variables());
                         for (target_index, var_index) in it {
@@ -5110,8 +5051,8 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
                         env.target.tuple_elem_indices.extend(0..elems.len());
 
                         TupleElems {
-                            length: elems.len() as _,
-                            variables_start: new_variables.start,
+                            length: elems.len() as u16,
+                            variables_start: new_variables.start(),
                             elem_index_start,
                         }
                     };
@@ -5127,15 +5068,13 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
                 }
 
                 FunctionOrTagUnion(tag_names, symbols, ext) => {
-                    let new_tag_names = SubsSlice::extend_new(
-                        &mut env.target.tag_names,
-                        env.source.get_subs_slice(tag_names).iter().cloned(),
-                    );
+                    let new_tag_names = env
+                        .target
+                        .extend_tag_names(env.source.get_subs_slice(tag_names).iter().cloned());
 
-                    let new_symbols = SubsSlice::extend_new(
-                        &mut env.target.symbol_names,
-                        env.source.get_subs_slice(symbols).iter().cloned(),
-                    );
+                    let new_symbols = env
+                        .target
+                        .extend_symbol_names(env.source.get_subs_slice(symbols).iter().cloned());
 
                     FunctionOrTagUnion(
                         new_tag_names,
@@ -5152,6 +5091,8 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
 
                     RecursiveTagUnion(new_rec_var, union_tags, new_ext)
                 }
+
+                EffectfulFunc => EffectfulFunc,
             };
 
             env.target
@@ -5161,8 +5102,8 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
         }
 
         FlexVar(Some(name_index)) => {
-            let name = env.source.field_names[name_index.index as usize].clone();
-            let new_name_index = SubsIndex::push_new(&mut env.target.field_names, name);
+            let name = env.source.field_names[name_index.index()].clone();
+            let new_name_index = env.target.push_field_name(name);
 
             let content = FlexVar(Some(new_name_index));
             env.target.set_content(copy, content);
@@ -5170,7 +5111,7 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
             copy
         }
 
-        FlexVar(None) | ErasedLambda | Error => copy,
+        FlexVar(None) | ErasedLambda | Error | Pure | Effectful => copy,
 
         RecursionVar {
             opt_name,
@@ -5192,8 +5133,8 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
         }
 
         RigidVar(name_index) => {
-            let name = env.source.field_names[name_index.index as usize].clone();
-            let new_name_index = SubsIndex::push_new(&mut env.target.field_names, name);
+            let name = env.source.field_names[name_index.index()].clone();
+            let new_name_index = env.target.push_field_name(name);
             env.target
                 .set(copy, make_descriptor(FlexVar(Some(new_name_index))));
 
@@ -5202,13 +5143,12 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
 
         FlexAbleVar(opt_name_index, abilities) => {
             let new_name_index = opt_name_index.map(|name_index| {
-                let name = env.source.field_names[name_index.index as usize].clone();
-                SubsIndex::push_new(&mut env.target.field_names, name)
+                let name = env.source.field_names[name_index.index()].clone();
+                env.target.push_field_name(name)
             });
-            let new_abilities_slice = SubsSlice::extend_new(
-                &mut env.target.symbol_names,
-                env.source.get_subs_slice(abilities).iter().copied(),
-            );
+            let new_abilities_slice = env
+                .target
+                .extend_symbol_names(env.source.get_subs_slice(abilities).iter().copied());
 
             let content = FlexAbleVar(new_name_index, new_abilities_slice);
             env.target.set_content(copy, content);
@@ -5217,12 +5157,11 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
         }
 
         RigidAbleVar(name_index, abilities) => {
-            let name = env.source.field_names[name_index.index as usize].clone();
-            let new_name_index = SubsIndex::push_new(&mut env.target.field_names, name);
-            let new_abilities_slice = SubsSlice::extend_new(
-                &mut env.target.symbol_names,
-                env.source.get_subs_slice(abilities).iter().copied(),
-            );
+            let name = env.source.field_names[name_index.index()].clone();
+            let new_name_index = env.target.push_field_name(name);
+            let new_abilities_slice = env
+                .target
+                .extend_symbol_names(env.source.get_subs_slice(abilities).iter().copied());
 
             env.target.set(
                 copy,
@@ -5233,8 +5172,9 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
         }
 
         Alias(symbol, arguments, real_type_var, kind) => {
-            let new_variables =
-                SubsSlice::reserve_into_subs(env.target, arguments.all_variables_len as _);
+            let new_variables = env
+                .target
+                .reserve_into_vars(arguments.all_variables_len as _);
             for (target_index, var_index) in
                 (new_variables.indices()).zip(arguments.all_variables())
             {
@@ -5244,7 +5184,7 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
             }
 
             let new_arguments = AliasVariables {
-                variables_start: new_variables.start,
+                variables_start: new_variables.start(),
                 ..arguments
             };
 
@@ -5267,7 +5207,7 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
 
             // NB: we are only copying into storage here, not instantiating like in solve::deep_copy_var.
             // So no bookkeeping should be done for the new unspecialized lambda sets.
-            let new_unspecialized = SubsSlice::reserve_uls_slice(env.target, unspecialized.len());
+            let new_unspecialized = env.target.reserve_uls_slice(unspecialized.len());
             for (target_index, source_index) in
                 (new_unspecialized.into_iter()).zip(unspecialized.into_iter())
             {
@@ -5406,6 +5346,7 @@ fn is_registered(content: &Content) -> bool {
         | Content::RigidAbleVar(..) => false,
         Content::Structure(FlatType::EmptyRecord | FlatType::EmptyTagUnion) => false,
         Content::ErasedLambda => false,
+        Content::Pure | Content::Effectful => false,
 
         Content::Structure(_)
         | Content::RecursionVar { .. }
@@ -5422,13 +5363,13 @@ fn copy_union<L: Label>(
     max_rank: Rank,
     tags: UnionLabels<L>,
 ) -> UnionLabels<L> {
-    let new_variable_slices = SubsSlice::reserve_variable_slices(env.target, tags.len());
+    let new_variable_slices = env.target.reserve_variable_slices(tags.len());
 
     let it = (new_variable_slices.indices()).zip(tags.variables());
     for (target_index, index) in it {
         let slice = env.source[index];
 
-        let new_variables = SubsSlice::reserve_into_subs(env.target, slice.len());
+        let new_variables = env.target.reserve_into_vars(slice.len());
         let it = (new_variables.indices()).zip(slice);
         for (target_index, var_index) in it {
             let var = env.source[var_index];
@@ -5499,7 +5440,7 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
         Structure(flat_type) => {
             let new_flat_type = match flat_type {
                 Apply(symbol, arguments) => {
-                    let new_arguments = SubsSlice::reserve_into_subs(env.target, arguments.len());
+                    let new_arguments = env.target.reserve_into_vars(arguments.len());
 
                     for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
                         let var = env.source[var_index];
@@ -5510,12 +5451,14 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
                     Apply(symbol, new_arguments)
                 }
 
-                Func(arguments, closure_var, ret_var) => {
+                Func(arguments, closure_var, ret_var, fx_var) => {
                     let new_ret_var = copy_import_to_help(env, max_rank, ret_var);
 
                     let new_closure_var = copy_import_to_help(env, max_rank, closure_var);
 
-                    let new_arguments = SubsSlice::reserve_into_subs(env.target, arguments.len());
+                    let new_fx_var = copy_import_to_help(env, max_rank, fx_var);
+
+                    let new_arguments = env.target.reserve_into_vars(arguments.len());
 
                     for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
                         let var = env.source[var_index];
@@ -5523,15 +5466,14 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
                         env.target.variables[target_index] = copy_var;
                     }
 
-                    Func(new_arguments, new_closure_var, new_ret_var)
+                    Func(new_arguments, new_closure_var, new_ret_var, new_fx_var)
                 }
 
-                same @ EmptyRecord | same @ EmptyTuple | same @ EmptyTagUnion => same,
+                same @ EmptyRecord | same @ EmptyTagUnion => same,
 
                 Record(fields, ext) => {
                     let record_fields = {
-                        let new_variables =
-                            VariableSubsSlice::reserve_into_subs(env.target, fields.len());
+                        let new_variables = env.target.reserve_into_vars(fields.len());
 
                         let it = (new_variables.indices()).zip(fields.iter_variables());
                         for (target_index, var_index) in it {
@@ -5553,9 +5495,9 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
                             .extend(record_fields.iter().copied());
 
                         RecordFields {
-                            length: fields.len() as _,
+                            length: fields.len() as u16,
                             field_names_start,
-                            variables_start: new_variables.start,
+                            variables_start: new_variables.start(),
                             field_types_start,
                         }
                     };
@@ -5565,8 +5507,7 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
 
                 Tuple(elems, ext) => {
                     let tuple_elems = {
-                        let new_variables =
-                            VariableSubsSlice::reserve_into_subs(env.target, elems.len());
+                        let new_variables = env.target.reserve_into_vars(elems.len());
 
                         let it = (new_variables.indices()).zip(elems.iter_variables());
                         for (target_index, var_index) in it {
@@ -5581,8 +5522,8 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
                         env.target.tuple_elem_indices.extend(0..elems.len());
 
                         TupleElems {
-                            length: elems.len() as _,
-                            variables_start: new_variables.start,
+                            length: elems.len() as u16,
+                            variables_start: new_variables.start(),
                             elem_index_start,
                         }
                     };
@@ -5599,15 +5540,13 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
                 }
 
                 FunctionOrTagUnion(tag_names, symbols, ext) => {
-                    let new_tag_names = SubsSlice::extend_new(
-                        &mut env.target.tag_names,
-                        env.source.get_subs_slice(tag_names).iter().cloned(),
-                    );
+                    let new_tag_names = env
+                        .target
+                        .extend_tag_names(env.source.get_subs_slice(tag_names).iter().cloned());
 
-                    let new_symbols = SubsSlice::extend_new(
-                        &mut env.target.symbol_names,
-                        env.source.get_subs_slice(symbols).iter().cloned(),
-                    );
+                    let new_symbols = env
+                        .target
+                        .extend_symbol_names(env.source.get_subs_slice(symbols).iter().cloned());
 
                     let new_ext = ext.map(|v| copy_import_to_help(env, max_rank, v));
 
@@ -5622,6 +5561,7 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
 
                     RecursiveTagUnion(new_rec_var, union_tags, new_ext)
                 }
+                EffectfulFunc => EffectfulFunc,
             };
 
             env.target
@@ -5632,8 +5572,8 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
 
         FlexVar(opt_name_index) => {
             if let Some(name_index) = opt_name_index {
-                let name = env.source.field_names[name_index.index as usize].clone();
-                let new_name_index = SubsIndex::push_new(&mut env.target.field_names, name);
+                let name = env.source.field_names[name_index.index()].clone();
+                let new_name_index = env.target.push_field_name(name);
 
                 let content = FlexVar(Some(new_name_index));
                 env.target.set_content(copy, content);
@@ -5646,17 +5586,16 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
 
         FlexAbleVar(opt_name_index, abilities) => {
             let new_opt_name_index = if let Some(name_index) = opt_name_index {
-                let name = env.source.field_names[name_index.index as usize].clone();
-                let new_name_index = SubsIndex::push_new(&mut env.target.field_names, name);
+                let name = env.source.field_names[name_index.index()].clone();
+                let new_name_index = env.target.push_field_name(name);
                 Some(new_name_index)
             } else {
                 None
             };
 
-            let new_abilities = SubsSlice::extend_new(
-                &mut env.target.symbol_names,
-                env.source.get_subs_slice(abilities).iter().copied(),
-            );
+            let new_abilities = env
+                .target
+                .extend_symbol_names(env.source.get_subs_slice(abilities).iter().copied());
 
             let content = FlexAbleVar(new_opt_name_index, new_abilities);
             env.target.set_content(copy, content);
@@ -5675,8 +5614,8 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
         }
 
         RigidVar(name_index) => {
-            let name = env.source.field_names[name_index.index as usize].clone();
-            let new_name_index = SubsIndex::push_new(&mut env.target.field_names, name);
+            let name = env.source.field_names[name_index.index()].clone();
+            let new_name_index = env.target.push_field_name(name);
 
             // If we are copying the import as generalized, we can keep it as rigid.
             // Otherwise we must make it flex, as this is copying to a non-generalized site.
@@ -5697,13 +5636,11 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
         }
 
         RigidAbleVar(name_index, abilities) => {
-            let name = env.source.field_names[name_index.index as usize].clone();
-            let new_name_index = SubsIndex::push_new(&mut env.target.field_names, name);
-
-            let new_abilities = SubsSlice::extend_new(
-                &mut env.target.symbol_names,
-                env.source.get_subs_slice(abilities).iter().copied(),
-            );
+            let name = env.source.field_names[name_index.index()].clone();
+            let new_name_index = env.target.push_field_name(name);
+            let new_abilities = env
+                .target
+                .extend_symbol_names(env.source.get_subs_slice(abilities).iter().copied());
 
             // If we are copying the import as generalized, we can keep it as rigid.
             // Otherwise we must make it flex, as this is copying to a non-generalized site.
@@ -5743,8 +5680,9 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
         }
 
         Alias(symbol, arguments, real_type_var, kind) => {
-            let new_variables =
-                SubsSlice::reserve_into_subs(env.target, arguments.all_variables_len as _);
+            let new_variables = env
+                .target
+                .reserve_into_vars(arguments.all_variables_len as _);
             for (target_index, var_index) in
                 (new_variables.indices()).zip(arguments.all_variables())
             {
@@ -5754,7 +5692,7 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
             }
 
             let new_arguments = AliasVariables {
-                variables_start: new_variables.start,
+                variables_start: new_variables.start(),
                 ..arguments
             };
 
@@ -5776,7 +5714,7 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
             let new_rec_var =
                 recursion_var.map(|rec_var| copy_import_to_help(env, max_rank, rec_var));
 
-            let new_unspecialized = SubsSlice::reserve_uls_slice(env.target, unspecialized.len());
+            let new_unspecialized = env.target.reserve_uls_slice(unspecialized.len());
             for (target_index, source_index) in
                 (new_unspecialized.into_iter()).zip(unspecialized.into_iter())
             {
@@ -5806,6 +5744,16 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
         ErasedLambda => {
             env.target.set(copy, make_descriptor(ErasedLambda));
 
+            copy
+        }
+
+        Pure => {
+            env.target.set(copy, make_descriptor(Pure));
+            copy
+        }
+
+        Effectful => {
+            env.target.set(copy, make_descriptor(Effectful));
             copy
         }
 
@@ -5883,7 +5831,7 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
                     }
                 })
             }
-            FlexVar(_) | FlexAbleVar(_, _) | ErasedLambda | Error => (),
+            FlexVar(_) | FlexAbleVar(_, _) | ErasedLambda | Error | Pure | Effectful => (),
 
             RecursionVar { structure, .. } => {
                 stack.push(*structure);
@@ -5894,18 +5842,20 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
                     stack.extend(var_slice!(*args));
                 }
 
-                Func(arg_vars, closure_var, ret_var) => {
+                Func(arg_vars, closure_var, ret_var, fx_var) => {
                     let arg_vars = *arg_vars;
                     let ret_var = *ret_var;
                     let closure_var = *closure_var;
+                    let fx_var = *fx_var;
 
                     stack.extend(var_slice!(arg_vars));
 
                     stack.push(ret_var);
                     stack.push(closure_var);
+                    stack.push(fx_var);
                 }
 
-                EmptyRecord | EmptyTuple | EmptyTagUnion => (),
+                EmptyRecord | EmptyTagUnion => (),
 
                 Record(fields, ext) => {
                     let fields = *fields;
@@ -5927,7 +5877,7 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
                     let ext = *ext;
 
                     for slice_index in tags.variables() {
-                        let slice = subs.variable_slices[slice_index.index as usize];
+                        let slice = subs.variable_slices[slice_index.index()];
                         stack.extend(var_slice!(slice));
                     }
 
@@ -5943,13 +5893,15 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
                     let rec_var = *rec_var;
 
                     for slice_index in tags.variables() {
-                        let slice = subs.variable_slices[slice_index.index as usize];
+                        let slice = subs.variable_slices[slice_index.index()];
                         stack.extend(var_slice!(slice));
                     }
 
                     stack.push(ext.var());
                     stack.push(rec_var);
                 }
+
+                EffectfulFunc => {}
             },
             Alias(_, args, var, _) => {
                 let var = *var;
@@ -5966,7 +5918,7 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
                 ambient_function: _,
             }) => {
                 for slice_index in solved.variables() {
-                    let slice = subs.variable_slices[slice_index.index as usize];
+                    let slice = subs.variable_slices[slice_index.index()];
                     stack.extend(var_slice!(slice));
                 }
 
@@ -6023,10 +5975,11 @@ pub fn get_member_lambda_sets_at_region(subs: &Subs, var: Variable, target_regio
                 FlatType::Apply(_, vars) => {
                     stack.extend(subs.get_subs_slice(*vars));
                 }
-                FlatType::Func(args, lset, ret) => {
+                FlatType::Func(args, lset, ret, fx) => {
                     stack.extend(subs.get_subs_slice(*args));
                     stack.push(*lset);
                     stack.push(*ret);
+                    stack.push(*fx);
                 }
                 FlatType::Record(fields, ext) => {
                     stack.extend(subs.get_subs_slice(fields.variables()));
@@ -6056,7 +6009,7 @@ pub fn get_member_lambda_sets_at_region(subs: &Subs, var: Variable, target_regio
                     );
                     stack.push(ext.var());
                 }
-                FlatType::EmptyRecord | FlatType::EmptyTuple | FlatType::EmptyTagUnion => {}
+                FlatType::EffectfulFunc | FlatType::EmptyRecord | FlatType::EmptyTagUnion => {}
             },
             Content::Alias(_, _, real_var, _) => {
                 stack.push(*real_var);
@@ -6071,7 +6024,9 @@ pub fn get_member_lambda_sets_at_region(subs: &Subs, var: Variable, target_regio
                 structure: _,
                 opt_name: _,
             }
-            | Content::ErasedLambda => {}
+            | Content::ErasedLambda
+            | Content::Pure
+            | Content::Effectful => {}
         }
     }
 
@@ -6097,9 +6052,10 @@ fn is_inhabited(subs: &Subs, var: Variable) -> bool {
             //     cannot have a tag union without a non-recursive variant.
             | Content::RecursionVar { .. } => {}
             Content::LambdaSet(_) | Content::ErasedLambda => {}
+            Content::Pure | Content::Effectful => {}
             Content::Structure(structure) => match structure {
                 FlatType::Apply(_, args) => stack.extend(subs.get_subs_slice(*args)),
-                FlatType::Func(args, _, ret) => {
+                FlatType::Func(args, _, ret, _fx) => {
                     stack.extend(subs.get_subs_slice(*args));
                     stack.push(*ret);
                 }
@@ -6129,9 +6085,9 @@ fn is_inhabited(subs: &Subs, var: Variable) -> bool {
                         return false;
                     }
                 }
+                FlatType::EffectfulFunc => {}
                 FlatType::FunctionOrTagUnion(_, _, _) => {}
                 FlatType::EmptyRecord => {}
-                FlatType::EmptyTuple => {}
                 FlatType::EmptyTagUnion => {
                     return false;
                 }

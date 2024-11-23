@@ -1,19 +1,20 @@
 ---
 source: crates/compiler/can/tests/test_suffixed.rs
 expression: snapshot
+snapshot_kind: text
 ---
 Defs {
     tags: [
-        Index(2147483648),
+        EitherIndex(2147483648),
     ],
     regions: [
         @0-28,
     ],
     space_before: [
-        Slice(start = 0, length = 0),
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
     ],
     space_after: [
-        Slice(start = 0, length = 1),
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
     ],
     spaces: [
         Newline,
@@ -59,16 +60,16 @@ Defs {
                                     @15-22 Defs(
                                         Defs {
                                             tags: [
-                                                Index(2147483648),
+                                                EitherIndex(2147483648),
                                             ],
                                             regions: [
                                                 @15-22,
                                             ],
                                             space_before: [
-                                                Slice(start = 0, length = 0),
+                                                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
                                             ],
                                             space_after: [
-                                                Slice(start = 0, length = 0),
+                                                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
                                             ],
                                             spaces: [],
                                             type_defs: [],

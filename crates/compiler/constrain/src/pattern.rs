@@ -5,9 +5,8 @@ use roc_can::expected::{Expected, PExpected};
 use roc_can::pattern::Pattern::{self, *};
 use roc_can::pattern::{DestructType, ListPatterns, RecordDestruct, TupleDestruct};
 use roc_collections::all::{HumanIndex, SendMap};
-use roc_collections::soa::Index;
 use roc_collections::VecMap;
-use roc_module::ident::Lowercase;
+use roc_module::ident::{IdentSuffix, Lowercase};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
@@ -15,6 +14,7 @@ use roc_types::types::{
     AliasKind, AliasShared, Category, OptAbleType, PReason, PatternCategory, Reason, RecordField,
     Type, TypeExtension, TypeTag, Types,
 };
+use soa::Index;
 
 #[derive(Default, Debug)]
 pub struct PatternState {
@@ -22,6 +22,7 @@ pub struct PatternState {
     pub vars: Vec<Variable>,
     pub constraints: Vec<Constraint>,
     pub delayed_is_open_constraints: Vec<Constraint>,
+    pub delayed_fx_suffix_constraints: Vec<Constraint>,
 }
 
 /// If there is a type annotation, the pattern state headers can be optimized by putting the
@@ -171,8 +172,10 @@ fn headers_from_annotation_help(
                             return false;
                         }
 
-                        arguments.iter().zip(arg_types_slice.into_iter()).all(
-                            |(arg_pattern, arg_type)| {
+                        arguments
+                            .iter()
+                            .zip(arg_types_slice)
+                            .all(|(arg_pattern, arg_type)| {
                                 headers_from_annotation_help(
                                     types,
                                     constraints,
@@ -180,8 +183,7 @@ fn headers_from_annotation_help(
                                     &Loc::at(annotation.region, arg_type),
                                     headers,
                                 )
-                            },
-                        )
+                            })
                     } else {
                         false
                     }
@@ -247,6 +249,29 @@ pub fn constrain_pattern(
     expected: PExpectedTypeIndex,
     state: &mut PatternState,
 ) {
+    constrain_pattern_help(
+        types,
+        constraints,
+        env,
+        pattern,
+        region,
+        expected,
+        state,
+        true,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn constrain_pattern_help(
+    types: &mut Types,
+    constraints: &mut Constraints,
+    env: &mut Env,
+    pattern: &Pattern,
+    region: Region,
+    expected: PExpectedTypeIndex,
+    state: &mut PatternState,
+    is_shallow: bool,
+) {
     match pattern {
         Underscore => {
             // This is an underscore in a position where we destruct a variable,
@@ -275,6 +300,27 @@ pub fn constrain_pattern(
                     .push(constraints.is_open_type(type_index));
             }
 
+            // Identifiers introduced in nested patterns get let constraints
+            // and therefore don't need fx_pattern_suffix constraints.
+            if is_shallow {
+                match symbol.suffix() {
+                    IdentSuffix::None => {
+                        // Unsuffixed identifiers should be constrained after we know if they're functions
+                        state
+                            .delayed_fx_suffix_constraints
+                            .push(constraints.fx_pattern_suffix(*symbol, type_index, region));
+                    }
+                    IdentSuffix::Bang => {
+                        // Bang suffixed identifiers are always required to be functions
+                        // We constrain this before the function's body,
+                        // so that we don't think it's pure and complain about leftover statements
+                        state
+                            .constraints
+                            .push(constraints.fx_pattern_suffix(*symbol, type_index, region));
+                    }
+                }
+            }
+
             state.headers.insert(
                 *symbol,
                 Loc {
@@ -296,7 +342,7 @@ pub fn constrain_pattern(
                 },
             );
 
-            constrain_pattern(
+            constrain_pattern_help(
                 types,
                 constraints,
                 env,
@@ -304,6 +350,7 @@ pub fn constrain_pattern(
                 subpattern.region,
                 expected,
                 state,
+                false,
             )
         }
 
@@ -529,7 +576,7 @@ pub fn constrain_pattern(
                     ));
                     state.vars.push(*guard_var);
 
-                    constrain_pattern(
+                    constrain_pattern_help(
                         types,
                         constraints,
                         env,
@@ -537,6 +584,7 @@ pub fn constrain_pattern(
                         loc_pattern.region,
                         expected,
                         state,
+                        false,
                     );
 
                     pat_type
@@ -627,7 +675,7 @@ pub fn constrain_pattern(
                         ));
                         state.vars.push(*guard_var);
 
-                        constrain_pattern(
+                        constrain_pattern_help(
                             types,
                             constraints,
                             env,
@@ -635,6 +683,7 @@ pub fn constrain_pattern(
                             loc_guard.region,
                             expected,
                             state,
+                            false,
                         );
 
                         RecordField::Demanded(pat_type)
@@ -750,7 +799,7 @@ pub fn constrain_pattern(
                     loc_pat.region,
                 ));
 
-                constrain_pattern(
+                constrain_pattern_help(
                     types,
                     constraints,
                     env,
@@ -758,6 +807,7 @@ pub fn constrain_pattern(
                     loc_pat.region,
                     expected,
                     state,
+                    false,
                 );
             }
 
@@ -806,7 +856,7 @@ pub fn constrain_pattern(
                     pattern_type,
                     region,
                 ));
-                constrain_pattern(
+                constrain_pattern_help(
                     types,
                     constraints,
                     env,
@@ -814,6 +864,7 @@ pub fn constrain_pattern(
                     loc_pattern.region,
                     expected,
                     state,
+                    false,
                 );
             }
 
@@ -871,7 +922,7 @@ pub fn constrain_pattern(
             // First, add a constraint for the argument "who"
             let arg_pattern_expected = constraints
                 .push_pat_expected_type(PExpected::NoExpectation(arg_pattern_type_index));
-            constrain_pattern(
+            constrain_pattern_help(
                 types,
                 constraints,
                 env,
@@ -879,6 +930,7 @@ pub fn constrain_pattern(
                 loc_arg_pattern.region,
                 arg_pattern_expected,
                 state,
+                false,
             );
 
             // Next, link `whole_var` to the opaque type of "@Id who"

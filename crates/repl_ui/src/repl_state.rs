@@ -196,9 +196,6 @@ impl ReplState {
                                 ValueDef::Expect { .. } => {
                                     todo!("handle receiving an `expect` - what should the repl do for that?")
                                 }
-                                ValueDef::ExpectFx { .. } => {
-                                    todo!("handle receiving an `expect-fx` - what should the repl do for that?")
-                                }
                                 ValueDef::ModuleImport(import) => match import.name.value.package {
                                     Some(_) => {
                                         todo!("handle importing a module from a package")
@@ -246,6 +243,7 @@ impl ReplState {
                                     return ReplAction::Nothing;
                                 }
                                 ValueDef::Stmt(_) => todo!(),
+                                ValueDef::StmtAfterExpr => todo!("effects in repl"),
                             }
                         }
                     }

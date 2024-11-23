@@ -15,11 +15,13 @@ use parking_lot::Mutex;
 use roc_builtins::roc::module_source;
 use roc_can::abilities::{AbilitiesStore, PendingAbilitiesStore, ResolvedImpl};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints, TypeOrVar};
+use roc_can::env::FxMode;
 use roc_can::expr::{DbgLookup, Declarations, ExpectLookup, PendingDerives};
 use roc_can::module::{
     canonicalize_module_defs, ExposedByModule, ExposedForModule, ExposedModuleTypes, Module,
     ModuleParams, ResolvedImplementations, TypeState,
 };
+use roc_collections::soa::slice_extend_new;
 use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecMap, VecSet};
 use roc_constrain::module::constrain_module;
 use roc_debug_flags::dbg_do;
@@ -32,7 +34,7 @@ use roc_debug_flags::{
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
 use roc_late_solve::{AbilitiesView, WorldAbilities};
-use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
+use roc_module::ident::{Ident, IdentSuffix, ModuleName, QualifiedModuleName};
 use roc_module::symbol::{
     IdentIds, IdentIdsByModule, Interns, ModuleId, ModuleIds, PQModuleName, PackageModuleIds,
     PackageQualified, Symbol,
@@ -51,7 +53,7 @@ use roc_parse::ast::{self, CommentOrNewline, ExtractSpaces, Spaced, ValueDef};
 use roc_parse::header::parse_module_defs;
 use roc_parse::header::{
     self, AppHeader, ExposedName, HeaderType, ImportsKeywordItem, PackageEntry, PackageHeader,
-    PlatformHeader, To, TypedIdent,
+    PlatformHeader, To,
 };
 use roc_parse::parser::{FileError, SourceError, SyntaxError};
 use roc_problem::Severity;
@@ -66,7 +68,7 @@ use roc_solve_problem::TypeError;
 use roc_target::Target;
 use roc_types::subs::{CopiedImport, ExposedTypesStorageSubs, Subs, VarStore, Variable};
 use roc_types::types::{Alias, Types};
-use roc_worker::{ChannelProblem, WorkerMsg};
+use roc_worker::ChannelProblem;
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::HashMap;
 use std::io;
@@ -317,6 +319,7 @@ fn start_phase<'a>(
                     exposed_module_ids: state.exposed_modules,
                     exec_mode: state.exec_mode,
                     imported_module_params,
+                    fx_mode: state.fx_mode,
                 }
             }
 
@@ -667,7 +670,7 @@ enum PlatformPath<'a> {
 #[derive(Debug)]
 struct PlatformData<'a> {
     module_id: ModuleId,
-    provides: &'a [(Loc<ExposedName<'a>>, Loc<TypedIdent<'a>>)],
+    provides: &'a [Loc<ExposedName<'a>>],
     is_prebuilt: bool,
 }
 
@@ -709,6 +712,7 @@ struct State<'a> {
     pub platform_path: PlatformPath<'a>,
     pub target: Target,
     pub(self) function_kind: FunctionKind,
+    pub fx_mode: FxMode,
 
     /// Note: only packages and platforms actually expose any modules;
     /// for all others, this will be empty.
@@ -784,7 +788,7 @@ impl<'a> State<'a> {
         number_of_workers: usize,
         exec_mode: ExecutionMode,
     ) -> Self {
-        let cache_dir = roc_packaging::cache::roc_cache_dir();
+        let cache_dir = roc_packaging::cache::roc_cache_packages_dir();
         let dependencies = Dependencies::new(exec_mode.goal_phase());
 
         Self {
@@ -796,6 +800,7 @@ impl<'a> State<'a> {
             cache_dir,
             target,
             function_kind,
+            fx_mode: FxMode::Task,
             platform_data: None,
             platform_path: PlatformPath::NotSpecified,
             module_cache: ModuleCache::default(),
@@ -899,6 +904,7 @@ enum BuildTask<'a> {
         skip_constraint_gen: bool,
         exec_mode: ExecutionMode,
         imported_module_params: VecMap<ModuleId, ModuleParams>,
+        fx_mode: FxMode,
     },
     Solve {
         module: Module,
@@ -1029,14 +1035,14 @@ type MsgSender<'a> = Sender<Msg<'a>>;
 /// Add a task to the queue, and notify all the listeners.
 fn enqueue_task<'a>(
     injector: &Injector<BuildTask<'a>>,
-    listeners: &[Sender<WorkerMsg>],
+    listeners: &[Sender<()>],
     task: BuildTask<'a>,
 ) -> Result<(), LoadingProblem<'a>> {
     injector.push(task);
 
     for listener in listeners {
         listener
-            .send(WorkerMsg::TaskAdded)
+            .send(())
             .map_err(|_| LoadingProblem::ChannelProblem(ChannelProblem::FailedToEnqueueTask))?;
     }
 
@@ -1456,6 +1462,8 @@ pub fn load<'a>(
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     enum Threads {
         Single,
+
+        #[allow(dead_code)]
         Many(usize),
     }
 
@@ -1561,9 +1569,9 @@ pub fn load_single_threaded<'a>(
     // We'll add tasks to this, and then worker threads will take tasks from it.
     let injector = Injector::new();
 
-    let (worker_msg_tx, worker_msg_rx) = bounded(1024);
-    let worker_listener = worker_msg_tx;
-    let worker_listeners = arena.alloc([worker_listener]);
+    let (worker_wakup_tx, worker_wakup_rx) = bounded(1024);
+    let worker_waker = worker_wakup_tx;
+    let worker_wakers = [worker_waker];
 
     let worker = Worker::new_fifo();
     let stealer = worker.stealer();
@@ -1571,7 +1579,7 @@ pub fn load_single_threaded<'a>(
 
     // now we just manually interleave stepping the state "thread" and the worker "thread"
     loop {
-        match state_thread_step(arena, state, worker_listeners, &injector, &msg_tx, &msg_rx) {
+        match state_thread_step(arena, state, &worker_wakers, &injector, &msg_tx, &msg_rx) {
             Ok(ControlFlow::Break(done)) => return Ok(done),
             Ok(ControlFlow::Continue(new_state)) => {
                 state = new_state;
@@ -1581,7 +1589,7 @@ pub fn load_single_threaded<'a>(
 
         // then check if the worker can step
         let control_flow =
-            roc_worker::worker_task_step(&worker, &injector, stealers, &worker_msg_rx, |task| {
+            roc_worker::worker_task_step(&worker, &injector, stealers, &worker_wakup_rx, |task| {
                 run_task(task, arena, &src_dir, msg_tx.clone(), roc_cache_dir, target)
             });
 
@@ -1598,7 +1606,7 @@ pub fn load_single_threaded<'a>(
 fn state_thread_step<'a>(
     arena: &'a Bump,
     state: State<'a>,
-    worker_listeners: &'a [Sender<WorkerMsg>],
+    worker_wakers: &[Sender<()>],
     injector: &Injector<BuildTask<'a>>,
     msg_tx: &crossbeam::channel::Sender<Msg<'a>>,
     msg_rx: &crossbeam::channel::Receiver<Msg<'a>>,
@@ -1704,14 +1712,8 @@ fn state_thread_step<'a>(
                     let render = state.render;
                     let palette = state.palette;
 
-                    let res_state = update(
-                        state,
-                        msg,
-                        msg_tx.clone(),
-                        injector,
-                        worker_listeners,
-                        arena,
-                    );
+                    let res_state =
+                        update(state, msg, msg_tx.clone(), injector, worker_wakers, arena);
 
                     match res_state {
                         Ok(new_state) => Ok(ControlFlow::Continue(new_state)),
@@ -1985,15 +1987,21 @@ fn load_multi_threaded<'a>(
 
     {
         let thread_result = thread::scope(|thread_scope| {
-            let mut worker_listeners =
-                bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
+            // Careful! It's important that worker listeners aren't allocated in the arena,
+            // since they need to be correctly dropped if we have a panic in this thread::scope code.
+            // Making sure they're owned means they'll be dropped correctly on either normal exit
+            // of this thread::scope block or on panicking. When they're dropped, the worker threads
+            // will correctly exit their message processing loops.
+            // If these were allocated in the arena, we might panic without shutting down the worker threads,
+            // causing the thread::scope block to hang while it waits for the worker threads to exit.
+            let mut worker_wakers = Vec::with_capacity(num_workers);
 
             for worker_arena in it {
                 let msg_tx = msg_tx.clone();
                 let worker = worker_queues.pop().unwrap();
 
-                let (worker_msg_tx, worker_msg_rx) = bounded(1024);
-                worker_listeners.push(worker_msg_tx);
+                let (worker_wakup_tx, worker_wakup_rx) = bounded(1024);
+                worker_wakers.push(worker_wakup_tx);
 
                 // We only want to move a *reference* to the main task queue's
                 // injector in the thread, not the injector itself
@@ -2007,16 +2015,22 @@ fn load_multi_threaded<'a>(
                     .stack_size(EXPANDED_STACK_SIZE)
                     .spawn(move |_| {
                         // will process messages until we run out
-                        roc_worker::worker_task(worker, injector, stealers, worker_msg_rx, |task| {
-                            run_task(
-                                task,
-                                worker_arena,
-                                src_dir,
-                                msg_tx.clone(),
-                                roc_cache_dir,
-                                target,
-                            )
-                        })
+                        roc_worker::worker_task(
+                            worker,
+                            injector,
+                            stealers,
+                            worker_wakup_rx,
+                            |task| {
+                                run_task(
+                                    task,
+                                    worker_arena,
+                                    src_dir,
+                                    msg_tx.clone(),
+                                    roc_cache_dir,
+                                    target,
+                                )
+                            },
+                        )
                     });
 
                 res_join_handle.unwrap_or_else(|_| {
@@ -2031,31 +2045,13 @@ fn load_multi_threaded<'a>(
 
             // Grab a reference to these Senders outside the loop, so we can share
             // it across each iteration of the loop.
-            let worker_listeners = worker_listeners.into_bump_slice();
             let msg_tx = msg_tx.clone();
-
-            macro_rules! shut_down_worker_threads {
-                () => {
-                    for listener in worker_listeners {
-                        // We intentionally don't propagate this Result, because even if
-                        // shutting down a worker failed (which can happen if a a panic
-                        // occurred on that thread), we want to continue shutting down
-                        // the others regardless.
-                        if listener.send(WorkerMsg::Shutdown).is_err() {
-                            log!("There was an error trying to shutdown a worker thread. One reason this can happen is if the thread panicked.");
-                        }
-                    }
-                };
-            }
 
             // The root module will have already queued up messages to process,
             // and processing those messages will in turn queue up more messages.
             loop {
-                match state_thread_step(arena, state, worker_listeners, &injector, &msg_tx, &msg_rx)
-                {
+                match state_thread_step(arena, state, &worker_wakers, &injector, &msg_tx, &msg_rx) {
                     Ok(ControlFlow::Break(load_result)) => {
-                        shut_down_worker_threads!();
-
                         return Ok(load_result);
                     }
                     Ok(ControlFlow::Continue(new_state)) => {
@@ -2063,8 +2059,6 @@ fn load_multi_threaded<'a>(
                         continue;
                     }
                     Err(e) => {
-                        shut_down_worker_threads!();
-
                         return Err(e);
                     }
                 }
@@ -2103,13 +2097,13 @@ fn start_tasks<'a>(
     state: &mut State<'a>,
     work: MutSet<(ModuleId, Phase)>,
     injector: &Injector<BuildTask<'a>>,
-    worker_listeners: &'a [Sender<WorkerMsg>],
+    worker_wakers: &[Sender<()>],
 ) -> Result<(), LoadingProblem<'a>> {
     for (module_id, phase) in work {
         let tasks = start_phase(module_id, phase, arena, state);
 
         for task in tasks {
-            enqueue_task(injector, worker_listeners, task)?
+            enqueue_task(injector, worker_wakers, task)?
         }
     }
 
@@ -2171,7 +2165,7 @@ fn update<'a>(
     msg: Msg<'a>,
     msg_tx: MsgSender<'a>,
     injector: &Injector<BuildTask<'a>>,
-    worker_listeners: &'a [Sender<WorkerMsg>],
+    worker_wakers: &[Sender<()>],
     arena: &'a Bump,
 ) -> Result<State<'a>, LoadingProblem<'a>> {
     use self::Msg::*;
@@ -2229,6 +2223,7 @@ fn update<'a>(
                     config_shorthand,
                     provides,
                     exposes_ids,
+                    requires,
                     ..
                 } => {
                     work.extend(state.dependencies.notify_package(config_shorthand));
@@ -2263,6 +2258,12 @@ fn update<'a>(
                     if header.is_root_module {
                         state.exposed_modules = exposes_ids;
                     }
+
+                    if requires.iter().any(|requires| {
+                        IdentSuffix::from_name(requires.value.ident.value).is_bang()
+                    }) {
+                        state.fx_mode = FxMode::PurityInference;
+                    }
                 }
                 Builtin { .. } | Module { .. } => {
                     if header.is_root_module {
@@ -2270,10 +2271,17 @@ fn update<'a>(
                         state.platform_path = PlatformPath::RootIsModule;
                     }
                 }
-                Hosted { .. } => {
+                Hosted { exposes, .. } => {
                     if header.is_root_module {
                         debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
                         state.platform_path = PlatformPath::RootIsHosted;
+                    }
+
+                    if exposes
+                        .iter()
+                        .any(|exposed| exposed.value.is_effectful_fn())
+                    {
+                        state.fx_mode = FxMode::PurityInference;
                     }
                 }
             }
@@ -2283,7 +2291,7 @@ fn update<'a>(
             work.extend(state.dependencies.notify(home, Phase::LoadHeader));
             work.insert((home, Phase::Parse));
 
-            start_tasks(arena, &mut state, work, injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, injector, worker_wakers)?;
 
             Ok(state)
         }
@@ -2360,7 +2368,7 @@ fn update<'a>(
                 }
             };
 
-            start_tasks(arena, &mut state, work, injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, injector, worker_wakers)?;
 
             state
                 .module_cache
@@ -2371,7 +2379,7 @@ fn update<'a>(
 
             let work = state.dependencies.notify(module_id, Phase::Parse);
 
-            start_tasks(arena, &mut state, work, injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, injector, worker_wakers)?;
 
             Ok(state)
         }
@@ -2423,7 +2431,7 @@ fn update<'a>(
                 .dependencies
                 .notify(module_id, Phase::CanonicalizeAndConstrain);
 
-            start_tasks(arena, &mut state, work, injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, injector, worker_wakers)?;
 
             Ok(state)
         }
@@ -2630,7 +2638,7 @@ fn update<'a>(
                     work
                 };
 
-                start_tasks(arena, &mut state, work, injector, worker_listeners)?;
+                start_tasks(arena, &mut state, work, injector, worker_wakers)?;
             }
 
             Ok(state)
@@ -2649,7 +2657,7 @@ fn update<'a>(
 
             let subs = solved_subs.into_inner();
 
-            if !toplevel_expects.pure.is_empty() || !toplevel_expects.fx.is_empty() {
+            if !toplevel_expects.pure.is_empty() {
                 state.toplevel_expects.insert(module_id, toplevel_expects);
             }
 
@@ -2678,7 +2686,7 @@ fn update<'a>(
                 .dependencies
                 .notify(module_id, Phase::FindSpecializations);
 
-            start_tasks(arena, &mut state, work, injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, injector, worker_wakers)?;
 
             Ok(state)
         }
@@ -2968,13 +2976,13 @@ fn update<'a>(
 
                     let work = state.dependencies.reload_make_specialization_pass();
 
-                    start_tasks(arena, &mut state, work, injector, worker_listeners)?;
+                    start_tasks(arena, &mut state, work, injector, worker_wakers)?;
 
                     Ok(state)
                 }
 
                 NextStep::MakingInPhase => {
-                    start_tasks(arena, &mut state, work, injector, worker_listeners)?;
+                    start_tasks(arena, &mut state, work, injector, worker_wakers)?;
 
                     Ok(state)
                 }
@@ -3171,7 +3179,7 @@ fn finish_specialization<'a>(
                             let proc_layout =
                                 proc_layout_for(state.procedures.keys().copied(), symbol);
 
-                            buf.push((symbol, proc_layout));
+                            buf.push(("", symbol, proc_layout));
                         }
 
                         buf.into_bump_slice()
@@ -3185,13 +3193,14 @@ fn finish_specialization<'a>(
                         let mut buf =
                             bumpalo::collections::Vec::with_capacity_in(provides.len(), arena);
 
-                        for (loc_name, _loc_typed_ident) in provides {
-                            let ident_id = ident_ids.get_or_insert(loc_name.value.as_str());
+                        for loc_name in provides {
+                            let fn_name = loc_name.value.as_str();
+                            let ident_id = ident_ids.get_or_insert(fn_name);
                             let symbol = Symbol::new(module_id, ident_id);
                             let proc_layout =
                                 proc_layout_for(state.procedures.keys().copied(), symbol);
 
-                            buf.push((symbol, proc_layout));
+                            buf.push((fn_name, symbol, proc_layout));
                         }
 
                         buf.into_bump_slice()
@@ -3229,7 +3238,7 @@ fn finish_specialization<'a>(
         .collect();
 
     let module_id = state.root_id;
-    let uses_prebuilt_platform = match platform_data {
+    let needs_prebuilt_host = match platform_data {
         Some(data) => data.is_prebuilt,
         // If there's no platform data (e.g. because we're building a module)
         // then there's no prebuilt platform either!
@@ -3252,7 +3261,7 @@ fn finish_specialization<'a>(
         timings: state.timings,
         toplevel_expects,
         glue_layouts: GlueLayouts { getters: vec![] },
-        uses_prebuilt_platform,
+        needs_prebuilt_host,
     })
 }
 
@@ -4368,7 +4377,7 @@ fn synth_list_len_type(subs: &mut Subs) -> Variable {
 
     // List.len : List a -> U64
     let a = synth_import(subs, Content::FlexVar(None));
-    let a_slice = SubsSlice::extend_new(&mut subs.variables, [a]);
+    let a_slice = slice_extend_new(&mut subs.variables, [a]);
     let list_a = synth_import(
         subs,
         Content::Structure(FlatType::Apply(Symbol::LIST_LIST, a_slice)),
@@ -4384,10 +4393,15 @@ fn synth_list_len_type(subs: &mut Subs) -> Variable {
             ambient_function: fn_var,
         }),
     );
-    let fn_args_slice = SubsSlice::extend_new(&mut subs.variables, [list_a]);
+    let fn_args_slice = slice_extend_new(&mut subs.variables, [list_a]);
     subs.set_content(
         fn_var,
-        Content::Structure(FlatType::Func(fn_args_slice, clos_list_len, Variable::U64)),
+        Content::Structure(FlatType::Func(
+            fn_args_slice,
+            clos_list_len,
+            Variable::U64,
+            Variable::PURE,
+        )),
     );
     fn_var
 }
@@ -4987,15 +5001,16 @@ fn build_platform_header<'a>(
     comments: &'a [CommentOrNewline<'a>],
     module_timing: ModuleTiming,
 ) -> Result<(ModuleId, PQModuleName<'a>, ModuleHeader<'a>), LoadingProblem<'a>> {
-    let requires = arena.alloc([Loc::at(
-        header.requires.item.signature.region,
-        header.requires.item.signature.extract_spaces().item,
-    )]);
+    let requires = header
+        .requires
+        .item
+        .signatures
+        .map_items(arena, |item| {
+            Loc::at(item.region, item.extract_spaces().item)
+        })
+        .items;
     let provides = bumpalo::collections::Vec::from_iter_in(
-        unspace(arena, header.provides.item.items)
-            .iter()
-            .copied()
-            .zip(requires.iter().copied()),
+        unspace(arena, header.provides.item.items).iter().copied(),
         arena,
     );
     let packages = unspace(arena, header.packages.item.items);
@@ -5042,6 +5057,7 @@ fn canonicalize_and_constrain<'a>(
     exposed_module_ids: &[ModuleId],
     exec_mode: ExecutionMode,
     imported_module_params: VecMap<ModuleId, ModuleParams>,
+    fx_mode: FxMode,
 ) -> CanAndCon {
     let canonicalize_start = Instant::now();
 
@@ -5068,6 +5084,14 @@ fn canonicalize_and_constrain<'a>(
 
     let mut var_store = VarStore::default();
 
+    let fx_mode = if module_id.is_builtin() {
+        // Allow builtins to expose effectful functions
+        // even if platform is `Task`-based
+        FxMode::PurityInference
+    } else {
+        fx_mode
+    };
+
     let mut module_output = canonicalize_module_defs(
         arena,
         parsed_defs,
@@ -5085,6 +5109,7 @@ fn canonicalize_and_constrain<'a>(
         &symbols_from_requires,
         &mut var_store,
         opt_shorthand,
+        fx_mode,
     );
 
     let mut types = Types::new();
@@ -5447,7 +5472,7 @@ fn parse<'a>(
         if let HeaderType::Platform { provides, .. } = header.header_type {
             exposed.reserve(provides.len());
 
-            for (loc_name, _loc_typed_ident) in provides.iter() {
+            for loc_name in provides.iter() {
                 // Use get_or_insert here because the ident_ids may already
                 // created an IdentId for this, when it was imported exposed
                 // in a dependent module.
@@ -5985,78 +6010,6 @@ fn build_pending_specializations<'a>(
                 toplevel_expects.pure.insert(symbol, region);
                 procs_base.partial_procs.insert(symbol, proc);
             }
-            ExpectationFx => {
-                // skip expectations if we're not going to run them
-                if !build_expects {
-                    continue;
-                }
-
-                // mark this symbol as a top-level thunk before any other work on the procs
-                module_thunks.push(symbol);
-
-                let expr_var = Variable::EMPTY_RECORD;
-
-                let is_host_exposed = true;
-
-                // If this is an exposed symbol, we need to
-                // register it as such. Otherwise, since it
-                // never gets called by Roc code, it will never
-                // get specialized!
-                if is_host_exposed {
-                    let layout_result =
-                        layout_cache.raw_from_var(mono_env.arena, expr_var, mono_env.subs);
-
-                    // cannot specialize when e.g. main's type contains type variables
-                    if let Err(e) = layout_result {
-                        match e {
-                            LayoutProblem::Erroneous => {
-                                let message = "top level function has erroneous type";
-                                procs_base.runtime_errors.insert(symbol, message);
-                                continue;
-                            }
-                            LayoutProblem::UnresolvedTypeVar(v) => {
-                                let message = format!(
-                                    "top level function has unresolved type variable {v:?}"
-                                );
-                                procs_base
-                                    .runtime_errors
-                                    .insert(symbol, mono_env.arena.alloc(message));
-                                continue;
-                            }
-                        }
-                    }
-
-                    procs_base.host_specializations.insert_host_exposed(
-                        mono_env.subs,
-                        LambdaName::no_niche(symbol),
-                        None,
-                        expr_var,
-                    );
-                }
-
-                let body = roc_can::expr::toplevel_expect_to_inline_expect_fx(body);
-
-                let proc = PartialProc {
-                    annotation: expr_var,
-                    // This is a 0-arity thunk, so it has no arguments.
-                    pattern_symbols: &[],
-                    // This is a top-level definition, so it cannot capture anything
-                    captured_symbols: CapturedSymbols::None,
-                    body: body.value,
-                    body_var: expr_var,
-                    // This is a 0-arity thunk, so it cannot be recursive
-                    is_self_recursive: false,
-                };
-
-                // extend the region of the expect expression with the region of the preceding
-                // comment, so it is shown in failure/panic messages
-                let name_region = declarations.symbols[index].region;
-                let expr_region = declarations.expressions[index].region;
-                let region = Region::span_across(&name_region, &expr_region);
-
-                toplevel_expects.fx.insert(symbol, region);
-                procs_base.partial_procs.insert(symbol, proc);
-            }
         }
     }
 
@@ -6268,6 +6221,7 @@ fn run_task<'a>(
             exposed_module_ids,
             exec_mode,
             imported_module_params,
+            fx_mode,
         } => {
             let can_and_con = canonicalize_and_constrain(
                 arena,
@@ -6281,6 +6235,7 @@ fn run_task<'a>(
                 exposed_module_ids,
                 exec_mode,
                 imported_module_params,
+                fx_mode,
             );
 
             Ok(Msg::CanonicalizedAndConstrained(can_and_con))

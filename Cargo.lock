@@ -384,11 +384,11 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.0.83"
+version = "1.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1174fb0b6ec23863f8b971027804a42614e347eafb0a95bf0b12cdae21fc4d0"
+checksum = "57b6a275aa2903740dc87da01c62040406b8812552e97129a63ea8850a17c6e6"
 dependencies = [
- "libc",
+ "shlex",
 ]
 
 [[package]]
@@ -463,20 +463,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd7cc57abe963c6d3b9d8be5b06ba7c8957a930305ca90304f24ef040aa6f961"
 
 [[package]]
-name = "cli_utils"
+name = "cli_test_utils"
 version = "0.0.1"
 dependencies = [
  "bumpalo",
+ "const_format",
  "criterion",
+ "lazy_static",
  "regex",
  "rlimit",
+ "roc_cli",
  "roc_collections",
  "roc_command_utils",
  "roc_load",
  "roc_module",
  "roc_reporting",
  "serde",
- "serde-xml-rs",
  "tempfile",
 ]
 
@@ -1666,6 +1668,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "num-conv"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "51d515d32fb182ee37cda2ccdcb92950d6a3c2893aa280e540671c2cd0f3b1d9"
+
+[[package]]
 name = "num-traits"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1873,9 +1881,9 @@ dependencies = [
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.69"
+version = "1.0.86"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "134c189feb4956b20f6f547d2cf727d4c0fe06722b20a0eec87ed445a97f92da"
+checksum = "5e719e8df665df0d1c8fbfd238015744736151d4445ec0836b8e628aae103b77"
 dependencies = [
  "unicode-ident",
 ]
@@ -1941,9 +1949,9 @@ dependencies = [
 
 [[package]]
 name = "quote"
-version = "1.0.33"
+version = "1.0.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5267fca4496028628a95160fc423a33e8b2e6af8a5302579e322e4b520293cae"
+checksum = "b5b9d34b8991d19d98081b46eacdd8eb58c6f2b201139f7c5f643cc155a633af"
 dependencies = [
  "proc-macro2",
 ]
@@ -2344,6 +2352,7 @@ dependencies = [
  "roc_region",
  "roc_serialize",
  "roc_types",
+ "soa",
  "static_assertions",
  "test_compile",
  "ven_pretty",
@@ -2375,14 +2384,16 @@ name = "roc_cli"
 version = "0.0.1"
 dependencies = [
  "bumpalo",
+ "chrono",
  "clap 4.4.6",
- "cli_utils",
+ "cli_test_utils",
  "const_format",
  "criterion",
  "distance",
  "errno",
  "indoc",
  "inkwell",
+ "insta",
  "libc",
  "libloading",
  "mimalloc",
@@ -2411,10 +2422,8 @@ dependencies = [
  "roc_repl_expect",
  "roc_reporting",
  "roc_target",
- "roc_test_utils",
  "roc_tracing",
  "roc_wasm_interp",
- "serial_test",
  "signal-hook",
  "strum",
  "target-lexicon",
@@ -2433,6 +2442,7 @@ dependencies = [
  "im",
  "im-rc",
  "smallvec",
+ "soa",
  "wyhash",
 ]
 
@@ -2453,6 +2463,7 @@ dependencies = [
  "roc_problem",
  "roc_region",
  "roc_types",
+ "soa",
 ]
 
 [[package]]
@@ -2617,7 +2628,7 @@ name = "roc_glue"
 version = "0.0.1"
 dependencies = [
  "bumpalo",
- "cli_utils",
+ "cli_test_utils",
  "dircpy",
  "fnv",
  "indexmap",
@@ -2893,6 +2904,7 @@ dependencies = [
  "roc_error_macros",
  "roc_module",
  "roc_region",
+ "soa",
  "tempfile",
 ]
 
@@ -2996,7 +3008,6 @@ dependencies = [
  "roc_std",
  "roc_target",
  "roc_types",
- "signal-hook",
  "strip-ansi-escapes",
  "target-lexicon",
  "tempfile",
@@ -3105,6 +3116,7 @@ dependencies = [
  "roc_target",
  "roc_types",
  "roc_unify",
+ "soa",
  "tempfile",
  "test_compile",
  "test_solve_helpers",
@@ -3227,6 +3239,7 @@ dependencies = [
  "roc_parse",
  "roc_region",
  "roc_serialize",
+ "soa",
  "static_assertions",
  "ven_pretty",
 ]
@@ -3346,9 +3359,9 @@ dependencies = [
 
 [[package]]
 name = "rustversion"
-version = "1.0.14"
+version = "1.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ffc183a10b4478d04cbbbfc96d0873219d962dd5accaff2ffbd4ceb7df837f4"
+checksum = "955d28af4278de8121b7ebeb796b6a45735dc01436d898801014aced2773a3d6"
 
 [[package]]
 name = "rusty-fork"
@@ -3465,18 +3478,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde-xml-rs"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb3aa78ecda1ebc9ec9847d5d3aba7d618823446a049ba2491940506da6e2782"
-dependencies = [
- "log",
- "serde",
- "thiserror",
- "xml-rs",
-]
-
-[[package]]
 name = "serde_cbor"
 version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3575,6 +3576,12 @@ checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
 dependencies = [
  "lazy_static",
 ]
+
+[[package]]
+name = "shlex"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
 name = "signal-hook"
@@ -4018,12 +4025,13 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.3.30"
+version = "0.3.36"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4a34ab300f2dee6e562c10a046fc05e358b29f9bf92277f30c3c8d82275f6f5"
+checksum = "5dfd88e563464686c916c7e46e623e520ddc6d79fa6641390f2e3fa86e83e885"
 dependencies = [
  "deranged",
  "itoa",
+ "num-conv",
  "powerfmt",
  "serde",
  "time-core",
@@ -4038,10 +4046,11 @@ checksum = "ef927ca75afb808a4d64dd374f00a2adf8d0fcff8e7b184af886c3c87ec4a3f3"
 
 [[package]]
 name = "time-macros"
-version = "0.2.15"
+version = "0.2.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ad70d68dba9e1f8aceda7aa6711965dfec1cac869f311a51bd08b3a2ccbce20"
+checksum = "3f252a68540fde3a3877aeea552b832b40ab9a69e318efd078774a01ddee1ccf"
 dependencies = [
+ "num-conv",
  "time-core",
 ]
 
@@ -4398,7 +4407,7 @@ name = "valgrind"
 version = "0.0.1"
 dependencies = [
  "bumpalo",
- "cli_utils",
+ "cli_test_utils",
  "indoc",
  "roc_build",
  "roc_command_utils",
@@ -4863,12 +4872,6 @@ checksum = "f4686009f71ff3e5c4dbcf1a282d0a44db3f021ba69350cd42086b3e5f1c6985"
 dependencies = [
  "libc",
 ]
-
-[[package]]
-name = "xml-rs"
-version = "0.8.19"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fcb9cbac069e033553e8bb871be2fbdffcab578eb25bd0f7c508cedc6dcd75a"
 
 [[package]]
 name = "yaml-rust"

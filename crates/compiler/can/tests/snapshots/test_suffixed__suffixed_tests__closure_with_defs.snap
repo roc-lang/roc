@@ -1,19 +1,20 @@
 ---
 source: crates/compiler/can/tests/test_suffixed.rs
 expression: snapshot
+snapshot_kind: text
 ---
 Defs {
     tags: [
-        Index(2147483648),
+        EitherIndex(2147483648),
     ],
     regions: [
         @0-143,
     ],
     space_before: [
-        Slice(start = 0, length = 0),
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
     ],
     space_after: [
-        Slice(start = 0, length = 1),
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
     ],
     spaces: [
         Newline,
@@ -27,16 +28,16 @@ Defs {
             @12-143 Defs(
                 Defs {
                     tags: [
-                        Index(2147483648),
+                        EitherIndex(2147483648),
                     ],
                     regions: [
                         @56-119,
                     ],
                     space_before: [
-                        Slice(start = 0, length = 0),
+                        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
                     ],
                     space_after: [
-                        Slice(start = 0, length = 0),
+                        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
                     ],
                     spaces: [],
                     type_defs: [],
@@ -62,6 +63,7 @@ Defs {
                                         [],
                                     ),
                                 ],
+                                Pure,
                                 @34-45 Apply(
                                     "",
                                     "Task",
@@ -105,16 +107,16 @@ Defs {
                                         @76-83 Defs(
                                             Defs {
                                                 tags: [
-                                                    Index(2147483648),
+                                                    EitherIndex(2147483648),
                                                 ],
                                                 regions: [
                                                     @76-83,
                                                 ],
                                                 space_before: [
-                                                    Slice(start = 0, length = 0),
+                                                    Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
                                                 ],
                                                 space_after: [
-                                                    Slice(start = 0, length = 0),
+                                                    Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
                                                 ],
                                                 spaces: [],
                                                 type_defs: [],
@@ -174,16 +176,16 @@ Defs {
                                                     @92-99 Defs(
                                                         Defs {
                                                             tags: [
-                                                                Index(2147483648),
+                                                                EitherIndex(2147483648),
                                                             ],
                                                             regions: [
                                                                 @92-99,
                                                             ],
                                                             space_before: [
-                                                                Slice(start = 0, length = 0),
+                                                                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
                                                             ],
                                                             space_after: [
-                                                                Slice(start = 0, length = 0),
+                                                                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
                                                             ],
                                                             spaces: [],
                                                             type_defs: [],

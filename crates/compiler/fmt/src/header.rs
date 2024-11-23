@@ -120,7 +120,7 @@ impl<'a> Formattable for ProvidesTo<'a> {
 
 impl<'a> Formattable for PlatformRequires<'a> {
     fn is_multiline(&self) -> bool {
-        is_collection_multiline(&self.rigids) || self.signature.is_multiline()
+        is_collection_multiline(&self.rigids) || is_collection_multiline(&self.signatures)
     }
 
     fn format_with_options(
@@ -260,10 +260,14 @@ pub fn fmt_platform_header<'a>(buf: &mut Buf, header: &'a PlatformHeader<'a>) {
 fn fmt_requires(buf: &mut Buf, requires: &PlatformRequires, indent: u16) {
     fmt_collection(buf, indent, Braces::Curly, requires.rigids, Newlines::No);
 
-    buf.push_str(" {");
     buf.spaces(1);
-    requires.signature.value.format(buf, indent);
-    buf.push_str(" }");
+    fmt_collection(
+        buf,
+        indent,
+        Braces::Curly,
+        requires.signatures,
+        Newlines::No,
+    );
 }
 
 impl<'a> Formattable for TypedIdent<'a> {

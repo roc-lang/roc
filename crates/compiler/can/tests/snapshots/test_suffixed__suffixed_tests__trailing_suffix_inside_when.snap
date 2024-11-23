@@ -1,19 +1,20 @@
 ---
 source: crates/compiler/can/tests/test_suffixed.rs
 expression: snapshot
+snapshot_kind: text
 ---
 Defs {
     tags: [
-        Index(2147483648),
+        EitherIndex(2147483648),
     ],
     regions: [
         @0-154,
     ],
     space_before: [
-        Slice(start = 0, length = 0),
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
     ],
     space_after: [
-        Slice(start = 0, length = 1),
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
     ],
     spaces: [
         Newline,
@@ -24,17 +25,17 @@ Defs {
             @0-4 Identifier {
                 ident: "main",
             },
-            @20-31 Apply(
-                @20-31 Var {
+            @20-30 Apply(
+                @20-30 Var {
                     module_name: "Task",
                     ident: "await",
                 },
                 [
-                    @20-31 Var {
+                    @20-30 Var {
                         module_name: "Stdin",
                         ident: "line",
                     },
-                    @20-31 Closure(
+                    @20-30 Closure(
                         [
                             @11-17 Identifier {
                                 ident: "result",

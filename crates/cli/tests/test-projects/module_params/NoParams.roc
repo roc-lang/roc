@@ -1,0 +1,3 @@
+module [hello]
+
+hello = "hello!"

@@ -28,7 +28,7 @@ pub const MOD_APP: ModName = ModName(b"UserApp");
 pub const STATIC_STR_NAME: ConstName = ConstName(&Symbol::STR_ALIAS_ANALYSIS_STATIC.to_ne_bytes());
 pub const STATIC_LIST_NAME: ConstName = ConstName(b"THIS IS A STATIC LIST");
 
-const ENTRY_POINT_NAME: &[u8] = b"mainForHost";
+const DEFAULT_ENTRY_POINT_NAME: &[u8] = b"mainForHost";
 
 pub fn func_name_bytes(proc: &Proc) -> [u8; SIZE] {
     let bytes = func_name_bytes_help(
@@ -149,6 +149,7 @@ where
     I1: Iterator<Item = &'r Proc<'a>>,
     I2: Iterator<Item = &'r HostExposedLambdaSet<'a>>,
 {
+    let mut entry_point_names = bumpalo::vec![in arena;];
     let main_module = {
         let mut m = ModDefBuilder::new();
 
@@ -237,34 +238,38 @@ where
         }
 
         match entry_point {
-            EntryPoint::Single(SingleEntryPoint {
-                symbol: entry_point_symbol,
-                layout: entry_point_layout,
-            }) => {
-                // the entry point wrapper
-                let roc_main_bytes = func_name_bytes_help(
-                    entry_point_symbol,
-                    entry_point_layout.arguments.iter().copied(),
-                    Niche::NONE,
-                    entry_point_layout.result,
-                );
-                let roc_main = FuncName(&roc_main_bytes);
+            EntryPoint::Program(entry_points) => {
+                for SingleEntryPoint {
+                    name: entry_point_name,
+                    symbol: entry_point_symbol,
+                    layout: entry_point_layout,
+                } in entry_points
+                {
+                    let roc_main_bytes = func_name_bytes_help(
+                        *entry_point_symbol,
+                        entry_point_layout.arguments.iter().copied(),
+                        Niche::NONE,
+                        entry_point_layout.result,
+                    );
+                    let roc_main = FuncName(&roc_main_bytes);
 
-                let mut env = Env::new();
+                    let mut env = Env::new();
 
-                let entry_point_function = build_entry_point(
-                    &mut env,
-                    interner,
-                    entry_point_layout,
-                    Some(roc_main),
-                    &host_exposed_functions,
-                    &erased_functions,
-                )?;
+                    let entry_point_function = build_entry_point(
+                        &mut env,
+                        interner,
+                        *entry_point_layout,
+                        Some(roc_main),
+                        &host_exposed_functions,
+                        &erased_functions,
+                    )?;
 
-                type_definitions.extend(env.type_names);
+                    type_definitions.extend(env.type_names);
 
-                let entry_point_name = FuncName(ENTRY_POINT_NAME);
-                m.add_func(entry_point_name, entry_point_function)?;
+                    entry_point_names.push(entry_point_name.as_bytes());
+                    let entry_point_name = FuncName(entry_point_name.as_bytes());
+                    m.add_func(entry_point_name, entry_point_function)?;
+                }
             }
             EntryPoint::Expects { symbols } => {
                 // construct a big pattern match picking one of the expects at random
@@ -296,7 +301,8 @@ where
 
                 type_definitions.extend(env.type_names);
 
-                let entry_point_name = FuncName(ENTRY_POINT_NAME);
+                entry_point_names.push(DEFAULT_ENTRY_POINT_NAME);
+                let entry_point_name = FuncName(DEFAULT_ENTRY_POINT_NAME);
                 m.add_func(entry_point_name, entry_point_function)?;
             }
         }
@@ -335,11 +341,13 @@ where
         let mut p = ProgramBuilder::new();
         p.add_mod(MOD_APP, main_module)?;
 
-        p.add_entry_point(
-            EntryPointName(ENTRY_POINT_NAME),
-            MOD_APP,
-            FuncName(ENTRY_POINT_NAME),
-        )?;
+        for entry_point_name in entry_point_names {
+            p.add_entry_point(
+                EntryPointName(entry_point_name),
+                MOD_APP,
+                FuncName(entry_point_name),
+            )?;
+        }
 
         p.build()?
     };
@@ -608,7 +616,6 @@ fn stmt_spec<'a>(
         }
         Dbg { remainder, .. } => stmt_spec(builder, interner, env, block, layout, remainder),
         Expect { remainder, .. } => stmt_spec(builder, interner, env, block, layout, remainder),
-        ExpectFx { remainder, .. } => stmt_spec(builder, interner, env, block, layout, remainder),
         Ret(symbol) => Ok(env.symbols[symbol]),
         Refcounting(modify_rc, continuation) => {
             apply_refcount_operation(builder, env, block, modify_rc)?;

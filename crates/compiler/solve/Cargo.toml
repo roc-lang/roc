@@ -27,6 +27,8 @@ roc_unify = { path = "../unify" }
 arrayvec.workspace = true
 bumpalo.workspace = true
 
+soa.workspace = true
+
 [dev-dependencies]
 roc_builtins = { path = "../builtins" }
 roc_derive = { path = "../derive", features = ["debug-derived-symbols"] }

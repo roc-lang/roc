@@ -130,6 +130,7 @@ impl<'a, 'c, 'd, 'e, 'f, 'm, 'p, P: Push<Problem>> Env<'a, 'c, 'd, 'e, 'f, 'm, '
         subs: &Subs,
         arg_vars: SubsSlice<Variable>,
         ret_var: Variable,
+        fx_var: Variable,
     ) -> MonoTypeId {
         let func = self.lower_var(subs, ret_var);
         let mut mono_args = Vec::with_capacity_in(arg_vars.len(), self.arena);
@@ -166,7 +167,9 @@ impl<'a, 'c, 'd, 'e, 'f, 'm, 'p, P: Push<Problem>> Env<'a, 'c, 'd, 'e, 'f, 'm, '
                         todo!("handle non-builtin Apply");
                     }
                 }
-                FlatType::Func(args, _capture, ret) => self.monomorphize_fn(subs, args, ret),
+                FlatType::Func(args, _capture, ret, fx) => {
+                    self.monomorphize_fn(subs, args, ret, fx)
+                }
                 _ => {
                     todo!();
                 } /*

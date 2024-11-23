@@ -10,10 +10,10 @@ extern crate roc_collections;
 mod helpers;
 
 #[cfg(test)]
-mod glue_cli_run {
+mod glue_cli_tests {
+    use cli_test_utils::{command::CmdOut, exec_cli::ExecCli};
+
     use crate::helpers::fixtures_dir;
-    use cli_utils::helpers::{has_error, run_glue, run_roc, Out};
-    use std::fs;
     use std::path::{Path, PathBuf};
 
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -48,11 +48,11 @@ mod glue_cli_run {
 
                     generate_glue_for(&dir, std::iter::empty());
 
-                    fn validate<'a, I: IntoIterator<Item = &'a str>>(dir: PathBuf, args: I) {
+                    fn validate<'a, I: IntoIterator<Item = &'a str> + std::fmt::Debug>(dir: PathBuf, args: I) {
                         let out = run_app(&dir.join("app.roc"), args);
 
                         assert!(out.status.success());
-                        let ignorable = "🔨 Rebuilding platform...\n";
+                        let ignorable = "🔨 Building host ...\n";
                         let stderr = out.stderr.replacen(ignorable, "", 1);
                         assert_eq!(stderr, "");
                         assert!(
@@ -67,15 +67,15 @@ mod glue_cli_run {
                     let test_name_str = stringify!($test_name);
 
                     // TODO after #5924 is fixed; remove this
-                    let skip_on_linux_surgical_linker = ["closures", "option", "nullable_wrapped", "nullable_unwrapped", "nonnullable_unwrapped", "enumeration", "nested_record", "advanced_recursive_union"];
+                    let skip_on_linux_surgical_linker = ["rust_closures", "rust_option", "rust_nullable_wrapped", "rust_nullable_unwrapped", "rust_nonnullable_unwrapped", "rust_enumeration", "rust_nested_record", "rust_advanced_recursive_union"];
 
                     // Validate linux with the default linker.
                     if !(cfg!(target_os = "linux") && (skip_on_linux_surgical_linker.contains(&test_name_str))) {
-                        validate(dir.clone(), std::iter::empty());
+                        validate(dir.clone(), ["--build-host", "--suppress-build-host-warning"]);
                     }
 
                     if TEST_LEGACY_LINKER {
-                        validate(dir, ["--linker=legacy"]);
+                        validate(dir, ["--build-host", "--suppress-build-host-warning", "--linker=legacy"]);
                     }
                 }
             )*
@@ -97,13 +97,13 @@ mod glue_cli_run {
     }
 
     fixtures! {
-        basic_record:"basic-record" => "Record was: MyRcd { b: 42, a: 1995 }\n",
-        nested_record:"nested-record" => "Record was: Outer { y: \"foo\", z: [1, 2], x: Inner { b: 24.0, a: 5 } }\n",
-        enumeration:"enumeration" => "tag_union was: MyEnum::Foo, Bar is: MyEnum::Bar, Baz is: MyEnum::Baz\n",
-        single_tag_union:"single-tag-union" => indoc!(r#"
+        rust_basic_record:"rust/basic-record" => "Record was: MyRcd { b: 42, a: 1995 }\n",
+        rust_nested_record:"rust/nested-record" => "Record was: Outer { y: \"foo\", z: [1, 2], x: Inner { b: 24.0, a: 5 } }\n",
+        rust_enumeration:"rust/enumeration" => "tag_union was: MyEnum::Foo, Bar is: MyEnum::Bar, Baz is: MyEnum::Baz\n",
+        rust_single_tag_union:"rust/single-tag-union" => indoc!(r#"
             tag_union was: SingleTagUnion::OneTag
         "#),
-        union_with_padding:"union-with-padding" => indoc!(r#"
+        rust_union_with_padding:"rust/union-with-padding" => indoc!(r#"
             tag_union was: NonRecursive::Foo("This is a test")
             `Foo "small str"` is: NonRecursive::Foo("small str")
             `Foo "A long enough string to not be small"` is: NonRecursive::Foo("A long enough string to not be small")
@@ -111,41 +111,41 @@ mod glue_cli_run {
             `Baz` is: NonRecursive::Baz(())
             `Blah 456` is: NonRecursive::Blah(456)
         "#),
-        union_without_padding:"union-without-padding" => indoc!(r#"
+        rust_union_without_padding:"rust/union-without-padding" => indoc!(r#"
             tag_union was: NonRecursive::Foo("This is a test")
             `Foo "small str"` is: NonRecursive::Foo("small str")
             `Bar 123` is: NonRecursive::Bar(123)
             `Baz` is: NonRecursive::Baz(())
             `Blah 456` is: NonRecursive::Blah(456)
         "#),
-        nullable_wrapped:"nullable-wrapped" => indoc!(r#"
+        rust_nullable_wrapped:"rust/nullable-wrapped" => indoc!(r#"
             tag_union was: StrFingerTree::More("foo", StrFingerTree::More("bar", StrFingerTree::Empty))
             `More "small str" (Single "other str")` is: StrFingerTree::More("small str", StrFingerTree::Single("other str"))
             `More "small str" Empty` is: StrFingerTree::More("small str", StrFingerTree::Empty)
             `Single "small str"` is: StrFingerTree::Single("small str")
             `Empty` is: StrFingerTree::Empty
         "#),
-        nullable_unwrapped:"nullable-unwrapped" => indoc!(r#"
+        rust_nullable_unwrapped:"rust/nullable-unwrapped" => indoc!(r#"
             tag_union was: StrConsList::Cons("World!", StrConsList::Cons("Hello ", StrConsList::Nil))
             `Cons "small str" Nil` is: StrConsList::Cons("small str", StrConsList::Nil)
             `Nil` is: StrConsList::Nil
         "#),
-        nonnullable_unwrapped:"nonnullable-unwrapped" => indoc!(r#"
+        rust_nonnullable_unwrapped:"rust/nonnullable-unwrapped" => indoc!(r#"
             tag_union was: StrRoseTree::Tree("root", [StrRoseTree::Tree("leaf1", []), StrRoseTree::Tree("leaf2", [])])
             Tree "foo" [] is: StrRoseTree::Tree("foo", [])
         "#),
-        basic_recursive_union:"basic-recursive-union" => indoc!(r#"
+        rust_basic_recursive_union:"rust/basic-recursive-union" => indoc!(r#"
             tag_union was: Expr::Concat(Expr::String("Hello, "), Expr::String("World!"))
             `Concat (String "Hello, ") (String "World!")` is: Expr::Concat(Expr::String("Hello, "), Expr::String("World!"))
             `String "this is a test"` is: Expr::String("this is a test")
         "#),
-        advanced_recursive_union:"advanced-recursive-union" => indoc!(r#"
+        rust_advanced_recursive_union:"rust/advanced-recursive-union" => indoc!(r#"
             rbt was: Rbt { default: Job::Job(R1 { command: Command::Command(R2 { tool: Tool::SystemTool(R4 { name: "test", num: 42 }) }), inputFiles: ["foo"] }) }
         "#),
-        list_recursive_union:"list-recursive-union" => indoc!(r#"
+        rust_list_recursive_union:"rust/list-recursive-union" => indoc!(r#"
             rbt was: Rbt { default: Job::Job(R1 { command: Command::Command(R2 { args: [], tool: Tool::SystemTool(R3 { name: "test" }) }), inputFiles: ["foo"], job: [] }) }
         "#),
-        multiple_modules:"multiple-modules" => indoc!(r#"
+        rust_multiple_modules:"rust/multiple-modules" => indoc!(r#"
             combined was: Combined { s1: DepStr1::S("hello"), s2: DepStr2::R("world") }
         "#),
         // issue https://github.com/roc-lang/roc/issues/6121
@@ -155,16 +155,19 @@ mod glue_cli_run {
         //        arguments:"arguments" => indoc!(r#"
         //            Answer was: 84
         //        "#),
-        closures:"closures" => indoc!(r#"
+        rust_closures:"rust/closures" => indoc!(r#"
             Answer was: 672
         "#),
-        rocresult:"rocresult" => indoc!(r#"
+        rust_rocresult:"rust/rocresult" => indoc!(r#"
             Answer was: RocOk(ManuallyDrop { value: "Hello World!" })
             Answer was: RocErr(ManuallyDrop { value: 42 })
         "#),
-        option:"option" => indoc!(r#"
+        rust_option:"rust/option" => indoc!(r#"
             Answer was: "Hello World!"
             Answer was: discriminant_U1::None
+        "#),
+        c_hello_world:"c/hello-world" => indoc!(r#"
+            mainForHost = 42
         "#),
     }
 
@@ -201,81 +204,80 @@ mod glue_cli_run {
     fn generate_glue_for<'a, I: IntoIterator<Item = &'a str>>(
         platform_dir: &'a Path,
         args: I,
-    ) -> Out {
+    ) -> CmdOut {
         let platform_module_path = platform_dir.join("platform.roc");
         let glue_dir = platform_dir.join("test_glue");
-        let fixture_templates_dir = platform_dir
+        let tests_dir = platform_dir
             .parent()
             .unwrap()
             .parent()
             .unwrap()
-            .join("fixture-templates");
-
-        // Copy the rust template from the templates directory into the fixture dir.
-        dircpy::CopyBuilder::new(fixture_templates_dir.join("rust"), platform_dir)
-            .overwrite(true) // overwrite any files that were already present
-            .run()
+            .parent()
             .unwrap();
 
-        // Delete the glue file to make sure we're actually regenerating it!
+        let fixture_templates_dir = tests_dir.join("fixture-templates");
+
+        let fixtures_subfolder_name = platform_dir.parent().unwrap().file_name().unwrap();
+
+        let fixture_template_dir = fixture_templates_dir.join(fixtures_subfolder_name);
+
+        if fixture_template_dir.exists() {
+            // Copy the template from the templates directory into the fixture dir if it exists
+            dircpy::CopyBuilder::new(fixture_template_dir, platform_dir)
+                .overwrite(true) // overwrite any files that were already present
+                .run()
+                .unwrap();
+        }
+
+        // Delete the glue files to make sure we're actually regenerating it!
         if glue_dir.exists() {
-            fs::remove_dir_all(&glue_dir)
+            std::fs::remove_dir_all(&glue_dir)
                 .expect("Unable to remove test_glue dir in order to regenerate it in the test");
         }
 
-        let rust_glue_spec = fixture_templates_dir
-            .parent()
-            .unwrap()
+        let glue_spec_filename = match fixtures_subfolder_name.to_str().unwrap() {
+            "rust" => "RustGlue.roc",
+            "zig" => "ZigGlue.roc",
+            "c" => "CGlue.roc",
+            unknown_subfolder => panic!("I don't know which glue file to use for tests in the `{}` subfolder! Please add one here!", unknown_subfolder),
+        };
+
+        let rust_glue_spec = tests_dir
             .parent()
             .unwrap()
             .join("src")
-            .join("RustGlue.roc");
+            .join(glue_spec_filename);
 
         // Generate a fresh test_glue for this platform
-        let parts : Vec<_> =
+        let all_args : Vec<_> =
             // converting these all to String avoids lifetime issues
-            std::iter::once("glue".to_string()).chain(
-                args.into_iter().map(|arg| arg.to_string()).chain([
-                    rust_glue_spec.to_str().unwrap().to_string(),
-                    glue_dir.to_str().unwrap().to_string(),
-                    platform_module_path.to_str().unwrap().to_string(),
-                ]),
-            ).collect();
-        let glue_out = run_glue(parts.iter());
+            args.into_iter().map(|arg| arg.to_string()).chain([
+                glue_dir.to_str().unwrap().to_string(),
+                platform_module_path.to_str().unwrap().to_string(),
+            ]).collect();
 
-        if has_error(&glue_out.stderr) {
-            panic!(
-                "`roc {}` command had unexpected stderr: {}",
-                parts.join(" "),
-                glue_out.stderr
-            );
-        }
+        let glue_cmd = ExecCli::new("glue", rust_glue_spec).add_args(all_args);
+        let glue_cmd_out = glue_cmd.run();
 
-        assert!(glue_out.status.success(), "bad status {glue_out:?}");
+        glue_cmd_out.assert_clean_success();
 
-        glue_out
+        glue_cmd_out
     }
 
-    fn run_app<'a, 'b, I: IntoIterator<Item = &'a str>>(app_file: &'b Path, args: I) -> Out {
-        // Generate test_glue for this platform
-        let compile_out = run_roc(
-            // converting these all to String avoids lifetime issues
-            args.into_iter()
-                .map(|arg| arg.to_string())
-                .chain([app_file.to_str().unwrap().to_string()]),
-            &[],
-            &[],
-        );
+    fn run_app<'a, 'b, I: IntoIterator<Item = &'a str> + std::fmt::Debug>(
+        app_file_path: &'b Path,
+        args: I,
+    ) -> CmdOut {
+        let dev_cmd = ExecCli::new(
+            "dev", // can't import CMD_DEV from roc_cli, that would create a cycle
+            app_file_path.to_path_buf(),
+        )
+        .add_args(args);
 
-        if has_error(&compile_out.stderr) {
-            panic!(
-                "`roc` command had unexpected stderr: {}",
-                compile_out.stderr
-            );
-        }
+        let dev_cmd_out = dev_cmd.run();
 
-        assert!(compile_out.status.success(), "bad status {compile_out:?}");
+        dev_cmd_out.assert_clean_success();
 
-        compile_out
+        dev_cmd_out
     }
 }

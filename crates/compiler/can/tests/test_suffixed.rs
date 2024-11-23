@@ -6,7 +6,7 @@ mod suffixed_tests {
     use bumpalo::Bump;
     use insta::assert_snapshot;
     use roc_can::desugar::desugar_defs_node_values;
-    use roc_can::env::Env;
+    use roc_can::env::{Env, FxMode};
     use roc_can::scope::Scope;
     use roc_module::symbol::{IdentIds, ModuleIds, PackageModuleIds};
     use roc_parse::test_helpers::parse_defs_with;
@@ -34,6 +34,7 @@ mod suffixed_tests {
                 &dep_idents,
                 &qualified_module_ids,
                 None,
+                FxMode::Task,
             );
 
             let mut defs = parse_defs_with(arena, indoc!($src)).unwrap();
@@ -603,6 +604,44 @@ mod suffixed_tests {
                 r : A
                 r = x!
                 Task.ok r
+            "##
+        );
+    }
+
+    #[test]
+    fn issue_7081() {
+        run_test!(
+            r##"
+            inc = \i ->
+                if i > 2 then
+                    Err MaxReached
+                else
+                    Ok (i + 1)
+
+            expect
+                run = \i ->
+                    newi =
+                        i
+                        |> inc?
+                        |> inc?
+                    Ok newi
+                result = run 0
+                result == Ok 2
+
+            main =
+                Stdout.line! "Hello world"
+            "##
+        );
+    }
+
+    #[test]
+    fn issue_7103() {
+        run_test!(
+            r##"
+            run : Task {} _
+            run = line! "foo"
+
+            main = run
             "##
         );
     }

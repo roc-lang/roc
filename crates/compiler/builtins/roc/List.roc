@@ -55,7 +55,9 @@ module [
     findLastIndex,
     sublist,
     intersperse,
-    split,
+    splitAt,
+    splitOn,
+    splitOnList,
     splitFirst,
     splitLast,
     startsWith,
@@ -70,6 +72,8 @@ module [
     countIf,
     chunksOf,
     concatUtf8,
+    forEach!,
+    forEachTry!,
 ]
 
 import Bool exposing [Bool, Eq]
@@ -1026,7 +1030,7 @@ first = \list ->
 ## To remove elements from both the beginning and end of the list,
 ## use `List.sublist`.
 ##
-## To split the list into two lists, use `List.split`.
+## To split the list into two lists, use `List.splitAt`.
 ##
 takeFirst : List elem, U64 -> List elem
 takeFirst = \list, outputLength ->
@@ -1046,7 +1050,7 @@ takeFirst = \list, outputLength ->
 ## To remove elements from both the beginning and end of the list,
 ## use `List.sublist`.
 ##
-## To split the list into two lists, use `List.split`.
+## To split the list into two lists, use `List.splitAt`.
 ##
 takeLast : List elem, U64 -> List elem
 takeLast = \list, outputLength ->
@@ -1247,14 +1251,52 @@ endsWith = \list, suffix ->
 ## than the given index, # and the `others` list will be all the others. (This
 ## means if you give an index of 0, the `before` list will be empty and the
 ## `others` list will have the same elements as the original list.)
-split : List elem, U64 -> { before : List elem, others : List elem }
-split = \elements, userSplitIndex ->
+splitAt : List elem, U64 -> { before : List elem, others : List elem }
+splitAt = \elements, userSplitIndex ->
     length = List.len elements
     splitIndex = if length > userSplitIndex then userSplitIndex else length
     before = List.sublist elements { start: 0, len: splitIndex }
     others = List.sublist elements { start: splitIndex, len: Num.subWrap length splitIndex }
 
     { before, others }
+
+## Splits the input list on the delimiter element.
+##
+## ```roc
+## List.splitOn [1, 2, 3] 2 == [[1], [3]]
+## ```
+splitOn : List a, a -> List (List a) where a implements Eq
+splitOn = \elements, delimiter ->
+    help = \remaining, chunks, currentChunk ->
+        when remaining is
+            [] -> List.append chunks currentChunk
+            [x, .. as rest] if x == delimiter ->
+                help rest (List.append chunks currentChunk) []
+
+            [x, .. as rest] ->
+                help rest chunks (List.append currentChunk x)
+    help elements [] []
+
+## Splits the input list on the delimiter list.
+##
+## ```roc
+## List.splitOnList [1, 2, 3] [1, 2] == [[], [3]]
+## ```
+splitOnList : List a, List a -> List (List a) where a implements Eq
+splitOnList = \elements, delimiter ->
+    help = \remaining, chunks, currentChunk ->
+        when remaining is
+            [] -> List.append chunks currentChunk
+            [x, .. as rest] ->
+                if List.startsWith remaining delimiter then
+                    help (List.dropFirst remaining (List.len delimiter)) (List.append chunks currentChunk) []
+                else
+                    help rest chunks (List.append currentChunk x)
+
+    if delimiter == [] then
+        [elements]
+    else
+        help elements [] []
 
 ## Returns the elements before the first occurrence of a delimiter, as well as the
 ## remaining elements after that occurrence. If the delimiter is not found, returns `Err`.
@@ -1305,7 +1347,7 @@ chunksOfHelp = \listRest, chunkSize, chunks ->
     if List.isEmpty listRest then
         chunks
     else
-        { before, others } = List.split listRest chunkSize
+        { before, others } = List.splitAt listRest chunkSize
         chunksOfHelp others chunkSize (List.append chunks before)
 
 ## Like [List.map], except the transformation function returns a [Result].
@@ -1383,3 +1425,44 @@ concatUtf8 : List U8, Str -> List U8
 
 expect (List.concatUtf8 [1, 2, 3, 4] "🐦") == [1, 2, 3, 4, 240, 159, 144, 166]
 
+## Run an effectful function for each element on the list.
+##
+## ```roc
+## List.forEach! ["Alice", "Bob", "Charlie"] \name ->
+##     createAccount! name
+##     log! "Account created"
+## ```
+##
+## If the function might fail or you need to return early, use [forEachTry!].
+forEach! : List a, (a => {}) => {}
+forEach! = \list, func! ->
+    when list is
+        [] ->
+            {}
+
+        [elem, .. as rest] ->
+            func! elem
+            forEach! rest func!
+
+## Run an effectful function that might fail for each element on the list.
+##
+## If the function returns `Err`, the iteration stops and the error is returned.
+##
+## ```roc
+## List.forEachTry! filesToDelete \path ->
+##     try File.delete! path
+##     Stdout.line! "$(path) deleted"
+## ```
+forEachTry! : List a, (a => Result {} err) => Result {} err
+forEachTry! = \list, func! ->
+    when list is
+        [] ->
+            Ok {}
+
+        [elem, .. as rest] ->
+            when func! elem is
+                Ok {} ->
+                    forEachTry! rest func!
+
+                Err err ->
+                    Err err

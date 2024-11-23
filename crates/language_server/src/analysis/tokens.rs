@@ -375,10 +375,10 @@ impl IterTokens for ProvidesTo<'_> {
 
 impl IterTokens for PlatformRequires<'_> {
     fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
-        let Self { rigids, signature } = self;
+        let Self { rigids, signatures } = self;
 
         (rigids.iter_tokens(arena).into_iter())
-            .chain(signature.iter_tokens(arena))
+            .chain(signatures.iter_tokens(arena))
             .collect_in(arena)
     }
 }
@@ -386,9 +386,11 @@ impl IterTokens for PlatformRequires<'_> {
 impl IterTokens for Loc<TypeAnnotation<'_>> {
     fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
         match self.value {
-            TypeAnnotation::Function(params, ret) => (params.iter_tokens(arena).into_iter())
-                .chain(ret.iter_tokens(arena))
-                .collect_in(arena),
+            TypeAnnotation::Function(params, _arrow, ret) => {
+                (params.iter_tokens(arena).into_iter())
+                    .chain(ret.iter_tokens(arena))
+                    .collect_in(arena)
+            }
             TypeAnnotation::Apply(_mod, _type, args) => args.iter_tokens(arena),
             TypeAnnotation::BoundVariable(_) => onetoken(Token::Type, self.region, arena),
             TypeAnnotation::As(ty, _, as_ty) => (ty.iter_tokens(arena).into_iter())
@@ -441,7 +443,6 @@ where
             AssignedField::SpaceBefore(af, _) | AssignedField::SpaceAfter(af, _) => {
                 af.iter_tokens(arena)
             }
-            AssignedField::Malformed(_) => bumpvec![in arena;],
         }
     }
 }
@@ -459,7 +460,6 @@ impl IterTokens for Tag<'_> {
                 .chain(args.iter_tokens(arena))
                 .collect_in(arena),
             Tag::SpaceBefore(t, _) | Tag::SpaceAfter(t, _) => t.iter_tokens(arena),
-            Tag::Malformed(_) => bumpvec![in arena;],
         }
     }
 }
@@ -629,10 +629,6 @@ impl IterTokens for ValueDef<'_> {
             | ValueDef::Expect {
                 preceding_comment,
                 condition,
-            }
-            | ValueDef::ExpectFx {
-                preceding_comment,
-                condition,
             } => (onetoken(Token::Comment, *preceding_comment, arena).into_iter())
                 .chain(condition.iter_tokens(arena))
                 .collect_in(arena),
@@ -641,6 +637,7 @@ impl IterTokens for ValueDef<'_> {
                 onetoken(Token::Import, import.name.item.region, arena)
             }
             ValueDef::Stmt(loc_expr) => loc_expr.iter_tokens(arena),
+            ValueDef::StmtAfterExpr => BumpVec::new_in(arena),
         }
     }
 }
@@ -689,9 +686,6 @@ impl IterTokens for Loc<Expr<'_>> {
                 .chain(e1.iter_tokens(arena))
                 .chain(e2.iter_tokens(arena))
                 .collect_in(arena),
-            Expr::Expect(e1, e2) => (e1.iter_tokens(arena).into_iter())
-                .chain(e2.iter_tokens(arena))
-                .collect_in(arena),
             Expr::Dbg => onetoken(Token::Keyword, region, arena),
             Expr::DbgStmt(e1, e2) => (e1.iter_tokens(arena).into_iter())
                 .chain(e2.iter_tokens(arena))
@@ -699,6 +693,7 @@ impl IterTokens for Loc<Expr<'_>> {
             Expr::LowLevelDbg(_, e1, e2) => (e1.iter_tokens(arena).into_iter())
                 .chain(e2.iter_tokens(arena))
                 .collect_in(arena),
+            Expr::Try => onetoken(Token::Keyword, region, arena),
             Expr::Apply(e1, e2, _called_via) => (e1.iter_tokens(arena).into_iter())
                 .chain(e2.iter_tokens(arena))
                 .collect_in(arena),
@@ -718,6 +713,11 @@ impl IterTokens for Loc<Expr<'_>> {
             Expr::When(e, branches) => (e.iter_tokens(arena).into_iter())
                 .chain(branches.iter_tokens(arena))
                 .collect_in(arena),
+            Expr::Return(ret_expr, after_ret) => ret_expr
+                .iter_tokens(arena)
+                .into_iter()
+                .chain(after_ret.iter_tokens(arena))
+                .collect_in(arena),
             Expr::SpaceBefore(e, _) | Expr::SpaceAfter(e, _) => {
                 Loc::at(region, *e).iter_tokens(arena)
             }
@@ -726,7 +726,6 @@ impl IterTokens for Loc<Expr<'_>> {
             Expr::SingleFieldRecordBuilder(e) => e.iter_tokens(arena),
             Expr::OptionalFieldInRecordBuilder(_name, e) => e.iter_tokens(arena),
             Expr::MalformedIdent(_, _)
-            | Expr::MalformedClosure
             | Expr::PrecedenceConflict(_)
             | Expr::MalformedSuffixed(_) => {
                 bumpvec![in arena;]

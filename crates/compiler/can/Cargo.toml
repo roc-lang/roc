@@ -24,6 +24,8 @@ bitvec.workspace = true
 bumpalo.workspace = true
 static_assertions.workspace = true
 
+soa.workspace = true
+
 [dev-dependencies]
 indoc.workspace = true
 insta.workspace = true

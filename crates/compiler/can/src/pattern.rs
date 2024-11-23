@@ -1110,7 +1110,7 @@ fn flatten_str_lines(lines: &[&[StrSegment<'_>]]) -> Pattern {
                 Unicode(loc_digits) => {
                     todo!("parse unicode digits {:?}", loc_digits);
                 }
-                Interpolated(loc_expr) | DeprecatedInterpolated(loc_expr) => {
+                Interpolated(loc_expr) => {
                     return Pattern::UnsupportedPattern(loc_expr.region);
                 }
                 EscapedChar(escaped) => buf.push(escaped.unescape()),

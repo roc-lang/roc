@@ -1,19 +1,20 @@
 ---
 source: crates/compiler/can/tests/test_suffixed.rs
 expression: snapshot
+snapshot_kind: text
 ---
 Defs {
     tags: [
-        Index(2147483648),
+        EitherIndex(2147483648),
     ],
     regions: [
         @0-69,
     ],
     space_before: [
-        Slice(start = 0, length = 0),
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
     ],
     space_after: [
-        Slice(start = 0, length = 1),
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
     ],
     spaces: [
         Newline,
@@ -27,16 +28,16 @@ Defs {
             @11-69 Defs(
                 Defs {
                     tags: [
-                        Index(2147483648),
+                        EitherIndex(2147483648),
                     ],
                     regions: [
                         @15-57,
                     ],
                     space_before: [
-                        Slice(start = 0, length = 0),
+                        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
                     ],
                     space_after: [
-                        Slice(start = 0, length = 0),
+                        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
                     ],
                     spaces: [],
                     type_defs: [],
@@ -51,25 +52,25 @@ Defs {
                                         ident: "msg",
                                     },
                                 ],
-                                @31-42 Apply(
-                                    @31-42 Var {
+                                @31-43 Apply(
+                                    @31-43 Var {
                                         module_name: "Task",
                                         ident: "await",
                                     },
                                     [
-                                        @31-42 Defs(
+                                        @31-43 Defs(
                                             Defs {
                                                 tags: [
-                                                    Index(2147483648),
+                                                    EitherIndex(2147483648),
                                                 ],
                                                 regions: [
-                                                    @31-42,
+                                                    @31-43,
                                                 ],
                                                 space_before: [
-                                                    Slice(start = 0, length = 0),
+                                                    Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
                                                 ],
                                                 space_after: [
-                                                    Slice(start = 0, length = 0),
+                                                    Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
                                                 ],
                                                 spaces: [],
                                                 type_defs: [],
@@ -93,8 +94,8 @@ Defs {
                                                         body_pattern: @31-43 Identifier {
                                                             ident: "#!0_stmt",
                                                         },
-                                                        body_expr: @31-42 Apply(
-                                                            @31-42 Var {
+                                                        body_expr: @31-43 Apply(
+                                                            @31-43 Var {
                                                                 module_name: "",
                                                                 ident: "line",
                                                             },
@@ -111,12 +112,12 @@ Defs {
                                                     },
                                                 ],
                                             },
-                                            @31-42 Var {
+                                            @31-43 Var {
                                                 module_name: "",
                                                 ident: "#!0_stmt",
                                             },
                                         ),
-                                        @31-42 Closure(
+                                        @31-43 Closure(
                                             [
                                                 @31-43 Underscore(
                                                     "#!stmt",

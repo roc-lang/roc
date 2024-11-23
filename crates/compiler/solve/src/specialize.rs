@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 
 use roc_can::abilities::{AbilitiesStore, ImplKey};
-use roc_collections::{VecMap, VecSet};
+use roc_collections::{soa::slice_extend_new, VecMap, VecSet};
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_TRACE_COMPACTION;
@@ -14,7 +14,7 @@ use roc_solve_schema::UnificationMode;
 use roc_types::{
     subs::{
         get_member_lambda_sets_at_region, Content, Descriptor, GetSubsSlice, LambdaSet, Mark,
-        OptVariable, Rank, Subs, SubsSlice, UlsOfVar, Variable,
+        OptVariable, Rank, Subs, UlsOfVar, Variable,
     },
     types::{AliasKind, MemberImpl, Polarity, Uls},
 };
@@ -360,7 +360,7 @@ pub fn compact_lambda_sets_of_vars<P: Phase>(
                             // The first lambda set contains one concrete lambda, plus all solved
                             // lambdas, plus all other unspecialized lambdas.
                             // l' = [solved_lambdas + t1 + ... + tm + C:f:r]
-                            let unspecialized = SubsSlice::extend_new(
+                            let unspecialized = slice_extend_new(
                                 &mut env.subs.unspecialized_lambda_sets,
                                 not_concrete
                                     .drain(..)
@@ -371,7 +371,7 @@ pub fn compact_lambda_sets_of_vars<P: Phase>(
                             // All the other lambda sets consists only of their respective concrete
                             // lambdas.
                             // ln = [[] + C:fn:rn]
-                            let unspecialized = SubsSlice::extend_new(
+                            let unspecialized = slice_extend_new(
                                 &mut env.subs.unspecialized_lambda_sets,
                                 [concrete_lambda],
                             );
@@ -521,10 +521,7 @@ fn compact_lambda_set<P: Phase>(
     let t_f1_lambda_set_without_concrete = LambdaSet {
         solved,
         recursion_var,
-        unspecialized: SubsSlice::extend_new(
-            &mut env.subs.unspecialized_lambda_sets,
-            new_unspecialized,
-        ),
+        unspecialized: slice_extend_new(&mut env.subs.unspecialized_lambda_sets, new_unspecialized),
         ambient_function: t_f1,
     };
     env.subs.set_content(
@@ -670,6 +667,8 @@ fn make_specialization_decision<P: Phase>(
         | RigidVar(..)
         | LambdaSet(..)
         | ErasedLambda
+        | Pure
+        | Effectful
         | RangedNumber(..) => {
             internal_error!("unexpected")
         }

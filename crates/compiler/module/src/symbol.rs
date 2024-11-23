@@ -1,4 +1,4 @@
-use crate::ident::{Ident, Lowercase, ModuleName};
+use crate::ident::{Ident, IdentSuffix, Lowercase, ModuleName};
 use crate::module_err::{ModuleError, ModuleResult};
 use roc_collections::{SmallStringInterner, VecMap};
 use roc_error_macros::internal_error;
@@ -79,7 +79,7 @@ impl Symbol {
 
         Self {
             module_id: module_id.0,
-            ident_id: ident_id.0,
+            ident_id: ident_id.raw(),
         }
     }
 
@@ -88,11 +88,15 @@ impl Symbol {
     }
 
     pub const fn ident_id(self) -> IdentId {
-        IdentId(self.ident_id)
+        IdentId::from_raw(self.ident_id)
     }
 
     pub const fn is_builtin(self) -> bool {
         self.module_id().is_builtin()
+    }
+
+    pub const fn suffix(self) -> IdentSuffix {
+        self.ident_id().suffix()
     }
 
     pub fn is_derivable_ability(self) -> bool {
@@ -146,10 +150,14 @@ impl Symbol {
             .unwrap_or_else(|| {
                 internal_error!(
                     "ident_string's IdentIds did not contain an entry for {} in module {:?}",
-                    self.ident_id().0,
+                    self.ident_id().index(),
                     self.module_id()
                 )
             })
+    }
+
+    pub fn as_unsuffixed_str(self, interns: &Interns) -> &str {
+        self.as_str(interns).trim_end_matches('!')
     }
 
     pub const fn as_u64(self) -> u64 {
@@ -246,11 +254,9 @@ impl fmt::Debug for Symbol {
 impl fmt::Display for Symbol {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let module_id = self.module_id();
-        let ident_id = self.ident_id();
+        let ident_id = self.ident_id().index();
 
-        match ident_id {
-            IdentId(value) => write!(f, "{module_id:?}.{value:?}"),
-        }
+        write!(f, "{module_id:?}.{ident_id:?}")
     }
 }
 
@@ -318,10 +324,6 @@ impl Interns {
                 );
             }
         }
-    }
-
-    pub fn from_index(module_id: ModuleId, ident_id: u32) -> Symbol {
-        Symbol::new(module_id, IdentId(ident_id))
     }
 }
 
@@ -637,27 +639,58 @@ impl ModuleIds {
     }
 }
 
-/// An ID that is assigned to interned string identifiers within a module.
-/// By turning these strings into numbers, post-canonicalization processes
-/// like unification and optimization can run a lot faster.
-///
-/// This ID is unique within a given module, not globally - so to turn this back into
-/// a string, you would need a ModuleId, an IdentId, and a Map<ModuleId, Map<IdentId, String>>.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub struct IdentId(u32);
+mod ident_id {
+    use crate::ident::IdentSuffix;
 
-impl IdentId {
-    pub const fn index(self) -> usize {
-        self.0 as usize
-    }
-
-    /// # Safety
+    /// An ID that is assigned to interned string identifiers within a module.
+    /// By turning these strings into numbers, post-canonicalization processes
+    /// like unification and optimization can run a lot faster.
     ///
-    /// The index is not guaranteed to know to exist.
-    pub unsafe fn from_index(index: u32) -> Self {
-        Self(index)
+    /// This ID is unique within a given module, not globally - so to turn this back into
+    /// a string, you would need a ModuleId, an IdentId, and a Map<ModuleId, Map<IdentId, String>>.
+    #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    pub struct IdentId(u32);
+
+    const BANG_FLAG: u32 = 1u32 << 31;
+    const UNSUFFIXED: u32 = !BANG_FLAG;
+
+    impl IdentId {
+        pub const fn index(self) -> usize {
+            (self.0 & UNSUFFIXED) as usize
+        }
+
+        pub const fn suffix(self) -> IdentSuffix {
+            if self.0 & BANG_FLAG > 0 {
+                IdentSuffix::Bang
+            } else {
+                IdentSuffix::None
+            }
+        }
+
+        pub(super) const fn raw(self) -> u32 {
+            self.0
+        }
+
+        pub(super) const fn from_raw(raw: u32) -> Self {
+            Self(raw)
+        }
+
+        pub(super) const fn from_index(index: usize, suffix: IdentSuffix) -> Self {
+            assert!(index as u32 <= UNSUFFIXED, "IdentId index too large");
+
+            match suffix {
+                IdentSuffix::None => Self(index as u32),
+                IdentSuffix::Bang => Self((index as u32) | BANG_FLAG),
+            }
+        }
+
+        pub(super) const fn from_index_named(index: usize, name: &str) -> Self {
+            Self::from_index(index, IdentSuffix::from_name(name))
+        }
     }
 }
+
+pub use ident_id::IdentId;
 
 /// Stores a mapping between Ident and IdentId.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -670,15 +703,15 @@ impl IdentIds {
         self.interner
             .iter()
             .enumerate()
-            .map(|(index, ident)| (IdentId(index as u32), ident))
+            .map(|(index, ident)| (IdentId::from_index_named(index, ident), ident))
     }
 
     pub fn add_str(&mut self, ident_name: &str) -> IdentId {
-        IdentId(self.interner.insert(ident_name) as u32)
+        IdentId::from_index_named(self.interner.insert(ident_name), ident_name)
     }
 
     pub fn duplicate_ident(&mut self, ident_id: IdentId) -> IdentId {
-        IdentId(self.interner.duplicate(ident_id.0 as usize) as u32)
+        IdentId::from_index(self.interner.duplicate(ident_id.index()), ident_id.suffix())
     }
 
     pub fn get_or_insert(&mut self, name: &str) -> IdentId {
@@ -692,7 +725,7 @@ impl IdentIds {
     // TODO fix when same ident_name is present multiple times, see issue #2548
     pub fn update_key(&mut self, old_name: &str, new_name: &str) -> Result<IdentId, String> {
         match self.interner.find_and_update(old_name, new_name) {
-            Some(index) => Ok(IdentId(index as u32)),
+            Some(index) => Ok(IdentId::from_index_named(index, new_name)),
             None => Err(format!("The identifier {old_name:?} is not in IdentIds")),
         }
     }
@@ -705,12 +738,12 @@ impl IdentIds {
     /// This is used, for example, during canonicalization of an Expr::Closure
     /// to generate a unique symbol to refer to that closure.
     pub fn gen_unique(&mut self) -> IdentId {
-        IdentId(self.interner.insert_index_str() as u32)
+        IdentId::from_index(self.interner.insert_index_str(), IdentSuffix::None)
     }
 
     pub fn is_generated_id(&self, id: IdentId) -> bool {
         self.interner
-            .try_get(id.0 as usize)
+            .try_get(id.index())
             .map_or(false, |str| str.starts_with(|c: char| c.is_ascii_digit()))
     }
 
@@ -718,18 +751,18 @@ impl IdentIds {
     pub fn get_id(&self, ident_name: &str) -> Option<IdentId> {
         self.interner
             .find_index(ident_name)
-            .map(|i| IdentId(i as u32))
+            .map(|i| IdentId::from_index_named(i, ident_name))
     }
 
     #[inline(always)]
     pub fn get_id_many<'a>(&'a self, ident_name: &'a str) -> impl Iterator<Item = IdentId> + 'a {
         self.interner
             .find_indices(ident_name)
-            .map(|i| IdentId(i as u32))
+            .map(|i| IdentId::from_index_named(i, ident_name))
     }
 
     pub fn get_name(&self, id: IdentId) -> Option<&str> {
-        self.interner.try_get(id.0 as usize)
+        self.interner.try_get(id.index())
     }
 
     pub fn get_name_str_res(&self, ident_id: IdentId) -> ModuleResult<&str> {
@@ -1013,10 +1046,10 @@ macro_rules! define_builtins {
             $(
                 $(
                     $(#[$ident_meta])*
-                    pub const $ident_const: Symbol = Symbol::new(ModuleId::$module_const, IdentId($ident_id));
+                    pub const $ident_const: Symbol = Symbol::new(ModuleId::$module_const, IdentId::from_index_named($ident_id, $ident_name));
                 )*
                 $(
-                    pub const $u_ident_const: Symbol = Symbol::new(ModuleId::$module_const, IdentId($u_ident_id));
+                    pub const $u_ident_const: Symbol = Symbol::new(ModuleId::$module_const, IdentId::from_index_named($u_ident_id, $u_ident_name));
                 )*
             )+
 
@@ -1038,9 +1071,11 @@ macro_rules! define_builtins {
                             // release builds, this condition is either `if true`
                             // or `if false` and will get optimized out.
                             debug_assert_eq!($exposed_apply_type, $ident_name.chars().next().unwrap().is_uppercase());
+                            // Types should not be suffixed
+                            debug_assert!(IdentSuffix::from_name($ident_name).is_none());
 
                             if $exposed_apply_type {
-                                scope.insert($ident_name.into(), (Symbol::new(ModuleId::$module_const, IdentId($ident_id)), Region::zero()));
+                                scope.insert($ident_name.into(), (Symbol::new(ModuleId::$module_const, IdentId::from_index($ident_id, IdentSuffix::None)), Region::zero()));
                             }
                         )?
                     )*
@@ -1059,7 +1094,7 @@ macro_rules! define_builtins {
                             $(
                                 $(
                                     if $exposed_type {
-                                        ($ident_name, (Symbol::new(ModuleId::$module_const, IdentId($ident_id)), Region::zero()))
+                                        ($ident_name, (Symbol::new(ModuleId::$module_const, IdentId::from_raw($ident_id)), Region::zero()))
                                     } else {
                                         unreachable!()
                                     },
@@ -1336,7 +1371,7 @@ define_builtins! {
         2 STR_APPEND: "#append" // unused
         3 STR_CONCAT: "concat"
         4 STR_JOIN_WITH: "joinWith"
-        5 STR_SPLIT: "split"
+        5 STR_SPLIT_ON: "splitOn"
         6 STR_WITH_PREFIX: "withPrefix"
         7 STR_STARTS_WITH: "startsWith"
         8 STR_ENDS_WITH: "endsWith"
@@ -1380,6 +1415,8 @@ define_builtins! {
         46 STR_REPLACE_FIRST: "replaceFirst"
         47 STR_REPLACE_LAST: "replaceLast"
         48 STR_RELEASE_EXCESS_CAPACITY: "releaseExcessCapacity"
+        49 STR_DROP_PREFIX: "dropPrefix"
+        50 STR_DROP_SUFFIX: "dropSuffix"
     }
     6 LIST: "List" => {
         0 LIST_LIST: "List" exposed_apply_type=true // the List.List type alias
@@ -1434,7 +1471,7 @@ define_builtins! {
         49 LIST_SUBLIST: "sublist"
         50 LIST_INTERSPERSE: "intersperse"
         51 LIST_INTERSPERSE_CLOS: "#intersperseClos"
-        52 LIST_SPLIT: "split"
+        52 LIST_SPLIT_AT: "splitAt"
         53 LIST_SPLIT_FIRST: "splitFirst"
         54 LIST_SPLIT_LAST: "splitLast"
         55 LIST_SPLIT_CLOS: "#splitClos"
@@ -1472,6 +1509,11 @@ define_builtins! {
         87 LIST_CLONE: "clone"
         88 LIST_LEN_USIZE: "lenUsize"
         89 LIST_CONCAT_UTF8: "concatUtf8"
+        90 LIST_FOR_EACH_FX: "forEach!"
+        91 LIST_FOR_EACH_TRY_FX: "forEachTry!"
+        92 LIST_WALK_FX: "walk!"
+        93 LIST_SPLIT_ON: "splitOn"
+        94 LIST_SPLIT_ON_LIST: "splitOnList"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias
@@ -1484,6 +1526,7 @@ define_builtins! {
         7 RESULT_IS_OK: "isOk"
         8 RESULT_MAP_BOTH: "mapBoth"
         9 RESULT_MAP_TWO: "map2"
+        10 RESULT_ON_ERR_FX: "onErr!"
     }
     8 DICT: "Dict" => {
         0 DICT_DICT: "Dict" exposed_type=true // the Dict.Dict type alias

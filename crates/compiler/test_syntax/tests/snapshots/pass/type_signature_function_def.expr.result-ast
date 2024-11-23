@@ -1,16 +1,16 @@
 Defs(
     Defs {
         tags: [
-            Index(2147483648),
+            EitherIndex(2147483648),
         ],
         regions: [
             @0-42,
         ],
         space_before: [
-            Slice(start = 0, length = 0),
+            Slice { start: 0, length: 0 },
         ],
         space_after: [
-            Slice(start = 0, length = 0),
+            Slice { start: 0, length: 0 },
         ],
         spaces: [],
         type_defs: [],
@@ -32,6 +32,7 @@ Defs(
                             [],
                         ),
                     ],
+                    Pure,
                     @20-24 Apply(
                         "",
                         "Bool",

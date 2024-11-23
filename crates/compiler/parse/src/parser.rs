@@ -97,6 +97,7 @@ impl_space_problem! {
     EPattern<'a>,
     EProvides<'a>,
     ERecord<'a>,
+    EReturn<'a>,
     ERequires<'a>,
     EString<'a>,
     EType<'a>,
@@ -302,7 +303,6 @@ pub enum EExpr<'a> {
     Start(Position),
     End(Position),
     BadExprEnd(Position),
-    StmtAfterExpr(Position),
     Space(BadInputError, Position),
 
     Dot(Position),
@@ -337,10 +337,12 @@ pub enum EExpr<'a> {
     Expect(EExpect<'a>, Position),
     Dbg(EExpect<'a>, Position),
     Import(EImport<'a>, Position),
+    Return(EReturn<'a>, Position),
 
     Closure(EClosure<'a>, Position),
     Underscore(Position),
     Crash(Position),
+    Try(Position),
 
     InParens(EInParens<'a>, Position),
     Record(ERecord<'a>, Position),
@@ -511,6 +513,14 @@ pub enum EExpect<'a> {
     Condition(&'a EExpr<'a>, Position),
     Continuation(&'a EExpr<'a>, Position),
     IndentCondition(Position),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EReturn<'a> {
+    Space(BadInputError, Position),
+    Return(Position),
+    ReturnValue(&'a EExpr<'a>, Position),
+    IndentReturnValue(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1046,7 +1056,11 @@ where
         // the next character should not be an identifier character
         // to prevent treating `whence` or `iffy` as keywords
         match state.bytes().get(width) {
-            Some(next) if *next == b' ' || *next == b'#' || *next == b'\n' || *next == b'\r' => {
+            Some(
+                b' ' | b'#' | b'\n' | b'\r' | b'\t' | b',' | b'(' | b')' | b'[' | b']' | b'{'
+                | b'}' | b'"' | b'\'' | b'/' | b'\\' | b'+' | b'*' | b'%' | b'^' | b'&' | b'|'
+                | b'<' | b'>' | b'=' | b'!' | b'~' | b'`' | b';' | b':' | b'?' | b'.',
+            ) => {
                 state = state.advance(width);
                 Ok((MadeProgress, (), state))
             }

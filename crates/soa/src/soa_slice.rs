@@ -7,25 +7,6 @@ use core::{
 
 use crate::soa_index::Index;
 
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
-pub struct NonEmptySlice<T> {
-    inner: Slice<T>,
-}
-
-impl<T> fmt::Debug for NonEmptySlice<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.inner.fmt(f)
-    }
-}
-
-impl<T> Copy for NonEmptySlice<T> {}
-
-impl<T> Clone for NonEmptySlice<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
 /// A slice into an array of values, based
 /// on an offset into the array rather than a pointer.
 ///
@@ -111,6 +92,13 @@ impl<T> Slice<T> {
         }
     }
 
+    pub fn at(&self, i: usize) -> Index<T> {
+        Index {
+            index: self.start + i as u32,
+            _marker: PhantomData,
+        }
+    }
+
     pub const fn new(start: u32, length: u16) -> Self {
         Self {
             start,
@@ -177,6 +165,25 @@ impl<T> ExactSizeIterator for SliceIterator<T> {}
 
 pub trait GetSlice<T> {
     fn get_slice(&self, slice: Slice<T>) -> &[T];
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+pub struct NonEmptySlice<T> {
+    inner: Slice<T>,
+}
+
+impl<T> fmt::Debug for NonEmptySlice<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+impl<T> Copy for NonEmptySlice<T> {}
+
+impl<T> Clone for NonEmptySlice<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
 impl<T> NonEmptySlice<T> {

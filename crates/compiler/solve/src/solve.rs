@@ -14,7 +14,9 @@ use crate::Aliases;
 use bumpalo::Bump;
 use roc_can::abilities::{AbilitiesStore, MemberSpecializationInfo};
 use roc_can::constraint::Constraint::{self, *};
-use roc_can::constraint::{Cycle, LetConstraint, OpportunisticResolve};
+use roc_can::constraint::{
+    Cycle, FxCallConstraint, FxSuffixConstraint, FxSuffixKind, LetConstraint, OpportunisticResolve,
+};
 use roc_can::expected::{Expected, PExpected};
 use roc_can::module::ModuleParams;
 use roc_collections::VecMap;
@@ -22,9 +24,10 @@ use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_VERIFY_RIGID_LET_GENERALIZED;
 use roc_error_macros::internal_error;
+use roc_module::ident::IdentSuffix;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_problem::can::CycleEntry;
-use roc_region::all::Loc;
+use roc_region::all::{Loc, Region};
 use roc_solve_problem::TypeError;
 use roc_solve_schema::UnificationMode;
 use roc_types::subs::{
@@ -448,6 +451,14 @@ fn solve(
                     );
 
                     new_scope.insert_symbol_var_if_vacant(*symbol, loc_var.value);
+
+                    solve_suffix_fx(
+                        env,
+                        problems,
+                        FxSuffixKind::Let(*symbol),
+                        loc_var.value,
+                        &loc_var.region,
+                    );
                 }
 
                 // Note that this vars_by_symbol is the one returned by the
@@ -774,6 +785,122 @@ fn solve(
                         problems.push(problem);
 
                         state
+                    }
+                }
+            }
+            FxCall(index) => {
+                let FxCallConstraint {
+                    call_fx_var,
+                    call_kind,
+                    call_region,
+                    expectation,
+                } = &env.constraints.fx_call_constraints[index.index()];
+
+                let actual_desc = env.subs.get(*call_fx_var);
+
+                match (actual_desc.content, expectation) {
+                    (Content::Pure, _) | (Content::FlexVar(_), _) | (Content::Error, _) => state,
+                    (Content::Effectful, None) => {
+                        let problem = TypeError::FxInTopLevel(*call_region, *call_kind);
+                        problems.push(problem);
+                        state
+                    }
+                    (Content::Effectful, Some(expectation)) => {
+                        match env.subs.get_content_without_compacting(expectation.fx_var) {
+                            Content::Effectful | Content::Error => state,
+                            Content::FlexVar(_) => {
+                                env.subs
+                                    .union(expectation.fx_var, *call_fx_var, actual_desc);
+                                state
+                            }
+                            Content::Pure => {
+                                let problem = TypeError::FxInPureFunction(
+                                    *call_region,
+                                    *call_kind,
+                                    expectation.ann_region,
+                                );
+                                problems.push(problem);
+                                state
+                            }
+                            expected_content => {
+                                internal_error!(
+                                    "CallFx: unexpected content: {:?}",
+                                    expected_content
+                                )
+                            }
+                        }
+                    }
+                    actual_content => {
+                        internal_error!("CallFx: unexpected content: {:?}", actual_content)
+                    }
+                }
+            }
+            FxSuffix(constraint_index) => {
+                let FxSuffixConstraint {
+                    type_index,
+                    kind,
+                    region,
+                } = &env.constraints.fx_suffix_constraints[constraint_index.index()];
+
+                let actual = either_type_index_to_var(
+                    env,
+                    rank,
+                    problems,
+                    abilities_store,
+                    obligation_cache,
+                    &mut can_types,
+                    aliases,
+                    *type_index,
+                );
+
+                solve_suffix_fx(env, problems, *kind, actual, region);
+                state
+            }
+            ExpectEffectful(variable, reason, region) => {
+                let content = env.subs.get_content_without_compacting(*variable);
+
+                match content {
+                    Content::Pure | Content::FlexVar(_) => {
+                        let problem = TypeError::ExpectedEffectful(*region, *reason);
+                        problems.push(problem);
+
+                        state
+                    }
+                    Content::Effectful | Content::Error => state,
+                    Content::RigidVar(_)
+                    | Content::FlexAbleVar(_, _)
+                    | Content::RigidAbleVar(_, _)
+                    | Content::RecursionVar { .. }
+                    | Content::LambdaSet(_)
+                    | Content::ErasedLambda
+                    | Content::Structure(_)
+                    | Content::Alias(_, _, _, _)
+                    | Content::RangedNumber(_) => {
+                        internal_error!("ExpectEffectful: unexpected content: {:?}", content)
+                    }
+                }
+            }
+            FlexToPure(variable) => {
+                let content = env.subs.get_content_without_compacting(*variable);
+
+                match content {
+                    Content::FlexVar(_) => {
+                        let desc = env.subs.get(Variable::PURE);
+                        env.subs.union(*variable, Variable::PURE, desc);
+
+                        state
+                    }
+                    Content::Pure | Content::Effectful | Content::Error => state,
+                    Content::RigidVar(_)
+                    | Content::FlexAbleVar(_, _)
+                    | Content::RigidAbleVar(_, _)
+                    | Content::RecursionVar { .. }
+                    | Content::LambdaSet(_)
+                    | Content::ErasedLambda
+                    | Content::Structure(_)
+                    | Content::Alias(_, _, _, _)
+                    | Content::RangedNumber(_) => {
+                        internal_error!("FlexToPure: unexpected content: {:?}", content)
                     }
                 }
             }
@@ -1403,7 +1530,7 @@ fn solve(
             }
             ImportParams(opt_provided, module_id, region) => {
                 match (module_params_vars.get(module_id), opt_provided) {
-                    (Some(expected), Some(provided)) => {
+                    (Some(expected_og), Some(provided)) => {
                         let actual = either_type_index_to_var(
                             env,
                             rank,
@@ -1415,10 +1542,18 @@ fn solve(
                             *provided,
                         );
 
+                        let expected = {
+                            // Similar to Lookup, we need to unify on a copy of the module params variable
+                            // Otherwise, this import might make it less general than it really is
+                            let mut solve_env = env.as_solve_env();
+                            let solve_env = &mut solve_env;
+                            deep_copy_var_in(solve_env, rank, *expected_og, solve_env.arena)
+                        };
+
                         match unify(
                             &mut env.uenv(),
                             actual,
-                            *expected,
+                            expected,
                             UnificationMode::EQ,
                             Polarity::OF_VALUE,
                         ) {
@@ -1485,6 +1620,52 @@ fn solve(
     }
 
     state
+}
+
+fn solve_suffix_fx(
+    env: &mut InferenceEnv<'_>,
+    problems: &mut Vec<TypeError>,
+    kind: FxSuffixKind,
+    variable: Variable,
+    region: &Region,
+) {
+    match kind.suffix() {
+        IdentSuffix::None => {
+            if let Content::Structure(FlatType::Func(_, _, _, fx)) =
+                env.subs.get_content_without_compacting(variable)
+            {
+                let fx = *fx;
+                match env.subs.get_content_without_compacting(fx) {
+                    Content::Effectful => {
+                        problems.push(TypeError::UnsuffixedEffectfulFunction(*region, kind));
+                    }
+                    Content::FlexVar(_) => {
+                        env.subs.set_content(fx, Content::Pure);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        IdentSuffix::Bang => match env.subs.get_content_without_compacting(variable) {
+            Content::Structure(FlatType::Func(_, _, _, fx)) => {
+                let fx = *fx;
+                match env.subs.get_content_without_compacting(fx) {
+                    Content::Pure => {
+                        problems.push(TypeError::SuffixedPureFunction(*region, kind));
+                    }
+                    Content::FlexVar(_) => {
+                        env.subs.set_content(fx, Content::Effectful);
+                    }
+                    _ => {}
+                }
+            }
+            Content::FlexVar(_) => {
+                env.subs
+                    .set_content(variable, Content::Structure(FlatType::EffectfulFunc));
+            }
+            _ => {}
+        },
+    }
 }
 
 fn chase_alias_content(subs: &Subs, mut var: Variable) -> (Variable, &Content) {
@@ -2158,7 +2339,7 @@ fn adjust_rank_content(
                     rank
                 }
 
-                Func(arg_vars, closure_var, ret_var) => {
+                Func(arg_vars, closure_var, ret_var, _fx_var) => {
                     let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ret_var);
 
                     // TODO investigate further.
@@ -2184,7 +2365,7 @@ fn adjust_rank_content(
                     rank
                 }
 
-                EmptyRecord | EmptyTuple => {
+                EmptyRecord => {
                     // from elm-compiler: THEORY: an empty record never needs to get generalized
                     //
                     // But for us, that theory does not hold, because there might be type variables hidden
@@ -2198,6 +2379,8 @@ fn adjust_rank_content(
 
                 // THEORY: an empty tag never needs to get generalized
                 EmptyTagUnion => Rank::toplevel(),
+
+                EffectfulFunc => Rank::toplevel(),
 
                 Record(fields, ext_var) => {
                     let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);
@@ -2420,6 +2603,8 @@ fn adjust_rank_content(
         }
 
         ErasedLambda => group_rank,
+
+        Pure | Effectful => group_rank,
 
         RangedNumber(_) => group_rank,
     }

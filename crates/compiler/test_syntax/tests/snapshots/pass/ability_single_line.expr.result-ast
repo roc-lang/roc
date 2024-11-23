@@ -2,16 +2,16 @@ SpaceAfter(
     Defs(
         Defs {
             tags: [
-                Index(0),
+                EitherIndex(0),
             ],
             regions: [
                 @0-55,
             ],
             space_before: [
-                Slice(start = 0, length = 0),
+                Slice { start: 0, length: 0 },
             ],
             space_after: [
-                Slice(start = 0, length = 0),
+                Slice { start: 0, length: 0 },
             ],
             spaces: [],
             type_defs: [
@@ -31,6 +31,7 @@ SpaceAfter(
                                             "a",
                                         ),
                                     ],
+                                    Pure,
                                     @28-31 Apply(
                                         "",
                                         "U64",

@@ -3650,74 +3650,6 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
             )
         }
 
-        ExpectFx {
-            condition: cond_symbol,
-            region,
-            lookups,
-            variables,
-            remainder,
-        } => {
-            let bd = env.builder;
-            let context = env.context;
-
-            let (cond, _cond_layout) = scope.load_symbol_and_layout(cond_symbol);
-
-            let condition = bd.new_build_int_compare(
-                IntPredicate::EQ,
-                cond.into_int_value(),
-                context.bool_type().const_int(1, false),
-                "is_true",
-            );
-
-            let then_block = context.append_basic_block(parent, "then_block");
-            let throw_block = context.append_basic_block(parent, "throw_block");
-
-            bd.new_build_conditional_branch(condition, then_block, throw_block);
-
-            if env.mode.runs_expects() {
-                bd.position_at_end(throw_block);
-
-                match env.target.ptr_width() {
-                    roc_target::PtrWidth::Bytes8 => {
-                        let shared_memory = SharedMemoryPointer::get(env);
-
-                        clone_to_shared_memory(
-                            env,
-                            layout_interner,
-                            scope,
-                            layout_ids,
-                            &shared_memory,
-                            *cond_symbol,
-                            *region,
-                            lookups,
-                            variables,
-                        );
-
-                        bd.new_build_unconditional_branch(then_block);
-                    }
-                    roc_target::PtrWidth::Bytes4 => {
-                        // temporary WASM implementation
-                        throw_internal_exception(env, "An expectation failed!");
-                    }
-                }
-            } else {
-                bd.position_at_end(throw_block);
-                bd.new_build_unconditional_branch(then_block);
-            }
-
-            bd.position_at_end(then_block);
-
-            build_exp_stmt(
-                env,
-                layout_interner,
-                layout_ids,
-                func_spec_solutions,
-                scope,
-                parent,
-                remainder,
-            )
-        }
-
         Crash(sym, tag) => {
             throw_exception(env, scope, sym, *tag);
 
@@ -4324,7 +4256,7 @@ fn expose_function_to_host<'a, 'ctx>(
     return_layout: InLayout<'a>,
     layout_ids: &mut LayoutIds<'a>,
 ) {
-    let ident_string = symbol.as_str(&env.interns);
+    let ident_string = symbol.as_unsuffixed_str(&env.interns);
 
     let proc_layout = ProcLayout {
         arguments,
@@ -5564,7 +5496,7 @@ pub fn build_procedures<'a>(
         let getter_fn = function_value_by_func_spec(env, FuncBorrowSpec::Some(*func_spec), symbol);
 
         let name = getter_fn.get_name().to_str().unwrap();
-        let getter_name = symbol.as_str(&env.interns);
+        let getter_name = symbol.as_unsuffixed_str(&env.interns);
 
         // Add the getter function to the module.
         let _ = expose_function_to_host_help_c_abi(
@@ -5592,7 +5524,7 @@ pub fn build_wasm_test_wrapper<'a, 'ctx>(
         opt_level,
         procedures,
         vec![],
-        EntryPoint::Single(entry_point),
+        EntryPoint::Program(env.arena.alloc([entry_point])),
         Some(&std::env::temp_dir().join("test.ll")),
     );
 
@@ -5619,7 +5551,7 @@ pub fn build_procedures_return_main<'a, 'ctx>(
         opt_level,
         procedures,
         host_exposed_lambda_sets,
-        EntryPoint::Single(entry_point),
+        EntryPoint::Program(env.arena.alloc([entry_point])),
         Some(&std::env::temp_dir().join("test.ll")),
     );
 
@@ -5830,7 +5762,7 @@ fn build_procedures_help<'a>(
         GenTest | WasmGenTest | CliTest => { /* no host, or exposing types is not supported */ }
         Binary | BinaryDev | BinaryGlue => {
             for (proc_name, alias_name, hels) in host_exposed_lambda_sets.iter() {
-                let ident_string = proc_name.name().as_str(&env.interns);
+                let ident_string = proc_name.name().as_unsuffixed_str(&env.interns);
                 let fn_name: String = format!("{}_{}", ident_string, hels.id.0);
 
                 expose_alias_to_host(

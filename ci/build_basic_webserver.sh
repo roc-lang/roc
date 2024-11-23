@@ -47,6 +47,6 @@ cd ..
 
 cd basic-webserver
 
-roc build.roc --prebuilt-platform
+roc build.roc
 
 cd ..

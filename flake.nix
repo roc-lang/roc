@@ -8,7 +8,6 @@
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
-      inputs.flake-utils.follows = "flake-utils";
     };
     # to easily make configs for multiple architectures
     flake-utils.url = "github:numtide/flake-utils";
@@ -48,7 +47,7 @@
         # DevInputs are not necessary to build roc as a user
         linuxDevInputs = with pkgs;
           lib.optionals stdenv.isLinux [
-            valgrind # used in cli tests, see cli/tests/cli_run.rs
+            valgrind # used in cli tests, see cli/tests/cli_tests.rs
             vulkan-headers # here and below is all graphics stuff for examples/gui
             vulkan-loader
             vulkan-tools
@@ -58,6 +57,7 @@
             xorg.libXrandr
             xorg.libXi
             xorg.libxcb
+            cargo-llvm-cov # to visualize code coverage
           ];
 
         # DevInputs are not necessary to build roc as a user
@@ -135,9 +135,7 @@
           shellHook = ''
             export LLVM_SYS_${llvmMajorMinorStr}_PREFIX="${llvmPkgs.llvm.dev}"
             ${aliases}
-          '' + pkgs.lib.optionalString (system == "aarch64-darwin") ''
-            export RUSTFLAGS="-C link-arg=-lc++abi"
-          ''; # lc++abi as workaround for github.com/NixOS/nixpkgs/issues/166205, see also github.com/roc-lang/roc/issues/6303
+          '';
         };
 
         formatter = pkgs.nixpkgs-fmt;

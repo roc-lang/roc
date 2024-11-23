@@ -4,8 +4,8 @@ use crate::{
     Buf,
 };
 use roc_parse::ast::{
-    AbilityImpls, AssignedField, Collection, Expr, ExtractSpaces, ImplementsAbilities,
-    ImplementsAbility, ImplementsClause, Tag, TypeAnnotation, TypeHeader,
+    AbilityImpls, AssignedField, Collection, Expr, ExtractSpaces, FunctionArrow,
+    ImplementsAbilities, ImplementsAbility, ImplementsClause, Tag, TypeAnnotation, TypeHeader,
 };
 use roc_parse::ident::UppercaseIdent;
 use roc_region::all::Loc;
@@ -149,7 +149,7 @@ impl<'a> Formattable for TypeAnnotation<'a> {
             }
 
             Wildcard | Inferred | BoundVariable(_) | Malformed(_) => false,
-            Function(args, result) => {
+            Function(args, _arrow, result) => {
                 result.value.is_multiline()
                     || args.iter().any(|loc_arg| loc_arg.value.is_multiline())
             }
@@ -195,7 +195,7 @@ impl<'a> Formattable for TypeAnnotation<'a> {
         let self_is_multiline = self.is_multiline();
 
         match self {
-            Function(args, ret) => {
+            Function(args, arrow, ret) => {
                 let needs_parens = parens != Parens::NotNeeded;
 
                 buf.indent(indent);
@@ -236,7 +236,11 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                     buf.spaces(1);
                 }
 
-                buf.push_str("->");
+                match arrow {
+                    FunctionArrow::Pure => buf.push_str("->"),
+                    FunctionArrow::Effectful => buf.push_str("=>"),
+                }
+
                 buf.spaces(1);
 
                 ret.value
@@ -434,7 +438,6 @@ fn is_multiline_assigned_field_help<T: Formattable>(afield: &AssignedField<'_, T
         | IgnoredValue(_, spaces, ann) => !spaces.is_empty() || ann.value.is_multiline(),
         LabelOnly(_) => false,
         AssignedField::SpaceBefore(_, _) | AssignedField::SpaceAfter(_, _) => true,
-        Malformed(text) => text.chars().any(|c| c == '\n'),
     }
 }
 
@@ -518,9 +521,6 @@ fn format_assigned_field_help<T>(
             format_assigned_field_help(sub_field, buf, indent, separator_spaces, is_multiline);
             fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
         }
-        Malformed(raw) => {
-            buf.push_str(raw);
-        }
     }
 }
 
@@ -531,7 +531,6 @@ impl<'a> Formattable for Tag<'a> {
         match self {
             Apply { args, .. } => args.iter().any(|arg| arg.value.is_multiline()),
             Tag::SpaceBefore(_, _) | Tag::SpaceAfter(_, _) => true,
-            Malformed(text) => text.chars().any(|c| c == '\n'),
         }
     }
 
@@ -568,10 +567,6 @@ impl<'a> Formattable for Tag<'a> {
                 }
             }
             Tag::SpaceBefore(_, _) | Tag::SpaceAfter(_, _) => unreachable!(),
-            Tag::Malformed(raw) => {
-                buf.indent(indent);
-                buf.push_str(raw);
-            }
         }
     }
 }

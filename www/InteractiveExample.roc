@@ -117,7 +117,7 @@ tokensToStr = \tokens ->
 
 identToHtml : Str -> Str
 identToHtml = \str ->
-    List.walk (Str.split str ".") "" \accum, ident ->
+    List.walk (Str.splitOn str ".") "" \accum, ident ->
         len = Str.countUtf8Bytes ident
         withoutSuffix = ident |> Str.replaceLast "!" ""
 

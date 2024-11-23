@@ -25,6 +25,10 @@
         <p>Roc doesn’t have a numbered release or an installer yet, but you can follow the install instructions for your OS<a href="/install/getting_started.html#installation"> here </a>. If you get stuck, friendly people will be happy to help if you open a topic in<a href="https://roc.zulipchat.com/#narrow/stream/231634-beginners"> #beginners </a>on<a href="https://roc.zulipchat.com/"> Roc Zulip Chat </a>and ask for assistance!</p>
     </section>
 
+## [LLM Docs](#llm-docs) {#llm-docs}
+
+We have experimental LLM-friendly text files for our [tutorial](/llms.txt) and [standard library](/builtins/llms.txt) that you can use to prompt your favorite LLM to answer your questions about Roc!
+
 ## [REPL](#repl) {#repl}
 
 Let's start by getting acquainted with Roc's [_Read-Eval-Print-Loop_](https://en.wikipedia.org/wiki/Read%E2%80%93eval%E2%80%93print_loop), or **REPL** for short.
@@ -154,7 +158,7 @@ Let's move out of the REPL and create our first Roc application!
 Make a file named `main.roc` and put this in it:
 
 ```roc
-app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.15.0/SlwdbJ-3GR7uBWQo6zlmYWNYOxnvo8r6YABXD-45UOw.tar.br" }
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.16.0/O00IPk-Krg_diNS2dVWlI0ZQP794Vctxzv0ha96mK0E.tar.br" }
 
 import pf.Stdout
 
@@ -1507,7 +1511,7 @@ Besides being built into the compiler, the builtin modules are different from ot
 Let's take a closer look at the part of `main.roc` above the `main` def:
 
 ```roc
-app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.15.0/SlwdbJ-3GR7uBWQo6zlmYWNYOxnvo8r6YABXD-45UOw.tar.br" }
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.16.0/O00IPk-Krg_diNS2dVWlI0ZQP794Vctxzv0ha96mK0E.tar.br" }
 
 import pf.Stdout
 ```
@@ -1625,7 +1629,7 @@ We'll use these four operations to learn about tasks.
 Let's start with a basic "Hello World" program.
 
 ```roc
-app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.15.0/SlwdbJ-3GR7uBWQo6zlmYWNYOxnvo8r6YABXD-45UOw.tar.br" }
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.16.0/O00IPk-Krg_diNS2dVWlI0ZQP794Vctxzv0ha96mK0E.tar.br" }
 
 import pf.Stdout
 
@@ -1660,7 +1664,7 @@ Once this task runs, we'll end up with the [tag union](https://www.roc-lang.org/
 Let's change `main` to read a line from `stdin`, and then print what we got:
 
 ```roc
-app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.15.0/SlwdbJ-3GR7uBWQo6zlmYWNYOxnvo8r6YABXD-45UOw.tar.br" }
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.16.0/O00IPk-Krg_diNS2dVWlI0ZQP794Vctxzv0ha96mK0E.tar.br" }
 
 import pf.Stdout
 import pf.Stdin
@@ -1691,7 +1695,7 @@ high-quality programs handle errors gracefully. Fortunately, we can do this nice
 If we wanted to add the type annotation to `main` that Roc is inferring for it, we would add this annotation:
 
 ```roc
-main : Task {} [Exit I32, StdoutErr Stdout.Err, StdinErr Stdin.Err]
+main : Task {} [Exit I32 Str, StdoutErr Stdout.Err, StdinErr Stdin.Err]
 main =
 ```
 
@@ -1699,7 +1703,7 @@ Let's break down what this type is saying:
 
 - `Task` tells us this is a `Task` type. Its two type parameters are just like the ones we saw in `Result` earlier: the first type tells us what this task will produce if it succeeds, and the other one tells us what it will produce if it fails.
 - `{}` tells us that this task always produces an empty record when it succeeds. (That is, it doesn't produce anything useful. Empty records don't have any information in them!) This is because the last task in `main` comes from `Stdout.line`, which doesn't produce anything. (In contrast, the `Stdin` task's first type parameter is a `Str`, because it produces a `Str` if it succeeds.)
-- `[Exit I32, StdoutErr Stdout.Err, StdinErr Stdin.Err]` tells us the different ways this task can fail. The `StdoutErr` and `StdinErr` tags are there because we used `Stdout.line` and `Stdin.line`. We'll talk about `Exit I32` more in a moment.
+- `[Exit I32 Str, StdoutErr Stdout.Err, StdinErr Stdin.Err]` tells us the different ways this task can fail. The `StdoutErr` and `StdinErr` tags are there because we used `Stdout.line` and `Stdin.line`. We'll talk about `Exit I32 Str` more in a moment.
 
 To understand what the `Exit I32 Str` error means, let's try temporarily commenting out our current `main` and replacing
 it with this one:
@@ -2326,6 +2330,8 @@ Here are various Roc expressions involving operators, and what they desugar to.
 | `!a`                         | `Bool.not a`       |
 | <code>a \|> f</code>         | `f a`              |
 | <code>f a b \|> g x y</code> | `g (f a b) x y`    |
+| `f!`                         | [see example](https://www.roc-lang.org/examples/DesugaringAwait/README.html)     |
+| `f?`                         | [see example](https://www.roc-lang.org/examples/DesugaringTry/README.html)     |
 
 </section>
 <script type="text/javascript" src="/builtins/search.js" defer></script>

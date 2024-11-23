@@ -4,7 +4,7 @@ use crate::ast::{
     Collection, CommentOrNewline, Defs, Header, Malformed, Pattern, Spaced, Spaces, SpacesBefore,
     StrLiteral, TypeAnnotation,
 };
-use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
+use crate::blankspace::{space0_before_e, space0_e};
 use crate::expr::merge_spaces;
 use crate::ident::{self, lowercase_ident, unqualified_ident, UppercaseIdent};
 use crate::parser::Progress::{self, *};
@@ -19,6 +19,7 @@ use crate::pattern::record_pattern_fields;
 use crate::state::State;
 use crate::string_literal::{self, parse_str_literal};
 use crate::type_annotation;
+use roc_module::ident::IdentSuffix;
 use roc_module::symbol::ModuleId;
 use roc_region::all::{Loc, Position, Region};
 
@@ -587,7 +588,7 @@ fn requires<'a>(
 fn platform_requires<'a>() -> impl Parser<'a, PlatformRequires<'a>, ERequires<'a>> {
     record!(PlatformRequires {
         rigids: skip_second(requires_rigids(), space0_e(ERequires::ListStart)),
-        signature: requires_typed_ident()
+        signatures: requires_typed_ident()
     })
 }
 
@@ -607,18 +608,15 @@ fn requires_rigids<'a>(
 }
 
 #[inline(always)]
-fn requires_typed_ident<'a>() -> impl Parser<'a, Loc<Spaced<'a, TypedIdent<'a>>>, ERequires<'a>> {
-    skip_first(
+fn requires_typed_ident<'a>(
+) -> impl Parser<'a, Collection<'a, Loc<Spaced<'a, TypedIdent<'a>>>>, ERequires<'a>> {
+    reset_min_indent(collection_trailing_sep_e(
         byte(b'{', ERequires::ListStart),
-        skip_second(
-            reset_min_indent(space0_around_ee(
-                specialize_err(ERequires::TypedIdent, loc(typed_ident())),
-                ERequires::ListStart,
-                ERequires::ListEnd,
-            )),
-            byte(b'}', ERequires::ListStart),
-        ),
-    )
+        specialize_err(ERequires::TypedIdent, loc(typed_ident())),
+        byte(b',', ERequires::ListEnd),
+        byte(b'}', ERequires::ListEnd),
+        Spaced::SpaceBefore,
+    ))
 }
 
 #[inline(always)]
@@ -955,7 +953,7 @@ pub enum HeaderType<'a> {
         opt_app_module_id: Option<ModuleId>,
         /// the name and type scheme of the main function (required by the platform)
         /// (type scheme is currently unused)
-        provides: &'a [(Loc<ExposedName<'a>>, Loc<TypedIdent<'a>>)],
+        provides: &'a [Loc<ExposedName<'a>>],
         requires: &'a [Loc<TypedIdent<'a>>],
         requires_types: &'a [Loc<UppercaseIdent<'a>>],
         exposes: &'a [Loc<ModuleName<'a>>],
@@ -1135,6 +1133,10 @@ impl<'a> ExposedName<'a> {
     pub fn as_str(&'a self) -> &'a str {
         self.0
     }
+
+    pub fn is_effectful_fn(&self) -> bool {
+        IdentSuffix::from_name(self.0).is_bang()
+    }
 }
 
 pub trait Keyword: Copy + Clone + Debug {
@@ -1239,7 +1241,7 @@ pub struct PackageHeader<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlatformRequires<'a> {
     pub rigids: Collection<'a, Loc<Spaced<'a, UppercaseIdent<'a>>>>,
-    pub signature: Loc<Spaced<'a, TypedIdent<'a>>>,
+    pub signatures: Collection<'a, Loc<Spaced<'a, TypedIdent<'a>>>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1258,7 +1260,7 @@ pub struct PlatformHeader<'a> {
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum ImportsEntry<'a> {
-    /// e.g. `Hello` or `Hello exposing [hello]` see roc-lang.org/examples/MultipleRocFiles/README.html  
+    /// e.g. `Hello` or `Hello exposing [hello]` see roc-lang.org/examples/MultipleRocFiles/README.html
     Module(
         ModuleName<'a>,
         Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
@@ -1393,7 +1395,7 @@ impl<'a> Malformed for PackageHeader<'a> {
 
 impl<'a> Malformed for PlatformRequires<'a> {
     fn is_malformed(&self) -> bool {
-        self.signature.is_malformed()
+        self.signatures.items.iter().any(|x| x.is_malformed())
     }
 }
 

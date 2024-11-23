@@ -1,19 +1,20 @@
 ---
 source: crates/compiler/can/tests/test_suffixed.rs
 expression: snapshot
+snapshot_kind: text
 ---
 Defs {
     tags: [
-        Index(2147483648),
+        EitherIndex(2147483648),
     ],
     regions: [
         @0-307,
     ],
     space_before: [
-        Slice(start = 0, length = 0),
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
     ],
     space_after: [
-        Slice(start = 0, length = 1),
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
     ],
     spaces: [
         Newline,
@@ -27,9 +28,9 @@ Defs {
             @11-307 Defs(
                 Defs {
                     tags: [
-                        Index(2147483648),
-                        Index(2147483649),
-                        Index(2147483650),
+                        EitherIndex(2147483648),
+                        EitherIndex(2147483649),
+                        EitherIndex(2147483650),
                     ],
                     regions: [
                         @20-37,
@@ -37,14 +38,14 @@ Defs {
                         @109-298,
                     ],
                     space_before: [
-                        Slice(start = 0, length = 0),
-                        Slice(start = 0, length = 1),
-                        Slice(start = 1, length = 1),
+                        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
+                        Slice<roc_parse::ast::CommentOrNewline> { start: 1, length: 1 },
                     ],
                     space_after: [
-                        Slice(start = 0, length = 0),
-                        Slice(start = 1, length = 0),
-                        Slice(start = 2, length = 0),
+                        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                        Slice<roc_parse::ast::CommentOrNewline> { start: 1, length: 0 },
+                        Slice<roc_parse::ast::CommentOrNewline> { start: 2, length: 0 },
                     ],
                     spaces: [
                         Newline,
@@ -165,16 +166,16 @@ Defs {
                                                             @140-152 Defs(
                                                                 Defs {
                                                                     tags: [
-                                                                        Index(2147483648),
+                                                                        EitherIndex(2147483648),
                                                                     ],
                                                                     regions: [
                                                                         @140-152,
                                                                     ],
                                                                     space_before: [
-                                                                        Slice(start = 0, length = 0),
+                                                                        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
                                                                     ],
                                                                     space_after: [
-                                                                        Slice(start = 0, length = 0),
+                                                                        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
                                                                     ],
                                                                     spaces: [],
                                                                     type_defs: [],
@@ -287,16 +288,16 @@ Defs {
                                                                             @227-239 Defs(
                                                                                 Defs {
                                                                                     tags: [
-                                                                                        Index(2147483648),
+                                                                                        EitherIndex(2147483648),
                                                                                     ],
                                                                                     regions: [
                                                                                         @227-239,
                                                                                     ],
                                                                                     space_before: [
-                                                                                        Slice(start = 0, length = 0),
+                                                                                        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
                                                                                     ],
                                                                                     space_after: [
-                                                                                        Slice(start = 0, length = 0),
+                                                                                        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
                                                                                     ],
                                                                                     spaces: [],
                                                                                     type_defs: [],

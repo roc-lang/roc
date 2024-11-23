@@ -88,6 +88,7 @@ pub fn fmt_collection<'a, 'buf, T: ExtractSpaces<'a> + Formattable>(
             buf.indent(item_indent);
             item.item.format(buf, item_indent);
 
+            buf.indent(item_indent);
             buf.push(',');
 
             if !item.after.is_empty() {

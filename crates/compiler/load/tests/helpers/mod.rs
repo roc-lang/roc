@@ -3,6 +3,7 @@ extern crate bumpalo;
 use self::bumpalo::Bump;
 use roc_can::abilities::AbilitiesStore;
 use roc_can::constraint::{Constraint, Constraints};
+use roc_can::desugar;
 use roc_can::env::Env;
 use roc_can::expected::Expected;
 use roc_can::expr::{canonicalize_expr, Expr, Output, PendingDerives};
@@ -10,7 +11,7 @@ use roc_can::scope::Scope;
 use roc_collections::all::{ImMap, MutMap, SendSet};
 use roc_constrain::expr::constrain_expr;
 use roc_derive::SharedDerivedModule;
-use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds};
+use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, PQModuleName, PackageModuleIds};
 use roc_parse::parser::{SourceError, SyntaxError};
 use roc_problem::can::Problem;
 use roc_region::all::Loc;
@@ -52,6 +53,8 @@ pub fn infer_expr(
         function_kind: FunctionKind::LambdaSet,
         #[cfg(debug_assertions)]
         checkmate: None,
+        module_params: None,
+        module_params_vars: Default::default(),
     };
 
     let RunSolveOutput { solved, .. } =
@@ -153,10 +156,29 @@ pub fn can_expr_with<'a>(
     let var = var_store.fresh();
     let var_index = constraints.push_variable(var);
     let expected = constraints.push_expected_type(Expected::NoExpectation(var_index));
-    let mut module_ids = ModuleIds::default();
+    let mut module_ids = PackageModuleIds::default();
 
     // ensure the Test module is accessible in our tests
-    module_ids.get_or_insert(&"Test".into());
+    module_ids.get_or_insert(&PQModuleName::Unqualified("Test".into()));
+
+    let mut scope = Scope::new(
+        home,
+        "TestPath".into(),
+        IdentIds::default(),
+        Default::default(),
+    );
+
+    let dep_idents = IdentIds::exposed_builtins(0);
+    let mut env = Env::new(
+        arena,
+        expr_str,
+        home,
+        Path::new("Test.roc"),
+        &dep_idents,
+        &module_ids,
+        None,
+        roc_can::env::FxMode::PurityInference,
+    );
 
     // Desugar operators (convert them to Apply calls, taking into account
     // operator precedence and associativity rules), before doing other canonicalization.
@@ -165,18 +187,26 @@ pub fn can_expr_with<'a>(
     // visited a BinOp node we'd recursively try to apply this to each of its nested
     // operators, and then again on *their* nested operators, ultimately applying the
     // rules multiple times unnecessarily.
-    let loc_expr = operator::desugar_expr(
-        arena,
-        &loc_expr,
-        expr_str,
-        &mut None,
-        arena.alloc("TestPath"),
+    let loc_expr = desugar::desugar_expr(&mut env, &mut scope, &loc_expr);
+
+    let mut scope = Scope::new(
+        home,
+        "TestPath".into(),
+        IdentIds::default(),
+        Default::default(),
     );
 
-    let mut scope = Scope::new(home, IdentIds::default(), Default::default());
-
     let dep_idents = IdentIds::exposed_builtins(0);
-    let mut env = Env::new(arena, home, &dep_idents, &module_ids);
+    let mut env = Env::new(
+        arena,
+        expr_str,
+        home,
+        Path::new("Test.roc"),
+        &dep_idents,
+        &module_ids,
+        None,
+        roc_can::env::FxMode::PurityInference,
+    );
     let (loc_expr, output) = canonicalize_expr(
         &mut env,
         &mut var_store,
@@ -192,6 +222,7 @@ pub fn can_expr_with<'a>(
             rigids: MutMap::default(),
             home,
             resolutions_to_make: vec![],
+            fx_expectation: None,
         },
         loc_expr.region,
         &loc_expr.value,
@@ -202,7 +233,7 @@ pub fn can_expr_with<'a>(
     all_ident_ids.insert(home, scope.locals.ident_ids);
 
     let interns = Interns {
-        module_ids: env.module_ids.clone(),
+        module_ids: env.qualified_module_ids.clone().into_module_ids(),
         all_ident_ids,
     };
 

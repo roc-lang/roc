@@ -22,6 +22,10 @@ pub enum DeclarationInfo<'a> {
         pattern: Pattern,
         annotation: Option<&'a Annotation>,
     },
+    Return {
+        loc_expr: &'a Loc<Expr>,
+        expr_var: Variable,
+    },
     Expectation {
         loc_condition: &'a Loc<Expr>,
     },
@@ -50,6 +54,7 @@ impl<'a> DeclarationInfo<'a> {
                 loc_expr,
                 ..
             } => Region::span_across(&loc_symbol.region, &loc_expr.region),
+            Return { loc_expr, .. } => loc_expr.region,
             Expectation { loc_condition } => loc_condition.region,
             Function {
                 loc_symbol,
@@ -67,6 +72,7 @@ impl<'a> DeclarationInfo<'a> {
     fn var(&self) -> Variable {
         match self {
             DeclarationInfo::Value { expr_var, .. } => *expr_var,
+            DeclarationInfo::Return { expr_var, .. } => *expr_var,
             DeclarationInfo::Expectation { .. } => Variable::BOOL,
             DeclarationInfo::Function { expr_var, .. } => *expr_var,
             DeclarationInfo::Destructure { expr_var, .. } => *expr_var,
@@ -101,7 +107,7 @@ pub fn walk_decls<V: Visitor>(visitor: &mut V, decls: &Declarations) {
                     annotation: decls.annotations[index].as_ref(),
                 }
             }
-            Expectation | ExpectationFx => {
+            Expectation => {
                 let loc_condition = &decls.expressions[index];
 
                 DeclarationInfo::Expectation { loc_condition }
@@ -184,6 +190,9 @@ pub fn walk_decl<V: Visitor>(visitor: &mut V, decl: DeclarationInfo<'_>) {
         }
         Expectation { loc_condition } => {
             visitor.visit_expr(&loc_condition.value, loc_condition.region, Variable::BOOL);
+        }
+        Return { loc_expr, expr_var } => {
+            visitor.visit_expr(&loc_expr.value, loc_expr.region, expr_var);
         }
         Function {
             loc_symbol,
@@ -283,7 +292,7 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
             visitor.visit_expr(&body.value, body.region, var);
         }
         Expr::Call(f, args, _called_via) => {
-            let (fn_var, loc_fn, _closure_var, _ret_var) = &**f;
+            let (fn_var, loc_fn, _closure_var, _ret_var, _fx_var) = &**f;
             walk_call(visitor, *fn_var, loc_fn, args);
         }
         Expr::Crash { msg, .. } => {
@@ -376,18 +385,6 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
                 Variable::NULL,
             );
         }
-        Expr::ExpectFx {
-            loc_condition,
-            loc_continuation,
-            lookups_in_cond: _,
-        } => {
-            visitor.visit_expr(&loc_condition.value, loc_condition.region, Variable::BOOL);
-            visitor.visit_expr(
-                &loc_continuation.value,
-                loc_continuation.region,
-                Variable::NULL,
-            );
-        }
         Expr::Dbg {
             variable,
             source: _,
@@ -402,6 +399,12 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
                 loc_continuation.region,
                 Variable::NULL,
             );
+        }
+        Expr::Return {
+            return_value,
+            return_var,
+        } => {
+            visitor.visit_expr(&return_value.value, return_value.region, *return_var);
         }
         Expr::TypedHole(_) => { /* terminal */ }
         Expr::RuntimeError(..) => { /* terminal */ }

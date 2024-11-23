@@ -4,27 +4,25 @@ use roc_build::link::LinkType;
 use roc_build::program::{check_file, CodeGenBackend};
 use roc_cli::{
     build_app, format_files, format_src, test, BuildConfig, FormatMode, CMD_BUILD, CMD_CHECK,
-    CMD_DEV, CMD_DOCS, CMD_FORMAT, CMD_GEN_STUB_LIB, CMD_GLUE, CMD_PREPROCESS_HOST, CMD_REPL,
-    CMD_RUN, CMD_TEST, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_LIB, FLAG_MAIN,
-    FLAG_NO_COLOR, FLAG_NO_HEADER, FLAG_NO_LINK, FLAG_OUTPUT, FLAG_PP_DYLIB, FLAG_PP_HOST,
-    FLAG_PP_PLATFORM, FLAG_STDIN, FLAG_STDOUT, FLAG_TARGET, FLAG_TIME, GLUE_DIR, GLUE_SPEC,
-    ROC_FILE,
+    CMD_DEV, CMD_DOCS, CMD_FORMAT, CMD_GLUE, CMD_PREPROCESS_HOST, CMD_REPL, CMD_RUN, CMD_TEST,
+    CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_LIB, FLAG_MAIN, FLAG_NO_COLOR,
+    FLAG_NO_HEADER, FLAG_NO_LINK, FLAG_OUTPUT, FLAG_PP_DYLIB, FLAG_PP_HOST, FLAG_PP_PLATFORM,
+    FLAG_STDIN, FLAG_STDOUT, FLAG_TARGET, FLAG_TIME, GLUE_DIR, GLUE_SPEC, ROC_FILE, VERSION,
 };
 use roc_docs::generate_docs_html;
 use roc_error_macros::user_error;
 use roc_gen_dev::AssemblyBackendMode;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
-use roc_load::{FunctionKind, LoadingProblem, Threading};
+use roc_load::{LoadingProblem, Threading};
 use roc_packaging::cache::{self, RocCacheDir};
 use roc_target::Target;
 use std::fs::{self, FileType};
+use std::io::BufRead;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use target_lexicon::Triple;
-
-#[macro_use]
-extern crate const_format;
+use tempfile::Builder;
 
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -52,7 +50,7 @@ fn main() -> io::Result<()> {
                     BuildConfig::BuildAndRunIfNoErrors,
                     Triple::host().into(),
                     None,
-                    RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+                    RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
                     LinkType::Executable,
                 )
             } else {
@@ -67,7 +65,7 @@ fn main() -> io::Result<()> {
                     BuildConfig::BuildAndRun,
                     Triple::host().into(),
                     None,
-                    RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+                    RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
                     LinkType::Executable,
                 )
             } else {
@@ -93,7 +91,7 @@ fn main() -> io::Result<()> {
                     BuildConfig::BuildAndRunIfNoErrors,
                     Triple::host().into(),
                     None,
-                    RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+                    RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
                     LinkType::Executable,
                 )
             } else {
@@ -120,21 +118,6 @@ fn main() -> io::Result<()> {
 
                 Ok(1)
             }
-        }
-        Some((CMD_GEN_STUB_LIB, matches)) => {
-            let input_path = matches.get_one::<PathBuf>(ROC_FILE).unwrap();
-            let target = matches
-                .get_one::<String>(FLAG_TARGET)
-                .and_then(|s| Target::from_str(s).ok())
-                .unwrap_or_default();
-            let function_kind = FunctionKind::from_env();
-            roc_linker::generate_stub_lib(
-                input_path,
-                RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
-                target,
-                function_kind,
-            );
-            Ok(0)
         }
         Some((CMD_PREPROCESS_HOST, matches)) => {
             let preprocess_host_err =
@@ -170,10 +153,14 @@ fn main() -> io::Result<()> {
 
             let verbose_and_time = matches.get_one::<bool>(roc_cli::FLAG_VERBOSE).unwrap();
 
+            let preprocessed_path = platform_path.with_file_name(target.prebuilt_surgical_host());
+            let metadata_path = platform_path.with_file_name(target.metadata_file_name());
+
             roc_linker::preprocess_host(
                 target,
                 host_path,
-                platform_path,
+                metadata_path.as_path(),
+                preprocessed_path.as_path(),
                 dylib_path,
                 *verbose_and_time,
                 *verbose_and_time,
@@ -202,7 +189,7 @@ fn main() -> io::Result<()> {
                 BuildConfig::BuildOnly,
                 target,
                 out_path,
-                RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+                RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
                 link_type,
             )?)
         }
@@ -220,26 +207,89 @@ fn main() -> io::Result<()> {
 
             let opt_main_path = matches.get_one::<PathBuf>(FLAG_MAIN);
 
-            match check_file(
-                &arena,
-                roc_file_path.to_owned(),
-                opt_main_path.cloned(),
-                emit_timings,
-                RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
-                threading,
-            ) {
-                Ok((problems, total_time)) => {
-                    problems.print_error_warning_count(total_time);
-                    Ok(problems.exit_code())
-                }
+            match roc_file_path.extension().and_then(OsStr::to_str) {
+                Some("md") => {
+                    // Extract the blocks of roc code
+                    let file = fs::File::open(roc_file_path.as_path())?;
+                    let markdown_file_reader = io::BufReader::new(file);
+                    let mut roc_blocks: Vec<String> = Vec::new();
+                    let mut in_roc_block: bool = false;
+                    let mut current_block = String::new();
 
-                Err(LoadingProblem::FormattedReport(report)) => {
-                    print!("{report}");
+                    for line in markdown_file_reader.lines() {
+                        let line = line.unwrap();
+                        if line == "```roc" {
+                            in_roc_block = true;
+                        } else if (line == "```") & in_roc_block {
+                            in_roc_block = false;
+                            roc_blocks.push(current_block);
+                            current_block = String::new();
+                        } else if in_roc_block {
+                            current_block.push_str(&line);
+                            current_block.push('\n');
+                        }
+                    }
 
-                    Ok(1)
+                    // now check each block, we exit early if any single block does not check
+                    let mut exit_code = 0;
+
+                    for block in roc_blocks.iter() {
+                        let mut file = Builder::new().suffix(".roc").tempfile()?;
+                        write!(file, "{}", block)?;
+
+                        match check_file(
+                            &arena,
+                            file.path().to_owned(),
+                            opt_main_path.cloned(),
+                            emit_timings,
+                            RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
+                            threading,
+                        ) {
+                            Ok((problems, total_time)) => {
+                                problems.print_error_warning_count(total_time);
+                                exit_code = problems.exit_code();
+                            }
+
+                            Err(LoadingProblem::FormattedReport(report)) => {
+                                print!("{report}");
+
+                                exit_code = 1;
+                            }
+                            Err(other) => {
+                                panic!("build_file failed with error:\n{other:?}");
+                            }
+                        }
+
+                        if exit_code != 0 {
+                            break;
+                        }
+                    }
+
+                    Ok(exit_code)
                 }
-                Err(other) => {
-                    panic!("build_file failed with error:\n{other:?}");
+                _ => {
+                    match check_file(
+                        &arena,
+                        roc_file_path.to_owned(),
+                        opt_main_path.cloned(),
+                        emit_timings,
+                        RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
+                        threading,
+                    ) {
+                        Ok((problems, total_time)) => {
+                            problems.print_error_warning_count(total_time);
+                            Ok(problems.exit_code())
+                        }
+
+                        Err(LoadingProblem::FormattedReport(report)) => {
+                            print!("{report}");
+
+                            Ok(1)
+                        }
+                        Err(other) => {
+                            panic!("build_file failed with error:\n{other:?}");
+                        }
+                    }
                 }
             }
         }
@@ -364,11 +414,7 @@ fn main() -> io::Result<()> {
             Ok(format_exit_code)
         }
         Some((CMD_VERSION, _)) => {
-            print!(
-                "{}",
-                concatcp!("roc ", include_str!("../../../version.txt"))
-            );
-
+            println!("roc {}", VERSION);
             Ok(0)
         }
         _ => unreachable!(),

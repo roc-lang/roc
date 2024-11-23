@@ -6,10 +6,14 @@ import pf.SSG
 import pf.Types exposing [Args]
 import pf.Html exposing [header, nav, div, link, attribute, text, a, span, html, head, body, meta, script, footer, br]
 import pf.Html.Attributes exposing [id, ariaLabel, ariaHidden, title, href, class, rel, type, content, lang, charset, name, color]
+import "content/tutorial.md" as tutorialMarkdown : Str
+
 import InteractiveExample
 
 main : Args -> Task {} _
 main = \{ inputDir, outputDir } ->
+
+    SSG.writeFile! { outputDir, relpath: Types.toRelPath "llms.txt", content: tutorialMarkdown }
 
     # get the path and url of markdown files in content directory
     files = SSG.files! inputDir
@@ -41,6 +45,7 @@ pageData =
     |> Dict.insert "/plans.html" { title: "Planned Changes | Roc", description: "Planned changes to the Roc programming language." }
     |> Dict.insert "/platforms.html" { title: "Platforms and Apps | Roc", description: "Learn about the platforms and applications architecture in the Roc programming language." }
     |> Dict.insert "/tutorial.html" { title: "Tutorial | Roc", description: "Learn the Roc programming language." }
+    |> Dict.insert "/different-names.html" { title: "Different Names | Roc", description: "Names of things in Roc that differ from other languages." }
     |> Dict.insert "/repl/index.html" { title: "REPL | Roc", description: "Try the Roc programming language in an online REPL." }
     |> Dict.insert "/examples/index.html" { title: "Examples | Roc", description: "All kinds of examples implemented in the Roc programming language." }
     |> Dict.insert "/install/other.html" { title: "Getting started on other systems | Roc", description: "Roc installation guide for other systems" }
@@ -57,7 +62,7 @@ getPageInfo = \pagePathStr ->
         Ok pageInfo -> pageInfo
         Err KeyNotFound ->
             if Str.contains pagePathStr "/examples/" then
-                Str.split pagePathStr "/"
+                Str.splitOn pagePathStr "/"
                 |> List.takeLast 2
                 |> List.first # we use the folder for name for the page title, e.g. Json from examples/Json/README.html
                 |> unwrapOrCrash "This List.first should never fail. pagePathStr ($(pagePathStr)) did not contain any `/`."

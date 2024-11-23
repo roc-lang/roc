@@ -243,9 +243,13 @@ fn create_llvm_module<'a>(
         } => {
             // TODO support multiple of these!
             debug_assert_eq!(exposed_to_host.len(), 1);
-            let (symbol, layout) = exposed_to_host[0];
+            let (name, symbol, layout) = exposed_to_host[0];
 
-            SingleEntryPoint { symbol, layout }
+            SingleEntryPoint {
+                name,
+                symbol,
+                layout,
+            }
         }
         EntryPoint::Test => {
             unreachable!()
@@ -536,6 +540,7 @@ pub fn try_run_lib_function<T>(
     }
 }
 
+#[allow(dead_code)]
 // only used in tests
 #[allow(dead_code)]
 pub(crate) fn llvm_evals_to<T, U, F>(
