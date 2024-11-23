@@ -14656,6 +14656,77 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
+        mismatch_only_early_returns,
+        indoc!(
+            r#"
+            myFunction = \x ->
+                if x == 5 then
+                    return "abc"
+                else
+                    return 123
+
+            myFunction 3
+            "#
+        ),
+        @r###"
+        ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+        
+        This `return` statement doesn't match the return type of its enclosing
+        function:
+        
+        5│          if x == 5 then
+        6│              return "abc"
+        7│          else
+        8│              return 123
+                        ^^^^^^^^^^
+        
+        This returns a value of type:
+        
+            Num *
+        
+        But I expected the function to have return type:
+        
+            Str
+        "###
+    );
+
+    test_report!(
+        mismatch_early_return_annotated_function,
+        indoc!(
+            r#"
+            myFunction : U64 -> Str
+            myFunction = \x ->
+                if x == 5 then
+                    return 123
+                else
+                    "abc"
+
+            myFunction 3
+            "#
+        ),
+        @r###"
+        ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+        
+        Something is off with the body of the `myFunction` definition:
+        
+        4│      myFunction : U64 -> Str
+        5│      myFunction = \x ->
+        6│          if x == 5 then
+        7│              return 123
+                        ^^^^^^^^^^
+        
+        This returns a value of type:
+        
+            Num *
+        
+        But the type annotation on `myFunction` says it should be:
+        
+            Str
+
+        "###
+    );
+
+    test_report!(
         leftover_statement,
         indoc!(
             r#"

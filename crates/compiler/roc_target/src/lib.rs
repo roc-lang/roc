@@ -49,8 +49,8 @@ pub enum Architecture {
 impl std::fmt::Display for Architecture {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let arch_str = match self {
-            Architecture::Aarch32 => "arm",
-            Architecture::Aarch64 => "arm64",
+            Architecture::Aarch32 => "aarch32",
+            Architecture::Aarch64 => "aarch64",
             Architecture::Wasm32 => "wasm32",
             Architecture::X86_32 => "x86_32",
             Architecture::X86_64 => "x86_64",
