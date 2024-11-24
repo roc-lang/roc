@@ -906,7 +906,7 @@ pub(super) fn finalizer(
         .zip(field_vars.iter().rev())
         .zip(result_field_vars.iter().rev())
     {
-        // [Ok field_var, Err DecodeError]
+        // [Ok field_var, Err err]
         //   when rec.f0 is
         //       Err _ ->
         //           when Decode.decodeWith [] Decode.decoder fmt is
