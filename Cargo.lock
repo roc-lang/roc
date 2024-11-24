@@ -1617,6 +1617,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "nonempty_str"
+version = "0.0.1"
+
+[[package]]
 name = "normpath"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3526,6 +3530,10 @@ dependencies = [
 [[package]]
 name = "sized_str"
 version = "0.0.1"
+dependencies = [
+ "nonempty_str",
+ "small_str_slice",
+]
 
 [[package]]
 name = "slab"
@@ -3534,6 +3542,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f92a496fb766b417c996b9c5e57daf2f7ad3b0bebe1ccfca4856390e3d3bb67"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "small_str_slice"
+version = "0.0.1"
+dependencies = [
+ "nonempty_str",
 ]
 
 [[package]]

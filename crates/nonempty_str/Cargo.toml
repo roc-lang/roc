@@ -1,0 +1,12 @@
+[package]
+name = "nonempty_str"
+description = "Like &str but nonempty."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+
+[dev-dependencies]

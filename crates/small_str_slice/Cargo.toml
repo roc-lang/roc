@@ -1,6 +1,6 @@
 [package]
-name = "sized_str"
-description = "Fixed-sized strings (Str4, Str8, Str16) that are zero-padded at the end."
+name = "small_str_slice"
+description = "A str slice that stores small strings (2 * size_of::<usize>() or smaller) inline."
 
 authors.workspace = true
 edition.workspace = true
@@ -9,6 +9,5 @@ version.workspace = true
 
 [dependencies]
 nonempty_str.workspace = true
-small_str_slice.workspace = true
 
 [dev-dependencies]
