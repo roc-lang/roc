@@ -17,8 +17,6 @@ use bumpalo::Bump;
 /// (e.g. `"        x = 1"` here) and trimming that many spaces from the beginning
 /// of each subsequent line. The end of the string is then trimmed normally, and
 /// any remaining empty lines are left empty.
-///
-/// This function is a no-op on single-line strings.
 pub fn trim_and_deindent<'a>(arena: &'a Bump, input: &'a str) -> &'a str {
     let newline_count = input.chars().filter(|&ch| ch == '\n').count();
 
