@@ -103,7 +103,7 @@ impl<T, U, V> Slice3<T, U, V> {
 }
 
 impl<T, U, V> IntoIterator for Slice3<T, U, V> {
-    type Item = (Index<T>, Index<U>);
+    type Item = (Index<T>, Index<U>, Index<V>);
     type IntoIter = SliceIterator<T, U, V>;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -120,7 +120,7 @@ pub struct SliceIterator<T, U, V> {
 }
 
 impl<T, U, V> Iterator for SliceIterator<T, U, V> {
-    type Item = (Index<T>, Index<U>);
+    type Item = (Index<T>, Index<U>, Index<V>);
 
     fn next(&mut self) -> Option<Self::Item> {
         let offset = self.offset;
@@ -134,10 +134,14 @@ impl<T, U, V> Iterator for SliceIterator<T, U, V> {
                 index: self.slice.start2 + offset,
                 _marker: PhantomData,
             };
+            let index3 = Index {
+                index: self.slice.start3 + offset,
+                _marker: PhantomData,
+            };
 
             self.offset += 1;
 
-            Some((index1, index2))
+            Some((index1, index2, index3))
         } else {
             None
         }
