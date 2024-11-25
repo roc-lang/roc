@@ -51,7 +51,7 @@ pub fn trim_and_deindent<'a>(arena: &'a Bump, input: &'a str) -> &'a str {
     // Find the smallest indent of the remaining lines. That's our indentation amount.
     let smallest_indent = lines
         .iter()
-        .filter(|line| !line.is_empty())
+        .filter(|line| !line.trim().is_empty())
         .map(|line| line.chars().take_while(|&ch| ch == ' ').count())
         .min()
         .unwrap_or(0);
