@@ -6,7 +6,7 @@ use roc_can::expr::Recursive;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
-use soa::{Id, Index, NonEmptySlice, Slice, Slice2, Slice3};
+use soa::{Index, NonEmptySlice, Slice, Slice2, Slice3};
 use std::iter;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -46,7 +46,7 @@ impl MonoExprs {
         self.regions.push(region);
 
         MonoExprId {
-            inner: Id::new(index),
+            inner: Index::new(index),
         }
     }
 
@@ -146,22 +146,22 @@ impl MonoExprs {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MonoExprId {
-    inner: Id<MonoExpr>,
+    inner: Index<MonoExpr>,
 }
 
 impl MonoExprId {
-    pub(crate) unsafe fn new_unchecked(inner: Id<MonoExpr>) -> Self {
+    pub(crate) unsafe fn new_unchecked(inner: Index<MonoExpr>) -> Self {
         Self { inner }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MonoStmtId {
-    inner: Id<MonoStmt>,
+    inner: Index<MonoStmt>,
 }
 
 impl MonoStmtId {
-    pub(crate) unsafe fn new_unchecked(inner: Id<MonoStmt>) -> Self {
+    pub(crate) unsafe fn new_unchecked(inner: Index<MonoStmt>) -> Self {
         Self { inner }
     }
 }

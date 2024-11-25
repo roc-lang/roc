@@ -8,8 +8,6 @@ use core::{
 
 use crate::soa_slice::Slice;
 
-pub type Id<T> = Index<T>;
-
 /// An index into an array of values, based
 /// on an offset into the array rather than a pointer.
 ///

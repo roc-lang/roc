@@ -1,5 +1,5 @@
 use roc_module::ident::ForeignSymbol;
-use soa::Id;
+use soa::Index;
 
 #[derive(Debug, Default)]
 pub struct ForeignSymbols {
@@ -26,12 +26,12 @@ impl ForeignSymbols {
         self.inner.push(entry);
 
         ForeignSymbolId {
-            inner: Id::new(id as u32),
+            inner: Index::new(id as u32),
         }
     }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct ForeignSymbolId {
-    inner: Id<ForeignSymbol>,
+    inner: Index<ForeignSymbol>,
 }
