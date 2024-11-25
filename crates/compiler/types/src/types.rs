@@ -3579,7 +3579,7 @@ impl AliasKind {
     pub fn as_str_plural(&self) -> &'static str {
         match self {
             AliasKind::Structural => "aliases",
-            AliasKind::Opaque => "opaques",
+            AliasKind::Opaque => "opaque types",
         }
     }
 }

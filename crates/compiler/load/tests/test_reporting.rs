@@ -11054,8 +11054,8 @@ All branches in an `if` must have the same type!
     4│      Recursive := [Infinitely Recursive]
             ^^^^^^^^^
 
-    Recursion in opaques is only allowed if recursion happens behind a
-    tagged union, at least one variant of which is not recursive.
+    Recursion in opaque types is only allowed if recursion happens behind
+    a tagged union, at least one variant of which is not recursive.
     "
     );
 
