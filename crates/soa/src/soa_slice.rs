@@ -115,7 +115,7 @@ impl<T> Slice<T> {
         }
     }
 
-    pub fn into_nonempty_slice(&self) -> Option<NonEmptySlice<T>> {
+    pub fn as_nonempty_slice(&self) -> Option<NonEmptySlice<T>> {
         NonZeroU16::new(self.length).map(|nonzero_len| NonEmptySlice::new(self.start, nonzero_len))
     }
 }
