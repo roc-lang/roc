@@ -3834,7 +3834,6 @@ dependencies = [
  "roc_specialize_types",
  "roc_target",
  "roc_types",
- "test_solve_helpers",
 ]
 
 [[package]]

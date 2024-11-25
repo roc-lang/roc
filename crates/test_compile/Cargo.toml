@@ -24,7 +24,6 @@ roc_constrain = { path = "../compiler/constrain" }
 roc_reporting = { path = "../reporting" }
 roc_target = { path = "../compiler/roc_target" }
 roc_solve = { path = "../compiler/solve" }
-test_solve_helpers = { path = "../compiler/test_solve_helpers" }
 roc_solve_problem = { path = "../compiler/solve_problem" }
 
 roc_specialize_types.workspace = true
