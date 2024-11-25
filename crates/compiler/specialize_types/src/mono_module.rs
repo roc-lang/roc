@@ -7,6 +7,7 @@ use crate::{foreign_symbol::ForeignSymbols, mono_type::MonoTypes, DebugInfo};
 pub struct MonoModule {
     mono_types: MonoTypes,
     foreign_symbols: ForeignSymbols,
+    // TODO [mono2]: interner type
     interned_strings: Vec<String>,
     debug_info: DebugInfo,
 }
