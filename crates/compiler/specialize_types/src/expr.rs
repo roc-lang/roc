@@ -469,7 +469,12 @@ fn monomorphize_var(var: Variable, subs: &mut Subs) -> Variable {
             for (i, uls) in lambda_set.unspecialized.into_iter().enumerate() {
                 let Uls(var, sym, region) = subs[uls];
                 let new_var = monomorphize_var(var, subs);
-                subs[new_unspecialized.into_iter().nth(i).unwrap()] = Uls(new_var, sym, region);
+
+                if let Some(i) = new_unspecialized.into_iter().nth(i) {
+                    subs[i] = Uls(new_var, sym, region);
+                } else {
+                    debug_panic!("new_unspecialized is too short");
+                }
             }
             let new_ambient_function = monomorphize_var(lambda_set.ambient_function, subs);
             let new_lambda_set = LambdaSet {
