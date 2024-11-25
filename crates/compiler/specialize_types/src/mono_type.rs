@@ -120,9 +120,7 @@ impl MonoTypes {
 
         debug_assert!(opt.is_some(), "A MonoTypeId corresponded to an index that wasn't in MonoTypes. This should never happen!");
 
-        unsafe {
-            opt.unwrap_unchecked()
-        }
+        unsafe { opt.unwrap_unchecked() }
     }
 
     pub(crate) fn add_primitive(&mut self, _primitive: Primitive) -> MonoTypeId {
