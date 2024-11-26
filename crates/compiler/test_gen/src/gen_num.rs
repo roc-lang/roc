@@ -1809,6 +1809,7 @@ fn frac_is_nan() {
     assert_evals_to!("Num.isNaN (0 / 0f64)", true, bool);
     assert_evals_to!("Num.isNaN (1 / 0f64)", false, bool);
     assert_evals_to!("Num.isNaN 42f64", false, bool);
+    assert_evals_to!("Num.isNaN 42dec", false, bool);
 }
 
 #[test]
@@ -1818,6 +1819,7 @@ fn frac_is_infinite() {
     assert_evals_to!("Num.isInfinite (-1 / 0f64)", true, bool);
     assert_evals_to!("Num.isInfinite (0 / 0f64)", false, bool);
     assert_evals_to!("Num.isInfinite 42f64", false, bool);
+    assert_evals_to!("Num.isInfinite 42dec", false, bool);
 }
 
 #[test]
@@ -1826,6 +1828,7 @@ fn frac_is_finite() {
     assert_evals_to!("Num.isFinite 42f64", true, bool);
     assert_evals_to!("Num.isFinite (1 / 0f64)", false, bool);
     assert_evals_to!("Num.isFinite (0 / 0f64)", false, bool);
+    assert_evals_to!("Num.isFinite 42dec", true, bool);
 }
 
 #[test]
