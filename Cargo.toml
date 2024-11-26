@@ -79,7 +79,6 @@ inkwell = { git = "https://github.com/roc-lang/inkwell", branch = "inkwell-llvm-
 soa = { path = "crates/soa" }
 
 arrayvec = "0.7.2" # update roc_std/Cargo.toml on change
-backtrace = "0.3.67"
 base64-url = "1.4.13"
 bincode = "1.3.3"
 bitflags = "1.3.2"
@@ -87,9 +86,7 @@ bitvec = "1.0.1"
 blake3 = "1.3.3"
 brotli = "3.3.4" # used for decompressing tarballs over HTTPS, if the server supports brotli
 bumpalo = { version = "3.12.0", features = ["collections"] }
-bytemuck = { version = "1.13.1", features = ["derive"] }
 capstone = { version = "0.11.0", default-features = false }
-cgmath = "0.18.0"
 chrono = "0.4.26"
 clap = { version = "4.2.7", default-features = false, features = [
     "std",
@@ -99,10 +96,8 @@ clap = { version = "4.2.7", default-features = false, features = [
     "usage",
     "error-context",
 ] }
-colored = "2.0.0"
 console_error_panic_hook = "0.1.7"
 const_format = { version = "0.2.30", features = ["const_generics"] }
-copypasta = "0.8.2"
 criterion = { git = "https://github.com/Anton-4/criterion.rs", features = [
     "html_reports",
 ], rev = "30ea0c5" }
@@ -116,7 +111,6 @@ flate2 = "1.0.25"
 fnv = "1.0.7"
 fs_extra = "1.3.0"
 futures = "0.3.26"
-glyph_brush = "0.7.7"
 hashbrown = { version = "0.14.3" }
 iced-x86 = { version = "1.18.0", default-features = false, features = [
     "std",
@@ -126,13 +120,11 @@ iced-x86 = { version = "1.18.0", default-features = false, features = [
 ] }
 im = "15.1.0"
 im-rc = "15.1.0"
-indexmap = "2.1.0"
 indoc = "1.0.9"
 insta = "1.28.0"
 js-sys = "0.3.61"
 lazy_static = "1.4.0"
 libc = "0.2.139" # update roc_std/Cargo.toml on change
-libfuzzer-sys = "0.4"
 libloading = "0.7.4"
 libtest-mimic = "0.6.0"
 log = "0.4.17"
@@ -140,18 +132,13 @@ mach_object = "0.1"
 maplit = "1.0.2"
 memmap2 = "0.5.10"
 mimalloc = { version = "0.1.34", default-features = false }
-nonempty = "0.8.1"
 object = { version = "0.32.2", default-features = false, features = [
     "read",
     "write",
 ] }
 packed_struct = "0.10.1"
-page_size = "0.5.0"
-palette = "0.6.1"
 parking_lot = "0.12"
 perfcnt = "0.8.0"
-pest = "2.5.6"
-pest_derive = "2.5.6"
 pretty_assertions = "1.3.0" # update roc_std/Cargo.toml on change
 proc-macro2 = "1.0.63"
 proptest = "1.1.0"
@@ -185,19 +172,12 @@ syn = { version = "1.0.109", features = ["full", "extra-traits"] }
 tar = "0.4.38"
 target-lexicon = "0.12.6"
 tempfile = "=3.2.0"
-threadpool = "1.8.1"
 tracing = { version = "0.1.40", features = ["release_max_level_off"] }
 tracing-appender = "0.2.2"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
-unicode-segmentation = "1.10.1"
-uuid = { version = "1.3.0", features = ["v4"] }
 walkdir = "2.3.2"
 wasm-bindgen = "0.2.84"
 wasm-bindgen-futures = "0.4.34"
-wgpu = "0.12.0"
-wgpu_glyph = "0.16.0"
-winapi = { version = "0.3.9", features = ["memoryapi"] }
-winit = "0.26.1"
 wyhash = "0.5.0"
 
 # Optimizations based on https://deterministic.space/high-performance-rust.html
