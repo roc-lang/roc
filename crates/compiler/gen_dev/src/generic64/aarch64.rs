@@ -1847,6 +1847,26 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
+    fn neg_freg64_freg64(
+        buf: &mut Vec<'_, u8>,
+        _relocs: &mut Vec<'_, Relocation>,
+        dst: AArch64FloatReg,
+        src: AArch64FloatReg,
+    ) {
+        fneg_freg_freg(buf, FloatWidth::F64, dst, src);
+    }
+
+    #[inline(always)]
+    fn neg_freg32_freg32(
+        buf: &mut Vec<'_, u8>,
+        _relocs: &mut Vec<'_, Relocation>,
+        dst: AArch64FloatReg,
+        src: AArch64FloatReg,
+    ) {
+        fneg_freg_freg(buf, FloatWidth::F32, dst, src);
+    }
+
+    #[inline(always)]
     fn sub_reg64_reg64_imm32(
         buf: &mut Vec<'_, u8>,
         dst: AArch64GeneralReg,
@@ -3950,6 +3970,24 @@ fn fsub_freg_freg_freg(
             rm: src2,
         });
 
+    buf.extend(inst.bytes());
+}
+
+/// `FNEG Sd/Dd, Sn/Dn`
+#[inline(always)]
+fn fneg_freg_freg(
+    buf: &mut Vec<'_, u8>,
+    ftype: FloatWidth,
+    dst: AArch64FloatReg,
+    src: AArch64FloatReg,
+) {
+    let inst =
+        FloatingPointDataProcessingOneSource::new(FloatingPointDataProcessingOneSourceParams {
+            ptype: ftype,
+            opcode: 0b00010,
+            rn: src,
+            rd: dst,
+        });
     buf.extend(inst.bytes());
 }
 

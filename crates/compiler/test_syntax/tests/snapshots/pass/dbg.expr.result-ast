@@ -1,6 +1,6 @@
 SpaceAfter(
     Apply(
-        @0-5 Dbg,
+        @0-3 Dbg,
         [
             @4-5 Num(
                 "1",

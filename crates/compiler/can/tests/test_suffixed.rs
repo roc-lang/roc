@@ -464,7 +464,7 @@ mod suffixed_tests {
         run_test!(
             r#"
             main =
-                dbg (dbg 1 + 1)
+                dbg (dbg (1 + 1))
             "#
         );
     }

@@ -676,8 +676,8 @@ pub fn cyclic_alias<'b>(
 ) -> (RocDocBuilder<'b>, String) {
     let when_is_recursion_legal =
         alloc.reflow("Recursion in ")
-        .append(alloc.reflow(alias_kind.as_str()))
-        .append(alloc.reflow("es is only allowed if recursion happens behind a tagged union, at least one variant of which is not recursive."));
+        .append(alloc.reflow(alias_kind.as_str_plural()))
+        .append(alloc.reflow(" is only allowed if recursion happens behind a tagged union, at least one variant of which is not recursive."));
 
     let doc = if others.is_empty() {
         alloc.stack([

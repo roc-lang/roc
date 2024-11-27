@@ -1,5 +1,5 @@
 dbg
- q
- qt
+ (q
+    qt)
 g
  qt

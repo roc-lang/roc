@@ -1624,6 +1624,7 @@ impl<'a> LowLevelCall<'a> {
                     }
                     F32 => backend.code_builder.f32_neg(),
                     F64 => backend.code_builder.f64_neg(),
+                    Decimal => self.load_args_and_call_zig(backend, bitcode::DEC_NEGATE),
                     _ => todo!("{:?} for {:?}", self.lowlevel, self.ret_layout),
                 }
             }

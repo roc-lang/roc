@@ -19,7 +19,7 @@ use roc_types::types::{LambdaSet, OptAbleVar, PatternCategory, Type};
 
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Pattern {
     Identifier(Symbol),
     As(Box<Loc<Pattern>>, Symbol),
@@ -198,7 +198,7 @@ impl Pattern {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ListPatterns {
     pub patterns: Vec<Loc<Pattern>>,
     /// Where a rest pattern splits patterns before and after it, if it does at all.
@@ -207,6 +207,7 @@ pub struct ListPatterns {
     ///   [ .., A, B ] -> patterns = [A, B], rest = 0
     ///   [ A, .., B ] -> patterns = [A, B], rest = 1
     ///   [ A, B, .. ] -> patterns = [A, B], rest = 2
+    /// Optionally, the rest pattern can be named - e.g. `[ A, B, ..others ]`
     pub opt_rest: Option<(usize, Option<Loc<Symbol>>)>,
 }
 
@@ -228,7 +229,7 @@ impl ListPatterns {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RecordDestruct {
     pub var: Variable,
     pub label: Lowercase,
@@ -236,14 +237,14 @@ pub struct RecordDestruct {
     pub typ: DestructType,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TupleDestruct {
     pub var: Variable,
     pub destruct_index: usize,
     pub typ: (Variable, Loc<Pattern>),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum DestructType {
     Required,
     Optional(Variable, Loc<Expr>),

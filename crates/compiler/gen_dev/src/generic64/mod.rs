@@ -557,6 +557,18 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     fn sqrt_freg32_freg32(buf: &mut Vec<'_, u8>, dst: FloatReg, src: FloatReg);
 
     fn neg_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: GeneralReg);
+    fn neg_freg64_freg64(
+        buf: &mut Vec<'_, u8>,
+        relocs: &mut Vec<'_, Relocation>,
+        dst: FloatReg,
+        src: FloatReg,
+    );
+    fn neg_freg32_freg32(
+        buf: &mut Vec<'_, u8>,
+        relocs: &mut Vec<'_, Relocation>,
+        dst: FloatReg,
+        src: FloatReg,
+    );
     fn mul_freg32_freg32_freg32(
         buf: &mut Vec<'_, u8>,
         dst: FloatReg,
@@ -1791,7 +1803,24 @@ impl<
                 let src_reg = self.storage_manager.load_to_general_reg(&mut self.buf, src);
                 ASM::neg_reg64_reg64(&mut self.buf, dst_reg, src_reg);
             }
-            x => todo!("NumNeg: layout, {:?}", x),
+            LayoutRepr::F32 => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
+                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
+                ASM::neg_freg32_freg32(&mut self.buf, &mut self.relocs, dst_reg, src_reg);
+            }
+            LayoutRepr::F64 => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
+                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
+                ASM::neg_freg64_freg64(&mut self.buf, &mut self.relocs, dst_reg, src_reg);
+            }
+            LayoutRepr::DEC => self.build_fn_call(
+                dst,
+                bitcode::DEC_NEGATE.to_string(),
+                &[*src],
+                &[Layout::DEC],
+                &Layout::DEC,
+            ),
+            other => internal_error!("unreachable: NumNeg for layout, {:?}", other),
         }
     }
 
