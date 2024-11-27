@@ -513,6 +513,7 @@ pub enum EExpect<'a> {
     Condition(&'a EExpr<'a>, Position),
     Continuation(&'a EExpr<'a>, Position),
     IndentCondition(Position),
+    DbgArity(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -545,10 +545,6 @@ fn stmt_start<'a>(
             EExpr::Expect,
             expect_help(options, preceding_comment)
         )),
-        loc(specialize_err(
-            EExpr::Dbg,
-            dbg_stmt_help(options, preceding_comment)
-        )),
         loc(specialize_err(EExpr::Return, return_help(options))),
         loc(specialize_err(EExpr::Import, map(import(), Stmt::ValueDef))),
         map(
@@ -2668,34 +2664,6 @@ fn return_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Stmt<'a>, ERetu
     .trace("return_help")
 }
 
-fn dbg_stmt_help<'a>(
-    options: ExprParseOptions,
-    preceding_comment: Region,
-) -> impl Parser<'a, Stmt<'a>, EExpect<'a>> {
-    (move |arena: &'a Bump, state: State<'a>, min_indent| {
-        let (_, _, state) =
-            parser::keyword(keyword::DBG, EExpect::Dbg).parse(arena, state, min_indent)?;
-
-        let (_, condition, state) = parse_block(
-            options,
-            arena,
-            state,
-            true,
-            EExpect::IndentCondition,
-            EExpect::Condition,
-        )
-        .map_err(|(_, f)| (MadeProgress, f))?;
-
-        let stmt = Stmt::ValueDef(ValueDef::Dbg {
-            condition: arena.alloc(condition),
-            preceding_comment,
-        });
-
-        Ok((MadeProgress, stmt, state))
-    })
-    .trace("dbg_stmt_help")
-}
-
 fn dbg_kw<'a>() -> impl Parser<'a, Expr<'a>, EExpect<'a>> {
     (move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
         let (_, _, next_state) =
@@ -3110,12 +3078,43 @@ fn stmts_to_defs<'a>(
             }
             Stmt::Expr(e) => {
                 if i + 1 < stmts.len() {
-                    defs.push_value_def(
-                        ValueDef::Stmt(arena.alloc(Loc::at(sp_stmt.item.region, e))),
-                        sp_stmt.item.region,
-                        sp_stmt.before,
-                        &[],
-                    );
+                    if let Expr::Apply(
+                        Loc {
+                            value: Expr::Dbg, ..
+                        },
+                        args,
+                        _,
+                    ) = e
+                    {
+                        if args.len() != 1 {
+                            // TODO: this should be done in can, not parsing!
+                            return Err(EExpr::Dbg(
+                                EExpect::DbgArity(sp_stmt.item.region.start()),
+                                sp_stmt.item.region.start(),
+                            ));
+                        }
+                        let condition = &args[0];
+                        let rest = stmts_to_expr(&stmts[i + 1..], arena)?;
+                        let e = Expr::DbgStmt(condition, arena.alloc(rest));
+
+                        let e = if sp_stmt.before.is_empty() {
+                            e
+                        } else {
+                            arena.alloc(e).before(sp_stmt.before)
+                        };
+
+                        last_expr = Some(Loc::at(sp_stmt.item.region, e));
+
+                        // don't re-process the rest of the statements; they got consumed by the dbg expr
+                        break;
+                    } else {
+                        defs.push_value_def(
+                            ValueDef::Stmt(arena.alloc(Loc::at(sp_stmt.item.region, e))),
+                            sp_stmt.item.region,
+                            sp_stmt.before,
+                            &[],
+                        );
+                    }
                 } else {
                     let e = if sp_stmt.before.is_empty() {
                         e
