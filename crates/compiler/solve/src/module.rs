@@ -76,7 +76,7 @@ pub struct SolveConfig<'a> {
     /// Needed during solving to resolve lambda sets from derived implementations that escape into
     /// the user module.
     pub derived_module: SharedDerivedModule,
-    ///
+    /// Symbols that are exposed to the host which might need special treatment.
     pub host_exposed_symbols: Option<&'a VecSet<Symbol>>,
 
     #[cfg(debug_assertions)]
