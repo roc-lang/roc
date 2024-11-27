@@ -17,6 +17,7 @@ members = [
     "crates/repl_wasm",
     "crates/repl_expect",
     "crates/roc_std",
+    "crates/test_compile",
     "crates/test_utils",
     "crates/test_utils_dir",
     "crates/valgrind_tests",
@@ -75,9 +76,8 @@ version = "0.0.1"
 inkwell = { git = "https://github.com/roc-lang/inkwell", branch = "inkwell-llvm-16", features = [
     "llvm16-0",
 ] }
-
 soa = { path = "crates/soa" }
-
+roc_specialize_types = { path = "crates/compiler/specialize_types" }
 arrayvec = "0.7.2" # update roc_std/Cargo.toml on change
 backtrace = "0.3.67"
 base64-url = "1.4.13"
@@ -199,6 +199,9 @@ wgpu_glyph = "0.16.0"
 winapi = { version = "0.3.9", features = ["memoryapi"] }
 winit = "0.26.1"
 wyhash = "0.5.0"
+
+# Testing
+test_compile = { path = "crates/test_compile" }
 
 # Optimizations based on https://deterministic.space/high-performance-rust.html
 [profile.release]

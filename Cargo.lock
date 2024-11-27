@@ -2354,6 +2354,7 @@ dependencies = [
  "roc_types",
  "soa",
  "static_assertions",
+ "test_compile",
  "ven_pretty",
 ]
 
@@ -3141,6 +3142,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_specialize_types"
+version = "0.0.1"
+dependencies = [
+ "arrayvec 0.7.4",
+ "bitvec",
+ "bumpalo",
+ "hashbrown",
+ "indoc",
+ "parking_lot",
+ "pretty_assertions",
+ "roc_builtins",
+ "roc_can",
+ "roc_collections",
+ "roc_derive",
+ "roc_load",
+ "roc_module",
+ "roc_parse",
+ "roc_problem",
+ "roc_region",
+ "roc_reporting",
+ "roc_solve",
+ "roc_target",
+ "roc_types",
+ "soa",
+ "static_assertions",
+ "test_compile",
+ "test_solve_helpers",
+]
+
+[[package]]
 name = "roc_std"
 version = "0.0.1"
 dependencies = [
@@ -3779,6 +3810,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6093bad37da69aab9d123a8091e4be0aa4a03e4d601ec641c327398315f62b64"
 dependencies = [
  "winapi-util",
+]
+
+[[package]]
+name = "test_compile"
+version = "0.0.1"
+dependencies = [
+ "bumpalo",
+ "pretty_assertions",
+ "roc_builtins",
+ "roc_can",
+ "roc_collections",
+ "roc_constrain",
+ "roc_derive",
+ "roc_load",
+ "roc_module",
+ "roc_parse",
+ "roc_problem",
+ "roc_region",
+ "roc_reporting",
+ "roc_solve",
+ "roc_solve_problem",
+ "roc_specialize_types",
+ "roc_target",
+ "roc_types",
 ]
 
 [[package]]

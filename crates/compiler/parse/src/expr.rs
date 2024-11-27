@@ -35,7 +35,7 @@ use roc_region::all::{Loc, Position, Region};
 
 use crate::parser::Progress::{self, *};
 
-fn expr_end<'a>() -> impl Parser<'a, (), EExpr<'a>> {
+pub fn expr_end<'a>() -> impl Parser<'a, (), EExpr<'a>> {
     |_arena, state: State<'a>, _min_indent: u32| {
         if state.has_reached_end() {
             Ok((NoProgress, (), state))

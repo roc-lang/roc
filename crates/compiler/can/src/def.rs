@@ -63,7 +63,7 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Def {
     pub loc_pattern: Loc<Pattern>,
     pub loc_expr: Loc<Expr>,
@@ -91,7 +91,7 @@ impl Def {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum DefKind {
     /// A def that introduces identifiers
     Let,
@@ -123,7 +123,7 @@ impl DefKind {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Annotation {
     pub signature: Type,
     pub introduced_variables: IntroducedVariables,

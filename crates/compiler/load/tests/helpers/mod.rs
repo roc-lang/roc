@@ -51,10 +51,10 @@ pub fn infer_expr(
         exposed_by_module: &Default::default(),
         derived_module,
         function_kind: FunctionKind::LambdaSet,
-        module_params: None,
-        module_params_vars: Default::default(),
         #[cfg(debug_assertions)]
         checkmate: None,
+        module_params: None,
+        module_params_vars: Default::default(),
     };
 
     let RunSolveOutput { solved, .. } =
@@ -189,6 +189,24 @@ pub fn can_expr_with<'a>(
     // rules multiple times unnecessarily.
     let loc_expr = desugar::desugar_expr(&mut env, &mut scope, &loc_expr);
 
+    let mut scope = Scope::new(
+        home,
+        "TestPath".into(),
+        IdentIds::default(),
+        Default::default(),
+    );
+
+    let dep_idents = IdentIds::exposed_builtins(0);
+    let mut env = Env::new(
+        arena,
+        expr_str,
+        home,
+        Path::new("Test.roc"),
+        &dep_idents,
+        &module_ids,
+        None,
+        roc_can::env::FxMode::PurityInference,
+    );
     let (loc_expr, output) = canonicalize_expr(
         &mut env,
         &mut var_store,

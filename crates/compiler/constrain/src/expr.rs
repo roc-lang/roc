@@ -64,6 +64,15 @@ pub struct Env {
 }
 
 impl Env {
+    pub fn new(home: ModuleId) -> Self {
+        Self {
+            rigids: MutMap::default(),
+            resolutions_to_make: Vec::new(),
+            home,
+            fx_expectation: None,
+        }
+    }
+
     pub fn with_fx_expectation<F, T>(
         &mut self,
         fx_var: Variable,

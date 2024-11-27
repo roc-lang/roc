@@ -9,10 +9,10 @@ SpaceBefore(
                     @18-21,
                 ],
                 space_before: [
-                    Slice { start: 0, length: 0 },
+                    Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
                 ],
                 space_after: [
-                    Slice { start: 0, length: 0 },
+                    Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
                 ],
                 spaces: [],
                 type_defs: [],

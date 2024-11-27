@@ -85,7 +85,55 @@ impl Display for IntValue {
     }
 }
 
-#[derive(Clone, Debug)]
+impl IntValue {
+    pub fn as_u8(self) -> u8 {
+        self.as_u128() as u8
+    }
+
+    pub fn as_i8(self) -> i8 {
+        self.as_i128() as i8
+    }
+
+    pub fn as_u16(self) -> u16 {
+        self.as_u128() as u16
+    }
+
+    pub fn as_i16(self) -> i16 {
+        self.as_i128() as i16
+    }
+
+    pub fn as_u32(self) -> u32 {
+        self.as_u128() as u32
+    }
+
+    pub fn as_i32(self) -> i32 {
+        self.as_i128() as i32
+    }
+
+    pub fn as_u64(self) -> u64 {
+        self.as_u128() as u64
+    }
+
+    pub fn as_i64(self) -> i64 {
+        self.as_i128() as i64
+    }
+
+    pub fn as_u128(self) -> u128 {
+        match self {
+            IntValue::I128(i128) => i128::from_ne_bytes(i128) as u128,
+            IntValue::U128(u128) => u128::from_ne_bytes(u128),
+        }
+    }
+
+    pub fn as_i128(self) -> i128 {
+        match self {
+            IntValue::I128(i128) => i128::from_ne_bytes(i128),
+            IntValue::U128(u128) => u128::from_ne_bytes(u128) as i128,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
     // Literals
 
@@ -104,7 +152,7 @@ pub enum Expr {
         loc_elems: Vec<Loc<Expr>>,
     },
 
-    // An ingested files, it's bytes, and the type variable.
+    // An ingested files, its bytes, and the type variable.
     IngestedFile(Box<PathBuf>, Arc<Vec<u8>>, Variable),
 
     // Lookups
@@ -131,7 +179,7 @@ pub enum Expr {
         /// The actual condition of the when expression.
         loc_cond: Box<Loc<Expr>>,
         cond_var: Variable,
-        /// Result type produced by the branches.
+        /// Type of each branch (and therefore the type of the entire `when` expression)
         expr_var: Variable,
         region: Region,
         /// The branches of the when, and the type of the condition that they expect to be matched
@@ -292,7 +340,7 @@ pub enum Expr {
     RuntimeError(RuntimeError),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ExpectLookup {
     pub symbol: Symbol,
     pub var: Variable,
@@ -370,7 +418,7 @@ impl Expr {
 
 /// Stores exhaustiveness-checking metadata for a closure argument that may
 /// have an annotated type.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AnnotatedMark {
     pub annotation_var: Variable,
     pub exhaustive: ExhaustiveMark,
@@ -394,7 +442,7 @@ impl AnnotatedMark {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ClosureData {
     pub function_type: Variable,
     pub closure_type: Variable,
@@ -491,7 +539,7 @@ impl StructAccessorData {
 /// An opaque wrapper like `@Foo`, which is equivalent to `\p -> @Foo p`
 /// These are desugared to closures, but we distinguish them so we can have
 /// better error messages during constraint generation.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct OpaqueWrapFunctionData {
     pub opaque_name: Symbol,
     pub opaque_var: Variable,
@@ -563,7 +611,7 @@ impl OpaqueWrapFunctionData {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Field {
     pub var: Variable,
     // The region of the full `foo: f bar`, rather than just `f bar`
@@ -587,7 +635,7 @@ impl Recursive {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct WhenBranchPattern {
     pub pattern: Loc<Pattern>,
     /// Degenerate branch patterns are those that don't fully bind symbols that the branch body
@@ -596,7 +644,7 @@ pub struct WhenBranchPattern {
     pub degenerate: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct WhenBranch {
     pub patterns: Vec<WhenBranchPattern>,
     pub value: Loc<Expr>,

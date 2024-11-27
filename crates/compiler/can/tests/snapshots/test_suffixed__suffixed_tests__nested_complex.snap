@@ -1,6 +1,7 @@
 ---
 source: crates/compiler/can/tests/test_suffixed.rs
 expression: snapshot
+snapshot_kind: text
 ---
 Defs {
     tags: [
@@ -10,10 +11,10 @@ Defs {
         @0-61,
     ],
     space_before: [
-        Slice { start: 0, length: 0 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
     ],
     space_after: [
-        Slice { start: 0, length: 1 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
     ],
     spaces: [
         Newline,
