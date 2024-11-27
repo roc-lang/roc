@@ -1,3 +1,6 @@
+// This crate is only used in tests, so panic is fine
+#![allow(clippy::panic)]
+
 mod deindent;
 mod help_can;
 mod help_constrain;
