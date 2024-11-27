@@ -6,7 +6,7 @@ use roc_can::constraint::{Constraint, Constraints};
 use roc_can::expr::PendingDerives;
 use roc_can::module::{ExposedByModule, ModuleParams, ResolvedImplementations, RigidVariables};
 use roc_collections::all::MutMap;
-use roc_collections::VecMap;
+use roc_collections::{VecMap, VecSet};
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
 use roc_module::symbol::{ModuleId, Symbol};
@@ -76,6 +76,8 @@ pub struct SolveConfig<'a> {
     /// Needed during solving to resolve lambda sets from derived implementations that escape into
     /// the user module.
     pub derived_module: SharedDerivedModule,
+    ///
+    pub host_exposed_symbols: Option<&'a VecSet<Symbol>>,
 
     #[cfg(debug_assertions)]
     /// The checkmate collector for this module.

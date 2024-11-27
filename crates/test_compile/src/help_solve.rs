@@ -49,6 +49,7 @@ impl SolvedExpr {
             derived_module: SharedDerivedModule::default(),
             module_params: None,
             module_params_vars: VecMap::default(),
+            host_exposed_symbols: None,
             #[cfg(debug_assertions)]
             checkmate: None,
         };
