@@ -1,6 +1,6 @@
 #![no_main]
-use bumpalo::Bump;
 use libfuzzer_sys::fuzz_target;
+use bumpalo::Bump;
 use test_syntax::test_helpers::Input;
 
 fuzz_target!(|data: &[u8]| {
