@@ -35,7 +35,7 @@ macro_rules! map_symbol_to_lowlevel_and_arity {
                 Symbol::NUM_TO_U128 => Some(lowlevel_1(Symbol::NUM_TO_U128, LowLevel::NumIntCast, var_store)),
 
                 Symbol::NUM_INT_CAST => Some(lowlevel_1(Symbol::NUM_INT_CAST, LowLevel::NumIntCast, var_store)),
-
+                Symbol::NUM_TO_DEC => Some(lowlevel_1(Symbol::NUM_TO_DEC, LowLevel::NumToDecCast, var_store)),
                 Symbol::NUM_TO_F32 => Some(lowlevel_1(Symbol::NUM_TO_F32, LowLevel::NumToFloatCast, var_store)),
                 Symbol::NUM_TO_F64 => Some(lowlevel_1(Symbol::NUM_TO_F64, LowLevel::NumToFloatCast, var_store)),
 
@@ -49,6 +49,8 @@ macro_rules! map_symbol_to_lowlevel_and_arity {
                 Symbol::NUM_TO_U32_CHECKED => Some(to_num_checked(Symbol::NUM_TO_U32_CHECKED, var_store, LowLevel::NumToIntChecked)),
                 Symbol::NUM_TO_U64_CHECKED => Some(to_num_checked(Symbol::NUM_TO_U64_CHECKED, var_store, LowLevel::NumToIntChecked)),
                 Symbol::NUM_TO_U128_CHECKED => Some(to_num_checked(Symbol::NUM_TO_U128_CHECKED, var_store, LowLevel::NumToIntChecked)),
+
+                Symbol::NUM_TO_DEC_CHECKED => Some(to_num_checked(Symbol::NUM_TO_DEC_CHECKED, var_store, LowLevel::NumToFloatChecked)),
 
                 Symbol::NUM_TO_F32_CHECKED => Some(to_num_checked(Symbol::NUM_TO_F32_CHECKED, var_store, LowLevel::NumToFloatChecked)),
                 Symbol::NUM_TO_F64_CHECKED => Some(to_num_checked(Symbol::NUM_TO_F64_CHECKED, var_store, LowLevel::NumToFloatChecked)),
@@ -79,7 +81,8 @@ macro_rules! map_symbol_to_lowlevel_and_arity {
                 LowLevel::NumToFloatCast => unreachable!(),
                 LowLevel::NumToIntChecked => unreachable!(),
                 LowLevel::NumToFloatChecked => unreachable!(),
-
+                LowLevel::NumToDecCast => unreachable!(),
+                LowLevel::NumToDecChecked => unreachable!(),
                 // these are used internally and not tied to a symbol
                 LowLevel::Hash => unimplemented!(),
                 LowLevel::PtrCast => unimplemented!(),

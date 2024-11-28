@@ -95,8 +95,10 @@ pub enum LowLevel {
     NumShiftRightZfBy,
     NumIntCast,
     NumToFloatCast,
+    NumToDecCast,
     NumToIntChecked,
     NumToFloatChecked,
+    NumToDecChecked,
     NumToStr,
     NumCountLeadingZeroBits,
     NumCountTrailingZeroBits,
@@ -216,7 +218,8 @@ macro_rules! map_symbol_to_lowlevel {
                 LowLevel::NumToFloatCast => unreachable!(),
                 LowLevel::NumToIntChecked => unreachable!(),
                 LowLevel::NumToFloatChecked => unreachable!(),
-
+                LowLevel::NumToDecCast => unreachable!(),
+                LowLevel::NumToDecChecked => unreachable!(),
 
                 // these are used internally and not tied to a symbol
                 LowLevel::Hash => unimplemented!(),

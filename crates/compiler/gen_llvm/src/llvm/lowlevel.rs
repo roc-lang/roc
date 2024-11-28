@@ -1147,6 +1147,12 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             )
         }
         NumIntCast => {
+            todo!()
+        }
+        NumToDecChecked => {
+            todo!()
+        }
+        NumToDecCast => {
             arguments!(arg);
 
             let to = basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout))

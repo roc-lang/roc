@@ -96,6 +96,7 @@ enum FirstOrder {
     NumShiftRightZfBy,
     NumIntCast,
     NumFloatCast,
+    NumToDecCast,
     Eq,
     NotEq,
     And,
