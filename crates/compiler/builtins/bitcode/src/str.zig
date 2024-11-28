@@ -598,14 +598,14 @@ fn strFromFloatHelp(comptime T: type, float: T) RocStr {
     return RocStr.init(&buf, result.len);
 }
 
-// Str.split
-pub fn strSplit(string: RocStr, delimiter: RocStr) callconv(.C) RocList {
+// Str.splitOn
+pub fn strSplitOn(string: RocStr, delimiter: RocStr) callconv(.C) RocList {
     const segment_count = countSegments(string, delimiter);
     const list = RocList.allocate(@alignOf(RocStr), segment_count, @sizeOf(RocStr), true);
 
     if (list.bytes) |bytes| {
         const strings = @as([*]RocStr, @ptrCast(@alignCast(bytes)));
-        strSplitHelp(strings, string, delimiter);
+        strSplitOnHelp(strings, string, delimiter);
     }
 
     return list;
@@ -625,7 +625,7 @@ fn initFromBigStr(slice_bytes: [*]u8, len: usize, alloc_ptr: usize) RocStr {
     };
 }
 
-fn strSplitHelp(array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
+fn strSplitOnHelp(array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
     if (delimiter.len() == 0) {
         string.incref(1);
         array[0] = string;
@@ -650,7 +650,7 @@ fn strSplitHelp(array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
 }
 
 test "strSplitHelp: empty delimiter" {
-    // Str.split "abc" "" == ["abc"]
+    // Str.splitOn "abc" "" == ["abc"]
     const str_arr = "abc";
     const str = RocStr.init(str_arr, str_arr.len);
 
@@ -660,7 +660,7 @@ test "strSplitHelp: empty delimiter" {
     var array: [1]RocStr = undefined;
     const array_ptr: [*]RocStr = &array;
 
-    strSplitHelp(array_ptr, str, delimiter);
+    strSplitOnHelp(array_ptr, str, delimiter);
 
     const expected = [1]RocStr{
         str,
@@ -684,7 +684,7 @@ test "strSplitHelp: empty delimiter" {
 }
 
 test "strSplitHelp: no delimiter" {
-    // Str.split "abc" "!" == ["abc"]
+    // Str.splitOn "abc" "!" == ["abc"]
     const str_arr = "abc";
     const str = RocStr.init(str_arr, str_arr.len);
 
@@ -694,7 +694,7 @@ test "strSplitHelp: no delimiter" {
     var array: [1]RocStr = undefined;
     const array_ptr: [*]RocStr = &array;
 
-    strSplitHelp(array_ptr, str, delimiter);
+    strSplitOnHelp(array_ptr, str, delimiter);
 
     const expected = [1]RocStr{
         str,
@@ -731,7 +731,7 @@ test "strSplitHelp: empty start" {
     };
     const array_ptr: [*]RocStr = &array;
 
-    strSplitHelp(array_ptr, str, delimiter);
+    strSplitOnHelp(array_ptr, str, delimiter);
 
     const one = RocStr.init("a", 1);
 
@@ -772,7 +772,7 @@ test "strSplitHelp: empty end" {
     };
     const array_ptr: [*]RocStr = &array;
 
-    strSplitHelp(array_ptr, str, delimiter);
+    strSplitOnHelp(array_ptr, str, delimiter);
 
     const one = RocStr.init("1", 1);
     const two = RocStr.init("2", 1);
@@ -811,7 +811,7 @@ test "strSplitHelp: string equals delimiter" {
     };
     const array_ptr: [*]RocStr = &array;
 
-    strSplitHelp(array_ptr, str_delimiter, str_delimiter);
+    strSplitOnHelp(array_ptr, str_delimiter, str_delimiter);
 
     const expected = [2]RocStr{ RocStr.empty(), RocStr.empty() };
 
@@ -846,7 +846,7 @@ test "strSplitHelp: delimiter on sides" {
         undefined,
     };
     const array_ptr: [*]RocStr = &array;
-    strSplitHelp(array_ptr, str, delimiter);
+    strSplitOnHelp(array_ptr, str, delimiter);
 
     const ghi_arr = "ghi";
     const ghi = RocStr.init(ghi_arr, ghi_arr.len);
@@ -875,7 +875,7 @@ test "strSplitHelp: delimiter on sides" {
 }
 
 test "strSplitHelp: three pieces" {
-    // Str.split "a!b!c" "!" == ["a", "b", "c"]
+    // Str.splitOn "a!b!c" "!" == ["a", "b", "c"]
     const str_arr = "a!b!c";
     const str = RocStr.init(str_arr, str_arr.len);
 
@@ -886,7 +886,7 @@ test "strSplitHelp: three pieces" {
     var array: [array_len]RocStr = undefined;
     const array_ptr: [*]RocStr = &array;
 
-    strSplitHelp(array_ptr, str, delimiter);
+    strSplitOnHelp(array_ptr, str, delimiter);
 
     const a = RocStr.init("a", 1);
     const b = RocStr.init("b", 1);
@@ -916,7 +916,7 @@ test "strSplitHelp: three pieces" {
 }
 
 test "strSplitHelp: overlapping delimiter 1" {
-    // Str.split "aaa" "aa" == ["", "a"]
+    // Str.splitOn "aaa" "aa" == ["", "a"]
     const str_arr = "aaa";
     const str = RocStr.init(str_arr, str_arr.len);
 
@@ -926,7 +926,7 @@ test "strSplitHelp: overlapping delimiter 1" {
     var array: [2]RocStr = undefined;
     const array_ptr: [*]RocStr = &array;
 
-    strSplitHelp(array_ptr, str, delimiter);
+    strSplitOnHelp(array_ptr, str, delimiter);
 
     const expected = [2]RocStr{
         RocStr.empty(),
@@ -941,7 +941,7 @@ test "strSplitHelp: overlapping delimiter 1" {
 }
 
 test "strSplitHelp: overlapping delimiter 2" {
-    // Str.split "aaa" "aa" == ["", "a"]
+    // Str.splitOn "aaa" "aa" == ["", "a"]
     const str_arr = "aaaa";
     const str = RocStr.init(str_arr, str_arr.len);
 
@@ -951,7 +951,7 @@ test "strSplitHelp: overlapping delimiter 2" {
     var array: [3]RocStr = undefined;
     const array_ptr: [*]RocStr = &array;
 
-    strSplitHelp(array_ptr, str, delimiter);
+    strSplitOnHelp(array_ptr, str, delimiter);
 
     const expected = [3]RocStr{
         RocStr.empty(),
@@ -967,7 +967,7 @@ test "strSplitHelp: overlapping delimiter 2" {
     try expect(array[2].eq(expected[2]));
 }
 
-// This is used for `Str.split : Str, Str -> Array Str
+// This is used for `Str.splitOn : Str, Str -> List Str
 // It is used to count how many segments the input `_str`
 // needs to be broken into, so that we can allocate a array
 // of that size. It always returns at least 1.
@@ -985,7 +985,7 @@ pub fn countSegments(string: RocStr, delimiter: RocStr) callconv(.C) usize {
 }
 
 test "countSegments: long delimiter" {
-    // Str.split "str" "delimiter" == ["str"]
+    // Str.splitOn "str" "delimiter" == ["str"]
     // 1 segment
     const str_arr = "str";
     const str = RocStr.init(str_arr, str_arr.len);
@@ -1003,7 +1003,7 @@ test "countSegments: long delimiter" {
 }
 
 test "countSegments: delimiter at start" {
-    // Str.split "hello there" "hello" == ["", " there"]
+    // Str.splitOn "hello there" "hello" == ["", " there"]
     // 2 segments
     const str_arr = "hello there";
     const str = RocStr.init(str_arr, str_arr.len);
@@ -1022,7 +1022,7 @@ test "countSegments: delimiter at start" {
 }
 
 test "countSegments: delimiter interspered" {
-    // Str.split "a!b!c" "!" == ["a", "b", "c"]
+    // Str.splitOn "a!b!c" "!" == ["a", "b", "c"]
     // 3 segments
     const str_arr = "a!b!c";
     const str = RocStr.init(str_arr, str_arr.len);
@@ -1041,7 +1041,7 @@ test "countSegments: delimiter interspered" {
 }
 
 test "countSegments: string equals delimiter" {
-    // Str.split "/" "/" == ["", ""]
+    // Str.splitOn "/" "/" == ["", ""]
     // 2 segments
     const str_delimiter_arr = "/";
     const str_delimiter = RocStr.init(str_delimiter_arr, str_delimiter_arr.len);
@@ -1056,14 +1056,14 @@ test "countSegments: string equals delimiter" {
 }
 
 test "countSegments: overlapping delimiter 1" {
-    // Str.split "aaa" "aa" == ["", "a"]
+    // Str.splitOn "aaa" "aa" == ["", "a"]
     const segments_count = countSegments(RocStr.init("aaa", 3), RocStr.init("aa", 2));
 
     try expectEqual(segments_count, 2);
 }
 
 test "countSegments: overlapping delimiter 2" {
-    // Str.split "aaa" "aa" == ["", "a"]
+    // Str.splitOn "aaa" "aa" == ["", "a"]
     const segments_count = countSegments(RocStr.init("aaaa", 4), RocStr.init("aa", 2));
 
     try expectEqual(segments_count, 3);

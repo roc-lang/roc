@@ -85,7 +85,55 @@ impl Display for IntValue {
     }
 }
 
-#[derive(Clone, Debug)]
+impl IntValue {
+    pub fn as_u8(self) -> u8 {
+        self.as_u128() as u8
+    }
+
+    pub fn as_i8(self) -> i8 {
+        self.as_i128() as i8
+    }
+
+    pub fn as_u16(self) -> u16 {
+        self.as_u128() as u16
+    }
+
+    pub fn as_i16(self) -> i16 {
+        self.as_i128() as i16
+    }
+
+    pub fn as_u32(self) -> u32 {
+        self.as_u128() as u32
+    }
+
+    pub fn as_i32(self) -> i32 {
+        self.as_i128() as i32
+    }
+
+    pub fn as_u64(self) -> u64 {
+        self.as_u128() as u64
+    }
+
+    pub fn as_i64(self) -> i64 {
+        self.as_i128() as i64
+    }
+
+    pub fn as_u128(self) -> u128 {
+        match self {
+            IntValue::I128(i128) => i128::from_ne_bytes(i128) as u128,
+            IntValue::U128(u128) => u128::from_ne_bytes(u128),
+        }
+    }
+
+    pub fn as_i128(self) -> i128 {
+        match self {
+            IntValue::I128(i128) => i128::from_ne_bytes(i128),
+            IntValue::U128(u128) => u128::from_ne_bytes(u128) as i128,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
     // Literals
 
@@ -104,7 +152,7 @@ pub enum Expr {
         loc_elems: Vec<Loc<Expr>>,
     },
 
-    // An ingested files, it's bytes, and the type variable.
+    // An ingested files, its bytes, and the type variable.
     IngestedFile(Box<PathBuf>, Arc<Vec<u8>>, Variable),
 
     // Lookups
@@ -131,7 +179,7 @@ pub enum Expr {
         /// The actual condition of the when expression.
         loc_cond: Box<Loc<Expr>>,
         cond_var: Variable,
-        /// Result type produced by the branches.
+        /// Type of each branch (and therefore the type of the entire `when` expression)
         expr_var: Variable,
         region: Region,
         /// The branches of the when, and the type of the condition that they expect to be matched
@@ -271,13 +319,6 @@ pub enum Expr {
         lookups_in_cond: Vec<ExpectLookup>,
     },
 
-    // not parsed, but is generated when lowering toplevel effectful expects
-    ExpectFx {
-        loc_condition: Box<Loc<Expr>>,
-        loc_continuation: Box<Loc<Expr>>,
-        lookups_in_cond: Vec<ExpectLookup>,
-    },
-
     Dbg {
         source_location: Box<str>,
         source: Box<str>,
@@ -299,7 +340,7 @@ pub enum Expr {
     RuntimeError(RuntimeError),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ExpectLookup {
     pub symbol: Symbol,
     pub var: Variable,
@@ -364,7 +405,6 @@ impl Expr {
                 Category::OpaqueWrap(opaque_name)
             }
             Self::Expect { .. } => Category::Expect,
-            Self::ExpectFx { .. } => Category::Expect,
             Self::Crash { .. } => Category::Crash,
             Self::Return { .. } => Category::Return,
 
@@ -378,7 +418,7 @@ impl Expr {
 
 /// Stores exhaustiveness-checking metadata for a closure argument that may
 /// have an annotated type.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AnnotatedMark {
     pub annotation_var: Variable,
     pub exhaustive: ExhaustiveMark,
@@ -402,7 +442,7 @@ impl AnnotatedMark {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ClosureData {
     pub function_type: Variable,
     pub closure_type: Variable,
@@ -499,7 +539,7 @@ impl StructAccessorData {
 /// An opaque wrapper like `@Foo`, which is equivalent to `\p -> @Foo p`
 /// These are desugared to closures, but we distinguish them so we can have
 /// better error messages during constraint generation.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct OpaqueWrapFunctionData {
     pub opaque_name: Symbol,
     pub opaque_var: Variable,
@@ -571,7 +611,7 @@ impl OpaqueWrapFunctionData {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Field {
     pub var: Variable,
     // The region of the full `foo: f bar`, rather than just `f bar`
@@ -595,7 +635,7 @@ impl Recursive {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct WhenBranchPattern {
     pub pattern: Loc<Pattern>,
     /// Degenerate branch patterns are those that don't fully bind symbols that the branch body
@@ -604,7 +644,7 @@ pub struct WhenBranchPattern {
     pub degenerate: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct WhenBranch {
     pub patterns: Vec<WhenBranchPattern>,
     pub value: Loc<Expr>,
@@ -1196,36 +1236,6 @@ pub fn canonicalize_expr<'a>(
                 }
             }
         }
-        ast::Expr::Expect(condition, continuation) => {
-            let mut output = Output::default();
-
-            let (loc_condition, output1) =
-                canonicalize_expr(env, var_store, scope, condition.region, &condition.value);
-
-            // Get all the lookups that were referenced in the condition,
-            // so we can print their values later.
-            let lookups_in_cond = get_lookup_symbols(&loc_condition.value);
-
-            let (loc_continuation, output2) = canonicalize_expr(
-                env,
-                var_store,
-                scope,
-                continuation.region,
-                &continuation.value,
-            );
-
-            output.union(output1);
-            output.union(output2);
-
-            (
-                Expect {
-                    loc_condition: Box::new(loc_condition),
-                    loc_continuation: Box::new(loc_continuation),
-                    lookups_in_cond,
-                },
-                output,
-            )
-        }
         ast::Expr::Dbg => {
             // Dbg was not desugared as either part of an `Apply` or a `Pizza` binop, so it's
             // invalid.
@@ -1390,10 +1400,6 @@ pub fn canonicalize_expr<'a>(
                 RuntimeError(InvalidPrecedence(problem, region)),
                 Output::default(),
             )
-        }
-        ast::Expr::MalformedClosure => {
-            use roc_problem::can::RuntimeError::*;
-            (RuntimeError(MalformedClosure(region)), Output::default())
         }
         ast::Expr::MalformedIdent(name, bad_ident) => {
             use roc_problem::can::RuntimeError::*;
@@ -1976,10 +1982,6 @@ fn canonicalize_field<'a>(
         SpaceBefore(sub_field, _) | SpaceAfter(sub_field, _) => {
             canonicalize_field(env, var_store, scope, sub_field)
         }
-
-        Malformed(_string) => {
-            internal_error!("TODO canonicalize malformed record field");
-        }
     }
 }
 
@@ -2219,28 +2221,6 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
             };
 
             Expect {
-                loc_condition: Box::new(loc_condition),
-                loc_continuation: Box::new(loc_continuation),
-                lookups_in_cond,
-            }
-        }
-
-        ExpectFx {
-            loc_condition,
-            loc_continuation,
-            lookups_in_cond,
-        } => {
-            let loc_condition = Loc {
-                region: loc_condition.region,
-                value: inline_calls(var_store, loc_condition.value),
-            };
-
-            let loc_continuation = Loc {
-                region: loc_continuation.region,
-                value: inline_calls(var_store, loc_continuation.value),
-            };
-
-            ExpectFx {
                 loc_condition: Box::new(loc_condition),
                 loc_continuation: Box::new(loc_continuation),
                 lookups_in_cond,
@@ -2568,12 +2548,10 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         | ast::Expr::Underscore(_)
         | ast::Expr::MalformedIdent(_, _)
         | ast::Expr::Tag(_)
-        | ast::Expr::OpaqueRef(_)
-        | ast::Expr::MalformedClosure => true,
+        | ast::Expr::OpaqueRef(_) => true,
         // Newlines are disallowed inside interpolation, and these all require newlines
         ast::Expr::DbgStmt(_, _)
         | ast::Expr::LowLevelDbg(_, _, _)
-        | ast::Expr::Expect(_, _)
         | ast::Expr::Return(_, _)
         | ast::Expr::When(_, _)
         | ast::Expr::Backpassing(_, _, _)
@@ -2604,7 +2582,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
             | ast::AssignedField::IgnoredValue(_label, loc_comments, loc_val) => {
                 loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
             }
-            ast::AssignedField::Malformed(_) | ast::AssignedField::LabelOnly(_) => true,
+            ast::AssignedField::LabelOnly(_) => true,
             ast::AssignedField::SpaceBefore(_, _) | ast::AssignedField::SpaceAfter(_, _) => false,
         }),
         ast::Expr::Tuple(fields) => fields
@@ -2655,7 +2633,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
                     | ast::AssignedField::IgnoredValue(_label, loc_comments, loc_val) => {
                         loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
                     }
-                    ast::AssignedField::Malformed(_) | ast::AssignedField::LabelOnly(_) => true,
+                    ast::AssignedField::LabelOnly(_) => true,
                     ast::AssignedField::SpaceBefore(_, _)
                     | ast::AssignedField::SpaceAfter(_, _) => false,
                 })
@@ -2668,7 +2646,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
                     | ast::AssignedField::IgnoredValue(_label, loc_comments, loc_val) => {
                         loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
                     }
-                    ast::AssignedField::Malformed(_) | ast::AssignedField::LabelOnly(_) => true,
+                    ast::AssignedField::LabelOnly(_) => true,
                     ast::AssignedField::SpaceBefore(_, _)
                     | ast::AssignedField::SpaceAfter(_, _) => false,
                 })
@@ -3028,24 +3006,6 @@ impl Declarations {
         index
     }
 
-    pub fn push_expect_fx(
-        &mut self,
-        preceding_comment: Region,
-        name: Symbol,
-        loc_expr: Loc<Expr>,
-    ) -> usize {
-        let index = self.declarations.len();
-
-        self.declarations.push(DeclarationTag::ExpectationFx);
-        self.variables.push(Variable::BOOL);
-        self.symbols.push(Loc::at(preceding_comment, name));
-        self.annotations.push(None);
-
-        self.expressions.push(loc_expr);
-
-        index
-    }
-
     pub fn push_value_def(
         &mut self,
         symbol: Loc<Symbol>,
@@ -3298,12 +3258,6 @@ impl Declarations {
 
                     collector.visit_expr(&loc_expr.value, loc_expr.region, var);
                 }
-                ExpectationFx => {
-                    let loc_expr =
-                        toplevel_expect_to_inline_expect_fx(self.expressions[index].clone());
-
-                    collector.visit_expr(&loc_expr.value, loc_expr.region, var);
-                }
             }
         }
 
@@ -3322,7 +3276,6 @@ roc_error_macros::assert_sizeof_default!(DeclarationTag, 8);
 pub enum DeclarationTag {
     Value,
     Expectation,
-    ExpectationFx,
     Function(Index<Loc<FunctionDef>>),
     Recursive(Index<Loc<FunctionDef>>),
     TailRecursive(Index<Loc<FunctionDef>>),
@@ -3340,7 +3293,7 @@ impl DeclarationTag {
         match self {
             Function(_) | Recursive(_) | TailRecursive(_) => 1,
             Value => 1,
-            Expectation | ExpectationFx => 1,
+            Expectation => 1,
             Destructure(_) => 1,
             MutualRecursion { length, .. } => length as usize + 1,
         }
@@ -3486,9 +3439,6 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
             Expr::Expect {
                 loc_continuation, ..
             }
-            | Expr::ExpectFx {
-                loc_continuation, ..
-            }
             | Expr::Dbg {
                 loc_continuation, ..
             } => {
@@ -3544,15 +3494,7 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
 /// This is supposed to happen just before monomorphization:
 /// all type errors and such are generated from the user source,
 /// but this transformation means that we don't need special codegen for toplevel expects
-pub fn toplevel_expect_to_inline_expect_pure(loc_expr: Loc<Expr>) -> Loc<Expr> {
-    toplevel_expect_to_inline_expect_help(loc_expr, false)
-}
-
-pub fn toplevel_expect_to_inline_expect_fx(loc_expr: Loc<Expr>) -> Loc<Expr> {
-    toplevel_expect_to_inline_expect_help(loc_expr, true)
-}
-
-fn toplevel_expect_to_inline_expect_help(mut loc_expr: Loc<Expr>, has_effects: bool) -> Loc<Expr> {
+pub fn toplevel_expect_to_inline_expect_pure(mut loc_expr: Loc<Expr>) -> Loc<Expr> {
     enum StoredDef {
         NonRecursive(Region, Box<Def>),
         Recursive(Region, Vec<Def>, IllegalCycleMark),
@@ -3590,18 +3532,10 @@ fn toplevel_expect_to_inline_expect_help(mut loc_expr: Loc<Expr>, has_effects: b
     }
 
     let expect_region = loc_expr.region;
-    let expect = if has_effects {
-        Expr::ExpectFx {
-            loc_condition: Box::new(loc_expr),
-            loc_continuation: Box::new(Loc::at_zero(Expr::EmptyRecord)),
-            lookups_in_cond,
-        }
-    } else {
-        Expr::Expect {
-            loc_condition: Box::new(loc_expr),
-            loc_continuation: Box::new(Loc::at_zero(Expr::EmptyRecord)),
-            lookups_in_cond,
-        }
+    let expect = Expr::Expect {
+        loc_condition: Box::new(loc_expr),
+        loc_continuation: Box::new(Loc::at_zero(Expr::EmptyRecord)),
+        lookups_in_cond,
     };
 
     let mut loc_expr = Loc::at(expect_region, expect);
@@ -3630,11 +3564,6 @@ impl crate::traverse::Visitor for ExpectCollector {
     fn visit_expr(&mut self, expr: &Expr, _region: Region, var: Variable) {
         match expr {
             Expr::Expect {
-                lookups_in_cond,
-                loc_condition,
-                ..
-            }
-            | Expr::ExpectFx {
                 lookups_in_cond,
                 loc_condition,
                 ..

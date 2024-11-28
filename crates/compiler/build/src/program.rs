@@ -536,7 +536,7 @@ fn gen_from_mono_module_dev_wasm32<'a>(
 
     let host_bytes = std::fs::read(built_host_path).unwrap_or_else(|_| {
         internal_error!(
-            "Failed to read host object file {}! Try omitting --prebuilt-platform",
+            "Failed to read host object file {}!",
             built_host_path.display()
         )
     });
@@ -883,7 +883,7 @@ fn build_loaded_file<'a>(
 
     let built_host_opt =
         // Not sure if this is correct for all calls with LinkType::Dylib...
-        if link_type == LinkType::Dylib || target == Target::Wasm32 {
+        if link_type == LinkType::None || link_type == LinkType::Dylib || target == Target::Wasm32 {
             BuiltHostOpt::None
         } else {
             let prebuilt_host = determine_built_host_path(&platform_main_roc_path, target, build_host_requested, link_type, linking_strategy, suppress_build_host_warning);

@@ -62,7 +62,7 @@ mod cli_tests {
             .unwrap();
 
         let cli_build = ExecCli::new(
-            roc_cli::CMD_RUN,
+            roc_cli::CMD_DEV,
             file_from_root("examples/platform-switching", "rocLovesRust.roc"),
         );
 
@@ -371,7 +371,7 @@ mod cli_tests {
     mod test_platform_basic_cli {
 
         use super::*;
-        use roc_cli::CMD_RUN;
+        use roc_cli::CMD_DEV;
 
         #[test]
         #[cfg_attr(
@@ -430,7 +430,7 @@ mod cli_tests {
         )]
         fn module_params_issue_7116() {
             let cli_build = ExecCli::new(
-                CMD_RUN,
+                CMD_DEV,
                 file_from_root(
                     "crates/cli/tests/test-projects/module_params",
                     "issue_7116.roc",
@@ -451,7 +451,7 @@ mod cli_tests {
         )]
         fn module_params_pass_task() {
             let cli_build = ExecCli::new(
-                CMD_RUN,
+                CMD_DEV,
                 file_from_root(
                     "crates/cli/tests/test-projects/module_params",
                     "pass_task.roc",
@@ -970,6 +970,62 @@ mod cli_tests {
             let expected_out = "I asked for input and I ignored it. Deal with it! 😎\n";
 
             cli_build.run().assert_clean_stdout(expected_out);
+        }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        fn effectful_suffixed_record_field() {
+            build_platform_host();
+
+            let cli_build = ExecCli::new(
+                roc_cli::CMD_DEV,
+                file_from_root(
+                    "crates/cli/tests/test-projects/effectful",
+                    "suffixed_record_field.roc",
+                ),
+            );
+
+            let expected_output = "notEffectful: hardcoded\neffectful: from stdin\n";
+
+            cli_build.check_build_and_run(
+                expected_output,
+                ALLOW_VALGRIND,
+                Some("from stdin"),
+                None,
+            );
+        }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        fn effectful_on_err() {
+            build_platform_host();
+
+            let cli_build = ExecCli::new(
+                roc_cli::CMD_DEV,
+                file_from_root("crates/cli/tests/test-projects/effectful", "on_err.roc"),
+            );
+
+            let expected_output = "Enter your password:\nLOG: Failed login attempt\n";
+
+            cli_build.check_build_and_run(expected_output, ALLOW_VALGRIND, Some("42"), None);
+        }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        fn effectful_for_each_try() {
+            build_platform_host();
+
+            let cli_build = ExecCli::new(
+                roc_cli::CMD_DEV,
+                file_from_root(
+                    "crates/cli/tests/test-projects/effectful",
+                    "for_each_try.roc",
+                ),
+            );
+
+            let expected_output = "✅ 0\n✅ 2\n✅ 4\n✅ 6\n✅ 8\n9 is not even! ABORT!\n";
+
+            cli_build.check_build_and_run(expected_output, ALLOW_VALGRIND, None, None);
         }
     }
 

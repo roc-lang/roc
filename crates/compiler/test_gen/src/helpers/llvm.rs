@@ -554,6 +554,7 @@ pub fn try_run_lib_function<T>(
 
 #[allow(dead_code)]
 // only used in tests
+#[allow(dead_code)]
 pub(crate) fn llvm_evals_to<T, U, F>(
     src: &str,
     expected: U,

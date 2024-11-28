@@ -306,7 +306,7 @@ impl<'state, 'a> State<'state, 'a> {
                 self.mark_owned(*s);
             }
             Stmt::Refcounting(_, _) => unreachable!("not inserted yet"),
-            Stmt::Expect { remainder, .. } | Stmt::ExpectFx { remainder, .. } => {
+            Stmt::Expect { remainder, .. } => {
                 // based on my reading of inc_dec.rs, expect borrows the symbols
                 self.inspect_stmt(interner, borrow_signatures, remainder);
             }
@@ -397,7 +397,7 @@ impl<'state, 'a> State<'state, 'a> {
                             "\n\tNo borrow signature for {name:?} layout.\n\n\t\
                             Tip 1: This can happen when you call a function with less arguments than it expects.\n\t\
                             Like `Arg.list!` instead of `Arg.list! {{}}`.\n\t\
-                            Tip 2: `roc check yourfile.roc` can sometimes give you a helpful error. 
+                            Tip 2: `roc check yourfile.roc` can sometimes give you a helpful error.
                             "
                         )
                     };
@@ -522,7 +522,6 @@ impl<'a> CallInfo<'a> {
 
                 Dbg { remainder, .. } => stack.push(remainder),
                 Expect { remainder, .. } => stack.push(remainder),
-                ExpectFx { remainder, .. } => stack.push(remainder),
 
                 Refcounting(_, _) => unreachable!("these have not been introduced yet"),
 

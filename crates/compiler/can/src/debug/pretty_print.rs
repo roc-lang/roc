@@ -62,7 +62,6 @@ fn print_declarations_help<'a>(
                 toplevel_function(c, f, symbol, function_def, &body.value)
             }
             DeclarationTag::Expectation => todo!(),
-            DeclarationTag::ExpectationFx => todo!(),
             DeclarationTag::Destructure(_) => todo!(),
             DeclarationTag::MutualRecursion { .. } => {
                 // the defs will be printed next
@@ -453,7 +452,6 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
         ),
         Dbg { .. } => todo!(),
         Expect { .. } => todo!(),
-        ExpectFx { .. } => todo!(),
         Return { .. } => todo!(),
         TypedHole(_) => todo!(),
         RuntimeError(_) => todo!(),

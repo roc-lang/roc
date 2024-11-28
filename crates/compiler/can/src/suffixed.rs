@@ -155,49 +155,6 @@ pub fn unwrap_suffixed_expression<'a>(
 
             Expr::LowLevelDbg(..) => unwrap_low_level_dbg(arena, loc_expr, maybe_def_pat),
 
-            Expr::Expect(condition, continuation) => {
-                if is_expr_suffixed(&condition.value) {
-                    // we cannot unwrap a suffixed expression within expect
-                    // e.g. expect (foo! "bar")
-                    return Err(EUnwrapped::Malformed);
-                }
-
-                match unwrap_suffixed_expression(arena, continuation, maybe_def_pat) {
-                    Ok(unwrapped_expr) => {
-                        let new_expect = arena
-                            .alloc(Loc::at(loc_expr.region, Expect(condition, unwrapped_expr)));
-                        return Ok(new_expect);
-                    }
-                    Err(EUnwrapped::UnwrappedDefExpr {
-                        loc_expr: unwrapped_expr,
-                        target,
-                    }) => {
-                        let new_expect = arena
-                            .alloc(Loc::at(loc_expr.region, Expect(condition, unwrapped_expr)));
-                        Err(EUnwrapped::UnwrappedDefExpr {
-                            loc_expr: new_expect,
-                            target,
-                        })
-                    }
-                    Err(EUnwrapped::UnwrappedSubExpr {
-                        sub_arg: unwrapped_expr,
-                        sub_pat,
-                        sub_new,
-                        target,
-                    }) => {
-                        let new_expect = arena
-                            .alloc(Loc::at(loc_expr.region, Expect(condition, unwrapped_expr)));
-                        Err(EUnwrapped::UnwrappedSubExpr {
-                            sub_arg: new_expect,
-                            sub_pat,
-                            sub_new,
-                            target,
-                        })
-                    }
-                    Err(EUnwrapped::Malformed) => Err(EUnwrapped::Malformed),
-                }
-            }
-
             // we only need to unwrap some expressions, leave the rest as is
             _ => Ok(loc_expr),
         }
@@ -680,7 +637,7 @@ pub fn unwrap_suffixed_expression_defs_help<'a>(
                 };
 
                 let maybe_suffixed_value_def = match current_value_def {
-                    Annotation(..) | Dbg{..} | Expect{..} | ExpectFx{..} | Stmt(..) | ModuleImport{..} | IngestedFileImport(_) => None,
+                    Annotation(..) | Dbg{..} | Expect{..} | Stmt(..) | ModuleImport{..} | IngestedFileImport(_) => None,
                     AnnotatedBody { body_pattern, body_expr, ann_type, ann_pattern, .. } => Some((body_pattern, body_expr, Some((ann_pattern, ann_type)))),
                     Body (def_pattern, def_expr) => Some((def_pattern, def_expr, None)),
                     StmtAfterExpr => None,

@@ -63,6 +63,7 @@ metadata
 #editors
 .idea/
 .vscode/
+.helix/
 .ignore
 .exrc
 .vimrc

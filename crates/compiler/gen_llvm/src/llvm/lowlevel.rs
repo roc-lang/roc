@@ -461,8 +461,8 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 bitcode::STR_REPEAT,
             )
         }
-        StrSplit => {
-            // Str.split : Str, Str -> List Str
+        StrSplitOn => {
+            // Str.splitOn : Str, Str -> List Str
             arguments!(string, delimiter);
 
             call_str_bitcode_fn(
@@ -470,7 +470,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 &[string, delimiter],
                 &[],
                 BitcodeReturns::List,
-                bitcode::STR_SPLIT,
+                bitcode::STR_SPLIT_ON,
             )
         }
         StrIsEmpty => {
@@ -2205,6 +2205,7 @@ fn build_dec_unary_op<'a, 'ctx>(
 
     match op {
         NumAbs => dec_unary_op(env, bitcode::DEC_ABS, arg),
+        NumNeg => dec_unary_op(env, bitcode::DEC_NEGATE, arg),
         NumAcos => dec_unary_op(env, bitcode::DEC_ACOS, arg),
         NumAsin => dec_unary_op(env, bitcode::DEC_ASIN, arg),
         NumAtan => dec_unary_op(env, bitcode::DEC_ATAN, arg),

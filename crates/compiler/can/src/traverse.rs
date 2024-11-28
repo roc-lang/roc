@@ -107,7 +107,7 @@ pub fn walk_decls<V: Visitor>(visitor: &mut V, decls: &Declarations) {
                     annotation: decls.annotations[index].as_ref(),
                 }
             }
-            Expectation | ExpectationFx => {
+            Expectation => {
                 let loc_condition = &decls.expressions[index];
 
                 DeclarationInfo::Expectation { loc_condition }
@@ -374,18 +374,6 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
             visitor.visit_expr(&le.value, le.region, *var);
         }
         Expr::Expect {
-            loc_condition,
-            loc_continuation,
-            lookups_in_cond: _,
-        } => {
-            visitor.visit_expr(&loc_condition.value, loc_condition.region, Variable::BOOL);
-            visitor.visit_expr(
-                &loc_continuation.value,
-                loc_continuation.region,
-                Variable::NULL,
-            );
-        }
-        Expr::ExpectFx {
             loc_condition,
             loc_continuation,
             lookups_in_cond: _,

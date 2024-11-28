@@ -409,7 +409,7 @@ pub fn type_problem<'b>(
                     FxSuffixKind::Pattern(_) => alloc.reflow(
                         "This is an effectful function, but its name does not indicate so:",
                     ),
-                    FxSuffixKind::RecordField(_) => {
+                    FxSuffixKind::UnsuffixedRecordField => {
                         unreachable!()
                     }
                 },
@@ -427,7 +427,7 @@ pub fn type_problem<'b>(
                 severity,
             })
         }
-        UnsuffixedEffectfulFunction(region, FxSuffixKind::RecordField(_)) => {
+        UnsuffixedEffectfulFunction(region, FxSuffixKind::UnsuffixedRecordField) => {
             let stack = [
                 alloc.reflow(
                     "This field's value is an effectful function, but its name does not indicate so:",
@@ -455,9 +455,9 @@ pub fn type_problem<'b>(
                     FxSuffixKind::Pattern(_) => {
                         alloc.reflow("This is a pure function, but its name suggests otherwise:")
                     }
-                    FxSuffixKind::RecordField(_) => alloc.reflow(
-                        "This field's value is a pure function, but its name suggests otherwise:",
-                    ),
+                    FxSuffixKind::UnsuffixedRecordField => {
+                        unreachable!()
+                    }
                 },
                 alloc.region(lines.convert_region(region), severity),
                 alloc
@@ -676,8 +676,8 @@ pub fn cyclic_alias<'b>(
 ) -> (RocDocBuilder<'b>, String) {
     let when_is_recursion_legal =
         alloc.reflow("Recursion in ")
-        .append(alloc.reflow(alias_kind.as_str()))
-        .append(alloc.reflow("es is only allowed if recursion happens behind a tagged union, at least one variant of which is not recursive."));
+        .append(alloc.reflow(alias_kind.as_str_plural()))
+        .append(alloc.reflow(" is only allowed if recursion happens behind a tagged union, at least one variant of which is not recursive."));
 
     let doc = if others.is_empty() {
         alloc.stack([

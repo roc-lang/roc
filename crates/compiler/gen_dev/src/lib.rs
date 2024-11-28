@@ -279,7 +279,6 @@ impl<'a> LastSeenMap<'a> {
 
             Stmt::Dbg { .. } => todo!("dbg not implemented in the dev backend"),
             Stmt::Expect { .. } => todo!("expect is not implemented in the dev backend"),
-            Stmt::ExpectFx { .. } => todo!("expect-fx is not implemented in the dev backend"),
 
             Stmt::Crash(msg, _crash_tag) => {
                 self.set_last_seen(*msg, stmt);
@@ -664,7 +663,9 @@ trait Backend<'a> {
                 cond_layout,
                 branches,
                 default_branch,
-                ret_layout,
+                // always use the proc's ret_layout, as early returns can make
+                // this ret_layout inaccurate
+                ret_layout: _,
             } => {
                 self.load_literal_symbols(&[*cond_symbol]);
                 self.build_switch(
@@ -1641,9 +1642,9 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
-            LowLevel::StrSplit => self.build_fn_call(
+            LowLevel::StrSplitOn => self.build_fn_call(
                 sym,
-                bitcode::STR_SPLIT.to_string(),
+                bitcode::STR_SPLIT_ON.to_string(),
                 args,
                 arg_layouts,
                 ret_layout,

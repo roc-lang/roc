@@ -1531,14 +1531,6 @@ pub enum Stmt<'a> {
         /// what happens after the expect
         remainder: &'a Stmt<'a>,
     },
-    ExpectFx {
-        condition: Symbol,
-        region: Region,
-        lookups: &'a [Symbol],
-        variables: &'a [LookupType],
-        /// what happens after the expect
-        remainder: &'a Stmt<'a>,
-    },
     Dbg {
         /// The location this dbg is in source as a printable string.
         source_location: &'a str,
@@ -2274,17 +2266,6 @@ impl<'a> Stmt<'a> {
                 ..
             } => alloc
                 .text("expect ")
-                .append(symbol_to_doc(alloc, *condition, pretty))
-                .append(";")
-                .append(alloc.hardline())
-                .append(remainder.to_doc(alloc, interner, pretty)),
-
-            ExpectFx {
-                condition,
-                remainder,
-                ..
-            } => alloc
-                .text("expect-fx ")
                 .append(symbol_to_doc(alloc, *condition, pretty))
                 .append(";")
                 .append(alloc.hardline())
@@ -4645,7 +4626,6 @@ pub fn with_hole<'a>(
         EmptyRecord => let_empty_struct(assigned, hole),
 
         Expect { .. } => unreachable!("I think this is unreachable"),
-        ExpectFx { .. } => unreachable!("I think this is unreachable"),
         Dbg {
             source_location,
             source,
@@ -7118,73 +7098,6 @@ pub fn from_can<'a>(
             stmt
         }
 
-        ExpectFx {
-            loc_condition,
-            loc_continuation,
-            lookups_in_cond,
-        } => {
-            let rest = from_can(env, variable, loc_continuation.value, procs, layout_cache);
-            let cond_symbol = env.unique_symbol();
-
-            let mut lookups = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
-            let mut lookup_variables = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
-            let mut specialized_variables = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
-
-            for ExpectLookup {
-                symbol,
-                var,
-                ability_info,
-            } in lookups_in_cond.iter().copied()
-            {
-                let symbol = match ability_info {
-                    Some(specialization_id) => late_resolve_ability_specialization(
-                        env,
-                        symbol,
-                        Some(specialization_id),
-                        var,
-                    ),
-                    None => symbol,
-                };
-
-                let expectation_subs = env
-                    .expectation_subs
-                    .as_deref_mut()
-                    .expect("if expects are compiled, their subs should be available");
-                let spec_var = expectation_subs.fresh_unnamed_flex_var();
-
-                if !env.subs.is_function(var) {
-                    // Exclude functions from lookups
-                    lookups.push(symbol);
-                    lookup_variables.push(var);
-                    specialized_variables.push(spec_var);
-                }
-            }
-
-            let specialized_variables = specialized_variables.into_bump_slice();
-
-            let mut stmt = Stmt::ExpectFx {
-                condition: cond_symbol,
-                region: loc_condition.region,
-                lookups: lookups.into_bump_slice(),
-                variables: specialized_variables,
-                remainder: env.arena.alloc(rest),
-            };
-
-            stmt = with_hole(
-                env,
-                loc_condition.value,
-                Variable::BOOL,
-                procs,
-                layout_cache,
-                cond_symbol,
-                env.arena.alloc(stmt),
-            );
-
-            store_specialized_expectation_lookups(env, lookup_variables, specialized_variables);
-
-            stmt
-        }
-
         Dbg {
             source_location,
             source,
@@ -7711,32 +7624,6 @@ fn substitute_in_stmt_help<'a>(
             );
 
             let expect = Expect {
-                condition: substitute(subs, *condition).unwrap_or(*condition),
-                region: *region,
-                lookups: new_lookups.into_bump_slice(),
-                variables,
-                remainder: new_remainder,
-            };
-
-            Some(arena.alloc(expect))
-        }
-
-        ExpectFx {
-            condition,
-            region,
-            lookups,
-            variables,
-            remainder,
-        } => {
-            let new_remainder =
-                substitute_in_stmt_help(arena, remainder, subs).unwrap_or(remainder);
-
-            let new_lookups = Vec::from_iter_in(
-                lookups.iter().map(|s| substitute(subs, *s).unwrap_or(*s)),
-                arena,
-            );
-
-            let expect = ExpectFx {
                 condition: substitute(subs, *condition).unwrap_or(*condition),
                 region: *region,
                 lookups: new_lookups.into_bump_slice(),

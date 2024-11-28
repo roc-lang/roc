@@ -1512,6 +1512,7 @@ fn to_dbg_or_expect_report<'a>(
             to_space_report(alloc, lines, filename, err, *pos)
         }
 
+        roc_parse::parser::EExpect::DbgArity(_) => todo!(),
         roc_parse::parser::EExpect::Dbg(_) => unreachable!("another branch would be taken"),
         roc_parse::parser::EExpect::Expect(_) => unreachable!("another branch would be taken"),
 

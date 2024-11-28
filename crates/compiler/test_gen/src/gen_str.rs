@@ -51,11 +51,11 @@ fn string_neq() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_split_empty_delimiter() {
+fn str_split_on_empty_delimiter() {
     assert_evals_to!(
         indoc!(
             r#"
-                    List.len (Str.split "hello" "")
+                    List.len (Str.splitOn "hello" "")
                 "#
         ),
         1,
@@ -65,7 +65,7 @@ fn str_split_empty_delimiter() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when List.first (Str.split "JJJ" "") is
+                    when List.first (Str.splitOn "JJJ" "") is
                         Ok str ->
                             Str.countUtf8Bytes str
 
@@ -81,11 +81,11 @@ fn str_split_empty_delimiter() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_split_bigger_delimiter_small_str() {
+fn str_split_on_bigger_delimiter_small_str() {
     assert_evals_to!(
         indoc!(
             r#"
-                    List.len (Str.split "hello" "JJJJ there")
+                    List.len (Str.splitOn "hello" "JJJJ there")
                 "#
         ),
         1,
@@ -95,7 +95,7 @@ fn str_split_bigger_delimiter_small_str() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when List.first (Str.split "JJJ" "JJJJ there") is
+                    when List.first (Str.splitOn "JJJ" "JJJJ there") is
                         Ok str ->
                             Str.countUtf8Bytes str
 
@@ -111,11 +111,11 @@ fn str_split_bigger_delimiter_small_str() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_split_str_concat_repeated() {
+fn str_split_on_str_concat_repeated() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when List.first (Str.split "JJJJJ" "JJJJ there") is
+                    when List.first (Str.splitOn "JJJJJ" "JJJJ there") is
                         Ok str ->
                             str
                                 |> Str.concat str
@@ -135,9 +135,9 @@ fn str_split_str_concat_repeated() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_split_small_str_bigger_delimiter() {
+fn str_split_on_small_str_bigger_delimiter() {
     assert_evals_to!(
-        indoc!(r#"Str.split "JJJ" "0123456789abcdefghi""#),
+        indoc!(r#"Str.splitOn "JJJ" "0123456789abcdefghi""#),
         RocList::from_slice(&[RocStr::from("JJJ")]),
         RocList<RocStr>
     );
@@ -145,11 +145,11 @@ fn str_split_small_str_bigger_delimiter() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_split_big_str_small_delimiter() {
+fn str_split_on_big_str_small_delimiter() {
     assert_evals_to!(
         indoc!(
             r#"
-                    Str.split "01234567789abcdefghi?01234567789abcdefghi" "?"
+                    Str.splitOn "01234567789abcdefghi?01234567789abcdefghi" "?"
                 "#
         ),
         RocList::from_slice(&[
@@ -162,7 +162,7 @@ fn str_split_big_str_small_delimiter() {
     assert_evals_to!(
         indoc!(
             r#"
-                    Str.split "01234567789abcdefghi 3ch 01234567789abcdefghi" "3ch"
+                    Str.splitOn "01234567789abcdefghi 3ch 01234567789abcdefghi" "3ch"
                 "#
         ),
         RocList::from_slice(&[
@@ -175,11 +175,11 @@ fn str_split_big_str_small_delimiter() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_split_small_str_small_delimiter() {
+fn str_split_on_small_str_small_delimiter() {
     assert_evals_to!(
         indoc!(
             r#"
-                    Str.split "J!J!J" "!"
+                    Str.splitOn "J!J!J" "!"
                 "#
         ),
         RocList::from_slice(&[RocStr::from("J"), RocStr::from("J"), RocStr::from("J")]),
@@ -189,11 +189,11 @@ fn str_split_small_str_small_delimiter() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_split_bigger_delimiter_big_strs() {
+fn str_split_on_bigger_delimiter_big_strs() {
     assert_evals_to!(
         indoc!(
             r#"
-                    Str.split
+                    Str.splitOn
                         "string to split is shorter"
                         "than the delimiter which happens to be very very long"
                 "#
@@ -205,11 +205,11 @@ fn str_split_bigger_delimiter_big_strs() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_split_empty_strs() {
+fn str_split_on_empty_strs() {
     assert_evals_to!(
         indoc!(
             r#"
-                    Str.split "" ""
+                    Str.splitOn "" ""
                 "#
         ),
         RocList::from_slice(&[RocStr::from("")]),
@@ -219,11 +219,11 @@ fn str_split_empty_strs() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_split_minimal_example() {
+fn str_split_on_minimal_example() {
     assert_evals_to!(
         indoc!(
             r#"
-                    Str.split "a," ","
+                    Str.splitOn "a," ","
                 "#
         ),
         RocList::from_slice(&[RocStr::from("a"), RocStr::from("")]),
@@ -233,11 +233,11 @@ fn str_split_minimal_example() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_split_small_str_big_delimiter() {
+fn str_split_on_small_str_big_delimiter() {
     assert_evals_to!(
         indoc!(
             r#"
-                    Str.split
+                    Str.splitOn
                         "1---- ---- ---- ---- ----2---- ---- ---- ---- ----"
                         "---- ---- ---- ---- ----"
                         |> List.len
@@ -250,7 +250,7 @@ fn str_split_small_str_big_delimiter() {
     assert_evals_to!(
         indoc!(
             r#"
-                    Str.split
+                    Str.splitOn
                         "1---- ---- ---- ---- ----2---- ---- ---- ---- ----"
                         "---- ---- ---- ---- ----"
                 "#
@@ -262,11 +262,11 @@ fn str_split_small_str_big_delimiter() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_split_small_str_20_char_delimiter() {
+fn str_split_on_small_str_20_char_delimiter() {
     assert_evals_to!(
         indoc!(
             r#"
-                    Str.split
+                    Str.splitOn
                         "3|-- -- -- -- -- -- |4|-- -- -- -- -- -- |"
                         "|-- -- -- -- -- -- |"
                 "#
@@ -1548,7 +1548,7 @@ fn issue_2811() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_split_first_one_char() {
+fn str_split_on_first_one_char() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -1564,7 +1564,7 @@ fn str_split_first_one_char() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_split_first_multiple_chars() {
+fn str_split_on_first_multiple_chars() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -1578,7 +1578,7 @@ fn str_split_first_multiple_chars() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_split_first_entire_input() {
+fn str_split_on_first_entire_input() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -1592,7 +1592,7 @@ fn str_split_first_entire_input() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_split_first_not_found() {
+fn str_split_on_first_not_found() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -1606,7 +1606,7 @@ fn str_split_first_not_found() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_split_last_one_char() {
+fn str_split_on_last_one_char() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -1620,7 +1620,7 @@ fn str_split_last_one_char() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_split_last_multiple_chars() {
+fn str_split_on_last_multiple_chars() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -1634,7 +1634,7 @@ fn str_split_last_multiple_chars() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_split_last_entire_input() {
+fn str_split_on_last_entire_input() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -1648,7 +1648,7 @@ fn str_split_last_entire_input() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_split_last_not_found() {
+fn str_split_on_last_not_found() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -1662,9 +1662,9 @@ fn str_split_last_not_found() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_split_overlapping_substring_1() {
+fn str_split_on_overlapping_substring_1() {
     assert_evals_to!(
-        r#"Str.split "aaa" "aa""#,
+        r#"Str.splitOn "aaa" "aa""#,
         RocList::from_slice(&[RocStr::from(""), RocStr::from("a")]),
         RocList<RocStr>
     );
@@ -1672,9 +1672,9 @@ fn str_split_overlapping_substring_1() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_split_overlapping_substring_2() {
+fn str_split_on_overlapping_substring_2() {
     assert_evals_to!(
-        r#"Str.split "aaaa" "aa""#,
+        r#"Str.splitOn "aaaa" "aa""#,
         RocList::from_slice(&[RocStr::from(""), RocStr::from(""), RocStr::from("")]),
         RocList<RocStr>
     );

@@ -1,4 +1,9 @@
-use core::{fmt, marker::PhantomData, ops::Range};
+use core::{
+    fmt,
+    marker::PhantomData,
+    num::{NonZeroU16, NonZeroUsize},
+    ops::Range,
+};
 
 use crate::soa_index::Index;
 
@@ -18,8 +23,10 @@ impl<T> fmt::Debug for Slice<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "Slice {{ start: {}, length: {} }}",
-            self.start, self.length
+            "Slice<{}> {{ start: {}, length: {} }}",
+            core::any::type_name::<T>(),
+            self.start,
+            self.length
         )
     }
 }
@@ -99,6 +106,18 @@ impl<T> Slice<T> {
             _marker: PhantomData,
         }
     }
+
+    pub const fn truncate(&self, length: u16) -> Self {
+        Self {
+            start: self.start,
+            length,
+            _marker: PhantomData,
+        }
+    }
+
+    pub fn as_nonempty_slice(&self) -> Option<NonEmptySlice<T>> {
+        NonZeroU16::new(self.length).map(|nonzero_len| NonEmptySlice::new(self.start, nonzero_len))
+    }
 }
 
 impl<T> IntoIterator for Slice<T> {
@@ -146,4 +165,112 @@ impl<T> ExactSizeIterator for SliceIterator<T> {}
 
 pub trait GetSlice<T> {
     fn get_slice(&self, slice: Slice<T>) -> &[T];
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+pub struct NonEmptySlice<T> {
+    inner: Slice<T>,
+}
+
+impl<T> fmt::Debug for NonEmptySlice<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+impl<T> Copy for NonEmptySlice<T> {}
+
+impl<T> Clone for NonEmptySlice<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> NonEmptySlice<T> {
+    pub const fn start(self) -> u32 {
+        self.inner.start()
+    }
+
+    pub fn advance(&mut self, amount: u32) {
+        self.inner.advance(amount);
+    }
+
+    pub fn get_slice<'a>(&self, elems: &'a [T]) -> &'a [T] {
+        self.inner.get_slice(elems)
+    }
+
+    pub fn get_slice_mut<'a>(&self, elems: &'a mut [T]) -> &'a mut [T] {
+        self.inner.get_slice_mut(elems)
+    }
+
+    #[inline(always)]
+    pub const fn indices(&self) -> Range<usize> {
+        self.inner.indices()
+    }
+
+    pub const fn len(&self) -> NonZeroUsize {
+        // Safety: we only accept a nonzero length on construction
+        unsafe { NonZeroUsize::new_unchecked(self.inner.len()) }
+    }
+
+    pub const fn new(start: u32, length: NonZeroU16) -> Self {
+        Self {
+            inner: Slice {
+                start,
+                length: length.get(),
+                _marker: PhantomData,
+            },
+        }
+    }
+
+    /// # Safety
+    ///
+    /// The caller must ensure that the length is nonzero
+    pub const unsafe fn new_unchecked(start: u32, length: u16) -> Self {
+        Self {
+            inner: Slice {
+                start,
+                length,
+                _marker: PhantomData,
+            },
+        }
+    }
+
+    pub const fn from_slice(slice: Slice<T>) -> Option<Self> {
+        // Using a match here because Option::map is not const
+        match NonZeroU16::new(slice.length) {
+            Some(len) => Some(Self::new(slice.start, len)),
+            None => None,
+        }
+    }
+
+    /// # Safety
+    ///
+    /// The caller must ensure that the length is nonzero
+    pub const unsafe fn from_slice_unchecked(slice: Slice<T>) -> Self {
+        Self::new(slice.start, NonZeroU16::new_unchecked(slice.length))
+    }
+
+    pub const fn truncate(&self, length: NonZeroU16) -> Self {
+        Self {
+            inner: Slice {
+                start: self.inner.start,
+                length: length.get(),
+                _marker: PhantomData,
+            },
+        }
+    }
+
+    pub fn as_slice(&self) -> Slice<T> {
+        self.inner
+    }
+}
+
+impl<T> IntoIterator for NonEmptySlice<T> {
+    type Item = Index<T>;
+    type IntoIter = SliceIterator<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.inner.into_iter()
+    }
 }

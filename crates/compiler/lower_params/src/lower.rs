@@ -101,7 +101,7 @@ impl<'a> LowerParams<'a> {
                     self.lower_expr(&mut decls.expressions[index].value);
                 }
 
-                Destructure(_) | Expectation | ExpectationFx => {
+                Destructure(_) | Expectation => {
                     self.lower_expr(&mut decls.expressions[index].value);
                 }
                 MutualRecursion { .. } => {}
@@ -353,15 +353,6 @@ impl<'a> LowerParams<'a> {
                     lambda_set_variables: _,
                 } => expr_stack.push(&mut argument.1.value),
                 Expect {
-                    loc_condition,
-                    loc_continuation,
-                    lookups_in_cond: _,
-                } => {
-                    expr_stack.reserve(2);
-                    expr_stack.push(&mut loc_condition.value);
-                    expr_stack.push(&mut loc_continuation.value);
-                }
-                ExpectFx {
                     loc_condition,
                     loc_continuation,
                     lookups_in_cond: _,

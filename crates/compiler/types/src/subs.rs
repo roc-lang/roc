@@ -975,7 +975,7 @@ impl From<OptVariable> for Option<Variable> {
 }
 
 /// Marks whether a when expression is exhaustive using a variable.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ExhaustiveMark(Variable);
 
 impl ExhaustiveMark {
@@ -2303,7 +2303,7 @@ roc_error_macros::assert_sizeof_default!((Variable, Option<Lowercase>), 4 * 8);
 roc_error_macros::assert_copyable!(Content);
 roc_error_macros::assert_copyable!(Descriptor);
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Content {
     /// A type variable which the user did not name in an annotation,
     ///
@@ -2343,7 +2343,7 @@ pub enum Content {
 ///   if b then f else g
 ///
 /// has the type {} -[f, g]-> {} where [f, g] is the solved lambda set.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LambdaSet {
     /// The resolved lambda symbols we know.
     pub solved: UnionLambdas,
@@ -2382,7 +2382,7 @@ pub struct LambdaSet {
     pub ambient_function: Variable,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct AliasVariables {
     pub variables_start: u32,
     pub all_variables_len: u16,
@@ -2532,7 +2532,7 @@ impl Content {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TagExt {
     /// This tag extension variable measures polymorphism in the openness of the tag,
     /// or the lack thereof. It can only be unified with
@@ -2581,7 +2581,7 @@ impl TagExt {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum FlatType {
     Apply(Symbol, VariableSubsSlice),
     Func(VariableSubsSlice, Variable, Variable, Variable),
@@ -2700,7 +2700,7 @@ impl Label for Symbol {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct UnionLabels<L> {
     pub(crate) length: u16,
     pub(crate) labels_start: u32,
@@ -3045,7 +3045,7 @@ pub fn is_empty_tag_union(subs: &Subs, mut var: Variable) -> bool {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RecordFields {
     pub length: u16,
     pub field_names_start: u32,
@@ -3258,7 +3258,7 @@ fn is_empty_record(subs: &Subs, mut var: Variable) -> bool {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TupleElems {
     pub length: u16,
 

@@ -10,12 +10,12 @@ SpaceAfter(
                 @27-51,
             ],
             space_before: [
-                Slice { start: 0, length: 0 },
-                Slice { start: 0, length: 1 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
             ],
             space_after: [
-                Slice { start: 0, length: 0 },
-                Slice { start: 1, length: 0 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 1, length: 0 },
             ],
             spaces: [
                 Newline,

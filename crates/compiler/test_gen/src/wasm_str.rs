@@ -15,11 +15,11 @@ use indoc::indoc;
 use roc_std::{RocList, RocStr, I128, U128};
 
 #[test]
-fn str_split_empty_delimiter() {
+fn str_split_on_empty_delimiter() {
     assert_evals_to!(
         indoc!(
             r#"
-                List.len (Str.split "hello" "")
+                List.len (Str.splitOn "hello" "")
             "#
         ),
         1,
@@ -28,11 +28,11 @@ fn str_split_empty_delimiter() {
 }
 
 #[test]
-fn str_split_bigger_delimiter_small_str() {
+fn str_split_on_bigger_delimiter_small_str() {
     assert_evals_to!(
         indoc!(
             r#"
-                List.len (Str.split "hello" "JJJJ there")
+                List.len (Str.splitOn "hello" "JJJJ there")
             "#
         ),
         1,
@@ -41,11 +41,11 @@ fn str_split_bigger_delimiter_small_str() {
 }
 
 #[test]
-fn str_split_str_concat_repeated() {
+fn str_split_on_str_concat_repeated() {
     assert_evals_to!(
         indoc!(
             r#"
-                when List.first (Str.split "JJJJJ" "JJJJ there") is
+                when List.first (Str.splitOn "JJJJJ" "JJJJ there") is
                     Ok str ->
                         str
                             |> Str.concat str
@@ -64,13 +64,13 @@ fn str_split_str_concat_repeated() {
 }
 
 #[test]
-fn str_split_small_str_bigger_delimiter() {
+fn str_split_on_small_str_bigger_delimiter() {
     assert_evals_to!(
         indoc!(
             r#"
                 when
                     List.first
-                        (Str.split "JJJ" "0123456789abcdefghi")
+                        (Str.splitOn "JJJ" "0123456789abcdefghi")
                 is
                     Ok str -> str
                     _ -> ""
@@ -82,11 +82,11 @@ fn str_split_small_str_bigger_delimiter() {
 }
 
 #[test]
-fn str_split_big_str_small_delimiter() {
+fn str_split_on_big_str_small_delimiter() {
     assert_evals_to!(
         indoc!(
             r#"
-                Str.split "01234567789abcdefghi?01234567789abcdefghi" "?"
+                Str.splitOn "01234567789abcdefghi?01234567789abcdefghi" "?"
             "#
         ),
         RocList::from_slice(&[
@@ -99,7 +99,7 @@ fn str_split_big_str_small_delimiter() {
     assert_evals_to!(
         indoc!(
             r#"
-                Str.split "01234567789abcdefghi 3ch 01234567789abcdefghi" "3ch"
+                Str.splitOn "01234567789abcdefghi 3ch 01234567789abcdefghi" "3ch"
             "#
         ),
         RocList::from_slice(&[
@@ -111,11 +111,11 @@ fn str_split_big_str_small_delimiter() {
 }
 
 #[test]
-fn str_split_small_str_small_delimiter() {
+fn str_split_on_small_str_small_delimiter() {
     assert_evals_to!(
         indoc!(
             r#"
-                Str.split "J!J!J" "!"
+                Str.splitOn "J!J!J" "!"
             "#
         ),
         RocList::from_slice(&[RocStr::from("J"), RocStr::from("J"), RocStr::from("J")]),
@@ -124,11 +124,11 @@ fn str_split_small_str_small_delimiter() {
 }
 
 #[test]
-fn str_split_bigger_delimiter_big_strs() {
+fn str_split_on_bigger_delimiter_big_strs() {
     assert_evals_to!(
         indoc!(
             r#"
-                Str.split
+                Str.splitOn
                     "string to split is shorter"
                     "than the delimiter which happens to be very very long"
             "#
@@ -139,11 +139,11 @@ fn str_split_bigger_delimiter_big_strs() {
 }
 
 #[test]
-fn str_split_empty_strs() {
+fn str_split_on_empty_strs() {
     assert_evals_to!(
         indoc!(
             r#"
-                    Str.split "" ""
+                    Str.splitOn "" ""
                 "#
         ),
         RocList::from_slice(&[RocStr::from("")]),
@@ -152,11 +152,11 @@ fn str_split_empty_strs() {
 }
 
 #[test]
-fn str_split_minimal_example() {
+fn str_split_on_minimal_example() {
     assert_evals_to!(
         indoc!(
             r#"
-                    Str.split "a," ","
+                    Str.splitOn "a," ","
                 "#
         ),
         RocList::from_slice(&[RocStr::from("a"), RocStr::from("")]),
@@ -165,11 +165,11 @@ fn str_split_minimal_example() {
 }
 
 #[test]
-fn str_split_small_str_big_delimiter() {
+fn str_split_on_small_str_big_delimiter() {
     assert_evals_to!(
         indoc!(
             r#"
-                    Str.split
+                    Str.splitOn
                         "1---- ---- ---- ---- ----2---- ---- ---- ---- ----"
                         "---- ---- ---- ---- ----"
                         |> List.len
@@ -182,7 +182,7 @@ fn str_split_small_str_big_delimiter() {
     assert_evals_to!(
         indoc!(
             r#"
-                    Str.split
+                    Str.splitOn
                         "1---- ---- ---- ---- ----2---- ---- ---- ---- ----"
                         "---- ---- ---- ---- ----"
                 "#
@@ -193,11 +193,11 @@ fn str_split_small_str_big_delimiter() {
 }
 
 #[test]
-fn str_split_small_str_20_char_delimiter() {
+fn str_split_on_small_str_20_char_delimiter() {
     assert_evals_to!(
         indoc!(
             r#"
-                    Str.split
+                    Str.splitOn
                         "3|-- -- -- -- -- -- |4|-- -- -- -- -- -- |"
                         "|-- -- -- -- -- -- |"
                 "#

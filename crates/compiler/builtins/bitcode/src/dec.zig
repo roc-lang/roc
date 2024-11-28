@@ -442,14 +442,14 @@ pub const RocDec = extern struct {
         const numerator_i128 = self.num;
         const denominator_i128 = other.num;
 
-        // (0 / n) is always 0
-        if (numerator_i128 == 0) {
-            return RocDec{ .num = 0 };
-        }
-
         // (n / 0) is an error
         if (denominator_i128 == 0) {
             roc_panic("Decimal division by 0!", 0);
+        }
+
+        // (0 / n) is always 0
+        if (numerator_i128 == 0) {
+            return RocDec{ .num = 0 };
         }
 
         // If they're both negative, or if neither is negative, the final answer

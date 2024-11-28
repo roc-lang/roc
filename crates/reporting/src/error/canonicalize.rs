@@ -65,6 +65,8 @@ const DUPLICATE_IMPLEMENTATION: &str = "DUPLICATE IMPLEMENTATION";
 const UNNECESSARY_IMPLEMENTATIONS: &str = "UNNECESSARY IMPLEMENTATIONS";
 const INCOMPLETE_ABILITY_IMPLEMENTATION: &str = "INCOMPLETE ABILITY IMPLEMENTATION";
 const STATEMENT_AFTER_EXPRESSION: &str = "STATEMENT AFTER EXPRESSION";
+const MISSING_EXCLAMATION: &str = "MISSING EXCLAMATION";
+const UNNECESSARY_EXCLAMATION: &str = "UNNECESSARY EXCLAMATION";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -1427,6 +1429,42 @@ pub fn can_problem<'b>(
 
             title = STATEMENT_AFTER_EXPRESSION.to_string();
         }
+
+        Problem::UnsuffixedEffectfulRecordField(region) => {
+            doc = alloc.stack([
+                alloc.reflow(
+                    "The type of this record field is an effectful function, but its name does not indicate so:",
+                ),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.reflow("Add an exclamation mark at the end, like:"),
+                alloc
+                    .parser_suggestion("{ readFile!: Str => Str }")
+                    .indent(4),
+                alloc.reflow("This will help readers identify it as a source of effects."),
+            ]);
+
+            title = MISSING_EXCLAMATION.to_string();
+        }
+
+        Problem::SuffixedPureRecordField(region) => {
+            doc = alloc.stack([
+                alloc.reflow(
+                    "The type of this record field is a pure function, but its name suggests otherwise:",
+                ),
+                alloc.region(lines.convert_region(region), severity),
+                alloc
+                    .reflow("The exclamation mark at the end is reserved for effectful functions."),
+                alloc.concat([
+                    alloc.hint("Did you mean to use "),
+                    alloc.keyword("=>"),
+                    alloc.text(" instead of "),
+                    alloc.keyword("->"),
+                    alloc.text("?"),
+                ]),
+            ]);
+
+            title = UNNECESSARY_EXCLAMATION.to_string();
+        }
     };
 
     Report {
@@ -2155,9 +2193,6 @@ fn pretty_runtime_error<'b>(
             ]);
 
             title = SYNTAX_PROBLEM;
-        }
-        RuntimeError::MalformedClosure(_) => {
-            todo!("");
         }
         RuntimeError::MalformedSuffixed(_) => {
             todo!("error for malformed suffix");

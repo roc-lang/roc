@@ -252,6 +252,8 @@ pub enum Problem {
         region: Region,
     },
     StmtAfterExpr(Region),
+    UnsuffixedEffectfulRecordField(Region),
+    SuffixedPureRecordField(Region),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -337,6 +339,9 @@ impl Problem {
             Problem::StatementsAfterReturn { .. } => Warning,
             Problem::ReturnAtEndOfFunction { .. } => Warning,
             Problem::StmtAfterExpr(_) => Fatal,
+            Problem::UnsuffixedEffectfulRecordField(_) | Problem::SuffixedPureRecordField(..) => {
+                Warning
+            }
         }
     }
 
@@ -430,7 +435,6 @@ impl Problem {
             | Problem::RuntimeError(RuntimeError::InvalidPrecedence(_, region))
             | Problem::RuntimeError(RuntimeError::MalformedIdentifier(_, _, region))
             | Problem::RuntimeError(RuntimeError::MalformedTypeName(_, region))
-            | Problem::RuntimeError(RuntimeError::MalformedClosure(region))
             | Problem::RuntimeError(RuntimeError::MalformedSuffixed(region))
             | Problem::RuntimeError(RuntimeError::InvalidRecordUpdate { region })
             | Problem::RuntimeError(RuntimeError::InvalidFloat(_, region, _))
@@ -502,11 +506,14 @@ impl Problem {
             | Problem::DefsOnlyUsedInRecursion(_, region)
             | Problem::ReturnOutsideOfFunction { region }
             | Problem::StatementsAfterReturn { region }
-            | Problem::ReturnAtEndOfFunction { region } => Some(*region),
+            | Problem::ReturnAtEndOfFunction { region }
+            | Problem::UnsuffixedEffectfulRecordField(region)
+            | Problem::SuffixedPureRecordField(region) => Some(*region),
             Problem::RuntimeError(RuntimeError::CircularDef(cycle_entries))
             | Problem::BadRecursion(cycle_entries) => {
                 cycle_entries.first().map(|entry| entry.expr_region)
             }
+
             Problem::StmtAfterExpr(region) => Some(*region),
             Problem::RuntimeError(RuntimeError::UnresolvedTypeVar)
             | Problem::RuntimeError(RuntimeError::ErroneousType)
@@ -670,7 +677,6 @@ pub enum RuntimeError {
     InvalidPrecedence(PrecedenceProblem, Region),
     MalformedIdentifier(Box<str>, roc_parse::ident::BadIdent, Region),
     MalformedTypeName(Box<str>, Region),
-    MalformedClosure(Region),
     InvalidRecordUpdate {
         region: Region,
     },
@@ -742,7 +748,6 @@ impl RuntimeError {
             | RuntimeError::InvalidPrecedence(_, region)
             | RuntimeError::MalformedIdentifier(_, _, region)
             | RuntimeError::MalformedTypeName(_, region)
-            | RuntimeError::MalformedClosure(region)
             | RuntimeError::MalformedSuffixed(region)
             | RuntimeError::InvalidRecordUpdate { region }
             | RuntimeError::InvalidFloat(_, region, _)
