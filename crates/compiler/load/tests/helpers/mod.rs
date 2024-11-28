@@ -51,10 +51,11 @@ pub fn infer_expr(
         exposed_by_module: &Default::default(),
         derived_module,
         function_kind: FunctionKind::LambdaSet,
-        #[cfg(debug_assertions)]
-        checkmate: None,
         module_params: None,
         module_params_vars: Default::default(),
+        host_exposed_symbols: None,
+        #[cfg(debug_assertions)]
+        checkmate: None,
     };
 
     let RunSolveOutput { solved, .. } =
