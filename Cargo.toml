@@ -180,6 +180,7 @@ roc_region = { path = "crates/compiler/region" }
 roc_repl_cli = { path = "crates/repl_cli" }
 roc_reporting = { path = "crates/reporting" }
 roc_solve = { path = "crates/compiler/solve" }
+roc_solve_problem = { path = "crates/compiler/solve_problem" }
 roc_std = { path = "crates/roc_std" }
 roc_target = { path = "crates/compiler/roc_target" }
 roc_tracing = { path = "crates/tracing" }
