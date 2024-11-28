@@ -1947,8 +1947,6 @@ pub enum Expr<'a> {
         symbol: Symbol,
         update_mode: UpdateModeId,
     },
-
-    RuntimeErrorFunction(&'a str),
 }
 
 impl<'a> Literal<'a> {
@@ -2110,8 +2108,6 @@ impl<'a> Expr<'a> {
                 index, structure, ..
             } => text!(alloc, "StructAtIndex {} ", index)
                 .append(symbol_to_doc(alloc, *structure, pretty)),
-
-            RuntimeErrorFunction(s) => text!(alloc, "ErrorFunction {}", s),
 
             GetTagId { structure, .. } => alloc
                 .text("GetTagId ")
@@ -7728,7 +7724,7 @@ fn substitute_in_expr<'a>(
     use Expr::*;
 
     match expr {
-        Literal(_) | EmptyArray | RuntimeErrorFunction(_) => None,
+        Literal(_) | EmptyArray => None,
 
         Call(call) => substitute_in_call(arena, call, subs).map(Expr::Call),
 
