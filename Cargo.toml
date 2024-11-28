@@ -167,17 +167,21 @@ roc_fmt = { path = "crates/compiler/fmt" }
 roc_gen_llvm = { path = "crates/compiler/gen_llvm" }
 roc_gen_dev = { path = "crates/compiler/gen_dev" }
 roc_glue = { path = "crates/glue" }
+roc_highlight = { path = "crates/highlight" }
 roc_linker = { path = "crates/linker" }
 roc_load = { path = "crates/compiler/load" }
 roc_module = { path = "crates/compiler/module" }
 roc_mono = { path = "crates/compiler/mono" }
 roc_packaging = { path = "crates/packaging" }
 roc_parse = { path = "crates/compiler/parse" }
+roc_problem = { path = "crates/compiler/problem" }
 roc_region = { path = "crates/compiler/region" }
 roc_repl_cli = { path = "crates/repl_cli" }
 roc_reporting = { path = "crates/reporting" }
+roc_solve = { path = "crates/compiler/solve" }
 roc_target = { path = "crates/compiler/roc_target" }
 roc_tracing = { path = "crates/tracing" }
+roc_types = { path = "crates/compiler/types" }
 roc_wasm_interp = { path = "crates/wasm_interp" }
 rustyline = { git = "https://github.com/roc-lang/rustyline", rev = "e74333c" }
 rustyline-derive = { git = "https://github.com/roc-lang/rustyline", rev = "e74333c" }
@@ -200,6 +204,7 @@ tempfile = "=3.2.0"
 tracing = { version = "0.1.40", features = ["release_max_level_off"] }
 tracing-appender = "0.2.2"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
+ven_pretty = { path = "crates/vendor/pretty" }
 walkdir = "2.3.2"
 wasm-bindgen = "0.2.84"
 wasm-bindgen-futures = "0.4.34"
