@@ -41,7 +41,6 @@ libloading.workspace = true
 rustyline-derive.workspace = true
 rustyline.workspace = true
 target-lexicon.workspace = true
-unicode-segmentation.workspace = true
 
 [lib]
 name = "roc_repl_cli"

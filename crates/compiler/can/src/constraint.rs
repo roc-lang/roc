@@ -957,6 +957,13 @@ impl FxSuffixKind {
             Self::UnsuffixedRecordField => IdentSuffix::None,
         }
     }
+
+    pub fn symbol(&self) -> Option<&Symbol> {
+        match self {
+            Self::Let(symbol) | Self::Pattern(symbol) => Some(symbol),
+            Self::UnsuffixedRecordField => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
