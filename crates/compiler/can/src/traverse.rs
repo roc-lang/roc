@@ -406,7 +406,6 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
         } => {
             visitor.visit_expr(&return_value.value, return_value.region, *return_var);
         }
-        Expr::TypedHole(_) => { /* terminal */ }
         Expr::RuntimeError(..) => { /* terminal */ }
     }
 }

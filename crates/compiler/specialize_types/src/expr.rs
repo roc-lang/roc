@@ -289,7 +289,6 @@ fn monomorphize_expr(expr: Expr, subs: &mut Subs) -> Expr {
             variable: monomorphize_var(variable, subs),
             symbol,
         },
-        Expr::TypedHole(var) => Expr::TypedHole(monomorphize_var(var, subs)),
         Expr::RuntimeError(error) => Expr::RuntimeError(error),
         Expr::RunLowLevel { op, args, ret_var } => Expr::RunLowLevel {
             op,

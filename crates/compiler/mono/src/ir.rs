@@ -5897,7 +5897,6 @@ pub fn with_hole<'a>(
                 Stmt::Ret(return_symbol),
             )
         }
-        TypedHole(_) => runtime_error(env, "Hit a blank"),
         RuntimeError(e) => runtime_error(env, env.arena.alloc(e.runtime_message())),
         Crash { msg, ret_var: _ } => {
             let msg_sym = possible_reuse_symbol_or_specialize(
