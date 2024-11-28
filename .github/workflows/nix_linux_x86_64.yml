@@ -18,7 +18,12 @@ jobs:
         run: nix-build
 
       - name: execute tests with --release
-        run: nix develop -c cargo test --locked --release
+        # skipping glue tests due to difficult multithreading bug, we run them single threaded in the next step
+        run: nix develop -c cargo test --locked --release -- --skip glue_cli_tests
+
+      - name: glue_cli_tests
+        # single threaded due to difficult bug when multithreading
+        run: nix develop -c cargo test --locked --release glue_cli_tests -- --test-threads=1
 
       - name: roc test all builtins
         run: nix develop -c ./ci/roc_test_builtins.sh

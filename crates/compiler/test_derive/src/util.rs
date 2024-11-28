@@ -439,6 +439,7 @@ fn check_derived_typechecks_and_golden(
         derived_module: Default::default(),
         module_params: None,
         module_params_vars: imported_param_vars,
+        host_exposed_symbols: None,
 
         #[cfg(debug_assertions)]
         checkmate: None,
