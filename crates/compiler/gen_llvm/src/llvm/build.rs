@@ -1083,7 +1083,7 @@ pub fn module_from_builtins<'ctx>(
 
     // Note, running DCE here is faster then waiting until full app DCE.
     let mpm = PassManager::create(());
-    // mpm.add_global_dce_pass();
+
     mpm.run_on(&module);
 
     // Now that the unused compiler-rt functions have been removed,
