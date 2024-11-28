@@ -1,24 +1,26 @@
 (() => {
-
     let sidebar = document.getElementById("sidebar-nav");
-    // Un-hide everything
-    sidebar
+
+    if (sidebar != null) {
+      // Un-hide everything
+      sidebar
         .querySelectorAll(".sidebar-entry a")
         .forEach((entry) => entry.classList.remove("hidden"));
 
-    // Re-hide all the sub-entries except for those of the current module
-    let currentModuleName = document.querySelector(".module-name").textContent;
+      // Re-hide all the sub-entries except for those of the current module
+      let currentModuleName = document.querySelector(".module-name").textContent;
 
-    sidebar.querySelectorAll(".sidebar-entry").forEach((entry) => {
+      sidebar.querySelectorAll(".sidebar-entry").forEach((entry) => {
         let entryName = entry.querySelector(".sidebar-module-link").textContent;
         if (currentModuleName === entryName) {
-            entry.firstChild.classList.add("active");
-            return;
+          entry.firstChild.classList.add("active");
+          return;
         }
         entry
-            .querySelectorAll(".sidebar-sub-entries a")
-            .forEach((subEntry) => subEntry.classList.add("hidden"));
-    });
+          .querySelectorAll(".sidebar-sub-entries a")
+          .forEach((subEntry) => subEntry.classList.add("hidden"));
+      });
+    }
 
     let searchTypeAhead = document.getElementById("search-type-ahead");
     let searchBox = document.getElementById("module-search");
