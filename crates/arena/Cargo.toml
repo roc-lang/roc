@@ -1,0 +1,15 @@
+[package]
+name = "arena"
+description = "Arena allocator designed to be used with caching."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+soa.workspace = true
+fs.workspace = true
+
+[target.'cfg(target_family = "wasm32")'.dependencies]
+wee_alloc = "0.4"

@@ -110,6 +110,9 @@ pub enum FileIoErr {
     #[cfg(windows)]
     /// ERROR_FILE_EXISTS: https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-
     AlreadyExists = 80,
+
+    /// The file is bigger than the maximum size we support (e.g. u32::MAX bytes)
+    TooBig,
 }
 
 impl fmt::Debug for FileIoErr {
@@ -121,6 +124,7 @@ impl fmt::Debug for FileIoErr {
             #[cfg(windows)]
             FileIoErr::AccessDenied => write!(f, "AccessDenied ({})", *self as i32),
             FileIoErr::AlreadyExists => write!(f, "AlreadyExists ({})", *self as i32),
+            FileIoErr::TooBig => write!(f, "TooBig ({})", *self as i32),
         }
     }
 }

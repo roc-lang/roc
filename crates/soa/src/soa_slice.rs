@@ -70,8 +70,8 @@ impl<T> Slice<T> {
         self.start as usize..(self.start as usize + self.length as usize)
     }
 
-    pub const fn len(&self) -> usize {
-        self.length as usize
+    pub const fn len(&self) -> u16 {
+        self.length
     }
 
     pub const fn is_empty(&self) -> bool {
