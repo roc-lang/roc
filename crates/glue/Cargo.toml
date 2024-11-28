@@ -27,7 +27,6 @@ roc_types = { path = "../compiler/types" }
 
 bumpalo.workspace = true
 fnv.workspace = true
-indexmap.workspace = true
 libc.workspace = true
 libloading.workspace = true
 strum.workspace = true

@@ -2631,7 +2631,6 @@ dependencies = [
  "cli_test_utils",
  "dircpy",
  "fnv",
- "indexmap",
  "indoc",
  "libc",
  "libloading",
@@ -2955,7 +2954,6 @@ dependencies = [
  "rustyline-derive",
  "target-lexicon",
  "tempfile",
- "unicode-segmentation",
 ]
 
 [[package]]
