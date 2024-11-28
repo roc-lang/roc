@@ -1301,7 +1301,7 @@ fn roc_dev_native(
 ) -> ! {
     use std::sync::{atomic::AtomicBool, Arc};
 
-    use roc_repl_expect::run::{ChildProcessMsg, ExpectMemory};
+    // use roc_repl_expect::run::{ChildProcessMsg, ExpectMemory};
 
     let ExpectMetadata {
         mut expectations,
@@ -1309,8 +1309,8 @@ fn roc_dev_native(
         layout_interner,
     } = expect_metadata;
 
-    let shm_name = format!("/roc_expect_buffer_{}", std::process::id());
-    let mut memory = ExpectMemory::create_or_reuse_mmap(&shm_name);
+    // let shm_name = format!("/roc_expect_buffer_{}", std::process::id());
+    // let mut memory = ExpectMemory::create_or_reuse_mmap(&shm_name);
 
     let layout_interner = layout_interner.into_global();
 
@@ -1338,39 +1338,39 @@ fn roc_dev_native(
             signal_hook::flag::register(signal_hook::consts::SIGCHLD, Arc::clone(&sigchld))
                 .unwrap();
 
-            let exit_code = loop {
-                match memory.wait_for_child(sigchld.clone()) {
-                    ChildProcessMsg::Terminate => {
-                        let mut status = 0;
-                        let options = 0;
-                        unsafe { libc::waitpid(pid, &mut status, options) };
+            // let exit_code = loop {
+            // match memory.wait_for_child(sigchld.clone()) {
+            //     ChildProcessMsg::Terminate => {
+            //         let mut status = 0;
+            //         let options = 0;
+            //         unsafe { libc::waitpid(pid, &mut status, options) };
 
-                        // if `WIFEXITED` returns false, `WEXITSTATUS` will just return junk
-                        break if libc::WIFEXITED(status) {
-                            libc::WEXITSTATUS(status)
-                        } else {
-                            // we don't have an exit code, but something went wrong if we're in this else
-                            1
-                        };
-                    }
-                    ChildProcessMsg::Expect => {
-                        let mut writer = std::io::stdout();
-                        roc_repl_expect::run::render_expects_in_memory(
-                            &mut writer,
-                            arena,
-                            &mut expectations,
-                            &interns,
-                            &layout_interner,
-                            &memory,
-                        )
-                        .unwrap();
+            //         // if `WIFEXITED` returns false, `WEXITSTATUS` will just return junk
+            //         break if libc::WIFEXITED(status) {
+            //             libc::WEXITSTATUS(status)
+            //         } else {
+            //             // we don't have an exit code, but something went wrong if we're in this else
+            //             1
+            //         };
+            //     }
+            //     ChildProcessMsg::Expect => {
+            //         let mut writer = std::io::stdout();
+            //         roc_repl_expect::run::render_expects_in_memory(
+            //             &mut writer,
+            //             arena,
+            //             &mut expectations,
+            //             &interns,
+            //             &layout_interner,
+            //             &memory,
+            //         )
+            //         .unwrap();
 
-                        memory.reset();
-                    }
-                }
-            };
+            //         memory.reset();
+            //     }
+            // }
+            // };
 
-            std::process::exit(exit_code)
+            std::process::exit(1)
         }
         _ => unreachable!(),
     }

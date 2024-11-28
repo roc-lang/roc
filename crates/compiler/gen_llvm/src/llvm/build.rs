@@ -5,7 +5,6 @@ use crate::llvm::build_list::{
 use crate::llvm::convert::{
     argument_type_from_layout, basic_type_from_builtin, basic_type_from_layout, zig_str_type,
 };
-use crate::llvm::expect::{clone_to_shared_memory, SharedMemoryPointer};
 use crate::llvm::memcpy::build_memcpy;
 use crate::llvm::refcounting::{
     build_reset, decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
@@ -928,6 +927,28 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         call.set_call_convention(C_CALL_CONV);
     }
 
+    pub fn call_roc_expect_failed(
+        &self,
+        env: &Env<'a, 'ctx, 'env>,
+        location: BasicValueEnum<'ctx>,
+        source: BasicValueEnum<'ctx>,
+        variables: BasicValueEnum<'ctx>, // maybe this needs to change?
+    ) {
+        let function = self.module.get_function("roc_expect_failed").unwrap();
+
+        let loc = self.string_to_arg(env, location);
+        let src = self.string_to_arg(env, source);
+        let vars = self.string_to_arg(env, variables);
+
+        let call = self.builder.new_build_call(
+            function,
+            &[loc.into(), src.into(), vars.into()],
+            "roc_expect_failed",
+        );
+
+        call.set_call_convention(C_CALL_CONV);
+    }
+
     fn string_to_arg(
         &self,
         env: &Env<'a, 'ctx, 'env>,
@@ -1068,7 +1089,6 @@ pub fn module_from_builtins<'ctx>(
         // Roc special functions
         "__roc_force_longjmp",
         "__roc_force_setjmp",
-        "set_shared_buffer",
     ];
     for func in module.get_functions() {
         let has_definition = func.count_basic_blocks() > 0;
@@ -3579,6 +3599,8 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
         }
 
         Expect {
+            source_location,
+            source,
             condition: cond_symbol,
             region,
             lookups,
@@ -3605,33 +3627,13 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
             if env.mode.runs_expects() {
                 bd.position_at_end(throw_block);
 
-                match env.target.ptr_width() {
-                    roc_target::PtrWidth::Bytes8 => {
-                        let shared_memory = SharedMemoryPointer::get(env);
+                let location = build_string_literal(env, source_location);
+                let source = build_string_literal(env, source);
+                let variables = build_string_literal(env, "TODO VARIABLES");
+                env.call_roc_expect_failed(env, location, source, variables);
 
-                        clone_to_shared_memory(
-                            env,
-                            layout_interner,
-                            scope,
-                            layout_ids,
-                            &shared_memory,
-                            *cond_symbol,
-                            *region,
-                            lookups,
-                            variables,
-                        );
-
-                        if let LlvmBackendMode::BinaryDev = env.mode {
-                            crate::llvm::expect::notify_parent_expect(env, &shared_memory);
-                        }
-
-                        bd.new_build_unconditional_branch(then_block);
-                    }
-                    roc_target::PtrWidth::Bytes4 => {
-                        // temporary WASM implementation
-                        throw_internal_exception(env, "An expectation failed!");
-                    }
-                }
+                // calling roc_expect_failed is handled in the platform and doesn't return
+                bd.new_build_unreachable();
             } else {
                 bd.position_at_end(throw_block);
                 bd.new_build_unconditional_branch(then_block);

@@ -21,21 +21,6 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
     let usize_type = env.ptr_int();
     let i8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::default());
 
-    match env.mode {
-        super::build::LlvmBackendMode::CliTest => {
-            // expose this function
-            if let Some(fn_val) = module.get_function("set_shared_buffer") {
-                fn_val.set_linkage(Linkage::External);
-            }
-        }
-        _ => {
-            // remove this function from the module
-            if let Some(fn_val) = module.get_function("set_shared_buffer") {
-                unsafe { fn_val.delete() };
-            }
-        }
-    }
-
     if !env.mode.has_host() {
         // roc_alloc
         {
@@ -195,38 +180,41 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
             }
         }
 
-        match env.target.operating_system() {
-            roc_target::OperatingSystem::Windows => {
-                // We don't need these functions on Windows
-            }
-            _ => {
-                unreachable_function(env, "roc_getppid");
-                unreachable_function(env, "roc_mmap");
-                unreachable_function(env, "roc_shm_open");
+        // roc_expect_failed
+        {
+            // The type of this function (but not the implementation) should have
+            // already been defined by the builtins, which rely on it.
+            let fn_val = module.get_function("roc_expect_failed").unwrap();
+            let mut params = fn_val.get_param_iter();
+            let loc_arg = params.next().unwrap();
+            let src_arg = params.next().unwrap();
+            let vars_arg = params.next().unwrap();
+
+            debug_assert!(params.next().is_none());
+
+            // Add a basic block for the entry point
+            let entry = ctx.append_basic_block(fn_val, "entry");
+
+            builder.position_at_end(entry);
+
+            // Call utils.dbg_impl()
+            let dbg_impl = module.get_function(bitcode::UTILS_EXPECT_IMPL).unwrap();
+            let call = builder.new_build_call(
+                dbg_impl,
+                &[loc_arg.into(), src_arg.into(), vars_arg.into()],
+                "call_utils_expect_impl",
+            );
+
+            call.set_call_convention(C_CALL_CONV);
+
+            builder.new_build_return(None);
+
+            if cfg!(debug_assertions) {
+                crate::llvm::build::verify_fn(fn_val);
             }
         }
 
         add_sjlj_roc_panic(env)
-    }
-}
-
-fn unreachable_function(env: &Env, name: &str) {
-    // The type of this function (but not the implementation) should have
-    // already been defined by the builtins, which rely on it.
-    let fn_val = match env.module.get_function(name) {
-        Some(f) => f,
-        None => panic!("extern function {name} is not defined by the builtins"),
-    };
-
-    // Add a basic block for the entry point
-    let entry = env.context.append_basic_block(fn_val, "entry");
-
-    env.builder.position_at_end(entry);
-
-    env.builder.new_build_unreachable();
-
-    if cfg!(debug_assertions) {
-        crate::llvm::build::verify_fn(fn_val);
     }
 }
 

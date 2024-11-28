@@ -16,6 +16,6 @@ pub fn expect_impl(loc: *const RocStr, src: *const RocStr, variables: *RocList) 
 
     if (builtin.target.cpu.arch != .wasm32) {
         const stderr = std.io.getStdErr().writer();
-        stderr.print("[{s}] {s} = TODO\n", .{ loc.asSlice(), src.asSlice() }) catch unreachable;
+        stderr.print("[{s}] {s} = TODO IMPLEMENT ME!\n", .{ loc.asSlice(), src.asSlice() }) catch unreachable;
     }
 }

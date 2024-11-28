@@ -745,6 +745,8 @@ pub fn constrain_expr(
         }
 
         Expect {
+            source_location: _,
+            source: _,
             loc_condition,
             loc_continuation,
             lookups_in_cond,

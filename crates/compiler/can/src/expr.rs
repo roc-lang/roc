@@ -314,6 +314,8 @@ pub enum Expr {
 
     // Test
     Expect {
+        source_location: Box<str>,
+        source: Box<str>,
         loc_condition: Box<Loc<Expr>>,
         loc_continuation: Box<Loc<Expr>>,
         lookups_in_cond: Vec<ExpectLookup>,
@@ -2206,6 +2208,8 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
         }
 
         Expect {
+            source_location,
+            source,
             loc_condition,
             loc_continuation,
             lookups_in_cond,
@@ -2221,6 +2225,8 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
             };
 
             Expect {
+                source_location,
+                source,
                 loc_condition: Box::new(loc_condition),
                 loc_continuation: Box::new(loc_continuation),
                 lookups_in_cond,
@@ -3531,8 +3537,12 @@ pub fn toplevel_expect_to_inline_expect_pure(mut loc_expr: Loc<Expr>) -> Loc<Exp
         }
     }
 
+    let boxed_raw_str: Box<str> = r"HOW DO WE GET SOURCE TO CAN?".into();
+
     let expect_region = loc_expr.region;
     let expect = Expr::Expect {
+        source_location: boxed_raw_str.clone(),
+        source: boxed_raw_str,
         loc_condition: Box::new(loc_expr),
         loc_continuation: Box::new(Loc::at_zero(Expr::EmptyRecord)),
         lookups_in_cond,

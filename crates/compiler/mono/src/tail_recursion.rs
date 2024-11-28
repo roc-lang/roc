@@ -354,6 +354,8 @@ fn insert_jumps<'a>(
         },
 
         Expect {
+            source_location,
+            source,
             condition,
             region,
             lookups,
@@ -368,6 +370,8 @@ fn insert_jumps<'a>(
             needle_result,
         ) {
             Some(cont) => Some(arena.alloc(Expect {
+                source_location,
+                source,
                 condition: *condition,
                 region: *region,
                 lookups,
@@ -974,12 +978,16 @@ impl<'a> TrmcEnv<'a> {
                 Stmt::Refcounting(*op, arena.alloc(new_next))
             }
             Stmt::Expect {
+                source_location,
+                source,
                 condition,
                 region,
                 lookups,
                 variables,
                 remainder,
             } => Stmt::Expect {
+                source_location,
+                source,
                 condition: *condition,
                 region: *region,
                 lookups,

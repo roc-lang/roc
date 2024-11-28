@@ -1524,6 +1524,10 @@ pub enum Stmt<'a> {
     Ret(Symbol),
     Refcounting(ModifyRc, &'a Stmt<'a>),
     Expect {
+        /// The location this dbg is in source as a printable string.
+        source_location: &'a str,
+        /// The source code of the expression being debugged.
+        source: &'a str,
         condition: Symbol,
         region: Region,
         lookups: &'a [Symbol],
@@ -7030,6 +7034,8 @@ pub fn from_can<'a>(
         }
 
         Expect {
+            source_location,
+            source,
             loc_condition,
             loc_continuation,
             lookups_in_cond,
@@ -7074,6 +7080,8 @@ pub fn from_can<'a>(
             let specialized_variables = specialized_variables.into_bump_slice();
 
             let mut stmt = Stmt::Expect {
+                source_location: &*env.arena.alloc(source_location),
+                source: &*env.arena.alloc(source),
                 condition: cond_symbol,
                 region: loc_condition.region,
                 lookups: lookups.into_bump_slice(),
@@ -7609,6 +7617,8 @@ fn substitute_in_stmt_help<'a>(
         }
 
         Expect {
+            source_location,
+            source,
             condition,
             region,
             lookups,
@@ -7624,6 +7634,8 @@ fn substitute_in_stmt_help<'a>(
             );
 
             let expect = Expect {
+                source_location: *source_location,
+                source: *source,
                 condition: substitute(subs, *condition).unwrap_or(*condition),
                 region: *region,
                 lookups: new_lookups.into_bump_slice(),

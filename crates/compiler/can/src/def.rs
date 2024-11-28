@@ -2822,7 +2822,11 @@ fn decl_to_let(decl: Declaration, loc_ret: Loc<Expr>) -> Loc<Expr> {
                 let region = Region::span_across(&expect_region, &loc_ret.region);
                 let lookups_in_cond = get_lookup_symbols(&condition);
 
+                let boxed_raw_str: Box<str> = r"HOW DO WE GET SOURCE TO CAN?".into();
+
                 let expr = Expr::Expect {
+                    source_location: boxed_raw_str.clone(),
+                    source: boxed_raw_str,
                     loc_condition: Box::new(Loc::at(condition_region, condition)),
                     loc_continuation: Box::new(loc_ret),
                     lookups_in_cond,

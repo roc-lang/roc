@@ -593,12 +593,16 @@ fn specialize_drops_stmt<'a, 'i>(
             }
         },
         Stmt::Expect {
+            source_location,
+            source,
             condition,
             region,
             lookups,
             variables,
             remainder,
         } => arena.alloc(Stmt::Expect {
+            source_location,
+            source,
             condition: *condition,
             region: *region,
             lookups,

@@ -601,6 +601,8 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
             stmt
         }
         Stmt::Expect {
+            source_location,
+            source,
             condition,
             region,
             lookups,
@@ -618,6 +620,8 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
             );
 
             arena.alloc(Stmt::Expect {
+                source_location: *source_location,
+                source: *source,
                 condition: *condition,
                 region: *region,
                 lookups,
