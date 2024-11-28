@@ -23,29 +23,24 @@ use roc_mono::{
 use roc_target::{PtrWidth, Target};
 
 use crate::llvm::{
-    bitcode::{
+    self, bitcode::{
         call_bitcode_fn, call_bitcode_fn_fixing_for_convention, call_bitcode_fn_returning_record,
         call_bitcode_fn_with_record_arg, call_list_bitcode_fn, call_str_bitcode_fn,
         call_void_bitcode_fn, pass_list_or_string_to_zig_32bit, pass_string_to_zig_wasm,
         BitcodeReturns,
-    },
-    build::{
+    }, build::{
         cast_basic_basic, complex_bitcast_check_size, create_entry_block_alloca,
         function_value_by_func_spec, load_roc_value, roc_function_call, tag_pointer_clear_tag_id,
         BuilderExt, FuncBorrowSpec, RocReturn,
-    },
-    build_list::{
+    }, build_list::{
         list_append_unsafe, list_clone, list_concat, list_drop_at, list_get_unsafe, list_len_usize,
         list_prepend, list_release_excess_capacity, list_replace_unsafe, list_reserve,
         list_sort_with, list_sublist, list_swap, list_symbol_to_c_abi, list_with_capacity,
         pass_update_mode,
-    },
-    compare::{generic_eq, generic_neq},
-    convert::{
+    }, compare::{generic_eq, generic_neq}, convert::{
         self, argument_type_from_layout, basic_type_from_layout, zig_num_parse_result_type,
         zig_to_int_checked_result_type,
-    },
-    intrinsics::{
+    }, intrinsics::{
         // These instrinsics do not generate calls to libc and are safe to keep.
         // If we find that any of them generate calls to libc on some platforms, we need to define them as zig bitcode.
         LLVM_ADD_SATURATED,
@@ -53,8 +48,7 @@ use crate::llvm::{
         LLVM_MUL_WITH_OVERFLOW,
         LLVM_SUB_SATURATED,
         LLVM_SUB_WITH_OVERFLOW,
-    },
-    refcounting::PointerToRefcount,
+    }, refcounting::PointerToRefcount
 };
 
 use super::{build::Env, convert::zig_dec_type};
@@ -1149,19 +1143,41 @@ pub(crate) fn run_low_level<'a, 'ctx>(
         NumIntCast => {
             todo!()
         }
+        
         NumToDecChecked => {
+            const RIGHT_DIGITS : u64 = 60; //Base 2
             todo!()
         }
         NumToDecCast => {
-            arguments!(arg);
-
-            let to = basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout))
-                .into_int_type();
-            let to_signed = intwidth_from_layout(layout).is_signed();
-
-            env.builder
-                .new_build_int_cast_sign_flag(arg.into_int_value(), to, to_signed, "inc_cast")
-                .into()
+            const RIGHT_DIGITS : u64 = 10u64.pow(18); //Base 2
+            let to = env.context.i128_type();
+            let llvm_digits = to.const_int(RIGHT_DIGITS,false);
+            arguments_with_layouts!((arg,arg_layout));
+            match layout_interner.get_repr(arg_layout) {
+                LayoutRepr::Builtin(Builtin::Int(width)) => {
+                    
+                    let Ok(converted_value) = (if width.is_signed() {
+                        env.builder.build_int_s_extend(arg.into_int_value(), to, "inc_cast")
+                    } else {
+                        env.builder.build_int_z_extend(arg.into_int_value(), to, "inc_cast")
+                    }) else {
+                        todo!()
+                    };
+                    let Ok(result) = env.builder.build_int_mul(converted_value, llvm_digits, "move_decimal") else {
+                        todo!()
+                    };
+                    result.into()
+                }
+                LayoutRepr::Builtin(Builtin::Float(_)) => {
+                    todo!()
+                }
+                LayoutRepr::Builtin(Builtin::Decimal) => {
+                    todo!()   
+                }
+                _ => {
+                    todo!()
+                }
+            }
         }
         NumToFloatCast => {
             arguments_with_layouts!((arg, arg_layout));
