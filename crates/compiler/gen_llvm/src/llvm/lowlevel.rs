@@ -2227,6 +2227,11 @@ fn build_dec_unary_op<'a, 'ctx>(
         NumFloor => dec_unary_op(env, &bitcode::DEC_FLOOR[int_width()], arg),
         NumCeiling => dec_unary_op(env, &bitcode::DEC_CEILING[int_width()], arg),
 
+        // return constant value bools
+        NumIsFinite => env.context.bool_type().const_int(1, false).into(),
+        NumIsInfinite => env.context.bool_type().const_int(0, false).into(),
+        NumIsNan => env.context.bool_type().const_int(0, false).into(),
+
         _ => {
             unreachable!("Unrecognized dec unary operation: {:?}", op);
         }
