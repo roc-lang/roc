@@ -2335,3 +2335,9 @@ Here are various Roc expressions involving operators, and what they desugar to.
 
 </section>
 <script type="text/javascript" src="/builtins/search.js" defer></script>
+
+### [Additional Resources]
+
+Looks like you've completed the tutorial, well done!
+
+If you are looking for more resources to learn Roc, check out these links for [additional learning resources](/install#additional-learning-resources).
