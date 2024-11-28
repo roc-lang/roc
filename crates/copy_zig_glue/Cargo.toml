@@ -1,5 +1,6 @@
 [package]
 name = "copy_zig_glue"
+description = "This crate Copies the glue source files for zig platforms from the roc builtins this is only temporary, we should create a zig package for the test platforms"
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
