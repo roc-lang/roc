@@ -43,27 +43,27 @@ sanitizers = ["roc_build/sanitizers"]
 
 
 [dependencies]
-roc_build = { path = "../compiler/build" }
-roc_builtins = { path = "../compiler/builtins" }
-roc_can = { path = "../compiler/can" }
-roc_collections = { path = "../compiler/collections" }
-roc_docs = { path = "../docs" }
-roc_error_macros = { path = "../error_macros" }
-roc_fmt = { path = "../compiler/fmt" }
-roc_gen_llvm = { path = "../compiler/gen_llvm" }
-roc_gen_dev = { path = "../compiler/gen_dev" }
-roc_glue = { path = "../glue" }
-roc_linker = { path = "../linker" }
-roc_load = { path = "../compiler/load" }
-roc_module = { path = "../compiler/module" }
-roc_mono = { path = "../compiler/mono" }
-roc_packaging = { path = "../packaging" }
-roc_parse = { path = "../compiler/parse" }
-roc_region = { path = "../compiler/region" }
+roc_build.workspace = true
+roc_builtins.workspace = true
+roc_can.workspace = true
+roc_collections.workspace = true
+roc_docs.workspace = true
+roc_error_macros.workspace = true
+roc_fmt.workspace = true
+roc_gen_llvm.workspace = true
+roc_gen_dev.workspace = true
+roc_glue.workspace = true
+roc_linker.workspace = true
+roc_load.workspace = true
+roc_module.workspace = true
+roc_mono.workspace = true
+roc_packaging.workspace = true
+roc_parse.workspace = true
+roc_region.workspace = true
+roc_reporting.workspace = true
+roc_target.workspace = true
+roc_tracing.workspace = true
 roc_repl_cli = { path = "../repl_cli", optional = true }
-roc_reporting = { path = "../reporting" }
-roc_target = { path = "../compiler/roc_target" }
-roc_tracing = { path = "../tracing" }
 roc_wasm_interp = { path = "../wasm_interp", optional = true }
 
 ven_pretty = { path = "../vendor/pretty" }

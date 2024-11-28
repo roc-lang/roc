@@ -155,6 +155,28 @@ reqwest = { version = "0.11.23", default-features = false, features = [
     "rustls-tls",
 ] } # default-features=false removes libopenssl as a dependency on Linux, which might not be available!
 rlimit = "0.9.1"
+roc_build = { path = "crates/compiler/build" }
+roc_builtins = { path = "crates/compiler/builtins" }
+roc_can = { path = "crates/compiler/can" }
+roc_collections = { path = "crates/compiler/collections" }
+roc_docs = { path = "crates/docs" }
+roc_error_macros = { path = "crates/error_macros" }
+roc_fmt = { path = "crates/compiler/fmt" }
+roc_gen_llvm = { path = "crates/compiler/gen_llvm" }
+roc_gen_dev = { path = "crates/compiler/gen_dev" }
+roc_glue = { path = "crates/glue" }
+roc_linker = { path = "crates/linker" }
+roc_load = { path = "crates/compiler/load" }
+roc_module = { path = "crates/compiler/module" }
+roc_mono = { path = "crates/compiler/mono" }
+roc_packaging = { path = "crates/packaging" }
+roc_parse = { path = "crates/compiler/parse" }
+roc_region = { path = "crates/compiler/region" }
+roc_repl_cli = { path = "crates/repl_cli" }
+roc_reporting = { path = "crates/reporting" }
+roc_target = { path = "crates/compiler/roc_target" }
+roc_tracing = { path = "crates/tracing" }
+roc_wasm_interp = { path = "crates/wasm_interp" }
 rustyline = { git = "https://github.com/roc-lang/rustyline", rev = "e74333c" }
 rustyline-derive = { git = "https://github.com/roc-lang/rustyline", rev = "e74333c" }
 schemars = "0.8.12"
