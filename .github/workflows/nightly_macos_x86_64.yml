@@ -17,9 +17,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Update PATH to use zig 11
+      - name: Update PATH to use zig 13
         run: |
-          echo "PATH=/Users/username1/Downloads/zig-macos-x86_64-0.11.0:$PATH" >> $GITHUB_ENV
+          echo "PATH=/Users/username1/Downloads/zig-macos-x86_64-0.13.0:$PATH" >> $GITHUB_ENV
 
       - run: zig version
 
