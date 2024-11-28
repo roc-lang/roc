@@ -156,6 +156,7 @@ reqwest = { version = "0.11.23", default-features = false, features = [
     "rustls-tls",
 ] } # default-features=false removes libopenssl as a dependency on Linux, which might not be available!
 rlimit = "0.9.1"
+roc_bitcode = { path = "crates/compiler/builtins/bitcode" }
 roc_build = { path = "crates/compiler/build" }
 roc_builtins = { path = "crates/compiler/builtins" }
 roc_can = { path = "crates/compiler/can" }
@@ -178,11 +179,14 @@ roc_parse = { path = "crates/compiler/parse" }
 roc_problem = { path = "crates/compiler/problem" }
 roc_region = { path = "crates/compiler/region" }
 roc_repl_cli = { path = "crates/repl_cli" }
+roc_repl_eval = { path = "crates/repl_eval" }
+roc_repl_ui = { path = "crates/repl_ui" }
 roc_reporting = { path = "crates/reporting" }
 roc_solve = { path = "crates/compiler/solve" }
 roc_solve_problem = { path = "crates/compiler/solve_problem" }
 roc_std = { path = "crates/roc_std" }
 roc_target = { path = "crates/compiler/roc_target" }
+roc_test_utils = { path = "crates/test_utils" }
 roc_tracing = { path = "crates/tracing" }
 roc_types = { path = "crates/compiler/types" }
 roc_wasm_interp = { path = "crates/wasm_interp" }
