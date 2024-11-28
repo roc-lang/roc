@@ -1145,14 +1145,18 @@ pub(crate) fn run_low_level<'a, 'ctx>(
         }
         
         NumToDecChecked => {
-            const RIGHT_DIGITS : u64 = 60; //Base 2
+            
             todo!()
         }
         NumToDecCast => {
-            const RIGHT_DIGITS : u64 = 10u64.pow(18); //Base 2
+
+            const DEC_RIGHT_DIGITS : u64 = 10u64.pow(18); 
             let to = env.context.i128_type();
-            let llvm_digits = to.const_int(RIGHT_DIGITS,false);
+            let float_type = env.context.f64_type();
+            let llvm_digits = to.const_int(DEC_RIGHT_DIGITS,false);
+            let llvm_divisor = float_type.const_float(DEC_RIGHT_DIGITS as f64);
             arguments_with_layouts!((arg,arg_layout));
+
             match layout_interner.get_repr(arg_layout) {
                 LayoutRepr::Builtin(Builtin::Int(width)) => {
                     
@@ -1161,21 +1165,27 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                     } else {
                         env.builder.build_int_z_extend(arg.into_int_value(), to, "inc_cast")
                     }) else {
-                        todo!()
+                        unreachable!()
                     };
-                    let Ok(result) = env.builder.build_int_mul(converted_value, llvm_digits, "move_decimal") else {
-                        todo!()
+                    let Ok(result) = env.builder.build_int_mul(converted_value, llvm_digits, "deci_cast") else {
+                        unreachable!()
                     };
                     result.into()
                 }
                 LayoutRepr::Builtin(Builtin::Float(_)) => {
-                    todo!()
+                    let Ok(float_result) = env.builder.build_float_div(arg.into_float_value(), llvm_divisor, "decf_cast") else {
+                        unreachable!()
+                    };
+                    let Ok(int_result) = env.builder.build_float_to_signed_int(float_result, to, "dec_place") else {
+                        unreachable!()
+                    };
+                    int_result.into()
                 }
                 LayoutRepr::Builtin(Builtin::Decimal) => {
-                    todo!()   
+                    arg 
                 }
                 _ => {
-                    todo!()
+                    unreachable!()
                 }
             }
         }
