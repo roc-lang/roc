@@ -23,11 +23,11 @@ roc_solve_problem = { path = "../solve_problem" }
 roc_solve_schema = { path = "../solve_schema" }
 roc_types = { path = "../types" }
 roc_unify = { path = "../unify" }
-soa = { path = "../../soa" }
 
 arrayvec.workspace = true
 bumpalo.workspace = true
 
+soa.workspace = true
 
 [dev-dependencies]
 roc_builtins = { path = "../builtins" }

@@ -17,4 +17,4 @@ im.workspace = true
 wyhash.workspace = true
 smallvec.workspace = true
 
-soa = { path = "../../soa" }
+soa.workspace = true

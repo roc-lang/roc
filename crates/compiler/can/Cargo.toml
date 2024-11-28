@@ -24,7 +24,7 @@ bitvec.workspace = true
 bumpalo.workspace = true
 static_assertions.workspace = true
 
-soa = { path = "../../soa" }
+soa.workspace = true
 
 [dev-dependencies]
 indoc.workspace = true

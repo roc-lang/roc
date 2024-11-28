@@ -16,6 +16,7 @@ roc_parse = { path = "../parse" }
 roc_problem = { path = "../problem" }
 roc_region = { path = "../region" }
 roc_types = { path = "../types" }
-soa = { path = "../../soa" }
 
 arrayvec.workspace = true
+
+soa.workspace = true

@@ -15,9 +15,10 @@ roc_module = { path = "../module" }
 roc_region = { path = "../region" }
 roc_serialize = { path = "../serialize" }
 roc_parse = { path = "../parse" }
-soa = { path = "../../soa" }
 
 ven_pretty = { path = "../../vendor/pretty" }
 
 bumpalo.workspace = true
 static_assertions.workspace = true
+
+soa.workspace = true
