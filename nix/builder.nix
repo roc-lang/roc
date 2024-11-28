@@ -1,6 +1,6 @@
 { pkgs, lib, rustPlatform, compile-deps, subPackage ? null }:
 let
-  inherit (compile-deps) zigPkg llvmPkgs llvmVersion llvmMajorMinorStr glibcPath libGccSPath;
+  inherit (compile-deps) zigPkg llvmPkgs glibcPath libGccSPath;
 
   subPackagePath = if subPackage != null then "crates/${subPackage}" else null;
   mainBin = if subPackage == "language_server" then "roc_language_server" else "roc";
