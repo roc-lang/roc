@@ -447,7 +447,7 @@ impl<'a> Formattable for Expr<'a> {
                 buf.push_str("dbg");
             }
             DbgStmt(condition, continuation) => {
-                fmt_dbg_stmt(buf, condition, continuation, self.is_multiline(), indent);
+                fmt_dbg_stmt(buf, condition, continuation, parens, indent);
             }
             LowLevelDbg(_, _, _) => unreachable!(
                 "LowLevelDbg should only exist after desugaring, not during formatting"
@@ -1022,42 +1022,15 @@ fn fmt_dbg_stmt<'a>(
     buf: &mut Buf,
     condition: &'a Loc<Expr<'a>>,
     continuation: &'a Loc<Expr<'a>>,
-    _: bool,
+    parens: Parens,
     indent: u16,
 ) {
-    buf.ensure_ends_with_newline();
-    buf.indent(indent);
-    buf.push_str("dbg");
-
-    buf.spaces(1);
-
-    fn should_outdent(mut expr: &Expr) -> bool {
-        loop {
-            match expr {
-                Expr::ParensAround(_) | Expr::List(_) | Expr::Record(_) | Expr::Tuple(_) => {
-                    return true
-                }
-                Expr::SpaceAfter(inner, _) => {
-                    expr = inner;
-                }
-                _ => return false,
-            }
-        }
-    }
-
-    let inner_indent = if should_outdent(&condition.value) {
-        indent
-    } else {
-        indent + INDENT
-    };
-
-    let cond_value = condition.value.extract_spaces();
-
-    let is_defs = matches!(cond_value.item, Expr::Defs(_, _));
-
-    let newlines = if is_defs { Newlines::Yes } else { Newlines::No };
-
-    condition.format_with_options(buf, Parens::NotNeeded, newlines, inner_indent);
+    Expr::Apply(
+        &Loc::at_zero(Expr::Dbg),
+        &[condition],
+        called_via::CalledVia::Space,
+    )
+    .format_with_options(buf, parens, Newlines::Yes, indent);
 
     // Always put a blank line after the `dbg` line(s)
     buf.ensure_ends_with_blank_line();

@@ -2241,6 +2241,7 @@ fn build_dec_unary_op<'a, 'ctx>(
 
     match op {
         NumAbs => dec_unary_op(env, bitcode::DEC_ABS, arg),
+        NumNeg => dec_unary_op(env, bitcode::DEC_NEGATE, arg),
         NumAcos => dec_unary_op(env, bitcode::DEC_ACOS, arg),
         NumAsin => dec_unary_op(env, bitcode::DEC_ASIN, arg),
         NumAtan => dec_unary_op(env, bitcode::DEC_ATAN, arg),

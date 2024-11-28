@@ -18,13 +18,23 @@ jobs:
         run: nix-build
 
       - name: execute tests with --release
-        run: nix develop -c cargo test --locked --release
+        # skipping glue tests due to difficult multithreading bug, we run them single threaded in the next step
+        run: nix develop -c cargo test --locked --release -- --skip glue_cli_tests
+
+      - name: glue_cli_tests
+        # single threaded due to difficult bug when multithreading
+        run: nix develop -c cargo test --locked --release glue_cli_tests -- --test-threads=1
 
       - name: roc test all builtins
         run: nix develop -c ./ci/roc_test_builtins.sh
 
       - name: test wasm32 cli_tests
-        run: nix develop -c cargo test --locked --release --features="wasm32-cli-run"
+        # skipping glue tests due to difficult multithreading bug, we run them single threaded in the next step
+        run: nix develop -c cargo test --locked --release --features="wasm32-cli-run" -- --skip glue_cli_tests
+
+      - name: wasm32 glue_cli_tests
+        # single threaded due to difficult bug when multithreading
+        run: nix develop -c cargo test --locked --release --features="wasm32-cli-run" glue_cli_tests -- --test-threads=1
 
       - name: test the dev backend # these tests require an explicit feature flag
         run: nix develop -c cargo nextest run --locked --release --package test_gen --no-default-features --features gen-dev --no-fail-fast

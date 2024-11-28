@@ -15,7 +15,7 @@ use roc_region::all::Region;
 
 use roc_types::types::{Category, ErrorType, PatternCategory};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TypeError {
     BadExpr(Region, Category, ErrorType, Expected<ErrorType>),
     BadPattern(Region, PatternCategory, ErrorType, PExpected<ErrorType>),

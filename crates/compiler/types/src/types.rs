@@ -306,7 +306,7 @@ impl FromIterator<Symbol> for AbilitySet {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct OptAbleVar {
     pub var: Variable,
     pub opt_abilities: Option<AbilitySet>,
@@ -3575,6 +3575,13 @@ impl AliasKind {
             AliasKind::Opaque => "opaque",
         }
     }
+
+    pub fn as_str_plural(&self) -> &'static str {
+        match self {
+            AliasKind::Structural => "aliases",
+            AliasKind::Opaque => "opaque types",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3613,7 +3620,7 @@ pub enum MemberImpl {
     Error,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Alias {
     pub region: Region,
     pub type_variables: Vec<Loc<AliasVar>>,
