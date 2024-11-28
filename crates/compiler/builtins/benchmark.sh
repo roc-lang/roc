@@ -4,4 +4,4 @@
 set -euxo pipefail
 
 zig build-exe benchmark-dec.zig -O ReleaseFast
-./dec
+./benchmark-dec

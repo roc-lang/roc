@@ -138,7 +138,7 @@ fn avg_runs(comptime T: type, comptime n: usize, comptime op: fn (T, T) T, v: T)
     var i: usize = 0;
     while (i < warmups + repeats) : (i += 1) {
         // Never inline run to ensure it doesn't optimize for the value of `v`.
-        runs[i] = callWrapper(u64, .never_inline, run, .{ T, n, op, v });
+        runs[i] = @call(.never_inline, run, .{ T, n, op, v });
     }
 
     const real_runs = runs[warmups..runs.len];
@@ -164,13 +164,13 @@ fn run(comptime T: type, comptime n: usize, comptime op: fn (T, T) T, v: T) u64 
     while (i < outer) : (i += 1) {
         comptime var j = 0;
         inline while (j < inner) : (j += 1) {
-            a = callWrapper(T, .always_inline, op, .{ a, v });
+            a = @call(.always_inline, op, .{ a, v });
         }
     }
     const rem = n % max_inline;
     const j = 0;
     inline while (j < rem) : (j += 1) {
-        a = callWrapper(T, .always_inline, op, .{ a, v });
+        a = @call(.always_inline, op, .{ a, v });
     }
 
     // Clobber `a` to avoid removal as dead code.
@@ -180,11 +180,6 @@ fn run(comptime T: type, comptime n: usize, comptime op: fn (T, T) T, v: T) u64 
         : "memory"
     );
     return timer.read();
-}
-
-// This is needed to work around a bug with using `@call` in loops.
-inline fn callWrapper(comptime T: type, call_modifier: anytype, comptime func: anytype, params: anytype) T {
-    return @call(call_modifier, func, params);
 }
 
 fn addF64(x: f64, y: f64) f64 {
