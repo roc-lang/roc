@@ -474,7 +474,6 @@ version = "0.0.1"
 dependencies = [
  "bumpalo",
  "const_format",
- "copy_zig_glue",
  "criterion",
  "lazy_static",
  "regex",
