@@ -205,7 +205,7 @@ A definition names an expression.
 - The next def assigns the name `total` to the expression `Num.toStr (birds + iguanas)`.
 - The last def assigns the name `main` to an expression which returns a `Task`. We'll [discuss tasks later](#tasks).
 
-Once we have a def, we can use its name in other expressions. For example, the `total` expression refers to `birds` and `iguanas`, and `Stdout.line "There are $(total) animals."` refers to `total`.
+Once we have a def, we can use its name in other expressions. For example, the `total` expression refers to `birds` and `iguanas`, and `Stdout.line! "There are $(total) animals."` refers to `total`.
 
 You can name a def using any combination of letters and numbers, but they have to start with a lowercase letter.
 
@@ -1454,7 +1454,7 @@ Let's clear up any confusion with an example:
 main =
     expect 1 == 2
 
-    Stdout.line "Hello, World!"
+    Stdout.line! "Hello, World!"
 
 double = \num ->
     expect num > -1
