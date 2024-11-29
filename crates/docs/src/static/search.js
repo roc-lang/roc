@@ -43,13 +43,13 @@
                             .textContent.toLowerCase();
                         const entrySignature = entry
                             .querySelector(".type-ahead-signature")
-                            .textContent.toLowerCase()
-                            .replace(/\s+/g, "");
+                            ?.textContent?.toLowerCase()
+                            ?.replace(/\s+/g, "");
 
                         if (
                             totalResults < 5 &&
                             (entryName.includes(text) ||
-                                entrySignature.includes(text.replace(/\s+/g, "")))
+                                entrySignature?.includes(text.replace(/\s+/g, "")))
                         ) {
                             totalResults++;
                             entry.classList.remove("hidden");

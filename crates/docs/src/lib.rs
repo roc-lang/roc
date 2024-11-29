@@ -357,7 +357,8 @@ fn render_module_documentation(
 }
 
 fn push_html<'a, 'b, I>(buf: &mut String, tag_name: &str, attrs: I, content: impl AsRef<str>)
-    where I: IntoIterator<Item=(&'a str, &'b str)>
+where
+    I: IntoIterator<Item = (&'a str, &'b str)>,
 {
     buf.push('<');
     buf.push_str(tag_name);
@@ -418,12 +419,7 @@ fn render_name_link(name: &str) -> String {
         let mut link_buf = String::new();
 
         // link to root (= docs overview page)
-        push_html(
-            &mut link_buf,
-            "a",
-            [("href", base_url().as_str())],
-            name,
-        );
+        push_html(&mut link_buf, "a", [("href", base_url().as_str())], name);
 
         link_buf
     });
@@ -496,40 +492,45 @@ fn render_search_type_ahead<'a, I: Iterator<Item = &'a ModuleDocumentation>>(mod
             if let DocEntry::DocDef(doc_def) = entry {
                 if module.exposed_symbols.contains(&doc_def.symbol) {
                     let mut entry_contents_buf = String::new();
+
                     push_html(
                         &mut entry_contents_buf,
-                        "p",
+                        "span",
+                        [("class", "type-ahead-module-name")],
+                        module_name,
+                    );
+
+                    push_html(
+                        &mut entry_contents_buf,
+                        "span",
+                        [("class", "type-ahead-module-dot")],
+                        ".",
+                    );
+
+                    push_html(
+                        &mut entry_contents_buf,
+                        "span",
                         [("class", "type-ahead-def-name")],
-                        doc_def.name.as_str(),
+                        &doc_def.name,
                     );
 
-                    let mut entry_signature_buf = String::new();
-                    type_annotation_to_html(
-                        0,
-                        &mut entry_signature_buf,
-                        &doc_def.type_annotation,
-                        false,
-                    );
+                    let mut type_ann_buf = String::new();
+                    type_annotation_to_html(0, &mut type_ann_buf, &doc_def.type_annotation, false);
 
-                    push_html(
-                        &mut entry_contents_buf,
-                        "p",
-                        [("class", "type-ahead-signature")],
-                        entry_signature_buf.as_str(),
-                    );
-
-                    push_html(
-                        &mut entry_contents_buf,
-                        "p",
-                        [("class", "type-ahead-doc-path")],
-                        format!("{} > {}", module_name, doc_def.name),
-                    );
+                    if !type_ann_buf.is_empty() {
+                        push_html(
+                            &mut entry_contents_buf,
+                            "span",
+                            [("class", "type-ahead-signature")],
+                            format!(" : {type_ann_buf}"),
+                        );
+                    }
 
                     let mut entry_href = String::new();
 
                     entry_href.push_str(module_name);
                     entry_href.push('#');
-                    entry_href.push_str(doc_def.name.as_str());
+                    entry_href.push_str(&doc_def.name);
 
                     let mut anchor_buf = String::new();
 
@@ -537,15 +538,10 @@ fn render_search_type_ahead<'a, I: Iterator<Item = &'a ModuleDocumentation>>(mod
                         &mut anchor_buf,
                         "a",
                         [("href", entry_href.as_str()), ("class", "type-ahead-link")],
-                        entry_contents_buf.as_str(),
+                        &entry_contents_buf,
                     );
 
-                    push_html(
-                        &mut buf,
-                        "li",
-                        [("role", "option")],
-                        anchor_buf.as_str(),
-                    );
+                    push_html(&mut buf, "li", [("role", "option")], &anchor_buf);
                 }
             }
         }
