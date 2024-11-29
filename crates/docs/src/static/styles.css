@@ -241,9 +241,17 @@ padding: 0px 16px;
   width: 100%;
 }
 
-.top-header-extension {
+.header-start-extension {
   grid-column-start: before-sidebar;
   grid-column-end: sidebar;
+  grid-row-start: top-header;
+  grid-row-end: top-header;
+  background-color: var(--violet-bg);
+}
+
+.header-end-extension {
+  grid-column-start: end;
+  grid-column-end: end;
   grid-row-start: top-header;
   grid-row-end: top-header;
   background-color: var(--violet-bg);
@@ -262,19 +270,9 @@ padding: 0px 16px;
   font-family: var(--font-sans);
   font-size: 24px;
   height: 100%;
+  background-color: var(--violet-bg);
   /* min-width must be set to something (even 0) for text-overflow: ellipsis to work in descendants, but we want this anyway. */
   min-width: 1024px;
-}
-
-.top-header-triangle {
-  /* This used to be a clip-path, but Firefox on Android (at least as of early 2020)
- * rendered the page extremely slowly in that version. With this approach it's super fast.
- */
-  width: 0;
-  height: 0;
-  border-style: solid;
-  border-width: var(--top-header-height) 0 0 48px;
-  border-color: transparent transparent transparent var(--violet-bg);
 }
 
 p {
@@ -449,7 +447,6 @@ pre>samp {
   height: 100%;
   background-color: var(--violet-bg);
   position: relative;
-  max-width: 500px;
   flex-grow: 1;
   box-sizing: border-box;
   padding: 0px var(--module-search-form-padding-width);
@@ -463,6 +460,7 @@ pre>samp {
 }
 
 #module-search {
+  border-radius: 8px;
   display: block;
   position: relative;
   box-sizing: border-box;
@@ -481,7 +479,7 @@ pre>samp {
   opacity: 1;
 }
 
-#module-search:focus {
+#module-search:focus, #module-search:hover {
   outline: 2px solid var(--faded-color);
 }
 
@@ -503,6 +501,14 @@ pre>samp {
   list-style-type: none;
   margin: 0;
   padding: 0;
+}
+
+.search-icon {
+    fill: var(--faded-color);
+    pointer-events: none;
+    opacity: 0.6;
+    position: absolute;
+    right: 32px;
 }
 
 #search-type-ahead .type-ahead-link {
@@ -547,15 +553,22 @@ pre>samp {
   background: var(--violet-bg);
 }
 
-#search-link {
-  box-sizing: border-box;
+#module-search-form:focus-within #search-label, #module-search-form:focus-within .search-icon {
   display: none;
+}
+
+#search-label {
+  color: var(--faded-color);
+  box-sizing: border-box;
   align-items: center;
   font-size: 18px;
   line-height: 18px;
   padding: 12px 16px;
   height: 48px;
-  cursor: pointer;
+  pointer-events: none;
+  position: absolute;
+  top: 12px;
+  left: 96px;
 }
 
 #search-shortcut-key {
@@ -566,8 +579,7 @@ pre>samp {
   font-style: normal;
   line-height: 15px;
   opacity: 0.6;
-  position: absolute;
-  right: 30px;
+  pointer-events: none;
 }
 
 #llm-prompt-container {
