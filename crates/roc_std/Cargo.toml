@@ -9,9 +9,9 @@ repository = "https://github.com/roc-lang/roc"
 version = "0.0.1"
 
 [dependencies]
-arrayvec = "0.7.2"
+arrayvec.workspace = true
 serde = { version = "1.0.153", optional = true }
-static_assertions = "1.1.0"
+static_assertions.workspace = true
 
 [dev-dependencies]
 libc = "0.2.139"
