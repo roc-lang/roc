@@ -386,7 +386,6 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
             //     variable,
             //     symbol,
             // } => todo!(),
-            // Expr::TypedHole(variable) => todo!(),
             // Expr::RuntimeError(_runtime_error) => {
             //     todo!("generate a MonoExpr::Crash based on the runtime error");
             // }

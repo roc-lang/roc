@@ -1815,15 +1815,6 @@ pub fn constrain_expr(
             arg_cons.push(eq);
             constraints.exists_many(vars, arg_cons)
         }
-        TypedHole(var) => {
-            // store the expected type for this position
-            constraints.equal_types_var(
-                *var,
-                expected,
-                Category::Storage(std::file!(), std::line!()),
-                region,
-            )
-        }
         RuntimeError(_) => {
             // Runtime Errors are always going to crash, so they don't introduce any new
             // constraints.
@@ -4403,7 +4394,6 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             | Expect { .. }
             | Dbg { .. }
             | Return { .. }
-            | TypedHole(_)
             | RuntimeError(..)
             | ZeroArgumentTag { .. }
             | Tag { .. }

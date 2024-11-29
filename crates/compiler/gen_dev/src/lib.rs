@@ -209,7 +209,6 @@ impl<'a> LastSeenMap<'a> {
                             self.set_last_seen(*initializer, stmt);
                         }
                     }
-                    Expr::RuntimeErrorFunction(_) => {}
                     Expr::FunctionPointer { .. } => todo_lambda_erasure!(),
                     Expr::EmptyArray => {}
                 }
@@ -1003,7 +1002,6 @@ trait Backend<'a> {
             } => {
                 self.build_alloca(*sym, *initializer, *element_layout);
             }
-            Expr::RuntimeErrorFunction(_) => todo!(),
         }
     }
 
