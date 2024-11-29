@@ -234,11 +234,11 @@ fn render_package_index(docs_by_module: &[(ModuleId, ModuleDocumentation)]) -> S
         push_html(
             &mut link_buf,
             "a",
-            vec![("href", module.name.as_str())],
+            [("href", module.name.as_str())],
             module.name.as_str(),
         );
 
-        push_html(&mut module_list_buf, "li", vec![], link_buf.as_str());
+        push_html(&mut module_list_buf, "li", [], link_buf.as_str());
     }
 
     // The HTML for the index page
@@ -247,13 +247,13 @@ fn render_package_index(docs_by_module: &[(ModuleId, ModuleDocumentation)]) -> S
     push_html(
         &mut index_buf,
         "h2",
-        vec![("class", "module-name")],
+        [("class", "module-name")],
         "Exposed Modules",
     );
     push_html(
         &mut index_buf,
         "ul",
-        vec![("class", "index-module-links")],
+        [("class", "index-module-links")],
         module_list_buf.as_str(),
     );
 
@@ -269,10 +269,10 @@ fn render_module_documentation(
     let mut buf = String::new();
     let module_name = module.name.as_str();
 
-    push_html(&mut buf, "h2", vec![("class", "module-name")], {
+    push_html(&mut buf, "h2", [("class", "module-name")], {
         let mut link_buf = String::new();
 
-        push_html(&mut link_buf, "a", vec![("href", "/")], module_name);
+        push_html(&mut link_buf, "a", [("href", "/")], module_name);
 
         link_buf
     });
@@ -288,8 +288,8 @@ fn render_module_documentation(
                     let href = format!("{module_name}#{def_name}");
                     let mut content = String::new();
 
-                    push_html(&mut content, "a", vec![("href", href.as_str())], LINK_SVG);
-                    push_html(&mut content, "strong", vec![], def_name);
+                    push_html(&mut content, "a", [("href", href.as_str())], LINK_SVG);
+                    push_html(&mut content, "strong", [], def_name);
 
                     for type_var in &doc_def.type_vars {
                         content.push(' ');
@@ -312,7 +312,7 @@ fn render_module_documentation(
                     push_html(
                         &mut buf,
                         "h3",
-                        vec![("id", def_name), ("class", "entry-name")],
+                        [("id", def_name), ("class", "entry-name")],
                         content.as_str(),
                     );
 
@@ -356,19 +356,18 @@ fn render_module_documentation(
     buf
 }
 
-fn push_html(buf: &mut String, tag_name: &str, attrs: Vec<(&str, &str)>, content: impl AsRef<str>) {
+fn push_html<'a, 'b, I>(buf: &mut String, tag_name: &str, attrs: I, content: impl AsRef<str>)
+    where I: IntoIterator<Item=(&'a str, &'b str)>
+{
     buf.push('<');
     buf.push_str(tag_name);
+    buf.push(' ');
 
-    for (key, value) in &attrs {
-        buf.push(' ');
+    for (key, value) in attrs.into_iter() {
         buf.push_str(key);
         buf.push_str("=\"");
         buf.push_str(value);
         buf.push('"');
-    }
-
-    if !&attrs.is_empty() {
         buf.push(' ');
     }
 
@@ -415,14 +414,14 @@ fn base_url() -> String {
 fn render_name_link(name: &str) -> String {
     let mut buf = String::new();
 
-    push_html(&mut buf, "h1", vec![("class", "pkg-full-name")], {
+    push_html(&mut buf, "h1", [("class", "pkg-full-name")], {
         let mut link_buf = String::new();
 
         // link to root (= docs overview page)
         push_html(
             &mut link_buf,
             "a",
-            vec![("href", base_url().as_str())],
+            [("href", base_url().as_str())],
             name,
         );
 
@@ -442,7 +441,7 @@ fn render_sidebar<'a, I: Iterator<Item = &'a ModuleDocumentation>>(modules: I) -
         push_html(
             &mut sidebar_entry_content,
             "a",
-            vec![("class", "sidebar-module-link"), ("href", href)],
+            [("class", "sidebar-module-link"), ("href", href)],
             module.name.as_str(),
         );
 
@@ -461,7 +460,7 @@ fn render_sidebar<'a, I: Iterator<Item = &'a ModuleDocumentation>>(modules: I) -
                         push_html(
                             &mut entries_buf,
                             "a",
-                            vec![("href", entry_href.as_str())],
+                            [("href", entry_href.as_str())],
                             doc_def.name.as_str(),
                         );
                     }
@@ -474,14 +473,14 @@ fn render_sidebar<'a, I: Iterator<Item = &'a ModuleDocumentation>>(modules: I) -
         push_html(
             &mut sidebar_entry_content,
             "div",
-            vec![("class", "sidebar-sub-entries")],
+            [("class", "sidebar-sub-entries")],
             entries.as_str(),
         );
 
         push_html(
             &mut buf,
             "div",
-            vec![("class", "sidebar-entry")],
+            [("class", "sidebar-entry")],
             sidebar_entry_content.as_str(),
         );
     }
@@ -500,7 +499,7 @@ fn render_search_type_ahead<'a, I: Iterator<Item = &'a ModuleDocumentation>>(mod
                     push_html(
                         &mut entry_contents_buf,
                         "p",
-                        vec![("class", "type-ahead-def-name")],
+                        [("class", "type-ahead-def-name")],
                         doc_def.name.as_str(),
                     );
 
@@ -515,14 +514,14 @@ fn render_search_type_ahead<'a, I: Iterator<Item = &'a ModuleDocumentation>>(mod
                     push_html(
                         &mut entry_contents_buf,
                         "p",
-                        vec![("class", "type-ahead-signature")],
+                        [("class", "type-ahead-signature")],
                         entry_signature_buf.as_str(),
                     );
 
                     push_html(
                         &mut entry_contents_buf,
                         "p",
-                        vec![("class", "type-ahead-doc-path")],
+                        [("class", "type-ahead-doc-path")],
                         format!("{} > {}", module_name, doc_def.name),
                     );
 
@@ -537,14 +536,14 @@ fn render_search_type_ahead<'a, I: Iterator<Item = &'a ModuleDocumentation>>(mod
                     push_html(
                         &mut anchor_buf,
                         "a",
-                        vec![("href", entry_href.as_str()), ("class", "type-ahead-link")],
+                        [("href", entry_href.as_str()), ("class", "type-ahead-link")],
                         entry_contents_buf.as_str(),
                     );
 
                     push_html(
                         &mut buf,
                         "li",
-                        vec![("role", "option")],
+                        [("role", "option")],
                         anchor_buf.as_str(),
                     );
                 }
@@ -1281,7 +1280,7 @@ fn markdown_to_html(
     let mut in_code_block: Option<CowStr> = None;
     let mut to_highlight = String::new();
 
-    let mut docs_parser = vec![];
+    let mut docs_parser = Vec::new();
     let parser = pulldown_cmark::Parser::new_with_broken_link_callback(
         markdown,
         markdown_options,
