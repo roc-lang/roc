@@ -96,14 +96,14 @@ Roc will respect [order of operations](https://en.wikipedia.org/wiki/Order_of_op
 
 Let's try calling a function:
 
-<pre><samp><span class="repl-prompt">Str.concat "Hi " "there!"</span>
+<pre><samp><span class="repl-prompt">Str.concat "Hi " "there."</span>
 
-<span class="literal">"Hi there!"</span> <span class="colon">:</span> Str
+<span class="literal">"Hi there."</span> <span class="colon">:</span> Str
 </samp></pre>
 
-Here we're calling the `Str.concat` function and passing two arguments: the string `"Hi "` and the string `"there!"`. This _concatenates_ the two strings together (that is, it puts one after the other) and returns the resulting combined string of `"Hi there!"`.
+Here we're calling the `Str.concat` function and passing two arguments: the string `"Hi "` and the string `"there."`. This _concatenates_ the two strings together (that is, it puts one after the other) and returns the resulting combined string of `"Hi there."`.
 
-Note that in Roc, we don't need parentheses or commas to call functions. We don't write `Str.concat("Hi ", "there!")` but rather `Str.concat "Hi " "there!"`.
+Note that in Roc, we don't need parentheses or commas to call functions. We don't write `Str.concat("Hi ", "there.")` but rather `Str.concat "Hi " "there."`.
 
 That said, just like in the arithmetic example above, we can use parentheses to specify how nested function calls should work. For example, we could write this:
 
@@ -137,12 +137,12 @@ We'll get into more depth about modules later, but for now you can think of a mo
 
 An alternative syntax for `Str.concat` is _string interpolation_, which looks like this:
 
-<pre><samp class="repl-prompt"><span class="literal">"<span class="str-esc">$(</span><span class="str-interp">greeting</span><span class="str-esc">)</span> there, <span class="str-esc">$(</span><span class="str-interp">audience</span><span class="str-esc">)</span>!"</span></samp></pre>
+<pre><samp class="repl-prompt"><span class="literal">"<span class="str-esc">$(</span><span class="str-interp">greeting</span><span class="str-esc">)</span> there, <span class="str-esc">$(</span><span class="str-interp">audience</span><span class="str-esc">)</span>."</span></samp></pre>
 
 This is syntax sugar for calling `Str.concat` several times, like so:
 
 ```roc
-Str.concat greeting (Str.concat " there, " (Str.concat audience "!"))
+Str.concat greeting (Str.concat " there, " (Str.concat audience "."))
 ```
 
 You can put entire single-line expressions inside the parentheses in string interpolation. For example:
@@ -163,7 +163,7 @@ app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/downlo
 import pf.Stdout
 
 main =
-    Stdout.line! "I'm a Roc application!"
+    Stdout.line! "Hi there, from inside a Roc app. 🎉"
 ```
 
 Try running this with:
@@ -172,7 +172,7 @@ Try running this with:
 
 You should see a message about a file being downloaded, followed by this:
 
-<samp>I'm a Roc application!</samp>
+<samp>Hi there, from inside a Roc app. 🎉</samp>
 
 Congratulations, you've written your first Roc application! We'll go over what the parts above `main` do later, but let's play around a bit first.
 
@@ -1454,7 +1454,7 @@ Let's clear up any confusion with an example:
 main =
     expect 1 == 2
 
-    Stdout.line! "Hello, World!"
+    Stdout.line! "Hi there."
 
 double = \num ->
     expect num > -1
@@ -1464,8 +1464,8 @@ double = \num ->
 expect double 0 == 0
 ```
 
-- `roc build` wil run `main`, ignore `expect 1 == 2` and just print `Hello, World!`.
-- `roc dev` will run `main`, tell you `expect 1 == 2` failed but will still print `Hello, World!`.
+- `roc build` wil run `main`, ignore `expect 1 == 2` and just print `Hi there.`.
+- `roc dev` will run `main`, tell you `expect 1 == 2` failed but will still print `Hi there`.
 - `roc test` will run `expect double 0 == 0` followed by `expect num > -1` and will print how many top level expects passed: `0 failed and 1 passed in 100 ms.`.
 
 ## [Modules](#modules) {#modules}
@@ -1532,7 +1532,7 @@ The `import pf.Stdout` line says that we want to import the `Stdout` module from
 This import has a direct interaction with our definition of `main`. Let's look at that again:
 
 ```roc
-main = Stdout.line! "I'm a Roc application!"
+main = Stdout.line! "Hi there, from inside a Roc app. 🎉"
 ```
 
 Here, `main` is calling a function called `Stdout.line`. More specifically, it's calling a function named `line` which is exposed by a module named `Stdout`.
@@ -1561,7 +1561,7 @@ import uuid.Generate as Uuid
 import pf.Stdout exposing [line]
 
 main =
-    line! "Hello, World!"
+    line! "Hi there, from inside a Roc app. 🎉"
 ```
 
 ### [Package Modules](#package-modules) {#package-modules}
@@ -1626,7 +1626,7 @@ In the `basic-cli` platform, here are four operations we can do:
 
 We'll use these four operations to learn about tasks.
 
-Let's start with a basic "Hello World" program.
+Let's revisit that first application.
 
 ```roc
 app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.17.0/lZFLstMUCUvd5bjnnpYromZJXkQUrdhbva4xdBInicE.tar.br" }
@@ -1634,10 +1634,10 @@ app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/downlo
 import pf.Stdout
 
 main =
-    Stdout.line! "Hello, World!"
+    Stdout.line! "Hi there, from inside a Roc app. 🎉"
 ```
 
-This code prints "Hello, World!" to the [standard output](<https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)>). `Stdout.line` has this type:
+This code prints "Hi there, from inside a Roc app. 🎉" to the [standard output](<https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)>). `Stdout.line` has this type:
 
 ```roc
 Stdout.line : Str -> Task {} *
@@ -1647,7 +1647,7 @@ A `Task` represents an _effect_; an interaction with state outside your Roc prog
 
  Did you notice the `!` suffix after `Stdout.line`? This operator is similar to the [`?` try operator](https://www.roc-lang.org/tutorial#error-handling), but it is used on functions that return a `Task` instead of a `Result` (we'll discuss [the `!` operator in more depth](https://www.roc-lang.org/tutorial#the-!-suffix) later in this tutorial).
 
-When we set `main` to be a `Task`, the task will get run when we run our program. Here, we've set `main` to be a task that writes `"Hello, World!"` to `stdout` when it gets run, so that's what our program does!
+When we set `main` to be a `Task`, the task will get run when we run our program. Here, we've set `main` to be a task that writes `"Hi there, from inside a Roc app. 🎉"` to `stdout` when it gets run, so that's what our program does!
 
 `Task` has two type parameters: the type of value it produces when it finishes running, and any errors that might happen when running it. `Stdout.line` has the type `Task {} *` because it doesn't produce any values when it finishes (hence the `{}`) and there aren't any errors that can happen when it runs (hence the `*`).
 
