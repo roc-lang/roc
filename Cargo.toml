@@ -56,10 +56,14 @@ repository = "https://github.com/roc-lang/roc"
 version = "0.0.1"
 
 [workspace.dependencies]
-inkwell = { git = "https://github.com/TheDan64/inkwell", rev = "89e06af", features = ["llvm18-0"] }
-soa = { path = "crates/soa" }
-roc_specialize_types = { path = "crates/compiler/specialize_types" }
-arrayvec = "0.7.2" # update roc_std/Cargo.toml on change
+object = { version = "0.32.2", default-features = false, features = [
+    "read",
+    "write",
+] }
+inkwell = { git = "https://github.com/TheDan64/inkwell", rev = "89e06af", features = [
+    "llvm18-0",
+] }
+arrayvec = "0.7.2"
 base64-url = "1.4.13"
 bincode = "1.3.3"
 bitflags = "1.3.2"
@@ -114,10 +118,7 @@ mach_object = "0.1"
 maplit = "1.0.2"
 memmap2 = "0.5.10"
 mimalloc = { version = "0.1.34", default-features = false }
-object = { version = "0.32.2", default-features = false, features = [
-    "read",
-    "write",
-] }
+morphic_lib = { path = "crates/vendor/morphic_lib" }
 packed_struct = "0.10.1"
 parking_lot = "0.12"
 perfcnt = "0.8.0"
@@ -160,10 +161,75 @@ tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
 walkdir = "2.3.2"
 wasm-bindgen = "0.2.84"
 wasm-bindgen-futures = "0.4.34"
+widestring = { version = "1.1.0", default-features = false }
 wyhash = "0.5.0"
 
-# Testing
+# INTERNAL DEPENDENCIES
+cli_test_utils = { path = "crates/cli_test_utils" }
+copy_zig_glue = { path = "crates/copy_zig_glue" }
+roc_alias_analysis = { path = "crates/compiler/alias_analysis" }
+roc_bitcode = { path = "crates/compiler/builtins/bitcode" }
+roc_bitcode_bc = { path = "crates/compiler/builtins/bitcode/bc" }
+roc_build = { path = "crates/compiler/build" }
+roc_builtins = { path = "crates/compiler/builtins" }
+roc_can = { path = "crates/compiler/can" }
+roc_checkmate = { path = "crates/compiler/checkmate" }
+roc_checkmate_schema = { path = "crates/compiler/checkmate_schema" }
+roc_cli = { path = "crates/cli" }
+roc_collections = { path = "crates/compiler/collections" }
+roc_command_utils = { path = "crates/utils/command" }
+roc_constrain = { path = "crates/compiler/constrain" }
+roc_debug_flags = { path = "crates/compiler/debug_flags" }
+roc_derive = { path = "crates/compiler/derive" }
+roc_derive_key = { path = "crates/compiler/derive_key" }
+roc_docs = { path = "crates/docs" }
+roc_error_macros = { path = "crates/error_macros" }
+roc_exhaustive = { path = "crates/compiler/exhaustive" }
+roc_fmt = { path = "crates/compiler/fmt" }
+roc_gen_llvm = { path = "crates/compiler/gen_llvm" }
+roc_gen_dev = { path = "crates/compiler/gen_dev" }
+roc_gen_wasm = { path = "crates/compiler/gen_wasm" }
+roc_glue = { path = "crates/glue" }
+roc_highlight = { path = "crates/highlight" }
+roc_ident = { path = "crates/compiler/ident" }
+roc_late_solve = { path = "crates/compiler/late_solve" }
+roc_linker = { path = "crates/linker" }
+roc_load = { path = "crates/compiler/load" }
+roc_load_internal = { path = "crates/compiler/load_internal" }
+roc_lower_params = { path = "crates/compiler/lower_params" }
+roc_module = { path = "crates/compiler/module" }
+roc_mono = { path = "crates/compiler/mono" }
+roc_packaging = { path = "crates/packaging" }
+roc_parse = { path = "crates/compiler/parse" }
+roc_problem = { path = "crates/compiler/problem" }
+roc_region = { path = "crates/compiler/region" }
+roc_repl_cli = { path = "crates/repl_cli" }
+roc_repl_eval = { path = "crates/repl_eval" }
+roc_repl_expect = { path = "crates/repl_expect" }
+roc_repl_ui = { path = "crates/repl_ui" }
+roc_reporting = { path = "crates/reporting" }
+roc_serialize = { path = "crates/compiler/serialize" }
+roc_solve = { path = "crates/compiler/solve" }
+roc_solve_schema = { path = "crates/compiler/solve_schema" }
+roc_solve_problem = { path = "crates/compiler/solve_problem" }
+roc_specialize_types = { path = "crates/compiler/specialize_types" }
+roc_std = { path = "crates/roc_std" }
+roc_target = { path = "crates/compiler/roc_target" }
+roc_test_utils = { path = "crates/test_utils" }
+roc_test_utils_dir = { path = "crates/test_utils_dir" }
+roc_tracing = { path = "crates/tracing" }
+roc_types = { path = "crates/compiler/types" }
+roc_unify = { path = "crates/compiler/unify" }
+roc_wasm_interp = { path = "crates/wasm_interp" }
+roc_wasm_module = { path = "crates/wasm_module" }
+roc_work = { path = "crates/compiler/work" }
+roc_worker = { path = "crates/compiler/worker" }
+soa = { path = "crates/soa" }
 test_compile = { path = "crates/test_compile" }
+test_mono_macros = { path = "crates/compiler/test_mono_macros" }
+test_solve_helpers = { path = "crates/compiler/test_solve_helpers" }
+ven_pretty = { path = "crates/vendor/pretty" }
+wasi_libc_sys = { path = "crates/wasi-libc-sys" }
 
 # Optimizations based on https://deterministic.space/high-performance-rust.html
 [profile.release]

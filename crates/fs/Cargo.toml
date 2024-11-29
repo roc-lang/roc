@@ -8,4 +8,4 @@ license.workspace = true
 version.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-widestring = { version = "1.1.0", default-features = false }
+widestring.workspace = true
