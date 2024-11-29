@@ -33,11 +33,7 @@ libloading.workspace = true
 target-lexicon.workspace = true
 
 [dev-dependencies]
-roc_build = { path = "../compiler/build", features = [
-    "target-aarch64",
-    "target-x86_64",
-] }
-
+roc_build = { workspace = true, features = ["target-aarch64", "target-x86_64"] }
 indoc.workspace = true
 pretty_assertions.workspace = true
 strip-ansi-escapes.workspace = true

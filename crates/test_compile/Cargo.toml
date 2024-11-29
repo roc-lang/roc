@@ -9,9 +9,7 @@ version.workspace = true
 
 [dependencies]
 roc_builtins.workspace = true
-roc_derive = { path = "../compiler/derive", features = [
-    "debug-derived-symbols",
-] }
+roc_derive = { workspace = true, features = ["debug-derived-symbols"] }
 roc_region.workspace = true
 roc_collections.workspace = true
 roc_load.workspace = true

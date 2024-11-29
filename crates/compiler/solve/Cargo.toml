@@ -31,7 +31,7 @@ soa.workspace = true
 
 [dev-dependencies]
 roc_builtins.workspace = true
-roc_derive = { path = "../derive", features = ["debug-derived-symbols"] }
+roc_derive = { workspace = true, features = ["debug-derived-symbols"] }
 roc_load.workspace = true
 roc_parse.workspace = true
 roc_problem.workspace = true

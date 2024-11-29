@@ -193,6 +193,7 @@ roc_problem = { path = "crates/compiler/problem" }
 roc_region = { path = "crates/compiler/region" }
 roc_repl_cli = { path = "crates/repl_cli" }
 roc_repl_eval = { path = "crates/repl_eval" }
+roc_repl_expect = { path = "crates/repl_expect" }
 roc_repl_ui = { path = "crates/repl_ui" }
 roc_reporting = { path = "crates/reporting" }
 roc_serialize = { path = "crates/compiler/serialize" }
