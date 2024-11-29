@@ -816,6 +816,7 @@ when List.get ["a", "b", "c"] index is
 There's also `List.first`, which always gets the first element, and `List.last` which always gets the last. They return `Err ListWasEmpty` instead of `Err OutOfBounds`, because the only way they can fail is if you pass them an empty list!
 
 ### [Error Handling](#error-handling) {#error-handling}
+
 The `List` functions such as `List.get`, `List.first`, and `List.last` demonstrate a common pattern in Roc: operations that can fail returning either an `Ok` tag with the answer (if successful), or an `Err` tag with another tag describing what went wrong (if unsuccessful). In fact, it's such a common pattern that there's a whole module called `Result` which deals with these two tags. Here are some examples of `Result` functions:
 
 ```roc
@@ -858,15 +859,15 @@ getLetter = \indexStr ->
 ```
 
 Notice that we appended `?` to the function name `Str.toU64`. Here's what this does:
-* If the `Str.toU64` function returns an `Ok` value, then its payload is unwrapped.
-    - For example, if we call `getLetter "2"`, then `Str.toU64` returns `Ok 2`, and the `?` operator unwraps the integer 2, so `index` is set to 2 (not `Ok 2`). Then the `List.get` function is called and returns `Ok "c"`.
-* If the `Str.toU64` function returns an `Err` value, then the `?` operator immediately interrupts the `getLetter` function and makes it return this error.
-    - For example, if we call `getLetter "abc"`, then the call to `Str.toU64` returns `Err InvalidNumStr`, and the `?` operator ensures that the `getLetter` function returns this error immediately, without executing the rest of the function.
+
+- If the `Str.toU64` function returns an `Ok` value, then its payload is unwrapped.
+  - For example, if we call `getLetter "2"`, then `Str.toU64` returns `Ok 2`, and the `?` operator unwraps the integer 2, so `index` is set to 2 (not `Ok 2`). Then the `List.get` function is called and returns `Ok "c"`.
+- If the `Str.toU64` function returns an `Err` value, then the `?` operator immediately interrupts the `getLetter` function and makes it return this error.
+  - For example, if we call `getLetter "abc"`, then the call to `Str.toU64` returns `Err InvalidNumStr`, and the `?` operator ensures that the `getLetter` function returns this error immediately, without executing the rest of the function.
 
 Thanks to the `?` operator, your code can focus on the "happy path" (where nothing fails) and simply bubble up to the caller any error that might occur. Your error handling code can be neatly separated, and you can rest assured that you won't forget to handle any errors, since the compiler will let you know. See this [code example](https://github.com/roc-lang/examples/blob/main/examples/Results/main.roc) for more details on error handling.
 
 Now let's get back to lists!
-
 
 ### [Walking the elements in a list](#walking-the-elements-in-a-list) {#walking-the-elements-in-a-list}
 
@@ -1645,7 +1646,7 @@ Stdout.line : Str -> Task {} *
 
 A `Task` represents an _effect_; an interaction with state outside your Roc program, such as the terminal's standard output, or a file.
 
- Did you notice the `!` suffix after `Stdout.line`? This operator is similar to the [`?` try operator](https://www.roc-lang.org/tutorial#error-handling), but it is used on functions that return a `Task` instead of a `Result` (we'll discuss [the `!` operator in more depth](https://www.roc-lang.org/tutorial#the-!-suffix) later in this tutorial).
+The `!` after `Stdout.line` is an operator, similar to the [`?` "try" operator](https://www.roc-lang.org/tutorial#error-handling), but it is used on functions that return a `Task` instead of a `Result` (we'll discuss [the `!` operator in more depth](https://www.roc-lang.org/tutorial#the-!-"await"-operator) later in this tutorial).
 
 When we set `main` to be a `Task`, the task will get run when we run our program. Here, we've set `main` to be a task that writes `"Hi there, from inside a Roc app. 🎉"` to `stdout` when it gets run, so that's what our program does!
 
@@ -1811,9 +1812,9 @@ This is a useful technique to use when we don't want to write out a bunch of err
 - If we're using an editor that supports it, hovering over the `_` might display the inferred type that goes there.
 - We can put an obviously wrong type in there (e.g. replace the `{}` with `Str`, which is totally wrong) and look at the compiler error to see what it inferred as the correct type.
 
-### [The ! suffix](#the-!-suffix) {#the-!-suffix}
+### [The `!` postfix "await" operator](#the-!-postfix-await-operator) {#the-!-postfix-await-operator}
 
-The `!` suffix operator is syntax sugar for the `Task.await` function, which has this type:
+The `!` postfix operator is syntax sugar for the `Task.await` function, which has this type:
 
 ```roc
 Task.await : Task a err, (a -> Task b err) -> Task b err
@@ -1827,7 +1828,7 @@ More specifically, `Task.await` returns a `Task` which:
 2. If it fails with some error, returns a `Task` which fails with that same error. (So if the given `Task a err` fails, the `a -> Task b err` function never gets called.)
 3. If it succeeds (meaning it produces a success value which has the type `a`), pass the value it succeeded with to the `a -> Task b err` function. Whatever `Task b err` that function returns will be the `Task b err` the entire `Task.await` call returns.
 
-The `!` suffix is syntax sugar for connecting tasks using `Task.await`. Let's revisit our earlier example here:
+The `!` postfix operator is syntax sugar for connecting tasks using `Task.await`. Let's revisit our earlier example here:
 
 ```roc
 Stdout.line! "Type in something and press Enter:"
@@ -1845,7 +1846,12 @@ Task.await (Stdout.line "Type in something and press Enter:") \_ ->
 
 Each of the `!` operators desugars to a `Task.await` call, except for the last one (which desugars to nothing because there's no task after it to connect to; if we wanted to, we could have left out that `!` without changing what the program does, but it looks more consistent to have both `Stdout.line!` calls end in a `!`).
 
-If you like, you can always call `Task.await` directly instead of using `!` (since `!` is nothing more than syntax sugar for `Task.await`), but it's a stylistic convention in the Roc ecosystem to use `!` instead.
+If you prefer, you can always...
+
+- call `Task.await` directly instead of using `!`
+- leave out the last/only `!` in a block of expressions
+
+...without changing what the program does, but it's a stylistic convention in the Roc ecosystem to use `!` wherever possible.
 
 ### [Tagging errors](#tagging-errors) {#tagging-errors}
 
@@ -2313,25 +2319,25 @@ Other keywords are used only in specific places, so they are not reserved. This 
 
 Here are various Roc expressions involving operators, and what they desugar to.
 
-| Expression                   | Desugars To        |
-| ---------------------------- | ------------------ |
-| `a + b`                      | `Num.add a b`      |
-| `a - b`                      | `Num.sub a b`      |
-| `a * b`                      | `Num.mul a b`      |
-| `a / b`                      | `Num.div a b`      |
-| `a // b`                     | `Num.divTrunc a b` |
-| `a ^ b`                      | `Num.pow a b`      |
-| `a % b`                      | `Num.rem a b`      |
-| `-a`                         | `Num.neg a`        |
-| `a == b`                     | `Bool.isEq a b`    |
-| `a != b`                     | `Bool.isNotEq a b` |
-| `a && b`                     | `Bool.and a b`     |
-| <code>a \|\| b</code>        | `Bool.or a b`      |
-| `!a`                         | `Bool.not a`       |
-| <code>a \|> f</code>         | `f a`              |
-| <code>f a b \|> g x y</code> | `g (f a b) x y`    |
-| `f!`                         | [see example](https://www.roc-lang.org/examples/DesugaringAwait/README.html)     |
-| `f?`                         | [see example](https://www.roc-lang.org/examples/DesugaringTry/README.html)     |
+| Expression                   | Desugars To                                                                  |
+| ---------------------------- | ---------------------------------------------------------------------------- |
+| `a + b`                      | `Num.add a b`                                                                |
+| `a - b`                      | `Num.sub a b`                                                                |
+| `a * b`                      | `Num.mul a b`                                                                |
+| `a / b`                      | `Num.div a b`                                                                |
+| `a // b`                     | `Num.divTrunc a b`                                                           |
+| `a ^ b`                      | `Num.pow a b`                                                                |
+| `a % b`                      | `Num.rem a b`                                                                |
+| `-a`                         | `Num.neg a`                                                                  |
+| `a == b`                     | `Bool.isEq a b`                                                              |
+| `a != b`                     | `Bool.isNotEq a b`                                                           |
+| `a && b`                     | `Bool.and a b`                                                               |
+| <code>a \|\| b</code>        | `Bool.or a b`                                                                |
+| `!a`                         | `Bool.not a`                                                                 |
+| <code>a \|> f</code>         | `f a`                                                                        |
+| <code>f a b \|> g x y</code> | `g (f a b) x y`                                                              |
+| `f!`                         | [see example](https://www.roc-lang.org/examples/DesugaringAwait/README.html) |
+| `f?`                         | [see example](https://www.roc-lang.org/examples/DesugaringTry/README.html)   |
 
 </section>
 <script type="text/javascript" src="/builtins/search.js" defer></script>
