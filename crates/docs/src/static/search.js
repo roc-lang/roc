@@ -27,6 +27,13 @@
     let searchForm = document.getElementById("module-search-form");
     let topSearchResultListItem = undefined;
 
+    // Hide the results whenever anyone clicks outside the search results.
+    window.addEventListener("click", function(event) {
+        if (!searchForm?.contains(event.target)) {
+            searchTypeAhead.classList.add("hidden");
+        }
+    });
+
     if (searchBox != null) {
         function searchKeyDown(event) {
           switch (event.key) {
