@@ -168,6 +168,7 @@ roc_collections = { path = "crates/compiler/collections" }
 roc_command_utils = { path = "crates/utils/command" }
 roc_constrain = { path = "crates/compiler/constrain" }
 roc_debug_flags = { path = "crates/compiler/debug_flags" }
+roc_derive = { path = "crates/compiler/derive" }
 roc_derive_key = { path = "crates/compiler/derive_key" }
 roc_docs = { path = "crates/docs" }
 roc_error_macros = { path = "crates/error_macros" }
@@ -178,8 +179,11 @@ roc_gen_dev = { path = "crates/compiler/gen_dev" }
 roc_gen_wasm = { path = "crates/compiler/gen_wasm" }
 roc_glue = { path = "crates/glue" }
 roc_highlight = { path = "crates/highlight" }
+roc_late_solve = { path = "crates/compiler/late_solve" }
 roc_linker = { path = "crates/linker" }
 roc_load = { path = "crates/compiler/load" }
+roc_load_internal = { path = "crates/compiler/load_internal" }
+roc_lower_params = { path = "crates/compiler/lower_params" }
 roc_module = { path = "crates/compiler/module" }
 roc_mono = { path = "crates/compiler/mono" }
 roc_packaging = { path = "crates/packaging" }
@@ -198,11 +202,14 @@ roc_specialize_types = { path = "crates/compiler/specialize_types" }
 roc_std = { path = "crates/roc_std" }
 roc_target = { path = "crates/compiler/roc_target" }
 roc_test_utils = { path = "crates/test_utils" }
+roc_test_utils_dir = { path = "crates/test_utils_dir" }
 roc_tracing = { path = "crates/tracing" }
 roc_types = { path = "crates/compiler/types" }
 roc_unify = { path = "crates/compiler/unify" }
 roc_wasm_interp = { path = "crates/wasm_interp" }
 roc_wasm_module = { path = "crates/wasm_module" }
+roc_work = { path = "crates/compiler/work" }
+roc_worker = { path = "crates/compiler/worker" }
 rustyline = { git = "https://github.com/roc-lang/rustyline", rev = "e74333c" }
 rustyline-derive = { git = "https://github.com/roc-lang/rustyline", rev = "e74333c" }
 schemars = "0.8.12"
