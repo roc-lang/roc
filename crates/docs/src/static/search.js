@@ -148,9 +148,13 @@
                 // De-focus and clear input box
                 searchBox.value = "";
                 searchBox.blur();
-              } else if (searchTypeAhead.contains(document.activeElement)) {
+              } else {
+                // Hide the search results
                 searchTypeAhead.classList.add("hidden");
-                searchBox.focus();
+
+                if (searchTypeAhead.contains(document.activeElement)) {
+                  searchBox.focus();
+                }
               }
             }
         });

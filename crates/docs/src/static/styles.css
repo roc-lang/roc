@@ -481,6 +481,10 @@ pre>samp {
   opacity: 1;
 }
 
+#module-search:focus {
+  outline: 2px solid var(--faded-color);
+}
+
 #search-type-ahead {
   font-family: var(--font-mono);
   display: flex;
@@ -532,18 +536,9 @@ pre>samp {
   position: relative;
 }
 
-#search-type-ahead:hover li:focus-within a:focus {
-  background: none;
-}
-
 #search-type-ahead a:focus {
   outline: none;
   background: var(--violet-bg);
-}
-
-#search-type-ahead a:hover {
-  background: var(--violet-bg) !important;
-  text-decoration: none;
 }
 
 #search-link {
