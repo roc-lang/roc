@@ -9,12 +9,12 @@ repository.workspace = true
 version.workspace = true
 
 [dependencies]
-roc_collections = { path = "../compiler/collections" }
-roc_load = { path = "../compiler/load" }
-roc_module = { path = "../compiler/module" }
-roc_reporting = { path = "../reporting" }
-roc_command_utils = { path = "../utils/command" }
-roc_cli = { path = "../cli" }
+roc_collections.workspace = true
+roc_load.workspace = true
+roc_module.workspace = true
+roc_reporting.workspace = true
+roc_command_utils.workspace = true
+roc_cli.workspace = true
 
 bumpalo.workspace = true
 criterion.workspace = true

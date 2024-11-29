@@ -8,9 +8,9 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-roc_collections = { path = "../collections" }
-roc_module = { path = "../module" }
-roc_work = { path = "../work" }
-roc_error_macros = { path = "../../error_macros" }
+roc_collections.workspace = true
+roc_module.workspace = true
+roc_work.workspace = true
+roc_error_macros.workspace = true
 
 crossbeam.workspace = true
