@@ -3944,3 +3944,11 @@ fn infinity_f32() {
 fn infinity_f64() {
     assert_evals_to!(r"Num.infinityF64", f64::INFINITY, f64);
 }
+
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn min_max_dec() {
+    assert_evals_to!(r"Num.minDec", i128::MIN, i128);
+    assert_evals_to!(r"Num.maxDec", i128::MAX, i128);
+}

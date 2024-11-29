@@ -1143,23 +1143,19 @@ pub(crate) fn run_low_level<'a, 'ctx>(
         NumIntCast => {
             todo!()
         }
-        
-        NumToDecChecked => {
-            
-            todo!()
-        }
-        NumToDecCast => {
-
+        NumToDecCast | NumToDecChecked => {
+            let checked = matches!(op,NumToDecChecked);
             const DEC_RIGHT_DIGITS : u64 = 10u64.pow(18); 
             let to = env.context.i128_type();
             let float_type = env.context.f64_type();
             let llvm_digits = to.const_int(DEC_RIGHT_DIGITS,false);
             let llvm_divisor = float_type.const_float(DEC_RIGHT_DIGITS as f64);
             arguments_with_layouts!((arg,arg_layout));
-
-            match layout_interner.get_repr(arg_layout) {
-                LayoutRepr::Builtin(Builtin::Int(width)) => {
-                    
+            //Get type
+            let result = match layout_interner.get_repr(arg_layout) {
+                //If integer
+                LayoutRepr::Builtin(Builtin::Int(width)) => {   
+                    //Extend to I128
                     let Ok(converted_value) = (if width.is_signed() {
                         env.builder.build_int_s_extend(arg.into_int_value(), to, "inc_cast")
                     } else {
@@ -1167,10 +1163,11 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                     }) else {
                         unreachable!()
                     };
+                    //Add decimal places
                     let Ok(result) = env.builder.build_int_mul(converted_value, llvm_digits, "deci_cast") else {
                         unreachable!()
                     };
-                    result.into()
+                    result.as_basic_value_enum()
                 }
                 LayoutRepr::Builtin(Builtin::Float(_)) => {
                     let Ok(float_result) = env.builder.build_float_div(arg.into_float_value(), llvm_divisor, "decf_cast") else {
@@ -1179,7 +1176,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                     let Ok(int_result) = env.builder.build_float_to_signed_int(float_result, to, "dec_place") else {
                         unreachable!()
                     };
-                    int_result.into()
+                    int_result.as_basic_value_enum()
                 }
                 LayoutRepr::Builtin(Builtin::Decimal) => {
                     arg 
@@ -1187,6 +1184,56 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 _ => {
                     unreachable!()
                 }
+            };
+            if checked {
+                let layout = Layout::from_int_width(IntWidth::I128);
+                let bool_false = env.context.bool_type().const_zero();
+                let bool_true = env.context.bool_type().const_all_ones();
+                let layout_repr = LayoutRepr::Struct(env.arena.alloc([layout, Layout::BOOL]));
+                // How the return type needs to be stored on the stack.
+                let return_type_stack_type = convert::basic_type_from_layout(
+                    env,
+                    layout_interner,
+                    layout_interner.get_repr(layout),
+                )
+                .into_struct_type();
+            
+                
+                let r = return_type_stack_type.const_zero();
+                
+                let with_overflow = match layout_interner.get_repr(arg_layout) {
+                    //If integer
+                    LayoutRepr::Builtin(Builtin::Int(width)) => {   
+                        if width.stack_size() <= 4 {
+                            bool_false
+                        } else {
+                            todo!()
+                        }
+                    }
+                    LayoutRepr::Builtin(Builtin::Float(_)) => {
+                        todo!()
+                    }
+                    LayoutRepr::Builtin(Builtin::Decimal) => {
+                        bool_false 
+                    }
+                    _ => {
+                        unreachable!()
+                    }
+                };
+                let r = return_type_stack_type.const_zero();
+                let r = env.builder
+                    .build_insert_value(r, result, 0, "converted_int")
+                    .unwrap();
+                let r = env.builder
+                    .build_insert_value(r, with_overflow, 1, "out_of_bounds")
+                    .unwrap();
+
+                r.into_struct_value().into()
+                
+
+                
+            } else {
+                result.into()
             }
         }
         NumToFloatCast => {
@@ -2594,7 +2641,7 @@ fn int_neg_raise_on_overflow<'ctx>(
 
     let min_val = int_type_signed_min(int_type);
     let condition = builder.new_build_int_compare(IntPredicate::EQ, arg, min_val, "is_min_val");
-
+    
     let block = env.builder.get_insert_block().expect("to be in a function");
     let parent = block.get_parent().expect("to be in a function");
     let then_block = env.context.append_basic_block(parent, "then");

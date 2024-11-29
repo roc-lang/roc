@@ -50,7 +50,7 @@ macro_rules! map_symbol_to_lowlevel_and_arity {
                 Symbol::NUM_TO_U64_CHECKED => Some(to_num_checked(Symbol::NUM_TO_U64_CHECKED, var_store, LowLevel::NumToIntChecked)),
                 Symbol::NUM_TO_U128_CHECKED => Some(to_num_checked(Symbol::NUM_TO_U128_CHECKED, var_store, LowLevel::NumToIntChecked)),
 
-                Symbol::NUM_TO_DEC_CHECKED => Some(to_num_checked(Symbol::NUM_TO_DEC_CHECKED, var_store, LowLevel::NumToFloatChecked)),
+                Symbol::NUM_TO_DEC_CHECKED => Some(to_num_checked(Symbol::NUM_TO_DEC_CHECKED, var_store, LowLevel::NumToDecChecked)),
 
                 Symbol::NUM_TO_F32_CHECKED => Some(to_num_checked(Symbol::NUM_TO_F32_CHECKED, var_store, LowLevel::NumToFloatChecked)),
                 Symbol::NUM_TO_F64_CHECKED => Some(to_num_checked(Symbol::NUM_TO_F64_CHECKED, var_store, LowLevel::NumToFloatChecked)),
