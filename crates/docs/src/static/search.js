@@ -96,11 +96,7 @@
                             ?.textContent?.toLowerCase()
                             ?.replace(/\s+/g, "");
 
-                        if (
-                            totalResults < 5 &&
-                            (entryName.includes(text) ||
-                                entrySignature?.includes(text.replace(/\s+/g, "")))
-                        ) {
+                        if ((entryName.includes(text) || entrySignature?.includes(text.replace(/\s+/g, "")))) {
                             totalResults++;
                             entry.classList.remove("hidden");
                             if (topSearchResultListItem === undefined) {
