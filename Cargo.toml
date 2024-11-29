@@ -179,6 +179,7 @@ roc_gen_dev = { path = "crates/compiler/gen_dev" }
 roc_gen_wasm = { path = "crates/compiler/gen_wasm" }
 roc_glue = { path = "crates/glue" }
 roc_highlight = { path = "crates/highlight" }
+roc_ident = { path = "crates/compiler/ident" }
 roc_late_solve = { path = "crates/compiler/late_solve" }
 roc_linker = { path = "crates/linker" }
 roc_load = { path = "crates/compiler/load" }
@@ -229,6 +230,8 @@ syn = { version = "1.0.109", features = ["full", "extra-traits"] }
 tar = "0.4.38"
 target-lexicon = "0.12.6"
 tempfile = "=3.2.0"
+test_mono_macros = { path = "crates/compiler/test_mono_macros" }
+test_solve_helpers = { path = "crates/compiler/test_solve_helpers" }
 tracing = { version = "0.1.40", features = ["release_max_level_off"] }
 tracing-appender = "0.2.2"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
