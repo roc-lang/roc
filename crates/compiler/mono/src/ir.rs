@@ -1947,8 +1947,6 @@ pub enum Expr<'a> {
         symbol: Symbol,
         update_mode: UpdateModeId,
     },
-
-    RuntimeErrorFunction(&'a str),
 }
 
 impl<'a> Literal<'a> {
@@ -2110,8 +2108,6 @@ impl<'a> Expr<'a> {
                 index, structure, ..
             } => text!(alloc, "StructAtIndex {} ", index)
                 .append(symbol_to_doc(alloc, *structure, pretty)),
-
-            RuntimeErrorFunction(s) => text!(alloc, "ErrorFunction {}", s),
 
             GetTagId { structure, .. } => alloc
                 .text("GetTagId ")
@@ -5897,7 +5893,6 @@ pub fn with_hole<'a>(
                 Stmt::Ret(return_symbol),
             )
         }
-        TypedHole(_) => runtime_error(env, "Hit a blank"),
         RuntimeError(e) => runtime_error(env, env.arena.alloc(e.runtime_message())),
         Crash { msg, ret_var: _ } => {
             let msg_sym = possible_reuse_symbol_or_specialize(
@@ -7729,7 +7724,7 @@ fn substitute_in_expr<'a>(
     use Expr::*;
 
     match expr {
-        Literal(_) | EmptyArray | RuntimeErrorFunction(_) => None,
+        Literal(_) | EmptyArray => None,
 
         Call(call) => substitute_in_call(arena, call, subs).map(Expr::Call),
 
