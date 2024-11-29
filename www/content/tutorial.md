@@ -849,7 +849,29 @@ listGet = \index ->
 
 `Result.try` is often used to chain two functions that return `Result` (as in the example above). This prevents you from needing to add error handling code at every intermediate step.
 
-Roc also has a special "try" operator `?`, which is convenient syntax sugar for `Result.try`. For example, consider the following `getLetter` function:
+### [The `try` keyword](#the-try-keyword) {#the-try-keyword}
+
+Roc also has a special `try` keyword, which is convenient syntax sugar for `Result.try`. For example, consider the following `getLetter` function:
+
+```roc
+getLetter : Str -> Result Str [OutOfBounds, InvalidNumStr]
+getLetter = \indexStr ->
+    index = try Str.toU64 indexStr
+    List.get ["a", "b", "c", "d"] index
+```
+
+Here's what this does:
+
+- If the `Str.toU64` function returns an `Ok` value, then its payload is unwrapped.
+  - For example, if we call `getLetter "2"`, then `Str.toU64` returns `Ok 2`, and the `try` keyword unwraps the integer 2, so `index` is set to 2 (not `Ok 2`). Then the `List.get` function is called and returns `Ok "c"`.
+- If the `Str.toU64` function returns an `Err` value, then the `try` keyword immediately interrupts the `getLetter` function and makes it return this error.
+  - For example, if we call `getLetter "abc"`, then the call to `Str.toU64` returns `Err InvalidNumStr`, and the `try` keyword ensures that the `getLetter` function returns this error immediately, without executing the rest of the function.
+
+Thanks to the `try` keyword, your code can focus on the "happy path" (where nothing fails) and simply bubble up to the caller any error that might occur. Your error handling code can be neatly separated, and you can rest assured that you won't forget to handle any errors, since the compiler will let you know. See this [code example](https://github.com/roc-lang/examples/blob/main/examples/Results/main.roc) for more details on error handling.
+
+### [The `?` postfix "try" operator](#the-?-postfix-try-operator) {#the-?-postfix-try-operator}
+
+Roc also has a `?` postfix operator version of the `try` keyword:
 
 ```roc
 getLetter : Str -> Result Str [OutOfBounds, InvalidNumStr]
@@ -857,15 +879,6 @@ getLetter = \indexStr ->
     index = Str.toU64? indexStr
     List.get ["a", "b", "c", "d"] index
 ```
-
-Notice that we appended `?` to the function name `Str.toU64`. Here's what this does:
-
-- If the `Str.toU64` function returns an `Ok` value, then its payload is unwrapped.
-  - For example, if we call `getLetter "2"`, then `Str.toU64` returns `Ok 2`, and the `?` operator unwraps the integer 2, so `index` is set to 2 (not `Ok 2`). Then the `List.get` function is called and returns `Ok "c"`.
-- If the `Str.toU64` function returns an `Err` value, then the `?` operator immediately interrupts the `getLetter` function and makes it return this error.
-  - For example, if we call `getLetter "abc"`, then the call to `Str.toU64` returns `Err InvalidNumStr`, and the `?` operator ensures that the `getLetter` function returns this error immediately, without executing the rest of the function.
-
-Thanks to the `?` operator, your code can focus on the "happy path" (where nothing fails) and simply bubble up to the caller any error that might occur. Your error handling code can be neatly separated, and you can rest assured that you won't forget to handle any errors, since the compiler will let you know. See this [code example](https://github.com/roc-lang/examples/blob/main/examples/Results/main.roc) for more details on error handling.
 
 Now let's get back to lists!
 
