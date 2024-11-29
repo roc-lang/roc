@@ -45,10 +45,10 @@ pub fn sha256Digest(sha: Sha256) callconv(.C) Digest256 {
     return @bitCast(sha.pointer().*.peek());
 }
 
-fn sameBytesAsHex(comptime comptime expected_hex: [:0]const u8, input: []const u8) bool{
+fn sameBytesAsHex(comptime  expected_hex: [:0]const u8, input: []const u8) bool{
         for (input, 0..) |input_byte, i| {
-        const hex_byte = fmt.parseInt(u8, expected_hex[2 * i .. 2 * i + 2], 16) catch unreachable;
-        if hex_byte != input_byte{ return false;}
+        const hex_byte = std.fmt.parseInt(u8, expected_hex[2 * i .. 2 * i + 2], 16) catch unreachable;
+        if (hex_byte != input_byte) { return false;}
     }
-    true
+    return true;
 }
