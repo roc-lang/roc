@@ -8,27 +8,11 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-
-[dependencies.roc_collections]
-path = "../collections"
-
-[dependencies.roc_error_macros]
-path = "../../error_macros"
-
-[dependencies.roc_module]
-path = "../module"
-
-[dependencies.roc_types]
-path = "../types"
-
-[dependencies.roc_debug_flags]
-path = "../debug_flags"
-
-[dependencies.roc_tracing]
-path = "../../tracing"
-
-[dependencies.roc_checkmate]
-path = "../checkmate"
-
-[dependencies.roc_solve_schema]
-path = "../solve_schema"
+roc_collections.workspace = true
+roc_error_macros.workspace = true
+roc_module.workspace = true
+roc_types.workspace = true
+roc_debug_flags.workspace = true
+roc_tracing.workspace = true
+roc_checkmate.workspace = true
+roc_solve_schema.workspace = true
