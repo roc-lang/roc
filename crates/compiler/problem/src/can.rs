@@ -728,7 +728,7 @@ impl RuntimeError {
                     "Hit a branch pattern that does not bind all symbols its body needs, at {region:?}"
                 )
             }
-            err => format!("HEY HEY {err:?}"),
+            err => format!("{err:?}"),
         }
     }
 
