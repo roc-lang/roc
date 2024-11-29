@@ -55,6 +55,11 @@ repository = "https://github.com/roc-lang/roc"
 version = "0.0.1"
 
 [workspace.dependencies]
+object = {
+version = "0.32.2", default-features = false, features = [
+"read",
+"write",
+] }
 # NOTE: roc-lang/inkwell is a fork of TheDan64/inkwell which does not change anything.
 #
 # The reason for this fork is that the way Inkwell is designed, you have to use
@@ -94,7 +99,6 @@ clap = { version = "4.2.7", default-features = false, features = [
     "usage",
     "error-context",
 ] }
-cli_test_utils = { path = "crates/cli_test_utils" }
 console_error_panic_hook = "0.1.7"
 const_format = { version = "0.2.30", features = ["const_generics"] }
 criterion = { git = "https://github.com/Anton-4/criterion.rs", features = [
@@ -133,10 +137,6 @@ maplit = "1.0.2"
 memmap2 = "0.5.10"
 mimalloc = { version = "0.1.34", default-features = false }
 morphic_lib = { path = "crates/vendor/morphic_lib" }
-object = { version = "0.32.2", default-features = false, features = [
-    "read",
-    "write",
-] }
 packed_struct = "0.10.1"
 parking_lot = "0.12"
 perfcnt = "0.8.0"
@@ -155,6 +155,35 @@ reqwest = { version = "0.11.23", default-features = false, features = [
     "rustls-tls",
 ] } # default-features=false removes libopenssl as a dependency on Linux, which might not be available!
 rlimit = "0.9.1"
+rustyline = { git = "https://github.com/roc-lang/rustyline", rev = "e74333c" }
+rustyline-derive = { git = "https://github.com/roc-lang/rustyline", rev = "e74333c" }
+schemars = "0.8.12"
+serde = { version = "1.0.153", features = [
+    "derive",
+] } # update roc_std/Cargo.toml on change
+serde_json = "1.0.94" # update roc_std/Cargo.toml on change
+serial_test = "1.0.0"
+signal-hook = "0.3.15"
+smallvec = { version = "1.10.0", features = ["const_generics", "const_new"] }
+static_assertions = "1.1.0" # update roc_std/Cargo.toml on change
+strip-ansi-escapes = "0.1.1"
+strum = { version = "0.24.1", features = ["derive"] }
+strum_macros = "0.24.3"
+syn = { version = "1.0.109", features = ["full", "extra-traits"] }
+tar = "0.4.38"
+target-lexicon = "0.12.6"
+tempfile = "=3.2.0"
+tracing = { version = "0.1.40", features = ["release_max_level_off"] }
+tracing-appender = "0.2.2"
+tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
+walkdir = "2.3.2"
+wasm-bindgen = "0.2.84"
+wasm-bindgen-futures = "0.4.34"
+widestring = { version = "1.1.0", default-features = false }
+wyhash = "0.5.0"
+
+# INTERNAL DEPENDENCIES
+cli_test_utils = { path = "crates/cli_test_utils" }
 roc_alias_analysis = { path = "crates/compiler/alias_analysis" }
 roc_bitcode = { path = "crates/compiler/builtins/bitcode" }
 roc_bitcode_bc = { path = "crates/compiler/builtins/bitcode/bc" }
@@ -212,40 +241,12 @@ roc_wasm_interp = { path = "crates/wasm_interp" }
 roc_wasm_module = { path = "crates/wasm_module" }
 roc_work = { path = "crates/compiler/work" }
 roc_worker = { path = "crates/compiler/worker" }
-rustyline = { git = "https://github.com/roc-lang/rustyline", rev = "e74333c" }
-rustyline-derive = { git = "https://github.com/roc-lang/rustyline", rev = "e74333c" }
-schemars = "0.8.12"
-serde = { version = "1.0.153", features = [
-    "derive",
-] } # update roc_std/Cargo.toml on change
-serde_json = "1.0.94" # update roc_std/Cargo.toml on change
-serial_test = "1.0.0"
-signal-hook = "0.3.15"
-smallvec = { version = "1.10.0", features = ["const_generics", "const_new"] }
 soa = { path = "crates/soa" }
-static_assertions = "1.1.0" # update roc_std/Cargo.toml on change
-strip-ansi-escapes = "0.1.1"
-strum = { version = "0.24.1", features = ["derive"] }
-strum_macros = "0.24.3"
-syn = { version = "1.0.109", features = ["full", "extra-traits"] }
-tar = "0.4.38"
-target-lexicon = "0.12.6"
-tempfile = "=3.2.0"
+test_compile = { path = "crates/test_compile" }
 test_mono_macros = { path = "crates/compiler/test_mono_macros" }
 test_solve_helpers = { path = "crates/compiler/test_solve_helpers" }
-tracing = { version = "0.1.40", features = ["release_max_level_off"] }
-tracing-appender = "0.2.2"
-tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
 ven_pretty = { path = "crates/vendor/pretty" }
-walkdir = "2.3.2"
 wasi_libc_sys = { path = "crates/wasi-libc-sys" }
-wasm-bindgen = "0.2.84"
-wasm-bindgen-futures = "0.4.34"
-widestring = { version = "1.1.0", default-features = false }
-wyhash = "0.5.0"
-
-# Testing
-test_compile = { path = "crates/test_compile" }
 
 # Optimizations based on https://deterministic.space/high-performance-rust.html
 [profile.release]
