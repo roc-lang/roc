@@ -132,6 +132,7 @@ mach_object = "0.1"
 maplit = "1.0.2"
 memmap2 = "0.5.10"
 mimalloc = { version = "0.1.34", default-features = false }
+morphic_lib = { path = "crates/vendor/morphic_lib" }
 object = { version = "0.32.2", default-features = false, features = [
     "read",
     "write",
@@ -162,6 +163,7 @@ roc_cli = { path = "crates/cli" }
 roc_collections = { path = "crates/compiler/collections" }
 roc_command_utils = { path = "crates/utils/command" }
 roc_constrain = { path = "crates/compiler/constrain" }
+roc_debug_flags = { path = "crates/compiler/debug_flags" }
 roc_docs = { path = "crates/docs" }
 roc_error_macros = { path = "crates/error_macros" }
 roc_exhaustive = { path = "crates/compiler/exhaustive" }
@@ -183,6 +185,7 @@ roc_repl_cli = { path = "crates/repl_cli" }
 roc_repl_eval = { path = "crates/repl_eval" }
 roc_repl_ui = { path = "crates/repl_ui" }
 roc_reporting = { path = "crates/reporting" }
+roc_serialize = { path = "crates/compiler/serialize" }
 roc_solve = { path = "crates/compiler/solve" }
 roc_solve_problem = { path = "crates/compiler/solve_problem" }
 roc_specialize_types = { path = "crates/compiler/specialize_types" }
@@ -191,6 +194,7 @@ roc_target = { path = "crates/compiler/roc_target" }
 roc_test_utils = { path = "crates/test_utils" }
 roc_tracing = { path = "crates/tracing" }
 roc_types = { path = "crates/compiler/types" }
+roc_unify = { path = "crates/compiler/unify" }
 roc_wasm_interp = { path = "crates/wasm_interp" }
 roc_wasm_module = { path = "crates/wasm_module" }
 rustyline = { git = "https://github.com/roc-lang/rustyline", rev = "e74333c" }
