@@ -2116,27 +2116,34 @@ impl<
     }
 
     fn build_num_is_nan(&mut self, dst: &Symbol, src: &Symbol, arg_layout: &InLayout<'a>) {
-        let float_width = match *arg_layout {
-            Layout::F32 => FloatWidth::F32,
-            Layout::F64 => FloatWidth::F64,
+        match *arg_layout {
+            Layout::F32 => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
+                ASM::is_nan_freg_reg64(&mut self.buf, dst_reg, src_reg, FloatWidth::F32);
+            }
+            Layout::F64 => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
+                ASM::is_nan_freg_reg64(&mut self.buf, dst_reg, src_reg, FloatWidth::F64);
+            }
+            Layout::DEC => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                // boolean "false"
+                ASM::mov_reg64_imm64(&mut self.buf, dst_reg, 0);
+            }
             _ => unreachable!(),
         };
-
-        let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
-        let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
-
-        ASM::is_nan_freg_reg64(&mut self.buf, dst_reg, src_reg, float_width);
     }
 
     fn build_num_is_infinite(&mut self, dst: &Symbol, src: &Symbol, arg_layout: &InLayout<'a>) {
-        let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
-        let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
-
-        self.storage_manager.with_tmp_general_reg(
-            &mut self.buf,
-            |_storage_manager, buf, mask_reg| {
-                match *arg_layout {
-                    Layout::F32 => {
+        match *arg_layout {
+            Layout::F32 => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
+                self.storage_manager.with_tmp_general_reg(
+                    &mut self.buf,
+                    |_storage_manager, buf, mask_reg| {
                         ASM::mov_reg64_imm64(buf, mask_reg, 0x7fff_ffff);
                         ASM::xor_reg64_reg64_reg64(buf, dst_reg, dst_reg, dst_reg); // zero out dst reg
                         ASM::mov_reg32_freg32(buf, dst_reg, src_reg);
@@ -2144,46 +2151,69 @@ impl<
 
                         ASM::mov_reg64_imm64(buf, mask_reg, 0x7f80_0000);
                         ASM::eq_reg_reg_reg(buf, RegisterWidth::W32, dst_reg, dst_reg, mask_reg);
-                    }
-                    Layout::F64 => {
+                    },
+                )
+            }
+            Layout::F64 => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
+                self.storage_manager.with_tmp_general_reg(
+                    &mut self.buf,
+                    |_storage_manager, buf, mask_reg| {
                         ASM::mov_reg64_imm64(buf, mask_reg, 0x7fff_ffff_ffff_ffff);
                         ASM::mov_reg64_freg64(buf, dst_reg, src_reg);
                         ASM::and_reg64_reg64_reg64(buf, dst_reg, dst_reg, mask_reg);
 
                         ASM::mov_reg64_imm64(buf, mask_reg, 0x7ff0_0000_0000_0000);
                         ASM::eq_reg_reg_reg(buf, RegisterWidth::W64, dst_reg, dst_reg, mask_reg);
-                    }
-                    _ => unreachable!(),
-                }
-            },
-        );
+                    },
+                )
+            }
+            Layout::DEC => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                // boolean "false"
+                ASM::mov_reg64_imm64(&mut self.buf, dst_reg, 0);
+            }
+            _ => unreachable!(),
+        }
     }
 
     fn build_num_is_finite(&mut self, dst: &Symbol, src: &Symbol, arg_layout: &InLayout<'a>) {
-        let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
-        let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
-
-        self.storage_manager.with_tmp_general_reg(
-            &mut self.buf,
-            |_storage_manager, buf, mask_reg| {
-                match *arg_layout {
-                    Layout::F32 => {
+        match *arg_layout {
+            Layout::F32 => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
+                self.storage_manager.with_tmp_general_reg(
+                    &mut self.buf,
+                    |_storage_manager, buf, mask_reg| {
                         ASM::mov_reg64_imm64(buf, mask_reg, 0x7f80_0000);
                         ASM::xor_reg64_reg64_reg64(buf, dst_reg, dst_reg, dst_reg); // zero out dst reg
                         ASM::mov_reg32_freg32(buf, dst_reg, src_reg);
                         ASM::and_reg64_reg64_reg64(buf, dst_reg, dst_reg, mask_reg);
                         ASM::neq_reg_reg_reg(buf, RegisterWidth::W32, dst_reg, dst_reg, mask_reg);
-                    }
-                    Layout::F64 => {
+                    },
+                )
+            }
+            Layout::F64 => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
+                self.storage_manager.with_tmp_general_reg(
+                    &mut self.buf,
+                    |_storage_manager, buf, mask_reg| {
                         ASM::mov_reg64_imm64(buf, mask_reg, 0x7ff0_0000_0000_0000);
                         ASM::mov_reg64_freg64(buf, dst_reg, src_reg);
                         ASM::and_reg64_reg64_reg64(buf, dst_reg, dst_reg, mask_reg);
                         ASM::neq_reg_reg_reg(buf, RegisterWidth::W64, dst_reg, dst_reg, mask_reg);
-                    }
-                    _ => unreachable!(),
-                }
-            },
-        );
+                    },
+                )
+            }
+            Layout::DEC => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                // boolean "true"
+                ASM::mov_reg64_imm64(&mut self.buf, dst_reg, 1);
+            }
+            _ => unreachable!(),
+        }
     }
 
     fn build_int_to_float_cast(
