@@ -2338,6 +2338,6 @@ Here are various Roc expressions involving operators, and what they desugar to.
 
 ### [Additional Resources]
 
-Looks like you've completed the tutorial, well done!
+You've completed the tutorial, well done!
 
-If you are looking for more resources to learn Roc, check out these links for [additional learning resources](/install#additional-learning-resources).
+If you are looking for more resources to learn Roc, check out [these links](/install#additional-learning-resources).
