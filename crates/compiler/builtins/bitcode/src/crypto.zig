@@ -28,7 +28,6 @@ test "emptySha256" {
 
 pub fn sha256AddBytes(sha: Sha256, data: list.RocList) callconv(.C) Sha256 {
     var out = emptySha256();
-    std.debug.print("Here!", .{});
     out.pointer().* = sha.pointer().*;
     if (data.bytes) |bytes| {
         const byteSlice: []u8 = bytes[0..data.length];
