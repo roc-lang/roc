@@ -3416,9 +3416,6 @@ pub enum RecordField<'a> {
     SpaceAfter(&'a RecordField<'a>, &'a [CommentOrNewline<'a>]),
 }
 
-#[derive(Debug)]
-pub struct FoundApplyValue;
-
 impl<'a> RecordField<'a> {
     fn is_ignored_value(&self) -> bool {
         let mut current = self;

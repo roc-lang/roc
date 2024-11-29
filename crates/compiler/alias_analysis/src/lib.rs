@@ -1453,11 +1453,6 @@ fn expr_spec<'a>(
 
             erasure_load(builder, block, value, *field, loaded_type)
         }
-        RuntimeErrorFunction(_) => {
-            let type_id = layout_spec(env, builder, interner, interner.get_repr(layout))?;
-
-            builder.add_terminate(block, type_id)
-        }
         GetTagId { .. } => {
             // TODO touch heap cell in recursive cases
 

@@ -718,8 +718,6 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             symbol: *symbol,
         },
 
-        TypedHole(v) => TypedHole(sub!(*v)),
-
         RuntimeError(err) => RuntimeError(err.clone()),
     }
 }
