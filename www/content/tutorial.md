@@ -1853,6 +1853,43 @@ If you prefer, you can always...
 
 ...without changing what the program does, but it's a stylistic convention in the Roc ecosystem to use `!` wherever possible.
 
+### [Ignoring informationless return values](#ignoring-informationless-return-values) {#ignoring-informationless-return-values}
+
+The compiler warns us about any unused variable, but as we saw before, if we don't intend to use a variable then we can name it `_` to clarify intent and silence the warning.
+
+Furthermore, if a variable can't possibly contain any useful information, then we can ignore it entirely.
+
+Let's revisit our earlier example again:
+
+```roc
+run =
+    Stdout.line! "Type in something and press Enter:"
+    input = Stdin.line!
+    Stdout.line! "Your input was: $(input)"
+```
+
+It looks like this block goes "expression, assignment, expression", but expressions are only allowed on the last line of a block. What's happening here?
+
+Since `Stdout.line : Str -> Task {} *`, the above is equivalent to:
+
+```roc
+run =
+    alwaysAnEmptyRecord = Stdout.line! "Type in something and press Enter:"
+    input = Stdin.line!
+    Stdout.line! "Your input was: $(input)"
+```
+
+We don't intend to use `alwaysAnEmptyRecord`, so we can rename it to `_`.
+
+```roc
+run =
+    _ = Stdout.line! "Type in something and press Enter:"
+    input = Stdin.line!
+    Stdout.line! "Your input was: $(input)"
+```
+
+Furthermore, since the type of `_` is `{}` (the only informationless type in Roc), the compiler allows us to delete the `_ =` entirely. `{}` is the only type for which Roc allows this ignoring/deletion.
+
 ### [Tagging errors](#tagging-errors) {#tagging-errors}
 
 Although it's rare, it is possible that either of the `Stdout.line!` operations in our example could fail:
