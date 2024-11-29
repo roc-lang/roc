@@ -55,10 +55,9 @@ repository = "https://github.com/roc-lang/roc"
 version = "0.0.1"
 
 [workspace.dependencies]
-object = {
-version = "0.32.2", default-features = false, features = [
-"read",
-"write",
+object = { version = "0.32.2", default-features = false, features = [
+    "read",
+    "write",
 ] }
 # NOTE: roc-lang/inkwell is a fork of TheDan64/inkwell which does not change anything.
 #
