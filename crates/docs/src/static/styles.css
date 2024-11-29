@@ -498,7 +498,7 @@ pre>samp {
   border-color: var(--border-color);
   list-style-type: none;
   margin: 0;
-  padding: 10px;
+  padding: 0;
 }
 
 #search-type-ahead .type-ahead-link {
@@ -506,10 +506,16 @@ pre>samp {
   color: var(--text-color);
   line-height: 2em;
   display: inline-block;
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  padding: 4px 8px;
 
   /* if it wraps, indent after the first line */
-  padding-left: 2em;
+  padding-left: calc(2em + 8px);
   text-indent: -2em;
+
 
   span {
     margin: 0px;
@@ -520,21 +526,24 @@ pre>samp {
     font-size: 1rem;
   }
 }
+
 #search-type-ahead li {
   box-sizing: border-box;
-  padding: 4px;
+  position: relative;
 }
 
-/*use browser defaults for focus outline*/
-#search-type-ahead li:focus-within {
-  /*firefox*/
-  outline: 5px auto Highlight;
-  /*chrome and safari*/
-  outline: 5px auto -webkit-focus-ring-color;
+#search-type-ahead:hover li:focus-within a:focus {
+  background: none;
 }
 
-.type-ahead-link:focus-visible {
+#search-type-ahead a:focus {
   outline: none;
+  background: var(--violet-bg);
+}
+
+#search-type-ahead a:hover {
+  background: var(--violet-bg) !important;
+  text-decoration: none;
 }
 
 #search-link {
