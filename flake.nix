@@ -77,7 +77,8 @@
           # provides lld
           llvmPkgs.dev
           # provides clang
-          llvmPkgs.lib
+          pkgs.clang_18
+
           pkg-config
 
           zigPkg # roc builtins are implemented in zig, see compiler/builtins/bitcode/
