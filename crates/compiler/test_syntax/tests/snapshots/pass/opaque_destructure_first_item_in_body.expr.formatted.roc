@@ -1,2 +1,2 @@
-(@Thunk it) = id (@A {})
+@Thunk it = id (@A {})
 it {}

@@ -294,13 +294,18 @@ fn crash_kw<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
 
 fn loc_possibly_negative_or_negated_term<'a>(
     options: ExprParseOptions,
+    allow_negate: bool,
 ) -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
     let parse_unary_negate = move |arena, state: State<'a>, min_indent: u32| {
         let initial = state.clone();
 
+        if !allow_negate {
+            return Err((NoProgress, EExpr::UnaryNegate(state.pos())));
+        }
+
         let (_, (loc_op, loc_expr), state) = and(
             loc(unary_negate()),
-            loc_possibly_negative_or_negated_term(options),
+            loc_possibly_negative_or_negated_term(options, true),
         )
         .parse(arena, state, min_indent)?;
 
@@ -310,24 +315,26 @@ fn loc_possibly_negative_or_negated_term<'a>(
     };
 
     one_of![
-        parse_unary_negate.trace("d"),
+        parse_unary_negate.trace("negate_expr"),
         // this will parse negative numbers, which the unary negate thing up top doesn't (for now)
-        loc(specialize_err(EExpr::Number, number_literal_help())).trace("c"),
+        // loc(specialize_err(EExpr::Number, number_literal_help())),
         loc(map_with_arena(
             and(
-                loc(byte(b'!', EExpr::Start)),
+                loc(unary_not()).trace("not"),
                 space0_before_e(
-                    loc_possibly_negative_or_negated_term(options),
+                    loc_possibly_negative_or_negated_term(options, true),
                     EExpr::IndentStart
                 )
+                .trace("not_expr")
             ),
             |arena: &'a Bump, (loc_op, loc_expr): (Loc<_>, _)| {
                 Expr::UnaryOp(arena.alloc(loc_expr), Loc::at(loc_op.region, UnaryOp::Not))
             }
         ))
-        .trace("b"),
-        loc_term_or_underscore_or_conditional(options).trace("a")
+        .trace("not_expr"),
+        loc_term_or_underscore_or_conditional(options)
     ]
+    .trace("loc_possibly_negative_or_negated_term")
 }
 
 fn fail_expr_start_e<'a, T: 'a>() -> impl Parser<'a, T, EExpr<'a>> {
@@ -340,14 +347,15 @@ fn unary_negate<'a>() -> impl Parser<'a, (), EExpr<'a>> {
         //
         // - it is preceded by whitespace (spaces, newlines, comments)
         // - it is not followed by whitespace
-        let followed_by_whitespace = state
+        // - it is not followed by >, making ->
+        let followed_by_illegal_char = state
             .bytes()
             .get(1)
-            .map(|c| c.is_ascii_whitespace() || *c == b'#')
+            .map(|c| c.is_ascii_whitespace() || *c == b'#' || *c == b'>')
             .unwrap_or(false);
 
         if state.bytes().starts_with(b"-")
-            && !followed_by_whitespace
+            && !followed_by_illegal_char
             && state.column() >= min_indent
         {
             // the negate is only unary if it is not followed by whitespace
@@ -355,6 +363,19 @@ fn unary_negate<'a>() -> impl Parser<'a, (), EExpr<'a>> {
             Ok((MadeProgress, (), state))
         } else {
             // this is not a negated expression
+            Err((NoProgress, EExpr::UnaryNot(state.pos())))
+        }
+    }
+}
+
+fn unary_not<'a>() -> impl Parser<'a, (), EExpr<'a>> {
+    move |_arena: &'a Bump, state: State<'a>, min_indent: u32| {
+        let followed_by_equals = state.bytes().get(1).map(|c| *c == b'=').unwrap_or(false);
+
+        if state.bytes().starts_with(b"!") && !followed_by_equals && state.column() >= min_indent {
+            let state = state.advance(1);
+            Ok((MadeProgress, (), state))
+        } else {
             Err((NoProgress, EExpr::UnaryNot(state.pos())))
         }
     }
@@ -389,7 +410,7 @@ fn parse_expr_operator_chain<'a>(
     let line_indent = state.line_indent();
 
     let (_, expr, state) =
-        loc_possibly_negative_or_negated_term(options).parse(arena, state, min_indent)?;
+        loc_possibly_negative_or_negated_term(options, true).parse(arena, state, min_indent)?;
 
     let mut initial_state = state.clone();
 
@@ -415,7 +436,8 @@ fn parse_expr_operator_chain<'a>(
         let parser = skip_first(
             crate::blankspace::check_indent(EExpr::IndentEnd),
             loc_term_or_underscore(options),
-        );
+        )
+        .trace("term_or_underscore");
         match parser.parse(arena, state.clone(), call_min_indent) {
             Err((MadeProgress, f)) => return Err((MadeProgress, f)),
             Err((NoProgress, _)) => {
@@ -583,7 +605,7 @@ fn parse_stmt_operator_chain<'a>(
     let line_indent = state.line_indent();
 
     let (_, expr, state) =
-        loc_possibly_negative_or_negated_term(options).parse(arena, state, min_indent)?;
+        loc_possibly_negative_or_negated_term(options, true).parse(arena, state, min_indent)?;
 
     let mut initial_state = state.clone();
     let end = state.pos();
@@ -593,6 +615,8 @@ fn parse_stmt_operator_chain<'a>(
             Err((_, _)) => return Ok((MadeProgress, Stmt::Expr(expr.value), state)),
             Ok((_, spaces_before_op, state)) => (spaces_before_op, state),
         };
+
+    let allow_negate = state.pos() > end;
 
     let mut expr_state = ExprState {
         operators: Vec::new_in(arena),
@@ -609,7 +633,7 @@ fn parse_stmt_operator_chain<'a>(
     loop {
         let parser = skip_first(
             crate::blankspace::check_indent(EExpr::IndentEnd),
-            loc_term_or_underscore(options),
+            loc_possibly_negative_or_negated_term(options, allow_negate),
         );
         match parser.parse(arena, state.clone(), call_min_indent) {
             Err((MadeProgress, f)) => return Err((MadeProgress, f)),
@@ -1566,10 +1590,10 @@ fn parse_after_binop<'a>(
     mut expr_state: ExprState<'a>,
     loc_op: Loc<BinOp>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
-    match loc_possibly_negative_or_negated_term(options).parse(
+    match loc_possibly_negative_or_negated_term(options, true).parse(
         arena,
         state.clone(),
-        call_min_indent,
+        min_indent,
     ) {
         Err((MadeProgress, f)) => Err((MadeProgress, f)),
         Ok((_, mut new_expr, state)) => {
@@ -2596,7 +2620,8 @@ fn if_branch<'a>() -> impl Parser<'a, (Loc<Expr<'a>>, Loc<Expr<'a>>), EIf<'a>> {
                     specialize_err_ref(EIf::Condition, loc_expr(true)),
                     EIf::IndentCondition,
                     EIf::IndentThenToken,
-                ),
+                )
+                .trace("if_condition"),
                 parser::keyword(keyword::THEN, EIf::Then),
             ),
             map_with_arena(
@@ -2614,6 +2639,7 @@ fn if_branch<'a>() -> impl Parser<'a, (Loc<Expr<'a>>, Loc<Expr<'a>>), EIf<'a>> {
         ),
         parser::keyword(keyword::ELSE, EIf::Else),
     )
+    .trace("if_branch")
 }
 
 fn expect_help<'a>(
@@ -2702,9 +2728,10 @@ fn import<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>> {
 }
 
 fn if_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EIf<'a>> {
-    move |arena: &'a Bump, state, min_indent| {
-        let (_, _, state) =
-            parser::keyword(keyword::IF, EIf::If).parse(arena, state, min_indent)?;
+    (move |arena: &'a Bump, state, min_indent| {
+        let (_, _, state) = parser::keyword(keyword::IF, EIf::If)
+            .trace("if_kw")
+            .parse(arena, state, min_indent)?;
 
         let if_indent = state.line_indent();
 
@@ -2713,8 +2740,9 @@ fn if_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EIf<
         let mut loop_state = state;
 
         let state_final_else = loop {
-            let (_, (cond, then_branch), state) =
-                if_branch().parse(arena, loop_state, min_indent)?;
+            let (_, (cond, then_branch), state) = if_branch()
+                .parse(arena, loop_state, min_indent)
+                .map_err(|(_p, err)| (MadeProgress, err))?;
 
             branches.push((cond, then_branch));
 
@@ -2767,7 +2795,8 @@ fn if_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EIf<
         };
 
         Ok((MadeProgress, expr, state))
-    }
+    })
+    .trace("if")
 }
 
 /// Parse a block of statements (parser combinator version of `parse_block`)
@@ -3759,26 +3788,6 @@ fn positive_number_literal_help<'a>() -> impl Parser<'a, Expr<'a>, ENumber> {
             }
         },
     )
-}
-
-fn number_literal_help<'a>() -> impl Parser<'a, Expr<'a>, ENumber> {
-    map(crate::number_literal::number_literal(), |literal| {
-        use crate::number_literal::NumLiteral::*;
-
-        match literal {
-            Num(s) => Expr::Num(s),
-            Float(s) => Expr::Float(s),
-            NonBase10Int {
-                string,
-                base,
-                is_negative,
-            } => Expr::NonBase10Int {
-                string,
-                base,
-                is_negative,
-            },
-        }
-    })
 }
 
 const BINOP_CHAR_SET: &[u8] = b"+-/*=.<>:&|^?%!";

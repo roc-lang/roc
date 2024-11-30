@@ -1,3 +1,3 @@
-(MT q) = g
+MT q = g
     q
 dbgT

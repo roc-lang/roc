@@ -204,7 +204,6 @@ fn fmt_pattern_inner(
 
                     if it.peek().is_some() {
                         buf.push_str(",");
-                        buf.spaces(1);
                     }
 
                     if !item.after.is_empty() {
@@ -217,6 +216,9 @@ fn fmt_pattern_inner(
                         } else {
                             fmt_spaces(buf, item.after.iter(), indent);
                         }
+                    }
+                    if it.peek().is_some() {
+                        buf.ensure_ends_with_whitespace();
                     }
                 }
                 buf.spaces(1);

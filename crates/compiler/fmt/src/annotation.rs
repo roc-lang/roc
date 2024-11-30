@@ -43,6 +43,7 @@ pub enum Parens {
     InApply,
     InOperator,
     InAsPattern,
+    InApplyLastArg,
 }
 
 /// In an AST node, do we show newlines around it
@@ -238,6 +239,7 @@ fn fmt_ty_ann(
                 let is_first = index == 0;
 
                 if !is_first {
+                    buf.indent(indent);
                     buf.push_str(",");
                     if !self_is_multiline {
                         buf.spaces(1);

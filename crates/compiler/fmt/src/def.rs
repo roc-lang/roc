@@ -1009,7 +1009,7 @@ pub fn fmt_body<'a>(
         return body.format_with_options(buf, Parens::NotNeeded, Newlines::No, indent);
     }
 
-    pattern.format_with_options(buf, Parens::InApply, Newlines::No, indent);
+    pattern.format_with_options(buf, Parens::NotNeeded, Newlines::No, indent);
     buf.indent(indent);
     buf.push_str(" =");
 
