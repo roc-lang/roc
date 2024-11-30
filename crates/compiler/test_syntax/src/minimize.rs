@@ -102,12 +102,6 @@ fn round_trip_once(input: Input<'_>) -> Option<String> {
         return Some("Different ast".to_string());
     }
 
-    let reformatted = reparsed_ast.format();
-
-    if output != reformatted {
-        return Some("Formatting not stable".to_string());
-    }
-
     None
 }
 

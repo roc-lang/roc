@@ -28,23 +28,9 @@ pub struct Spaces<'a, T> {
     pub after: &'a [CommentOrNewline<'a>],
 }
 
-impl<'a, T: Copy> ExtractSpaces<'a> for Spaces<'a, T> {
-    type Item = T;
-
-    fn extract_spaces(&self) -> Spaces<'a, T> {
-        *self
-    }
-}
-
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct SpacesBefore<'a, T> {
     pub before: &'a [CommentOrNewline<'a>],
-    pub item: T,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct SpacesAfter<'a, T> {
-    pub after: &'a [CommentOrNewline<'a>],
     pub item: T,
 }
 
@@ -505,11 +491,7 @@ pub enum Expr<'a> {
     Backpassing(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
 
     Dbg,
-    DbgStmt {
-        first: &'a Loc<Expr<'a>>,
-        extra_args: &'a [&'a Loc<Expr<'a>>],
-        continuation: &'a Loc<Expr<'a>>,
-    },
+    DbgStmt(&'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
 
     // This form of debug is a desugared call to roc_dbg
     LowLevelDbg(&'a (&'a str, &'a str), &'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
@@ -645,7 +627,7 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::ParensAround(sub_loc_expr) => is_expr_suffixed(sub_loc_expr),
 
         // expression in a closure
-        Expr::Closure(_, _) => false,
+        Expr::Closure(_, sub_loc_expr) => is_expr_suffixed(&sub_loc_expr.value),
 
         // expressions inside a Defs
         Expr::Defs(defs, expr) => {
@@ -689,15 +671,7 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::OpaqueRef(_) => false,
         Expr::Backpassing(_, _, _) => false, // TODO: we might want to check this?
         Expr::Dbg => false,
-        Expr::DbgStmt {
-            first,
-            extra_args,
-            continuation,
-        } => {
-            is_expr_suffixed(&first.value)
-                || extra_args.iter().any(|a| is_expr_suffixed(&a.value))
-                || is_expr_suffixed(&continuation.value)
-        }
+        Expr::DbgStmt(a, b) => is_expr_suffixed(&a.value) || is_expr_suffixed(&b.value),
         Expr::LowLevelDbg(_, a, b) => is_expr_suffixed(&a.value) || is_expr_suffixed(&b.value),
         Expr::Try => false,
         Expr::UnaryOp(a, _) => is_expr_suffixed(&a.value),
@@ -956,17 +930,10 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                     expr_stack.push(&a.value);
                     expr_stack.push(&b.value);
                 }
-                DbgStmt {
-                    first,
-                    extra_args,
-                    continuation,
-                } => {
+                DbgStmt(condition, cont) => {
                     expr_stack.reserve(2);
-                    expr_stack.push(&first.value);
-                    for arg in extra_args.iter() {
-                        expr_stack.push(&arg.value);
-                    }
-                    expr_stack.push(&continuation.value);
+                    expr_stack.push(&condition.value);
+                    expr_stack.push(&cont.value);
                 }
                 LowLevelDbg(_, condition, cont) => {
                     expr_stack.reserve(2);
@@ -2344,7 +2311,6 @@ impl_extract_spaces!(Tag);
 impl_extract_spaces!(AssignedField<T>);
 impl_extract_spaces!(TypeAnnotation);
 impl_extract_spaces!(ImplementsAbility);
-impl_extract_spaces!(ImplementsAbilities);
 
 impl<'a, T: Copy> ExtractSpaces<'a> for Spaced<'a, T> {
     type Item = T;
@@ -2510,7 +2476,7 @@ impl<'a> Malformed for Expr<'a> {
             Defs(defs, body) => defs.is_malformed() || body.is_malformed(),
             Backpassing(args, call, body) => args.iter().any(|arg| arg.is_malformed()) || call.is_malformed() || body.is_malformed(),
             Dbg => false,
-            DbgStmt { first, extra_args, continuation } => first.is_malformed() || extra_args.iter().any(|a| a.is_malformed()) || continuation.is_malformed(),
+            DbgStmt(condition, continuation) => condition.is_malformed() || continuation.is_malformed(),
             LowLevelDbg(_, condition, continuation) => condition.is_malformed() || continuation.is_malformed(),
             Try => false,
             Return(return_value, after_return) => return_value.is_malformed() || after_return.is_some_and(|ar| ar.is_malformed()),

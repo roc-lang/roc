@@ -1,4 +1,0 @@
-dbg
-    dbg
-    a
-    g
