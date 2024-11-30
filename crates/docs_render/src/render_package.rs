@@ -80,7 +80,7 @@ pub trait Docs<
     // Required iterators
     fn module_names(&'a self) -> ModuleNames;
     fn package_sidebar_entries(&'a self) -> SBEntries;
-    fn body_entries(&'a self) -> BodyEntries;
+    fn body_entries(&'a self, module_id: ModuleId) -> BodyEntries;
 
     // Required lookups
     fn base_url(&'a self, module_id: ModuleId) -> &'a str;
@@ -281,7 +281,7 @@ pub trait Docs<
             "<h2 class='module-name'><a href='/{module_name}'>{module_name}</a></h2>"
         );
 
-        for entry in self.body_entries() {
+        for entry in self.body_entries(module_id) {
             let name = entry.entry_name;
             let type_ann = &entry.type_annotation;
 

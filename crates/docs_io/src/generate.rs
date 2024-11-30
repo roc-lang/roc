@@ -15,8 +15,8 @@ use roc_module::symbol::{IdentId, Interns, ModuleId, Symbol};
 use roc_packaging::cache::{self, RocCacheDir};
 use roc_packaging::tarball::build;
 use roc_parse::ident::{parse_ident, Accessor, Ident};
-use roc_parse::keyword;
 use roc_parse::state::State;
+use roc_parse::{keyword, type_annotation};
 use roc_region::all::Region;
 use roc_target::Target;
 use roc_types::types::{Alias, Type};
@@ -99,6 +99,7 @@ struct IoDocs<'a> {
     pkg_name: &'a str,
     opt_user_specified_base_url: Option<&'a str>,
     sb_entries: Vec<'a, SBEntry<'a>>,
+    body_entries_by_module: Vec<'a, (ModuleId, &'a [BodyEntry<'a, Annotation>])>,
     module_names: Vec<'a, (ModuleId, &'a str)>,
 }
 
@@ -110,9 +111,10 @@ impl<'a> IoDocs<'a> {
         pkg_name: &'a str,
         opt_user_specified_base_url: Option<&'a str>,
     ) -> IoDocs<'a> {
-        let mut module_names: Vec<'a, (ModuleId, &'a str)> =
+        let mut module_names =
             Vec::with_capacity_in(loaded_module.exposed_module_docs.len(), arena);
-        let mut sb_entries: Vec<'a, SBEntry<'a>> =
+        let mut sb_entries = Vec::with_capacity_in(loaded_module.exposed_modules.len(), arena);
+        let mut body_entries_by_module =
             Vec::with_capacity_in(loaded_module.exposed_modules.len(), arena);
         let header_doc_comment = arena.alloc_str(&loaded_module.header_doc_comment);
 
@@ -141,11 +143,34 @@ impl<'a> IoDocs<'a> {
                     ""
                 },
             });
+
+            let mut body_entries = Vec::with_capacity_in(docs.entries.len(), arena);
+
+            for entry in docs.entries.iter() {
+                if let DocEntry::DocDef(def) = entry {
+                    let type_annotation = Annotation {
+                        typ: def.type_annotation,
+                    };
+                    body_entries.push(BodyEntry {
+                        entry_name: &*arena.alloc_str(&def.name),
+                        type_vars_names: Vec::from_iter_in(
+                            def.type_vars.iter().map(|s| &*arena.alloc_str(s)),
+                            arena,
+                        )
+                        .into_bump_slice(),
+                        type_annotation,
+                        docs: def.docs.map(|str| &*arena.alloc_str(&str)),
+                    });
+                }
+            }
+
+            body_entries_by_module.push((*module_id, body_entries.into_bump_slice()));
         }
 
         Self {
             header_doc_comment,
             sb_entries,
+            body_entries_by_module,
             raw_template_html,
             pkg_name,
             opt_user_specified_base_url,
@@ -187,7 +212,7 @@ impl<'a> IoDocs<'a> {
 
 #[derive(Debug)]
 struct Annotation {
-    typ: Type,
+    typ: TypeAnnotation,
 }
 
 impl<'a>
@@ -327,8 +352,8 @@ impl<'a>
         self.header_doc_comment()
     }
 
-    fn base_url(&self, module_id: ModuleId) -> &'a str {
-        "TODO base_url"
+    fn base_url(&'a self, module_id: ModuleId) -> &'a str {
+        self.user_specified_base_url().unwrap_or("")
     }
 
     fn module_name(&'a self, module_id: ModuleId) -> &'a str {
@@ -356,10 +381,18 @@ impl<'a>
         self.sb_entries.iter()
     }
 
-    fn body_entries(&self) -> slice::Iter<'a, BodyEntry<'a, Annotation>> {
-        let todo = ();
-
-        [].iter()
+    fn body_entries(&'a self, module_id: ModuleId) -> slice::Iter<'a, BodyEntry<'a, Annotation>> {
+        self.body_entries_by_module
+            .iter()
+            .find_map(|(id, entries)| {
+                if *id == module_id {
+                    Some(*entries)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(&[])
+            .iter()
     }
 
     fn opt_type(&self, module_id: ModuleId, ident_id: IdentId) -> Option<Annotation> {
