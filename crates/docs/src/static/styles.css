@@ -636,6 +636,29 @@ pre>samp {
 }
 
 @media only screen and (max-device-width: 480px) and (orientation: portrait) {
+    body {
+      grid-template-areas:
+        "header"
+        "main"
+        "sidebar"
+        "footer";
+    }
+
+    #sidebar-nav {
+      grid-area: sidebar;
+    }
+
+    main {
+      grid-area: main;
+    }
+
+    .top-header {
+      grid-area: header;
+    }
+
+    footer {
+      grid-area: footer;
+    }
   :root {
       --top-header-height: 160px;
   }
@@ -702,20 +725,12 @@ pre>samp {
   }
 
   main {
-      grid-column-start: none;
-      grid-column-end: none;
-      grid-row-start: above-footer;
-      grid-row-end: above-footer;
       padding: 18px;
       font-size: 16px;
       max-width: 480px;
   }
 
   #sidebar-nav {
-      grid-column-start: none;
-      grid-column-end: none;
-      grid-row-start: sidebar;
-      grid-row-end: sidebar;
       margin-top: 0;
       padding-left: 0;
       width: auto;
@@ -738,9 +753,6 @@ pre>samp {
 
   body {
       grid-template-columns: auto;
-      grid-template-rows: [top-header] var(--top-header-height) [before-sidebar] auto [sidebar] auto [above-footer] auto [footer] auto;
-      /* [before-sidebar] 1fr [sidebar] var(--sidebar-width) [main-content] fit-content(calc(1280px - var(--sidebar-width))) [end] 1fr; */
-
       margin: 0;
       min-width: 320px;
       max-width: 100%;
