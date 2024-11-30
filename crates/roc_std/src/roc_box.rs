@@ -71,7 +71,7 @@ where
     }
 
     fn storage(&self) -> &Cell<Storage> {
-        unsafe { &*self.as_ptr().cast::<Cell<Storage>>() }
+        unsafe { &*self.as_refcount_ptr().cast::<Cell<Storage>>() }
     }
 
     /// The raw pointer to a roc box, including the leading refcount
