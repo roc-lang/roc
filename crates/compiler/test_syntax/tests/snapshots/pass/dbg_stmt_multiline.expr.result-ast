@@ -1,6 +1,6 @@
 SpaceAfter(
-    DbgStmt {
-        first: @4-16 Tuple(
+    DbgStmt(
+        @4-16 Tuple(
             [
                 @5-6 Num(
                     "5",
@@ -15,8 +15,7 @@ SpaceAfter(
                 ),
             ],
         ),
-        extra_args: [],
-        continuation: @18-19 SpaceBefore(
+        @18-19 SpaceBefore(
             Num(
                 "4",
             ),
@@ -25,7 +24,7 @@ SpaceAfter(
                 Newline,
             ],
         ),
-    },
+    ),
     [
         Newline,
     ],
