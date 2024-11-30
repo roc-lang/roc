@@ -1,25 +1,14 @@
 use crate::file::{self, Assets};
 use crate::problem::Problem;
+use crate::render_package::AbilityMember;
 use bumpalo::collections::Vec;
 use bumpalo::{collections::string::String, Bump};
-use core::{fmt::Debug, slice};
-use roc_can::scope::Scope;
-use roc_collections::VecSet;
-use roc_docs_render::{
-    AbilityImpl, AbilityMember, BodyEntry, Docs, SidebarEntry, TypeAnn, TypeRenderer,
-};
+use core::fmt::{Debug, Write};
 use roc_load::docs::{DocEntry, TypeAnnotation};
-use roc_load::docs::{ModuleDocumentation, RecordField};
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
-use roc_module::symbol::{IdentId, Interns, ModuleId, Symbol};
+use roc_module::symbol::{IdentId, ModuleId};
 use roc_packaging::cache::{self, RocCacheDir};
-use roc_packaging::tarball::build;
-use roc_parse::ident::{parse_ident, Accessor, Ident};
-use roc_parse::state::State;
-use roc_parse::{keyword, type_annotation};
-use roc_region::all::Region;
 use roc_target::Target;
-use roc_types::types::{Alias, Type};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -82,7 +71,7 @@ pub fn generate_docs_html<'a>(
 
     IoDocs::new(
         arena,
-        &loaded_module,
+        loaded_module,
         assets.raw_template_html.as_ref(),
         // TODO get this from the platform's source file rather than hardcoding it!
         // github.com/roc-lang/roc/issues/5712
@@ -92,6 +81,18 @@ pub fn generate_docs_html<'a>(
     .generate(out_dir)
 }
 
+struct Ability<'a> {
+    name: &'a str,
+    docs_url: &'a str,
+}
+
+struct BodyEntry<'a> {
+    pub entry_name: &'a str,
+    pub type_vars_names: &'a [&'a str],
+    pub type_annotation: TypeAnnotation,
+    pub docs: Option<&'a str>,
+}
+
 struct IoDocs<'a> {
     arena: &'a Bump,
     header_doc_comment: &'a str,
@@ -99,14 +100,14 @@ struct IoDocs<'a> {
     pkg_name: &'a str,
     opt_user_specified_base_url: Option<&'a str>,
     sb_entries: Vec<'a, SBEntry<'a>>,
-    body_entries_by_module: Vec<'a, (ModuleId, &'a [BodyEntry<'a, Annotation>])>,
+    body_entries_by_module: Vec<'a, (ModuleId, &'a [BodyEntry<'a>])>,
     module_names: Vec<'a, (ModuleId, &'a str)>,
 }
 
 impl<'a> IoDocs<'a> {
     pub fn new(
         arena: &'a Bump,
-        loaded_module: &LoadedModule,
+        loaded_module: LoadedModule,
         raw_template_html: &'a str,
         pkg_name: &'a str,
         opt_user_specified_base_url: Option<&'a str>,
@@ -118,8 +119,8 @@ impl<'a> IoDocs<'a> {
             Vec::with_capacity_in(loaded_module.exposed_modules.len(), arena);
         let header_doc_comment = arena.alloc_str(&loaded_module.header_doc_comment);
 
-        for (module_id, docs) in loaded_module.exposed_module_docs.iter() {
-            module_names.push((*module_id, &*arena.alloc_str(&docs.name)));
+        for (module_id, docs) in loaded_module.exposed_module_docs.into_iter() {
+            module_names.push((module_id, &*arena.alloc_str(&docs.name)));
 
             let mut exposed = Vec::with_capacity_in(docs.exposed_symbols.len(), arena);
             for symbol in docs.exposed_symbols.iter() {
@@ -146,11 +147,8 @@ impl<'a> IoDocs<'a> {
 
             let mut body_entries = Vec::with_capacity_in(docs.entries.len(), arena);
 
-            for entry in docs.entries.iter() {
+            for entry in docs.entries.into_iter() {
                 if let DocEntry::DocDef(def) = entry {
-                    let type_annotation = Annotation {
-                        typ: def.type_annotation,
-                    };
                     body_entries.push(BodyEntry {
                         entry_name: &*arena.alloc_str(&def.name),
                         type_vars_names: Vec::from_iter_in(
@@ -158,13 +156,13 @@ impl<'a> IoDocs<'a> {
                             arena,
                         )
                         .into_bump_slice(),
-                        type_annotation,
+                        type_annotation: def.type_annotation,
                         docs: def.docs.map(|str| &*arena.alloc_str(&str)),
                     });
                 }
             }
 
-            body_entries_by_module.push((*module_id, body_entries.into_bump_slice()));
+            body_entries_by_module.push((module_id, body_entries.into_bump_slice()));
         }
 
         Self {
@@ -208,75 +206,12 @@ impl<'a> IoDocs<'a> {
     fn header_doc_comment(&self) -> &'a str {
         self.header_doc_comment
     }
-}
 
-#[derive(Debug)]
-struct Annotation {
-    typ: TypeAnnotation,
-}
-
-impl<'a>
-    TypeAnn<
-        'a,
-        AbilityAnn<'a>,
-        slice::Iter<'a, &'a str>,
-        slice::Iter<'a, &'a str>,
-        slice::Iter<'a, AbilityAnn<'a>>,
-        slice::Iter<'a, AbilityMember<'a, Self>>,
-    > for Annotation
-{
-    fn visit<
-        'b,
-        'c,
-        // visit functions
-        VisitAbility: Fn(slice::Iter<'a, AbilityMember<'a, Self>>, &'b mut String<'c>),
-        VisitAlias: Fn(slice::Iter<'a, &'a str>, &'a Self, &'b mut String<'c>),
-        VisitOpaque: Fn(slice::Iter<'a, &'a str>, slice::Iter<'a, AbilityAnn<'a>>, &'b mut String<'c>),
-        VisitValue: Fn(&'a Self, &'b mut String<'c>),
-    >(
-        &'a self,
-        buf: &'b mut String<'c>,
-        visit_ability: VisitAbility,
-        visit_type_alias: VisitAlias,
-        visit_opaque_type: VisitOpaque,
-        visit_value: VisitValue,
-    ) {
-        match &self.typ {
-            Type::EmptyRec
-            | Type::EmptyTagUnion
-            | Type::Function(_, _, _, _)
-            | Type::Record(_, _)
-            | Type::Tuple(_, _)
-            | Type::TagUnion(_, _)
-            | Type::FunctionOrTagUnion(_, _, _)
-            | Type::RangedNumber(_) => (visit_value)(&self, buf),
-            Type::ClosureTag {
-                name,
-                captures,
-                ambient_function,
-            } => todo!(),
-            Type::UnspecializedLambdaSet { unspecialized } => todo!(),
-            Type::DelayedAlias(_) => todo!(),
-            Type::Alias {
-                symbol,
-                type_arguments,
-                lambda_set_variables,
-                infer_ext_in_output_types,
-                actual,
-                kind,
-            } => {
-                let todo = (); // TODO actually populate these.
-                let type_var_names = &["TODO type variable names"];
-
-                (visit_type_alias)(type_var_names.iter(), &self, buf)
-            }
-            Type::RecursiveTagUnion(_, _, _) => todo!(),
-            Type::Apply(_, _, _) => (visit_opaque_type)(todo!(), todo!(), todo!()),
-            Type::Variable(_) => todo!(),
-            Type::Error => todo!(),
-            Type::Pure => todo!(),
-            Type::Effectful => todo!(),
-        }
+    fn module_name(&'a self, module_id: ModuleId) -> &'a str {
+        self.module_names
+            .iter()
+            .find_map(|(id, name)| if *id == module_id { Some(*name) } else { None })
+            .unwrap_or("")
     }
 }
 
@@ -301,88 +236,183 @@ struct SBEntry<'a> {
     pub doc_comment: &'a str,
 }
 
-impl<'a> SidebarEntry<'a, slice::Iter<'a, &'a str>> for SBEntry<'a> {
-    fn link_text(&'a self) -> &'a str {
-        self.link_text
+impl<'a> IoDocs<'a> {
+    fn render_to_disk<Problem>(
+        &'a self,
+        arena: &'a Bump,
+        // Takes the module name to be used as the directory name (or None if this is the root index.html),
+        // as well as the contents of the file.
+        write_to_disk: impl Fn(Option<&str>, &str) -> Result<(), Problem>,
+    ) -> Result<(), Problem> {
+        let package_doc_comment_html = self.header_doc_comment;
+        let raw_template_html = self.raw_template_html;
+        let package_name = self.pkg_name;
+        let mut buf = String::with_capacity_in(raw_template_html.len() + 2048, arena);
+        let mut module_template_html =
+            String::with_capacity_in(raw_template_html.len() + 2048, arena);
+        let mut sidebar_links = String::with_capacity_in(4096, arena);
+
+        let sidebar_links = &mut sidebar_links;
+
+        self.render_sidebar(sidebar_links);
+
+        // Write index.html for package (/index.html)
+        {
+            let mut src = raw_template_html;
+
+            {
+                src = advance_past("<!-- base -->", src, &mut buf);
+                write_base_url(self.opt_user_specified_base_url, &mut buf);
+            }
+
+            {
+                src = advance_past("<!-- Prefetch links -->", src, &mut buf);
+
+                for (index, (_, module_name)) in self.module_names.iter().enumerate() {
+                    if index > 0 {
+                        buf.push_str("\n    ");
+                    }
+
+                    let _ = write!(buf, "<link rel='prefetch' href='{module_name}'/>",);
+                }
+            }
+
+            // Set module_template_html to be all the replacements we've made so far,
+            // plus the rest of the source template. We'll use this partially-completed
+            // template later on for the individual modules.
+            {
+                module_template_html.push_str(&buf);
+                module_template_html.push_str(&src);
+            }
+
+            {
+                src = advance_past("<!-- Page title -->", src, &mut buf);
+                let _ = write!(buf, "<title>{package_name}</title>");
+            }
+
+            {
+                src = advance_past("<!-- Module links -->", src, &mut buf);
+                buf.push_str(&sidebar_links);
+            }
+
+            {
+                src = advance_past("<!-- Package Name -->", src, &mut buf);
+                render_package_name_link(package_name, &mut buf);
+            }
+
+            {
+                src = advance_past("<!-- Module Docs -->", src, &mut buf);
+
+                if package_doc_comment_html.is_empty() {
+                    buf.push_str("Choose a module from the list to see its documentation.");
+                } else {
+                    buf.push_str(package_doc_comment_html);
+                }
+            }
+
+            {
+                // Write the rest of the template into the buffer.
+                buf.push_str(&src);
+
+                // Finally, write the accumulated buffer to disk.
+                write_to_disk(None, &buf)?;
+
+                buf.clear(); // We're done with this now. It's ready to be reused!
+            }
+        }
+
+        // Write each package module's index.html file
+        for (module_id, module_name) in self.module_names.iter() {
+            let mut src = module_template_html.as_str();
+
+            {
+                {
+                    src = advance_past("<!-- Page title -->", src, &mut buf);
+                    let _ = write!(buf, "<title>{module_name} - {package_name}</title>",);
+                }
+
+                {
+                    src = advance_past("<!-- Module links -->", src, &mut buf);
+                    buf.push_str(sidebar_links);
+                }
+
+                {
+                    src = advance_past("<!-- Package Name -->", src, &mut buf);
+                    render_package_name_link(package_name, &mut buf);
+                }
+            }
+
+            {
+                src = advance_past("<!-- Module Docs -->", src, &mut buf);
+                self.render_module(arena, *module_id, &mut buf);
+            }
+
+            {
+                // Write the rest of the template into the buffer.
+                buf.push_str(&src);
+            }
+
+            {
+                // Finally, write the accumulated buffer to disk.
+                write_to_disk(Some(module_name), &buf)?;
+            }
+
+            buf.clear(); // We're done with this now. It's ready to be reused in the next iteration of the loop!
+        }
+
+        Ok(())
     }
 
-    fn exposed(&'a self) -> slice::Iter<'a, &'a str> {
-        self.exposed.iter()
+    fn render_sidebar(&'a self, buf: &mut String<'_>) {
+        for entry in self.sb_entries.iter() {
+            let heading = entry.doc_comment;
+
+            if !heading.is_empty() {
+                let _ = write!(buf, "\t<h3 class=\"sidebar-heading\">{heading}</a>\n");
+            }
+
+            let module_name = entry.link_text;
+
+            // Sidebar entries should all be relative URLs and unqualified names
+            let _ = write!(
+                buf,
+                "<div class='sidebar-entry'><a class='sidebar-module-link' href='{module_name}'>{module_name}</a><div class='sidebar-sub-entries'>",
+            );
+
+            for name in entry.exposed.iter() {
+                let _ = write!(buf, "<a href='{module_name}#{name}'>{name}</a>",);
+            }
+
+            buf.push_str("</div></div>");
+        }
     }
 
-    fn doc_comment(&'a self) -> &'a str {
-        self.doc_comment
-    }
-}
-
-impl<'a>
-    Docs<
-        'a,
-        AbilityAnn<'a>,
-        ModuleId,
-        IdentId,
-        Annotation,
-        Alias,
-        TypeRenderer,
-        // Iterators
-        slice::Iter<'a, AbilityAnn<'a>>,
-        slice::Iter<'a, AbilityMember<'a, Annotation>>,
-        slice::Iter<'a, (ModuleId, &'a str)>,
-        SBEntry<'a>,
-        slice::Iter<'a, SBEntry<'a>>,
-        slice::Iter<'a, &'a str>,
-        slice::Iter<'a, BodyEntry<'a, Annotation>>,
-        slice::Iter<'a, (&'a str, slice::Iter<'a, Annotation>)>,
-        slice::Iter<'a, Annotation>,
-    > for IoDocs<'a>
-{
-    fn package_name(&self) -> &'a str {
-        self.pkg_name
+    fn render_type(&'a self, arena: &'a Bump, typ: &TypeAnnotation, buf: &mut String<'a>) {
+        todo!("implement render_type");
     }
 
-    fn raw_template_html(&self) -> &'a str {
-        self.raw_template_html
+    fn render_absolute_url(&'a self, ident_id: IdentId, module_id: ModuleId, buf: &mut String<'_>) {
+        todo!();
+        // let base_url = self.base_url(module_id);
+
+        // let _ = write!(
+        //     buf,
+        //     // e.g. "https://example.com/Str#isEmpty"
+        //     "{base_url}{}#{}",
+        //     self.module_name(module_id),
+        //     self.ident_name(module_id, ident_id)
+        // );
     }
 
-    fn user_specified_base_url(&self) -> Option<&'a str> {
-        self.opt_user_specified_base_url
-    }
+    fn render_module(&'a self, arena: &'a Bump, module_id: ModuleId, buf: &mut String<'a>) {
+        let module_name = self.module_name(module_id);
+        let _ = write!(
+            buf,
+            "<h2 class='module-name'><a href='/{module_name}'>{module_name}</a></h2>"
+        );
 
-    fn package_doc_comment_markdown(&self) -> &'a str {
-        self.header_doc_comment()
-    }
-
-    fn base_url(&'a self, module_id: ModuleId) -> &'a str {
-        self.user_specified_base_url().unwrap_or("")
-    }
-
-    fn module_name(&'a self, module_id: ModuleId) -> &'a str {
-        self.module_names()
-            .find(|(id, _name)| *id == module_id)
-            .map(|(_module_id, name)| *name)
-            .unwrap_or_default()
-    }
-
-    fn ident_name(&self, module_id: ModuleId, ident_id: IdentId) -> &'a str {
-        "TODO ident_name"
-    }
-
-    fn opt_alias(&self, module_id: ModuleId, ident_id: IdentId) -> Option<Alias> {
-        let todo = ();
-
-        None
-    }
-
-    fn module_names(&'a self) -> slice::Iter<'a, (ModuleId, &'a str)> {
-        self.module_names.iter()
-    }
-
-    fn package_sidebar_entries(&'a self) -> slice::Iter<'a, SBEntry<'a>> {
-        self.sb_entries.iter()
-    }
-
-    fn body_entries(&'a self, module_id: ModuleId) -> slice::Iter<'a, BodyEntry<'a, Annotation>> {
-        self.body_entries_by_module
+        let entries = self
+            .body_entries_by_module
             .iter()
             .find_map(|(id, entries)| {
                 if *id == module_id {
@@ -391,40 +421,133 @@ impl<'a>
                     None
                 }
             })
-            .unwrap_or(&[])
-            .iter()
+            .unwrap_or(&[]);
+
+        for entry in entries {
+            let name = entry.entry_name;
+            let type_ann = &entry.type_annotation;
+
+            let _ = write!(
+                buf,
+                "<section><h3 id='{name}' class='entry-name'><a href='{module_name}#{name}'>{name}</a>"
+            );
+
+            match &entry.type_annotation {
+                TypeAnnotation::TagUnion { .. } => todo!(),
+                TypeAnnotation::Function { .. } => todo!(),
+                TypeAnnotation::ObscuredTagUnion => todo!(),
+                TypeAnnotation::ObscuredRecord => todo!(),
+                TypeAnnotation::BoundVariable(_) => todo!(),
+                TypeAnnotation::Apply { .. } => todo!(),
+                TypeAnnotation::Record { .. } => todo!(),
+                TypeAnnotation::Tuple { .. } => todo!(),
+                TypeAnnotation::Ability { .. } => {
+                    todo!()
+                }
+                TypeAnnotation::Wildcard => todo!(),
+                TypeAnnotation::NoTypeAnn => todo!(),
+                TypeAnnotation::Where { .. } => todo!(),
+                TypeAnnotation::As { .. } => todo!(),
+            }
+        }
     }
 
-    fn opt_type(&self, module_id: ModuleId, ident_id: IdentId) -> Option<Annotation> {
-        let todo = ();
-
-        None
-    }
-
-    fn visit_type<'b>(
-        &self,
-        arena: &'b Bump,
-        renderer: &mut TypeRenderer,
-        typ: &Annotation,
-        buf: &mut String<'b>,
+    fn render_ability_decl(
+        &'a self,
+        arena: &'a Bump,
+        members: impl Iterator<Item = &'a AbilityMember<'a, TypeAnnotation>>,
+        buf: &mut String<'a>,
     ) {
-        let todo = ();
+        buf.push_str(" <span class='kw'>implements {</span>");
+
+        let mut any_rendered = false;
+
+        for (index, member) in members.enumerate() {
+            if index == 0 {
+                buf.push_str(" <h4 class='kw'>implements</h4><ul class='opaque-abilities'>");
+                any_rendered = true;
+            }
+
+            let _ = write!(buf, "<li>{} : ", member.entry_name);
+            // TODO should we render docs for each member individually?
+
+            self.render_type(arena, &member.type_annotation, buf);
+
+            buf.push_str("</li>");
+        }
+
+        if any_rendered {
+            buf.push_str("</ul>");
+        }
+
+        buf.push_str("<span class='kw'>}</span>");
+    }
+
+    fn render_type_alias_decl(
+        &'a self,
+        arena: &'a Bump,
+        type_var_names: impl Iterator<Item = &'a str>,
+        alias: &'a TypeAnnotation,
+        buf: &mut String<'a>,
+    ) {
+        // Render the type variables
+        // e.g. if the alias is `Foo a b c :`, render the `a b c` part
+        for type_var_name in type_var_names {
+            buf.push(' ');
+            buf.push_str(type_var_name);
+        }
+
+        buf.push_str(" <span class='kw'>:</span>");
+
+        self.render_type(arena, &alias, buf);
+    }
+
+    fn render_opaque_type_decl(
+        &'a self,
+        _arena: &'a Bump, // TODO this will be needed in the future arena API
+        type_var_names: impl Iterator<Item = impl AsRef<str>>,
+        abilities: impl Iterator<Item = &'a Ability<'a>>,
+        buf: &mut String<'_>,
+    ) {
+        // Render the type variables
+        // e.g. if the opaque type is `Foo a b c :=`, render the `a b c` part
+        for type_var_name in type_var_names {
+            buf.push(' ');
+            buf.push_str(type_var_name.as_ref());
+        }
+
+        buf.push_str(" <span class='kw'>:=</span> <a class='opaque-note-link' href='#opaque-note'>(opaque - TODO: put this in italics, have a section at the end of the page with a note, have JS hide it on load unless that's the anchor of the page e.g. you opened it in a new tab - and then have JS display it inline on click here)</a>");
+        let mut any_rendered = false;
+
+        for (index, ability) in abilities.enumerate() {
+            let name = ability.name;
+            let href = ability.docs_url;
+
+            if index == 0 {
+                buf.push_str(" <h4 class='kw'>implements</h4><ul class='opaque-abilities'>");
+                any_rendered = true;
+            } else {
+                buf.push_str(",</li> ")
+            }
+
+            let _ = write!(buf, "<li><a href='{href}'>{name}</a>");
+        }
+
+        if any_rendered {
+            buf.push_str("</li></ul>");
+        }
+    }
+
+    fn render_val_decl(&'a self, arena: &'a Bump, typ: &'a TypeAnnotation, buf: &mut String<'a>) {
+        buf.push_str(" <span class='kw'>:</span>");
+
+        self.render_type(arena, &typ, buf)
     }
 }
 
 #[derive(Debug)]
 pub struct AbilityAnn<'a> {
     name: &'a str,
-}
-
-impl<'a> AbilityImpl<'a> for AbilityAnn<'a> {
-    fn name(&self) -> &'a str {
-        todo!()
-    }
-
-    fn docs_url(&self) -> &'a str {
-        todo!()
-    }
 }
 
 // fn render_package_index(root_module: &LoadedModule) -> String {
@@ -1128,3 +1251,44 @@ pub fn load_module_for_docs(filename: PathBuf) -> LoadedModule {
 //             ""
 //         })
 // }
+
+fn render_package_name_link(name: &str, buf: &mut String<'_>) {
+    let _ = write!(buf, "<h1 class='pkg-full-name'><a href='/'>{name}</a></h1>");
+}
+
+fn advance_past<'a>(needle: &'static str, src: &'a str, buf: &mut String<'_>) -> &'a str {
+    if let Some(start_index) = src.find(needle) {
+        // Copy over everything up to this point.
+        buf.push_str(&src[..start_index]);
+
+        // Advance past the end of this string.
+        &src[(start_index + needle.len())..]
+    } else {
+        unreachable!( // TODO replace this with a panic in debug builds and a much more concise crash in release
+            "Compiler bug in docs generation code: could not find doc template section {:?} in the template - this should never happen!\n\nNOTE: advance_past must be called on each template section in the order they appear in the template! This improves performance, but means that working on sections out of order can lead to this error.\n\nAt this point, the remaining template was:\n\n{src}",
+            needle
+        );
+    }
+}
+
+fn write_base_url(user_specified_base_url: Option<impl AsRef<str>>, buf: &mut String) {
+    // e.g. "builtins/" in "https://roc-lang.org/builtins/Str"
+    match user_specified_base_url {
+        Some(root_builtins_path) => {
+            let root_builtins_path = root_builtins_path.as_ref();
+
+            if !root_builtins_path.starts_with('/') {
+                buf.push('/');
+            }
+
+            buf.push_str(&root_builtins_path);
+
+            if !root_builtins_path.ends_with('/') {
+                buf.push('/');
+            }
+        }
+        None => {
+            buf.push('/');
+        }
+    }
+}

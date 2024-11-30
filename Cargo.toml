@@ -23,8 +23,6 @@ members = [
     "crates/valgrind_tests",
     "crates/tracing",
     "crates/utils/*",
-    "crates/docs_types",
-    "crates/docs_render",
     "crates/docs_io",
     "crates/docs",
     "crates/docs_cli",

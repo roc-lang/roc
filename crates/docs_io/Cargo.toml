@@ -20,10 +20,10 @@ roc_reporting = { path = "../reporting" }
 roc_solve = { path = "../compiler/solve" }
 roc_target = { path = "../compiler/roc_target" }
 roc_types = { path = "../compiler/types" }
-roc_docs_render = { path = "../docs_render" }
-roc_docs_types = { path = "../docs_types" }
+roc_highlight = { path = "../highlight" }              # TODO this brings in many deps - slim it down!
 
 bumpalo.workspace = true
+pulldown-cmark.workspace = true
 const_format.workspace = true
 
 [dev-dependencies]

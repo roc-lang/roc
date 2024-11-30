@@ -2540,11 +2540,11 @@ dependencies = [
  "bumpalo",
  "const_format",
  "pretty_assertions",
+ "pulldown-cmark",
  "roc_builtins",
  "roc_can",
  "roc_collections",
- "roc_docs_render",
- "roc_docs_types",
+ "roc_highlight",
  "roc_load",
  "roc_module",
  "roc_packaging",
@@ -2554,28 +2554,6 @@ dependencies = [
  "roc_solve",
  "roc_target",
  "roc_types",
-]
-
-[[package]]
-name = "roc_docs_render"
-version = "0.0.1"
-dependencies = [
- "bumpalo",
- "const_format",
- "pretty_assertions",
- "pulldown-cmark",
- "roc_docs_types",
- "roc_highlight",
-]
-
-[[package]]
-name = "roc_docs_types"
-version = "0.0.1"
-dependencies = [
- "bumpalo",
- "const_format",
- "pretty_assertions",
- "pulldown-cmark",
 ]
 
 [[package]]

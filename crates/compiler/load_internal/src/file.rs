@@ -5189,7 +5189,6 @@ fn canonicalize_and_constrain<'a>(
     let module_docs = {
         let module_name = header_type.get_name();
         module_name.map(|module_name| {
-            let todo = (); // TODO: if exposed_module_ids.contains(&parsed.module_id) =>
             let mut scope = module_output.scope.clone();
             scope.add_docs_imports();
             crate::docs::generate_module_docs(
