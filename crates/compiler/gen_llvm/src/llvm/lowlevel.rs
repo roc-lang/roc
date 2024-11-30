@@ -1186,20 +1186,22 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 }
             };
             if checked {
-                let layout = Layout::from_int_width(IntWidth::I128);
+                let layout = env.context.i128_type();
                 let bool_false = env.context.bool_type().const_zero();
                 let bool_true = env.context.bool_type().const_all_ones();
-                let layout_repr = LayoutRepr::Struct(env.arena.alloc([layout, Layout::BOOL]));
+                //let layout_repr = LayoutRepr::Struct(env.arena.alloc([layout, Layout::BOOL]));
+                //println!("{:?}",layout_repr);
                 // How the return type needs to be stored on the stack.
-                let return_type_stack_type = convert::basic_type_from_layout(
-                    env,
-                    layout_interner,
-                    layout_interner.get_repr(layout),
-                )
-                .into_struct_type();
+                // let struct_type = convert::basic_type_from_layout(
+                //     env,
+                //     layout_interner,
+                //     layout_interner.get_repr(layout),
+                // )
+                // .into_struct_type();
+                let struct_type = env.context.struct_type(&[layout.into(),env.context.bool_type().into()], false);
             
                 
-                let r = return_type_stack_type.const_zero();
+                
                 
                 let with_overflow = match layout_interner.get_repr(arg_layout) {
                     //If integer
@@ -1220,15 +1222,16 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                         unreachable!()
                     }
                 };
-                let r = return_type_stack_type.const_zero();
+                let return_value = struct_type.const_zero();
                 let r = env.builder
-                    .build_insert_value(r, result, 0, "converted_int")
+                    .build_insert_value(return_value, result, 0, "converted_int")
                     .unwrap();
-                let r = env.builder
-                    .build_insert_value(r, with_overflow, 1, "out_of_bounds")
+                let return_value = env.builder
+                    .build_insert_value(return_value, with_overflow, 1, "out_of_bounds")
                     .unwrap();
 
                 r.into_struct_value().into()
+                
                 
 
                 
