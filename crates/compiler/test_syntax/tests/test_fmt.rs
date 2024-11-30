@@ -2283,15 +2283,25 @@ mod test_fmt {
             "
         ));
 
-        expr_formats_same(indoc!(
-            r"
-                f :
-                    {
+        expr_formats_to(
+            indoc!(
+                r"
+                    f :
+                        {
+                        }
+
+                    f
+                "
+            ),
+            indoc!(
+                r"
+                    f : {
                     }
 
-                f
-            "
-        ));
+                    f
+                "
+            ),
+        );
     }
 
     #[test]
@@ -4731,8 +4741,6 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r"
                 blah :
-                    Str,
-                    # comment
                     (Str -> Str)
                     -> Str
 
@@ -5489,25 +5497,15 @@ mod test_fmt {
             "
         ));
 
-        expr_formats_to(
-            indoc!(
-                r"
+        expr_formats_same(indoc!(
+            r"
                 A :=
                     U8
                     implements [Eq, Hash]
 
                 0
                 "
-            ),
-            indoc!(
-                r"
-                A := U8
-                    implements [Eq, Hash]
-
-                0
-                "
-            ),
-        );
+        ));
 
         expr_formats_to(
             indoc!(

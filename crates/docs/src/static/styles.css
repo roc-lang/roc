@@ -481,9 +481,14 @@ pre>samp {
   opacity: 1;
 }
 
+#module-search:focus {
+  outline: 2px solid var(--faded-color);
+}
+
 #search-type-ahead {
+  font-family: var(--font-mono);
   display: flex;
-  gap: 20px;
+  gap: 0px;
   flex-direction: column;
   position: absolute;
   top: calc(var(--module-search-padding-height) + var(--module-search-height));
@@ -497,40 +502,49 @@ pre>samp {
   border-color: var(--border-color);
   list-style-type: none;
   margin: 0;
-  padding: 10px;
+  padding: 0;
 }
 
 #search-type-ahead .type-ahead-link {
-  font-size: 0.875rem;
+  font-size: 1rem;
   color: var(--text-color);
-  p {
+  line-height: 2em;
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  padding: 4px 8px;
+
+  max-height: 6em;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+
+  /* if it wraps, indent after the first line */
+  padding-left: calc(2em + 8px);
+  text-indent: -2em;
+
+
+  span {
     margin: 0px;
   }
 
-  p.type-ahead-def-name {
+  .type-ahead-module-name, .type-ahead-def-name {
     color: var(--violet);
     font-size: 1rem;
   }
-  p.type-ahead-doc-path {
-    font-size: 0.75rem;
-    color: var(--faded-color);
-  }
 }
+
 #search-type-ahead li {
   box-sizing: border-box;
-  padding: 4px;
+  position: relative;
 }
 
-/*use browser defaults for focus outline*/
-#search-type-ahead li:focus-within {
-  /*firefox*/
-  outline: 5px auto Highlight;
-  /*chrome and safari*/
-  outline: 5px auto -webkit-focus-ring-color;
-}
-
-.type-ahead-link:focus-visible {
+#search-type-ahead a:focus {
   outline: none;
+  background: var(--violet-bg);
 }
 
 #search-link {
@@ -545,7 +559,7 @@ pre>samp {
 }
 
 #search-shortcut-key {
-  font-family: monospace;
+  font-family: var(--font-mono);
   border: 1px solid #666;
   border-radius: 5px;
   padding: 1px 3px 3px;

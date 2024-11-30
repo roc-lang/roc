@@ -11,8 +11,8 @@ version.workspace = true
 tempfile.workspace = true
 
 [build-dependencies]
-roc_command_utils = { path = "../../../utils/command" }
-roc_error_macros = { path = "../../../error_macros" }
+roc_command_utils.workspace = true
+roc_error_macros.workspace = true
 # dunce can be removed once ziglang/zig#5109 is fixed
 dunce = "1.0.3"
 

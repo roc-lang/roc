@@ -333,9 +333,6 @@ pub enum Expr {
         return_var: Variable,
     },
 
-    /// Rendered as empty box in editor
-    TypedHole(Variable),
-
     /// Compiles, but will crash if reached
     RuntimeError(RuntimeError),
 }
@@ -411,7 +408,7 @@ impl Expr {
             Self::Dbg { .. } => Category::Expect,
 
             // these nodes place no constraints on the expression's type
-            Self::TypedHole(_) | Self::RuntimeError(..) => Category::Unknown,
+            Self::RuntimeError(..) => Category::Unknown,
         }
     }
 }
@@ -1248,7 +1245,7 @@ pub fn canonicalize_expr<'a>(
 
             (loc_expr.value, output)
         }
-        ast::Expr::DbgStmt(_, _) => {
+        ast::Expr::DbgStmt { .. } => {
             internal_error!("DbgStmt should have been desugared by now")
         }
         ast::Expr::LowLevelDbg((source_location, source), message, continuation) => {
@@ -2095,7 +2092,6 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
         | other @ ParamsVar { .. }
         | other @ AbilityMember(..)
         | other @ RunLowLevel { .. }
-        | other @ TypedHole { .. }
         | other @ ForeignCall { .. }
         | other @ OpaqueWrapFunction(_)
         | other @ Crash { .. }
@@ -2550,7 +2546,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         | ast::Expr::Tag(_)
         | ast::Expr::OpaqueRef(_) => true,
         // Newlines are disallowed inside interpolation, and these all require newlines
-        ast::Expr::DbgStmt(_, _)
+        ast::Expr::DbgStmt { .. }
         | ast::Expr::LowLevelDbg(_, _, _)
         | ast::Expr::Return(_, _)
         | ast::Expr::When(_, _)
@@ -3460,7 +3456,6 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
             | Expr::RecordAccessor(_)
             | Expr::SingleQuote(..)
             | Expr::EmptyRecord
-            | Expr::TypedHole(_)
             | Expr::RuntimeError(_)
             | Expr::ImportParams(_, _, None)
             | Expr::OpaqueWrapFunction(_) => {}

@@ -389,7 +389,6 @@ impl<'a> LowerParams<'a> {
                 }
                 | OpaqueWrapFunction(_)
                 | EmptyRecord
-                | TypedHole(_)
                 | RuntimeError(_)
                 | Num(_, _, _, _)
                 | Int(_, _, _, _, _)

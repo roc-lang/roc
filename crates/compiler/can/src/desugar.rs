@@ -1104,9 +1104,20 @@ pub fn desugar_expr<'a>(
             // Allow naked dbg, necessary for piping values into dbg with the `Pizza` binop
             loc_expr
         }
-        DbgStmt(condition, continuation) => {
+        DbgStmt {
+            first: condition,
+            extra_args,
+            continuation,
+        } => {
             let desugared_condition = &*env.arena.alloc(desugar_expr(env, scope, condition));
             let desugared_continuation = &*env.arena.alloc(desugar_expr(env, scope, continuation));
+
+            if let Some(last) = extra_args.last() {
+                let args_region = Region::span_across(&condition.region, &last.region);
+                env.problem(Problem::OverAppliedDbg {
+                    region: args_region,
+                });
+            }
 
             env.arena.alloc(Loc {
                 value: *desugar_dbg_stmt(env, desugared_condition, desugared_continuation),

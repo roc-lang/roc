@@ -1908,7 +1908,6 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
         Array { elem_layout, elems } => {
             list_literal(env, layout_interner, scope, *elem_layout, elems)
         }
-        RuntimeErrorFunction(_) => todo!(),
 
         UnionAtIndex {
             tag_id,
