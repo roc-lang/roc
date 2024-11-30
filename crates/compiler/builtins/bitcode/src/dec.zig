@@ -338,12 +338,11 @@ pub const RocDec = extern struct {
             }
         }));
 
-        const unsigned_answer: i128 = mul_and_decimalize(self_u128, other_u128);
-
+        const unsigned_answer = mul_and_decimalize(self_u128, other_u128);
         if (is_answer_negative) {
-            return .{ .value = RocDec{ .num = -unsigned_answer }, .has_overflowed = false };
+            return .{ .value = RocDec{ .num = -unsigned_answer.value }, .has_overflowed = unsigned_answer.has_overflowed };
         } else {
-            return .{ .value = RocDec{ .num = unsigned_answer }, .has_overflowed = false };
+            return .{ .value = RocDec{ .num = unsigned_answer.value }, .has_overflowed = unsigned_answer.has_overflowed };
         }
     }
 
@@ -430,7 +429,15 @@ pub const RocDec = extern struct {
 
     pub fn mulSaturated(self: RocDec, other: RocDec) RocDec {
         const answer = RocDec.mulWithOverflow(self, other);
-        return answer.value;
+        if (answer.has_overflowed) {
+            if (answer.value.num < 0) {
+                return RocDec.max;
+            } else {
+                return RocDec.min;
+            }
+        } else {
+            return answer.value;
+        }
     }
 
     pub fn div(self: RocDec, other: RocDec) RocDec {
@@ -592,7 +599,7 @@ inline fn count_trailing_zeros_base10(input: i128) u6 {
     return count;
 }
 
-fn mul_and_decimalize(a: u128, b: u128) i128 {
+fn mul_and_decimalize(a: u128, b: u128) WithOverflow(i128) {
     const answer_u256 = mul_u128(a, b);
 
     var lhs_hi = answer_u256.hi;
@@ -710,14 +717,15 @@ fn mul_and_decimalize(a: u128, b: u128) i128 {
     overflowed = overflowed | answer[1];
     const d = answer[0];
 
-    if (overflowed == 1) {
-        roc_panic("Decimal multiplication overflow!", 0);
-    }
-
     // Final 512bit value is d, c, b, a
-    // need to left shift 321 times
-    // 315 - 256 is 59. So left shift d, c 59 times.
-    return @as(i128, @intCast(c >> 59 | (d << (128 - 59))));
+    // need to right shift 315 times
+    // 315 - 256 is 59. So shift c right 59 times.
+    // d takes up the higher space above c, so shift it left by (128 - 59 = 69).
+
+    // Since d is being shift left 69 times, all of those 69 bits (+1 for the sign bit)
+    // must be zero. Otherwise, we have an overflow.
+    const d_high_bits = d >> 58;
+    return .{ .value = @as(i128, @intCast(c >> 59 | (d << (128 - 59)))), .has_overflowed = overflowed | d_high_bits != 0 };
 }
 
 // Multiply two 128-bit ints and divide the result by 10^DECIMAL_PLACES
