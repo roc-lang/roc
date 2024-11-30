@@ -10,9 +10,9 @@ use crate::expr::record_field;
 use crate::ident::{lowercase_ident, lowercase_ident_keyword_e};
 use crate::keyword;
 use crate::parser::{
-    absolute_column_min_indent, and, collection_trailing_sep_e, either, error_on_byte,
-    increment_min_indent, indented_seq, loc, map, map_with_arena, skip_first, skip_second, succeed,
-    then, zero_or_more, ERecord, ETypeAbilityImpl,
+    absolute_column_min_indent, and, collection_trailing_sep_e, either, increment_min_indent,
+    indented_seq, loc, map, map_with_arena, skip_first, skip_second, succeed, then, zero_or_more,
+    ERecord, ETypeAbilityImpl,
 };
 use crate::parser::{
     allocated, backtrackable, byte, fail, optional, specialize_err, specialize_err_ref, two_bytes,
@@ -27,13 +27,13 @@ use roc_region::all::{Loc, Position, Region};
 pub fn located<'a>(
     is_trailing_comma_valid: bool,
 ) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
-    expression(is_trailing_comma_valid, false).trace("a")
+    expression(is_trailing_comma_valid, false)
 }
 
 pub fn located_opaque_signature<'a>(
     is_trailing_comma_valid: bool,
 ) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
-    expression(is_trailing_comma_valid, true).trace("b")
+    expression(is_trailing_comma_valid, true)
 }
 
 #[inline(always)]
@@ -241,7 +241,7 @@ fn loc_type_in_parens<'a>(
         loc(and(
             collection_trailing_sep_e(
                 byte(b'(', ETypeInParens::Open),
-                specialize_err_ref(ETypeInParens::Type, expression(true, false).trace("c")),
+                specialize_err_ref(ETypeInParens::Type, expression(true, false)),
                 byte(b',', ETypeInParens::End),
                 byte(b')', ETypeInParens::End),
                 TypeAnnotation::SpaceBefore,
@@ -334,7 +334,7 @@ fn record_type_field<'a>() -> impl Parser<'a, AssignedField<'a, TypeAnnotation<'
         ))
         .parse(arena, state, min_indent)?;
 
-        let val_parser = specialize_err_ref(ETypeRecord::Type, expression(true, false).trace("d"));
+        let val_parser = specialize_err_ref(ETypeRecord::Type, expression(true, false));
 
         match opt_loc_val {
             Some(First(_)) => {
@@ -582,39 +582,37 @@ fn expression<'a>(
         let (p1, first, state) = space0_before_e(term(stop_at_surface_has), EType::TIndentStart)
             .parse(arena, state, min_indent)?;
 
-        let (p2, rest, rest_state) = zero_or_more(skip_first(
-            backtrackable(byte(b',', EType::TFunctionArgument)),
-            one_of![
-                map_with_arena(
-                    and(
-                        backtrackable(space0_e(EType::TIndentStart)),
-                        and(term(stop_at_surface_has), space0_e(EType::TIndentEnd)),
-                    ),
-                    comma_args_help,
-                ),
-                error_on_byte(b',', EType::TFunctionArgument)
-            ],
-        ))
-        .trace("type_annotation:expression:rest_args")
-        .parse(arena, state.clone(), min_indent)?;
-
         let result = and(
-            space0_e(EType::TIndentStart),
-            one_of![
-                map(two_bytes(b'-', b'>', EType::TStart), |_| {
-                    FunctionArrow::Pure
-                }),
-                map(two_bytes(b'=', b'>', EType::TStart), |_| {
-                    FunctionArrow::Effectful
-                }),
-            ],
+            zero_or_more(skip_first(
+                byte(b',', EType::TFunctionArgument),
+                one_of![
+                    space0_around_ee(
+                        term(stop_at_surface_has),
+                        EType::TIndentStart,
+                        EType::TIndentEnd
+                    ),
+                    fail(EType::TFunctionArgument)
+                ],
+            ))
+            .trace("type_annotation:expression:rest_args"),
+            and(
+                space0_e(EType::TIndentStart),
+                one_of![
+                    map(two_bytes(b'-', b'>', EType::TStart), |_| {
+                        FunctionArrow::Pure
+                    }),
+                    map(two_bytes(b'=', b'>', EType::TStart), |_| {
+                        FunctionArrow::Effectful
+                    }),
+                ],
+            )
+            .trace("type_annotation:expression:arrow"),
         )
-        .trace("type_annotation:expression:arrow")
-        .parse(arena, rest_state, min_indent);
+        .parse(arena, state.clone(), min_indent);
 
         let (progress, annot, state) = match result {
-            Ok((p3, (space_before_arrow, arrow), state)) => {
-                let (p4, return_type, state) =
+            Ok((p2, (rest, (space_before_arrow, arrow)), state)) => {
+                let (p3, return_type, state) =
                     space0_before_e(term(stop_at_surface_has), EType::TIndentStart)
                         .parse(arena, state, min_indent)?;
 
@@ -638,7 +636,7 @@ fn expression<'a>(
                     region,
                     value: TypeAnnotation::Function(output, arrow, arena.alloc(return_type)),
                 };
-                let progress = p1.or(p2).or(p3).or(p4);
+                let progress = p1.or(p2).or(p3);
                 (progress, result, state)
             }
             Err(err) => {
@@ -666,10 +664,7 @@ fn expression<'a>(
 
         // Finally, try to parse a where clause if there is one.
         // The where clause must be at least as deep as where the type annotation started.
-        match implements_clause_chain()
-            .trace("implements_clause_chain")
-            .parse(arena, state.clone(), min_indent)
-        {
+        match implements_clause_chain().parse(arena, state.clone(), min_indent) {
             Ok((where_progress, (spaces_before, implements_chain), state)) => {
                 let region =
                     Region::span_across(&annot.region, &implements_chain.last().unwrap().region);
@@ -697,36 +692,6 @@ fn expression<'a>(
         }
     })
     .trace("type_annotation:expression")
-}
-
-fn comma_args_help<'a>(
-    arena: &'a Bump,
-    (spaces_before, (loc_val, spaces_after)): (
-        &'a [CommentOrNewline<'a>],
-        (Loc<TypeAnnotation<'a>>, &'a [CommentOrNewline<'a>]),
-    ),
-) -> Loc<TypeAnnotation<'a>> {
-    if spaces_before.is_empty() {
-        if spaces_after.is_empty() {
-            loc_val
-        } else {
-            arena
-                .alloc(loc_val.value)
-                .with_spaces_after(spaces_after, loc_val.region)
-        }
-    } else if spaces_after.is_empty() {
-        arena
-            .alloc(loc_val.value)
-            .with_spaces_before(spaces_before, loc_val.region)
-    } else {
-        let wrapped_expr = arena
-            .alloc(loc_val.value)
-            .with_spaces_after(spaces_after, loc_val.region);
-
-        arena
-            .alloc(wrapped_expr.value)
-            .with_spaces_before(spaces_before, wrapped_expr.region)
-    }
 }
 
 /// Parse a basic type annotation that's a combination of variables

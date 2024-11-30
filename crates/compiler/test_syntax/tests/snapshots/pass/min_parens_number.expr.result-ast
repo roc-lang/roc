@@ -1,8 +1,0 @@
-UnaryOp(
-    @2-3 ParensAround(
-        Num(
-            "8",
-        ),
-    ),
-    @0-1 Negate,
-)

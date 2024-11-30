@@ -1,7 +1,7 @@
 SpaceBefore(
     SpaceAfter(
-        DbgStmt {
-            first: @6-12 ParensAround(
+        DbgStmt(
+            @6-12 ParensAround(
                 BinOps(
                     [
                         (
@@ -16,8 +16,7 @@ SpaceBefore(
                     ),
                 ),
             ),
-            extra_args: [],
-            continuation: @15-16 SpaceBefore(
+            @15-16 SpaceBefore(
                 Num(
                     "4",
                 ),
@@ -26,7 +25,7 @@ SpaceBefore(
                     Newline,
                 ],
             ),
-        },
+        ),
         [
             Newline,
         ],
