@@ -11,6 +11,7 @@ const Sha256 = extern struct {
 };
 
 fn create(comptime T: type) *T {
+    //test_roc_alloc ignores alignment
     if (builtin.is_test) {
         return std.testing.allocator.create(T) catch unreachable;
     }
