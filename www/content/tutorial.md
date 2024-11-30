@@ -1984,6 +1984,29 @@ when err is
     StdinErr e -> Exit 2 "Error writing to stdin: $(Inspect.toStr e)"
 ```
 
+### [The early `return` keyword](#the-early-return-keyword) {#the-early-return-keyword}
+
+Just as the `try` keyword can interrupt a function in response to return a Result error, the `return` keyword can interrupt and return any value we want.
+
+This is rarely necessary, due to Roc's powerful syntax for expressions and pattern matching, but it's included as a comfort to developers familiar with its frequent use in primarily-imperative programing languages.
+
+For example:
+
+```roc
+stoplightStr : Str
+stoplightStr =
+    stoplightColor =
+        if thisIsABadTime then
+            return "Hey, listen, I just don't want to do this."
+        else
+            previousStopLightColor
+    when stoplightColor is
+        Red -> "red"
+        Green | Yellow if contrast > 75 -> "not red, but very high contrast"
+        Green | Yellow if contrast > 50 -> "not red, but high contrast"
+        Green | Yellow -> "not red"
+```
+
 ## [Examples](#examples) {#examples}
 
 Well done on making it this far!
@@ -2359,7 +2382,7 @@ If you want to see other examples of using record builders, look at the [Record 
 
 These are reserved keywords in Roc. You can't choose any of them as names, except as record field names.
 
-`as`, `crash`, `dbg`, `else`, `expect`, `expect-fx`, `if`, `import`, `is`, `then`, `when`
+`as`, `crash`, `dbg`, `else`, `expect`, `expect-fx`, `if`, `import`, `is`, `return`, `then`, `try`, `when`
 
 Other keywords are used only in specific places, so they are not reserved. This includes:
 
