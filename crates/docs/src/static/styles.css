@@ -180,6 +180,7 @@ main {
   max-width: 740px;
   /* necessary for text-overflow: ellipsis to work in descendants */
   min-width: 0;
+  overflow-x: auto;
   /* fixes issues with horizonatal scroll in cases where word is too long,
   like in one of the examples at https://www.roc-lang.org/builtins/Num#Dec */
   overflow-wrap: break-word;
@@ -707,7 +708,7 @@ pre>samp {
       grid-row-end: above-footer;
       padding: 18px;
       font-size: 16px;
-      max-width: none;
+      max-width: 480px;
   }
 
   #sidebar-nav {
