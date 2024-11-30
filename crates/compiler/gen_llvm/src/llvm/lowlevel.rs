@@ -23,24 +23,30 @@ use roc_mono::{
 use roc_target::{PtrWidth, Target};
 
 use crate::llvm::{
-    self, bitcode::{
+    self,
+    bitcode::{
         call_bitcode_fn, call_bitcode_fn_fixing_for_convention, call_bitcode_fn_returning_record,
         call_bitcode_fn_with_record_arg, call_list_bitcode_fn, call_str_bitcode_fn,
         call_void_bitcode_fn, pass_list_or_string_to_zig_32bit, pass_string_to_zig_wasm,
         BitcodeReturns,
-    }, build::{
+    },
+    build::{
         cast_basic_basic, complex_bitcast_check_size, create_entry_block_alloca,
         function_value_by_func_spec, load_roc_value, roc_function_call, tag_pointer_clear_tag_id,
         BuilderExt, FuncBorrowSpec, RocReturn,
-    }, build_list::{
+    },
+    build_list::{
         list_append_unsafe, list_clone, list_concat, list_drop_at, list_get_unsafe, list_len_usize,
         list_prepend, list_release_excess_capacity, list_replace_unsafe, list_reserve,
         list_sort_with, list_sublist, list_swap, list_symbol_to_c_abi, list_with_capacity,
         pass_update_mode,
-    }, compare::{generic_eq, generic_neq}, convert::{
+    },
+    compare::{generic_eq, generic_neq},
+    convert::{
         self, argument_type_from_layout, basic_type_from_layout, zig_num_parse_result_type,
         zig_to_int_checked_result_type,
-    }, intrinsics::{
+    },
+    intrinsics::{
         // These instrinsics do not generate calls to libc and are safe to keep.
         // If we find that any of them generate calls to libc on some platforms, we need to define them as zig bitcode.
         LLVM_ADD_SATURATED,
@@ -48,7 +54,8 @@ use crate::llvm::{
         LLVM_MUL_WITH_OVERFLOW,
         LLVM_SUB_SATURATED,
         LLVM_SUB_WITH_OVERFLOW,
-    }, refcounting::PointerToRefcount
+    },
+    refcounting::PointerToRefcount,
 };
 
 use super::{build::Env, convert::zig_dec_type};
@@ -1144,68 +1151,67 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             todo!()
         }
         NumToDecCast | NumToDecChecked => {
-            let checked = matches!(op,NumToDecChecked);
-            const DEC_RIGHT_DIGITS : u64 = 10u64.pow(18); 
+            let checked = matches!(op, NumToDecChecked);
+            const DEC_RIGHT_DIGITS: u64 = 10u64.pow(18);
             let to = env.context.i128_type();
             let float_type = env.context.f64_type();
-            let llvm_digits = to.const_int(DEC_RIGHT_DIGITS,false);
+            let llvm_digits = to.const_int(DEC_RIGHT_DIGITS, false);
             let llvm_divisor = float_type.const_float(DEC_RIGHT_DIGITS as f64);
-            arguments_with_layouts!((arg,arg_layout));
-            //Get type
+            arguments_with_layouts!((arg, arg_layout));
+            //Get the actual value that we are converting to
             let result = match layout_interner.get_repr(arg_layout) {
                 //If integer
-                LayoutRepr::Builtin(Builtin::Int(width)) => {   
+                LayoutRepr::Builtin(Builtin::Int(width)) => {
                     //Extend to I128
                     let Ok(converted_value) = (if width.is_signed() {
-                        env.builder.build_int_s_extend(arg.into_int_value(), to, "inc_cast")
+                        env.builder
+                            .build_int_s_extend(arg.into_int_value(), to, "inc_cast")
                     } else {
-                        env.builder.build_int_z_extend(arg.into_int_value(), to, "inc_cast")
+                        env.builder
+                            .build_int_z_extend(arg.into_int_value(), to, "inc_cast")
                     }) else {
                         unreachable!()
                     };
                     //Add decimal places
-                    let Ok(result) = env.builder.build_int_mul(converted_value, llvm_digits, "deci_cast") else {
+                    let Ok(result) =
+                        env.builder
+                            .build_int_mul(converted_value, llvm_digits, "deci_cast")
+                    else {
                         unreachable!()
                     };
                     result.as_basic_value_enum()
                 }
                 LayoutRepr::Builtin(Builtin::Float(_)) => {
-                    let Ok(float_result) = env.builder.build_float_div(arg.into_float_value(), llvm_divisor, "decf_cast") else {
+                    let Ok(float_result) = env.builder.build_float_div(
+                        arg.into_float_value(),
+                        llvm_divisor,
+                        "decf_cast",
+                    ) else {
                         unreachable!()
                     };
-                    let Ok(int_result) = env.builder.build_float_to_signed_int(float_result, to, "dec_place") else {
+                    let Ok(int_result) =
+                        env.builder
+                            .build_float_to_signed_int(float_result, to, "dec_place")
+                    else {
                         unreachable!()
                     };
                     int_result.as_basic_value_enum()
                 }
-                LayoutRepr::Builtin(Builtin::Decimal) => {
-                    arg 
-                }
+                LayoutRepr::Builtin(Builtin::Decimal) => arg,
                 _ => {
                     unreachable!()
                 }
             };
+            //Look and see if the conversion is checked or not
             if checked {
                 let layout = env.context.i128_type();
                 let bool_false = env.context.bool_type().const_zero();
                 let bool_true = env.context.bool_type().const_all_ones();
-                //let layout_repr = LayoutRepr::Struct(env.arena.alloc([layout, Layout::BOOL]));
-                //println!("{:?}",layout_repr);
-                // How the return type needs to be stored on the stack.
-                // let struct_type = convert::basic_type_from_layout(
-                //     env,
-                //     layout_interner,
-                //     layout_interner.get_repr(layout),
-                // )
-                // .into_struct_type();
-                let struct_type = env.context.struct_type(&[layout.into(),env.context.bool_type().into()], false);
-            
-                
-                
-                
+
                 let with_overflow = match layout_interner.get_repr(arg_layout) {
-                    //If integer
-                    LayoutRepr::Builtin(Builtin::Int(width)) => {   
+                    //If the value being is converted into a integer
+                    LayoutRepr::Builtin(Builtin::Int(width)) => {
+                        //`Dec` can always fit `I64`s and `U64`s and smaller, no need to check at runtime
                         if width.stack_size() <= 4 {
                             bool_false
                         } else {
@@ -1215,26 +1221,15 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                     LayoutRepr::Builtin(Builtin::Float(_)) => {
                         todo!()
                     }
-                    LayoutRepr::Builtin(Builtin::Decimal) => {
-                        bool_false 
-                    }
+                    //A decimal can obviously fit itself
+                    LayoutRepr::Builtin(Builtin::Decimal) => bool_false,
                     _ => {
                         unreachable!()
                     }
                 };
-                let return_value = struct_type.const_zero();
-                let r = env.builder
-                    .build_insert_value(return_value, result, 0, "converted_int")
-                    .unwrap();
-                let return_value = env.builder
-                    .build_insert_value(return_value, with_overflow, 1, "out_of_bounds")
-                    .unwrap();
-
-                r.into_struct_value().into()
                 
-                
-
-                
+                let return_int_type : BasicTypeEnum = env.context.i128_type().into();
+                result_with(env,return_int_type,result,with_overflow).into()
             } else {
                 result.into()
             }
@@ -2644,7 +2639,7 @@ fn int_neg_raise_on_overflow<'ctx>(
 
     let min_val = int_type_signed_min(int_type);
     let condition = builder.new_build_int_compare(IntPredicate::EQ, arg, min_val, "is_min_val");
-    
+
     let block = env.builder.get_insert_block().expect("to be in a function");
     let parent = block.get_parent().expect("to be in a function");
     let then_block = env.context.append_basic_block(parent, "then");
@@ -2943,4 +2938,29 @@ fn load_symbol_and_lambda_set<'a, 'ctx>(
         LayoutRepr::LambdaSet(lambda_set) => (ptr, lambda_set),
         other => panic!("Not a lambda set: {other:?}, {ptr:?}"),
     }
+}
+use inkwell::types::BasicTypeEnum;
+///Change from a basic LLVM value to a Roc `Result`
+fn result_with<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
+    good_type : BasicTypeEnum,
+    good_value : impl BasicValue<'ctx>,
+    bad_value : impl BasicValue<'ctx>
+) -> StructValue<'ctx> {
+    use LowLevel::*;
+    
+    let struct_type = env
+        .context
+        .struct_type(&[good_type.into(), env.context.bool_type().into()], false);
+    let return_value = struct_type.const_zero();
+    let return_value = env
+        .builder
+        .build_insert_value(return_value, good_value, 0, "good_value")
+        .unwrap();
+    let return_value = env
+        .builder
+        .build_insert_value(return_value, bad_value, 1, "is_bad")
+        .unwrap();
+
+    return_value.into_struct_value()
 }
