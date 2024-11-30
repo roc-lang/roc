@@ -45,7 +45,7 @@ pub struct LoadedModule {
     pub resolved_implementations: ResolvedImplementations,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
-    pub docs_by_module: VecMap<ModuleId, ModuleDocumentation>,
+    pub exposed_module_docs: Vec<(ModuleId, ModuleDocumentation)>,
     pub abilities_store: AbilitiesStore,
     pub typechecked: MutMap<ModuleId, CheckedModule>,
     pub imports: MutMap<ModuleId, MutSet<ModuleId>>,

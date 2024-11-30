@@ -490,7 +490,7 @@ fn load_docs() {
     let loaded_module = load_fixture("no_deps", "Docs", subs_by_module);
 
     let module_docs = loaded_module
-        .docs_by_module
+        .exposed_module_docs
         .get(&loaded_module.module_id)
         .expect("module should have docs");
 

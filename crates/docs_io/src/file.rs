@@ -51,7 +51,7 @@ pub enum CreationOutcome {
     DidNotExist,
 }
 
-fn create_dir_all<'a>(_arena: &'a Bump, dir: &Path) -> Result<CreationOutcome, Problem> {
+pub fn create_dir_all<'a>(_arena: &'a Bump, dir: &Path) -> Result<CreationOutcome, Problem> {
     // TODO in the future, this will make use of the arena when we're using bump-allocated paths.
     match fs::create_dir_all(dir) {
         Ok(_) => Ok(CreationOutcome::DidNotExist),
@@ -65,7 +65,7 @@ fn create_dir_all<'a>(_arena: &'a Bump, dir: &Path) -> Result<CreationOutcome, P
     }
 }
 
-fn delete_dir_contents<'a>(arena: &'a Bump, dir: &Path) -> Result<(), Problem> {
+pub fn delete_dir_contents<'a>(arena: &'a Bump, dir: &Path) -> Result<(), Problem> {
     let to_problem = |io_err: io::Error| Problem::FailedToDeleteDir(dir.to_path_buf(), io_err);
 
     if dir.is_dir() {

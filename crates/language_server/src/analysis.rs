@@ -149,7 +149,7 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
         exposed_imports,
         mut imports,
         exposes,
-        docs_by_module,
+        exposed_module_docs: docs_by_module,
         ..
     } = module;
 

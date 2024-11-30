@@ -111,34 +111,36 @@ impl<'a> IoDocs<'a> {
         opt_user_specified_base_url: Option<&'a str>,
     ) -> IoDocs<'a> {
         let mut module_names: Vec<'a, (ModuleId, &'a str)> =
-            Vec::with_capacity_in(loaded_module.docs_by_module.len(), arena);
+            Vec::with_capacity_in(loaded_module.exposed_module_docs.len(), arena);
         let mut sb_entries: Vec<'a, SBEntry<'a>> =
             Vec::with_capacity_in(loaded_module.exposed_modules.len(), arena);
         let header_doc_comment = arena.alloc_str(&loaded_module.header_doc_comment);
 
-        for (module_id, docs) in loaded_module.docs_by_module.iter() {
+        for (module_id, docs) in loaded_module.exposed_module_docs.iter() {
             module_names.push((*module_id, &*arena.alloc_str(&docs.name)));
-        }
 
-        for module_id in loaded_module.exposed_modules.iter() {
-            if let Some(docs) = loaded_module.docs_by_module.get(module_id) {
-                let mut exposed = Vec::with_capacity_in(docs.exposed_symbols.len(), arena);
-                for symbol in docs.exposed_symbols.iter() {
-                    if let Some(ident_ids) =
-                        loaded_module.interns.all_ident_ids.get(&symbol.module_id())
-                    {
-                        if let Some(name) = ident_ids.get_name(symbol.ident_id()) {
-                            exposed.push(&*arena.alloc_str(name));
-                        }
+            let mut exposed = Vec::with_capacity_in(docs.exposed_symbols.len(), arena);
+            for symbol in docs.exposed_symbols.iter() {
+                if let Some(ident_ids) =
+                    loaded_module.interns.all_ident_ids.get(&symbol.module_id())
+                {
+                    if let Some(name) = ident_ids.get_name(symbol.ident_id()) {
+                        exposed.push(&*arena.alloc_str(name));
                     }
                 }
-
-                sb_entries.push(SBEntry {
-                    link_text: arena.alloc_str(&docs.name),
-                    exposed,
-                    doc_comment: arena.alloc_str(&docs.header_doc_comment),
-                });
             }
+
+            sb_entries.push(SBEntry {
+                link_text: arena.alloc_str(&docs.name),
+                exposed,
+                doc_comment: {
+                    let todo = (); // TODO: thread through whatever doc comment might be above this.
+                                   // Currently, we only know about docs.header_doc_comment, which is
+                                   // the doc comment at the top of the module, NOT the doc comment above
+                                   // the entry in the package, which is what we want here.
+                    ""
+                },
+            });
         }
 
         Self {
@@ -169,8 +171,7 @@ impl<'a> IoDocs<'a> {
                     None => PathBuf::from(build_dir),
                 };
 
-                // TODO mkdir -p on dir_buf
-                /////////////////////////////////////////////////
+                file::create_dir_all(arena, &dir)?;
 
                 let path_buf = dir.join("index.html");
 

@@ -3345,6 +3345,9 @@ fn finish(
         docs_by_module.push(docs);
     }
 
+    // We're all done with this now, and it's been emptied out. Dropping it here so we don't accidentally use it later!
+    drop(documentation);
+
     let module_id = state.root_id;
 
     let (_module_id, header_doc_comment) = state
@@ -3371,7 +3374,7 @@ fn finish(
         resolved_implementations,
         sources,
         timings: state.timings,
-        docs_by_module: documentation,
+        exposed_module_docs: docs_by_module,
         abilities_store,
         exposed_imports: state.module_cache.exposed_imports,
         imports: state.module_cache.imports,
