@@ -1153,9 +1153,16 @@ pub(crate) fn run_low_level<'a, 'ctx>(
         NumToDecCast | NumToDecChecked => {
             let checked = matches!(op, NumToDecChecked);
             const DEC_RIGHT_DIGITS: u64 = 10u64.pow(18);
+            const MAX_DEC_F: f64 = 170_141_183_460_469_231_731.687_303_715_884_105_727;
+            const MAX_DEC_I: i128 = 170_141_183_460_469_231_731;
+            const MAX_DEC_IH: u64 = 9;
+            const MAX_DEC_IL: u64 = 4120486797000000000;
             let to = env.context.i128_type();
             let float_type = env.context.f64_type();
             let llvm_digits = to.const_int(DEC_RIGHT_DIGITS, false);
+            let llvm_max_dec_f = float_type.const_float(MAX_DEC_F);
+            let llvm_max_dec_i = to.const_int_arbitrary_precision(&[MAX_DEC_IL,MAX_DEC_IH]);
+            let llvm_min_dec_i = to.const_int_arbitrary_precision(&[MAX_DEC_IL,MAX_DEC_IH]).const_not();
             let llvm_divisor = float_type.const_float(DEC_RIGHT_DIGITS as f64);
             arguments_with_layouts!((arg, arg_layout));
             //Get the actual value that we are converting to
@@ -1170,14 +1177,14 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                         env.builder
                             .build_int_z_extend(arg.into_int_value(), to, "inc_cast")
                     }) else {
-                        unreachable!()
+                        todo!()
                     };
                     //Add decimal places
                     let Ok(result) =
                         env.builder
                             .build_int_mul(converted_value, llvm_digits, "deci_cast")
                     else {
-                        unreachable!()
+                        todo!()
                     };
                     result.as_basic_value_enum()
                 }
@@ -1187,19 +1194,19 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                         llvm_divisor,
                         "decf_cast",
                     ) else {
-                        unreachable!()
+                        todo!()
                     };
                     let Ok(int_result) =
                         env.builder
                             .build_float_to_signed_int(float_result, to, "dec_place")
                     else {
-                        unreachable!()
+                        todo!()
                     };
                     int_result.as_basic_value_enum()
                 }
                 LayoutRepr::Builtin(Builtin::Decimal) => arg,
                 _ => {
-                    unreachable!()
+                    todo!()
                 }
             };
             //Look and see if the conversion is checked or not
@@ -1215,11 +1222,39 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                         if width.stack_size() <= 4 {
                             bool_false
                         } else {
-                            todo!()
+                            if width.is_signed() {
+                                //If VA > +Dec
+                                let pos_res = env.builder.new_build_int_compare(
+                                    inkwell::IntPredicate::SGT,
+                                    arg.into_int_value(),
+                                    llvm_max_dec_i,
+                                    "int_compare",
+                                );
+                                //If VA < -Dec
+                                let neg_res = env.builder.new_build_int_compare(
+                                    inkwell::IntPredicate::SGT,
+                                    llvm_min_dec_i,
+                                    arg.into_int_value(),
+                                    "int_compare",
+                                );
+                                env.builder.new_build_or(pos_res,neg_res,"or_ops")
+                            } else {
+                                env.builder.new_build_int_compare(
+                                    inkwell::IntPredicate::SGT,
+                                    arg.into_int_value(),
+                                    llvm_max_dec_i,
+                                    "int_compare",
+                                )
+                            }
                         }
                     }
                     LayoutRepr::Builtin(Builtin::Float(_)) => {
-                        todo!()
+                        env.builder.new_build_float_compare(
+                            inkwell::FloatPredicate::OGT,
+                            arg.into_float_value(),
+                            llvm_max_dec_f,
+                            "float_compare",
+                        )
                     }
                     //A decimal can obviously fit itself
                     LayoutRepr::Builtin(Builtin::Decimal) => bool_false,
@@ -1229,7 +1264,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 };
                 
                 let return_int_type : BasicTypeEnum = env.context.i128_type().into();
-                result_with(env,return_int_type,result,with_overflow).into()
+                result_with(env,return_int_type,result,env.context.bool_type().into(),with_overflow).into()
             } else {
                 result.into()
             }
@@ -2950,13 +2985,14 @@ fn result_with<'ctx>(
     env: &Env<'_, 'ctx, '_>,
     good_type : BasicTypeEnum,
     good_value : impl BasicValue<'ctx>,
+    bad_type : BasicTypeEnum,
     bad_value : impl BasicValue<'ctx>
 ) -> StructValue<'ctx> {
     use LowLevel::*;
     
     let struct_type = env
         .context
-        .struct_type(&[good_type.into(), env.context.bool_type().into()], false);
+        .struct_type(&[good_type.into(), bad_type.into()], false);
     let return_value = struct_type.const_zero();
     let return_value = env
         .builder
