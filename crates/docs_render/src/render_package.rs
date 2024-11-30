@@ -415,14 +415,14 @@ pub trait TypeAnn<
     AbilityIter: Iterator<Item = &'a Ability>,
     AbilityMemberIter: Iterator<Item = &'a AbilityMember<'a, Self>>,
 >: Sized + 'a {
-    fn visit<
-        VisitAbility: Fn(AbilityMemberIter, &'a mut String<'a>) + Copy,
-        VisitAlias: Fn(AliasVarNames, &'a Self, &'a mut String<'a>) + Copy,
-        VisitOpaque: Fn(OpaqueVarNames, AbilityIter, &'a mut String<'a>) + Copy,
-        VisitValue: Fn(&'a Self, &'a mut String<'a>) + Copy,
+    fn visit<'b, 'c,
+        VisitAbility: Fn(AbilityMemberIter, &'b mut String<'c>),
+        VisitAlias: Fn(AliasVarNames, &'a Self, &'b mut String<'c>),
+        VisitOpaque: Fn(OpaqueVarNames, AbilityIter, &'b mut String<'c>),
+        VisitValue: Fn(&'a Self, &'b mut String<'c>),
     >(
         &'a self,
-        buf: &'a mut String<'a>,
+        buf: &'b mut String<'c>,
         visit_ability: VisitAbility,
         visit_type_alias: VisitAlias,
         visit_opaque_type: VisitOpaque,

@@ -99,7 +99,7 @@ struct IoDocs<'a> {
     pkg_name: &'a str,
     opt_user_specified_base_url: Option<&'a str>,
     sb_entries: Vec<'a, SBEntry<'a>>,
-    body_entries_by_module: Vec<'a, (ModuleId, &'a [BodyEntry<'a, Annotation<'a>>])>,
+    body_entries_by_module: Vec<'a, (ModuleId, &'a [BodyEntry<'a, Annotation>])>,
     module_names: Vec<'a, (ModuleId, &'a str)>,
 }
 
@@ -149,8 +149,7 @@ impl<'a> IoDocs<'a> {
             for entry in docs.entries.iter() {
                 if let DocEntry::DocDef(def) = entry {
                     let type_annotation = Annotation {
-                        typ: arena.alloc(def.type_annotation.clone()),
-                        arena,
+                        typ: def.type_annotation,
                     };
                     body_entries.push(BodyEntry {
                         entry_name: &*arena.alloc_str(&def.name),
@@ -212,9 +211,8 @@ impl<'a> IoDocs<'a> {
 }
 
 #[derive(Debug)]
-struct Annotation<'a> {
-    arena: &'a Bump,
-    typ: &'a TypeAnnotation,
+struct Annotation {
+    typ: TypeAnnotation,
 }
 
 impl<'a>
@@ -225,87 +223,59 @@ impl<'a>
         slice::Iter<'a, &'a str>,
         slice::Iter<'a, AbilityAnn<'a>>,
         slice::Iter<'a, AbilityMember<'a, Self>>,
-    > for Annotation<'a>
+    > for Annotation
 {
     fn visit<
-        VisitAbility: Fn(slice::Iter<'a, AbilityMember<'a, Self>>, &'a mut String<'a>) + Copy,
-        VisitAlias: Fn(slice::Iter<'a, &'a str>, &'a Self, &'a mut String<'a>) + Copy,
-        VisitOpaque: Fn(slice::Iter<'a, &'a str>, slice::Iter<'a, AbilityAnn<'a>>, &'a mut String<'a>) + Copy,
-        VisitValue: Fn(&'a Self, &'a mut String<'a>) + Copy,
+        'b,
+        'c,
+        // visit functions
+        VisitAbility: Fn(slice::Iter<'a, AbilityMember<'a, Self>>, &'b mut String<'c>),
+        VisitAlias: Fn(slice::Iter<'a, &'a str>, &'a Self, &'b mut String<'c>),
+        VisitOpaque: Fn(slice::Iter<'a, &'a str>, slice::Iter<'a, AbilityAnn<'a>>, &'b mut String<'c>),
+        VisitValue: Fn(&'a Self, &'b mut String<'c>),
     >(
         &'a self,
-        buf: &'a mut String<'a>,
+        buf: &'b mut String<'c>,
         visit_ability: VisitAbility,
         visit_type_alias: VisitAlias,
         visit_opaque_type: VisitOpaque,
         visit_value: VisitValue,
     ) {
         match &self.typ {
-            TypeAnnotation::TagUnion { tags, extension } => {
-                if tags.is_empty() {
-                    (visit_value)(&self, buf)
-                } else {
-                    // TODO
-                }
-            }
-            TypeAnnotation::Function {
-                args,
-                arrow,
-                output,
+            Type::EmptyRec
+            | Type::EmptyTagUnion
+            | Type::Function(_, _, _, _)
+            | Type::Record(_, _)
+            | Type::Tuple(_, _)
+            | Type::TagUnion(_, _)
+            | Type::FunctionOrTagUnion(_, _, _)
+            | Type::RangedNumber(_) => (visit_value)(&self, buf),
+            Type::ClosureTag {
+                name,
+                captures,
+                ambient_function,
             } => todo!(),
-            TypeAnnotation::ObscuredTagUnion => todo!(),
-            TypeAnnotation::ObscuredRecord => todo!(),
-            TypeAnnotation::BoundVariable(_) => todo!(),
-            TypeAnnotation::Apply { name, parts } => {
-                buf.push_str(name);
+            Type::UnspecializedLambdaSet { unspecialized } => todo!(),
+            Type::DelayedAlias(_) => todo!(),
+            Type::Alias {
+                symbol,
+                type_arguments,
+                lambda_set_variables,
+                infer_ext_in_output_types,
+                actual,
+                kind,
+            } => {
+                let todo = (); // TODO actually populate these.
+                let type_var_names = &["TODO type variable names"];
 
-                let mut var_names = Vec::with_capacity_in(parts.len(), self.arena);
-
-                for part in parts {
-                    let var_name =
-                        self.arena
-                            .alloc(bumpalo::collections::String::with_capacity_in(
-                                4, self.arena,
-                            ));
-
-                    self.visit(
-                        var_name,
-                        visit_ability,
-                        visit_type_alias,
-                        visit_opaque_type,
-                        visit_value,
-                    );
-
-                    var_names.push(var_name.as_str());
-                }
-
-                let ability_ann = {
-                    let todo = (); // TODO actually get some abilities in there...or do we need them though?
-
-                    &[]
-                };
-
-                (visit_opaque_type)(var_names.into_bump_slice().iter(), ability_ann.iter(), buf)
+                (visit_type_alias)(type_var_names.iter(), &self, buf)
             }
-            TypeAnnotation::Record { fields, extension } => {
-                if fields.is_empty() {
-                    (visit_value)(&self, buf)
-                } else {
-                    // TODO
-                }
-            }
-            TypeAnnotation::Tuple { elems, extension } => {
-                if elems.is_empty() {
-                    (visit_value)(&self, buf)
-                } else {
-                    // TODO
-                }
-            }
-            TypeAnnotation::Ability { members } => todo!(),
-            TypeAnnotation::Wildcard => todo!(),
-            TypeAnnotation::NoTypeAnn => todo!(),
-            TypeAnnotation::Where { ann, implements } => todo!(),
-            TypeAnnotation::As { ann, name, vars } => todo!(),
+            Type::RecursiveTagUnion(_, _, _) => todo!(),
+            Type::Apply(_, _, _) => (visit_opaque_type)(todo!(), todo!(), todo!()),
+            Type::Variable(_) => todo!(),
+            Type::Error => todo!(),
+            Type::Pure => todo!(),
+            Type::Effectful => todo!(),
         }
     }
 }
@@ -351,19 +321,19 @@ impl<'a>
         AbilityAnn<'a>,
         ModuleId,
         IdentId,
-        Annotation<'a>,
+        Annotation,
         Alias,
         TypeRenderer,
         // Iterators
         slice::Iter<'a, AbilityAnn<'a>>,
-        slice::Iter<'a, AbilityMember<'a, Annotation<'a>>>,
+        slice::Iter<'a, AbilityMember<'a, Annotation>>,
         slice::Iter<'a, (ModuleId, &'a str)>,
         SBEntry<'a>,
         slice::Iter<'a, SBEntry<'a>>,
         slice::Iter<'a, &'a str>,
-        slice::Iter<'a, BodyEntry<'a, Annotation<'a>>>,
-        slice::Iter<'a, (&'a str, slice::Iter<'a, Annotation<'a>>)>,
-        slice::Iter<'a, Annotation<'a>>,
+        slice::Iter<'a, BodyEntry<'a, Annotation>>,
+        slice::Iter<'a, (&'a str, slice::Iter<'a, Annotation>)>,
+        slice::Iter<'a, Annotation>,
     > for IoDocs<'a>
 {
     fn package_name(&self) -> &'a str {
@@ -411,10 +381,7 @@ impl<'a>
         self.sb_entries.iter()
     }
 
-    fn body_entries(
-        &'a self,
-        module_id: ModuleId,
-    ) -> slice::Iter<'a, BodyEntry<'a, Annotation<'a>>> {
+    fn body_entries(&'a self, module_id: ModuleId) -> slice::Iter<'a, BodyEntry<'a, Annotation>> {
         self.body_entries_by_module
             .iter()
             .find_map(|(id, entries)| {
@@ -428,7 +395,7 @@ impl<'a>
             .iter()
     }
 
-    fn opt_type(&'a self, module_id: ModuleId, ident_id: IdentId) -> Option<Annotation<'a>> {
+    fn opt_type(&self, module_id: ModuleId, ident_id: IdentId) -> Option<Annotation> {
         let todo = ();
 
         None
