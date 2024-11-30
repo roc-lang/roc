@@ -826,6 +826,9 @@ fn build_and_preprocess_host(
             target,
             platform_main_roc.to_owned(),
         ),
+        LinkingStrategy::NotSpecified => internal_error!(
+            "LinkingStrategy should have been resolved by now into either Legacy or Surgical"
+        ),
     };
     let (rebuild_duration, path) = rebuild_thread.join().expect("Failed to build host.");
     if emit_timings {
@@ -875,7 +878,7 @@ fn build_loaded_file<'a>(
         if link_type == LinkType::None || link_type == LinkType::Dylib || target == Target::Wasm32 {
             BuiltHostOpt::None
         } else {
-            let prebuilt_host = determine_built_host_path(&platform_main_roc_path, target, build_host_requested, link_type, linking_strategy, suppress_build_host_warning);
+            let prebuilt_host = determine_built_host_path(&platform_main_roc_path, target, build_host_requested, link_type, linking_strategy, suppress_build_host_warning).unwrap();
 
             match prebuilt_host {
                 BuiltHostOpt::None => {
@@ -969,10 +972,75 @@ fn build_loaded_file<'a>(
         );
     }
 
+    link_loaded_file(
+        target,
+        code_gen_options,
+        emit_timings,
+        link_type,
+        linking_strategy,
+        compilation_start,
+        problems,
+        roc_app_bytes,
+        output_exe_path,
+        built_host_opt,
+        platform_main_roc_path,
+        expect_metadata,
+    )
+}
+
+fn link_loaded_file<'a>(
+    target: Target,
+    code_gen_options: CodeGenOptions,
+    emit_timings: bool,
+    link_type: LinkType,
+    linking_strategy: LinkingStrategy,
+    compilation_start: Instant,
+    problems: Problems,
+    roc_app_bytes: CodeObject,
+    output_exe_path: PathBuf,
+    built_host_opt: BuiltHostOpt,
+    platform_main_roc_path: PathBuf,
+    expect_metadata: ExpectMetadata<'a>,
+) -> Result<BuiltFile<'a>, BuildFileError<'a>> {
     // link the prebuilt platform and compiled app
     let link_start = Instant::now();
 
     match (linking_strategy, link_type) {
+        (LinkingStrategy::NotSpecified, _) => {
+            let metadata_file = platform_main_roc_path.with_file_name(target.metadata_file_name());
+
+            if metadata_file.exists() {
+                return link_loaded_file(
+                    target,
+                    code_gen_options,
+                    emit_timings,
+                    link_type,
+                    LinkingStrategy::Surgical,
+                    compilation_start,
+                    problems,
+                    roc_app_bytes,
+                    output_exe_path,
+                    built_host_opt,
+                    platform_main_roc_path,
+                    expect_metadata,
+                );
+            } else {
+                return link_loaded_file(
+                    target,
+                    code_gen_options,
+                    emit_timings,
+                    link_type,
+                    LinkingStrategy::Legacy,
+                    compilation_start,
+                    problems,
+                    roc_app_bytes,
+                    output_exe_path,
+                    built_host_opt,
+                    platform_main_roc_path,
+                    expect_metadata,
+                );
+            }
+        }
         (LinkingStrategy::Surgical, _) => {
             let metadata_file = platform_main_roc_path.with_file_name(target.metadata_file_name());
 
@@ -1083,7 +1151,7 @@ fn determine_built_host_path(
     link_type: LinkType,
     linking_strategy: LinkingStrategy,
     suppress_build_host_warning: bool,
-) -> BuiltHostOpt {
+) -> Option<BuiltHostOpt> {
     if build_host_requested {
         if !suppress_build_host_warning {
             // TODO
@@ -1092,7 +1160,7 @@ fn determine_built_host_path(
         }
 
         match link_type {
-            LinkType::Executable => BuiltHostOpt::None,
+            LinkType::Executable => Some(BuiltHostOpt::None),
             LinkType::Dylib => {
                 eprintln!("You asked me to build the host, but I don't know how to rebuild a host for a dynamic library.");
                 std::process::exit(1);
@@ -1108,7 +1176,7 @@ fn determine_built_host_path(
                 let legacy_host_path_res = target.find_legacy_host(platform_main_roc_path);
 
                 match legacy_host_path_res {
-                    Ok(legacy_host_path) => BuiltHostOpt::Legacy(legacy_host_path),
+                    Ok(legacy_host_path) => Some(BuiltHostOpt::Legacy(legacy_host_path)),
                     Err(err_msg) => {
                         eprintln!("Legacy linking failed: {}", err_msg);
                         #[cfg(target_os = "linux")]
@@ -1123,7 +1191,7 @@ fn determine_built_host_path(
                 let surgical_artifacts = target.find_surgical_host(platform_main_roc_path);
 
                 match surgical_artifacts {
-                    Ok(surgical_artifacts) => BuiltHostOpt::Surgical(surgical_artifacts),
+                    Ok(surgical_artifacts) => Some(BuiltHostOpt::Surgical(surgical_artifacts)),
                     Err(paths_str) => {
                         // TODO improve error message
                         eprintln!(
@@ -1138,6 +1206,23 @@ fn determine_built_host_path(
             LinkingStrategy::Additive => {
                 unimplemented!()
             }
+            // Try surgical first, then legacy
+            LinkingStrategy::NotSpecified => determine_built_host_path(
+                platform_main_roc_path,
+                target,
+                build_host_requested,
+                link_type,
+                LinkingStrategy::Surgical,
+                suppress_build_host_warning,
+            )
+            .or(determine_built_host_path(
+                platform_main_roc_path,
+                target,
+                build_host_requested,
+                link_type,
+                LinkingStrategy::Legacy,
+                suppress_build_host_warning,
+            )),
         }
     }
 }

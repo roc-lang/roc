@@ -24,6 +24,8 @@ pub enum LinkingStrategy {
     Surgical,
     /// Initialise the backend from a host object file, then add the app to it. No linker needed.
     Additive,
+    /// Not specified, will default to Surgical where possible, and fallback to legacy otherwise
+    NotSpecified,
 }
 
 /// input_paths can include the host as well as the app. e.g. &["host.o", "roc_app.o"]

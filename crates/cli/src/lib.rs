@@ -907,12 +907,19 @@ pub fn build(
 
     let linking_strategy = if wasm_dev_backend {
         LinkingStrategy::Additive
-    } else if !roc_linker::supported(link_type, target)
-        || matches.get_one::<String>(FLAG_LINKER).map(|s| s.as_str()) == Some("legacy")
+    } else if matches.get_one::<String>(FLAG_LINKER).map(|s| s.as_str()) == Some("surgical")
+        && roc_linker::supported(link_type, target)
+    {
+        LinkingStrategy::Surgical
+    } else if matches.get_one::<String>(FLAG_LINKER).map(|s| s.as_str()) == Some("legacy")
+        && roc_linker::supported(link_type, target)
     {
         LinkingStrategy::Legacy
     } else {
-        LinkingStrategy::Surgical
+        // We included this here, instead of in program.rs as we do not have information about
+        // the platform until after we load the module header. If the surgical host is not available
+        // but the legacy host is we can fallback and use that given a flag was not provided.
+        LinkingStrategy::NotSpecified
     };
 
     // All hosts should be prebuilt, this flag keeps the rebuilding behvaiour
