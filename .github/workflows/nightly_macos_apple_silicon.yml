@@ -2,7 +2,7 @@ on:
   #pull_request:
   workflow_dispatch:
   schedule:
-    - cron:  '0 9 * * *'
+    - cron: "0 9 * * *"
 
 name: Nightly Release macOS Apple Silicon
 
@@ -30,15 +30,15 @@ jobs:
         run: cargo test --locked --release
 
       - name: get commit SHA
-        run:  echo "SHA=$(git rev-parse --short "$GITHUB_SHA")" >> $GITHUB_ENV
+        run: echo "SHA=$(git rev-parse --short "$GITHUB_SHA")" >> $GITHUB_ENV
 
       - name: get date
         run: echo "DATE=$(date "+%Y-%m-%d")" >> $GITHUB_ENV
 
       - name: build file name
         env:
-            DATE: ${{ env.DATE }}
-            SHA: ${{ env.SHA }}
+          DATE: ${{ env.DATE }}
+          SHA: ${{ env.SHA }}
         run: echo "RELEASE_FOLDER_NAME=roc_nightly-macos_apple_silicon-$DATE-$SHA" >> $GITHUB_ENV
 
       - name: write version to file
@@ -56,8 +56,9 @@ jobs:
       - name: extract tar for a quick test
         run: ls | grep tar | xargs tar -xf
 
-      - name: test with rust platform
-        run: cd ${{ env.RELEASE_FOLDER_NAME }} && ./roc examples/platform-switching/rocLovesRust.roc
+      - name: test with zig platform
+        run: |
+          cd ${{ env.RELEASE_FOLDER_NAME }} && ./roc --build-host --suppress-build-host-warning examples/platform-switching/rocLovesZig.roc
 
       - name: print short commit SHA
         run: git rev-parse --short "$GITHUB_SHA"
@@ -66,6 +67,6 @@ jobs:
       - name: Upload artifact Actually uploading to github releases has to be done manually
         uses: actions/upload-artifact@v4
         with:
-           name: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
-           path: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
-           retention-days: 4
+          name: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
+          path: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
+          retention-days: 4

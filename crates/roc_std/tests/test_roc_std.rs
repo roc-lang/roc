@@ -308,6 +308,35 @@ mod test_roc_std {
     }
 
     #[test]
+    fn roc_dec_sort() {
+        let neg_one_point_five = RocDec::from_str("-1.5").unwrap();
+
+        let mut sorted_by_ord = [
+            neg_one_point_five,
+            RocDec::from(35),
+            RocDec::from(-10057),
+            RocDec::from(0),
+        ];
+
+        sorted_by_ord.sort();
+
+        let manually_sorted = [
+            RocDec::from(-10057),
+            neg_one_point_five,
+            RocDec::from(0),
+            RocDec::from(35),
+        ];
+
+        assert_eq!(sorted_by_ord, manually_sorted);
+    }
+
+    #[test]
+    fn roc_dec_default() {
+        // check if derived Default still returns zero if the implementation ever changes
+        assert_eq!(RocDec::from(0), RocDec::default());
+    }
+
+    #[test]
     fn safe_send_no_copy() {
         let x = RocStr::from("This is a long string but still unique. Yay!!!");
         assert_eq!(x.is_unique(), true);

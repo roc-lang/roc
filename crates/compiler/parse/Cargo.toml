@@ -11,10 +11,12 @@ version.workspace = true
 "parse_debug_trace" = []
 
 [dependencies]
-roc_collections = { path = "../collections" }
-roc_module = { path = "../module" }
-roc_region = { path = "../region" }
-roc_error_macros = { path = "../../error_macros" }
+roc_collections.workspace = true
+roc_module.workspace = true
+roc_region.workspace = true
+roc_error_macros.workspace = true
+
+soa.workspace = true
 
 bumpalo.workspace = true
 encode_unicode.workspace = true

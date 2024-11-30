@@ -185,7 +185,7 @@ comptime {
 const str = @import("str.zig");
 comptime {
     exportStrFn(str.init, "init");
-    exportStrFn(str.strSplit, "str_split");
+    exportStrFn(str.strSplitOn, "str_split_on");
     exportStrFn(str.countSegments, "count_segments");
     exportStrFn(str.countUtf8Bytes, "count_utf8_bytes");
     exportStrFn(str.isEmpty, "is_empty");
@@ -394,11 +394,13 @@ fn exportUtilsFn(comptime func: anytype, comptime func_name: []const u8) void {
 
 // Custom panic function, as builtin Zig version errors during LLVM verification
 pub fn panic(message: []const u8, stacktrace: ?*std.builtin.StackTrace, _: ?usize) noreturn {
-    if (builtin.is_test) {
-        std.debug.print("{s}: {?}", .{ message, stacktrace });
+    if (builtin.target.cpu.arch != .wasm32) {
+        std.debug.print("\nSomehow in unreachable zig panic!\nThis is a roc standard libarry bug\n{s}: {?}", .{ message, stacktrace });
+        std.process.abort();
+    } else {
+        // Can't call abort or print from wasm. Just leave it as unreachable.
+        unreachable;
     }
-
-    unreachable;
 }
 
 // Run all tests in imported modules

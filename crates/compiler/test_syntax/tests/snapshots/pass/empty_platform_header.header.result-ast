@@ -1,6 +1,6 @@
-Module {
-    comments: [],
-    header: Platform(
+SpacesBefore {
+    before: [],
+    item: Platform(
         PlatformHeader {
             before_name: [],
             name: @9-25 PackageName(
@@ -14,14 +14,24 @@ Module {
                 },
                 item: PlatformRequires {
                     rigids: [],
-                    signature: @40-49 TypedIdent {
-                        ident: @40-44 "main",
-                        spaces_before_colon: [],
-                        ann: @47-49 Record {
-                            fields: [],
-                            ext: None,
+                    signatures: [
+                        @40-49 TypedIdent {
+                            ident: @40-44 "init",
+                            spaces_before_colon: [],
+                            ann: @47-49 Record {
+                                fields: [],
+                                ext: None,
+                            },
                         },
-                    },
+                        @51-62 TypedIdent {
+                            ident: @51-57 "update",
+                            spaces_before_colon: [],
+                            ann: @60-62 Record {
+                                fields: [],
+                                ext: None,
+                            },
+                        },
+                    ],
                 },
             },
             exposes: KeywordItem {

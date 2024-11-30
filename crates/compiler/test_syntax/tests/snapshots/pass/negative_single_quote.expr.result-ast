@@ -1,0 +1,6 @@
+UnaryOp(
+    @1-4 SingleQuote(
+        "i",
+    ),
+    @0-1 Negate,
+)

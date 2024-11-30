@@ -1,11 +1,11 @@
-Module {
-    comments: [],
-    header: Module(
+SpacesBefore {
+    before: [],
+    item: Module(
         ModuleHeader {
             after_keyword: [],
             params: Some(
                 ModuleParams {
-                    params: [
+                    pattern: @7-20 [
                         @9-10 Identifier {
                             ident: "x",
                         },

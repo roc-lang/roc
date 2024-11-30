@@ -12,23 +12,26 @@ name = "test_derive"
 path = "src/tests.rs"
 
 [dev-dependencies]
-roc_builtins = { path = "../builtins" }
-roc_can = { path = "../can" }
-roc_collections = { path = "../collections" }
-roc_constrain = { path = "../constrain" }
-roc_debug_flags = { path = "../debug_flags" }
-roc_derive = { path = "../derive", features = ["debug-derived-symbols", "open-extension-vars"] }
-roc_derive_key = { path = "../derive_key" }
-roc_load_internal = { path = "../load_internal" }
-roc_module = { path = "../module" }
-roc_packaging = { path = "../../packaging" }
-roc_region = { path = "../region" }
-roc_reporting = { path = "../../reporting" }
-roc_solve = { path = "../solve" }
-roc_target = { path = "../roc_target" }
-roc_types = { path = "../types" }
+roc_builtins.workspace = true
+roc_can.workspace = true
+roc_collections.workspace = true
+roc_constrain.workspace = true
+roc_debug_flags.workspace = true
+roc_derive = { workspace = true, features = [
+    "debug-derived-symbols",
+    "open-extension-vars",
+] }
+roc_derive_key.workspace = true
+roc_load_internal.workspace = true
+roc_module.workspace = true
+roc_packaging.workspace = true
+roc_region.workspace = true
+roc_reporting.workspace = true
+roc_solve.workspace = true
+roc_target.workspace = true
+roc_types.workspace = true
 
-ven_pretty = { path = "../../vendor/pretty" }
+ven_pretty.workspace = true
 
 bumpalo.workspace = true
 insta.workspace = true

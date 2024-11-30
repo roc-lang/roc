@@ -16,6 +16,7 @@ pub mod gen_primitives;
 pub mod gen_records;
 pub mod gen_refcount;
 pub mod gen_result;
+pub mod gen_return;
 pub mod gen_set;
 pub mod gen_str;
 pub mod gen_tags;

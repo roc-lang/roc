@@ -793,6 +793,13 @@ fn gen_div_checked_by_zero_dec() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 #[should_panic(expected = r#"Roc failed with message: "Decimal division by 0!"#)]
+fn gen_div_dec_zero_by_zero() {
+    assert_evals_to!("0dec / 0", RocDec::from_str("-1").unwrap(), RocDec);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+#[should_panic(expected = r#"Roc failed with message: "Decimal division by 0!"#)]
 fn gen_div_dec_by_zero() {
     assert_evals_to!("1dec / 0", RocDec::from_str("-1").unwrap(), RocDec);
 }
@@ -1606,22 +1613,43 @@ fn tail_call_elimination() {
 }
 
 #[test]
-#[cfg(feature = "gen-dev")]
-fn int_negate_dev() {
-    // TODO
-    // dev backend yet to have `Num.maxI64` or `Num.minI64`.
-    // add the "gen-dev" feature to the test below after implementing them both.
-    assert_evals_to!("Num.neg 123", -123, i64);
-    assert_evals_to!("Num.neg -123", 123, i64);
-    assert_evals_to!("Num.neg 0", 0, i64);
-}
-
-#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn int_negate() {
+fn num_negate() {
+    assert_evals_to!("Num.neg 123i8", -123, i8);
+    assert_evals_to!("Num.neg Num.maxI8", -i8::MAX, i8);
+    assert_evals_to!("Num.neg (Num.minI8 + 1)", i8::MAX, i8);
+
+    assert_evals_to!("Num.neg 123i16", -123, i16);
+    assert_evals_to!("Num.neg Num.maxI16", -i16::MAX, i16);
+    assert_evals_to!("Num.neg (Num.minI16 + 1)", i16::MAX, i16);
+
+    assert_evals_to!("Num.neg 123i32", -123, i32);
+    assert_evals_to!("Num.neg Num.maxI32", -i32::MAX, i32);
+    assert_evals_to!("Num.neg (Num.minI32 + 1)", i32::MAX, i32);
+
     assert_evals_to!("Num.neg 123", -123, i64);
     assert_evals_to!("Num.neg Num.maxI64", -i64::MAX, i64);
     assert_evals_to!("Num.neg (Num.minI64 + 1)", i64::MAX, i64);
+
+    assert_evals_to!("Num.neg 12.3f32", -12.3, f32);
+    assert_evals_to!("Num.neg 0.0f32", -0.0, f32);
+    assert_evals_to!("Num.neg Num.maxF32", -f32::MAX, f32);
+    assert_evals_to!("Num.neg Num.minF32", -f32::MIN, f32);
+    assert_evals_to!("Num.neg Num.infinityF32", -f32::INFINITY, f32);
+    // can't test equality for nan
+    assert_evals_to!("Num.isNaN (Num.neg Num.nanF32)", true, bool);
+
+    assert_evals_to!("Num.neg 12.3f64", -12.3, f64);
+    assert_evals_to!("Num.neg 0.0f64", -0.0, f64);
+    assert_evals_to!("Num.neg Num.maxF64", -f64::MAX, f64);
+    assert_evals_to!("Num.neg Num.minF64", -f64::MIN, f64);
+    assert_evals_to!("Num.neg Num.infinityF64", -f64::INFINITY, f64);
+    // can't test equality for nan
+    assert_evals_to!("Num.isNaN (Num.neg Num.nanF64)", true, bool);
+
+    assert_evals_to!("Num.neg 123dec", RocDec::from(-123), RocDec);
+    // 0 is signless, unlike f32/f64
+    assert_evals_to!("Num.neg 0dec", RocDec::from(0), RocDec);
 }
 
 #[test]
@@ -1788,6 +1816,7 @@ fn frac_is_nan() {
     assert_evals_to!("Num.isNaN (0 / 0f64)", true, bool);
     assert_evals_to!("Num.isNaN (1 / 0f64)", false, bool);
     assert_evals_to!("Num.isNaN 42f64", false, bool);
+    assert_evals_to!("Num.isNaN 42dec", false, bool);
 }
 
 #[test]
@@ -1797,6 +1826,7 @@ fn frac_is_infinite() {
     assert_evals_to!("Num.isInfinite (-1 / 0f64)", true, bool);
     assert_evals_to!("Num.isInfinite (0 / 0f64)", false, bool);
     assert_evals_to!("Num.isInfinite 42f64", false, bool);
+    assert_evals_to!("Num.isInfinite 42dec", false, bool);
 }
 
 #[test]
@@ -1805,6 +1835,7 @@ fn frac_is_finite() {
     assert_evals_to!("Num.isFinite 42f64", true, bool);
     assert_evals_to!("Num.isFinite (1 / 0f64)", false, bool);
     assert_evals_to!("Num.isFinite (0 / 0f64)", false, bool);
+    assert_evals_to!("Num.isFinite 42dec", true, bool);
 }
 
 #[test]

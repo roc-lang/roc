@@ -110,7 +110,7 @@ Here's a code sample that shows a few different aspects of Roc:
 - File I/O and HTTP requests
 - Pattern matching for error handling
 - JSON deserialization via type inference
-- Common syntax sugar: string interpolation, pipelines, and backpassing
+- Common syntax sugar: pipelines, the `!` operator, and string interpolation
 
 The [tutorial](/tutorial) introduces these gradually and in more depth, but this gives a brief overview.
 
@@ -132,6 +132,7 @@ If you would like your organization to become an official sponsor of Roc's devel
 We'd also like to express our gratitude to our generous [individual sponsors](https://github.com/sponsors/roc-lang/)! A special thanks to those sponsoring $25/month or more:
 
 <ul id="individual-sponsors">
+    <li><a href="https://github.com/pmarreck">Peter Marreck</a></li>
     <li><a href="https://github.com/chiroptical">Barry Moore</a></li>
     <li>Eric Andresen</li>
     <li><a href="https://github.com/jluckyiv">Jackson Lucky</a></li>

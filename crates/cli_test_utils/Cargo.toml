@@ -1,0 +1,28 @@
+[package]
+name = "cli_test_utils"
+description = "Provides shared code for cli tests, cli benchmarks, glue tests, valgrind crate."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+version.workspace = true
+
+[dependencies]
+roc_collections.workspace = true
+roc_load.workspace = true
+roc_module.workspace = true
+roc_reporting.workspace = true
+roc_command_utils.workspace = true
+roc_cli.workspace = true
+
+bumpalo.workspace = true
+criterion.workspace = true
+regex.workspace = true
+serde.workspace = true
+tempfile.workspace = true
+lazy_static.workspace = true
+const_format.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rlimit.workspace = true

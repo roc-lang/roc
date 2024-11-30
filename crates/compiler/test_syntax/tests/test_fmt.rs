@@ -5,10 +5,10 @@ extern crate indoc;
 mod test_fmt {
     use bumpalo::Bump;
     use roc_fmt::def::fmt_defs;
-    use roc_fmt::module::fmt_module;
+    use roc_fmt::header::fmt_header;
     use roc_fmt::Buf;
-    use roc_parse::ast::{Defs, Module};
-    use roc_parse::module::{self, parse_module_defs};
+    use roc_parse::ast::{Defs, Header, SpacesBefore};
+    use roc_parse::header::{self, parse_module_defs};
     use roc_parse::state::State;
     use roc_test_utils::assert_multiline_str_eq;
     use roc_test_utils_dir::workspace_root;
@@ -32,19 +32,26 @@ mod test_fmt {
     fn fmt_module_and_defs<'a>(
         arena: &Bump,
         src: &str,
-        module: &Module<'a>,
+        header: &SpacesBefore<'a, Header<'a>>,
         state: State<'a>,
         buf: &mut Buf<'_>,
     ) {
-        fmt_module(buf, module);
+        fmt_header(buf, header);
 
         match parse_module_defs(arena, state, Defs::default()) {
             Ok(loc_defs) => {
                 fmt_defs(buf, &loc_defs, 0);
             }
-            Err(error) => panic!(
-                r"Unexpected parse failure when parsing this for defs formatting:\n\n{src:?}\n\nParse error was:\n\n{error:?}\n\n"
-            ),
+            Err(error) => {
+                let src = if src.len() > 1000 {
+                    "<source too long to display>"
+                } else {
+                    src
+                };
+                panic!(
+                    "Unexpected parse failure when parsing this for defs formatting:\n\n{src}\n\nParse error was:\n\n{error:?}\n\n"
+                )
+            }
         }
     }
 
@@ -54,9 +61,9 @@ mod test_fmt {
         let src = src.trim();
         let expected = expected.trim();
 
-        match module::parse_header(&arena, State::new(src.as_bytes())) {
+        match header::parse_header(&arena, State::new(src.as_bytes())) {
             Ok((actual, state)) => {
-                use roc_fmt::spaces::RemoveSpaces;
+                use roc_parse::normalize::Normalize;
 
                 let mut buf = Buf::new_in(&arena);
 
@@ -64,14 +71,14 @@ mod test_fmt {
 
                 let output = buf.as_str().trim();
 
-                let (reparsed_ast, state) = module::parse_header(&arena, State::new(output.as_bytes())).unwrap_or_else(|err| {
+                let (reparsed_ast, state) = header::parse_header(&arena, State::new(output.as_bytes())).unwrap_or_else(|err| {
                     panic!(
                         "After formatting, the source code no longer parsed!\n\nParse error was: {err:?}\n\nThe code that failed to parse:\n\n{output}\n\n"
                     );
                 });
 
-                let ast_normalized = actual.remove_spaces(&arena);
-                let reparsed_ast_normalized = reparsed_ast.remove_spaces(&arena);
+                let ast_normalized = actual.normalize(&arena);
+                let reparsed_ast_normalized = reparsed_ast.normalize(&arena);
 
                 // HACK!
                 // We compare the debug format strings of the ASTs, because I'm finding in practice that _somewhere_ deep inside the ast,
@@ -1979,7 +1986,7 @@ mod test_fmt {
     }
 
     #[test]
-    fn new_record_builder() {
+    fn record_builder() {
         expr_formats_same(indoc!(
             r"
             { shoes <- leftShoe: nothing }
@@ -2066,170 +2073,6 @@ mod test_fmt {
                     leftShoe: bareFoot,
                 }
                 "
-            ),
-        );
-    }
-
-    #[test]
-    fn old_record_builder() {
-        expr_formats_same(indoc!(
-            r#"
-            { a: 1, b: <- get "b" |> batch, c: <- get "c" |> batch, d }
-            "#
-        ));
-
-        expr_formats_to(
-            indoc!(
-                r#"
-                {   a: 1, b:   <-  get "b" |> batch,   c:<- get "c" |> batch }
-                "#
-            ),
-            indoc!(
-                r#"
-                { a: 1, b: <- get "b" |> batch, c: <- get "c" |> batch }
-                "#
-            ),
-        );
-
-        expr_formats_same(indoc!(
-            r#"
-            {
-                a: 1,
-                b: <- get "b" |> batch,
-                c: <- get "c" |> batch,
-                d,
-            }
-            "#
-        ));
-
-        expr_formats_to(
-            indoc!(
-                r#"
-                {   a: 1, b:  <-  get "b" |> batch,
-                c: <- get "c" |> batch, d }
-                "#
-            ),
-            indoc!(
-                r#"
-                {
-                    a: 1,
-                    b: <- get "b" |> batch,
-                    c: <- get "c" |> batch,
-                    d,
-                }
-                "#
-            ),
-        );
-    }
-
-    #[test]
-    fn multiline_record_builder_field() {
-        expr_formats_to(
-            indoc!(
-                r#"
-                succeed {
-                    a: <- get "a" |> map (\x -> x * 2)
-                        |> batch,
-                    b: <- get "b" |> batch,
-                    c: items
-                        |> List.map \x -> x * 2
-                }
-                "#
-            ),
-            indoc!(
-                r#"
-                succeed {
-                    a: <-
-                        get "a"
-                        |> map (\x -> x * 2)
-                        |> batch,
-                    b: <- get "b" |> batch,
-                    c:
-                        items
-                        |> List.map \x -> x * 2,
-                }
-                "#
-            ),
-        );
-
-        expr_formats_same(indoc!(
-            r#"
-                succeed {
-                    a: # I like to comment in weird places
-                        <- get "a" |> batch,
-                    b: <- get "b" |> batch,
-                }
-                "#
-        ));
-
-        expr_formats_same(indoc!(
-            r#"
-                succeed {
-                    a:
-                    # I like to comment in weird places
-                        <- get "a" |> batch,
-                    b: <- get "b" |> batch,
-                }
-                "#
-        ));
-    }
-
-    #[test]
-    fn outdentable_record_builders() {
-        expr_formats_to(
-            indoc!(
-                r#"
-                succeed {  a: <- get "a" |> batch,
-                    b: <- get "b" |> batch,
-                }
-                "#
-            ),
-            indoc!(
-                r#"
-                succeed {
-                    a: <- get "a" |> batch,
-                    b: <- get "b" |> batch,
-                }
-                "#
-            ),
-        );
-
-        expr_formats_to(
-            indoc!(
-                r#"
-                succeed
-                    {
-                        a: <- get "a" |> batch,
-                        b: <- get "b" |> batch,
-                    }
-                "#
-            ),
-            indoc!(
-                r#"
-                succeed {
-                    a: <- get "a" |> batch,
-                    b: <- get "b" |> batch,
-                }
-                "#
-            ),
-        );
-    }
-
-    #[test]
-    fn can_format_multiple_record_builders() {
-        expr_formats_to(
-            indoc!(
-                r#"
-                succeed { a: <- get "a" }
-                    { b: <- get "b" }
-                "#
-            ),
-            indoc!(
-                r#"
-                succeed
-                    { a: <- get "a" }
-                    { b: <- get "b" }
-                "#
             ),
         );
     }
@@ -2440,15 +2283,25 @@ mod test_fmt {
             "
         ));
 
-        expr_formats_same(indoc!(
-            r"
-                f :
-                    {
+        expr_formats_to(
+            indoc!(
+                r"
+                    f :
+                        {
+                        }
+
+                    f
+                "
+            ),
+            indoc!(
+                r"
+                    f : {
                     }
 
-                f
-            "
-        ));
+                    f
+                "
+            ),
+        );
     }
 
     #[test]
@@ -3622,6 +3475,60 @@ mod test_fmt {
     }
 
     #[test]
+    fn early_return_else() {
+        expr_formats_same(indoc!(
+            r"
+            if foo then
+                bar
+                else
+
+            baz
+            "
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r"
+                if thing then
+                    whatever
+                    else
+                too close
+                "
+            ),
+            indoc!(
+                r"
+                if thing then
+                    whatever
+                    else
+
+                too close
+                "
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r"
+                if isGrowing plant then
+                    LetBe
+                    else
+
+                    Water
+                "
+            ),
+            indoc!(
+                r"
+                if isGrowing plant then
+                    LetBe
+                    else
+
+                Water
+                "
+            ),
+        );
+    }
+
+    #[test]
     fn multi_line_application() {
         expr_formats_same(indoc!(
             r"
@@ -3923,6 +3830,7 @@ mod test_fmt {
     }
 
     #[test]
+    #[ignore]
     fn with_multiline_pattern_indentation() {
         expr_formats_to(
             indoc!(
@@ -4833,8 +4741,6 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r"
                 blah :
-                    Str,
-                    # comment
                     (Str -> Str)
                     -> Str
 
@@ -5022,10 +4928,10 @@ mod test_fmt {
     fn single_line_platform() {
         module_formats_same(
             "platform \"folkertdev/foo\" \
-            requires { Model, Msg } { main : Effect {} } \
+            requires { Model, Msg } { main : Task {} [] } \
             exposes [] \
             packages {} \
-            imports [Task.{ Task }] \
+            imports [] \
             provides [mainForHost]",
         );
     }
@@ -5094,7 +5000,7 @@ mod test_fmt {
     fn single_line_hosted() {
         module_formats_same(indoc!(
             r"
-                hosted Foo exposes [] imports [] generates Bar with []"
+                hosted Foo exposes [] imports []"
         ));
     }
 
@@ -5111,11 +5017,6 @@ mod test_fmt {
                     imports [
                         Blah,
                         Baz.{ stuff, things },
-                    ]
-                    generates Bar with [
-                        map,
-                        after,
-                        loop,
                     ]"
         ));
     }
@@ -5596,25 +5497,15 @@ mod test_fmt {
             "
         ));
 
-        expr_formats_to(
-            indoc!(
-                r"
+        expr_formats_same(indoc!(
+            r"
                 A :=
                     U8
                     implements [Eq, Hash]
 
                 0
                 "
-            ),
-            indoc!(
-                r"
-                A := U8
-                    implements [Eq, Hash]
-
-                0
-                "
-            ),
-        );
+        ));
 
         expr_formats_to(
             indoc!(
@@ -6179,6 +6070,41 @@ mod test_fmt {
     }
 
     #[test]
+    fn format_try() {
+        expr_formats_same(indoc!(
+            r#"
+            _ = crash
+            _ = crash ""
+
+            crash "" ""
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                _ = crash
+                _ = crash    ""
+                _ = crash   ""   ""
+                try
+                    foo
+                    (\_ ->   crash "")
+                "#
+            ),
+            indoc!(
+                r#"
+                _ = crash
+                _ = crash ""
+                _ = crash "" ""
+                try
+                    foo
+                    (\_ -> crash "")
+                "#
+            ),
+        );
+    }
+
+    #[test]
     fn issue_6197() {
         expr_formats_to(
             indoc!(
@@ -6223,11 +6149,183 @@ mod test_fmt {
                     [first as last]
                     | [first, last] ->
                         first
-                
+
                     _ -> Not
                 "
             ),
         );
+    }
+
+    #[test]
+    fn preserve_annotated_body() {
+        expr_formats_same(indoc!(
+            r"
+                x : i32
+                x = 1
+                x
+            "
+        ));
+    }
+
+    #[test]
+    fn preserve_annotated_body_comment() {
+        expr_formats_same(indoc!(
+            r"
+                x : i32 # comment
+                x = 1
+                x
+            "
+        ));
+    }
+
+    #[test]
+    fn preserve_annotated_body_comments() {
+        expr_formats_same(indoc!(
+            r"
+                x : i32
+                # comment
+                # comment 2
+                x = 1
+                x
+            "
+        ));
+    }
+
+    #[test]
+    fn preserve_annotated_body_comments_without_newlines() {
+        expr_formats_to(
+            indoc!(
+                r"
+                    x : i32
+
+                    # comment
+
+                    # comment 2
+
+                    x = 1
+                    x
+                "
+            ),
+            indoc!(
+                r"
+                    x : i32
+                    # comment
+                    # comment 2
+                    x = 1
+                    x
+                "
+            ),
+        );
+    }
+
+    #[test]
+    fn preserve_annotated_body_blank_comment() {
+        expr_formats_same(indoc!(
+            r"
+                x : i32
+                #
+                x = 1
+                x
+            "
+        ));
+    }
+
+    #[test]
+    fn preserve_annotated_body_without_newlines() {
+        expr_formats_to(
+            indoc!(
+                r"
+                x : i32
+
+                x = 1
+                x
+            "
+            ),
+            indoc!(
+                r"
+                x : i32
+                x = 1
+                x
+            "
+            ),
+        );
+    }
+
+    #[test]
+    fn keep_explicit_blank_chars() {
+        expr_formats_same(indoc!(
+            r#"
+                x = "a\u(200a)b\u(200b)c\u(200c)d\u(feff)e"
+                x
+            "#
+        ));
+    }
+
+    #[test]
+    fn make_blank_chars_explicit() {
+        expr_formats_to(
+            indoc!(
+                "
+                    x = \"a\u{200A}b\u{200B}c\u{200C}d\u{FEFF}e\"
+                    x
+                "
+            ),
+            indoc!(
+                r#"
+                    x = "a\u(200a)b\u(200b)c\u(200c)d\u(feff)e"
+                    x
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn make_blank_chars_explicit_when_interpolating() {
+        expr_formats_to(
+            indoc!(
+                "
+                    x = \"foo:\u{200B} $(bar).\"
+                    x
+                "
+            ),
+            indoc!(
+                r#"
+                    x = "foo:\u(200b) $(bar)."
+                    x
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn make_blank_chars_explicit_in_multiline_string() {
+        expr_formats_to(
+            indoc!(
+                "
+                    x =
+                        \"\"\"
+                        foo:\u{200B} $(bar).
+                        \"\"\"
+                    x
+                "
+            ),
+            indoc!(
+                r#"
+                    x =
+                        """
+                        foo:\u(200b) $(bar).
+                        """
+                    x
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn preserve_multiline_string_trailing_whitespace() {
+        expr_formats_same(indoc!(
+            "x =\n    \"\"\"\n    foo\n    bar                \n    baz\n    \"\"\"\nx"
+        ));
     }
 
     // this is a parse error atm

@@ -1,3 +1,4 @@
+use crate::ast::TryTarget;
 use crate::parser::Progress::{self, *};
 use crate::parser::{BadInputError, EExpr, ParseResult, Parser};
 use crate::state::State;
@@ -45,40 +46,10 @@ pub enum Ident<'a> {
     },
     /// `.foo { foo: 42 }` or `.1 (1, 2, 3)`
     AccessorFunction(Accessor<'a>),
+    /// `&foo { foo: 42 } 3`
+    RecordUpdaterFunction(&'a str),
     /// .Foo or foo. or something like foo.Bar
     Malformed(&'a str, BadIdent),
-}
-
-impl<'a> Ident<'a> {
-    pub fn len(&self) -> usize {
-        use self::Ident::*;
-
-        match self {
-            Tag(string) | OpaqueRef(string) => string.len(),
-            Access {
-                module_name, parts, ..
-            } => {
-                let mut len = if module_name.is_empty() {
-                    0
-                } else {
-                    module_name.len() + 1
-                    // +1 for the dot
-                };
-
-                for part in parts.iter() {
-                    len += part.len() + 1 // +1 for the dot
-                }
-
-                len - 1
-            }
-            AccessorFunction(string) => string.len(),
-            Malformed(string, _) => string.len(),
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
 }
 
 /// This could be:
@@ -271,6 +242,7 @@ pub enum BadIdent {
     WeirdDotAccess(Position),
     WeirdDotQualified(Position),
     StrayDot(Position),
+    StrayAmpersand(Position),
     BadOpaqueRef(Position),
     QualifiedTupleAccessor(Position),
 }
@@ -280,21 +252,27 @@ fn is_alnum(ch: char) -> bool {
 }
 
 fn chomp_lowercase_part(buffer: &[u8]) -> Result<&str, Progress> {
-    chomp_part(char::is_lowercase, is_alnum, buffer)
+    chomp_part(char::is_lowercase, is_alnum, true, buffer)
 }
 
 fn chomp_uppercase_part(buffer: &[u8]) -> Result<&str, Progress> {
-    chomp_part(char::is_uppercase, is_alnum, buffer)
+    chomp_part(char::is_uppercase, is_alnum, false, buffer)
 }
 
 fn chomp_anycase_part(buffer: &[u8]) -> Result<&str, Progress> {
-    chomp_part(char::is_alphabetic, is_alnum, buffer)
+    use encode_unicode::CharExt;
+
+    let allow_bang =
+        char::from_utf8_slice_start(buffer).map_or(false, |(leading, _)| leading.is_lowercase());
+
+    chomp_part(char::is_alphabetic, is_alnum, allow_bang, buffer)
 }
 
 fn chomp_integer_part(buffer: &[u8]) -> Result<&str, Progress> {
     chomp_part(
         |ch| char::is_ascii_digit(&ch),
         |ch| char::is_ascii_digit(&ch),
+        false,
         buffer,
     )
 }
@@ -304,7 +282,12 @@ fn is_plausible_ident_continue(ch: char) -> bool {
 }
 
 #[inline(always)]
-fn chomp_part<F, G>(leading_is_good: F, rest_is_good: G, buffer: &[u8]) -> Result<&str, Progress>
+fn chomp_part<F, G>(
+    leading_is_good: F,
+    rest_is_good: G,
+    allow_bang: bool,
+    buffer: &[u8],
+) -> Result<&str, Progress>
 where
     F: Fn(char) -> bool,
     G: Fn(char) -> bool,
@@ -324,6 +307,9 @@ where
     while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
         if rest_is_good(ch) {
             chomped += width;
+        } else if allow_bang && ch == '!' {
+            chomped += width;
+            break;
         } else {
             // we're done
             break;
@@ -377,7 +363,7 @@ impl<'a> Accessor<'a> {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Suffix<'a> {
     Accessor(Accessor<'a>),
-    TaskAwaitBang,
+    TrySuffix(TryTarget),
 }
 
 /// a `.foo` or `.1` accessor function
@@ -411,6 +397,18 @@ fn chomp_accessor(buffer: &[u8], pos: Position) -> Result<Accessor, BadIdent> {
                     Err(BadIdent::StrayDot(pos.bump_column(1)))
                 }
             }
+        }
+    }
+}
+
+/// a `&foo` record updater function
+fn chomp_record_updater(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
+    // assumes the leading `&` has been chomped already
+    match chomp_lowercase_part(buffer) {
+        Ok(name) => Ok(name),
+        Err(_) => {
+            // we've already made progress with the initial `&`
+            Err(BadIdent::StrayAmpersand(pos.bump_column(1)))
         }
     }
 }
@@ -457,6 +455,14 @@ fn chomp_identifier_chain<'a>(
                 }
                 Err(fail) => return Err((1, fail)),
             },
+            '&' => match chomp_record_updater(&buffer[1..], pos) {
+                Ok(updater) => {
+                    let bytes_parsed = 1 + updater.len();
+                    return Ok((bytes_parsed as u32, Ident::RecordUpdaterFunction(updater)));
+                }
+                // return 0 bytes consumed on failure to allow parsing &&
+                Err(fail) => return Err((0, fail)),
+            },
             '@' => match chomp_opaque_ref(buffer, pos) {
                 Ok(tagname) => {
                     let bytes_parsed = tagname.len();
@@ -482,6 +488,16 @@ fn chomp_identifier_chain<'a>(
     while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
         if ch.is_alphabetic() || ch.is_ascii_digit() {
             chomped += width;
+        } else if ch == '!' && !first_is_uppercase {
+            chomped += width;
+
+            let value = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
+            let ident = Ident::Access {
+                module_name: "",
+                parts: arena.alloc([Accessor::RecordField(value)]),
+            };
+
+            return Ok((chomped as u32, ident));
         } else {
             // we're done
             break;

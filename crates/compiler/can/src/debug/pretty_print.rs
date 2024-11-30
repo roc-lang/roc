@@ -1,14 +1,16 @@
 //! Pretty-prints the canonical AST back to check our work - do things look reasonable?
 
-use crate::def::Def;
+use crate::def::{Def, DefKind};
 use crate::expr::Expr::{self, *};
 use crate::expr::{
-    ClosureData, DeclarationTag, Declarations, FunctionDef, OpaqueWrapFunctionData, WhenBranch,
+    ClosureData, DeclarationTag, Declarations, FunctionDef, OpaqueWrapFunctionData,
+    StructAccessorData, WhenBranch,
 };
 use crate::pattern::{Pattern, RecordDestruct, TupleDestruct};
 
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 
+use roc_types::types::IndexOrField;
 use ven_pretty::{text, Arena, DocAllocator, DocBuilder};
 
 pub struct Ctx<'a> {
@@ -60,7 +62,6 @@ fn print_declarations_help<'a>(
                 toplevel_function(c, f, symbol, function_def, &body.value)
             }
             DeclarationTag::Expectation => todo!(),
-            DeclarationTag::ExpectationFx => todo!(),
             DeclarationTag::Destructure(_) => todo!(),
             DeclarationTag::MutualRecursion { .. } => {
                 // the defs will be printed next
@@ -105,9 +106,14 @@ fn def<'a>(c: &Ctx, f: &'a Arena<'a>, d: &'a Def) -> DocBuilder<'a, Arena<'a>> {
         expr_var: _,
         pattern_vars: _,
         annotation: _,
+        kind,
     } = d;
 
-    def_help(c, f, &loc_pattern.value, &loc_expr.value)
+    match kind {
+        DefKind::Let => def_help(c, f, &loc_pattern.value, &loc_expr.value),
+        DefKind::Ignored(_) => def_help(c, f, &loc_pattern.value, &loc_expr.value),
+        DefKind::Stmt(_) => expr(c, EPrec::Free, f, &loc_expr.value),
+    }
 }
 
 fn def_symbol_help<'a>(
@@ -206,7 +212,13 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
                     .append("]")
                     .group(),
             ),
-        Var(sym, _) | AbilityMember(sym, _, _) => pp_sym(c, f, *sym),
+        Var(sym, _) | ParamsVar { symbol: sym, .. } | AbilityMember(sym, _, _) => {
+            pp_sym(c, f, *sym)
+        }
+        ImportParams(_, _, Some((_, params_expr))) => expr(c, p, f, params_expr),
+        ImportParams(module_id, _, None) => {
+            text!(f, "<no params for {:?}>", module_id)
+        }
         When {
             loc_cond, branches, ..
         } => maybe_paren!(
@@ -259,7 +271,7 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
             .append(expr(c, Free, f, &body.value))
             .group(),
         Call(fun, args, _) => {
-            let (_, fun, _, _) = &**fun;
+            let (_, fun, _, _, _) = &**fun;
             maybe_paren!(
                 Free,
                 p,
@@ -375,7 +387,10 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
         OpaqueWrapFunction(OpaqueWrapFunctionData { opaque_name, .. }) => {
             text!(f, "@{}", opaque_name.as_str(c.interns))
         }
-        RecordAccessor(_) => todo!(),
+        RecordAccessor(StructAccessorData { field, .. }) => match field {
+            IndexOrField::Index(index) => text!(f, ".{}", index),
+            IndexOrField::Field(name) => text!(f, ".{}", name),
+        },
         RecordUpdate {
             symbol, updates, ..
         } => f
@@ -437,8 +452,7 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
         ),
         Dbg { .. } => todo!(),
         Expect { .. } => todo!(),
-        ExpectFx { .. } => todo!(),
-        TypedHole(_) => todo!(),
+        Return { .. } => todo!(),
         RuntimeError(_) => todo!(),
     }
 }

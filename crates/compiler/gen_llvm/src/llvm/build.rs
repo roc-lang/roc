@@ -936,9 +936,7 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         match env.target.ptr_width() {
             PtrWidth::Bytes4 => {
                 // we need to pass the string by reference, but we currently hold the value.
-                let alloca = env
-                    .builder
-                    .new_build_alloca(string.get_type(), "alloca_string");
+                let alloca = create_entry_block_alloca(env, string.get_type(), "alloca_string");
                 env.builder.new_build_store(alloca, string);
                 alloca.into()
             }
@@ -1345,7 +1343,6 @@ fn float_with_precision<'ctx>(
 pub fn build_exp_literal<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
-    parent: FunctionValue<'ctx>,
     layout: InLayout<'_>,
     literal: &roc_mono::ir::Literal<'a>,
 ) -> BasicValueEnum<'ctx> {
@@ -1382,18 +1379,14 @@ pub fn build_exp_literal<'a, 'ctx>(
         }
         Bool(b) => env.context.bool_type().const_int(*b as u64, false).into(),
         Byte(b) => env.context.i8_type().const_int(*b as u64, false).into(),
-        Str(str_literal) => build_string_literal(env, parent, str_literal),
+        Str(str_literal) => build_string_literal(env, str_literal),
     }
 }
 
-fn build_string_literal<'ctx>(
-    env: &Env<'_, 'ctx, '_>,
-    parent: FunctionValue<'ctx>,
-    str_literal: &str,
-) -> BasicValueEnum<'ctx> {
+fn build_string_literal<'ctx>(env: &Env<'_, 'ctx, '_>, str_literal: &str) -> BasicValueEnum<'ctx> {
     if str_literal.len() < env.small_str_bytes() as usize {
         match env.small_str_bytes() {
-            24 => small_str_ptr_width_8(env, parent, str_literal).into(),
+            24 => small_str_ptr_width_8(env, str_literal).into(),
             12 => small_str_ptr_width_4(env, str_literal).into(),
             _ => unreachable!("incorrect small_str_bytes"),
         }
@@ -1401,7 +1394,7 @@ fn build_string_literal<'ctx>(
         let ptr = define_global_str_literal_ptr(env, str_literal);
         let number_of_elements = env.ptr_int().const_int(str_literal.len() as u64, false);
 
-        let alloca = const_str_alloca_ptr(env, parent, ptr, number_of_elements, number_of_elements);
+        let alloca = const_str_alloca_ptr(env, ptr, number_of_elements, number_of_elements);
 
         match env.target.ptr_width() {
             PtrWidth::Bytes4 => {
@@ -1415,7 +1408,6 @@ fn build_string_literal<'ctx>(
 
 fn const_str_alloca_ptr<'ctx>(
     env: &Env<'_, 'ctx, '_>,
-    parent: FunctionValue<'ctx>,
     ptr: PointerValue<'ctx>,
     len: IntValue<'ctx>,
     cap: IntValue<'ctx>,
@@ -1424,18 +1416,14 @@ fn const_str_alloca_ptr<'ctx>(
 
     let value = typ.const_named_struct(&[ptr.into(), len.into(), cap.into()]);
 
-    let alloca = create_entry_block_alloca(env, parent, typ.into(), "const_str_store");
+    let alloca = create_entry_block_alloca(env, typ, "const_str_store");
 
     env.builder.new_build_store(alloca, value);
 
     alloca
 }
 
-fn small_str_ptr_width_8<'ctx>(
-    env: &Env<'_, 'ctx, '_>,
-    parent: FunctionValue<'ctx>,
-    str_literal: &str,
-) -> PointerValue<'ctx> {
+fn small_str_ptr_width_8<'ctx>(env: &Env<'_, 'ctx, '_>, str_literal: &str) -> PointerValue<'ctx> {
     debug_assert_eq!(env.target.ptr_width() as u8, 8);
 
     let mut array = [0u8; 24];
@@ -1456,7 +1444,7 @@ fn small_str_ptr_width_8<'ctx>(
     let ptr_type = env.context.i8_type().ptr_type(address_space);
     let ptr = env.builder.new_build_int_to_ptr(ptr, ptr_type, "to_u8_ptr");
 
-    const_str_alloca_ptr(env, parent, ptr, len, cap)
+    const_str_alloca_ptr(env, ptr, len, cap)
 }
 
 fn small_str_ptr_width_4<'ctx>(env: &Env<'_, 'ctx, '_>, str_literal: &str) -> StructValue<'ctx> {
@@ -1653,7 +1641,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
     use roc_mono::ir::Expr::*;
 
     match expr {
-        Literal(literal) => build_exp_literal(env, layout_interner, parent, layout, literal),
+        Literal(literal) => build_exp_literal(env, layout_interner, layout, literal),
         NullPointer => {
             let basic_type =
                 basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
@@ -1918,9 +1906,8 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
 
         EmptyArray => empty_polymorphic_list(env),
         Array { elem_layout, elems } => {
-            list_literal(env, layout_interner, parent, scope, *elem_layout, elems)
+            list_literal(env, layout_interner, scope, *elem_layout, elems)
         }
-        RuntimeErrorFunction(_) => todo!(),
 
         UnionAtIndex {
             tag_id,
@@ -2204,7 +2191,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                 layout_interner,
                 layout_interner.get_repr(*element_layout),
             );
-            let ptr = entry_block_alloca_zerofill(env, element_type, "stack_value");
+            let ptr = create_entry_block_alloca(env, element_type, "stack_value");
 
             if let Some(initializer) = initializer {
                 env.builder
@@ -2295,21 +2282,6 @@ fn build_wrapped_tag<'a, 'ctx>(
     }
 }
 
-pub fn entry_block_alloca_zerofill<'ctx>(
-    env: &Env<'_, 'ctx, '_>,
-    basic_type: BasicTypeEnum<'ctx>,
-    name: &str,
-) -> PointerValue<'ctx> {
-    let parent = env
-        .builder
-        .get_insert_block()
-        .unwrap()
-        .get_parent()
-        .unwrap();
-
-    create_entry_block_alloca(env, parent, basic_type, name)
-}
-
 fn build_tag_field_value<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
@@ -2395,10 +2367,7 @@ fn build_tag<'a, 'ctx>(
 
             let roc_union = RocUnion::tagged_from_slices(layout_interner, env.context, tags);
 
-            let tag_alloca = env
-                .builder
-                .new_build_alloca(roc_union.struct_type(), "tag_alloca");
-
+            let tag_alloca = create_entry_block_alloca(env, roc_union.struct_type(), "tag_alloca");
             roc_union.write_struct_data(
                 env,
                 layout_interner,
@@ -2692,8 +2661,6 @@ pub fn get_tag_id<'a, 'ctx>(
     union_layout: &UnionLayout<'a>,
     argument: BasicValueEnum<'ctx>,
 ) -> IntValue<'ctx> {
-    let builder = env.builder;
-
     let tag_id_layout = union_layout.tag_id_layout();
     let tag_id_int_type = basic_type_from_layout(
         env,
@@ -2728,7 +2695,7 @@ pub fn get_tag_id<'a, 'ctx>(
             let else_block = ctx.append_basic_block(parent, "else");
             let cont_block = ctx.append_basic_block(parent, "cont");
 
-            let result = builder.new_build_alloca(tag_id_int_type, "result");
+            let result = create_entry_block_alloca(env, tag_id_int_type, "result");
 
             env.builder
                 .new_build_conditional_branch(is_null, then_block, else_block);
@@ -2801,7 +2768,7 @@ fn lookup_at_index_ptr<'a, 'ctx>(
 
     // A recursive pointer in the loaded structure is stored as a `i64*`, but the loaded layout
     // might want a more precise structure. As such, cast it to the refined type if needed.
-    cast_if_necessary_for_opaque_recursive_pointers(env.builder, result, target_loaded_type)
+    cast_if_necessary_for_opaque_recursive_pointers(env, result, target_loaded_type)
 }
 
 fn union_field_ptr_at_index_help<'a, 'ctx>(
@@ -2858,8 +2825,7 @@ fn union_field_ptr_at_index<'a, 'ctx>(
     // might want a more precise structure. As such, cast it to the refined type if needed.
     let from_value: BasicValueEnum = result.into();
     let to_type: BasicTypeEnum = target_loaded_type;
-    cast_if_necessary_for_opaque_recursive_pointers(env.builder, from_value, to_type)
-        .into_pointer_value()
+    cast_if_necessary_for_opaque_recursive_pointers(env, from_value, to_type).into_pointer_value()
 }
 
 fn reserve_with_refcount_union_as_block_of_memory<'a, 'ctx>(
@@ -2932,7 +2898,6 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
 fn list_literal<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
-    parent: FunctionValue<'ctx>,
     scope: &Scope<'a, 'ctx>,
     element_layout: InLayout<'a>,
     elems: &[ListLiteralElement],
@@ -2949,136 +2914,108 @@ fn list_literal<'a, 'ctx>(
     let list_length = elems.len();
     let list_length_intval = env.ptr_int().const_int(list_length as _, false);
 
-    // TODO re-enable, currently causes morphic segfaults because it tries to update
-    // constants in-place...
-    // if element_type.is_int_type() {
-    if false {
-        let element_type = element_type.into_int_type();
+    let is_refcounted = layout_interner.contains_refcounted(element_layout);
+    let is_all_constant = elems.iter().all(|e| e.is_literal());
+
+    if is_all_constant && !is_refcounted {
+        // Build a global literal in-place instead of GEPing and storing individual elements.
+        // Exceptions:
+        //   - Anything that is refcounted has nested pointers,
+        //     and nested pointers in globals will break the surgical linker.
+        //     Ignore such cases for now.
+
         let element_width = layout_interner.stack_size(element_layout);
-        let size = list_length * element_width as usize;
+
         let alignment = layout_interner
             .alignment_bytes(element_layout)
             .max(env.target.ptr_width() as u32);
 
-        let mut is_all_constant = true;
-        let zero_elements =
-            (env.target.ptr_width() as u8 as f64 / element_width as f64).ceil() as usize;
+        let refcount_slot_bytes = alignment as usize;
 
-        // runtime-evaluated elements
-        let mut runtime_evaluated_elements = Vec::with_capacity_in(list_length, env.arena);
+        let refcount_slot_elements =
+            (refcount_slot_bytes as f64 / element_width as f64).ceil() as usize;
 
-        // set up a global that contains all the literal elements of the array
-        // any variables or expressions are represented as `undef`
-        let global = {
-            let mut global_elements = Vec::with_capacity_in(list_length, env.arena);
+        let data_bytes = list_length * element_width as usize;
 
-            // Add zero bytes that represent the refcount
-            //
-            // - if all elements are const, then we store the whole list as a constant.
-            //      It then needs a refcount before the first element.
-            // - but if the list is not all constants, then we will just copy the constant values,
-            //      and we do not need that refcount at the start
-            //
-            // In the latter case, we won't store the zeros in the globals
-            // (we slice them off again below)
-            for _ in 0..zero_elements {
-                global_elements.push(element_type.const_zero());
+        assert!(refcount_slot_elements > 0);
+
+        let global = if element_type.is_int_type() {
+            let element_type = element_type.into_int_type();
+            let mut bytes = Vec::with_capacity_in(refcount_slot_elements + data_bytes, env.arena);
+
+            // Fill the refcount slot with nulls
+            for _ in 0..(refcount_slot_elements) {
+                bytes.push(element_type.const_zero());
             }
 
             // Copy the elements from the list literal into the array
-            for (index, element) in elems.iter().enumerate() {
-                match element {
-                    ListLiteralElement::Literal(literal) => {
-                        let val = build_exp_literal(
-                            env,
-                            layout_interner,
-                            parent,
-                            element_layout,
-                            literal,
-                        );
-                        global_elements.push(val.into_int_value());
-                    }
-                    ListLiteralElement::Symbol(symbol) => {
-                        let val = scope.load_symbol(symbol);
-
-                        // here we'd like to furthermore check for intval.is_const().
-                        // if all elements are const for LLVM, we could make the array a constant.
-                        // BUT morphic does not know about this, and could allow us to modify that
-                        // array in-place. That would cause a segfault. So, we'll have to find
-                        // constants ourselves and cannot lean on LLVM here.
-
-                        is_all_constant = false;
-
-                        runtime_evaluated_elements.push((index, val));
-
-                        global_elements.push(element_type.get_undef());
-                    }
-                };
+            for element in elems.iter() {
+                let literal = element.get_literal().expect("is_all_constant is true");
+                let val = build_exp_literal(env, layout_interner, element_layout, &literal);
+                bytes.push(val.into_int_value());
             }
 
-            let const_elements = if is_all_constant {
-                global_elements.into_bump_slice()
-            } else {
-                &global_elements[zero_elements..]
-            };
-
-            // use None for the address space (e.g. Const does not work)
-            let typ = element_type.array_type(const_elements.len() as u32);
+            let typ = element_type.array_type(bytes.len() as u32);
             let global = env.module.add_global(typ, None, "roc__list_literal");
 
-            global.set_constant(true);
-            global.set_alignment(alignment);
-            global.set_unnamed_addr(true);
-            global.set_linkage(inkwell::module::Linkage::Private);
+            global.set_initializer(&element_type.const_array(bytes.into_bump_slice()));
+            global
+        } else if element_type.is_float_type() {
+            let element_type = element_type.into_float_type();
+            let mut bytes = Vec::with_capacity_in(refcount_slot_elements + data_bytes, env.arena);
 
-            global.set_initializer(&element_type.const_array(const_elements));
-            global.as_pointer_value()
-        };
-
-        if is_all_constant {
-            // all elements are constants, so we can use the memory in the constants section directly
-            // here we make a pointer to the first actual element (skipping the 0 bytes that
-            // represent the refcount)
-            let zero = env.ptr_int().const_zero();
-            let offset = env.ptr_int().const_int(zero_elements as _, false);
-
-            let ptr = unsafe {
-                env.builder.new_build_in_bounds_gep(
-                    element_type,
-                    global,
-                    &[zero, offset],
-                    "first_element_pointer",
-                )
-            };
-
-            super::build_list::store_list(env, ptr, list_length_intval).into()
-        } else {
-            // some of our elements are non-constant, so we must allocate space on the heap
-            let ptr = allocate_list(env, layout_interner, element_layout, list_length_intval);
-
-            // then, copy the relevant segment from the constant section into the heap
-            env.builder
-                .build_memcpy(
-                    ptr,
-                    alignment,
-                    global,
-                    alignment,
-                    env.ptr_int().const_int(size as _, false),
-                )
-                .unwrap();
-
-            // then replace the `undef`s with the values that we evaluate at runtime
-            for (index, val) in runtime_evaluated_elements {
-                let index_val = ctx.i64_type().const_int(index as u64, false);
-                let elem_ptr = unsafe {
-                    builder.new_build_in_bounds_gep(element_type, ptr, &[index_val], "index")
-                };
-
-                builder.new_build_store(elem_ptr, val);
+            // Fill the refcount slot with nulls
+            for _ in 0..(refcount_slot_elements) {
+                bytes.push(element_type.const_zero());
             }
 
-            super::build_list::store_list(env, ptr, list_length_intval).into()
-        }
+            // Copy the elements from the list literal into the array
+            for element in elems.iter() {
+                let literal = element.get_literal().expect("is_all_constant is true");
+                let val = build_exp_literal(env, layout_interner, element_layout, &literal);
+                bytes.push(val.into_float_value());
+            }
+
+            let typ = element_type.array_type(bytes.len() as u32);
+            let global = env.module.add_global(typ, None, "roc__list_literal");
+
+            global.set_initializer(&element_type.const_array(bytes.into_bump_slice()));
+            global
+        } else {
+            internal_error!("unexpected element type: {:?}", element_type);
+        };
+
+        global.set_constant(true);
+        global.set_alignment(alignment);
+        global.set_unnamed_addr(true);
+        global.set_linkage(inkwell::module::Linkage::Private);
+
+        // Refcount the global itself in a new allocation.
+        // Necessary because morphic MAY attempt to update the global in-place, which is
+        // illegal if the global is in the read-only section.
+        let with_rc_ptr = global.as_pointer_value();
+
+        let const_data_ptr = unsafe {
+            env.builder.new_build_in_bounds_gep(
+                element_type,
+                with_rc_ptr,
+                &[env
+                    .ptr_int()
+                    .const_int(refcount_slot_elements as u64, false)],
+                "get_data_ptr",
+            )
+        };
+
+        let data_ptr = allocate_list(env, layout_interner, element_layout, list_length_intval);
+
+        let byte_size = env
+            .ptr_int()
+            .const_int(list_length as u64 * element_width as u64, false);
+        builder
+            .build_memcpy(data_ptr, alignment, const_data_ptr, alignment, byte_size)
+            .unwrap();
+
+        super::build_list::store_list(env, data_ptr, list_length_intval).into()
     } else {
         let ptr = allocate_list(env, layout_interner, element_layout, list_length_intval);
 
@@ -3086,7 +3023,7 @@ fn list_literal<'a, 'ctx>(
         for (index, element) in elems.iter().enumerate() {
             let val = match element {
                 ListLiteralElement::Literal(literal) => {
-                    build_exp_literal(env, layout_interner, parent, element_layout, literal)
+                    build_exp_literal(env, layout_interner, element_layout, literal)
                 }
                 ListLiteralElement::Symbol(symbol) => scope.load_symbol(symbol),
             };
@@ -3118,7 +3055,7 @@ pub fn load_roc_value<'a, 'ctx>(
     let basic_type = basic_type_from_layout(env, layout_interner, layout);
 
     if layout.is_passed_by_reference(layout_interner) {
-        let alloca = entry_block_alloca_zerofill(env, basic_type, name);
+        let alloca = create_entry_block_alloca(env, basic_type, name);
 
         store_roc_value(env, layout_interner, layout, alloca, source.into());
 
@@ -3136,7 +3073,7 @@ pub fn use_roc_value<'a, 'ctx>(
     name: &str,
 ) -> BasicValueEnum<'ctx> {
     if layout.is_passed_by_reference(layout_interner) {
-        let alloca = entry_block_alloca_zerofill(
+        let alloca = create_entry_block_alloca(
             env,
             basic_type_from_layout(env, layout_interner, layout),
             name,
@@ -3332,14 +3269,18 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                         layout_interner.get_repr(param.layout),
                     );
 
-                    let phi_type = if layout_interner.is_passed_by_reference(param.layout) {
-                        basic_type.ptr_type(AddressSpace::default()).into()
+                    use crate::llvm::scope::JoinPointArg::*;
+                    let joinpoint_arg = if layout_interner.is_passed_by_reference(param.layout) {
+                        Alloca(create_entry_block_alloca(
+                            env,
+                            basic_type,
+                            "joinpoint_arg_alloca",
+                        ))
                     } else {
-                        basic_type
+                        Phi(env.builder.new_build_phi(basic_type, "joinpointarg"))
                     };
 
-                    let phi_node = env.builder.new_build_phi(phi_type, "joinpointarg");
-                    joinpoint_args.push(phi_node);
+                    joinpoint_args.push(joinpoint_arg);
                 }
 
                 builder.position_at_end(current);
@@ -3391,14 +3332,57 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
         Jump(join_point, arguments) => {
             let builder = env.builder;
             let context = env.context;
-            let (cont_block, argument_phi_values) = scope.get_join_point(*join_point).unwrap();
+            let (cont_block, joinpoint_args) = scope.get_join_point(*join_point).unwrap();
 
             let current_block = builder.get_insert_block().unwrap();
 
-            for (phi_value, argument) in argument_phi_values.iter().zip(arguments.iter()) {
-                let (value, _) = scope.load_symbol_and_layout(argument);
+            let mut to_resolve = bumpalo::vec![in env.arena];
+            for (joinpoint_arg, argument) in joinpoint_args.iter().zip(arguments.iter()) {
+                let (value, layout) = scope.load_symbol_and_layout(argument);
 
-                phi_value.add_incoming(&[(&value, current_block)]);
+                match joinpoint_arg {
+                    crate::llvm::scope::JoinPointArg::Alloca(alloca) => {
+                        let (size, alignment) = layout_interner.stack_size_and_alignment(layout);
+                        // I would like to just do a direct memcpy here, but it is not valid.
+                        // Imagine the case where I just swap two referenced args.
+                        // (a, b) -> jump (b, a)
+                        // This would generate `b` overwriting `a` then `a` overwriting `b`.
+                        // That would lead to both values being `b`
+
+                        // Instead we copy to a tmp alloca here.
+                        // After we have all tmp allocas, we copy those to the final output.
+                        let basic_type = basic_type_from_layout(
+                            env,
+                            layout_interner,
+                            layout_interner.get_repr(layout),
+                        );
+                        let tmp = create_entry_block_alloca(env, basic_type, "tmp_output_for_jmp");
+                        builder
+                            .build_memcpy(
+                                tmp,
+                                alignment,
+                                value.into_pointer_value(),
+                                alignment,
+                                env.ptr_int().const_int(size as _, false),
+                            )
+                            .unwrap();
+                        to_resolve.push((alloca, tmp, alignment, size));
+                    }
+                    crate::llvm::scope::JoinPointArg::Phi(phi) => {
+                        phi.add_incoming(&[(&value, current_block)]);
+                    }
+                }
+            }
+            for (alloca, tmp, alignment, size) in to_resolve {
+                builder
+                    .build_memcpy(
+                        *alloca,
+                        alignment,
+                        tmp,
+                        alignment,
+                        env.ptr_int().const_int(size as _, false),
+                    )
+                    .unwrap();
             }
 
             builder.new_build_unconditional_branch(*cont_block);
@@ -3576,8 +3560,8 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
             remainder,
         } => {
             if env.mode.runs_expects() {
-                let location = build_string_literal(env, parent, source_location);
-                let source = build_string_literal(env, parent, source);
+                let location = build_string_literal(env, source_location);
+                let source = build_string_literal(env, source);
                 let message = scope.load_symbol(symbol);
                 env.call_dbg(env, location, source, message);
             }
@@ -3644,75 +3628,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                     }
                     roc_target::PtrWidth::Bytes4 => {
                         // temporary WASM implementation
-                        throw_internal_exception(env, parent, "An expectation failed!");
-                    }
-                }
-            } else {
-                bd.position_at_end(throw_block);
-                bd.new_build_unconditional_branch(then_block);
-            }
-
-            bd.position_at_end(then_block);
-
-            build_exp_stmt(
-                env,
-                layout_interner,
-                layout_ids,
-                func_spec_solutions,
-                scope,
-                parent,
-                remainder,
-            )
-        }
-
-        ExpectFx {
-            condition: cond_symbol,
-            region,
-            lookups,
-            variables,
-            remainder,
-        } => {
-            let bd = env.builder;
-            let context = env.context;
-
-            let (cond, _cond_layout) = scope.load_symbol_and_layout(cond_symbol);
-
-            let condition = bd.new_build_int_compare(
-                IntPredicate::EQ,
-                cond.into_int_value(),
-                context.bool_type().const_int(1, false),
-                "is_true",
-            );
-
-            let then_block = context.append_basic_block(parent, "then_block");
-            let throw_block = context.append_basic_block(parent, "throw_block");
-
-            bd.new_build_conditional_branch(condition, then_block, throw_block);
-
-            if env.mode.runs_expects() {
-                bd.position_at_end(throw_block);
-
-                match env.target.ptr_width() {
-                    roc_target::PtrWidth::Bytes8 => {
-                        let shared_memory = SharedMemoryPointer::get(env);
-
-                        clone_to_shared_memory(
-                            env,
-                            layout_interner,
-                            scope,
-                            layout_ids,
-                            &shared_memory,
-                            *cond_symbol,
-                            *region,
-                            lookups,
-                            variables,
-                        );
-
-                        bd.new_build_unconditional_branch(then_block);
-                    }
-                    roc_target::PtrWidth::Bytes4 => {
-                        // temporary WASM implementation
-                        throw_internal_exception(env, parent, "An expectation failed!");
+                        throw_internal_exception(env, "An expectation failed!");
                     }
                 }
             } else {
@@ -3844,7 +3760,7 @@ fn equivalent_type_constructors(t1: &BasicTypeEnum, t2: &BasicTypeEnum) -> bool 
 /// This will no longer be necessary and should be removed after we employ opaque pointers from
 /// LLVM.
 pub fn cast_if_necessary_for_opaque_recursive_pointers<'ctx>(
-    builder: &Builder<'ctx>,
+    env: &Env<'_, 'ctx, '_>,
     from_value: BasicValueEnum<'ctx>,
     to_type: BasicTypeEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
@@ -3853,7 +3769,7 @@ pub fn cast_if_necessary_for_opaque_recursive_pointers<'ctx>(
         && equivalent_type_constructors(&from_value.get_type(), &to_type)
     {
         complex_bitcast(
-            builder,
+            env,
             from_value,
             to_type,
             "bitcast_for_opaque_recursive_pointer",
@@ -3865,39 +3781,33 @@ pub fn cast_if_necessary_for_opaque_recursive_pointers<'ctx>(
 
 /// Cast a value to another value of the same (or smaller?) size
 pub fn cast_basic_basic<'ctx>(
-    builder: &Builder<'ctx>,
+    env: &Env<'_, 'ctx, '_>,
     from_value: BasicValueEnum<'ctx>,
     to_type: BasicTypeEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
-    complex_bitcast(builder, from_value, to_type, "cast_basic_basic")
+    complex_bitcast(env, from_value, to_type, "cast_basic_basic")
 }
 
 pub fn complex_bitcast_struct_struct<'ctx>(
-    builder: &Builder<'ctx>,
+    env: &Env<'_, 'ctx, '_>,
     from_value: StructValue<'ctx>,
     to_type: StructType<'ctx>,
     name: &str,
 ) -> StructValue<'ctx> {
-    complex_bitcast(builder, from_value.into(), to_type.into(), name).into_struct_value()
+    complex_bitcast(env, from_value.into(), to_type.into(), name).into_struct_value()
 }
 
 pub fn cast_block_of_memory_to_tag<'ctx>(
-    builder: &Builder<'ctx>,
+    env: &Env<'_, 'ctx, '_>,
     from_value: StructValue<'ctx>,
     to_type: BasicTypeEnum<'ctx>,
 ) -> StructValue<'ctx> {
-    complex_bitcast(
-        builder,
-        from_value.into(),
-        to_type,
-        "block_of_memory_to_tag",
-    )
-    .into_struct_value()
+    complex_bitcast(env, from_value.into(), to_type, "block_of_memory_to_tag").into_struct_value()
 }
 
 /// Cast a value to another value of the same (or smaller?) size
 pub fn complex_bitcast<'ctx>(
-    builder: &Builder<'ctx>,
+    env: &Env<'_, 'ctx, '_>,
     from_value: BasicValueEnum<'ctx>,
     to_type: BasicTypeEnum<'ctx>,
     name: &str,
@@ -3908,7 +3818,8 @@ pub fn complex_bitcast<'ctx>(
         // we can't use the more straightforward bitcast in all cases
         // it seems like a bitcast only works on integers and pointers
         // and crucially does not work not on arrays
-        return builder
+        return env
+            .builder
             .new_build_pointer_cast(
                 from_value.into_pointer_value(),
                 to_type.into_pointer_type(),
@@ -3917,7 +3828,7 @@ pub fn complex_bitcast<'ctx>(
             .into();
     }
 
-    complex_bitcast_from_bigger_than_to(builder, from_value, to_type, name)
+    complex_bitcast_from_bigger_than_to(env, from_value, to_type, name)
 }
 
 /// Check the size of the input and output types. Pretending we have more bytes at a pointer than
@@ -3965,14 +3876,14 @@ pub fn complex_bitcast_check_size<'ctx>(
 
     let then_answer = {
         env.builder.position_at_end(then_block);
-        let result = complex_bitcast_from_bigger_than_to(env.builder, from_value, to_type, name);
+        let result = complex_bitcast_from_bigger_than_to(env, from_value, to_type, name);
         env.builder.new_build_unconditional_branch(cont_block);
         result
     };
 
     let else_answer = {
         env.builder.position_at_end(else_block);
-        let result = complex_bitcast_to_bigger_than_from(env.builder, from_value, to_type, name);
+        let result = complex_bitcast_to_bigger_than_from(env, from_value, to_type, name);
         env.builder.new_build_unconditional_branch(cont_block);
         result
     };
@@ -3987,13 +3898,15 @@ pub fn complex_bitcast_check_size<'ctx>(
 }
 
 fn complex_bitcast_from_bigger_than_to<'ctx>(
-    builder: &Builder<'ctx>,
+    env: &Env<'_, 'ctx, '_>,
     from_value: BasicValueEnum<'ctx>,
     to_type: BasicTypeEnum<'ctx>,
     name: &str,
 ) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+
     // store the value in memory
-    let argument_pointer = builder.new_build_alloca(from_value.get_type(), "cast_alloca");
+    let argument_pointer = create_entry_block_alloca(env, from_value.get_type(), "cast_alloca");
     builder.new_build_store(argument_pointer, from_value);
 
     // then read it back as a different type
@@ -4007,15 +3920,16 @@ fn complex_bitcast_from_bigger_than_to<'ctx>(
 }
 
 fn complex_bitcast_to_bigger_than_from<'ctx>(
-    builder: &Builder<'ctx>,
+    env: &Env<'_, 'ctx, '_>,
     from_value: BasicValueEnum<'ctx>,
     to_type: BasicTypeEnum<'ctx>,
     name: &str,
 ) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
     // reserve space in memory with the return type. This way, if the return type is bigger
     // than the input type, we don't access invalid memory when later taking a pointer to
     // the cast value
-    let storage = builder.new_build_alloca(to_type, "cast_alloca");
+    let storage = create_entry_block_alloca(env, to_type, "cast_alloca");
 
     // then cast the pointer to our desired type
     let from_type_pointer = builder.new_build_pointer_cast(
@@ -4035,7 +3949,7 @@ fn complex_bitcast_to_bigger_than_from<'ctx>(
 
 /// get the tag id out of a pointer to a wrapped (i.e. stores the tag id at runtime) layout
 fn get_tag_id_wrapped<'a, 'ctx>(
-    env: &Env<'a, 'ctx, '_>,
+    env: &Env<'_, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
     union_layout: UnionLayout<'a>,
     from_value: PointerValue<'ctx>,
@@ -4308,12 +4222,18 @@ fn build_switch_ir<'a, 'ctx>(
 }
 
 /// Creates a new stack allocation instruction in the entry block of the function.
-pub fn create_entry_block_alloca<'ctx>(
+pub fn create_entry_block_alloca<'ctx, T: BasicType<'ctx>>(
     env: &Env<'_, 'ctx, '_>,
-    parent: FunctionValue<'_>,
-    basic_type: BasicTypeEnum<'ctx>,
+    basic_type: T,
     name: &str,
 ) -> PointerValue<'ctx> {
+    let parent = env
+        .builder
+        .get_insert_block()
+        .expect("builder to be in a block")
+        .get_parent()
+        .expect("block to be in a function");
+
     let builder = env.context.create_builder();
     let entry = parent.get_first_basic_block().unwrap();
 
@@ -4335,7 +4255,7 @@ fn expose_function_to_host<'a, 'ctx>(
     return_layout: InLayout<'a>,
     layout_ids: &mut LayoutIds<'a>,
 ) {
-    let ident_string = symbol.as_str(&env.interns);
+    let ident_string = symbol.as_unsuffixed_str(&env.interns);
 
     let proc_layout = ProcLayout {
         arguments,
@@ -5212,7 +5132,7 @@ fn set_jump_and_catch_long_jump<'a, 'ctx>(
         RocReturn::from_layout(layout_interner, layout)
     };
     let call_result_type = roc_call_result_type(env, return_type.as_basic_type_enum());
-    let result_alloca = builder.new_build_alloca(call_result_type, "result");
+    let result_alloca = create_entry_block_alloca(env, call_result_type, "result");
 
     let then_block = context.append_basic_block(parent, "then_block");
     let catch_block = context.append_basic_block(parent, "catch_block");
@@ -5575,7 +5495,7 @@ pub fn build_procedures<'a>(
         let getter_fn = function_value_by_func_spec(env, FuncBorrowSpec::Some(*func_spec), symbol);
 
         let name = getter_fn.get_name().to_str().unwrap();
-        let getter_name = symbol.as_str(&env.interns);
+        let getter_name = symbol.as_unsuffixed_str(&env.interns);
 
         // Add the getter function to the module.
         let _ = expose_function_to_host_help_c_abi(
@@ -5603,7 +5523,7 @@ pub fn build_wasm_test_wrapper<'a, 'ctx>(
         opt_level,
         procedures,
         vec![],
-        EntryPoint::Single(entry_point),
+        EntryPoint::Program(env.arena.alloc([entry_point])),
         Some(&std::env::temp_dir().join("test.ll")),
     );
 
@@ -5630,7 +5550,7 @@ pub fn build_procedures_return_main<'a, 'ctx>(
         opt_level,
         procedures,
         host_exposed_lambda_sets,
-        EntryPoint::Single(entry_point),
+        EntryPoint::Program(env.arena.alloc([entry_point])),
         Some(&std::env::temp_dir().join("test.ll")),
     );
 
@@ -5841,7 +5761,7 @@ fn build_procedures_help<'a>(
         GenTest | WasmGenTest | CliTest => { /* no host, or exposing types is not supported */ }
         Binary | BinaryDev | BinaryGlue => {
             for (proc_name, alias_name, hels) in host_exposed_lambda_sets.iter() {
-                let ident_string = proc_name.name().as_str(&env.interns);
+                let ident_string = proc_name.name().as_unsuffixed_str(&env.interns);
                 let fn_name: String = format!("{}_{}", ident_string, hels.id.0);
 
                 expose_alias_to_host(
@@ -6392,7 +6312,7 @@ fn call_roc_function_help<'a, 'ctx>(
             arguments.pop();
 
             let result_type = basic_type_from_layout(env, layout_interner, result_layout);
-            let result_alloca = env.builder.new_build_alloca(result_type, "result_value");
+            let result_alloca = create_entry_block_alloca(env, result_type, "result_value");
 
             arguments.push(result_alloca.into());
 
@@ -6410,7 +6330,7 @@ fn call_roc_function_help<'a, 'ctx>(
             let mut arguments = Vec::from_iter_in(it, env.arena);
 
             let result_type = basic_type_from_layout(env, layout_interner, result_layout);
-            let result_alloca = entry_block_alloca_zerofill(env, result_type, "result_value");
+            let result_alloca = create_entry_block_alloca(env, result_type, "result_value");
 
             arguments.push(result_alloca.into());
 
@@ -6494,9 +6414,7 @@ pub(crate) fn roc_function_call<'a, 'ctx>(
         layout_interner.get_repr(lambda_set.runtime_representation()),
     );
 
-    let closure_data_ptr = env
-        .builder
-        .new_build_alloca(closure_data_type, "closure_data_ptr");
+    let closure_data_ptr = create_entry_block_alloca(env, closure_data_type, "closure_data_ptr");
 
     store_roc_value(
         env,
@@ -6864,7 +6782,9 @@ fn build_foreign_symbol<'a, 'ctx>(
                     Vec::with_capacity_in(fastcc_parameters.len() + 1, env.arena);
 
                 let return_pointer = match roc_return {
-                    RocReturn::Return => env.builder.new_build_alloca(return_type, "return_value"),
+                    RocReturn::Return => {
+                        create_entry_block_alloca(env, return_type, "return_value")
+                    }
                     RocReturn::ByPointer => fastcc_parameters.pop().unwrap().into_pointer_value(),
                 };
 
@@ -6882,9 +6802,8 @@ fn build_foreign_symbol<'a, 'ctx>(
                             // we need to pass this value by-reference; put it into an alloca
                             // and bitcast the reference
 
-                            let param_alloca = env
-                                .builder
-                                .new_build_alloca(param.get_type(), "param_alloca");
+                            let param_alloca =
+                                create_entry_block_alloca(env, param.get_type(), "param_alloca");
                             env.builder.new_build_store(param_alloca, param);
 
                             let as_cc_type = env.builder.new_build_pointer_cast(
@@ -7042,14 +6961,10 @@ fn define_global_str_literal<'ctx>(
     }
 }
 
-pub(crate) fn throw_internal_exception<'ctx>(
-    env: &Env<'_, 'ctx, '_>,
-    parent: FunctionValue<'ctx>,
-    message: &str,
-) {
+pub(crate) fn throw_internal_exception(env: &Env<'_, '_, '_>, message: &str) {
     let builder = env.builder;
 
-    let str = build_string_literal(env, parent, message);
+    let str = build_string_literal(env, message);
 
     env.call_panic(env, str, CrashTag::Roc);
 

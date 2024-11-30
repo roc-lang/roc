@@ -30,6 +30,7 @@ zig-cache
 .envrc
 *.rs.bk
 *.o
+*.a
 *.so
 *.so.*
 *.obj
@@ -58,6 +59,7 @@ metadata
 #editors
 .idea/
 .vscode/
+.helix/
 .ignore
 .exrc
 .vimrc
@@ -118,3 +120,6 @@ crates/glue/tests/fixtures/*/build.rs
 crates/glue/tests/fixtures/*/host.c
 crates/glue/tests/fixtures/*/src/main.rs
 crates/glue/tests/fixtures/*/test_glue/
+
+# ignore the zig glue files copied into test platforms
+**/*platform/glue/*

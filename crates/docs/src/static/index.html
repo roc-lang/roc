@@ -19,9 +19,6 @@
 
 <body>
     <nav id="sidebar-nav">
-        <input id="module-search" aria-labelledby="search-link" type="text" placeholder="Search" />
-        <label for="module-search" id="search-link"><span id="search-link-text">Search</span> <span
-                id="search-link-hint">(press <span id="search-shortcut-key">s</span>)</span></label>
         <div class="module-links">
             <!-- Module links -->
         </div>
@@ -40,6 +37,28 @@
                 </svg>
             </a>
             <!-- Package Name -->
+        </div>
+        <form id="module-search-form">
+            <input
+                id="module-search"
+                aria-labelledby="search-link"
+                type="text"
+                placeholder="Search"
+                role="combobox"
+                aria-autocomplete="list"
+                aria-expanded="false"
+                aria-controls="search-type-ahead"
+            />
+            <label for="module-search" id="search-link">Search (press s)</label>
+            <span id="search-shortcut-key" aria-hidden="true">s</span>
+            <ul id="search-type-ahead" role="listbox" aria-label="Search Results" class="hidden">
+                <!-- Search Type Ahead -->
+            </ul>
+        </form>
+        <div id="llm-prompt-container">
+            <a id="llm-prompt-link" href="llms.txt" title="Documentation in a LLM friendly format">
+                LLM docs
+            </a>
         </div>
         <div class="top-header-triangle">
             <!-- if the window gets big, this extends the purple bar on the top header to the left edge of the window -->

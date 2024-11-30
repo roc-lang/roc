@@ -13,4 +13,4 @@ readme = "README.md"
 edition = "2018"
 
 [dependencies]
-roc_collections = { path = "../../compiler/collections" }
+roc_collections.workspace = true

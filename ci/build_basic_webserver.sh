@@ -4,6 +4,9 @@
 set -euxo pipefail
 
 git clone https://github.com/roc-lang/basic-webserver.git
+cd basic-webserver
+git checkout $RELEASE_TAG
+cd ..
 
 OS=$(uname -s)
 ARCH=$(uname -m)
@@ -37,20 +40,13 @@ rm roc_nightly.tar.gz
 # simplify dir name
 mv roc_nightly* roc_nightly
 
+# add roc to PATH
 cd roc_nightly
+export PATH="$(pwd -P):$PATH"
+cd ..
 
-# prevent https://github.com/roc-lang/basic-webserver/issues/9
-if [ "$OS" != "Linux" ] || [ "$ARCH" != "x86_64" ]; then
-    # build the basic-webserver platform
-    ./roc build ../basic-webserver/examples/echo.roc --optimize
-fi
+cd basic-webserver
 
-# We need this extra variable so we can safely check if $2 is empty later
-EXTRA_ARGS=${2:-}
-
-# In some rare cases it's nice to be able to use the legacy linker, so we produce the .o file to be able to do that
-if [ -n "${EXTRA_ARGS}" ];
- then ./roc build $EXTRA_ARGS ../basic-webserver/examples/echo.roc --optimize
-fi
+roc build.roc
 
 cd ..

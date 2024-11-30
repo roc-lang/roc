@@ -1,21 +1,24 @@
 ---
 source: crates/compiler/can/tests/test_suffixed.rs
 expression: snapshot
+snapshot_kind: text
 ---
 Defs {
     tags: [
-        Index(2147483648),
+        EitherIndex(2147483648),
     ],
     regions: [
         @0-72,
     ],
     space_before: [
-        Slice(start = 0, length = 0),
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
     ],
     space_after: [
-        Slice(start = 0, length = 0),
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
     ],
-    spaces: [],
+    spaces: [
+        Newline,
+    ],
     type_defs: [],
     value_defs: [
         Body(
@@ -28,34 +31,78 @@ Defs {
                     ident: "await",
                 },
                 [
-                    @11-23 Apply(
+                    @11-23 Defs(
+                        Defs {
+                            tags: [
+                                EitherIndex(2147483648),
+                            ],
+                            regions: [
+                                @11-23,
+                            ],
+                            space_before: [
+                                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                            ],
+                            space_after: [
+                                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                            ],
+                            spaces: [],
+                            type_defs: [],
+                            value_defs: [
+                                AnnotatedBody {
+                                    ann_pattern: @11-23 Identifier {
+                                        ident: "#!0_stmt",
+                                    },
+                                    ann_type: @11-23 Apply(
+                                        "",
+                                        "Task",
+                                        [
+                                            @11-23 Record {
+                                                fields: [],
+                                                ext: None,
+                                            },
+                                            @11-23 Inferred,
+                                        ],
+                                    ),
+                                    lines_between: [],
+                                    body_pattern: @11-23 Identifier {
+                                        ident: "#!0_stmt",
+                                    },
+                                    body_expr: @11-23 Apply(
+                                        @11-23 Var {
+                                            module_name: "",
+                                            ident: "line",
+                                        },
+                                        [
+                                            @17-23 Str(
+                                                PlainLine(
+                                                    "Ahoy",
+                                                ),
+                                            ),
+                                        ],
+                                        Space,
+                                    ),
+                                },
+                            ],
+                        },
                         @11-23 Var {
                             module_name: "",
-                            ident: "line",
+                            ident: "#!0_stmt",
                         },
-                        [
-                            @17-23 Str(
-                                PlainLine(
-                                    "Ahoy",
-                                ),
-                            ),
-                        ],
-                        Space,
                     ),
                     @11-23 Closure(
                         [
-                            @11-23 RecordDestructure(
-                                [],
+                            @11-23 Underscore(
+                                "#!stmt",
                             ),
                         ],
-                        @33-55 Apply(
-                            @33-55 Var {
+                        @33-56 Apply(
+                            @33-56 Var {
                                 module_name: "Task",
                                 ident: "await",
                             },
                             [
-                                @33-55 Apply(
-                                    @33-55 Var {
+                                @33-56 Apply(
+                                    @33-56 Var {
                                         module_name: "Stdout",
                                         ident: "line",
                                     },
@@ -70,7 +117,7 @@ Defs {
                                         Pizza,
                                     ),
                                 ),
-                                @33-55 Closure(
+                                @33-56 Closure(
                                     [
                                         @28-30 RecordDestructure(
                                             [],

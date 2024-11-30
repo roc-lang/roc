@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use roc_collections::all::MutSet;
 use roc_module::called_via::BinOp;
 use roc_module::ident::{Ident, Lowercase, ModuleName, TagName};
-use roc_module::symbol::{ModuleId, ScopeModuleSource, Symbol};
+use roc_module::symbol::{ModuleId, Symbol};
 use roc_parse::ast::Base;
 use roc_parse::pattern::PatternType;
 use roc_region::all::{Loc, Region};
@@ -39,7 +39,6 @@ pub enum Problem {
     UnusedImport(Symbol, Region),
     UnusedModuleImport(ModuleId, Region),
     ExposedButNotDefined(Symbol),
-    UnknownGeneratesWith(Loc<Ident>),
     ImportNameConflict {
         name: ModuleName,
         is_alias: bool,
@@ -54,6 +53,7 @@ pub enum Problem {
         new_symbol: Symbol,
         existing_symbol_region: Region,
     },
+    DeprecatedBackpassing(Region),
     /// First symbol is the name of the closure with that argument
     /// Bool is whether the closure is anonymous
     /// Second symbol is the name of the argument that is unused
@@ -220,6 +220,12 @@ pub enum Problem {
     OverAppliedCrash {
         region: Region,
     },
+    UnappliedDbg {
+        region: Region,
+    },
+    OverAppliedDbg {
+        region: Region,
+    },
     FileProblem {
         filename: PathBuf,
         error: io::ErrorKind,
@@ -236,6 +242,25 @@ pub enum Problem {
         one_occurrence: Region,
         kind: AliasKind,
     },
+    ReturnOutsideOfFunction {
+        region: Region,
+    },
+    StatementsAfterReturn {
+        region: Region,
+    },
+    ReturnAtEndOfFunction {
+        region: Region,
+    },
+    StmtAfterExpr(Region),
+    UnsuffixedEffectfulRecordField(Region),
+    SuffixedPureRecordField(Region),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeModuleSource {
+    Builtin,
+    Current,
+    Import(Region),
 }
 
 impl Problem {
@@ -250,8 +275,8 @@ impl Problem {
             Problem::ExplicitBuiltinImport(_, _) => Warning,
             Problem::ExplicitBuiltinTypeImport(_, _) => Warning,
             Problem::ImportShadowsSymbol { .. } => RuntimeError,
+            Problem::DeprecatedBackpassing(_) => Warning,
             Problem::ExposedButNotDefined(_) => RuntimeError,
-            Problem::UnknownGeneratesWith(_) => RuntimeError,
             Problem::UnusedArgument(_, _, _, _) => Warning,
             Problem::UnusedBranchDef(_, _) => Warning,
             Problem::PrecedenceProblem(_) => RuntimeError,
@@ -306,8 +331,17 @@ impl Problem {
             // injecting a crash message
             Problem::UnappliedCrash { .. } => RuntimeError,
             Problem::OverAppliedCrash { .. } => RuntimeError,
+            Problem::UnappliedDbg { .. } => RuntimeError,
+            Problem::OverAppliedDbg { .. } => RuntimeError,
             Problem::DefsOnlyUsedInRecursion(_, _) => Warning,
             Problem::FileProblem { .. } => Fatal,
+            Problem::ReturnOutsideOfFunction { .. } => Warning,
+            Problem::StatementsAfterReturn { .. } => Warning,
+            Problem::ReturnAtEndOfFunction { .. } => Warning,
+            Problem::StmtAfterExpr(_) => Fatal,
+            Problem::UnsuffixedEffectfulRecordField(_) | Problem::SuffixedPureRecordField(..) => {
+                Warning
+            }
         }
     }
 
@@ -333,7 +367,7 @@ impl Problem {
             | Problem::ExplicitBuiltinImport(_, region)
             | Problem::ExplicitBuiltinTypeImport(_, region)
             | Problem::ImportShadowsSymbol { region, .. }
-            | Problem::UnknownGeneratesWith(Loc { region, .. })
+            | Problem::DeprecatedBackpassing(region)
             | Problem::UnusedArgument(_, _, _, region)
             | Problem::UnusedBranchDef(_, region)
             | Problem::PrecedenceProblem(PrecedenceProblem::BothNonAssociative(region, _, _))
@@ -401,7 +435,6 @@ impl Problem {
             | Problem::RuntimeError(RuntimeError::InvalidPrecedence(_, region))
             | Problem::RuntimeError(RuntimeError::MalformedIdentifier(_, _, region))
             | Problem::RuntimeError(RuntimeError::MalformedTypeName(_, region))
-            | Problem::RuntimeError(RuntimeError::MalformedClosure(region))
             | Problem::RuntimeError(RuntimeError::MalformedSuffixed(region))
             | Problem::RuntimeError(RuntimeError::InvalidRecordUpdate { region })
             | Problem::RuntimeError(RuntimeError::InvalidFloat(_, region, _))
@@ -412,8 +445,6 @@ impl Problem {
             | Problem::RuntimeError(RuntimeError::EmptySingleQuote(region))
             | Problem::RuntimeError(RuntimeError::MultipleCharsInSingleQuote(region))
             | Problem::RuntimeError(RuntimeError::DegenerateBranch(region))
-            | Problem::RuntimeError(RuntimeError::MultipleOldRecordBuilders(region))
-            | Problem::RuntimeError(RuntimeError::UnappliedOldRecordBuilder(region))
             | Problem::RuntimeError(RuntimeError::EmptyRecordBuilder(region))
             | Problem::RuntimeError(RuntimeError::SingleFieldRecordBuilder(region))
             | Problem::RuntimeError(RuntimeError::OptionalFieldInRecordBuilder {
@@ -455,8 +486,8 @@ impl Problem {
             }
             | Problem::NotAnAbility(region)
             | Problem::ImplementsNonRequired { region, .. }
-            | Problem::DoesNotImplementAbility { region, .. }
             | Problem::NoIdentifiersIntroduced(region)
+            | Problem::DoesNotImplementAbility { region, .. }
             | Problem::OverloadedSpecialization {
                 overload: region, ..
             }
@@ -470,11 +501,20 @@ impl Problem {
             | Problem::UnnecessaryOutputWildcard { region }
             | Problem::OverAppliedCrash { region }
             | Problem::UnappliedCrash { region }
-            | Problem::DefsOnlyUsedInRecursion(_, region) => Some(*region),
+            | Problem::OverAppliedDbg { region }
+            | Problem::UnappliedDbg { region }
+            | Problem::DefsOnlyUsedInRecursion(_, region)
+            | Problem::ReturnOutsideOfFunction { region }
+            | Problem::StatementsAfterReturn { region }
+            | Problem::ReturnAtEndOfFunction { region }
+            | Problem::UnsuffixedEffectfulRecordField(region)
+            | Problem::SuffixedPureRecordField(region) => Some(*region),
             Problem::RuntimeError(RuntimeError::CircularDef(cycle_entries))
             | Problem::BadRecursion(cycle_entries) => {
                 cycle_entries.first().map(|entry| entry.expr_region)
             }
+
+            Problem::StmtAfterExpr(region) => Some(*region),
             Problem::RuntimeError(RuntimeError::UnresolvedTypeVar)
             | Problem::RuntimeError(RuntimeError::ErroneousType)
             | Problem::RuntimeError(RuntimeError::NonExhaustivePattern)
@@ -637,7 +677,6 @@ pub enum RuntimeError {
     InvalidPrecedence(PrecedenceProblem, Region),
     MalformedIdentifier(Box<str>, roc_parse::ident::BadIdent, Region),
     MalformedTypeName(Box<str>, Region),
-    MalformedClosure(Region),
     InvalidRecordUpdate {
         region: Region,
     },
@@ -668,9 +707,6 @@ pub enum RuntimeError {
     MultipleCharsInSingleQuote(Region),
 
     DegenerateBranch(Region),
-
-    MultipleOldRecordBuilders(Region),
-    UnappliedOldRecordBuilder(Region),
 
     EmptyRecordBuilder(Region),
     SingleFieldRecordBuilder(Region),
@@ -712,7 +748,6 @@ impl RuntimeError {
             | RuntimeError::InvalidPrecedence(_, region)
             | RuntimeError::MalformedIdentifier(_, _, region)
             | RuntimeError::MalformedTypeName(_, region)
-            | RuntimeError::MalformedClosure(region)
             | RuntimeError::MalformedSuffixed(region)
             | RuntimeError::InvalidRecordUpdate { region }
             | RuntimeError::InvalidFloat(_, region, _)
@@ -722,8 +757,6 @@ impl RuntimeError {
             | RuntimeError::DegenerateBranch(region)
             | RuntimeError::InvalidInterpolation(region)
             | RuntimeError::InvalidHexadecimal(region)
-            | RuntimeError::MultipleOldRecordBuilders(region)
-            | RuntimeError::UnappliedOldRecordBuilder(region)
             | RuntimeError::EmptyRecordBuilder(region)
             | RuntimeError::SingleFieldRecordBuilder(region)
             | RuntimeError::OptionalFieldInRecordBuilder {

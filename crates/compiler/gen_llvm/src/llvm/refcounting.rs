@@ -646,7 +646,7 @@ fn call_help<'ctx>(
     value: BasicValueEnum<'ctx>,
 ) -> inkwell::values::CallSiteValue<'ctx> {
     let value = cast_if_necessary_for_opaque_recursive_pointers(
-        env.builder,
+        env,
         value,
         function.get_params()[0].get_type(),
     );
@@ -1350,7 +1350,7 @@ fn build_rec_union_recursive_decrement<'a, 'ctx>(
                 // therefore we must cast it to our desired type
                 let union_layout = LayoutRepr::Union(union_layout);
                 let union_type = basic_type_from_layout(env, layout_interner, union_layout);
-                let recursive_field_ptr = cast_basic_basic(env.builder, ptr_as_i64_ptr, union_type);
+                let recursive_field_ptr = cast_basic_basic(env, ptr_as_i64_ptr, union_type);
 
                 deferred_rec.push(recursive_field_ptr);
             } else if layout_interner.contains_refcounted(*field_layout) {
@@ -1823,8 +1823,7 @@ fn modify_refcount_nonrecursive_help<'a, 'ctx>(
                     layout_interner,
                     layout_interner.get_repr(union_layout),
                 );
-                let recursive_ptr_field_value =
-                    cast_basic_basic(env.builder, field_value, union_type);
+                let recursive_ptr_field_value = cast_basic_basic(env, field_value, union_type);
 
                 modify_refcount_layout_help(
                     env,

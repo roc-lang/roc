@@ -132,13 +132,14 @@ pub enum OptLevel {
 
 #[derive(Debug, Clone, Copy)]
 pub struct SingleEntryPoint<'a> {
+    pub name: &'a str,
     pub symbol: Symbol,
     pub layout: ProcLayout<'a>,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum EntryPoint<'a> {
-    Single(SingleEntryPoint<'a>),
+    Program(&'a [SingleEntryPoint<'a>]),
     Expects { symbols: &'a [Symbol] },
 }
 
@@ -1530,14 +1531,6 @@ pub enum Stmt<'a> {
         /// what happens after the expect
         remainder: &'a Stmt<'a>,
     },
-    ExpectFx {
-        condition: Symbol,
-        region: Region,
-        lookups: &'a [Symbol],
-        variables: &'a [LookupType],
-        /// what happens after the expect
-        remainder: &'a Stmt<'a>,
-    },
     Dbg {
         /// The location this dbg is in source as a printable string.
         source_location: &'a str,
@@ -1954,8 +1947,6 @@ pub enum Expr<'a> {
         symbol: Symbol,
         update_mode: UpdateModeId,
     },
-
-    RuntimeErrorFunction(&'a str),
 }
 
 impl<'a> Literal<'a> {
@@ -2118,8 +2109,6 @@ impl<'a> Expr<'a> {
             } => text!(alloc, "StructAtIndex {} ", index)
                 .append(symbol_to_doc(alloc, *structure, pretty)),
 
-            RuntimeErrorFunction(s) => text!(alloc, "ErrorFunction {}", s),
-
             GetTagId { structure, .. } => alloc
                 .text("GetTagId ")
                 .append(symbol_to_doc(alloc, *structure, pretty)),
@@ -2273,17 +2262,6 @@ impl<'a> Stmt<'a> {
                 ..
             } => alloc
                 .text("expect ")
-                .append(symbol_to_doc(alloc, *condition, pretty))
-                .append(";")
-                .append(alloc.hardline())
-                .append(remainder.to_doc(alloc, interner, pretty)),
-
-            ExpectFx {
-                condition,
-                remainder,
-                ..
-            } => alloc
-                .text("expect-fx ")
                 .append(symbol_to_doc(alloc, *condition, pretty))
                 .append(";")
                 .append(alloc.hardline())
@@ -2481,6 +2459,9 @@ fn from_can_let<'a>(
 
                 lower_rest!(variable, cont.value)
             }
+            ImportParams(_, _, None) => {
+                lower_rest!(variable, cont.value)
+            }
             Var(original, _) | AbilityMember(original, _, _)
                 if procs.get_partial_proc(original).is_none() =>
             {
@@ -2616,6 +2597,7 @@ fn from_can_let<'a>(
                             expr_var: def.expr_var,
                             pattern_vars: std::iter::once((anon_name, def.expr_var)).collect(),
                             annotation: None,
+                            kind: def.kind,
                         });
 
                         // f = #lam
@@ -2625,6 +2607,7 @@ fn from_can_let<'a>(
                             expr_var: def.expr_var,
                             pattern_vars: def.pattern_vars,
                             annotation: def.annotation,
+                            kind: def.kind,
                         });
 
                         let new_inner = LetNonRec(new_def, cont);
@@ -2644,6 +2627,7 @@ fn from_can_let<'a>(
                             pattern_vars: def.pattern_vars,
                             annotation: def.annotation,
                             expr_var: def.expr_var,
+                            kind: def.kind,
                         };
 
                         let new_inner = LetNonRec(Box::new(new_def), cont);
@@ -2683,6 +2667,7 @@ fn from_can_let<'a>(
                     pattern_vars: def.pattern_vars,
                     annotation: def.annotation,
                     expr_var: def.expr_var,
+                    kind: def.kind,
                 };
 
                 let new_inner = LetNonRec(Box::new(new_def), cont);
@@ -2870,7 +2855,6 @@ fn pattern_to_when(
     body: Loc<roc_can::expr::Expr>,
 ) -> (Symbol, Loc<roc_can::expr::Expr>) {
     use roc_can::expr::Expr::*;
-    use roc_can::expr::{WhenBranch, WhenBranchPattern};
     use roc_can::pattern::Pattern::{self, *};
 
     match &pattern.value {
@@ -2888,7 +2872,7 @@ fn pattern_to_when(
             (*new_symbol, Loc::at_zero(RuntimeError(error)))
         }
 
-        As(_, _) => todo!("as bindings are not supported yet"),
+        As(pattern, symbol) => pattern_to_when_help(pattern_var, pattern, body_var, body, *symbol),
 
         UnsupportedPattern(region) => {
             // create the runtime error here, instead of delegating to When.
@@ -2915,28 +2899,7 @@ fn pattern_to_when(
         | TupleDestructure { .. }
         | UnwrappedOpaque { .. } => {
             let symbol = env.unique_symbol();
-
-            let wrapped_body = When {
-                cond_var: pattern_var,
-                expr_var: body_var,
-                region: Region::zero(),
-                loc_cond: Box::new(Loc::at_zero(Var(symbol, pattern_var))),
-                branches: vec![WhenBranch {
-                    patterns: vec![WhenBranchPattern {
-                        pattern,
-                        degenerate: false,
-                    }],
-                    value: body,
-                    guard: None,
-                    // If this type-checked, it's non-redundant
-                    redundant: RedundantMark::known_non_redundant(),
-                }],
-                branches_cond_var: pattern_var,
-                // If this type-checked, it's exhaustive
-                exhaustive: ExhaustiveMark::known_exhaustive(),
-            };
-
-            (symbol, Loc::at_zero(wrapped_body))
+            pattern_to_when_help(pattern_var, &pattern, body_var, body, symbol)
         }
 
         Pattern::List { .. } => todo!(),
@@ -2958,6 +2921,38 @@ fn pattern_to_when(
             )
         }
     }
+}
+
+fn pattern_to_when_help(
+    pattern_var: Variable,
+    pattern: &Loc<roc_can::pattern::Pattern>,
+    body_var: Variable,
+    body: Loc<roc_can::expr::Expr>,
+    symbol: Symbol,
+) -> (Symbol, Loc<roc_can::expr::Expr>) {
+    use roc_can::expr::{Expr, WhenBranch, WhenBranchPattern};
+
+    let wrapped_body = Expr::When {
+        cond_var: pattern_var,
+        expr_var: body_var,
+        region: Region::zero(),
+        loc_cond: Box::new(Loc::at_zero(Expr::Var(symbol, pattern_var))),
+        branches: vec![WhenBranch {
+            patterns: vec![WhenBranchPattern {
+                pattern: pattern.to_owned(),
+                degenerate: false,
+            }],
+            value: body,
+            guard: None,
+            // If this type-checked, it's non-redundant
+            redundant: RedundantMark::known_non_redundant(),
+        }],
+        branches_cond_var: pattern_var,
+        // If this type-checked, it's exhaustive
+        exhaustive: ExhaustiveMark::known_exhaustive(),
+    };
+
+    (symbol, Loc::at_zero(wrapped_body))
 }
 
 fn specialize_suspended<'a>(
@@ -4443,6 +4438,15 @@ pub fn with_hole<'a>(
 
             specialize_naked_symbol(env, variable, procs, layout_cache, assigned, hole, symbol)
         }
+        ParamsVar { .. } => {
+            internal_error!("ParamsVar should've been lowered to Var")
+        }
+        ImportParams(_, _, Some((_, value))) => {
+            with_hole(env, *value, variable, procs, layout_cache, assigned, hole)
+        }
+        ImportParams(_, _, None) => {
+            internal_error!("Missing module params should've been dropped by now");
+        }
         AbilityMember(member, specialization_id, specialization_var) => {
             let specialization_symbol = late_resolve_ability_specialization(
                 env,
@@ -4471,7 +4475,7 @@ pub fn with_hole<'a>(
 
             debug_assert!(!matches!(
                 env.subs.get_content_without_compacting(variant_var),
-                Content::Structure(FlatType::Func(_, _, _))
+                Content::Structure(FlatType::Func(_, _, _, _))
             ));
             convert_tag_union(
                 env,
@@ -4496,7 +4500,7 @@ pub fn with_hole<'a>(
 
             let content = env.subs.get_content_without_compacting(variable);
 
-            if let Content::Structure(FlatType::Func(arg_vars, _, ret_var)) = content {
+            if let Content::Structure(FlatType::Func(arg_vars, _, ret_var, _fx_var)) = content {
                 let ret_var = *ret_var;
                 let arg_vars = *arg_vars;
 
@@ -4618,7 +4622,6 @@ pub fn with_hole<'a>(
         EmptyRecord => let_empty_struct(assigned, hole),
 
         Expect { .. } => unreachable!("I think this is unreachable"),
-        ExpectFx { .. } => unreachable!("I think this is unreachable"),
         Dbg {
             source_location,
             source,
@@ -4958,12 +4961,17 @@ pub fn with_hole<'a>(
                 }
             }
 
+            let struct_index = match index {
+                Some(index) => index,
+                None => return runtime_error(env, "No such field in record"),
+            };
+
             compile_struct_like_access(
                 env,
                 procs,
                 layout_cache,
                 field_layouts,
-                index.expect("field not in its own type") as _,
+                struct_index,
                 *loc_expr,
                 record_var,
                 hole,
@@ -5056,12 +5064,17 @@ pub fn with_hole<'a>(
                 }
             }
 
+            let tuple_index = match final_index {
+                Some(index) => index as u64,
+                None => return runtime_error(env, "No such index in tuple"),
+            };
+
             compile_struct_like_access(
                 env,
                 procs,
                 layout_cache,
                 field_layouts,
-                final_index.expect("elem not in its own type") as u64,
+                tuple_index,
                 *loc_expr,
                 tuple_var,
                 hole,
@@ -5422,7 +5435,7 @@ pub fn with_hole<'a>(
         }
 
         Call(boxed, loc_args, _) => {
-            let (fn_var, loc_expr, _lambda_set_var, _ret_var) = *boxed;
+            let (fn_var, loc_expr, _lambda_set_var, _ret_var, _fx_var) = *boxed;
 
             // even if a call looks like it's by name, it may in fact be by-pointer.
             // E.g. in `(\f, x -> f x)` the call is in fact by pointer.
@@ -5858,7 +5871,28 @@ pub fn with_hole<'a>(
                 }
             }
         }
-        TypedHole(_) => runtime_error(env, "Hit a blank"),
+        Return {
+            return_value,
+            return_var,
+        } => {
+            let return_symbol = possible_reuse_symbol_or_specialize(
+                env,
+                procs,
+                layout_cache,
+                &return_value.value,
+                return_var,
+            );
+
+            assign_to_symbol(
+                env,
+                procs,
+                layout_cache,
+                return_var,
+                *return_value,
+                return_symbol,
+                Stmt::Ret(return_symbol),
+            )
+        }
         RuntimeError(e) => runtime_error(env, env.arena.alloc(e.runtime_message())),
         Crash { msg, ret_var: _ } => {
             let msg_sym = possible_reuse_symbol_or_specialize(
@@ -6108,7 +6142,7 @@ fn late_resolve_ability_specialization(
     if let Some(spec_symbol) = opt_resolved {
         // Fast path: specialization is monomorphic, was found during solving.
         spec_symbol
-    } else if let Content::Structure(FlatType::Func(_, lambda_set, _)) =
+    } else if let Content::Structure(FlatType::Func(_, lambda_set, _, _fx_var)) =
         env.subs.get_content_without_compacting(specialization_var)
     {
         // Fast path: the member is a function, so the lambda set will tell us the
@@ -6140,7 +6174,7 @@ fn late_resolve_ability_specialization(
             member,
             specialization_var,
         )
-        .expect("Ability specialization is unknown - code generation cannot proceed!");
+        .expect("Ability specialization is unknown. Tip: check out <https://roc.zulipchat.com/#narrow/stream/231634-beginners/topic/Non-Functions.20in.20Abilities/near/456068617>");
 
         match specialization {
             Resolved::Specialization(symbol) => symbol,
@@ -6833,7 +6867,7 @@ fn register_capturing_closure<'a>(
         let is_self_recursive = !matches!(recursive, roc_can::expr::Recursive::NotRecursive);
 
         let captured_symbols = match *env.subs.get_content_without_compacting(function_type) {
-            Content::Structure(FlatType::Func(args, closure_var, ret)) => {
+            Content::Structure(FlatType::Func(args, closure_var, ret, _fx_var)) => {
                 let lambda_set_layout = {
                     LambdaSet::from_var_pub(
                         layout_cache,
@@ -7059,73 +7093,6 @@ pub fn from_can<'a>(
             stmt
         }
 
-        ExpectFx {
-            loc_condition,
-            loc_continuation,
-            lookups_in_cond,
-        } => {
-            let rest = from_can(env, variable, loc_continuation.value, procs, layout_cache);
-            let cond_symbol = env.unique_symbol();
-
-            let mut lookups = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
-            let mut lookup_variables = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
-            let mut specialized_variables = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
-
-            for ExpectLookup {
-                symbol,
-                var,
-                ability_info,
-            } in lookups_in_cond.iter().copied()
-            {
-                let symbol = match ability_info {
-                    Some(specialization_id) => late_resolve_ability_specialization(
-                        env,
-                        symbol,
-                        Some(specialization_id),
-                        var,
-                    ),
-                    None => symbol,
-                };
-
-                let expectation_subs = env
-                    .expectation_subs
-                    .as_deref_mut()
-                    .expect("if expects are compiled, their subs should be available");
-                let spec_var = expectation_subs.fresh_unnamed_flex_var();
-
-                if !env.subs.is_function(var) {
-                    // Exclude functions from lookups
-                    lookups.push(symbol);
-                    lookup_variables.push(var);
-                    specialized_variables.push(spec_var);
-                }
-            }
-
-            let specialized_variables = specialized_variables.into_bump_slice();
-
-            let mut stmt = Stmt::ExpectFx {
-                condition: cond_symbol,
-                region: loc_condition.region,
-                lookups: lookups.into_bump_slice(),
-                variables: specialized_variables,
-                remainder: env.arena.alloc(rest),
-            };
-
-            stmt = with_hole(
-                env,
-                loc_condition.value,
-                Variable::BOOL,
-                procs,
-                layout_cache,
-                cond_symbol,
-                env.arena.alloc(stmt),
-            );
-
-            store_specialized_expectation_lookups(env, lookup_variables, specialized_variables);
-
-            stmt
-        }
-
         Dbg {
             source_location,
             source,
@@ -7237,6 +7204,7 @@ fn to_opt_branches<'a>(
                                     roc_can::pattern::Pattern::Identifier(symbol),
                                 ),
                                 pattern_vars: std::iter::once((symbol, variable)).collect(),
+                                kind: roc_can::def::DefKind::Let,
                             };
                             let new_expr =
                                 roc_can::expr::Expr::LetNonRec(Box::new(def), Box::new(loc_expr));
@@ -7661,32 +7629,6 @@ fn substitute_in_stmt_help<'a>(
             Some(arena.alloc(expect))
         }
 
-        ExpectFx {
-            condition,
-            region,
-            lookups,
-            variables,
-            remainder,
-        } => {
-            let new_remainder =
-                substitute_in_stmt_help(arena, remainder, subs).unwrap_or(remainder);
-
-            let new_lookups = Vec::from_iter_in(
-                lookups.iter().map(|s| substitute(subs, *s).unwrap_or(*s)),
-                arena,
-            );
-
-            let expect = ExpectFx {
-                condition: substitute(subs, *condition).unwrap_or(*condition),
-                region: *region,
-                lookups: new_lookups.into_bump_slice(),
-                variables,
-                remainder: new_remainder,
-            };
-
-            Some(arena.alloc(expect))
-        }
-
         Jump(id, args) => {
             let mut did_change = false;
             let new_args = Vec::from_iter_in(
@@ -7782,7 +7724,7 @@ fn substitute_in_expr<'a>(
     use Expr::*;
 
     match expr {
-        Literal(_) | EmptyArray | RuntimeErrorFunction(_) => None,
+        Literal(_) | EmptyArray => None,
 
         Call(call) => substitute_in_call(arena, call, subs).map(Expr::Call),
 
@@ -8035,7 +7977,10 @@ fn can_reuse_symbol<'a>(
                 .enumerate()
                 .find_map(|(current, (label, _, _))| (label == *field).then_some(current));
 
-            let struct_index = index.expect("field not in its own type");
+            let struct_index = match index {
+                Some(index) => index as u64,
+                None => return NotASymbol,
+            };
 
             let struct_symbol = possible_reuse_symbol_or_specialize(
                 env,
@@ -10034,7 +9979,7 @@ pub fn find_lambda_sets(
 
     // ignore the lambda set of top-level functions
     match subs.get_without_compacting(initial).content {
-        Content::Structure(FlatType::Func(arguments, _, result)) => {
+        Content::Structure(FlatType::Func(arguments, _, result, _fx)) => {
             let arguments = &subs.variables[arguments.indices()];
 
             stack.extend(arguments.iter().copied());
@@ -10071,7 +10016,7 @@ fn find_lambda_sets_help(
                 FlatType::Apply(_, arguments) => {
                     stack.extend(subs.get_subs_slice(*arguments).iter().rev());
                 }
-                FlatType::Func(arguments, lambda_set_var, ret_var) => {
+                FlatType::Func(arguments, lambda_set_var, ret_var, _fx_var) => {
                     use std::collections::hash_map::Entry;
                     // Only insert a lambda_set_var if we didn't already have a value for this key.
                     if let Entry::Vacant(entry) = result.entry(*lambda_set_var) {
@@ -10104,7 +10049,7 @@ fn find_lambda_sets_help(
                 | FlatType::RecursiveTagUnion(_, union_tags, ext) => {
                     for tag in union_tags.variables() {
                         stack.extend(
-                            subs.get_subs_slice(subs.variable_slices[tag.index as usize])
+                            subs.get_subs_slice(subs.variable_slices[tag.index()])
                                 .iter()
                                 .rev(),
                         );
@@ -10116,8 +10061,8 @@ fn find_lambda_sets_help(
                     }
                 }
                 FlatType::EmptyRecord => {}
-                FlatType::EmptyTuple => {}
                 FlatType::EmptyTagUnion => {}
+                FlatType::EffectfulFunc => {}
             },
             Content::Alias(_, _, actual, _) => {
                 stack.push(*actual);
@@ -10126,11 +10071,12 @@ fn find_lambda_sets_help(
                 // the lambda set itself should already be caught by Func above, but the
                 // capture can itself contain more lambda sets
                 for index in lambda_set.solved.variables() {
-                    let subs_slice = subs.variable_slices[index.index as usize];
+                    let subs_slice = subs.variable_slices[index.index()];
                     stack.extend(subs.variables[subs_slice.indices()].iter());
                 }
             }
             Content::ErasedLambda => {}
+            Content::Pure | Content::Effectful => {}
         }
     }
 

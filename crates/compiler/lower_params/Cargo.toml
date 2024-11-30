@@ -1,0 +1,17 @@
+[package]
+name = "roc_lower_params"
+description = "Lowers module params by extending functions and their calls"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+roc_can.workspace = true
+roc_module.workspace = true
+roc_region.workspace = true
+roc_types.workspace = true
+roc_collections.workspace = true
+roc_solve_problem.workspace = true
+bumpalo.workspace = true

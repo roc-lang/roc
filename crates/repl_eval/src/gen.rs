@@ -22,7 +22,7 @@ pub struct ReplOutput {
 
 pub fn format_answer<'a>(arena: &'a Bump, answer: Expr<'_>) -> &'a str {
     match answer {
-        Expr::Closure(_, _) | Expr::MalformedClosure => "<function>",
+        Expr::Closure(_, _) => "<function>",
         _ => {
             let mut expr = roc_fmt::Buf::new_in(arena);
 
@@ -61,7 +61,7 @@ pub fn compile_to_mono<'a, 'i, I: Iterator<Item = &'i str>>(
         module_src,
         src_dir,
         None,
-        RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+        RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
         LoadConfig {
             target,
             function_kind: FunctionKind::LambdaSet,

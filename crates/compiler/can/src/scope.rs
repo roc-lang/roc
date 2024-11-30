@@ -1,8 +1,8 @@
 use roc_collections::{VecMap, VecSet};
 use roc_error_macros::internal_error;
 use roc_module::ident::{Ident, ModuleName};
-use roc_module::symbol::{IdentId, IdentIds, ModuleId, ScopeModules, Symbol};
-use roc_problem::can::RuntimeError;
+use roc_module::symbol::{IdentId, IdentIds, ModuleId, ModuleIds, Symbol};
+use roc_problem::can::{RuntimeError, ScopeModuleSource};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
 use roc_types::types::{Alias, AliasKind, AliasVar, Type};
@@ -48,6 +48,8 @@ pub struct Scope {
     /// Ignored variables (variables that start with an underscore).
     /// We won't intern them because they're only used during canonicalization for error reporting.
     ignored_locals: VecMap<String, Region>,
+
+    pub early_returns: Vec<(Variable, Region)>,
 }
 
 impl Scope {
@@ -73,10 +75,11 @@ impl Scope {
             modules: ScopeModules::new(home, module_name),
             imported_symbols: default_imports,
             ignored_locals: VecMap::default(),
+            early_returns: Vec::default(),
         }
     }
 
-    pub fn lookup(&self, ident: &Ident, region: Region) -> Result<Symbol, RuntimeError> {
+    pub fn lookup(&self, ident: &Ident, region: Region) -> Result<SymbolLookup, RuntimeError> {
         self.lookup_str(ident.as_str(), region)
     }
 
@@ -91,7 +94,7 @@ impl Scope {
             .push(("Set".into(), Symbol::SET_SET, Region::zero()));
     }
 
-    pub fn lookup_str(&self, ident: &str, region: Region) -> Result<Symbol, RuntimeError> {
+    pub fn lookup_str(&self, ident: &str, region: Region) -> Result<SymbolLookup, RuntimeError> {
         use ContainsIdent::*;
 
         match self.scope_contains_ident(ident) {
@@ -205,14 +208,19 @@ impl Scope {
         }
     }
 
-    fn has_imported_symbol(&self, ident: &str) -> Option<(Symbol, Region)> {
-        for (import, shadow, original_region) in self.imported_symbols.iter() {
-            if ident == import.as_str() {
-                return Some((*shadow, *original_region));
-            }
-        }
-
-        None
+    fn has_imported_symbol(&self, ident: &str) -> Option<(SymbolLookup, Region)> {
+        self.imported_symbols
+            .iter()
+            .find_map(|(import, symbol, original_region)| {
+                if ident == import.as_str() {
+                    match self.modules.lookup_by_id(&symbol.module_id()) {
+                        Some(module) => Some((module.into_symbol(*symbol), *original_region)),
+                        None => Some((SymbolLookup::no_params(*symbol), *original_region)),
+                    }
+                } else {
+                    None
+                }
+            })
     }
 
     /// Is an identifier in scope, either in the locals or imports
@@ -229,7 +237,7 @@ impl Scope {
             ContainsIdent::InScope(original_symbol, original_region) => {
                 // the ident is already in scope; up to the caller how to handle that
                 // (usually it's shadowing, but it is valid to shadow ability members)
-                Err((original_symbol, original_region))
+                Err((original_symbol.symbol, original_region))
             }
             ContainsIdent::NotPresent => {
                 // We know nothing about this ident yet; introduce it to the scope
@@ -389,7 +397,13 @@ impl Scope {
         region: Region,
     ) -> Result<(), (Symbol, Region)> {
         match self.scope_contains_ident(ident.as_str()) {
-            ContainsIdent::InScope(symbol, region) => Err((symbol, region)),
+            ContainsIdent::InScope(
+                SymbolLookup {
+                    symbol,
+                    module_params: _,
+                },
+                region,
+            ) => Err((symbol, region)),
             ContainsIdent::NotPresent | ContainsIdent::NotInScope(_) => {
                 self.imported_symbols.push((ident, symbol, region));
                 Ok(())
@@ -418,7 +432,8 @@ impl Scope {
         self.aliases.contains_key(&name)
     }
 
-    pub fn inner_scope<F, T>(&mut self, f: F) -> T
+    /// Enter an inner scope within a definition, e.g. a def or when block.
+    pub fn inner_def_scope<F, T>(&mut self, f: F) -> T
     where
         F: FnOnce(&mut Scope) -> T,
     {
@@ -451,17 +466,37 @@ impl Scope {
         result
     }
 
+    /// Enter an inner scope within a child function, e.g. a closure body.
+    pub fn inner_function_scope<F, T>(&mut self, f: F) -> T
+    where
+        F: FnOnce(&mut Scope) -> T,
+    {
+        let early_returns_snapshot = std::mem::take(&mut self.early_returns);
+
+        let result = self.inner_def_scope(f);
+
+        self.early_returns = early_returns_snapshot;
+
+        result
+    }
+
     pub fn register_debug_idents(&self) {
         self.home.register_debug_idents(&self.locals.ident_ids)
     }
 
-    /// Generates a unique, new symbol like "$1" or "$5",
+    /// Generates a unique, new symbol like "1" or "5",
     /// using the home module as the module_id.
     ///
     /// This is used, for example, during canonicalization of an Expr::Closure
     /// to generate a unique symbol to refer to that closure.
     pub fn gen_unique_symbol(&mut self) -> Symbol {
         Symbol::new(self.home, self.locals.gen_unique())
+    }
+
+    /// Generates a unique new symbol and return the symbol's unqualified identifier name.
+    pub fn gen_unique_symbol_name(&mut self) -> &str {
+        let ident_id = self.locals.gen_unique();
+        self.locals.ident_ids.get_name(ident_id).unwrap()
     }
 
     /// Introduce a new ignored variable (variable starting with an underscore).
@@ -534,7 +569,7 @@ pub fn create_alias(
 
 #[derive(Debug)]
 enum ContainsIdent {
-    InScope(Symbol, Region),
+    InScope(SymbolLookup, Region),
     NotInScope(IdentId),
     NotPresent,
 }
@@ -561,7 +596,7 @@ impl ScopedIdentIds {
 
     fn has_in_scope(&self, ident: &Ident) -> Option<(Symbol, Region)> {
         match self.contains_ident(ident.as_str()) {
-            ContainsIdent::InScope(symbol, region) => Some((symbol, region)),
+            ContainsIdent::InScope(symbol, region) => Some((symbol.symbol, region)),
             ContainsIdent::NotInScope(_) | ContainsIdent::NotPresent => None,
         }
     }
@@ -574,7 +609,10 @@ impl ScopedIdentIds {
         for ident_id in self.ident_ids.get_id_many(ident) {
             let index = ident_id.index();
             if self.in_scope[index] {
-                return InScope(Symbol::new(self.home, ident_id), self.regions[index]);
+                return InScope(
+                    SymbolLookup::no_params(Symbol::new(self.home, ident_id)),
+                    self.regions[index],
+                );
             } else {
                 result = NotInScope(ident_id)
             }
@@ -646,6 +684,149 @@ impl ScopedIdentIds {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ScopeModules {
+    /// The ids of all modules in scope
+    ids: Vec<ModuleId>,
+    /// The alias or original name of each module in scope
+    names: Vec<ModuleName>,
+    /// Why is this module in scope?
+    sources: Vec<ScopeModuleSource>,
+    /// The params of a module if any
+    params: Vec<Option<(Variable, Symbol)>>,
+}
+
+impl ScopeModules {
+    pub fn new(home_id: ModuleId, home_name: ModuleName) -> Self {
+        let builtins = ModuleIds::default();
+        let builtins_iter = builtins.iter();
+        let count = builtins_iter.len();
+
+        let mut ids = Vec::with_capacity(count + 1);
+        let mut names = Vec::with_capacity(count + 1);
+        let mut sources = vec![ScopeModuleSource::Builtin; count];
+        let mut params = vec![None; count];
+
+        for (module_id, module_name) in builtins_iter {
+            ids.push(module_id);
+            names.push(module_name.clone());
+        }
+
+        if !home_id.is_builtin() {
+            ids.push(home_id);
+            names.push(home_name);
+            sources.push(ScopeModuleSource::Current);
+            params.push(None);
+        }
+
+        Self {
+            ids,
+            names,
+            sources,
+            params,
+        }
+    }
+
+    pub fn lookup(&self, module_name: &ModuleName) -> Option<ModuleLookup> {
+        self.names
+            .iter()
+            .position(|name| name == module_name)
+            .map(|index| ModuleLookup {
+                id: self.ids[index],
+                params: self.params[index],
+            })
+    }
+
+    pub fn lookup_by_id(&self, module_id: &ModuleId) -> Option<ModuleLookup> {
+        self.ids
+            .iter()
+            .position(|id| id == module_id)
+            .map(|index| ModuleLookup {
+                id: self.ids[index],
+                params: self.params[index],
+            })
+    }
+
+    pub fn available_names(&self) -> impl Iterator<Item = &ModuleName> {
+        self.names.iter()
+    }
+
+    pub fn insert(
+        &mut self,
+        module_name: ModuleName,
+        module_id: ModuleId,
+        params: Option<(Variable, Symbol)>,
+        region: Region,
+    ) -> Result<(), ScopeModuleSource> {
+        if let Some(index) = self.names.iter().position(|name| name == &module_name) {
+            if self.ids[index] == module_id {
+                return Ok(());
+            }
+
+            return Err(self.sources[index]);
+        }
+
+        self.ids.push(module_id);
+        self.names.push(module_name);
+        self.sources.push(ScopeModuleSource::Import(region));
+        self.params.push(params);
+        Ok(())
+    }
+
+    pub fn len(&self) -> usize {
+        debug_assert_eq!(self.ids.len(), self.names.len());
+        debug_assert_eq!(self.ids.len(), self.sources.len());
+        debug_assert_eq!(self.ids.len(), self.params.len());
+        self.ids.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ids.is_empty()
+    }
+
+    pub fn truncate(&mut self, len: usize) {
+        self.ids.truncate(len);
+        self.names.truncate(len);
+        self.sources.truncate(len);
+        self.params.truncate(len);
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SymbolLookup {
+    pub symbol: Symbol,
+    pub module_params: Option<(Variable, Symbol)>,
+}
+
+impl SymbolLookup {
+    pub fn new(symbol: Symbol, params: Option<(Variable, Symbol)>) -> Self {
+        Self {
+            symbol,
+            module_params: params,
+        }
+    }
+
+    pub fn no_params(symbol: Symbol) -> Self {
+        Self::new(symbol, None)
+    }
+}
+
+pub struct ModuleLookup {
+    pub id: ModuleId,
+    pub params: Option<(Variable, Symbol)>,
+}
+
+impl ModuleLookup {
+    pub fn into_symbol(&self, symbol: Symbol) -> SymbolLookup {
+        debug_assert_eq!(symbol.module_id(), self.id);
+
+        SymbolLookup {
+            symbol,
+            module_params: self.params,
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -701,11 +882,11 @@ mod test {
 
         let lookup = scope.lookup(&ident, Region::zero()).unwrap();
 
-        assert_eq!(first, lookup);
+        assert_eq!(first, lookup.symbol);
     }
 
     #[test]
-    fn inner_scope_does_not_influence_outer() {
+    fn inner_def_scope_does_not_influence_outer() {
         let _register_module_debug_names = ModuleIds::default();
         let mut scope = Scope::new(
             ModuleId::ATTR,
@@ -719,7 +900,7 @@ mod test {
 
         assert!(scope.lookup(&ident, region).is_err());
 
-        scope.inner_scope(|inner| {
+        scope.inner_def_scope(|inner| {
             assert!(inner.introduce(ident.clone(), region).is_ok());
         });
 
@@ -745,7 +926,7 @@ mod test {
     }
 
     #[test]
-    fn idents_with_inner_scope() {
+    fn idents_with_inner_def_scope() {
         let _register_module_debug_names = ModuleIds::default();
         let mut scope = Scope::new(
             ModuleId::ATTR,
@@ -780,7 +961,7 @@ mod test {
             &[ident1.clone(), ident2.clone(), ident3.clone(),]
         );
 
-        scope.inner_scope(|inner| {
+        scope.inner_def_scope(|inner| {
             let ident4 = Ident::from("Ångström");
             let ident5 = Ident::from("Sirály");
 
@@ -857,6 +1038,6 @@ mod test {
 
         let lookup = scope.lookup(&ident, Region::zero()).unwrap();
 
-        assert_eq!(symbol, lookup);
+        assert_eq!(symbol, lookup.symbol);
     }
 }

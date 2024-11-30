@@ -1,0 +1,27 @@
+on:
+    workflow_call:
+  
+name: cargo test debug nix
+
+env:
+    RUST_BACKTRACE: 1
+
+jobs:
+    cargo-test-debug-nix:
+        name: cargo test debug nix
+        runs-on: [ubuntu-22.04]
+        timeout-minutes: 90
+        steps:
+        - uses: actions/checkout@v4
+
+        # install nix
+        - uses: cachix/install-nix-action@v23
+          with:
+            nix_path: nixpkgs=channel:nixos-unstable
+
+        - name: Check if debug flag files are in sync
+          run: ./ci/check_debug_vars.sh
+
+        # for skipped tests; see #6946, #6947
+        - name: cargo test without --release
+          run: nix develop -c sh -c 'export ROC_CHECK_MONO_IR=1 && cargo test'

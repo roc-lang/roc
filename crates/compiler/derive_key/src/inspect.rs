@@ -82,8 +82,8 @@ impl FlatInspectable {
                     let (elems_iter, ext) = elems.sorted_iterator_and_ext(subs, ext);
 
                     // TODO someday we can put #[cfg(debug_assertions)] around this, but for now let's always do it.
-                    check_derivable_ext_var(subs, ext, |ext| {
-                        matches!(ext, Content::Structure(FlatType::EmptyTuple))
+                    check_derivable_ext_var(subs, ext, |_| {
+                        false
                     }).expect("Compiler error: unexpected nonempty ext var when deriving Inspect for tuple");
 
                     Key(FlatInspectableKey::Tuple(elems_iter.count() as _))
@@ -128,26 +128,27 @@ impl FlatInspectable {
                 }
                 FlatType::EmptyRecord => Key(FlatInspectableKey::Record(Vec::new())),
                 FlatType::EmptyTagUnion => Key(FlatInspectableKey::TagUnion(Vec::new())),
-                FlatType::Func(..) => {
-                    Immediate(Symbol::INSPECT_FUNCTION)
+                FlatType::Func(..) => Immediate(Symbol::INSPECT_FUNCTION),
+                FlatType::EffectfulFunc => {
+                    unreachable!("There must have been a bug in the solver, because we're trying to derive Inspect on a non-concrete type.");
                 }
-                FlatType::EmptyTuple => unreachable!("Somehow Inspect derivation got an expression that's an empty tuple, which shouldn't be possible!"),
             },
             Content::Alias(sym, _, real_var, kind) => match Self::from_builtin_alias(sym) {
                 Some(lambda) => lambda,
 
                 _ => {
                     match kind {
-                        AliasKind::Structural => {
-                            Self::from_var(subs, real_var)
-                        }
+                        AliasKind::Structural => Self::from_var(subs, real_var),
                         // Special case, an unbound `Frac *` will become a `Dec`.
-                        AliasKind::Opaque if matches!(*subs.get_content_without_compacting(real_var), Content::FlexVar(_) | Content::FlexAbleVar(_, _)) => {
+                        AliasKind::Opaque
+                            if matches!(
+                                *subs.get_content_without_compacting(real_var),
+                                Content::FlexVar(_) | Content::FlexAbleVar(_, _)
+                            ) =>
+                        {
                             Immediate(Symbol::INSPECT_DEC)
                         }
-                        AliasKind::Opaque if sym.is_builtin() => {
-                            Self::from_var(subs, real_var)
-                        }
+                        AliasKind::Opaque if sym.is_builtin() => Self::from_var(subs, real_var),
                         AliasKind::Opaque => {
                             // There are two cases in which `Inspect` can be derived for an opaque
                             // type.
@@ -169,7 +170,6 @@ impl FlatInspectable {
                         }
                     }
                 }
-
             },
             Content::RangedNumber(range) => {
                 Self::from_var(subs, range.default_compilation_variable())
@@ -180,7 +180,10 @@ impl FlatInspectable {
             | Content::RigidVar(_)
             | Content::FlexAbleVar(_, _)
             | Content::RigidAbleVar(_, _)
-            | Content::LambdaSet(_) | Content::ErasedLambda => {
+            | Content::LambdaSet(_)
+            | Content::ErasedLambda
+            | Content::Pure
+            | Content::Effectful => {
                 unreachable!("There must have been a bug in the solver, because we're trying to derive Inspect on a non-concrete type.");
             }
         }

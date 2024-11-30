@@ -25,6 +25,10 @@
         <p>Roc doesn’t have a numbered release or an installer yet, but you can follow the install instructions for your OS<a href="/install/getting_started.html#installation"> here </a>. If you get stuck, friendly people will be happy to help if you open a topic in<a href="https://roc.zulipchat.com/#narrow/stream/231634-beginners"> #beginners </a>on<a href="https://roc.zulipchat.com/"> Roc Zulip Chat </a>and ask for assistance!</p>
     </section>
 
+## [LLM Docs](#llm-docs) {#llm-docs}
+
+We have experimental LLM-friendly text files for our [tutorial](/llms.txt) and [standard library](/builtins/llms.txt) that you can use to prompt your favorite LLM to answer your questions about Roc!
+
 ## [REPL](#repl) {#repl}
 
 Let's start by getting acquainted with Roc's [_Read-Eval-Print-Loop_](https://en.wikipedia.org/wiki/Read%E2%80%93eval%E2%80%93print_loop), or **REPL** for short.
@@ -154,10 +158,9 @@ Let's move out of the REPL and create our first Roc application!
 Make a file named `main.roc` and put this in it:
 
 ```roc
-app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.12.0/Lb8EgiejTUzbggO2HVVuPJFkwvvsfW6LojkLR20kTVE.tar.br" }
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.17.0/lZFLstMUCUvd5bjnnpYromZJXkQUrdhbva4xdBInicE.tar.br" }
 
 import pf.Stdout
-import pf.Task
 
 main =
     Stdout.line! "I'm a Roc application!"
@@ -441,6 +444,12 @@ You can give `dbg` any expression you like, for example:
 dbg Str.concat singular plural
 ```
 
+You can also use `dbg` as a function inside an expression, which will print the function argument to stderr and then return the argument to the caller. For example:
+
+```roc
+inc = \n -> 1 + dbg n
+```
+
 ### [Tuples](#tuples) {#tuples}
 
 One way to have `dbg` print multiple values at a time is to wrap them in a record:
@@ -477,7 +486,10 @@ third = tuple.2 # ["list"]
 (first, second, third) = ("hello", 42, ["list"])
 ```
 
-By the way, there are two common ways to pronounce "tuple"—one sounds like "two-pull" and the other rhymes with "supple"—and although no clear consensus has emerged in the programming world, people seem generally accepting when others pronounce it differently than they do.
+<details>
+    <summary>Pronouncing Tuple</summary>
+    By the way, there are two common ways to pronounce "tuple"—one sounds like "two-pull" and the other rhymes with "supple"—and although no clear consensus has emerged in the programming world, people seem generally accepting when others pronounce it differently than they do.
+</details>
 
 ## [Pattern Matching](#pattern-matching) {#pattern-matching}
 
@@ -803,7 +815,8 @@ when List.get ["a", "b", "c"] index is
 
 There's also `List.first`, which always gets the first element, and `List.last` which always gets the last. They return `Err ListWasEmpty` instead of `Err OutOfBounds`, because the only way they can fail is if you pass them an empty list!
 
-These functions demonstrate a common pattern in Roc: operations that can fail returning either an `Ok` tag with the answer (if successful), or an `Err` tag with another tag describing what went wrong (if unsuccessful). In fact, it's such a common pattern that there's a whole module called `Result` which deals with these two tags. Here are some examples of `Result` functions:
+### [Error Handling](#error-handling) {#error-handling}
+The `List` functions such as `List.get`, `List.first`, and `List.last` demonstrate a common pattern in Roc: operations that can fail returning either an `Ok` tag with the answer (if successful), or an `Err` tag with another tag describing what went wrong (if unsuccessful). In fact, it's such a common pattern that there's a whole module called `Result` which deals with these two tags. Here are some examples of `Result` functions:
 
 ```roc
 Result.withDefault (List.get ["a", "b", "c"] 100) ""
@@ -816,6 +829,44 @@ Result.isOk (List.get ["a", "b", "c"] 1)
 
 # Note: There's a Result.isErr function that works similarly.
 ```
+
+```roc
+# Running this will produce `Ok "c"`
+Result.try (Str.toU64 "2") listGet
+
+listGet : U64 -> Result Str [OutOfBounds]
+listGet = \index ->
+    List.get ["a", "b", "c", "d"] index
+
+# Notes:
+#  - `Str.toU64 "2"` parses the string "2" to the integer 2, and returns `Ok 2` (more on
+#    integer types later)
+#  - since parsing is successful, `Result.try` passes 2 to the `listGet` function
+#  - passing "abc" or "1000" instead of "2" would have resulted in `Err InvalidNumStr`
+#    or `Err OutOfBounds` respectively
+```
+
+`Result.try` is often used to chain two functions that return `Result` (as in the example above). This prevents you from needing to add error handling code at every intermediate step.
+
+Roc also has a special "try" operator `?`, which is convenient syntax sugar for `Result.try`. For example, consider the following `getLetter` function:
+
+```roc
+getLetter : Str -> Result Str [OutOfBounds, InvalidNumStr]
+getLetter = \indexStr ->
+    index = Str.toU64? indexStr
+    List.get ["a", "b", "c", "d"] index
+```
+
+Notice that we appended `?` to the function name `Str.toU64`. Here's what this does:
+* If the `Str.toU64` function returns an `Ok` value, then its payload is unwrapped.
+    - For example, if we call `getLetter "2"`, then `Str.toU64` returns `Ok 2`, and the `?` operator unwraps the integer 2, so `index` is set to 2 (not `Ok 2`). Then the `List.get` function is called and returns `Ok "c"`.
+* If the `Str.toU64` function returns an `Err` value, then the `?` operator immediately interrupts the `getLetter` function and makes it return this error.
+    - For example, if we call `getLetter "abc"`, then the call to `Str.toU64` returns `Err InvalidNumStr`, and the `?` operator ensures that the `getLetter` function returns this error immediately, without executing the rest of the function.
+
+Thanks to the `?` operator, your code can focus on the "happy path" (where nothing fails) and simply bubble up to the caller any error that might occur. Your error handling code can be neatly separated, and you can rest assured that you won't forget to handle any errors, since the compiler will let you know. See this [code example](https://github.com/roc-lang/examples/blob/main/examples/Results/main.roc) for more details on error handling.
+
+Now let's get back to lists!
+
 
 ### [Walking the elements in a list](#walking-the-elements-in-a-list) {#walking-the-elements-in-a-list}
 
@@ -1432,13 +1483,19 @@ Each `.roc` file is a separate module and contains Roc code for different purpos
 
 There are several modules that are built into the Roc compiler, which are imported automatically into every Roc module. They are:
 
-1.  `Bool`
-2.  `Str`
-3.  `Num`
-4.  `List`
-5.  `Result`
-6.  `Dict`
-7.  `Set`
+1.  [Str](https://www.roc-lang.org/builtins/Str)
+2.  [Num](https://www.roc-lang.org/builtins/Num)
+3.  [Bool](https://www.roc-lang.org/builtins/Bool)
+4.  [Result](https://www.roc-lang.org/builtins/Result)
+5.  [List](https://www.roc-lang.org/builtins/List)
+6.  [Dict](https://www.roc-lang.org/builtins/Dict)
+7.  [Set](https://www.roc-lang.org/builtins/Set)
+8.  [Decode](https://www.roc-lang.org/builtins/Decode)
+9.  [Encode](https://www.roc-lang.org/builtins/Encode)
+10. [Hash](https://www.roc-lang.org/builtins/Hash)
+11. [Box](https://www.roc-lang.org/builtins/Box)
+12. [Inspect](https://www.roc-lang.org/builtins/Inspect)
+13. [Task](https://www.roc-lang.org/builtins/Task)
 
 You may have noticed that we already used the first five. For example, when we wrote `Str.concat` and `Num.isEven`, we were referencing functions stored in the `Str` and `Num` modules.
 
@@ -1454,7 +1511,7 @@ Besides being built into the compiler, the builtin modules are different from ot
 Let's take a closer look at the part of `main.roc` above the `main` def:
 
 ```roc
-app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.12.0/Lb8EgiejTUzbggO2HVVuPJFkwvvsfW6LojkLR20kTVE.tar.br" }
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.17.0/lZFLstMUCUvd5bjnnpYromZJXkQUrdhbva4xdBInicE.tar.br" }
 
 import pf.Stdout
 ```
@@ -1558,7 +1615,7 @@ See the [Ingest Files Example](https://www.roc-lang.org/examples/IngestFiles/REA
 
 ## [Tasks](#tasks) {#tasks}
 
-Tasks are not currently part of the Roc builtins—for now, each platform exposes their own `Task` implementation, but the plan is to standardize them into a builtin `Task` like module like the builtin modules we already have for `List`, `Str`, and so on—but they're an important part of building Roc applications, so let's continue using the [basic-cli](https://github.com/roc-lang/basic-cli) platform we've been using up to this point as an example!
+Tasks are provided in a builtin `Task` module like the `List`, `Str` modules. They're an important part of building Roc applications, so let's continue using the [basic-cli](https://github.com/roc-lang/basic-cli) platform we've been using up to this point as an example!
 
 In the `basic-cli` platform, here are four operations we can do:
 
@@ -1572,7 +1629,7 @@ We'll use these four operations to learn about tasks.
 Let's start with a basic "Hello World" program.
 
 ```roc
-app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.12.0/Lb8EgiejTUzbggO2HVVuPJFkwvvsfW6LojkLR20kTVE.tar.br" }
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.17.0/lZFLstMUCUvd5bjnnpYromZJXkQUrdhbva4xdBInicE.tar.br" }
 
 import pf.Stdout
 
@@ -1580,13 +1637,15 @@ main =
     Stdout.line! "Hello, World!"
 ```
 
-The `Stdout.line` function takes a `Str` and writes it to [standard output](<https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)>). (We'll discuss the `!` part later.) `Stdout.line` has this type:
+This code prints "Hello, World!" to the [standard output](<https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)>). `Stdout.line` has this type:
 
 ```roc
 Stdout.line : Str -> Task {} *
 ```
 
 A `Task` represents an _effect_; an interaction with state outside your Roc program, such as the terminal's standard output, or a file.
+
+ Did you notice the `!` suffix after `Stdout.line`? This operator is similar to the [`?` try operator](https://www.roc-lang.org/tutorial#error-handling), but it is used on functions that return a `Task` instead of a `Result` (we'll discuss [the `!` operator in more depth](https://www.roc-lang.org/tutorial#the-!-suffix) later in this tutorial).
 
 When we set `main` to be a `Task`, the task will get run when we run our program. Here, we've set `main` to be a task that writes `"Hello, World!"` to `stdout` when it gets run, so that's what our program does!
 
@@ -1600,22 +1659,20 @@ Stdin.line : Task [Input Str, End] *
 
 Once this task runs, we'll end up with the [tag union](https://www.roc-lang.org/tutorial#tags-with-payloads) `[Input Str, End]`. Then we can check whether we got an `End` or some actual `Input`, and print out a message accordingly.
 
-### [Reading values from tasks](#inspect) {#task-input}
+### [Reading values from tasks](#task-input) {#task-input}
 
 Let's change `main` to read a line from `stdin`, and then print what we got:
 
 ```roc
-app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.12.0/Lb8EgiejTUzbggO2HVVuPJFkwvvsfW6LojkLR20kTVE.tar.br" }
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.17.0/lZFLstMUCUvd5bjnnpYromZJXkQUrdhbva4xdBInicE.tar.br" }
 
 import pf.Stdout
 import pf.Stdin
-import pf.Task
 
 main =
     Stdout.line! "Type in something and press Enter:"
     input = Stdin.line!
     Stdout.line! "Your input was: $(input)"
-
 ```
 
 If you run this program, it will print "Type in something and press Enter:" and then pause.
@@ -1638,7 +1695,7 @@ high-quality programs handle errors gracefully. Fortunately, we can do this nice
 If we wanted to add the type annotation to `main` that Roc is inferring for it, we would add this annotation:
 
 ```roc
-main : Task {} [Exit I32, StdoutErr Stdout.Err, StdinErr Stdin.Err]
+main : Task {} [Exit I32 Str, StdoutErr Stdout.Err, StdinErr Stdin.Err]
 main =
 ```
 
@@ -1646,7 +1703,7 @@ Let's break down what this type is saying:
 
 - `Task` tells us this is a `Task` type. Its two type parameters are just like the ones we saw in `Result` earlier: the first type tells us what this task will produce if it succeeds, and the other one tells us what it will produce if it fails.
 - `{}` tells us that this task always produces an empty record when it succeeds. (That is, it doesn't produce anything useful. Empty records don't have any information in them!) This is because the last task in `main` comes from `Stdout.line`, which doesn't produce anything. (In contrast, the `Stdin` task's first type parameter is a `Str`, because it produces a `Str` if it succeeds.)
-- `[Exit I32, StdoutErr Stdout.Err, StdinErr Stdin.Err]` tells us the different ways this task can fail. The `StdoutErr` and `StdinErr` tags are there becase we used `Stdout.line` and `Stdin.line`. We'll talk about `Exit I32` more in a moment.
+- `[Exit I32 Str, StdoutErr Stdout.Err, StdinErr Stdin.Err]` tells us the different ways this task can fail. The `StdoutErr` and `StdinErr` tags are there because we used `Stdout.line` and `Stdin.line`. We'll talk about `Exit I32 Str` more in a moment.
 
 To understand what the `Exit I32 Str` error means, let's try temporarily commenting out our current `main` and replacing
 it with this one:
@@ -1753,22 +1810,6 @@ This is a useful technique to use when we don't want to write out a bunch of err
 - Look at the branches of our `when err is`, since they cover all the errors (and we'd get a compile error if we left any out)
 - If we're using an editor that supports it, hovering over the `_` might display the inferred type that goes there.
 - We can put an obviously wrong type in there (e.g. replace the `{}` with `Str`, which is totally wrong) and look at the compiler error to see what it inferred as the correct type.
-
-We can also use `_` in type aliases, to express that two types are the same without annotating either of them. For example:
-
-```roc
-RunErr : _
-```
-
-```roc
-run : Task {} RunErr
-```
-
-```roc
-handleErr : RunErr -> [Exit I32 Str]
-```
-
-Of course, we could also choose not to use `_` at all and populate the `RunErr` type alias with the full list of errors that could happen in our `run` task. All of these are totally reasonable stylistic choices, depending on how you prefer the code to look. They all compile to exactly the same thing, and have the same runtime characteristics.
 
 ### [The ! suffix](#the-!-suffix) {#the-!-suffix}
 
@@ -2200,39 +2241,73 @@ For this reason, any time you see a function that only runs a `when` on its only
 
 ### [Record Builder](#record-builder) {#record-builder}
 
-The record builder syntax sugar is a useful feature which leverages the functional programming concept of [applicative functors](https://lucamug.medium.com/functors-applicatives-and-monads-in-pictures-784c2b5786f7), to provide a flexible method for constructing complex types.
+Record builders are a syntax sugar for sequencing actions and collecting the intermediate results as fields in a record. All you need to build a record is a `map2`-style function that takes two values of the same type and combines them using a provided combiner function. There are many convenient APIs we can build with this simple syntax.
 
-The record builder syntax sugar helps to build up a record by applying a series of functions to it.
-
-For example, let's say we write a record-builder as follows:
+For example, let's say we want a record builder to match URLs as follows:
 
 ```roc
-{ aliceID, bobID, trudyID } =
-    initIDCount {
-        aliceID: <- incID,
-        bobID: <- incID,
-        trudyID: <- incID,
-    } |> extractState
+combineMatchers : UrlMatcher a, UrlMatcher b, (a, b -> c) -> UrlMatcher c
+combineMatchers = \matcherA, matcherB, combiner -> ...
+
+userTabMatcher : UrlMatcher { users: {}, userId: U64, tab: Str }
+userTabMatcher =
+    { combineMatchers <-
+        users: exactSegment "users",
+        userId: u64Segment,
+        tab: anySegment,
+    }
+
+expect
+    userTabMatcher
+    |> matchOnUrl "/users/123/account"
+    == Ok { users: {}, userId: 123, tab: "account" }
 ```
 
-The above desguars to the following.
+The `userTabMatcher` record builder desugars to the following:
 
 ```roc
-{ aliceID, bobID, trudyID } =
-    initIDCount (\aID -> \bID -> \cID -> { aliceID: aID, bobID: bID, trudyID: cID })
-    |> incID
-    |> incID
-    |> incID
-    |> extractState
+userTabMatcher =
+    combineMatchers
+        (exactSegment "users")
+        (
+            combineMatchers
+                u64Segment
+                anySegment
+                \userId, tab -> (userId, tab)
+        )
+        \users, (userId, tab) -> { users, userId, tab }
 ```
 
-See the [Record Builder Example](https://www.roc-lang.org/examples/RecordBuilder/README.html) for an explanation of how to use this feature.
+You can see that the `combineMatchers` builder function is simply applied in sequence, pairing up all fields until a record is created.
+
+You'll notice that the `users` field above holds an empty record, and isn't a useful part of the result. If you want to ignore such a field in the record builder, prefix its name with an underscore as you would do to ignore a variable:
+
+```roc
+userTabMatcher : UrlMatcher { userId: U64 }
+userTabMatcher =
+    { combineMatchers <-
+        _: exactSegment "users",
+        userId: u64Segment,
+        _tab: anySegment,
+    }
+
+expect
+    userTabMatcher
+    |> matchOnUrl "/users/123/account"
+    == Ok { userId: 123 }
+```
+
+If you want to see other examples of using record builders, look at the [Record Builder Example](https://www.roc-lang.org/examples/RecordBuilder/README.html) for a moderately-sized example or the [Arg.Builder](https://github.com/roc-lang/basic-cli/blob/main/platform/Arg/Builder.roc) module in our `basic-cli` platform for a complex example.
 
 ### [Reserved Keywords](#reserved-keywords) {#reserved-keywords}
 
-These are all the reserved keywords in Roc. You can't choose any of these as names, except as record field names.
+These are reserved keywords in Roc. You can't choose any of them as names, except as record field names.
 
-`if`, `then`, `else`, `when`, `as`, `is`, `dbg`, `import`, `expect`, `expect-fx`, `crash`, `module`, `app`, `package`, `platform`, `hosted`, `exposes`, `with`, `generates`, `packages`, `requires`
+`as`, `crash`, `dbg`, `else`, `expect`, `expect-fx`, `if`, `import`, `is`, `then`, `when`
+
+Other keywords are used only in specific places, so they are not reserved. This includes:
+
+`app`, `exposes`, `exposing`, `generates`, `implements`, `module`, `package`, `packages`, `platform`, `requires`, `where`, `with`
 
 ## [Operator Desugaring Table](#operator-desugaring-table) {#operator-desugaring-table}
 
@@ -2255,6 +2330,14 @@ Here are various Roc expressions involving operators, and what they desugar to.
 | `!a`                         | `Bool.not a`       |
 | <code>a \|> f</code>         | `f a`              |
 | <code>f a b \|> g x y</code> | `g (f a b) x y`    |
+| `f!`                         | [see example](https://www.roc-lang.org/examples/DesugaringAwait/README.html)     |
+| `f?`                         | [see example](https://www.roc-lang.org/examples/DesugaringTry/README.html)     |
 
 </section>
 <script type="text/javascript" src="/builtins/search.js" defer></script>
+
+### [Additional Resources]
+
+You've completed the tutorial, well done!
+
+If you are looking for more resources to learn Roc, check out [these links](/install#additional-learning-resources).

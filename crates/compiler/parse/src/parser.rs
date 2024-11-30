@@ -83,8 +83,6 @@ impl_space_problem! {
     EExpect<'a>,
     EExposes,
     EExpr<'a>,
-    EGenerates,
-    EGeneratesWith,
     EHeader<'a>,
     EIf<'a>,
     EImport<'a>,
@@ -99,6 +97,7 @@ impl_space_problem! {
     EPattern<'a>,
     EProvides<'a>,
     ERecord<'a>,
+    EReturn<'a>,
     ERequires<'a>,
     EString<'a>,
     EType<'a>,
@@ -122,8 +121,6 @@ pub enum EHeader<'a> {
     Imports(EImports, Position),
     Requires(ERequires<'a>, Position),
     Packages(EPackages<'a>, Position),
-    Generates(EGenerates, Position),
-    GeneratesWith(EGeneratesWith, Position),
 
     Space(BadInputError, Position),
     Start(Position),
@@ -252,30 +249,6 @@ pub enum EImports {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EGenerates {
-    Open(Position),
-    Generates(Position),
-    IndentGenerates(Position),
-    Identifier(Position),
-    Space(BadInputError, Position),
-    IndentTypeStart(Position),
-    IndentTypeEnd(Position),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EGeneratesWith {
-    Open(Position),
-    With(Position),
-    IndentWith(Position),
-    IndentListStart(Position),
-    IndentListEnd(Position),
-    ListStart(Position),
-    ListEnd(Position),
-    Identifier(Position),
-    Space(BadInputError, Position),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BadInputError {
     HasTab,
     HasMisplacedCarriageReturn,
@@ -355,6 +328,8 @@ pub enum EExpr<'a> {
     QualifiedTag(Position),
     BackpassComma(Position),
     BackpassArrow(Position),
+    BackpassContinue(Position),
+    DbgContinue(Position),
 
     When(EWhen<'a>, Position),
     If(EIf<'a>, Position),
@@ -362,16 +337,18 @@ pub enum EExpr<'a> {
     Expect(EExpect<'a>, Position),
     Dbg(EExpect<'a>, Position),
     Import(EImport<'a>, Position),
+    Return(EReturn<'a>, Position),
 
     Closure(EClosure<'a>, Position),
     Underscore(Position),
     Crash(Position),
+    Try(Position),
 
     InParens(EInParens<'a>, Position),
     Record(ERecord<'a>, Position),
-    OptionalValueInRecordBuilder(Region),
-    RecordUpdateAccumulator(Region),
-    RecordBuilderAccumulator(Region),
+    RecordUpdateOldBuilderField(Region),
+    RecordUpdateIgnoredField(Region),
+    RecordBuilderOldBuilderField(Region),
 
     // SingleQuote errors are folded into the EString
     Str(EString<'a>, Position),
@@ -383,6 +360,7 @@ pub enum EExpr<'a> {
     IndentEnd(Position),
 
     UnexpectedComma(Position),
+    UnexpectedTopLevelExpr(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -424,6 +402,7 @@ pub enum ERecord<'a> {
 
     Prefix(Position),
     Field(Position),
+    UnderscoreField(Position),
     Colon(Position),
     QuestionMark(Position),
     Arrow(Position),
@@ -537,6 +516,14 @@ pub enum EExpect<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EReturn<'a> {
+    Space(BadInputError, Position),
+    Return(Position),
+    ReturnValue(&'a EExpr<'a>, Position),
+    IndentReturnValue(Position),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EImport<'a> {
     Import(Position),
     IndentStart(Position),
@@ -572,7 +559,7 @@ pub enum EImportParams<'a> {
     Record(ERecord<'a>, Position),
     RecordUpdateFound(Region),
     RecordBuilderFound(Region),
-    RecordApplyFound(Region),
+    RecordIgnoredFieldFound(Region),
     Space(BadInputError, Position),
 }
 
@@ -597,6 +584,7 @@ pub enum EPattern<'a> {
     AsIndentStart(Position),
 
     AccessorFunction(Position),
+    RecordUpdaterFunction(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -731,6 +719,7 @@ pub enum ETypeAbilityImpl<'a> {
     Open(Position),
 
     Field(Position),
+    UnderscoreField(Position),
     Colon(Position),
     Arrow(Position),
     Optional(Position),
@@ -752,6 +741,7 @@ impl<'a> From<ERecord<'a>> for ETypeAbilityImpl<'a> {
             ERecord::End(p) => ETypeAbilityImpl::End(p),
             ERecord::Open(p) => ETypeAbilityImpl::Open(p),
             ERecord::Field(p) => ETypeAbilityImpl::Field(p),
+            ERecord::UnderscoreField(p) => ETypeAbilityImpl::UnderscoreField(p),
             ERecord::Colon(p) => ETypeAbilityImpl::Colon(p),
             ERecord::Arrow(p) => ETypeAbilityImpl::Arrow(p),
             ERecord::Space(s, p) => ETypeAbilityImpl::Space(s, p),
@@ -845,14 +835,14 @@ where
         }
 
         // This should be enough for anyone. Right? RIGHT?
-        let indent_text =
-            "| ; : ! | ; : ! | ; : ! | ; : ! | ; : ! | ; : ! | ; : ! | ; : ! | ; : ! ";
+        let indent_text = "| ; : ! ".repeat(100);
 
         let cur_indent = INDENT.with(|i| *i.borrow());
 
         println!(
-            "{:<5?}: {}{:<50}",
+            "{:<5?}:{:<2} {}{:<50}",
             state.pos(),
+            min_indent,
             &indent_text[..cur_indent * 2],
             self.message
         );
@@ -868,8 +858,9 @@ where
         };
 
         println!(
-            "{:<5?}: {}{:<50} {:<15} {:?}",
+            "{:<5?}:{:<2} {}{:<50} {:<15} {:?}",
             state.pos(),
+            min_indent,
             &indent_text[..cur_indent * 2],
             self.message,
             format!("{:?}", progress),
@@ -1065,7 +1056,15 @@ where
         // the next character should not be an identifier character
         // to prevent treating `whence` or `iffy` as keywords
         match state.bytes().get(width) {
-            Some(next) if *next == b' ' || *next == b'#' || *next == b'\n' || *next == b'\r' => {
+            Some(
+                b' ' | b'#' | b'\n' | b'\r' | b'\t' | b',' | b'(' | b')' | b'[' | b']' | b'{'
+                | b'}' | b'"' | b'\'' | b'/' | b'\\' | b'+' | b'*' | b'%' | b'^' | b'&' | b'|'
+                | b'<' | b'>' | b'=' | b'!' | b'~' | b'`' | b';' | b':' | b'?' | b'.' | b'@',
+            ) => {
+                state = state.advance(width);
+                Ok((MadeProgress, (), state))
+            }
+            Some(b'-') if keyword_str != "expect" => {
                 state = state.advance(width);
                 Ok((MadeProgress, (), state))
             }
@@ -1670,6 +1669,21 @@ where
 {
     move |_arena: &'a bumpalo::Bump, state: State<'a>, _min_indent: u32| {
         Err((NoProgress, f(state.pos())))
+    }
+}
+
+/// Creates a parser that fails if the next byte is the given byte.
+pub fn error_on_byte<'a, T, E, F>(byte_to_match: u8, to_error: F) -> impl Parser<'a, T, E>
+where
+    T: 'a,
+    E: 'a,
+    F: Fn(Position) -> E,
+{
+    debug_assert_ne!(byte_to_match, b'\n');
+
+    move |_arena: &'a Bump, state: State<'a>, _min_indent: u32| match state.bytes().first() {
+        Some(x) if *x == byte_to_match => Err((MadeProgress, to_error(state.pos()))),
+        _ => Err((NoProgress, to_error(state.pos()))),
     }
 }
 

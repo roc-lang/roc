@@ -166,7 +166,7 @@ impl<'a>
         match &self.typ {
             Type::EmptyRec
             | Type::EmptyTagUnion
-            | Type::Function(_, _, _)
+            | Type::Function(_, _, _, _)
             | Type::Record(_, _)
             | Type::Tuple(_, _)
             | Type::TagUnion(_, _)
@@ -196,6 +196,8 @@ impl<'a>
             Type::Apply(_, _, _) => (visit_opaque_type)(todo!(), todo!(), todo!()),
             Type::Variable(_) => todo!(),
             Type::Error => todo!(),
+            Type::Pure => todo!(),
+            Type::Effectful => todo!(),
         }
     }
 }

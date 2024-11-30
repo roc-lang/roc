@@ -9,8 +9,7 @@ version.workspace = true
 [dependencies]
 
 [dev-dependencies]
-cli_utils = { path = "../cli/cli_utils" }
-
+cli_test_utils.workspace = true
 criterion-perf-events.workspace = true
 criterion.workspace = true
 perfcnt.workspace = true

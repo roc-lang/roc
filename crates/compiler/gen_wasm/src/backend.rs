@@ -607,7 +607,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
             Stmt::Dbg { .. } => todo!("dbg is not implemented in the wasm backend"),
             Stmt::Expect { .. } => todo!("expect is not implemented in the wasm backend"),
-            Stmt::ExpectFx { .. } => todo!("expect-fx is not implemented in the wasm backend"),
 
             Stmt::Crash(sym, tag) => self.stmt_crash(*sym, *tag),
         }
@@ -1010,10 +1009,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 initializer,
                 element_layout,
             } => self.expr_alloca(*initializer, *element_layout, storage),
-
-            Expr::RuntimeErrorFunction(_) => {
-                todo!("Expression `{}`", expr.to_pretty(100, false))
-            }
         }
     }
 
@@ -1981,12 +1976,33 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             self.register_helper_proc(spec_sym, spec_layout, ProcSource::Helper);
         }
 
-        self.get_existing_refcount_fn_index(proc_symbol, layout, op)
+        self.get_existing_helper_fn_index(proc_symbol, layout, op)
+    }
+
+    /// Generate a copy helper procedure and return a pointer (table index) to it
+    /// This allows it to be indirectly called from Zig code
+    pub fn get_copy_fn_index(&mut self, layout: InLayout<'a>) -> u32 {
+        let ident_ids = self
+            .interns
+            .all_ident_ids
+            .get_mut(&self.env.module_id)
+            .unwrap();
+
+        let (proc_symbol, new_specializations) =
+            self.helper_proc_gen
+                .gen_copy_proc(ident_ids, self.layout_interner, layout);
+
+        // If any new specializations were created, register their symbol data
+        for (spec_sym, spec_layout) in new_specializations.into_iter() {
+            self.register_helper_proc(spec_sym, spec_layout, ProcSource::Helper);
+        }
+
+        self.get_existing_helper_fn_index(proc_symbol, layout, HelperOp::IndirectCopy)
     }
 
     /// return a pointer (table index) to a refcount helper procedure.
     /// This allows it to be indirectly called from Zig code
-    pub fn get_existing_refcount_fn_index(
+    pub fn get_existing_helper_fn_index(
         &mut self,
         proc_symbol: Symbol,
         layout: InLayout<'a>,

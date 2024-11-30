@@ -182,9 +182,7 @@ impl<'a, 'i> SymbolRcTypesEnv<'a, 'i> {
             Stmt::Refcounting(_, _) => unreachable!(
                 "Refcounting operations should not be present in the AST at this point."
             ),
-            Stmt::Expect { remainder, .. }
-            | Stmt::ExpectFx { remainder, .. }
-            | Stmt::Dbg { remainder, .. } => {
+            Stmt::Expect { remainder, .. } | Stmt::Dbg { remainder, .. } => {
                 self.insert_symbols_rc_type_stmt(remainder);
             }
             Stmt::Join {
@@ -680,30 +678,6 @@ fn insert_refcount_operations_stmt<'v, 'a>(
                 remainder: newer_remainder,
             })
         }
-        Stmt::ExpectFx {
-            condition,
-            region,
-            lookups,
-            variables,
-            remainder,
-        } => {
-            let new_remainder = insert_refcount_operations_stmt(arena, environment, remainder);
-
-            let newer_remainder = consume_and_insert_dec_stmts(
-                arena,
-                environment,
-                environment.borrowed_usages(lookups.iter().copied()),
-                new_remainder,
-            );
-
-            arena.alloc(Stmt::ExpectFx {
-                condition: *condition,
-                region: *region,
-                lookups,
-                variables,
-                remainder: newer_remainder,
-            })
-        }
         Stmt::Dbg {
             source_location,
             source,
@@ -907,12 +881,8 @@ fn insert_refcount_operations_binding<'a>(
     }
 
     match expr {
-        Expr::Literal(_)
-        | Expr::NullPointer
-        | Expr::FunctionPointer { .. }
-        | Expr::EmptyArray
-        | Expr::RuntimeErrorFunction(_) => {
-            // Literals, empty arrays, and runtime errors are not (and have nothing) reference counted.
+        Expr::Literal(_) | Expr::NullPointer | Expr::FunctionPointer { .. } | Expr::EmptyArray => {
+            // Literals and empty arrays are not (and have nothing) reference counted.
             new_let!(stmt)
         }
 
@@ -1274,7 +1244,7 @@ pub(crate) fn lowlevel_borrow_signature(op: LowLevel) -> &'static [Ownership] {
         StrTrim => &[OWNED],
         StrTrimStart => &[OWNED],
         StrTrimEnd => &[OWNED],
-        StrSplit => &[BORROWED, BORROWED],
+        StrSplitOn => &[BORROWED, BORROWED],
         StrToNum => &[BORROWED],
         ListPrepend => &[OWNED, OWNED],
         StrJoinWith => &[BORROWED, BORROWED],

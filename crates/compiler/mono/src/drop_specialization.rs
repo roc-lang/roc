@@ -244,8 +244,7 @@ fn specialize_drops_stmt<'a, 'i>(
                         }
                     }
                     Reset { .. } | Expr::ResetRef { .. } => { /* do nothing */ }
-                    RuntimeErrorFunction(_)
-                    | FunctionPointer { .. }
+                    FunctionPointer { .. }
                     | GetTagId { .. }
                     | Alloca { .. }
                     | EmptyArray
@@ -599,25 +598,6 @@ fn specialize_drops_stmt<'a, 'i>(
             variables,
             remainder,
         } => arena.alloc(Stmt::Expect {
-            condition: *condition,
-            region: *region,
-            lookups,
-            variables,
-            remainder: specialize_drops_stmt(
-                arena,
-                layout_interner,
-                ident_ids,
-                environment,
-                remainder,
-            ),
-        }),
-        Stmt::ExpectFx {
-            condition,
-            region,
-            lookups,
-            variables,
-            remainder,
-        } => arena.alloc(Stmt::ExpectFx {
             condition: *condition,
             region: *region,
             lookups,
@@ -1563,7 +1543,7 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         StrTrim => RC::Rc,
         StrTrimStart => RC::Rc,
         StrTrimEnd => RC::Rc,
-        StrSplit => RC::NoRc,
+        StrSplitOn => RC::NoRc,
         StrToNum => RC::NoRc,
         ListPrepend => RC::Rc,
         StrJoinWith => RC::NoRc,

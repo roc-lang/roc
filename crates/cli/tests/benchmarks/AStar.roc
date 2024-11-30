@@ -1,6 +1,6 @@
-interface AStar
-    exposes [findPath, Model, initialModel, cheapestOpen, reconstructPath]
-    imports [Quicksort]
+module [findPath, Model, initialModel, cheapestOpen, reconstructPath]
+
+import Quicksort
 
 findPath = \costFn, moveFn, start, end ->
     astar costFn moveFn end (initialModel start)
@@ -92,9 +92,8 @@ astar = \costFn, moveFn, goal, model ->
 
                 modelWithNeighbors : Model position
                 modelWithNeighbors =
-                    { modelPopped &
-                        openSet: Set.union modelPopped.openSet newNeighbors,
-                    }
+                    modelPopped
+                    |> &openSet (Set.union modelPopped.openSet newNeighbors)
 
                 walker : Model position, position -> Model position
                 walker = \amodel, n -> updateCost current n amodel

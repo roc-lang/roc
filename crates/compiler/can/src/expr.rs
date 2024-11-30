@@ -1,23 +1,24 @@
 use crate::abilities::SpecializationId;
 use crate::annotation::{freshen_opaque_def, IntroducedVariables};
 use crate::builtins::builtin_defs_map;
-use crate::def::{can_defs_with_return, Annotation, Def};
+use crate::def::{can_defs_with_return, Annotation, Def, DefKind};
 use crate::env::Env;
 use crate::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_num, float_expr_from_result,
     int_expr_from_result, num_expr_from_result, FloatBound, IntBound, NumBound,
 };
+use crate::params_in_abilities_unimplemented;
 use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern, PermitShadows};
 use crate::procedure::{QualifiedReference, References};
-use crate::scope::Scope;
+use crate::scope::{Scope, SymbolLookup};
 use crate::traverse::{walk_expr, Visitor};
-use roc_collections::soa::Index;
+use roc_collections::soa::index_push_new;
 use roc_collections::{SendMap, VecMap, VecSet};
 use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{IdentId, ModuleId, Symbol};
 use roc_parse::ast::{self, Defs, PrecedenceConflict, StrLiteral};
 use roc_parse::ident::Accessor;
 use roc_parse::pattern::PatternType::*;
@@ -26,6 +27,7 @@ use roc_region::all::{Loc, Region};
 use roc_types::num::SingleQuoteBound;
 use roc_types::subs::{ExhaustiveMark, IllegalCycleMark, RedundantMark, VarStore, Variable};
 use roc_types::types::{Alias, Category, IndexOrField, LambdaSet, OptAbleVar, Type};
+use soa::Index;
 use std::fmt::{Debug, Display};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -37,7 +39,7 @@ pub type PendingDerives = VecMap<Symbol, (Type, Vec<Loc<Symbol>>)>;
 #[derive(Clone, Default, Debug)]
 pub struct Output {
     pub references: References,
-    pub tail_call: Option<Symbol>,
+    pub tail_calls: Vec<Symbol>,
     pub introduced_variables: IntroducedVariables,
     pub aliases: VecMap<Symbol, Alias>,
     pub non_closures: VecSet<Symbol>,
@@ -48,8 +50,8 @@ impl Output {
     pub fn union(&mut self, other: Self) {
         self.references.union_mut(&other.references);
 
-        if let (None, Some(later)) = (self.tail_call, other.tail_call) {
-            self.tail_call = Some(later);
+        if self.tail_calls.is_empty() && !other.tail_calls.is_empty() {
+            self.tail_calls = other.tail_calls;
         }
 
         self.introduced_variables
@@ -83,7 +85,55 @@ impl Display for IntValue {
     }
 }
 
-#[derive(Clone, Debug)]
+impl IntValue {
+    pub fn as_u8(self) -> u8 {
+        self.as_u128() as u8
+    }
+
+    pub fn as_i8(self) -> i8 {
+        self.as_i128() as i8
+    }
+
+    pub fn as_u16(self) -> u16 {
+        self.as_u128() as u16
+    }
+
+    pub fn as_i16(self) -> i16 {
+        self.as_i128() as i16
+    }
+
+    pub fn as_u32(self) -> u32 {
+        self.as_u128() as u32
+    }
+
+    pub fn as_i32(self) -> i32 {
+        self.as_i128() as i32
+    }
+
+    pub fn as_u64(self) -> u64 {
+        self.as_u128() as u64
+    }
+
+    pub fn as_i64(self) -> i64 {
+        self.as_i128() as i64
+    }
+
+    pub fn as_u128(self) -> u128 {
+        match self {
+            IntValue::I128(i128) => i128::from_ne_bytes(i128) as u128,
+            IntValue::U128(u128) => u128::from_ne_bytes(u128),
+        }
+    }
+
+    pub fn as_i128(self) -> i128 {
+        match self {
+            IntValue::I128(i128) => i128::from_ne_bytes(i128),
+            IntValue::U128(u128) => u128::from_ne_bytes(u128) as i128,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
     // Literals
 
@@ -102,11 +152,18 @@ pub enum Expr {
         loc_elems: Vec<Loc<Expr>>,
     },
 
-    // An ingested files, it's bytes, and the type variable.
+    // An ingested files, its bytes, and the type variable.
     IngestedFile(Box<PathBuf>, Arc<Vec<u8>>, Variable),
 
     // Lookups
     Var(Symbol, Variable),
+    /// Like Var, but from a module with params
+    ParamsVar {
+        symbol: Symbol,
+        var: Variable,
+        params_symbol: Symbol,
+        params_var: Variable,
+    },
     AbilityMember(
         /// Actual member name
         Symbol,
@@ -122,7 +179,7 @@ pub enum Expr {
         /// The actual condition of the when expression.
         loc_cond: Box<Loc<Expr>>,
         cond_var: Variable,
-        /// Result type produced by the branches.
+        /// Type of each branch (and therefore the type of the entire `when` expression)
         expr_var: Variable,
         region: Region,
         /// The branches of the when, and the type of the condition that they expect to be matched
@@ -146,7 +203,7 @@ pub enum Expr {
     /// This is *only* for calling functions, not for tag application.
     /// The Tag variant contains any applied values inside it.
     Call(
-        Box<(Variable, Loc<Expr>, Variable, Variable)>,
+        Box<(Variable, Loc<Expr>, Variable, Variable, Variable)>,
         Vec<(Variable, Loc<Expr>)>,
         CalledVia,
     ),
@@ -176,6 +233,9 @@ pub enum Expr {
         tuple_var: Variable,
         elems: Vec<(Variable, Box<Loc<Expr>>)>,
     },
+
+    /// Module params expression in import
+    ImportParams(ModuleId, Region, Option<(Variable, Box<Expr>)>),
 
     /// The "crash" keyword
     Crash {
@@ -259,13 +319,6 @@ pub enum Expr {
         lookups_in_cond: Vec<ExpectLookup>,
     },
 
-    // not parsed, but is generated when lowering toplevel effectful expects
-    ExpectFx {
-        loc_condition: Box<Loc<Expr>>,
-        loc_continuation: Box<Loc<Expr>>,
-        lookups_in_cond: Vec<ExpectLookup>,
-    },
-
     Dbg {
         source_location: Box<str>,
         source: Box<str>,
@@ -275,14 +328,16 @@ pub enum Expr {
         symbol: Symbol,
     },
 
-    /// Rendered as empty box in editor
-    TypedHole(Variable),
+    Return {
+        return_value: Box<Loc<Expr>>,
+        return_var: Variable,
+    },
 
     /// Compiles, but will crash if reached
     RuntimeError(RuntimeError),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ExpectLookup {
     pub symbol: Symbol,
     pub var: Variable,
@@ -308,6 +363,12 @@ impl Expr {
             Self::SingleQuote(..) => Category::Character,
             Self::List { .. } => Category::List,
             &Self::Var(sym, _) => Category::Lookup(sym),
+            &Self::ParamsVar {
+                symbol,
+                var: _,
+                params_symbol: _,
+                params_var: _,
+            } => Category::Lookup(symbol),
             &Self::AbilityMember(sym, _, _) => Category::Lookup(sym),
             Self::When { .. } => Category::When,
             Self::If { .. } => Category::If,
@@ -324,6 +385,8 @@ impl Expr {
             Self::RecordAccessor(data) => Category::Accessor(data.field.clone()),
             Self::TupleAccess { index, .. } => Category::TupleAccess(*index),
             Self::RecordUpdate { .. } => Category::Record,
+            Self::ImportParams(_, _, Some((_, expr))) => expr.category(),
+            Self::ImportParams(_, _, None) => Category::Unknown,
             Self::Tag {
                 name, arguments, ..
             } => Category::TagApply {
@@ -339,20 +402,20 @@ impl Expr {
                 Category::OpaqueWrap(opaque_name)
             }
             Self::Expect { .. } => Category::Expect,
-            Self::ExpectFx { .. } => Category::Expect,
             Self::Crash { .. } => Category::Crash,
+            Self::Return { .. } => Category::Return,
 
             Self::Dbg { .. } => Category::Expect,
 
             // these nodes place no constraints on the expression's type
-            Self::TypedHole(_) | Self::RuntimeError(..) => Category::Unknown,
+            Self::RuntimeError(..) => Category::Unknown,
         }
     }
 }
 
 /// Stores exhaustiveness-checking metadata for a closure argument that may
 /// have an annotated type.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AnnotatedMark {
     pub annotation_var: Variable,
     pub exhaustive: ExhaustiveMark,
@@ -376,11 +439,13 @@ impl AnnotatedMark {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ClosureData {
     pub function_type: Variable,
     pub closure_type: Variable,
     pub return_type: Variable,
+    pub fx_type: Variable,
+    pub early_returns: Vec<(Variable, Region)>,
     pub name: Symbol,
     pub captured_symbols: Vec<(Symbol, Variable)>,
     pub recursive: Recursive,
@@ -457,6 +522,8 @@ impl StructAccessorData {
             function_type: function_var,
             closure_type: closure_var,
             return_type: field_var,
+            fx_type: Variable::PURE,
+            early_returns: vec![],
             name,
             captured_symbols: vec![],
             recursive: Recursive::NotRecursive,
@@ -469,7 +536,7 @@ impl StructAccessorData {
 /// An opaque wrapper like `@Foo`, which is equivalent to `\p -> @Foo p`
 /// These are desugared to closures, but we distinguish them so we can have
 /// better error messages during constraint generation.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct OpaqueWrapFunctionData {
     pub opaque_name: Symbol,
     pub opaque_var: Variable,
@@ -530,6 +597,8 @@ impl OpaqueWrapFunctionData {
             function_type: function_var,
             closure_type: closure_var,
             return_type: opaque_var,
+            fx_type: Variable::PURE,
+            early_returns: vec![],
             name: function_name,
             captured_symbols: vec![],
             recursive: Recursive::NotRecursive,
@@ -539,7 +608,7 @@ impl OpaqueWrapFunctionData {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Field {
     pub var: Variable,
     // The region of the full `foo: f bar`, rather than just `f bar`
@@ -563,7 +632,7 @@ impl Recursive {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct WhenBranchPattern {
     pub pattern: Loc<Pattern>,
     /// Degenerate branch patterns are those that don't fully bind symbols that the branch body
@@ -572,7 +641,7 @@ pub struct WhenBranchPattern {
     pub degenerate: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct WhenBranch {
     pub patterns: Vec<WhenBranchPattern>,
     pub value: Loc<Expr>,
@@ -631,34 +700,7 @@ pub fn canonicalize_expr<'a>(
 
             (answer, Output::default())
         }
-        ast::Expr::Record(fields) => {
-            if fields.is_empty() {
-                (EmptyRecord, Output::default())
-            } else {
-                match canonicalize_fields(env, var_store, scope, region, fields.items) {
-                    Ok((can_fields, output)) => (
-                        Record {
-                            record_var: var_store.fresh(),
-                            fields: can_fields,
-                        },
-                        output,
-                    ),
-                    Err(CanonicalizeRecordProblem::InvalidOptionalValue {
-                        field_name,
-                        field_region,
-                        record_region,
-                    }) => (
-                        Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidOptionalValue {
-                            field_name,
-                            field_region,
-                            record_region,
-                        }),
-                        Output::default(),
-                    ),
-                }
-            }
-        }
-
+        ast::Expr::Record(fields) => canonicalize_record(env, var_store, scope, region, *fields),
         ast::Expr::RecordUpdate {
             fields,
             update: loc_update,
@@ -722,7 +764,6 @@ pub fn canonicalize_expr<'a>(
 
             let output = Output {
                 references,
-                tail_call: None,
                 ..Default::default()
             };
 
@@ -790,7 +831,6 @@ pub fn canonicalize_expr<'a>(
 
                 let output = Output {
                     references,
-                    tail_call: None,
                     ..Default::default()
                 };
 
@@ -907,22 +947,25 @@ pub fn canonicalize_expr<'a>(
                 output.union(fn_expr_output);
 
                 // Default: We're not tail-calling a symbol (by name), we're tail-calling a function value.
-                output.tail_call = None;
+                output.tail_calls = vec![];
 
                 let expr = match fn_expr.value {
                     Var(symbol, _) => {
                         output.references.insert_call(symbol);
 
                         // we're tail-calling a symbol by name, check if it's the tail-callable symbol
-                        output.tail_call = match &env.tailcallable_symbol {
-                            Some(tc_sym) if *tc_sym == symbol => Some(symbol),
-                            Some(_) | None => None,
-                        };
+                        if env
+                            .tailcallable_symbol
+                            .is_some_and(|tc_sym| tc_sym == symbol)
+                        {
+                            output.tail_calls.push(symbol);
+                        }
 
                         Call(
                             Box::new((
                                 var_store.fresh(),
                                 fn_expr,
+                                var_store.fresh(),
                                 var_store.fresh(),
                                 var_store.fresh(),
                             )),
@@ -962,6 +1005,7 @@ pub fn canonicalize_expr<'a>(
                             Box::new((
                                 var_store.fresh(),
                                 fn_expr,
+                                var_store.fresh(),
                                 var_store.fresh(),
                                 var_store.fresh(),
                             )),
@@ -1016,19 +1060,19 @@ pub fn canonicalize_expr<'a>(
         }
         ast::Expr::Defs(loc_defs, loc_ret) => {
             // The body expression gets a new scope for canonicalization,
-            scope.inner_scope(|inner_scope| {
+            scope.inner_def_scope(|inner_scope| {
                 let defs: Defs = (*loc_defs).clone();
                 can_defs_with_return(env, var_store, inner_scope, env.arena.alloc(defs), loc_ret)
             })
         }
-        ast::Expr::OldRecordBuilder(_) => {
-            internal_error!("Old record builder should have been desugared by now")
-        }
         ast::Expr::RecordBuilder { .. } => {
-            internal_error!("New record builder should have been desugared by now")
+            internal_error!("Record builder should have been desugared by now")
         }
         ast::Expr::Backpassing(_, _, _) => {
             internal_error!("Backpassing should have been desugared by now")
+        }
+        ast::Expr::RecordUpdater(_) => {
+            internal_error!("Record updater should have been desugared by now")
         }
         ast::Expr::Closure(loc_arg_patterns, loc_body_expr) => {
             let (closure_data, output) =
@@ -1043,12 +1087,12 @@ pub fn canonicalize_expr<'a>(
                 canonicalize_expr(env, var_store, scope, loc_cond.region, &loc_cond.value);
 
             // the condition can never be a tail-call
-            output.tail_call = None;
+            output.tail_calls = vec![];
 
             let mut can_branches = Vec::with_capacity(branches.len());
 
             for branch in branches.iter() {
-                let (can_when_branch, branch_references) = scope.inner_scope(|inner_scope| {
+                let (can_when_branch, branch_references) = scope.inner_def_scope(|inner_scope| {
                     canonicalize_when_branch(
                         env,
                         var_store,
@@ -1068,7 +1112,7 @@ pub fn canonicalize_expr<'a>(
             // if code gen mistakenly thinks this is a tail call just because its condition
             // happened to be one. (The condition gave us our initial output value.)
             if branches.is_empty() {
-                output.tail_call = None;
+                output.tail_calls = vec![];
             }
 
             // Incorporate all three expressions into a combined Output value.
@@ -1127,7 +1171,14 @@ pub fn canonicalize_expr<'a>(
                 output,
             )
         }
-        ast::Expr::TaskAwaitBang(..) => internal_error!("a Expr::TaskAwaitBang expression was not completely removed in desugar_value_def_suffixed"),
+        ast::Expr::TrySuffix { .. } => internal_error!(
+            "a Expr::TrySuffix expression was not completely removed in desugar_value_def_suffixed"
+        ),
+        ast::Expr::Try => {
+            // Treat remaining `try` keywords as normal variables so that we can continue to support `Result.try`
+            canonicalize_var_lookup(env, var_store, scope, "", "try", region)
+        }
+
         ast::Expr::Tag(tag) => {
             let variant_var = var_store.fresh();
             let ext_var = var_store.fresh();
@@ -1182,38 +1233,20 @@ pub fn canonicalize_expr<'a>(
                 }
             }
         }
-        ast::Expr::Expect(condition, continuation) => {
-            let mut output = Output::default();
+        ast::Expr::Dbg => {
+            // Dbg was not desugared as either part of an `Apply` or a `Pizza` binop, so it's
+            // invalid.
+            env.problem(Problem::UnappliedDbg { region });
 
-            let (loc_condition, output1) =
-                canonicalize_expr(env, var_store, scope, condition.region, &condition.value);
+            let invalid_dbg_expr = crate::desugar::desugar_invalid_dbg_expr(env, scope, region);
 
-            // Get all the lookups that were referenced in the condition,
-            // so we can print their values later.
-            let lookups_in_cond = get_lookup_symbols(&loc_condition.value);
+            let (loc_expr, output) =
+                canonicalize_expr(env, var_store, scope, region, invalid_dbg_expr);
 
-            let (loc_continuation, output2) = canonicalize_expr(
-                env,
-                var_store,
-                scope,
-                continuation.region,
-                &continuation.value,
-            );
-
-            output.union(output1);
-            output.union(output2);
-
-            (
-                Expect {
-                    loc_condition: Box::new(loc_condition),
-                    loc_continuation: Box::new(loc_continuation),
-                    lookups_in_cond,
-                },
-                output,
-            )
+            (loc_expr.value, output)
         }
-        ast::Expr::Dbg(_, _) => {
-            internal_error!("Dbg should have been desugared by now")
+        ast::Expr::DbgStmt { .. } => {
+            internal_error!("DbgStmt should have been desugared by now")
         }
         ast::Expr::LowLevelDbg((source_location, source), message, continuation) => {
             let mut output = Output::default();
@@ -1252,7 +1285,45 @@ pub fn canonicalize_expr<'a>(
                 output,
             )
         }
-        ast::Expr::If(if_thens, final_else_branch) => {
+        ast::Expr::Return(return_expr, after_return) => {
+            let mut output = Output::default();
+
+            if let Some(after_return) = after_return {
+                let region_with_return =
+                    Region::span_across(&return_expr.region, &after_return.region);
+
+                env.problem(Problem::StatementsAfterReturn {
+                    region: region_with_return,
+                });
+            }
+
+            let (loc_return_expr, output1) = canonicalize_expr(
+                env,
+                var_store,
+                scope,
+                return_expr.region,
+                &return_expr.value,
+            );
+
+            output.union(output1);
+
+            let return_var = var_store.fresh();
+
+            scope.early_returns.push((return_var, return_expr.region));
+
+            (
+                Return {
+                    return_value: Box::new(loc_return_expr),
+                    return_var,
+                },
+                output,
+            )
+        }
+        ast::Expr::If {
+            if_thens,
+            final_else: final_else_branch,
+            ..
+        } => {
             let mut branches = Vec::with_capacity(if_thens.len());
             let mut output = Output::default();
 
@@ -1327,10 +1398,6 @@ pub fn canonicalize_expr<'a>(
                 Output::default(),
             )
         }
-        ast::Expr::MalformedClosure => {
-            use roc_problem::can::RuntimeError::*;
-            (RuntimeError(MalformedClosure(region)), Output::default())
-        }
         ast::Expr::MalformedIdent(name, bad_ident) => {
             use roc_problem::can::RuntimeError::*;
 
@@ -1342,22 +1409,6 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::MalformedSuffixed(..) => {
             use roc_problem::can::RuntimeError::*;
             (RuntimeError(MalformedSuffixed(region)), Output::default())
-        }
-        ast::Expr::MultipleOldRecordBuilders(sub_expr) => {
-            use roc_problem::can::RuntimeError::*;
-
-            let problem = MultipleOldRecordBuilders(sub_expr.region);
-            env.problem(Problem::RuntimeError(problem.clone()));
-
-            (RuntimeError(problem), Output::default())
-        }
-        ast::Expr::UnappliedOldRecordBuilder(sub_expr) => {
-            use roc_problem::can::RuntimeError::*;
-
-            let problem = UnappliedOldRecordBuilder(sub_expr.region);
-            env.problem(Problem::RuntimeError(problem.clone()));
-
-            (RuntimeError(problem), Output::default())
         }
         ast::Expr::EmptyRecordBuilder(sub_expr) => {
             use roc_problem::can::RuntimeError::*;
@@ -1379,7 +1430,10 @@ pub fn canonicalize_expr<'a>(
             use roc_problem::can::RuntimeError::*;
 
             let sub_region = Region::span_across(&loc_name.region, &loc_value.region);
-            let problem = OptionalFieldInRecordBuilder {record: region, field: sub_region };
+            let problem = OptionalFieldInRecordBuilder {
+                record: region,
+                field: sub_region,
+            };
             env.problem(Problem::RuntimeError(problem.clone()));
 
             (RuntimeError(problem), Output::default())
@@ -1452,6 +1506,42 @@ pub fn canonicalize_expr<'a>(
     )
 }
 
+pub fn canonicalize_record<'a>(
+    env: &mut Env<'a>,
+    var_store: &mut VarStore,
+    scope: &mut Scope,
+    region: Region,
+    fields: ast::Collection<'a, Loc<ast::AssignedField<'a, ast::Expr<'a>>>>,
+) -> (Expr, Output) {
+    use Expr::*;
+
+    if fields.is_empty() {
+        (EmptyRecord, Output::default())
+    } else {
+        match canonicalize_fields(env, var_store, scope, region, fields.items) {
+            Ok((can_fields, output)) => (
+                Record {
+                    record_var: var_store.fresh(),
+                    fields: can_fields,
+                },
+                output,
+            ),
+            Err(CanonicalizeRecordProblem::InvalidOptionalValue {
+                field_name,
+                field_region,
+                record_region,
+            }) => (
+                Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidOptionalValue {
+                    field_name,
+                    field_region,
+                    record_region,
+                }),
+                Output::default(),
+            ),
+        }
+    }
+}
+
 pub fn canonicalize_closure<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
@@ -1460,7 +1550,7 @@ pub fn canonicalize_closure<'a>(
     loc_body_expr: &'a Loc<ast::Expr<'a>>,
     opt_def_name: Option<Symbol>,
 ) -> (ClosureData, Output) {
-    scope.inner_scope(|inner_scope| {
+    scope.inner_function_scope(|inner_scope| {
         canonicalize_closure_body(
             env,
             var_store,
@@ -1520,6 +1610,8 @@ fn canonicalize_closure_body<'a>(
         &loc_body_expr.value,
     );
 
+    let mut references_top_level = false;
+
     let mut captured_symbols: Vec<_> = new_output
         .references
         .value_lookups()
@@ -1530,7 +1622,11 @@ fn canonicalize_closure_body<'a>(
         .filter(|s| !new_output.references.bound_symbols().any(|x| x == s))
         .filter(|s| bound_by_argument_patterns.iter().all(|(k, _)| s != k))
         // filter out top-level symbols those will be globally available, and don't need to be captured
-        .filter(|s| !env.top_level_symbols.contains(s))
+        .filter(|s| {
+            let is_top_level = env.top_level_symbols.contains(s);
+            references_top_level = references_top_level || is_top_level;
+            !is_top_level
+        })
         // filter out imported symbols those will be globally available, and don't need to be captured
         .filter(|s| s.module_id() == env.home)
         // filter out functions that don't close over anything
@@ -1538,6 +1634,15 @@ fn canonicalize_closure_body<'a>(
         .filter(|s| !output.non_closures.contains(s))
         .map(|s| (s, var_store.fresh()))
         .collect();
+
+    if references_top_level {
+        if let Some(params_record) = env.home_params_record {
+            // If this module has params and the closure references top-level symbols,
+            // we need to capture the whole record so we can pass it.
+            // The lower_params pass will take care of removing the captures for top-level fns.
+            captured_symbols.push(params_record);
+        }
+    }
 
     output.union(new_output);
 
@@ -1560,6 +1665,17 @@ fn canonicalize_closure_body<'a>(
         }
     }
 
+    let mut final_expr = &loc_body_expr;
+    while let Expr::LetRec(_, inner, _) | Expr::LetNonRec(_, inner) = &final_expr.value {
+        final_expr = inner;
+    }
+
+    if let Expr::Return { return_value, .. } = &final_expr.value {
+        env.problem(Problem::ReturnAtEndOfFunction {
+            region: return_value.region,
+        });
+    }
+
     // store the references of this function in the Env. This information is used
     // when we canonicalize a surrounding def (if it exists)
     env.closures.insert(symbol, output.references.clone());
@@ -1573,10 +1689,14 @@ fn canonicalize_closure_body<'a>(
         output.non_closures.insert(symbol);
     }
 
+    let return_type_var = var_store.fresh();
+
     let closure_data = ClosureData {
         function_type: var_store.fresh(),
         closure_type: var_store.fresh(),
-        return_type: var_store.fresh(),
+        return_type: return_type_var,
+        fx_type: var_store.fresh(),
+        early_returns: scope.early_returns.clone(),
         name: symbol,
         captured_symbols,
         recursive: Recursive::NotRecursive,
@@ -1846,6 +1966,11 @@ fn canonicalize_field<'a>(
             field_region: Region::span_across(&label.region, &loc_expr.region),
         }),
 
+        // An ignored value, e.g. `{ _name: 123 }`
+        IgnoredValue(_, _, _) => {
+            internal_error!("Somehow an IgnoredValue record field was not desugared!");
+        }
+
         // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
         LabelOnly(_) => {
             internal_error!("Somehow a LabelOnly record field was not desugared!");
@@ -1853,10 +1978,6 @@ fn canonicalize_field<'a>(
 
         SpaceBefore(sub_field, _) | SpaceAfter(sub_field, _) => {
             canonicalize_field(env, var_store, scope, sub_field)
-        }
-
-        Malformed(_string) => {
-            internal_error!("TODO canonicalize malformed record field");
         }
     }
 }
@@ -1876,19 +1997,19 @@ fn canonicalize_var_lookup(
         // Since module_name was empty, this is an unqualified var.
         // Look it up in scope!
         match scope.lookup_str(ident, region) {
-            Ok(symbol) => {
+            Ok(lookup) => {
                 output
                     .references
-                    .insert_value_lookup(symbol, QualifiedReference::Unqualified);
+                    .insert_value_lookup(lookup, QualifiedReference::Unqualified);
 
-                if scope.abilities_store.is_ability_member_name(symbol) {
+                if scope.abilities_store.is_ability_member_name(lookup.symbol) {
                     AbilityMember(
-                        symbol,
+                        params_in_abilities_unimplemented!(lookup),
                         Some(scope.abilities_store.fresh_specialization_id()),
                         var_store.fresh(),
                     )
                 } else {
-                    Var(symbol, var_store.fresh())
+                    lookup_to_expr(var_store, lookup)
                 }
             }
             Err(problem) => {
@@ -1901,19 +2022,19 @@ fn canonicalize_var_lookup(
         // Since module_name was nonempty, this is a qualified var.
         // Look it up in the env!
         match env.qualified_lookup(scope, module_name, ident, region) {
-            Ok(symbol) => {
+            Ok(lookup) => {
                 output
                     .references
-                    .insert_value_lookup(symbol, QualifiedReference::Qualified);
+                    .insert_value_lookup(lookup, QualifiedReference::Qualified);
 
-                if scope.abilities_store.is_ability_member_name(symbol) {
+                if scope.abilities_store.is_ability_member_name(lookup.symbol) {
                     AbilityMember(
-                        symbol,
+                        params_in_abilities_unimplemented!(lookup),
                         Some(scope.abilities_store.fresh_specialization_id()),
                         var_store.fresh(),
                     )
                 } else {
-                    Var(symbol, var_store.fresh())
+                    lookup_to_expr(var_store, lookup)
                 }
             }
             Err(problem) => {
@@ -1929,6 +2050,25 @@ fn canonicalize_var_lookup(
     // If it's valid, this ident should be in scope already.
 
     (can_expr, output)
+}
+
+fn lookup_to_expr(
+    var_store: &mut VarStore,
+    SymbolLookup {
+        symbol,
+        module_params,
+    }: SymbolLookup,
+) -> Expr {
+    if let Some((params_var, params_symbol)) = module_params {
+        Expr::ParamsVar {
+            symbol,
+            var: var_store.fresh(),
+            params_symbol,
+            params_var,
+        }
+    } else {
+        Expr::Var(symbol, var_store.fresh())
+    }
 }
 
 /// Currently uses the heuristic of "only inline if it's a builtin"
@@ -1949,12 +2089,13 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
         | other @ RecordAccessor { .. }
         | other @ RecordUpdate { .. }
         | other @ Var(..)
+        | other @ ParamsVar { .. }
         | other @ AbilityMember(..)
         | other @ RunLowLevel { .. }
-        | other @ TypedHole { .. }
         | other @ ForeignCall { .. }
         | other @ OpaqueWrapFunction(_)
-        | other @ Crash { .. } => other,
+        | other @ Crash { .. }
+        | other @ Return { .. } => other,
 
         List {
             elem_var,
@@ -2082,28 +2223,6 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
             }
         }
 
-        ExpectFx {
-            loc_condition,
-            loc_continuation,
-            lookups_in_cond,
-        } => {
-            let loc_condition = Loc {
-                region: loc_condition.region,
-                value: inline_calls(var_store, loc_condition.value),
-            };
-
-            let loc_continuation = Loc {
-                region: loc_continuation.region,
-                value: inline_calls(var_store, loc_continuation.value),
-            };
-
-            ExpectFx {
-                loc_condition: Box::new(loc_condition),
-                loc_continuation: Box::new(loc_continuation),
-                lookups_in_cond,
-            }
-        }
-
         Dbg {
             source_location,
             source,
@@ -2145,6 +2264,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
                     expr_var: def.expr_var,
                     pattern_vars: def.pattern_vars,
                     annotation: def.annotation,
+                    kind: def.kind,
                 });
             }
 
@@ -2166,6 +2286,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
                 expr_var: def.expr_var,
                 pattern_vars: def.pattern_vars,
                 annotation: def.annotation,
+                kind: def.kind,
             };
 
             let loc_expr = Loc {
@@ -2180,6 +2301,8 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
             function_type,
             closure_type,
             return_type,
+            fx_type,
+            early_returns,
             recursive,
             name,
             captured_symbols,
@@ -2196,6 +2319,8 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
                 function_type,
                 closure_type,
                 return_type,
+                fx_type,
+                early_returns,
                 recursive,
                 name,
                 captured_symbols,
@@ -2211,6 +2336,14 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
                 fields
             );
         }
+
+        ImportParams(module_id, region, Some((var, expr))) => ImportParams(
+            module_id,
+            region,
+            Some((var, Box::new(inline_calls(var_store, *expr)))),
+        ),
+
+        ImportParams(module_id, region, None) => ImportParams(module_id, region, None),
 
         RecordAccess {
             record_var,
@@ -2295,10 +2428,11 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
         }
 
         Call(boxed_tuple, args, called_via) => {
-            let (fn_var, loc_expr, closure_var, expr_var) = *boxed_tuple;
+            let (fn_var, loc_expr, closure_var, expr_var, fx_var) = *boxed_tuple;
 
             match loc_expr.value {
                 Var(symbol, _) if symbol.is_builtin() => {
+                    // NOTE: This assumes builtins are not effectful!
                     match builtin_defs_map(symbol, var_store) {
                         Some(Def {
                             loc_expr:
@@ -2342,6 +2476,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
                                     expr_var,
                                     pattern_vars,
                                     annotation: None,
+                                    kind: DefKind::Let,
                                 };
 
                                 loc_answer = Loc {
@@ -2366,7 +2501,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
                 _ => {
                     // For now, we only inline calls to builtins. Leave this alone!
                     Call(
-                        Box::new((fn_var, loc_expr, closure_var, expr_var)),
+                        Box::new((fn_var, loc_expr, closure_var, expr_var, fx_var)),
                         args,
                         called_via,
                     )
@@ -2402,22 +2537,30 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         | ast::Expr::Num(_)
         | ast::Expr::NonBase10Int { .. }
         | ast::Expr::AccessorFunction(_)
+        | ast::Expr::RecordUpdater(_)
         | ast::Expr::Crash
+        | ast::Expr::Dbg
+        | ast::Expr::Try
         | ast::Expr::Underscore(_)
         | ast::Expr::MalformedIdent(_, _)
         | ast::Expr::Tag(_)
-        | ast::Expr::OpaqueRef(_)
-        | ast::Expr::MalformedClosure => true,
+        | ast::Expr::OpaqueRef(_) => true,
         // Newlines are disallowed inside interpolation, and these all require newlines
-        ast::Expr::Dbg(_, _)
+        ast::Expr::DbgStmt { .. }
         | ast::Expr::LowLevelDbg(_, _, _)
-        | ast::Expr::Defs(_, _)
-        | ast::Expr::Expect(_, _)
+        | ast::Expr::Return(_, _)
         | ast::Expr::When(_, _)
         | ast::Expr::Backpassing(_, _, _)
         | ast::Expr::SpaceBefore(_, _)
         | ast::Expr::Str(StrLiteral::Block(_))
         | ast::Expr::SpaceAfter(_, _) => false,
+        // Desugared dbg expression
+        ast::Expr::Defs(_, loc_ret) => match loc_ret.value {
+            ast::Expr::LowLevelDbg(_, _, continuation) => {
+                is_valid_interpolation(&continuation.value)
+            }
+            _ => false,
+        },
         // These can contain subexpressions, so we need to recursively check those
         ast::Expr::Str(StrLiteral::Line(segments)) => {
             segments.iter().all(|segment| match segment {
@@ -2426,25 +2569,22 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
                 | ast::StrSegment::Plaintext(_) => true,
                 // Disallow nested interpolation. Alternatively, we could allow it but require
                 // a comment above it apologizing to the next person who has to read the code.
-                ast::StrSegment::Interpolated(_) | ast::StrSegment::DeprecatedInterpolated(_) => {
-                    false
-                }
+                ast::StrSegment::Interpolated(_) => false,
             })
         }
         ast::Expr::Record(fields) => fields.iter().all(|loc_field| match loc_field.value {
             ast::AssignedField::RequiredValue(_label, loc_comments, loc_val)
-            | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val) => {
+            | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val)
+            | ast::AssignedField::IgnoredValue(_label, loc_comments, loc_val) => {
                 loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
             }
-            ast::AssignedField::Malformed(_) | ast::AssignedField::LabelOnly(_) => true,
+            ast::AssignedField::LabelOnly(_) => true,
             ast::AssignedField::SpaceBefore(_, _) | ast::AssignedField::SpaceAfter(_, _) => false,
         }),
         ast::Expr::Tuple(fields) => fields
             .iter()
             .all(|loc_field| is_valid_interpolation(&loc_field.value)),
         ast::Expr::MalformedSuffixed(loc_expr)
-        | ast::Expr::MultipleOldRecordBuilders(loc_expr)
-        | ast::Expr::UnappliedOldRecordBuilder(loc_expr)
         | ast::Expr::EmptyRecordBuilder(loc_expr)
         | ast::Expr::SingleFieldRecordBuilder(loc_expr)
         | ast::Expr::OptionalFieldInRecordBuilder(_, loc_expr)
@@ -2454,7 +2594,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         ast::Expr::TupleAccess(sub_expr, _)
         | ast::Expr::ParensAround(sub_expr)
         | ast::Expr::RecordAccess(sub_expr, _)
-        | ast::Expr::TaskAwaitBang(sub_expr) => is_valid_interpolation(sub_expr),
+        | ast::Expr::TrySuffix { expr: sub_expr, .. } => is_valid_interpolation(sub_expr),
         ast::Expr::Apply(loc_expr, args, _called_via) => {
             is_valid_interpolation(&loc_expr.value)
                 && args
@@ -2467,7 +2607,11 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
                     .iter()
                     .all(|(loc_expr, _binop)| is_valid_interpolation(&loc_expr.value))
         }
-        ast::Expr::If(branches, final_branch) => {
+        ast::Expr::If {
+            if_thens: branches,
+            final_else: final_branch,
+            ..
+        } => {
             is_valid_interpolation(&final_branch.value)
                 && branches.iter().all(|(loc_before, loc_after)| {
                     is_valid_interpolation(&loc_before.value)
@@ -2481,43 +2625,24 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
             is_valid_interpolation(&update.value)
                 && fields.iter().all(|loc_field| match loc_field.value {
                     ast::AssignedField::RequiredValue(_label, loc_comments, loc_val)
-                    | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val) => {
+                    | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val)
+                    | ast::AssignedField::IgnoredValue(_label, loc_comments, loc_val) => {
                         loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
                     }
-                    ast::AssignedField::Malformed(_) | ast::AssignedField::LabelOnly(_) => true,
+                    ast::AssignedField::LabelOnly(_) => true,
                     ast::AssignedField::SpaceBefore(_, _)
                     | ast::AssignedField::SpaceAfter(_, _) => false,
                 })
-        }
-        ast::Expr::OldRecordBuilder(fields) => {
-            fields.iter().all(|loc_field| match loc_field.value {
-                ast::OldRecordBuilderField::Value(_label, comments, loc_expr) => {
-                    comments.is_empty() && is_valid_interpolation(&loc_expr.value)
-                }
-                ast::OldRecordBuilderField::ApplyValue(
-                    _label,
-                    comments_before,
-                    comments_after,
-                    loc_expr,
-                ) => {
-                    comments_before.is_empty()
-                        && comments_after.is_empty()
-                        && is_valid_interpolation(&loc_expr.value)
-                }
-                ast::OldRecordBuilderField::Malformed(_)
-                | ast::OldRecordBuilderField::LabelOnly(_) => true,
-                ast::OldRecordBuilderField::SpaceBefore(_, _)
-                | ast::OldRecordBuilderField::SpaceAfter(_, _) => false,
-            })
         }
         ast::Expr::RecordBuilder { mapper, fields } => {
             is_valid_interpolation(&mapper.value)
                 && fields.iter().all(|loc_field| match loc_field.value {
                     ast::AssignedField::RequiredValue(_label, loc_comments, loc_val)
-                    | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val) => {
+                    | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val)
+                    | ast::AssignedField::IgnoredValue(_label, loc_comments, loc_val) => {
                         loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
                     }
-                    ast::AssignedField::Malformed(_) | ast::AssignedField::LabelOnly(_) => true,
+                    ast::AssignedField::LabelOnly(_) => true,
                     ast::AssignedField::SpaceBefore(_, _)
                     | ast::AssignedField::SpaceAfter(_, _) => false,
                 })
@@ -2575,7 +2700,7 @@ fn flatten_str_lines<'a>(
                         );
                     }
                 },
-                Interpolated(loc_expr) | DeprecatedInterpolated(loc_expr) => {
+                Interpolated(loc_expr) => {
                     if is_valid_interpolation(loc_expr.value) {
                         // Interpolations desugar to Str.concat calls
                         output.references.insert_call(Symbol::STR_CONCAT);
@@ -2642,6 +2767,7 @@ fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> 
                         fn_expr,
                         var_store.fresh(),
                         var_store.fresh(),
+                        var_store.fresh(),
                     )),
                     vec![
                         (var_store.fresh(), empty_string),
@@ -2678,6 +2804,7 @@ fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> 
                 fn_expr,
                 var_store.fresh(),
                 var_store.fresh(),
+                var_store.fresh(),
             )),
             vec![
                 (var_store.fresh(), loc_new_expr),
@@ -2704,6 +2831,9 @@ pub struct Declarations {
     // used for ability member specializatons.
     pub specializes: VecMap<usize, Symbol>,
 
+    // used while lowering params.
+    arity_by_name: VecMap<IdentId, usize>,
+
     pub host_exposed_annotations: VecMap<usize, (Variable, crate::def::Annotation)>,
 
     pub function_bodies: Vec<Loc<FunctionDef>>,
@@ -2721,6 +2851,7 @@ impl Declarations {
     pub fn new() -> Self {
         Self::with_capacity(0)
     }
+
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             declarations: Vec::with_capacity(capacity),
@@ -2732,6 +2863,7 @@ impl Declarations {
             expressions: Vec::with_capacity(capacity),
             specializes: VecMap::default(), // number of specializations is probably low
             destructs: Vec::new(),          // number of destructs is probably low
+            arity_by_name: VecMap::with_capacity(capacity),
         }
     }
 
@@ -2766,13 +2898,18 @@ impl Declarations {
         let function_def = FunctionDef {
             closure_type: loc_closure_data.value.closure_type,
             return_type: loc_closure_data.value.return_type,
+            fx_type: loc_closure_data.value.fx_type,
+            early_returns: loc_closure_data.value.early_returns,
             captured_symbols: loc_closure_data.value.captured_symbols,
             arguments: loc_closure_data.value.arguments,
         };
 
+        self.arity_by_name
+            .insert(symbol.value.ident_id(), function_def.arguments.len());
+
         let loc_function_def = Loc::at(loc_closure_data.region, function_def);
 
-        let function_def_index = Index::push_new(&mut self.function_bodies, loc_function_def);
+        let function_def_index = index_push_new(&mut self.function_bodies, loc_function_def);
 
         let tag = match loc_closure_data.value.recursive {
             Recursive::NotRecursive | Recursive::Recursive => {
@@ -2814,13 +2951,18 @@ impl Declarations {
         let function_def = FunctionDef {
             closure_type: loc_closure_data.value.closure_type,
             return_type: loc_closure_data.value.return_type,
+            fx_type: loc_closure_data.value.fx_type,
+            early_returns: loc_closure_data.value.early_returns,
             captured_symbols: loc_closure_data.value.captured_symbols,
             arguments: loc_closure_data.value.arguments,
         };
 
+        self.arity_by_name
+            .insert(symbol.value.ident_id(), function_def.arguments.len());
+
         let loc_function_def = Loc::at(loc_closure_data.region, function_def);
 
-        let function_def_index = Index::push_new(&mut self.function_bodies, loc_function_def);
+        let function_def_index = index_push_new(&mut self.function_bodies, loc_function_def);
 
         if let Some(annotation) = host_annotation {
             self.host_exposed_annotations
@@ -2860,24 +3002,6 @@ impl Declarations {
         index
     }
 
-    pub fn push_expect_fx(
-        &mut self,
-        preceding_comment: Region,
-        name: Symbol,
-        loc_expr: Loc<Expr>,
-    ) -> usize {
-        let index = self.declarations.len();
-
-        self.declarations.push(DeclarationTag::ExpectationFx);
-        self.variables.push(Variable::BOOL);
-        self.symbols.push(Loc::at(preceding_comment, name));
-        self.annotations.push(None);
-
-        self.expressions.push(loc_expr);
-
-        index
-    }
-
     pub fn push_value_def(
         &mut self,
         symbol: Loc<Symbol>,
@@ -2893,6 +3017,8 @@ impl Declarations {
             self.host_exposed_annotations
                 .insert(self.declarations.len(), annotation);
         }
+
+        self.arity_by_name.insert(symbol.value.ident_id(), 0);
 
         self.declarations.push(DeclarationTag::Value);
         self.variables.push(expr_var);
@@ -2924,7 +3050,7 @@ impl Declarations {
             pattern_vars,
         };
 
-        let destructure_def_index = Index::push_new(&mut self.destructs, destruct_def);
+        let destructure_def_index = index_push_new(&mut self.destructs, destruct_def);
 
         self.declarations
             .push(DeclarationTag::Destructure(destructure_def_index));
@@ -2989,6 +3115,8 @@ impl Declarations {
                 let function_def = FunctionDef {
                     closure_type: closure_data.closure_type,
                     return_type: closure_data.return_type,
+                    fx_type: closure_data.fx_type,
+                    early_returns: closure_data.early_returns,
                     captured_symbols: closure_data.captured_symbols,
                     arguments: closure_data.arguments,
                 };
@@ -2996,7 +3124,7 @@ impl Declarations {
                 let loc_function_def = Loc::at(def.loc_expr.region, function_def);
 
                 let function_def_index =
-                    Index::push_new(&mut self.function_bodies, loc_function_def);
+                    index_push_new(&mut self.function_bodies, loc_function_def);
 
                 self.declarations[index] = DeclarationTag::Function(function_def_index);
                 self.expressions[index] = *closure_data.loc_body;
@@ -3008,6 +3136,64 @@ impl Declarations {
                 self.variables[index] = def.expr_var;
             }
         }
+    }
+
+    /// Convert a value def to a function def with the given arguments
+    /// Currently used in lower_params
+    pub fn convert_value_to_function(
+        &mut self,
+        index: usize,
+        new_arguments: Vec<(Variable, AnnotatedMark, Loc<Pattern>)>,
+        var_store: &mut VarStore,
+    ) {
+        match self.declarations[index] {
+            DeclarationTag::Value => {
+                let new_args_len = new_arguments.len();
+
+                let loc_body = self.expressions[index].clone();
+                let region = loc_body.region;
+
+                let closure_data = ClosureData {
+                    function_type: var_store.fresh(),
+                    closure_type: var_store.fresh(),
+                    return_type: var_store.fresh(),
+                    fx_type: var_store.fresh(),
+                    early_returns: vec![],
+                    name: self.symbols[index].value,
+                    captured_symbols: vec![],
+                    recursive: Recursive::NotRecursive,
+                    arguments: new_arguments,
+                    loc_body: Box::new(loc_body),
+                };
+
+                let loc_closure_data = Loc::at(region, closure_data);
+
+                let function_def = FunctionDef {
+                    closure_type: loc_closure_data.value.closure_type,
+                    return_type: loc_closure_data.value.return_type,
+                    fx_type: loc_closure_data.value.fx_type,
+                    early_returns: loc_closure_data.value.early_returns,
+                    captured_symbols: loc_closure_data.value.captured_symbols,
+                    arguments: loc_closure_data.value.arguments,
+                };
+
+                let loc_function_def = Loc::at(region, function_def);
+
+                let function_def_index =
+                    index_push_new(&mut self.function_bodies, loc_function_def);
+
+                if let Some(annotation) = &mut self.annotations[index] {
+                    annotation.convert_to_fn(new_args_len, var_store);
+                }
+
+                if let Some((_var, annotation)) = self.host_exposed_annotations.get_mut(&index) {
+                    annotation.convert_to_fn(new_args_len, var_store);
+                }
+
+                self.declarations[index] = DeclarationTag::Function(function_def_index);
+            }
+            _ => internal_error!("Expected value declaration"),
+        };
     }
 
     pub fn len(&self) -> usize {
@@ -3068,12 +3254,6 @@ impl Declarations {
 
                     collector.visit_expr(&loc_expr.value, loc_expr.region, var);
                 }
-                ExpectationFx => {
-                    let loc_expr =
-                        toplevel_expect_to_inline_expect_fx(self.expressions[index].clone());
-
-                    collector.visit_expr(&loc_expr.value, loc_expr.region, var);
-                }
             }
         }
 
@@ -3095,6 +3275,11 @@ impl Declarations {
                 }
             })
     }
+
+    pub(crate) fn take_arity_by_name(&mut self) -> VecMap<IdentId, usize> {
+        // `arity_by_name` is only needed for lowering module params
+        std::mem::take(&mut self.arity_by_name)
+    }
 }
 
 roc_error_macros::assert_sizeof_default!(DeclarationTag, 8);
@@ -3103,7 +3288,6 @@ roc_error_macros::assert_sizeof_default!(DeclarationTag, 8);
 pub enum DeclarationTag {
     Value,
     Expectation,
-    ExpectationFx,
     Function(Index<Loc<FunctionDef>>),
     Recursive(Index<Loc<FunctionDef>>),
     TailRecursive(Index<Loc<FunctionDef>>),
@@ -3121,7 +3305,7 @@ impl DeclarationTag {
         match self {
             Function(_) | Recursive(_) | TailRecursive(_) => 1,
             Value => 1,
-            Expectation | ExpectationFx => 1,
+            Expectation => 1,
             Destructure(_) => 1,
             MutualRecursion { length, .. } => length as usize + 1,
         }
@@ -3132,6 +3316,8 @@ impl DeclarationTag {
 pub struct FunctionDef {
     pub closure_type: Variable,
     pub return_type: Variable,
+    pub fx_type: Variable,
+    pub early_returns: Vec<(Variable, Region)>,
     pub captured_symbols: Vec<(Symbol, Variable)>,
     pub arguments: Vec<(Variable, AnnotatedMark, Loc<Pattern>)>,
 }
@@ -3149,6 +3335,12 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
     while let Some(expr) = stack.pop() {
         match expr {
             Expr::Var(symbol, var)
+            | Expr::ParamsVar {
+                symbol,
+                var,
+                params_symbol: _,
+                params_var: _,
+            }
             | Expr::RecordUpdate {
                 symbol,
                 record_var: var,
@@ -3253,10 +3445,10 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
             Expr::Tuple { elems, .. } => {
                 stack.extend(elems.iter().map(|(_, elem)| &elem.value));
             }
-            Expr::Expect {
-                loc_continuation, ..
+            Expr::ImportParams(_, _, Some((_, expr))) => {
+                stack.push(expr);
             }
-            | Expr::ExpectFx {
+            Expr::Expect {
                 loc_continuation, ..
             }
             | Expr::Dbg {
@@ -3266,6 +3458,9 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
 
                 // Intentionally ignore the lookups in the nested `expect` condition itself,
                 // because they couldn't possibly influence the outcome of this `expect`!
+            }
+            Expr::Return { return_value, .. } => {
+                stack.push(&return_value.value);
             }
             Expr::Crash { msg, .. } => stack.push(&msg.value),
             Expr::Num(_, _, _, _)
@@ -3277,8 +3472,8 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
             | Expr::RecordAccessor(_)
             | Expr::SingleQuote(..)
             | Expr::EmptyRecord
-            | Expr::TypedHole(_)
             | Expr::RuntimeError(_)
+            | Expr::ImportParams(_, _, None)
             | Expr::OpaqueWrapFunction(_) => {}
         }
     }
@@ -3310,15 +3505,7 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
 /// This is supposed to happen just before monomorphization:
 /// all type errors and such are generated from the user source,
 /// but this transformation means that we don't need special codegen for toplevel expects
-pub fn toplevel_expect_to_inline_expect_pure(loc_expr: Loc<Expr>) -> Loc<Expr> {
-    toplevel_expect_to_inline_expect_help(loc_expr, false)
-}
-
-pub fn toplevel_expect_to_inline_expect_fx(loc_expr: Loc<Expr>) -> Loc<Expr> {
-    toplevel_expect_to_inline_expect_help(loc_expr, true)
-}
-
-fn toplevel_expect_to_inline_expect_help(mut loc_expr: Loc<Expr>, has_effects: bool) -> Loc<Expr> {
+pub fn toplevel_expect_to_inline_expect_pure(mut loc_expr: Loc<Expr>) -> Loc<Expr> {
     enum StoredDef {
         NonRecursive(Region, Box<Def>),
         Recursive(Region, Vec<Def>, IllegalCycleMark),
@@ -3356,18 +3543,10 @@ fn toplevel_expect_to_inline_expect_help(mut loc_expr: Loc<Expr>, has_effects: b
     }
 
     let expect_region = loc_expr.region;
-    let expect = if has_effects {
-        Expr::ExpectFx {
-            loc_condition: Box::new(loc_expr),
-            loc_continuation: Box::new(Loc::at_zero(Expr::EmptyRecord)),
-            lookups_in_cond,
-        }
-    } else {
-        Expr::Expect {
-            loc_condition: Box::new(loc_expr),
-            loc_continuation: Box::new(Loc::at_zero(Expr::EmptyRecord)),
-            lookups_in_cond,
-        }
+    let expect = Expr::Expect {
+        loc_condition: Box::new(loc_expr),
+        loc_continuation: Box::new(Loc::at_zero(Expr::EmptyRecord)),
+        lookups_in_cond,
     };
 
     let mut loc_expr = Loc::at(expect_region, expect);
@@ -3396,11 +3575,6 @@ impl crate::traverse::Visitor for ExpectCollector {
     fn visit_expr(&mut self, expr: &Expr, _region: Region, var: Variable) {
         match expr {
             Expr::Expect {
-                lookups_in_cond,
-                loc_condition,
-                ..
-            }
-            | Expr::ExpectFx {
                 lookups_in_cond,
                 loc_condition,
                 ..

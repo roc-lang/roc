@@ -1,1 +1,0 @@
-Stdout.line!!!

@@ -1,14 +1,21 @@
 //! Provides types to describe problems that can occur during solving.
 use std::{path::PathBuf, str::Utf8Error};
 
-use roc_can::expected::{Expected, PExpected};
-use roc_module::{ident::Lowercase, symbol::Symbol};
+use roc_can::constraint::{ExpectEffectfulReason, FxSuffixKind};
+use roc_can::{
+    constraint::FxCallKind,
+    expected::{Expected, PExpected},
+};
+use roc_module::{
+    ident::Lowercase,
+    symbol::{ModuleId, Symbol},
+};
 use roc_problem::{can::CycleEntry, Severity};
 use roc_region::all::Region;
 
 use roc_types::types::{Category, ErrorType, PatternCategory};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TypeError {
     BadExpr(Region, Category, ErrorType, Expected<ErrorType>),
     BadPattern(Region, PatternCategory, ErrorType, PExpected<ErrorType>),
@@ -33,6 +40,14 @@ pub enum TypeError {
     },
     IngestedFileBadUtf8(Box<PathBuf>, Utf8Error),
     IngestedFileUnsupportedType(Box<PathBuf>, ErrorType),
+    UnexpectedModuleParams(Region, ModuleId),
+    MissingModuleParams(Region, ModuleId, ErrorType),
+    ModuleParamsMismatch(Region, ModuleId, ErrorType, ErrorType),
+    FxInPureFunction(Region, FxCallKind, Option<Region>),
+    FxInTopLevel(Region, FxCallKind),
+    ExpectedEffectful(Region, ExpectEffectfulReason),
+    UnsuffixedEffectfulFunction(Region, FxSuffixKind),
+    SuffixedPureFunction(Region, FxSuffixKind),
 }
 
 impl TypeError {
@@ -52,8 +67,16 @@ impl TypeError {
             TypeError::Exhaustive(exhtv) => exhtv.severity(),
             TypeError::StructuralSpecialization { .. } => RuntimeError,
             TypeError::WrongSpecialization { .. } => RuntimeError,
+            TypeError::UnexpectedModuleParams(..) => Warning,
+            TypeError::MissingModuleParams(..) => RuntimeError,
+            TypeError::ModuleParamsMismatch(..) => RuntimeError,
             TypeError::IngestedFileBadUtf8(..) => Fatal,
             TypeError::IngestedFileUnsupportedType(..) => Fatal,
+            TypeError::ExpectedEffectful(..) => Warning,
+            TypeError::FxInPureFunction(_, _, _) => Warning,
+            TypeError::FxInTopLevel(_, _) => Warning,
+            TypeError::UnsuffixedEffectfulFunction(_, _) => Warning,
+            TypeError::SuffixedPureFunction(_, _) => Warning,
         }
     }
 
@@ -66,7 +89,15 @@ impl TypeError {
             | TypeError::BadExprMissingAbility(region, ..)
             | TypeError::StructuralSpecialization { region, .. }
             | TypeError::WrongSpecialization { region, .. }
-            | TypeError::BadPatternMissingAbility(region, ..) => Some(*region),
+            | TypeError::BadPatternMissingAbility(region, ..)
+            | TypeError::UnexpectedModuleParams(region, ..)
+            | TypeError::MissingModuleParams(region, ..)
+            | TypeError::ModuleParamsMismatch(region, ..)
+            | TypeError::FxInPureFunction(region, _, _)
+            | TypeError::FxInTopLevel(region, _)
+            | TypeError::ExpectedEffectful(region, _)
+            | TypeError::UnsuffixedEffectfulFunction(region, _)
+            | TypeError::SuffixedPureFunction(region, _) => Some(*region),
             TypeError::UnfulfilledAbility(ab, ..) => ab.region(),
             TypeError::Exhaustive(e) => Some(e.region()),
             TypeError::CircularDef(c) => c.first().map(|ce| ce.symbol_region),

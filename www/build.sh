@@ -84,7 +84,14 @@ else
   echo 'Fetching latest roc nightly...'
 
   # get roc release archive
-  curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
+  # check if testing archive is available
+  TESTING_URL="https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-TESTING.tar.gz"
+  LATEST_URL="https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz"
+  if curl --output /dev/null --silent --head --fail "$TESTING_URL"; then 
+    curl -fOL "$TESTING_URL"
+  else
+    curl -fOL "$LATEST_URL"
+  fi
   # extract archive
   ls | grep "roc_nightly" | xargs tar -xzvf
   # delete archive
@@ -97,8 +104,9 @@ fi
 
 $roc version
 
-echo 'Building site markdown content'
-$roc dev www/main.roc -- www/content/ www/build/
+echo 'Generating site markdown content'
+$roc build --linker legacy www/main.roc
+./www/main www/content/ www/build/
 
 echo "Adding github link to examples' html..."
 source www/scripts/add-github-link-to-examples.sh
@@ -106,6 +114,36 @@ add_github_link_to_examples www/build/examples
 
 # cleanup
 rm -rf roc_nightly roc_releases.json
+
+# LLM prompt building
+
+# > all exercism exercises
+rm -rf exercism
+git clone --depth 1 https://github.com/exercism/roc.git exercism
+echo "BEGIN Roc Exercism Exercises" > prompt.md
+
+for dir in exercism/exercises/practice/*/; do
+    if [ -d "$dir" ]; then
+        echo "> Exercise: $(basename "$dir")" >> prompt.md
+        echo "> problem description:" >> prompt.md
+        cat "$dir.docs/instructions.md" >> prompt.md
+        echo "> solution:" >> prompt.md
+        echo '```' >> prompt.md
+        cat "$dir.meta/Example.roc" >> prompt.md
+        echo '```' >> prompt.md
+    fi
+done
+
+echo "Roc exercism LICENSE:" >> prompt.md
+
+cat exercism/LICENSE >> prompt.md
+
+echo "END Roc Exercism Exercises" >> prompt.md
+
+rm -rf exercism
+
+mv prompt.md www/build/
+
 
 echo 'Generating CLI example platform docs...'
 # Change ROC_DOCS_ROOT_DIR=builtins so that links will be generated relative to

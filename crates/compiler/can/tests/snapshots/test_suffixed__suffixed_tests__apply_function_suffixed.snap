@@ -1,21 +1,24 @@
 ---
 source: crates/compiler/can/tests/test_suffixed.rs
 expression: snapshot
+snapshot_kind: text
 ---
 Defs {
     tags: [
-        Index(2147483648),
+        EitherIndex(2147483648),
     ],
     regions: [
         @0-45,
     ],
     space_before: [
-        Slice(start = 0, length = 0),
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
     ],
     space_after: [
-        Slice(start = 0, length = 0),
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
     ],
-    spaces: [],
+    spaces: [
+        Newline,
+    ],
     type_defs: [],
     value_defs: [
         Body(
@@ -45,22 +48,22 @@ Defs {
                     @15-35 Closure(
                         [
                             Identifier {
-                                ident: "#!a0",
+                                ident: "#!0_arg",
                             },
                         ],
                         @15-35 Defs(
                             Defs {
                                 tags: [
-                                    Index(2147483648),
+                                    EitherIndex(2147483648),
                                 ],
                                 regions: [
                                     @15-35,
                                 ],
                                 space_before: [
-                                    Slice(start = 0, length = 0),
+                                    Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
                                 ],
                                 space_after: [
-                                    Slice(start = 0, length = 0),
+                                    Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
                                 ],
                                 spaces: [],
                                 type_defs: [],
@@ -73,7 +76,7 @@ Defs {
                                             @16-26 ParensAround(
                                                 Var {
                                                     module_name: "",
-                                                    ident: "#!a0",
+                                                    ident: "#!0_arg",
                                                 },
                                             ),
                                             [

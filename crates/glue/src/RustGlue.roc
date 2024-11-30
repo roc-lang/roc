@@ -1288,7 +1288,6 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
         union $(unionName) {
         """
     |> \b -> List.walk tags b (generateUnionField types)
-    |> generateTagUnionSizer types id tags
     |> Str.concat "}\n\n"
     |> generateRocRefcounted types unionType escapedName
 
@@ -1336,25 +1335,6 @@ writeTagImpls = \buf, tags, discriminantName, indents, f ->
             |> Str.concat "$(discriminantName)::$(name) => $(branchStr)\n"
     |> writeIndents indents
     |> Str.concat "}\n"
-
-generateTagUnionSizer : Str, Types, TypeId, _ -> Str
-generateTagUnionSizer = \buf, types, id, tags ->
-    if List.len tags > 1 then
-        # When there's a discriminant (so, multiple tags) and there is
-        # no alignment padding after the largest variant,
-        # the compiler will make extra room for the discriminant.
-        # We need that to be reflected in the overall size of the enum,
-        # so add an extra variant with the appropriate size.
-        #
-        # (Do this even if theoretically shouldn't be necessary, since
-        # there's no runtime cost and it more explicitly syncs the
-        # union's size with what we think it should be.)
-        size = getSizeRoundedToAlignment types id
-        sizeStr = Num.toStr size
-
-        Str.concat buf "$(indent)_sizer: [u8; $(sizeStr)],\n"
-    else
-        buf
 
 generateDiscriminant = \buf, types, name, tags, size ->
     if size > 0 then

@@ -11,7 +11,7 @@ If you have a specific question, the [FAQ](/faq) might have an answer, although 
 ## [Installation](#installation){#installation}
 
 - [🐧 Linux x86_64](/install/linux_x86_64)
-- [❄️ Nix Linux/MacOS](/install/nix)
+- [❄️ Nix](/install/nix)
 - [🍏 MacOS Apple Silicon](/install/macos_apple_silicon)
 - [🍏 MacOS x86_64](/install/macos_x86_64)
 - [🟦 Windows](/install/windows)
@@ -29,14 +29,13 @@ If you have a specific question, the [FAQ](/faq) might have an answer, although 
 
 ## Running Examples
 
-You can run examples as follows:
+You can run [examples](https://github.com/roc-lang/examples) as follows:
 
 ```sh
+git clone https://github.com/roc-lang/examples.git
 cd examples
-roc dev helloWorld.roc
+roc ./HelloWorld/main.roc
 ```
-
-[crates/cli/tests/benchmarks](https://github.com/roc-lang/roc/tree/main/crates/cli/tests/benchmarks) contains more examples.
 
 ## Getting Involved
 

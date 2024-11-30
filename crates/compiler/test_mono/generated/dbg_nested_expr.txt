@@ -1,0 +1,56 @@
+procedure Inspect.278 (Inspect.279, Inspect.277):
+    let Inspect.318 : Str = CallByName Num.96 Inspect.277;
+    let Inspect.317 : Str = CallByName Inspect.63 Inspect.279 Inspect.318;
+    dec Inspect.318;
+    ret Inspect.317;
+
+procedure Inspect.30 (Inspect.147):
+    ret Inspect.147;
+
+procedure Inspect.33 (Inspect.152):
+    let Inspect.324 : Str = CallByName Inspect.5 Inspect.152;
+    let Inspect.323 : Str = CallByName Inspect.64 Inspect.324;
+    ret Inspect.323;
+
+procedure Inspect.39 (Inspect.301):
+    let Inspect.311 : Str = "";
+    ret Inspect.311;
+
+procedure Inspect.5 (Inspect.150):
+    let Inspect.312 : I64 = CallByName Inspect.57 Inspect.150;
+    let Inspect.309 : {} = Struct {};
+    let Inspect.308 : Str = CallByName Inspect.39 Inspect.309;
+    let Inspect.307 : Str = CallByName Inspect.278 Inspect.308 Inspect.312;
+    ret Inspect.307;
+
+procedure Inspect.57 (Inspect.277):
+    let Inspect.313 : I64 = CallByName Inspect.30 Inspect.277;
+    ret Inspect.313;
+
+procedure Inspect.63 (Inspect.300, Inspect.296):
+    let Inspect.320 : Str = CallByName Str.3 Inspect.300 Inspect.296;
+    ret Inspect.320;
+
+procedure Inspect.64 (Inspect.302):
+    ret Inspect.302;
+
+procedure Num.96 (#Attr.2):
+    let Num.281 : Str = lowlevel NumToStr #Attr.2;
+    ret Num.281;
+
+procedure Str.3 (#Attr.2, #Attr.3):
+    let Str.246 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.246;
+
+procedure Test.0 ():
+    let Test.6 : I64 = 1i64;
+    let Test.7 : Str = CallByName Inspect.33 Test.6;
+    dbg Test.7;
+    dec Test.7;
+    let Test.8 : Str = CallByName Inspect.33 Test.6;
+    dbg Test.8;
+    dec Test.8;
+    let Test.9 : Str = CallByName Inspect.33 Test.6;
+    dbg Test.9;
+    dec Test.9;
+    ret Test.6;

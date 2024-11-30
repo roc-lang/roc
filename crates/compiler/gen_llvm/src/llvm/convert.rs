@@ -263,7 +263,7 @@ fn alignment_type(context: &Context, alignment: u32) -> BasicTypeEnum {
         2 => context.i16_type().into(),
         4 => context.i32_type().into(),
         8 => context.i64_type().into(),
-        16 => context.i128_type().into(),
+        16 => context.f128_type().into(),
         _ => unimplemented!("weird alignment: {alignment}"),
     }
 }
@@ -282,16 +282,9 @@ pub(crate) struct RocUnion<'ctx> {
     tag_type: Option<TagType>,
 }
 
-fn is_multiple_of(big: u32, small: u32) -> bool {
-    match small {
-        0 => true, // 0 is a multiple of all n, because n * 0 = 0
-        n => big % n == 0,
-    }
-}
-
 impl<'ctx> RocUnion<'ctx> {
-    pub const TAG_ID_INDEX: u32 = 2;
-    pub const TAG_DATA_INDEX: u32 = 1;
+    pub const TAG_ID_INDEX: u32 = 1;
+    pub const TAG_DATA_INDEX: u32 = 0;
 
     fn new(
         context: &'ctx Context,
@@ -301,45 +294,24 @@ impl<'ctx> RocUnion<'ctx> {
     ) -> Self {
         let bytes = round_up_to_alignment(data_width, data_align);
 
-        let byte_array_type = if is_multiple_of(bytes, 8) && is_multiple_of(data_align, 8) {
-            context
-                .i64_type()
-                .array_type(bytes / 8)
-                .as_basic_type_enum()
-        } else {
-            context.i8_type().array_type(bytes).as_basic_type_enum()
-        };
-
-        let alignment_array_type = alignment_type(context, data_align)
-            .array_type(0)
+        let align_type = alignment_type(context, data_align);
+        let byte_array_type = align_type
+            .array_type(bytes / data_align)
             .as_basic_type_enum();
 
         let struct_type = if let Some(tag_type) = tag_type {
-            let tag_width = match tag_type {
-                TagType::I8 => 1,
-                TagType::I16 => 2,
-            };
-
-            let tag_padding = round_up_to_alignment(tag_width, data_align) - tag_width;
-            let tag_padding_type = context
-                .i8_type()
-                .array_type(tag_padding)
-                .as_basic_type_enum();
-
             context.struct_type(
                 &[
-                    alignment_array_type,
                     byte_array_type,
                     match tag_type {
                         TagType::I8 => context.i8_type().into(),
                         TagType::I16 => context.i16_type().into(),
                     },
-                    tag_padding_type,
                 ],
                 false,
             )
         } else {
-            context.struct_type(&[alignment_array_type, byte_array_type], false)
+            context.struct_type(&[byte_array_type], false)
         };
 
         Self {
@@ -404,7 +376,8 @@ impl<'ctx> RocUnion<'ctx> {
         let mut width = self.data_width;
 
         // add padding between data and the tag id
-        width = round_up_to_alignment(width, tag_id_width);
+        let tag_id_alignment = tag_id_width.max(1);
+        width = round_up_to_alignment(width, tag_id_alignment);
 
         // add tag id
         width += tag_id_width;

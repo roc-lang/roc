@@ -16,7 +16,7 @@ mod test_reporting {
     use roc_load::{self, ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
     use roc_module::symbol::{Interns, ModuleId};
     use roc_packaging::cache::RocCacheDir;
-    use roc_parse::module::parse_header;
+    use roc_parse::header::parse_header;
     use roc_parse::state::State;
     use roc_parse::test_helpers::parse_expr_with;
     use roc_problem::Severity;
@@ -101,7 +101,7 @@ mod test_reporting {
         use std::fs::File;
         use std::io::Write;
 
-        let module_src = if src.starts_with("app") {
+        let module_src = if src.starts_with("app") || src.starts_with("module") {
             maybe_save_parse_test_case(subdir, src, false);
             // this is already a module
             src.to_string()
@@ -359,7 +359,7 @@ mod test_reporting {
         let src_lines: Vec<&str> = src.split('\n').collect();
         let lines = LineInfo::new(src);
 
-        match roc_parse::module::parse_header(arena, state) {
+        match roc_parse::header::parse_header(arena, state) {
             Err(fail) => {
                 let interns = Interns::default();
                 let home = crate::helpers::test_home();
@@ -3374,7 +3374,7 @@ mod test_reporting {
             f x y = x
             "
         ),
-        @r#"
+        @r###"
     ── ARGUMENTS BEFORE EQUALS in tmp/elm_function_syntax/Test.roc ─────────────────
 
     I am partway through parsing a definition, but I got stuck here:
@@ -3385,9 +3385,9 @@ mod test_reporting {
     4│      f x y = x
               ^^^
 
-    Looks like you are trying to define a function. In roc, functions are
+    Looks like you are trying to define a function. In Roc, functions are
     always written as a lambda, like increment = \n -> n + 1.
-    "#
+    "###
     );
 
     test_report!(
@@ -3793,9 +3793,9 @@ mod test_reporting {
     of these?
 
         Set
+        Task
         List
         Dict
-        Hash
 
     ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
@@ -4299,8 +4299,9 @@ mod test_reporting {
     4│      f :: I64
               ^^
 
-    I have no specific suggestion for this operator, see TODO for the full
-    list of operators in Roc.
+    I have no specific suggestion for this operator, see
+    https://www.roc-lang.org/tutorial#operator-desugaring-table for the
+    full list of operators in Roc.
     "#
     );
 
@@ -4320,16 +4321,28 @@ mod test_reporting {
             { x,  y }
             "
         ),
-        @r"
-    ── TOO MANY ARGS in /code/proj/Main.roc ────────────────────────────────────────
+        @r###"
+    ── STATEMENT AFTER EXPRESSION in /code/proj/Main.roc ───────────────────────────
 
-    This value is not a function, but it was given 3 arguments:
+    I just finished parsing an expression with a series of definitions,
+
+    and this line is indented as if it's intended to be part of that
+    expression:
 
     6│          x == 5
-                     ^
+                ^^^^^^
 
-    Are there any missing commas? Or missing parentheses?
-    "
+    However, I already saw the final expression in that series of
+    definitions.
+
+    Tip: An expression like `4`, `"hello"`, or `functionCall MyThing` is
+    like `return 4` in other programming languages. To me, it seems like
+    you did `return 4` followed by more code in the lines after, that code
+    would never be executed!
+
+    Tip: If you are working with `Task`, this error can happen if you
+    forgot a `!` somewhere.
+    "###
     );
 
     test_report!(
@@ -4806,7 +4819,7 @@ mod test_reporting {
         expression_indentation_end,
         indoc!(
             r"
-            f <- Foo.foo
+            f = Foo.foo
             "
         ),
         @r#"
@@ -4817,8 +4830,8 @@ mod test_reporting {
     1│  app "test" provides [main] to "./platform"
     2│
     3│  main =
-    4│      f <- Foo.foo
-                        ^
+    4│      f = Foo.foo
+                       ^
 
     Looks like the indentation ends prematurely here. Did you mean to have
     another expression after this line?
@@ -4963,30 +4976,6 @@ mod test_reporting {
     );
 
     test_report!(
-        record_builder_in_module_params,
-        indoc!(
-            r"
-            import Menu {
-                echo,
-                name: <- applyName
-            }
-            "
-        ),@r###"
-    ── OLD-STYLE RECORD BUILDER IN MODULE PARAMS in ...r_in_module_params/Test.roc ─
-
-    I was partway through parsing module params, but I got stuck here:
-
-    4│      import Menu {
-    5│          echo,
-    6│          name: <- applyName
-                ^^^^^^^^^^^^^^^^^^
-
-    This looks like an old-style record builder field, but those are not
-    allowed in module params.
-    "###
-    );
-
-    test_report!(
         record_update_in_module_params,
         indoc!(
             r"
@@ -5018,9 +5007,9 @@ mod test_reporting {
     I was partway through parsing an `import`, but I got stuck here:
 
     4│      import svg.Path a
-                            ^
+                           ^
 
-    I was expecting to see the `as` keyword, like:
+    I was expecting to see the `as` keyword next, like:
 
         import svg.Path as SvgPath
 
@@ -5417,14 +5406,25 @@ mod test_reporting {
              2 -> 2
             "
         ),
-        @r"
-    ── NOT END OF FILE in tmp/when_outdented_branch/Test.roc ───────────────────────
+        @r###"
+    ── UNKNOWN OPERATOR in tmp/when_outdented_branch/Test.roc ──────────────────────
 
-    I expected to reach the end of the file, but got stuck here:
+    This looks like an operator, but it's not one I recognize!
 
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  main =
+    4│      when 4 is
+    5│          5 -> 2
     6│       2 -> 2
-             ^
-    "
+               ^^
+
+    Looks like you are trying to define a function. 
+
+    In Roc, functions are always written as a lambda, like 
+
+        increment = \n -> n + 1
+    "###
     );
 
     test_report!(
@@ -5436,12 +5436,13 @@ mod test_reporting {
                  _ -> 2
             "
         ),
-        @r"
+        @r###"
     ── UNEXPECTED ARROW in tmp/when_over_indented_underscore/Test.roc ──────────────
 
     I am parsing a `when` expression right now, but this arrow is confusing
     me:
 
+    4│      when 4 is
     5│          5 -> 2
     6│           _ -> 2
                    ^^
@@ -5461,7 +5462,7 @@ mod test_reporting {
 
     Notice the indentation. All patterns are aligned, and each branch is
     indented a bit more than the corresponding pattern. That is important!
-    "
+    "###
     );
 
     test_report!(
@@ -5473,12 +5474,13 @@ mod test_reporting {
                  2 -> 2
             "
         ),
-        @r"
+        @r###"
     ── UNEXPECTED ARROW in tmp/when_over_indented_int/Test.roc ─────────────────────
 
     I am parsing a `when` expression right now, but this arrow is confusing
     me:
 
+    4│      when 4 is
     5│          5 -> Num.neg
     6│           2 -> 2
                    ^^
@@ -5498,7 +5500,7 @@ mod test_reporting {
 
     Notice the indentation. All patterns are aligned, and each branch is
     indented a bit more than the corresponding pattern. That is important!
-    "
+    "###
     );
 
     // TODO I think we can do better here
@@ -5592,6 +5594,60 @@ mod test_reporting {
     );
 
     test_report!(
+        missing_return_expression,
+        indoc!(
+            r"
+            return
+            "
+        ),
+        @r#"
+    ── MISSING EXPRESSION in tmp/missing_return_expression/Test.roc ────────────────
+
+    I am partway through parsing a return statement, but I got stuck here:
+
+    4│      return
+                  ^
+
+    I was expecting to see an expression like 42 or "hello".
+    "#
+    );
+
+    test_report!(
+        return_as_def_name,
+        indoc!(
+            r"
+            return = \a -> a
+            return
+            "
+        ),
+        @r#"
+    ── MISSING EXPRESSION in tmp/return_as_def_name/Test.roc ───────────────────────
+
+    I am partway through parsing a return statement, but I got stuck here:
+
+    4│      return = \a -> a
+                   ^
+
+    I was expecting to see an expression like 42 or "hello".
+    "#
+    );
+
+    test_report!(
+        return_space_problem,
+        "return \t",
+        @r###"
+    ── TAB CHARACTER in tmp/return_space_problem/Test.roc ──────────────────────────
+
+    I encountered a tab character:
+
+    4│      return 	
+                   ^
+
+    Tab characters are not allowed in Roc code. Please use spaces instead!
+    "###
+    );
+
+    test_report!(
         number_double_dot,
         indoc!(
             r"
@@ -5649,7 +5705,7 @@ mod test_reporting {
     test_report!(
         weird_escape,
         r#""abc\qdef""#,
-        @r###"
+        @r#"
     ── WEIRD ESCAPE in tmp/weird_escape/Test.roc ───────────────────────────────────
 
     I was partway through parsing a  string literal, but I got stuck here:
@@ -5666,8 +5722,7 @@ mod test_reporting {
         - An escaped quote: \"
         - An escaped backslash: \\
         - A unicode code point: \u(00FF)
-        - An interpolated string: $(myVariable)
-    "###
+    "#
     );
 
     test_report!(
@@ -5738,28 +5793,6 @@ mod test_reporting {
     );
 
     test_report!(
-        dbg_without_final_expression,
-        indoc!(
-            r"
-            dbg 42
-            "
-        ),
-        @r#"
-    ── INDENT ENDS AFTER EXPRESSION in tmp/dbg_without_final_expression/Test.roc ───
-
-    I am partway through parsing a dbg statement, but I got stuck here:
-
-    4│      dbg 42
-                  ^
-
-    I was expecting a final expression, like so
-
-        dbg 42
-        "done"
-    "#
-    );
-
-    test_report!(
         expect_without_final_expression,
         indoc!(
             r"
@@ -5779,6 +5812,36 @@ mod test_reporting {
 
         expect 1 + 1 == 2
         "done"
+    "#
+    );
+
+    test_report!(
+        unhandled_parse_error,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            42
+            "#
+        ),
+        @r#"
+    ── UNHANDLED PARSE ERROR in tmp/unhandled_parse_error/Test.roc ─────────────────
+
+    I got stuck while parsing this:
+
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  42
+        ^
+
+    Here's the internal parse problem:
+
+        UnexpectedTopLevelExpr(@44)
+
+    Unfortunately, I'm not able to provide a more insightful error message
+    for this syntax problem yet. This is considered a bug in the compiler.
+
+    Note: If you'd like to contribute to Roc, this would be a good first issue!
     "#
     );
 
@@ -6067,8 +6130,9 @@ All branches in an `if` must have the same type!
     5│          5 ** 3
                   ^^
 
-    I have no specific suggestion for this operator, see TODO for the full
-    list of operators in Roc.
+    I have no specific suggestion for this operator, see
+    https://www.roc-lang.org/tutorial#operator-desugaring-table for the
+    full list of operators in Roc.
     "#
     );
 
@@ -6136,27 +6200,21 @@ All branches in an `if` must have the same type!
             main = 5 -> 3
             "
         ),
-        |golden| pretty_assertions::assert_eq!(
-            golden,
-            &format!(
-                r#"── UNKNOWN OPERATOR in tmp/wild_case_arrow/Test.roc ────────────────────────────
+        @r###"
+    ── SYNTAX PROBLEM in tmp/wild_case_arrow/Test.roc ──────────────────────────────
 
-This looks like an operator, but it's not one I recognize!
+    I got stuck here:
 
-1│  app "test" provides [main] to "./platform"
-2│
-3│  main =
-4│      main = 5 -> 3
-                 ^^
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  main =
+    4│      main = 5 -> 3
+                    ^
 
-Looks like you are trying to define a function.{}
-
-In roc, functions are always written as a lambda, like{}
-
-    increment = \n -> n + 1"#,
-                ' ', ' '
-            )
-        )
+    Whatever I am running into is confusing me a lot! Normally I can give
+    fairly specific hints, but something is really tripping me up this
+    time.
+    "###
     );
 
     #[test]
@@ -6195,7 +6253,7 @@ In roc, functions are always written as a lambda, like{}
                 r#"
                 app "broken"
                     packages {
-                        pf: "https://github.com/roc-lang/basic-cli/releases/download/0.5.0/Cufzl36_SnJ4QbOoEmiJ5dIpUxBvdB3NEySvuH82Wio.tar.br",
+                        pf: "generic-test-platform/main.roc",
                     }
                     imports [
                         pf.Stdout,
@@ -6301,16 +6359,17 @@ In roc, functions are always written as a lambda, like{}
         )
     }
 
+    // TODO: this test seems out of date (what is the `effects` clause?) and as such should be removed
     #[test]
     fn platform_requires_rigids() {
         report_header_problem_as(
             indoc!(
                 r#"
                 platform "folkertdev/foo"
-                    requires { main : Effect {} }
+                    requires { main : Task {} [] }
                     exposes []
                     packages {}
-                    imports [Task]
+                    imports []
                     provides [mainForHost]
                     effects fx.Effect
                          {
@@ -6327,13 +6386,13 @@ In roc, functions are always written as a lambda, like{}
                 I am partway through parsing a header, but I got stuck here:
 
                 1│  platform "folkertdev/foo"
-                2│      requires { main : Effect {} }
+                2│      requires { main : Task {} [] }
                                    ^
 
                 I am expecting a list of type names like `{}` or `{ Model }` next. A full
                 `requires` definition looks like
 
-                    requires { Model, Msg } {main : Effect {}}
+                    requires { Model, Msg } {main : Task {} []}
             "#
             ),
         )
@@ -6598,34 +6657,6 @@ In roc, functions are always written as a lambda, like{}
     I was expecting to see a closing parenthesis before this, so try
     adding a ) and see if that helps?
     "
-    );
-
-    test_report!(
-        backpassing_type_error,
-        indoc!(
-            r#"
-            x <- List.map ["a", "b"]
-
-            x + 1
-            "#
-        ),
-        @r#"
-    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
-
-    This 2nd argument to `map` has an unexpected type:
-
-    4│>      x <- List.map ["a", "b"]
-    5│>
-    6│>      x + 1
-
-    The argument is an anonymous function of type:
-
-        Num * -> Num *
-
-    But `map` needs its 2nd argument to be:
-
-        Str -> Num *
-    "#
     );
 
     test_report!(
@@ -8127,7 +8158,7 @@ In roc, functions are always written as a lambda, like{}
         unimported_modules_reported,
         indoc!(
             r#"
-            alt : Task.Task {} []
+            alt : Unimported.CustomType
             alt = "whatever man you don't even know my type"
             alt
             "#
@@ -8135,18 +8166,18 @@ In roc, functions are always written as a lambda, like{}
         @r"
     ── MODULE NOT IMPORTED in /code/proj/Main.roc ──────────────────────────────────
 
-    The `Task` module is not imported:
+    The `Unimported` module is not imported:
 
-    4│      alt : Task.Task {} []
-                  ^^^^^^^^^^^^^^^
+    4│      alt : Unimported.CustomType
+                  ^^^^^^^^^^^^^^^^^^^^^
 
     Is there an import missing? Perhaps there is a typo. Did you mean one
     of these?
 
-        Hash
+        Encode
+        Inspect
+        Dict
         List
-        Num
-        Box
     "
     );
 
@@ -8240,10 +8271,8 @@ In roc, functions are always written as a lambda, like{}
 
         F Str
 
-    Tip: Type comparisons between an opaque type are only ever equal if
-    both types are the same opaque type. Did you mean to create an opaque
-    type by wrapping it? If I have an opaque type Age := U32 I can create
-    an instance of this opaque type by doing @Age 23.
+    Tip: *Add type annotations* to functions or values to help you figure
+    this out.
     "#
     );
 
@@ -8277,10 +8306,8 @@ In roc, functions are always written as a lambda, like{}
 
         Age
 
-    Tip: Type comparisons between an opaque type are only ever equal if
-    both types are the same opaque type. Did you mean to create an opaque
-    type by wrapping it? If I have an opaque type Age := U32 I can create
-    an instance of this opaque type by doing @Age 23.
+    Tip: *Add type annotations* to functions or values to help you figure
+    this out.
     "
     );
 
@@ -10143,7 +10170,7 @@ In roc, functions are always written as a lambda, like{}
             main = \n -> n + 2
             "#
         ),
-        @r"
+        @r###"
     ── DUPLICATE NAME in /code/proj/Main.roc ───────────────────────────────────────
 
     The `main` name is first defined here:
@@ -10166,11 +10193,11 @@ In roc, functions are always written as a lambda, like{}
     5│  main = \n -> n + 2
         ^^^^
 
-    If you don't need to use the value on the right-hand-side of this
-    assignment, consider removing the assignment. Since Roc is purely
-    functional, assignments that don't introduce variables cannot affect a
-    program's behavior!
-    "
+    If you don't need to use the value on the right-hand side of this
+    assignment, consider removing the assignment. Since effects are not
+    allowed at the top-level, assignments that don't introduce variables
+    cannot affect a program's behavior
+    "###
     );
 
     test_report!(
@@ -10185,9 +10212,9 @@ In roc, functions are always written as a lambda, like{}
 
             withOpen : (Handle -> Result {} *) -> Result {} *
             withOpen = \callback ->
-                handle <- await (open {})
-                {} <- await (callback handle)
-                close handle
+                await (open {}) \handle ->
+                    await (callback handle) \_ ->
+                        close handle
 
             withOpen
             "
@@ -10199,9 +10226,9 @@ In roc, functions are always written as a lambda, like{}
 
         10│       withOpen : (Handle -> Result {} *) -> Result {} *
         11│       withOpen = \callback ->
-        12│>          handle <- await (open {})
-        13│>          {} <- await (callback handle)
-        14│>          close handle
+        12│>          await (open {}) \handle ->
+        13│>              await (callback handle) \_ ->
+        14│>                  close handle
 
         The type annotation on `withOpen` says this `await` call should have the
         type:
@@ -10214,6 +10241,7 @@ In roc, functions are always written as a lambda, like{}
         Tip: Any connection between types must use a named type variable, not
         a `*`! Maybe the annotation  on `withOpen` should have a named type
         variable in place of the `*`?
+
         "
     );
 
@@ -10403,10 +10431,8 @@ In roc, functions are always written as a lambda, like{}
 
         OList
 
-    Tip: Type comparisons between an opaque type are only ever equal if
-    both types are the same opaque type. Did you mean to create an opaque
-    type by wrapping it? If I have an opaque type Age := U32 I can create
-    an instance of this opaque type by doing @Age 23.
+    Tip: *Add type annotations* to functions or values to help you figure
+    this out.
     "
     );
 
@@ -10699,163 +10725,6 @@ In roc, functions are always written as a lambda, like{}
     // Record Builders
 
     test_report!(
-        optional_field_in_old_record_builder,
-        indoc!(
-            r#"
-            {
-                a: <- apply "a",
-                b,
-                c ? "optional"
-            }
-            "#
-        ),
-        @r#"
-    ── BAD OLD-STYLE RECORD BUILDER in ...nal_field_in_old_record_builder/Test.roc ─
-
-    I am partway through parsing a record builder, and I found an optional
-    field:
-
-    1│  app "test" provides [main] to "./platform"
-    2│
-    3│  main =
-    4│      {
-    5│          a: <- apply "a",
-    6│          b,
-    7│          c ? "optional"
-                ^^^^^^^^^^^^^^
-
-    Optional fields can only appear when you destructure a record.
-    "#
-    );
-
-    test_report!(
-        record_update_old_builder,
-        indoc!(
-            r#"
-            { rec &
-                a: <- apply "a",
-                b: 3
-            }
-            "#
-        ),
-        @r#"
-    ── BAD RECORD UPDATE in tmp/record_update_old_builder/Test.roc ─────────────────
-
-    I am partway through parsing a record update, and I found an old-style
-    record builder field:
-
-    1│  app "test" provides [main] to "./platform"
-    2│
-    3│  main =
-    4│      { rec &
-    5│          a: <- apply "a",
-                ^^^^^^^^^^^^^^^
-
-    Old-style record builders cannot be updated like records.
-    "#
-    );
-
-    test_report!(
-        multiple_old_record_builders,
-        indoc!(
-            r#"
-            succeed
-                { a: <- apply "a" }
-                { b: <- apply "b" }
-            "#
-        ),
-        @r#"
-    ── MULTIPLE OLD-STYLE RECORD BUILDERS in /code/proj/Main.roc ───────────────────
-
-    This function is applied to multiple old-style record builders:
-
-    4│>      succeed
-    5│>          { a: <- apply "a" }
-    6│>          { b: <- apply "b" }
-
-    Note: Functions can only take at most one old-style record builder!
-
-    Tip: You can combine them or apply them separately.
-    "#
-    );
-
-    test_report!(
-        unapplied_old_record_builder,
-        indoc!(
-            r#"
-            { a: <- apply "a" }
-            "#
-        ),
-        @r#"
-    ── UNAPPLIED OLD-STYLE RECORD BUILDER in /code/proj/Main.roc ───────────────────
-
-    This old-style record builder was not applied to a function:
-
-    4│      { a: <- apply "a" }
-            ^^^^^^^^^^^^^^^^^^^
-
-    However, we need a function to construct the record.
-
-    Note: Functions must be applied directly. The pipe operator (|>) cannot be used.
-    "#
-    );
-
-    test_report!(
-        old_record_builder_apply_non_function,
-        indoc!(
-            r#"
-            succeed = \_ -> crash ""
-
-            succeed {
-                a: <- "a",
-            }
-            "#
-        ),
-        @r#"
-    ── TOO MANY ARGS in /code/proj/Main.roc ────────────────────────────────────────
-
-    This value is not a function, but it was given 1 argument:
-
-    7│          a: <- "a",
-                      ^^^
-
-    Tip: Remove `<-` to assign the field directly.
-    "#
-    );
-
-    // Skipping test because opaque types defined in the same module
-    // do not fail with the special opaque type error
-    //
-    // test_report!(
-    //     record_builder_apply_opaque,
-    //     indoc!(
-    //         r#"
-    //         succeed = \_ -> crash ""
-
-    //         Decode := {}
-
-    //         get : Str -> Decode
-    //         get = \_ -> @Decode {}
-
-    //         succeed {
-    //             a: <- get "a",
-    //             # missing |> apply ^
-    //         }
-    //         "#
-    //     ),
-    //     @r#"
-    // ── TOO MANY ARGS in /code/proj/Main.roc ────────────────────────────────────────
-
-    // This value is an opaque type, so it cannot be called with an argument:
-
-    // 12│          a: <- get "a",
-    //                    ^^^^^^^
-
-    // Hint: Did you mean to apply it to a function first?
-    //     "#
-    // );
-
-    test_report!(
         empty_record_builder,
         indoc!(
             r#"
@@ -10864,12 +10733,12 @@ In roc, functions are always written as a lambda, like{}
         ),
         @r#"
     ── EMPTY RECORD BUILDER in /code/proj/Main.roc ─────────────────────────────────
-    
+
     This record builder has no fields:
-    
+
     4│      { a <- }
             ^^^^^^^^
-    
+
     I need at least two fields to combine their values into a record.
     "#
     );
@@ -10887,11 +10756,11 @@ In roc, functions are always written as a lambda, like{}
     ── NOT ENOUGH FIELDS IN RECORD BUILDER in /code/proj/Main.roc ──────────────────
 
     This record builder only has one field:
-    
+
     4│>      { a <-
     5│>          b: 123
     6│>      }
-    
+
     I need at least two fields to combine their values into a record.
     "#
     );
@@ -10908,14 +10777,14 @@ In roc, functions are always written as a lambda, like{}
         ),
         @r#"
     ── OPTIONAL FIELD IN RECORD BUILDER in /code/proj/Main.roc ─────────────────────
-    
+
     Optional fields are not allowed to be used in record builders.
-    
+
     4│       { a <-
     5│           b: 123,
     6│>          c? 456
     7│       }
-    
+
     Record builders can only have required values for their fields.
     "#
     );
@@ -10951,7 +10820,7 @@ In roc, functions are always written as a lambda, like{}
     6│      { xyz <-
               ^^^
 
-    Note: Record builders need a mapper function before the `<-` to combine
+    Note: Record builders need a mapper function before the <- to combine
     fields together with.
     "#
     );
@@ -10971,55 +10840,51 @@ In roc, functions are always written as a lambda, like{}
             0
             "
         ),
-        @r"
+        @r###"
     ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
 
-    This destructure assignment doesn't introduce any new variables:
+    This assignment doesn't introduce any new variables:
 
     4│      Pair _ _ = Pair 0 1
-            ^^^^
+            ^^^^^^^^
 
-    If you don't need to use the value on the right-hand-side of this
-    assignment, consider removing the assignment. Since Roc is purely
-    functional, assignments that don't introduce variables cannot affect a
-    program's behavior!
+    Since it doesn't call any effectful functions, this assignment cannot
+    affect the program's behavior. If you don't need to use the value on
+    the right-hand side, consider removing the assignment.
 
     ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
 
-    This destructure assignment doesn't introduce any new variables:
+    This assignment doesn't introduce any new variables:
 
     6│      _ = Pair 0 1
             ^
 
-    If you don't need to use the value on the right-hand-side of this
-    assignment, consider removing the assignment. Since Roc is purely
-    functional, assignments that don't introduce variables cannot affect a
-    program's behavior!
+    Since it doesn't call any effectful functions, this assignment cannot
+    affect the program's behavior. If you don't need to use the value on
+    the right-hand side, consider removing the assignment.
 
     ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
 
-    This destructure assignment doesn't introduce any new variables:
+    This assignment doesn't introduce any new variables:
 
     8│      {} = {}
             ^^
 
-    If you don't need to use the value on the right-hand-side of this
-    assignment, consider removing the assignment. Since Roc is purely
-    functional, assignments that don't introduce variables cannot affect a
-    program's behavior!
+    Since it doesn't call any effectful functions, this assignment cannot
+    affect the program's behavior. If you don't need to use the value on
+    the right-hand side, consider removing the assignment.
 
     ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
 
-    This destructure assignment doesn't introduce any new variables:
+    This assignment doesn't introduce any new variables:
 
     10│      Foo = Foo
              ^^^
 
-    If you don't need to use the value on the right-hand-side of this
-    assignment, consider removing the assignment. Since Roc is purely
-    functional, assignments that don't introduce variables cannot affect a
-    program's behavior!
-    "
+    Since it doesn't call any effectful functions, this assignment cannot
+    affect the program's behavior. If you don't need to use the value on
+    the right-hand side, consider removing the assignment.
+    "###
     );
 
     test_report!(
@@ -11037,7 +10902,7 @@ In roc, functions are always written as a lambda, like{}
             Foo = Foo
             "#
         ),
-        @r"
+        @r###"
     ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
 
     This destructure assignment doesn't introduce any new variables:
@@ -11045,10 +10910,10 @@ In roc, functions are always written as a lambda, like{}
     3│  Pair _ _ = Pair 0 1
         ^^^^^^^^
 
-    If you don't need to use the value on the right-hand-side of this
-    assignment, consider removing the assignment. Since Roc is purely
-    functional, assignments that don't introduce variables cannot affect a
-    program's behavior!
+    If you don't need to use the value on the right-hand side of this
+    assignment, consider removing the assignment. Since effects are not
+    allowed at the top-level, assignments that don't introduce variables
+    cannot affect a program's behavior
 
     ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
 
@@ -11057,10 +10922,10 @@ In roc, functions are always written as a lambda, like{}
     5│  _ = Pair 0 1
         ^
 
-    If you don't need to use the value on the right-hand-side of this
-    assignment, consider removing the assignment. Since Roc is purely
-    functional, assignments that don't introduce variables cannot affect a
-    program's behavior!
+    If you don't need to use the value on the right-hand side of this
+    assignment, consider removing the assignment. Since effects are not
+    allowed at the top-level, assignments that don't introduce variables
+    cannot affect a program's behavior
 
     ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
 
@@ -11069,10 +10934,10 @@ In roc, functions are always written as a lambda, like{}
     7│  {} = {}
         ^^
 
-    If you don't need to use the value on the right-hand-side of this
-    assignment, consider removing the assignment. Since Roc is purely
-    functional, assignments that don't introduce variables cannot affect a
-    program's behavior!
+    If you don't need to use the value on the right-hand side of this
+    assignment, consider removing the assignment. Since effects are not
+    allowed at the top-level, assignments that don't introduce variables
+    cannot affect a program's behavior
 
     ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
 
@@ -11081,11 +10946,11 @@ In roc, functions are always written as a lambda, like{}
     9│  Foo = Foo
         ^^^
 
-    If you don't need to use the value on the right-hand-side of this
-    assignment, consider removing the assignment. Since Roc is purely
-    functional, assignments that don't introduce variables cannot affect a
-    program's behavior!
-    "
+    If you don't need to use the value on the right-hand side of this
+    assignment, consider removing the assignment. Since effects are not
+    allowed at the top-level, assignments that don't introduce variables
+    cannot affect a program's behavior
+    "###
     );
 
     test_report!(
@@ -11189,8 +11054,8 @@ In roc, functions are always written as a lambda, like{}
     4│      Recursive := [Infinitely Recursive]
             ^^^^^^^^^
 
-    Recursion in opaquees is only allowed if recursion happens behind a
-    tagged union, at least one variant of which is not recursive.
+    Recursion in opaque types is only allowed if recursion happens behind
+    a tagged union, at least one variant of which is not recursive.
     "
     );
 
@@ -11833,6 +11698,32 @@ In roc, functions are always written as a lambda, like{}
     @r"
     "
     );
+
+    test_report!(
+        deprecated_backpassing,
+        indoc!(
+            r#"
+            foo = \bar ->
+                baz <- Result.try bar
+
+                Ok (baz * 3)
+
+            foo (Ok 123)
+            "#
+        ),
+        @r###"
+    ── BACKPASSING DEPRECATED in /code/proj/Main.roc ───────────────────────────────
+
+    Backpassing (<-) like this will soon be deprecated:
+
+    5│          baz <- Result.try bar
+                ^^^^^^^^^^^^^^^^^^^^^
+
+    You should use a ! for awaiting tasks or a ? for trying results, and
+    functions everywhere else.
+    "###
+    );
+
     test_report!(
         unknown_shorthand_no_deps,
         indoc!(
@@ -13870,7 +13761,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── DEFINITIONs ONLY USED IN RECURSION in /code/proj/Main.roc ───────────────────
+    ── DEFINITIONS ONLY USED IN RECURSION in /code/proj/Main.roc ───────────────────
 
     These 2 definitions are only used in mutual recursion with themselves:
 
@@ -13879,6 +13770,7 @@ In roc, functions are always written as a lambda, like{}
 
     If you don't intend to use or export any of them, they should all be
     removed!
+
     "#
     );
 
@@ -13942,7 +13834,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── DEFINITIONs ONLY USED IN RECURSION in /code/proj/Main.roc ───────────────────
+    ── DEFINITIONS ONLY USED IN RECURSION in /code/proj/Main.roc ───────────────────
 
     These 2 definitions are only used in mutual recursion with themselves:
 
@@ -13951,6 +13843,7 @@ In roc, functions are always written as a lambda, like{}
 
     If you don't intend to use or export any of them, they should all be
     removed!
+
     "#
     );
 
@@ -14502,5 +14395,1071 @@ In roc, functions are always written as a lambda, like{}
     Roc does not allow functions to be partially applied. Use a closure to
     make partial application explicit.
     "
+    );
+
+    test_report!(
+        dbg_unapplied,
+        indoc!(
+            r"
+            1 + dbg + 2
+            "
+        ),
+    @r"
+    ── UNAPPLIED DBG in /code/proj/Main.roc ────────────────────────────────────────
+
+    This `dbg` doesn't have a value given to it:
+
+    4│      1 + dbg + 2
+                ^^^
+
+    `dbg` must be passed a value to print at the exact place it's used. `dbg`
+    can't be used as a value that's passed around, like functions can be -
+    it must be applied immediately!
+
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+
+    This 2nd argument to + has an unexpected type:
+
+    4│      1 + dbg + 2
+                ^^^
+
+    This value is a:
+
+        {}
+
+    But + needs its 2nd argument to be:
+
+        Num *
+    "
+    );
+
+    test_report!(
+        dbg_overapplied,
+        indoc!(
+            r#"
+            1 + dbg "" "" + 2
+            "#
+        ),
+    @r#"
+    ── OVERAPPLIED DBG in /code/proj/Main.roc ──────────────────────────────────────
+
+    This `dbg` has too many values given to it:
+
+    4│      1 + dbg "" "" + 2
+                    ^^^^^
+
+    `dbg` must be given exactly one value to print.
+
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+
+    This 2nd argument to + has an unexpected type:
+
+    4│      1 + dbg "" "" + 2
+                ^^^^^^^^^
+
+    This value is a:
+
+        {}
+
+    But + needs its 2nd argument to be:
+
+        Num *
+    "#
+    );
+
+    test_report!(
+        issue_6240_1,
+        indoc!(
+            r"
+            {}.abcde
+            "
+        ),
+        @r###"
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+
+    This record doesn’t have a `abcde` field:
+
+    4│      {}.abcde
+            ^^^^^^^^
+
+    In fact, it’s a record with no fields at all!
+    "###
+    );
+
+    test_report!(
+        issue_6240_2,
+        indoc!(
+            r#"
+              ("", "").abcde
+              "#
+        ),
+        @r###"
+      ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+
+      This expression is used in an unexpected way:
+
+      4│      ("", "").abcde
+              ^^^^^^^^^^^^^^
+
+      It is a tuple of type:
+
+          (
+              Str,
+              Str,
+          )a
+
+      But you are trying to use it as:
+
+          { abcde : * }b
+      "###
+    );
+
+    test_report!(
+        issue_6240_3,
+        indoc!(
+            r"
+              {}.0
+              "
+        ),
+        @r"
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+
+    This expression is used in an unexpected way:
+
+    4│      {}.0
+            ^^^^
+
+    It is a record of type:
+
+        {}
+
+    But you are trying to use it as:
+
+        (*)b
+    "
+    );
+
+    test_report!(
+        return_outside_of_function,
+        indoc!(
+            r"
+            someVal =
+                if 10 > 5 then
+                    x = 5
+                    return x
+                else
+                    6
+
+            someVal + 2
+            "
+        ),
+        @r###"
+        ── RETURN OUTSIDE OF FUNCTION in /code/proj/Main.roc ───────────────────────────
+
+        This `return` statement doesn't belong to a function:
+
+        7│              return x
+                        ^^^^^^^^
+
+        I wouldn't know where to return to if I used it!
+        "###
+    );
+
+    test_report!(
+        statements_after_return,
+        indoc!(
+            r#"
+            myFunction = \x ->
+                if x == 2 then
+                    return x
+
+                    log! "someData"
+                    useX x 123
+                else
+                    x + 5
+
+            myFunction 2
+            "#
+        ),
+        @r###"
+        ── UNREACHABLE CODE in /code/proj/Main.roc ─────────────────────────────────────
+
+        This code won't run because it follows a `return` statement:
+
+        6│>              return x
+        7│>
+        8│>              log! "someData"
+        9│>              useX x 123
+
+        Hint: you can move the `return` statement below this block to make the
+        code that follows it run.
+        "###
+    );
+
+    test_report!(
+        return_at_end_of_function,
+        indoc!(
+            r#"
+            myFunction = \x ->
+                y = Num.toStr x
+
+                return y
+
+            myFunction 3
+            "#
+        ),
+        @r###"
+        ── UNNECESSARY RETURN in /code/proj/Main.roc ───────────────────────────────────
+
+        This `return` keyword is redundant:
+
+        7│          return y
+                    ^^^^^^^^
+
+        The last expression in a function is treated like a `return` statement.
+        You can safely remove `return` here.
+        "###
+    );
+
+    test_report!(
+        mismatch_early_return_with_function_output,
+        indoc!(
+            r#"
+            myFunction = \x ->
+                if x == 5 then
+                    return "abc"
+                else
+                    x
+
+            myFunction 3
+            "#
+        ),
+        @r###"
+        ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+
+        This `return` statement doesn't match the return type of its enclosing
+        function:
+
+        5│           if x == 5 then
+        6│>              return "abc"
+        7│           else
+        8│               x
+
+        This returns a value of type:
+
+            Str
+
+        But I expected the function to have return type:
+
+            Num *
+        "###
+    );
+
+    test_report!(
+        mismatch_only_early_returns,
+        indoc!(
+            r#"
+            myFunction = \x ->
+                if x == 5 then
+                    return "abc"
+                else
+                    return 123
+
+            myFunction 3
+            "#
+        ),
+        @r###"
+        ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+        
+        This `return` statement doesn't match the return type of its enclosing
+        function:
+        
+        5│          if x == 5 then
+        6│              return "abc"
+        7│          else
+        8│              return 123
+                        ^^^^^^^^^^
+        
+        This returns a value of type:
+        
+            Num *
+        
+        But I expected the function to have return type:
+        
+            Str
+        "###
+    );
+
+    test_report!(
+        mismatch_early_return_annotated_function,
+        indoc!(
+            r#"
+            myFunction : U64 -> Str
+            myFunction = \x ->
+                if x == 5 then
+                    return 123
+                else
+                    "abc"
+
+            myFunction 3
+            "#
+        ),
+        @r###"
+        ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+        
+        Something is off with the body of the `myFunction` definition:
+        
+        4│      myFunction : U64 -> Str
+        5│      myFunction = \x ->
+        6│          if x == 5 then
+        7│              return 123
+                        ^^^^^^^^^^
+        
+        This returns a value of type:
+        
+            Num *
+        
+        But the type annotation on `myFunction` says it should be:
+        
+            Str
+
+        "###
+    );
+
+    test_report!(
+        leftover_statement,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../crates/cli/tests/test-projects/test-platform-effects-zig/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                identity {}
+
+                Effect.putLine! "hello"
+
+            identity = \x -> x
+            "#
+        ),
+        @r###"
+    ── LEFTOVER STATEMENT in /code/proj/Main.roc ───────────────────────────────────
+
+    This statement does not produce any effects:
+
+    6│      identity {}
+            ^^^^^^^^^^^
+
+    Standalone statements are only useful if they call effectful
+    functions.
+
+    Did you forget to use its result? If not, feel free to remove it.
+    "###
+    );
+
+    test_report!(
+        fx_fn_annotated_as_pure,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../crates/cli/tests/test-projects/test-platform-effects-zig/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                Effect.putLine! (getCheer "hello")
+
+            getCheer : Str -> Str
+            getCheer = \msg ->
+                name = Effect.getLine! {}
+
+                "$(msg), $(name)!"
+            "#
+        ),
+        @r###"
+    ── EFFECT IN PURE FUNCTION in /code/proj/Main.roc ──────────────────────────────
+
+    This call to `Effect.getLine!` might produce an effect:
+
+    10│      name = Effect.getLine! {}
+                    ^^^^^^^^^^^^^^^^^^
+
+    However, the type of the enclosing function requires that it's pure:
+
+    8│  getCheer : Str -> Str
+                   ^^^^^^^^^^
+
+    Tip: Replace `->` with `=>` to annotate it as effectful.
+
+    You can still run the program with this error, which can be helpful
+    when you're debugging.
+    "###
+    );
+
+    test_report!(
+        fx_fn_annotated_as_pure_stmt,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../crates/cli/tests/test-projects/test-platform-effects-zig/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                trim "hello "
+
+            trim : Str -> Str
+            trim = \msg ->
+                Effect.putLine! "Trimming $(msg)"
+                Str.trim msg
+            "#
+        ),
+        @r#"
+    ── EFFECT IN PURE FUNCTION in /code/proj/Main.roc ──────────────────────────────
+
+    This call to `Effect.putLine!` might produce an effect:
+
+    10│      Effect.putLine! "Trimming $(msg)"
+             ^^^^^^^^^^^^^^^
+
+    However, the type of the enclosing function requires that it's pure:
+
+    8│  trim : Str -> Str
+               ^^^^^^^^^^
+
+    Tip: Replace `->` with `=>` to annotate it as effectful.
+
+    You can still run the program with this error, which can be helpful
+    when you're debugging.
+    "#
+    );
+
+    test_report!(
+        nested_function_def_fx_no_bang,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../crates/cli/tests/test-projects/test-platform-effects-zig/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                printHello = \{} ->
+                    Effect.putLine! "hello"
+
+                printHello {}
+            "#
+        ),
+        @r###"
+    ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
+
+    This function is effectful, but its name does not indicate so:
+
+    6│      printHello = \{} ->
+            ^^^^^^^^^^
+
+    Add an exclamation mark at the end, like:
+
+        printHello!
+
+    This will help readers identify it as a source of effects.
+    "###
+    );
+
+    test_report!(
+        ignored_result_stmt,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../crates/cli/tests/test-projects/test-platform-effects-zig/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                Effect.getLine! {}
+                {}
+            "#
+        ),
+        @r###"
+    ── IGNORED RESULT in /code/proj/Main.roc ───────────────────────────────────────
+
+    The result of this call to `Effect.getLine!` is ignored:
+
+    6│      Effect.getLine! {}
+            ^^^^^^^^^^^^^^^
+
+    Standalone statements are required to produce an empty record, but the
+    type of this one is:
+
+        Str
+
+    If you still want to ignore it, assign it to `_`, like this:
+
+        _ = File.delete! "data.json"
+    "###
+    );
+
+    test_report!(
+        ignored_stmt_forgot_to_call,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../crates/cli/tests/test-projects/test-platform-effects-zig/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                Effect.getLine!
+                Effect.putLine! "hi"
+            "#
+        ),
+        @r###"
+    ── IGNORED RESULT in /code/proj/Main.roc ───────────────────────────────────────
+
+    The result of this expression is ignored:
+
+    6│      Effect.getLine!
+            ^^^^^^^^^^^^^^^
+
+    Standalone statements are required to produce an empty record, but the
+    type of this one is:
+
+        {} => Str
+
+    Hint: Did you forget to call the function?
+
+    ── LEFTOVER STATEMENT in /code/proj/Main.roc ───────────────────────────────────
+
+    This statement does not produce any effects:
+
+    6│      Effect.getLine!
+            ^^^^^^^^^^^^^^^
+
+    Standalone statements are only useful if they call effectful
+    functions.
+
+    Did you forget to use its result? If not, feel free to remove it.
+    "###
+    );
+
+    test_report!(
+        function_def_leftover_bang,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../crates/cli/tests/test-projects/test-platform-effects-zig/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                Effect.putLine! (hello! {})
+
+            hello! = \{} ->
+                "hello"
+            "#
+        ),
+        @r###"
+    ── UNNECESSARY EXCLAMATION in /code/proj/Main.roc ──────────────────────────────
+
+    This function is pure, but its name suggests otherwise:
+
+    8│  hello! = \{} ->
+        ^^^^^^
+
+    The exclamation mark at the end is reserved for effectful functions.
+
+    Hint: Did you forget to run an effect? Is the type annotation wrong?
+    "###
+    );
+
+    test_report!(
+        effect_in_top_level_value_def,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../crates/cli/tests/test-projects/test-platform-effects-zig/main.roc" }
+
+            import pf.Effect
+
+            hello =
+                Effect.putLine! "calling hello!"
+                "hello"
+
+            main! = \{} ->
+                Effect.putLine! hello
+            "#
+        ),
+        @r###"
+    ── EFFECT IN TOP-LEVEL in /code/proj/Main.roc ──────────────────────────────────
+
+    This call to `Effect.putLine!` might produce an effect:
+
+    6│      Effect.putLine! "calling hello!"
+            ^^^^^^^^^^^^^^^
+
+    However, it appears in a top-level def instead of a function. If we
+    allowed this, importing this module would produce a side effect.
+
+    Tip: If you don't need any arguments, use an empty record:
+
+        askName! : {} => Str
+        askName! = \{} ->
+            Stdout.line! "What's your name?"
+            Stdin.line! {}
+
+    This will allow the caller to control when the effects run.
+    "###
+    );
+
+    test_report!(
+        aliased_fx_fn,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../crates/cli/tests/test-projects/test-platform-effects-zig/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                printLn "Hello"
+
+            printLn = Effect.putLine!
+            "#
+        ),
+        @r###"
+    ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
+
+    This function is effectful, but its name does not indicate so:
+
+    8│  printLn = Effect.putLine!
+        ^^^^^^^
+
+    Add an exclamation mark at the end, like:
+
+        printLn!
+
+    This will help readers identify it as a source of effects.
+    "###
+    );
+
+    test_report!(
+        unsuffixed_fx_in_record,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../crates/cli/tests/test-projects/test-platform-effects-zig/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                fx = {
+                    putLine: Effect.putLine!
+                }
+                fx.putLine "hello world!"
+            "#
+        ),
+        @r###"
+    ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
+
+    This field's value is an effectful function, but its name does not
+    indicate so:
+
+    7│          putLine: Effect.putLine!
+                ^^^^^^^^^^^^^^^^^^^^^^^^
+
+    Add an exclamation mark at the end, like:
+
+        { readFile! : File.read! }
+
+    This will help readers identify it as a source of effects.
+    "###
+    );
+
+    test_report!(
+        unsuffixed_fx_in_record_annotation,
+        indoc!(
+            r#"
+            module [Fx]
+
+            Fx : {
+                getLine: {} => Str
+            }
+            "#
+        ),
+        @r"
+    ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
+
+    The type of this record field is an effectful function, but its name
+    does not indicate so:
+
+    4│      getLine: {} => Str
+            ^^^^^^^^^^^^^^^^^^
+
+    Add an exclamation mark at the end, like:
+
+        { readFile!: Str => Str }
+
+    This will help readers identify it as a source of effects.
+    "
+    );
+
+    test_report!(
+        suffixed_pure_fn_in_record_annotation,
+        indoc!(
+            r#"
+            module [Fx]
+
+            Fx : {
+                getLine!: {} -> Str
+            }
+            "#
+        ),
+        @r"
+    ── UNNECESSARY EXCLAMATION in /code/proj/Main.roc ──────────────────────────────
+
+    The type of this record field is a pure function, but its name
+    suggests otherwise:
+
+    4│      getLine!: {} -> Str
+            ^^^^^^^^^^^^^^^^^^^
+
+    The exclamation mark at the end is reserved for effectful functions.
+
+    Hint: Did you mean to use `=>` instead of `->`?
+    "
+    );
+
+    test_report!(
+        unsuffixed_fx_arg,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../crates/cli/tests/test-projects/test-platform-effects-zig/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                ["Hello", "world!"]
+                |> forEach! Effect.putLine!
+
+            forEach! : List a, (a => {}) => {}
+            forEach! = \l, f ->
+                when l is
+                    [] -> {}
+                    [x, .. as xs] ->
+                        f x
+                        forEach! xs f
+            "#
+        ),
+        @r###"
+    ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
+
+    This is an effectful function, but its name does not indicate so:
+
+    10│  forEach! = \l, f ->
+                        ^
+
+    Add an exclamation mark at the end, like:
+
+        f!
+
+    This will help readers identify it as a source of effects.
+    "###
+    );
+
+    test_report!(
+        suffixed_pure_arg,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../crates/cli/tests/test-projects/test-platform-effects-zig/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                Ok " hi "
+                |> mapOk  Str.trim
+                |> Result.withDefault ""
+                |> Effect.putLine!
+
+            mapOk : Result a err, (a -> b) -> Result b err
+            mapOk = \result, fn! ->
+                when result is
+                    Ok x -> Ok (fn! x)
+                    Err e -> Err e
+            "#
+        ),
+        @r###"
+    ── UNNECESSARY EXCLAMATION in /code/proj/Main.roc ──────────────────────────────
+
+    This is a pure function, but its name suggests otherwise:
+
+    12│  mapOk = \result, fn! ->
+                          ^^^
+
+    The exclamation mark at the end is reserved for effectful functions.
+
+    Hint: Did you forget to run an effect? Is the type annotation wrong?
+    "###
+    );
+
+    test_report!(
+        unsuffixed_tuple_fx_field,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../crates/cli/tests/test-projects/test-platform-effects-zig/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                (get, put) = (Effect.getLine!, Effect.putLine!)
+
+                name = get {}
+                put "Hi, $(name)"
+            "#
+        ),
+        @r###"
+    ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
+
+    This function is effectful, but its name does not indicate so:
+
+    6│      (get, put) = (Effect.getLine!, Effect.putLine!)
+             ^^^
+
+    Add an exclamation mark at the end, like:
+
+        get!
+
+    This will help readers identify it as a source of effects.
+
+    ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
+
+    This function is effectful, but its name does not indicate so:
+
+    6│      (get, put) = (Effect.getLine!, Effect.putLine!)
+                  ^^^
+
+    Add an exclamation mark at the end, like:
+
+        put!
+
+    This will help readers identify it as a source of effects.
+    "###
+    );
+
+    test_report!(
+        suffixed_tuple_pure_field,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../crates/cli/tests/test-projects/test-platform-effects-zig/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                (msg, trim!) = (" hi ", Str.trim)
+
+                Effect.putLine! (trim! msg)
+            "#
+        ),
+        @r###"
+    ── UNNECESSARY EXCLAMATION in /code/proj/Main.roc ──────────────────────────────
+
+    This function is pure, but its name suggests otherwise:
+
+    6│      (msg, trim!) = (" hi ", Str.trim)
+                  ^^^^^
+
+    The exclamation mark at the end is reserved for effectful functions.
+
+    Hint: Did you forget to run an effect? Is the type annotation wrong?
+    "###
+    );
+
+    test_report!(
+        unsuffixed_tag_fx_field,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../crates/cli/tests/test-projects/test-platform-effects-zig/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                Tag get put = Tag Effect.getLine! Effect.putLine!
+
+                name = get {}
+                put "Hi, $(name)"
+            "#
+        ),
+        @r###"
+    ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
+
+    This function is effectful, but its name does not indicate so:
+
+    6│      Tag get put = Tag Effect.getLine! Effect.putLine!
+                ^^^
+
+    Add an exclamation mark at the end, like:
+
+        get!
+
+    This will help readers identify it as a source of effects.
+
+    ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
+
+    This function is effectful, but its name does not indicate so:
+
+    6│      Tag get put = Tag Effect.getLine! Effect.putLine!
+                    ^^^
+
+    Add an exclamation mark at the end, like:
+
+        put!
+
+    This will help readers identify it as a source of effects.
+    "###
+    );
+
+    test_report!(
+        suffixed_tag_pure_field,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../crates/cli/tests/test-projects/test-platform-effects-zig/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                Tag msg trim! = Tag " hi " Str.trim
+
+                Effect.putLine! (trim! msg)
+            "#
+        ),
+        @r###"
+    ── UNNECESSARY EXCLAMATION in /code/proj/Main.roc ──────────────────────────────
+
+    This function is pure, but its name suggests otherwise:
+
+    6│      Tag msg trim! = Tag " hi " Str.trim
+                    ^^^^^
+
+    The exclamation mark at the end is reserved for effectful functions.
+
+    Hint: Did you forget to run an effect? Is the type annotation wrong?
+    "###
+    );
+
+    test_report!(
+        unsuffixed_opaque_fx_field,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../crates/cli/tests/test-projects/test-platform-effects-zig/main.roc" }
+
+            import pf.Effect
+
+            PutLine := Str => {}
+
+            main! = \{} ->
+                @PutLine put = @PutLine Effect.putLine!
+
+                put "Hi!"
+            "#
+        ),
+        @r###"
+    ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
+
+    This function is effectful, but its name does not indicate so:
+
+    8│      @PutLine put = @PutLine Effect.putLine!
+                     ^^^
+
+    Add an exclamation mark at the end, like:
+
+        put!
+
+    This will help readers identify it as a source of effects.
+    "###
+    );
+
+    test_report!(
+        suffixed_opaque_pure_field,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../crates/cli/tests/test-projects/test-platform-effects-zig/main.roc" }
+
+            import pf.Effect
+
+            Trim := Str -> Str
+
+            main! = \{} ->
+                @Trim trim! = @Trim Str.trim
+
+                Effect.putLine! (trim! " hi ")
+            "#
+        ),
+        @r###"
+    ── UNNECESSARY EXCLAMATION in /code/proj/Main.roc ──────────────────────────────
+
+    This function is pure, but its name suggests otherwise:
+
+    8│      @Trim trim! = @Trim Str.trim
+                  ^^^^^
+
+    The exclamation mark at the end is reserved for effectful functions.
+
+    Hint: Did you forget to run an effect? Is the type annotation wrong?
+    "###
+    );
+
+    test_report!(
+        fx_passed_to_untyped_pure_hof,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../crates/cli/tests/test-projects/test-platform-effects-zig/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                pureHigherOrder Effect.putLine! "hi"
+
+            pureHigherOrder = \f, x -> f x
+            "#
+        ),
+        @r#"
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+
+    This 1st argument to `pureHigherOrder` has an unexpected type:
+
+    6│      pureHigherOrder Effect.putLine! "hi"
+                            ^^^^^^^^^^^^^^^
+
+    This `Effect.putLine!` value is a:
+
+        Str => {}
+
+    But `pureHigherOrder` needs its 1st argument to be:
+
+        Str -> {}
+    "#
+    );
+
+    test_report!(
+        fx_passed_to_partially_inferred_pure_hof,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../crates/cli/tests/test-projects/test-platform-effects-zig/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                pureHigherOrder Effect.putLine! "hi"
+
+            pureHigherOrder : _, _ -> _
+            pureHigherOrder = \f, x -> f x
+            "#
+        ),
+        @r#"
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+
+    This 1st argument to `pureHigherOrder` has an unexpected type:
+
+    6│      pureHigherOrder Effect.putLine! "hi"
+                            ^^^^^^^^^^^^^^^
+
+    This `Effect.putLine!` value is a:
+
+        Str => {}
+
+    But `pureHigherOrder` needs its 1st argument to be:
+
+        Str -> {}
+    "#
     );
 }

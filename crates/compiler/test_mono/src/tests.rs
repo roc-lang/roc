@@ -658,6 +658,31 @@ fn record_optional_field_function_use_default() {
 }
 
 #[mono_test]
+fn record_as_pattern_in_closure_arg() {
+    r"
+    f = \{x, y, w, h} -> (x + w, y + h)
+
+    g = \({ x, y } as box) ->
+        (right, bottom) = f box
+        (x, y, right, bottom)
+
+    g { x: 1, y: 2, w: 3, h: 4 }
+    "
+}
+
+#[mono_test]
+fn opaque_as_pattern_in_closure_arg() {
+    r"
+    Opaque := U64
+
+    f = \(@Opaque x) -> x * 2
+    g = \(@Opaque x as s) -> (x, f s)
+
+    g (@Opaque 42)
+    "
+}
+
+#[mono_test]
 fn quicksort_help() {
     // do we still need with_larger_debug_stack?
     r"
@@ -3244,6 +3269,45 @@ fn dbg_str_followed_by_number() {
 }
 
 #[mono_test]
+fn dbg_expr() {
+    indoc!(
+        r#"
+        1 + (dbg 2)
+        "#
+    )
+}
+
+#[mono_test]
+fn dbg_nested_expr() {
+    indoc!(
+        r#"
+        dbg (dbg (dbg 1))
+        "#
+    )
+}
+
+#[mono_test]
+fn dbg_inside_string() {
+    indoc!(
+        r#"
+        "Hello $(dbg "world")!"
+        "#
+    )
+}
+
+#[mono_test]
+fn pizza_dbg() {
+    indoc!(
+        r#"
+        1
+        |> dbg
+        |> Num.add 2
+        |> dbg
+        "#
+    )
+}
+
+#[mono_test]
 fn linked_list_reverse() {
     indoc!(
         r#"
@@ -3319,9 +3383,9 @@ fn capture_void_layout_task() {
 
         Fx a : {} -> a
 
-        Task ok err : Fx (Result ok err)
+        OtherTask ok err : Fx (Result ok err)
 
-        succeed : ok -> Task ok *
+        succeed : ok -> OtherTask ok *
         succeed = \ok -> \{} -> Ok ok
 
         after : Fx a, (a -> Fx b) -> Fx b
@@ -3333,7 +3397,7 @@ fn capture_void_layout_task() {
 
             afterInner
 
-        await : Task a err, (a -> Task b err) -> Task b err
+        await : OtherTask a err, (a -> OtherTask b err) -> OtherTask b err
         await = \fx, toNext ->
             inner = after fx \result ->
                 when result is
@@ -3343,12 +3407,12 @@ fn capture_void_layout_task() {
                     Err e -> (\{} -> Err e)
             inner
 
-        forEach : List a, (a -> Task {} err) -> Task {} err
+        forEach : List a, (a -> OtherTask {} err) -> OtherTask {} err
         forEach = \list, fromElem ->
             List.walk list (succeed {}) \task, elem ->
                 await task \{} -> fromElem elem
 
-        main : Task {} []
+        main : OtherTask {} []
         main =
             forEach [] \_ -> succeed {}
         "#
@@ -3389,8 +3453,8 @@ fn inspect_custom_type() {
 
         myToInspector : HelloWorld -> Inspector f where f implements InspectFormatter
         myToInspector = \@HellowWorld {} ->
-            fmt <- Inspect.custom
-            Inspect.apply (Inspect.str "Hello, World!\n") fmt
+            Inspect.custom \fmt ->
+                Inspect.apply (Inspect.str "Hello, World!\n") fmt
 
         main =
             Inspect.inspect (@HelloWorld {})
@@ -3606,5 +3670,43 @@ fn issue_6606_2() {
 
         f
         "
+    )
+}
+
+#[mono_test]
+fn dec_refcount_for_usage_after_early_return_in_if() {
+    indoc!(
+        r#"
+        displayN = \n ->
+            first = Num.toStr n
+            second =
+                if n == 1 then
+                    return "early 1"
+                else
+                    third = Num.toStr (n + 1)
+                    if n == 2 then
+                        return "early 2"
+                    else
+                        third
+
+            "$(first), $(second)"
+
+        displayN 3
+        "#
+    )
+}
+
+#[mono_test]
+fn return_annotated() {
+    indoc!(
+        r#"
+        validateInput : Str -> Result U64 _
+        validateInput = \str ->
+            num = try Str.toU64 str
+
+            Ok num
+
+        validateInput "123"
+        "#
     )
 }

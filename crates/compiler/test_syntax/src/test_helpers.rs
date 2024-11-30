@@ -1,15 +1,15 @@
 use bumpalo::Bump;
-use roc_fmt::{annotation::Formattable, module::fmt_module};
+use roc_fmt::{annotation::Formattable, header::fmt_header};
 use roc_parse::{
-    ast::{Defs, Expr, Malformed, Module},
-    module::parse_module_defs,
+    ast::{Defs, Expr, FullAst, Header, Malformed, SpacesBefore},
+    header::parse_module_defs,
+    normalize::Normalize,
     parser::{Parser, SyntaxError},
     state::State,
     test_helpers::{parse_defs_with, parse_expr_with, parse_header_with},
 };
 use roc_test_utils::assert_multiline_str_eq;
 
-use roc_fmt::spaces::RemoveSpaces;
 use roc_fmt::Buf;
 
 /// Source code to parse. Usually in the form of a test case.
@@ -28,6 +28,25 @@ pub enum Input<'a> {
     Full(&'a str),
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum InputKind {
+    Header,
+    ModuleDefs,
+    Expr,
+    Full,
+}
+
+impl InputKind {
+    pub fn with_text(self, text: &str) -> Input {
+        match self {
+            InputKind::Header => Input::Header(text),
+            InputKind::ModuleDefs => Input::ModuleDefs(text),
+            InputKind::Expr => Input::Expr(text),
+            InputKind::Full => Input::Full(text),
+        }
+    }
+}
+
 // Owned version of `Input`
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputOwned {
@@ -38,7 +57,7 @@ pub enum InputOwned {
 }
 
 impl InputOwned {
-    fn as_ref(&self) -> Input {
+    pub fn as_ref(&self) -> Input {
         match self {
             InputOwned::Header(s) => Input::Header(s),
             InputOwned::ModuleDefs(s) => Input::ModuleDefs(s),
@@ -51,25 +70,22 @@ impl InputOwned {
 /// Output AST of a successful parse
 #[derive(Debug, Clone)]
 pub enum Output<'a> {
-    Header(Module<'a>),
+    Header(SpacesBefore<'a, Header<'a>>),
 
     ModuleDefs(Defs<'a>),
 
     Expr(Expr<'a>),
 
-    Full {
-        header: Module<'a>,
-        module_defs: Defs<'a>,
-    },
+    Full(FullAst<'a>),
 }
 
 impl<'a> Output<'a> {
-    fn format(&self) -> InputOwned {
+    pub fn format(&self) -> InputOwned {
         let arena = Bump::new();
         let mut buf = Buf::new_in(&arena);
         match self {
             Output::Header(header) => {
-                fmt_module(&mut buf, header);
+                fmt_header(&mut buf, header);
                 buf.fmt_end_of_file();
                 InputOwned::Header(buf.as_str().to_string())
             }
@@ -82,12 +98,9 @@ impl<'a> Output<'a> {
                 expr.format(&mut buf, 0);
                 InputOwned::Expr(buf.as_str().to_string())
             }
-            Output::Full {
-                header,
-                module_defs,
-            } => {
-                fmt_module(&mut buf, header);
-                module_defs.format(&mut buf, 0);
+            Output::Full(full) => {
+                fmt_header(&mut buf, &full.header);
+                full.defs.format(&mut buf, 0);
                 buf.fmt_end_of_file();
                 InputOwned::Full(buf.as_str().to_string())
             }
@@ -110,27 +123,18 @@ impl<'a> Malformed for Output<'a> {
             Output::Header(header) => header.is_malformed(),
             Output::ModuleDefs(defs) => defs.is_malformed(),
             Output::Expr(expr) => expr.is_malformed(),
-            Output::Full {
-                header,
-                module_defs,
-            } => header.is_malformed() || module_defs.is_malformed(),
+            Output::Full(full) => full.is_malformed(),
         }
     }
 }
 
-impl<'a> RemoveSpaces<'a> for Output<'a> {
-    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+impl<'a> Normalize<'a> for Output<'a> {
+    fn normalize(&self, arena: &'a Bump) -> Self {
         match self {
-            Output::Header(header) => Output::Header(header.remove_spaces(arena)),
-            Output::ModuleDefs(defs) => Output::ModuleDefs(defs.remove_spaces(arena)),
-            Output::Expr(expr) => Output::Expr(expr.remove_spaces(arena)),
-            Output::Full {
-                header,
-                module_defs,
-            } => Output::Full {
-                header: header.remove_spaces(arena),
-                module_defs: module_defs.remove_spaces(arena),
-            },
+            Output::Header(header) => Output::Header(header.normalize(arena)),
+            Output::ModuleDefs(defs) => Output::ModuleDefs(defs.normalize(arena)),
+            Output::Expr(expr) => Output::Expr(expr.normalize(arena)),
+            Output::Full(full) => Output::Full(full.normalize(arena)),
         }
     }
 }
@@ -166,18 +170,19 @@ impl<'a> Input<'a> {
                 let state = State::new(input.as_bytes());
 
                 let min_indent = 0;
-                let (_, header, state) = roc_parse::module::header()
+                let (_, header, state) = roc_parse::header::header()
                     .parse(arena, state.clone(), min_indent)
                     .map_err(|(_, fail)| SyntaxError::Header(fail))?;
 
-                let (header, defs) = header.upgrade_header_imports(arena);
+                let (new_header, defs) = header.item.upgrade_header_imports(arena);
+                let header = SpacesBefore {
+                    before: header.before,
+                    item: new_header,
+                };
 
-                let module_defs = parse_module_defs(arena, state, defs).unwrap();
+                let defs = parse_module_defs(arena, state, defs)?;
 
-                Ok(Output::Full {
-                    header,
-                    module_defs,
-                })
+                Ok(Output::Full(FullAst { header, defs }))
             }
         }
     }
@@ -216,8 +221,8 @@ impl<'a> Input<'a> {
             );
         });
 
-        let ast_normalized = actual.remove_spaces(&arena);
-        let reparsed_ast_normalized = reparsed_ast.remove_spaces(&arena);
+        let ast_normalized = actual.normalize(&arena);
+        let reparsed_ast_normalized = reparsed_ast.normalize(&arena);
 
         // HACK!
         // We compare the debug format strings of the ASTs, because I'm finding in practice that _somewhere_ deep inside the ast,
@@ -234,7 +239,7 @@ impl<'a> Input<'a> {
                 self.as_str(),
                 output.as_ref().as_str(),
                 actual,
-                reparsed_ast_normalized
+                reparsed_ast
             );
         }
 

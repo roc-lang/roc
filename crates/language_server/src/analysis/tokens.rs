@@ -6,9 +6,8 @@ use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::{
     ast::{
         AbilityImpls, AbilityMember, AssignedField, Collection, Defs, Expr, Header, Implements,
-        ImplementsAbilities, ImplementsAbility, ImplementsClause, Module, OldRecordBuilderField,
-        Pattern, PatternAs, Spaced, StrLiteral, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
-        WhenBranch,
+        ImplementsAbilities, ImplementsAbility, ImplementsClause, Pattern, PatternAs, Spaced,
+        StrLiteral, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef, WhenBranch,
     },
     header::{
         AppHeader, ExposedName, HostedHeader, ImportsEntry, ModuleHeader, ModuleName, ModuleParams,
@@ -189,16 +188,6 @@ impl<T: IterTokens, U: IterTokens> IterTokens for (T, U) {
     }
 }
 
-impl IterTokens for Module<'_> {
-    fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
-        let Self {
-            comments: _,
-            header,
-        } = self;
-        header.iter_tokens(arena)
-    }
-}
-
 impl IterTokens for Header<'_> {
     fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
         match self {
@@ -243,12 +232,12 @@ where
 impl IterTokens for ModuleParams<'_> {
     fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
         let Self {
-            params,
+            pattern,
             before_arrow: _,
             after_arrow: _,
         } = self;
 
-        params.iter_tokens(arena)
+        pattern.value.iter_tokens(arena)
     }
 }
 
@@ -315,14 +304,11 @@ impl IterTokens for HostedHeader<'_> {
             name,
             exposes,
             imports,
-            generates: _,
-            generates_with,
         } = self;
 
         (name.iter_tokens(arena).into_iter())
             .chain(exposes.item.iter_tokens(arena))
             .chain(imports.item.iter_tokens(arena))
-            .chain(generates_with.item.iter_tokens(arena))
             .collect_in(arena)
     }
 }
@@ -389,10 +375,10 @@ impl IterTokens for ProvidesTo<'_> {
 
 impl IterTokens for PlatformRequires<'_> {
     fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
-        let Self { rigids, signature } = self;
+        let Self { rigids, signatures } = self;
 
         (rigids.iter_tokens(arena).into_iter())
-            .chain(signature.iter_tokens(arena))
+            .chain(signatures.iter_tokens(arena))
             .collect_in(arena)
     }
 }
@@ -400,9 +386,11 @@ impl IterTokens for PlatformRequires<'_> {
 impl IterTokens for Loc<TypeAnnotation<'_>> {
     fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
         match self.value {
-            TypeAnnotation::Function(params, ret) => (params.iter_tokens(arena).into_iter())
-                .chain(ret.iter_tokens(arena))
-                .collect_in(arena),
+            TypeAnnotation::Function(params, _arrow, ret) => {
+                (params.iter_tokens(arena).into_iter())
+                    .chain(ret.iter_tokens(arena))
+                    .collect_in(arena)
+            }
             TypeAnnotation::Apply(_mod, _type, args) => args.iter_tokens(arena),
             TypeAnnotation::BoundVariable(_) => onetoken(Token::Type, self.region, arena),
             TypeAnnotation::As(ty, _, as_ty) => (ty.iter_tokens(arena).into_iter())
@@ -446,7 +434,8 @@ where
     fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
         match self {
             AssignedField::RequiredValue(field, _, ty)
-            | AssignedField::OptionalValue(field, _, ty) => (field_token(field.region, arena)
+            | AssignedField::OptionalValue(field, _, ty)
+            | AssignedField::IgnoredValue(field, _, ty) => (field_token(field.region, arena)
                 .into_iter())
             .chain(ty.iter_tokens(arena))
             .collect_in(arena),
@@ -454,7 +443,6 @@ where
             AssignedField::SpaceBefore(af, _) | AssignedField::SpaceAfter(af, _) => {
                 af.iter_tokens(arena)
             }
-            AssignedField::Malformed(_) => bumpvec![in arena;],
         }
     }
 }
@@ -472,7 +460,6 @@ impl IterTokens for Tag<'_> {
                 .chain(args.iter_tokens(arena))
                 .collect_in(arena),
             Tag::SpaceBefore(t, _) | Tag::SpaceAfter(t, _) => t.iter_tokens(arena),
-            Tag::Malformed(_) => bumpvec![in arena;],
         }
     }
 }
@@ -627,7 +614,7 @@ impl IterTokens for ValueDef<'_> {
             ValueDef::AnnotatedBody {
                 ann_pattern,
                 ann_type,
-                comment: _,
+                lines_between: _,
                 body_pattern,
                 body_expr,
             } => (ann_pattern.iter_tokens(arena).into_iter())
@@ -642,10 +629,6 @@ impl IterTokens for ValueDef<'_> {
             | ValueDef::Expect {
                 preceding_comment,
                 condition,
-            }
-            | ValueDef::ExpectFx {
-                preceding_comment,
-                condition,
             } => (onetoken(Token::Comment, *preceding_comment, arena).into_iter())
                 .chain(condition.iter_tokens(arena))
                 .collect_in(arena),
@@ -654,6 +637,7 @@ impl IterTokens for ValueDef<'_> {
                 onetoken(Token::Import, import.name.item.region, arena)
             }
             ValueDef::Stmt(loc_expr) => loc_expr.iter_tokens(arena),
+            ValueDef::StmtAfterExpr => BumpVec::new_in(arena),
         }
     }
 }
@@ -675,15 +659,15 @@ impl IterTokens for Loc<Expr<'_>> {
             Expr::SingleQuote(_) => onetoken(Token::String, region, arena),
             Expr::RecordAccess(rcd, _field) => Loc::at(region, *rcd).iter_tokens(arena),
             Expr::AccessorFunction(accessor) => Loc::at(region, accessor).iter_tokens(arena),
+            Expr::RecordUpdater(updater) => Loc::at(region, updater).iter_tokens(arena),
             Expr::TupleAccess(tup, _field) => Loc::at(region, *tup).iter_tokens(arena),
-            Expr::TaskAwaitBang(inner) => Loc::at(region, *inner).iter_tokens(arena),
+            Expr::TrySuffix { expr: inner, .. } => Loc::at(region, *inner).iter_tokens(arena),
             Expr::List(lst) => lst.iter_tokens(arena),
             Expr::RecordUpdate { update, fields } => (update.iter_tokens(arena).into_iter())
                 .chain(fields.iter().flat_map(|f| f.iter_tokens(arena)))
                 .collect_in(arena),
             Expr::Record(rcd) => rcd.iter_tokens(arena),
             Expr::Tuple(tup) => tup.iter_tokens(arena),
-            Expr::OldRecordBuilder(rb) => rb.iter_tokens(arena),
             Expr::RecordBuilder { mapper, fields } => (mapper.iter_tokens(arena).into_iter())
                 .chain(fields.iter().flat_map(|f| f.iter_tokens(arena)))
                 .collect_in(arena),
@@ -702,15 +686,19 @@ impl IterTokens for Loc<Expr<'_>> {
                 .chain(e1.iter_tokens(arena))
                 .chain(e2.iter_tokens(arena))
                 .collect_in(arena),
-            Expr::Expect(e1, e2) => (e1.iter_tokens(arena).into_iter())
-                .chain(e2.iter_tokens(arena))
-                .collect_in(arena),
-            Expr::Dbg(e1, e2) => (e1.iter_tokens(arena).into_iter())
-                .chain(e2.iter_tokens(arena))
+            Expr::Dbg => onetoken(Token::Keyword, region, arena),
+            Expr::DbgStmt {
+                first,
+                extra_args,
+                continuation,
+            } => (first.iter_tokens(arena).into_iter())
+                .chain(extra_args.iter_tokens(arena))
+                .chain(continuation.iter_tokens(arena))
                 .collect_in(arena),
             Expr::LowLevelDbg(_, e1, e2) => (e1.iter_tokens(arena).into_iter())
                 .chain(e2.iter_tokens(arena))
                 .collect_in(arena),
+            Expr::Try => onetoken(Token::Keyword, region, arena),
             Expr::Apply(e1, e2, _called_via) => (e1.iter_tokens(arena).into_iter())
                 .chain(e2.iter_tokens(arena))
                 .collect_in(arena),
@@ -720,23 +708,29 @@ impl IterTokens for Loc<Expr<'_>> {
             Expr::UnaryOp(e1, op) => (op.iter_tokens(arena).into_iter())
                 .chain(e1.iter_tokens(arena))
                 .collect_in(arena),
-            Expr::If(e1, e2) => (e1.iter_tokens(arena).into_iter())
+            Expr::If {
+                if_thens: e1,
+                final_else: e2,
+                ..
+            } => (e1.iter_tokens(arena).into_iter())
                 .chain(e2.iter_tokens(arena))
                 .collect_in(arena),
             Expr::When(e, branches) => (e.iter_tokens(arena).into_iter())
                 .chain(branches.iter_tokens(arena))
                 .collect_in(arena),
+            Expr::Return(ret_expr, after_ret) => ret_expr
+                .iter_tokens(arena)
+                .into_iter()
+                .chain(after_ret.iter_tokens(arena))
+                .collect_in(arena),
             Expr::SpaceBefore(e, _) | Expr::SpaceAfter(e, _) => {
                 Loc::at(region, *e).iter_tokens(arena)
             }
             Expr::ParensAround(e) => Loc::at(region, *e).iter_tokens(arena),
-            Expr::MultipleOldRecordBuilders(e) => e.iter_tokens(arena),
-            Expr::UnappliedOldRecordBuilder(e) => e.iter_tokens(arena),
             Expr::EmptyRecordBuilder(e) => e.iter_tokens(arena),
             Expr::SingleFieldRecordBuilder(e) => e.iter_tokens(arena),
             Expr::OptionalFieldInRecordBuilder(_name, e) => e.iter_tokens(arena),
             Expr::MalformedIdent(_, _)
-            | Expr::MalformedClosure
             | Expr::PrecedenceConflict(_)
             | Expr::MalformedSuffixed(_) => {
                 bumpvec![in arena;]
@@ -750,24 +744,6 @@ impl IterTokens for Loc<Accessor<'_>> {
         match self.value {
             Accessor::RecordField(_) => onetoken(Token::Function, self.region, arena),
             Accessor::TupleIndex(_) => onetoken(Token::Function, self.region, arena),
-        }
-    }
-}
-
-impl IterTokens for Loc<OldRecordBuilderField<'_>> {
-    fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
-        match self.value {
-            OldRecordBuilderField::Value(field, _, e)
-            | OldRecordBuilderField::ApplyValue(field, _, _, e) => field_token(field.region, arena)
-                .into_iter()
-                .chain(e.iter_tokens(arena))
-                .collect_in(arena),
-            OldRecordBuilderField::LabelOnly(field) => field_token(field.region, arena),
-            OldRecordBuilderField::SpaceBefore(rbf, _)
-            | OldRecordBuilderField::SpaceAfter(rbf, _) => {
-                Loc::at(self.region, *rbf).iter_tokens(arena)
-            }
-            OldRecordBuilderField::Malformed(_) => bumpvec![in arena;],
         }
     }
 }

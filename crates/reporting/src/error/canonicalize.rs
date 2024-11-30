@@ -1,10 +1,11 @@
 use roc_collections::all::MutSet;
+use roc_module::called_via::Suffix;
 use roc_module::ident::{Ident, Lowercase, ModuleName};
-use roc_module::symbol::{ScopeModuleSource, DERIVABLE_ABILITIES};
+use roc_module::symbol::DERIVABLE_ABILITIES;
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::{
     BadPattern, CycleEntry, ExtensionTypeKind, FloatErrorKind, IntErrorKind, Problem, RuntimeError,
-    ShadowKind,
+    ScopeModuleSource, ShadowKind,
 };
 use roc_problem::Severity;
 use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Loc, Region};
@@ -28,7 +29,6 @@ const WILDCARD_NOT_ALLOWED: &str = "WILDCARD NOT ALLOWED HERE";
 const UNDERSCORE_NOT_ALLOWED: &str = "UNDERSCORE NOT ALLOWED HERE";
 const UNUSED_ARG: &str = "UNUSED ARGUMENT";
 const MISSING_DEFINITION: &str = "MISSING DEFINITION";
-const UNKNOWN_GENERATES_WITH: &str = "UNKNOWN GENERATES FUNCTION";
 const DUPLICATE_FIELD_NAME: &str = "DUPLICATE FIELD NAME";
 const DUPLICATE_TAG_NAME: &str = "DUPLICATE TAG NAME";
 const INVALID_UNICODE: &str = "INVALID UNICODE";
@@ -64,6 +64,9 @@ const ABILITY_IMPLEMENTATION_NOT_IDENTIFIER: &str = "ABILITY IMPLEMENTATION NOT 
 const DUPLICATE_IMPLEMENTATION: &str = "DUPLICATE IMPLEMENTATION";
 const UNNECESSARY_IMPLEMENTATIONS: &str = "UNNECESSARY IMPLEMENTATIONS";
 const INCOMPLETE_ABILITY_IMPLEMENTATION: &str = "INCOMPLETE ABILITY IMPLEMENTATION";
+const STATEMENT_AFTER_EXPRESSION: &str = "STATEMENT AFTER EXPRESSION";
+const MISSING_EXCLAMATION: &str = "MISSING EXCLAMATION";
+const UNNECESSARY_EXCLAMATION: &str = "UNNECESSARY EXCLAMATION";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -195,7 +198,7 @@ pub fn can_problem<'b>(
                 ]),
                 alloc.region(lines.convert_region(region), severity),
                 alloc.reflow("Builtins are imported automatically, so you can remove this import."),
-                alloc.reflow("Tip: Learn more about builtins in the tutorial:\n\n<https://www.roc-lang.org/tutorial#builtin-modules>"),
+                alloc.reflow("Tip: Learn more about builtins in the tutorial:\n<https://www.roc-lang.org/tutorial#builtin-modules>"),
             ]);
 
             title = EXPLICIT_BUILTIN_IMPORT.to_string();
@@ -213,7 +216,7 @@ pub fn can_problem<'b>(
                     alloc.symbol_unqualified(symbol),
                     alloc.reflow(" from the exposing list.")
                 ]),
-                alloc.reflow("Tip: Learn more about builtins in the tutorial:\n\n<https://www.roc-lang.org/tutorial#builtin-modules>"),
+                alloc.reflow("Tip: Learn more about builtins in the tutorial:\n<https://www.roc-lang.org/tutorial#builtin-modules>"),
             ]);
 
             title = EXPLICIT_BUILTIN_IMPORT.to_string();
@@ -246,6 +249,26 @@ pub fn can_problem<'b>(
             title = DUPLICATE_NAME.to_string();
         }
 
+        Problem::DeprecatedBackpassing(region) => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("Backpassing ("),
+                    alloc.backpassing_arrow(),
+                    alloc.reflow(") like this will soon be deprecated:"),
+                ]),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.concat([
+                    alloc.reflow("You should use a "),
+                    alloc.suffix(Suffix::Bang),
+                    alloc.reflow(" for awaiting tasks or a "),
+                    alloc.suffix(Suffix::Question),
+                    alloc.reflow(" for trying results, and functions everywhere else."),
+                ]),
+            ]);
+
+            title = "BACKPASSING DEPRECATED".to_string();
+        }
+
         Problem::DefsOnlyUsedInRecursion(1, region) => {
             doc = alloc.stack([
                 alloc.reflow("This definition is only used in recursion with itself:"),
@@ -270,7 +293,7 @@ pub fn can_problem<'b>(
                 ),
             ]);
 
-            title = "DEFINITIONs ONLY USED IN RECURSION".to_string();
+            title = "DEFINITIONS ONLY USED IN RECURSION".to_string();
         }
         Problem::ExposedButNotDefined(symbol) => {
             doc = alloc.stack([
@@ -286,20 +309,6 @@ pub fn can_problem<'b>(
             ]);
 
             title = MISSING_DEFINITION.to_string();
-        }
-        Problem::UnknownGeneratesWith(loc_ident) => {
-            doc = alloc.stack([
-                alloc
-                    .reflow("I don't know how to generate the ")
-                    .append(alloc.ident(loc_ident.value))
-                    .append(alloc.reflow(" function.")),
-                alloc.region(lines.convert_region(loc_ident.region), severity),
-                alloc
-                    .reflow("Only specific functions like `after` and `map` can be generated.")
-                    .append(alloc.reflow("Learn more about hosted modules at TODO.")),
-            ]);
-
-            title = UNKNOWN_GENERATES_WITH.to_string();
         }
         Problem::UnusedArgument(closure_symbol, is_anonymous, argument_symbol, region) => {
             let line = "\". Adding an underscore at the start of a variable name is a way of saying that the variable is not used.";
@@ -390,6 +399,7 @@ pub fn can_problem<'b>(
                 TopLevelDef => "a top-level definition:",
                 DefExpr => "a value definition:",
                 FunctionArg => "function arguments:",
+                ModuleParams => "module params:",
                 WhenBranch => unreachable!("all patterns are allowed in a When"),
             };
 
@@ -1185,7 +1195,7 @@ pub fn can_problem<'b>(
             doc = alloc.stack([
                 alloc.reflow("This destructure assignment doesn't introduce any new variables:"),
                 alloc.region(lines.convert_region(region), severity),
-                alloc.reflow("If you don't need to use the value on the right-hand-side of this assignment, consider removing the assignment. Since Roc is purely functional, assignments that don't introduce variables cannot affect a program's behavior!"),
+                alloc.reflow("If you don't need to use the value on the right-hand side of this assignment, consider removing the assignment. Since effects are not allowed at the top-level, assignments that don't introduce variables cannot affect a program's behavior"),
             ]);
             title = "UNNECESSARY DEFINITION".to_string();
         }
@@ -1306,10 +1316,154 @@ pub fn can_problem<'b>(
             ]);
             title = "OVERAPPLIED CRASH".to_string();
         }
+        Problem::UnappliedDbg { region } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This "), alloc.keyword("dbg"), alloc.reflow(" doesn't have a value given to it:")
+                ]),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.concat([
+                    alloc.keyword("dbg"), alloc.reflow(" must be passed a value to print at the exact place it's used. "),
+                    alloc.keyword("dbg"), alloc.reflow(" can't be used as a value that's passed around, like functions can be - it must be applied immediately!"),
+                ])
+            ]);
+            title = "UNAPPLIED DBG".to_string();
+        }
+        Problem::OverAppliedDbg { region } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This "),
+                    alloc.keyword("dbg"),
+                    alloc.reflow(" has too many values given to it:"),
+                ]),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.concat([
+                    alloc.keyword("dbg"),
+                    alloc.reflow(" must be given exactly one value to print."),
+                ]),
+            ]);
+            title = "OVERAPPLIED DBG".to_string();
+        }
         Problem::FileProblem { filename, error } => {
             let report = to_file_problem_report(alloc, filename, error);
             doc = report.doc;
             title = report.title;
+        }
+
+        Problem::ReturnOutsideOfFunction { region } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This "),
+                    alloc.keyword("return"),
+                    alloc.reflow(" statement doesn't belong to a function:"),
+                ]),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.reflow("I wouldn't know where to return to if I used it!"),
+            ]);
+
+            title = "RETURN OUTSIDE OF FUNCTION".to_string();
+        }
+
+        Problem::StatementsAfterReturn { region } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This code won't run because it follows a "),
+                    alloc.keyword("return"),
+                    alloc.reflow(" statement:"),
+                ]),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.concat([
+                    alloc.hint("you can move the "),
+                    alloc.keyword("return"),
+                    alloc.reflow(
+                        " statement below this block to make the code that follows it run.",
+                    ),
+                ]),
+            ]);
+
+            title = "UNREACHABLE CODE".to_string();
+        }
+
+        Problem::ReturnAtEndOfFunction { region } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This "),
+                    alloc.keyword("return"),
+                    alloc.reflow(" keyword is redundant:"),
+                ]),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.concat([
+                    alloc.reflow("The last expression in a function is treated like a "),
+                    alloc.keyword("return"),
+                    alloc.reflow(" statement. You can safely remove "),
+                    alloc.keyword("return"),
+                    alloc.reflow(" here."),
+                ]),
+            ]);
+
+            title = "UNNECESSARY RETURN".to_string();
+        }
+
+        Problem::StmtAfterExpr(region) => {
+            doc = alloc.stack([
+                alloc
+                    .reflow(r"I just finished parsing an expression with a series of definitions,"),
+                alloc.reflow(
+                    r"and this line is indented as if it's intended to be part of that expression:",
+                ),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.concat([alloc.reflow(
+                    "However, I already saw the final expression in that series of definitions.",
+                )]),
+                alloc.tip().append(
+                    alloc.reflow(
+                        "An expression like `4`, `\"hello\"`, or `functionCall MyThing` is like `return 4` in other programming languages. To me, it seems like you did `return 4` followed by more code in the lines after, that code would never be executed!"
+                    )
+                ),
+                alloc.tip().append(
+                    alloc.reflow(
+                        "If you are working with `Task`, this error can happen if you forgot a `!` somewhere."
+                    )
+                )
+            ]);
+
+            title = STATEMENT_AFTER_EXPRESSION.to_string();
+        }
+
+        Problem::UnsuffixedEffectfulRecordField(region) => {
+            doc = alloc.stack([
+                alloc.reflow(
+                    "The type of this record field is an effectful function, but its name does not indicate so:",
+                ),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.reflow("Add an exclamation mark at the end, like:"),
+                alloc
+                    .parser_suggestion("{ readFile!: Str => Str }")
+                    .indent(4),
+                alloc.reflow("This will help readers identify it as a source of effects."),
+            ]);
+
+            title = MISSING_EXCLAMATION.to_string();
+        }
+
+        Problem::SuffixedPureRecordField(region) => {
+            doc = alloc.stack([
+                alloc.reflow(
+                    "The type of this record field is a pure function, but its name suggests otherwise:",
+                ),
+                alloc.region(lines.convert_region(region), severity),
+                alloc
+                    .reflow("The exclamation mark at the end is reserved for effectful functions."),
+                alloc.concat([
+                    alloc.hint("Did you mean to use "),
+                    alloc.keyword("=>"),
+                    alloc.text(" instead of "),
+                    alloc.keyword("->"),
+                    alloc.text("?"),
+                ]),
+            ]);
+
+            title = UNNECESSARY_EXCLAMATION.to_string();
         }
     };
 
@@ -1421,6 +1575,22 @@ fn to_bad_ident_expr_report<'b>(
                 alloc.reflow("?"),
             ]),
         ]),
+
+        StrayAmpersand(pos) => {
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            alloc.stack([
+                alloc.reflow(r"I am trying to parse a record updater function here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
+                alloc.concat([
+                    alloc.reflow("So I expect to see a lowercase letter next, like "),
+                    alloc.parser_suggestion("&name"),
+                    alloc.reflow(" or "),
+                    alloc.parser_suggestion("&height"),
+                    alloc.reflow("."),
+                ]),
+            ])
+        }
 
         WeirdDotQualified(pos) => {
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
@@ -1607,6 +1777,22 @@ fn to_bad_ident_pattern_report<'b>(
                     alloc.reflow(" or "),
                     alloc.parser_suggestion(".height"),
                     alloc.reflow(" that accesses a value from a record."),
+                ]),
+            ])
+        }
+
+        StrayAmpersand(pos) => {
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            alloc.stack([
+                alloc.reflow(r"I am trying to parse a record updater function here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
+                alloc.concat([
+                    alloc.reflow("Something like "),
+                    alloc.parser_suggestion("&name"),
+                    alloc.reflow(" or "),
+                    alloc.parser_suggestion("&height"),
+                    alloc.reflow(" that updates a field in a record."),
                 ]),
             ])
         }
@@ -2007,9 +2193,6 @@ fn pretty_runtime_error<'b>(
             ]);
 
             title = SYNTAX_PROBLEM;
-        }
-        RuntimeError::MalformedClosure(_) => {
-            todo!("");
         }
         RuntimeError::MalformedSuffixed(_) => {
             todo!("error for malformed suffix");
@@ -2420,32 +2603,6 @@ fn pretty_runtime_error<'b>(
             ]);
 
             title = "DEGENERATE BRANCH";
-        }
-        RuntimeError::MultipleOldRecordBuilders(region) => {
-            let tip = alloc
-                .tip()
-                .append(alloc.reflow("You can combine them or apply them separately."));
-
-            doc = alloc.stack([
-                alloc.reflow("This function is applied to multiple old-style record builders:"),
-                alloc.region(lines.convert_region(region), severity),
-                alloc.note("Functions can only take at most one old-style record builder!"),
-                tip,
-            ]);
-
-            title = "MULTIPLE OLD-STYLE RECORD BUILDERS";
-        }
-        RuntimeError::UnappliedOldRecordBuilder(region) => {
-            doc = alloc.stack([
-                alloc.reflow("This old-style record builder was not applied to a function:"),
-                alloc.region(lines.convert_region(region), severity),
-                alloc.reflow("However, we need a function to construct the record."),
-                alloc.note(
-                    "Functions must be applied directly. The pipe operator (|>) cannot be used.",
-                ),
-            ]);
-
-            title = "UNAPPLIED OLD-STYLE RECORD BUILDER";
         }
         RuntimeError::EmptyRecordBuilder(region) => {
             doc = alloc.stack([

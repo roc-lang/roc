@@ -15,11 +15,13 @@ use parking_lot::Mutex;
 use roc_builtins::roc::module_source;
 use roc_can::abilities::{AbilitiesStore, PendingAbilitiesStore, ResolvedImpl};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints, TypeOrVar};
+use roc_can::env::FxMode;
 use roc_can::expr::{DbgLookup, Declarations, ExpectLookup, PendingDerives};
 use roc_can::module::{
     canonicalize_module_defs, ExposedByModule, ExposedForModule, ExposedModuleTypes, Module,
-    ResolvedImplementations, TypeState,
+    ModuleParams, ResolvedImplementations, TypeState,
 };
+use roc_collections::soa::slice_extend_new;
 use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecMap, VecSet};
 use roc_constrain::module::constrain_module;
 use roc_debug_flags::dbg_do;
@@ -32,7 +34,7 @@ use roc_debug_flags::{
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
 use roc_late_solve::{AbilitiesView, WorldAbilities};
-use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
+use roc_module::ident::{Ident, IdentSuffix, ModuleName, QualifiedModuleName};
 use roc_module::symbol::{
     IdentIds, IdentIdsByModule, Interns, ModuleId, ModuleIds, PQModuleName, PackageModuleIds,
     PackageQualified, Symbol,
@@ -48,11 +50,11 @@ use roc_mono::reset_reuse;
 use roc_mono::{drop_specialization, inc_dec};
 use roc_packaging::cache::RocCacheDir;
 use roc_parse::ast::{self, CommentOrNewline, ExtractSpaces, Spaced, ValueDef};
+use roc_parse::header::parse_module_defs;
 use roc_parse::header::{
     self, AppHeader, ExposedName, HeaderType, ImportsKeywordItem, PackageEntry, PackageHeader,
-    PlatformHeader, To, TypedIdent,
+    PlatformHeader, To,
 };
-use roc_parse::module::parse_module_defs;
 use roc_parse::parser::{FileError, SourceError, SyntaxError};
 use roc_problem::Severity;
 use roc_region::all::{LineInfo, Loc, Region};
@@ -66,7 +68,7 @@ use roc_solve_problem::TypeError;
 use roc_target::Target;
 use roc_types::subs::{CopiedImport, ExposedTypesStorageSubs, Subs, VarStore, Variable};
 use roc_types::types::{Alias, Types};
-use roc_worker::{ChannelProblem, WorkerMsg};
+use roc_worker::ChannelProblem;
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::HashMap;
 use std::io;
@@ -251,6 +253,7 @@ fn start_phase<'a>(
 
                 let mut aliases = MutMap::default();
                 let mut abilities_store = PendingAbilitiesStore::default();
+                let mut imported_module_params = VecMap::default();
 
                 for imported in parsed.available_modules.keys() {
                     match state.module_cache.aliases.get(imported) {
@@ -293,6 +296,10 @@ fn start_phase<'a>(
                                 .union(import_store.closure_from_imported(exposed_symbols));
                         }
                     }
+
+                    if let Some(params) = state.module_cache.module_params.get(imported) {
+                        imported_module_params.insert(*imported, params.clone());
+                    }
                 }
 
                 let skip_constraint_gen = {
@@ -310,6 +317,9 @@ fn start_phase<'a>(
                     abilities_store,
                     skip_constraint_gen,
                     exposed_module_ids: state.exposed_modules,
+                    exec_mode: state.exec_mode,
+                    imported_module_params,
+                    fx_mode: state.fx_mode,
                 }
             }
 
@@ -340,6 +350,8 @@ fn start_phase<'a>(
                     None
                 };
 
+                let is_host_exposed = state.root_id == module.module_id;
+
                 BuildTask::solve_module(
                     module,
                     ident_ids,
@@ -356,6 +368,8 @@ fn start_phase<'a>(
                     declarations,
                     state.cached_types.clone(),
                     derived_module,
+                    state.exec_mode,
+                    is_host_exposed,
                     //
                     #[cfg(debug_assertions)]
                     checkmate,
@@ -660,7 +674,7 @@ enum PlatformPath<'a> {
 #[derive(Debug)]
 struct PlatformData<'a> {
     module_id: ModuleId,
-    provides: &'a [(Loc<ExposedName<'a>>, Loc<TypedIdent<'a>>)],
+    provides: &'a [Loc<ExposedName<'a>>],
     is_prebuilt: bool,
 }
 
@@ -702,6 +716,7 @@ struct State<'a> {
     pub platform_path: PlatformPath<'a>,
     pub target: Target,
     pub(self) function_kind: FunctionKind,
+    pub fx_mode: FxMode,
 
     /// Note: only packages and platforms actually expose any modules;
     /// for all others, this will be empty.
@@ -775,7 +790,7 @@ impl<'a> State<'a> {
         number_of_workers: usize,
         exec_mode: ExecutionMode,
     ) -> Self {
-        let cache_dir = roc_packaging::cache::roc_cache_dir();
+        let cache_dir = roc_packaging::cache::roc_cache_packages_dir();
         let dependencies = Dependencies::new(exec_mode.goal_phase());
 
         Self {
@@ -787,6 +802,7 @@ impl<'a> State<'a> {
             cache_dir,
             target,
             function_kind,
+            fx_mode: FxMode::Task,
             platform_data: None,
             platform_path: PlatformPath::NotSpecified,
             module_cache: ModuleCache::default(),
@@ -887,6 +903,9 @@ enum BuildTask<'a> {
         abilities_store: PendingAbilitiesStore,
         exposed_module_ids: &'a [ModuleId],
         skip_constraint_gen: bool,
+        exec_mode: ExecutionMode,
+        imported_module_params: VecMap<ModuleId, ModuleParams>,
+        fx_mode: FxMode,
     },
     Solve {
         module: Module,
@@ -903,6 +922,8 @@ enum BuildTask<'a> {
         dep_idents: IdentIdsByModule,
         cached_subs: CachedTypeState,
         derived_module: SharedDerivedModule,
+        exec_mode: ExecutionMode,
+        is_host_exposed: bool,
 
         #[cfg(debug_assertions)]
         checkmate: Option<roc_checkmate::Collector>,
@@ -1016,14 +1037,14 @@ type MsgSender<'a> = Sender<Msg<'a>>;
 /// Add a task to the queue, and notify all the listeners.
 fn enqueue_task<'a>(
     injector: &Injector<BuildTask<'a>>,
-    listeners: &[Sender<WorkerMsg>],
+    listeners: &[Sender<()>],
     task: BuildTask<'a>,
 ) -> Result<(), LoadingProblem<'a>> {
     injector.push(task);
 
     for listener in listeners {
         listener
-            .send(WorkerMsg::TaskAdded)
+            .send(())
             .map_err(|_| LoadingProblem::ChannelProblem(ChannelProblem::FailedToEnqueueTask))?;
     }
 
@@ -1325,8 +1346,8 @@ fn load_packages_from_main<'a>(
 
     let parse_state = roc_parse::state::State::new(arena.alloc(src_bytes));
 
-    let (parsed_module, _) =
-        roc_parse::module::parse_header(arena, parse_state.clone()).map_err(|fail| {
+    let (parsed_header, _) =
+        roc_parse::header::parse_header(arena, parse_state.clone()).map_err(|fail| {
             LoadingProblem::ParsingFailed(
                 fail.map_problem(SyntaxError::Header)
                     .into_file_error(filename.clone()),
@@ -1335,7 +1356,7 @@ fn load_packages_from_main<'a>(
 
     use ast::Header::*;
 
-    let packages = match parsed_module.header {
+    let packages = match parsed_header.item {
         App(AppHeader { packages, .. }) | Package(PackageHeader { packages, .. }) => {
             unspace(arena, packages.value.items)
         }
@@ -1443,6 +1464,8 @@ pub fn load<'a>(
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     enum Threads {
         Single,
+
+        #[allow(dead_code)]
         Many(usize),
     }
 
@@ -1548,9 +1571,9 @@ pub fn load_single_threaded<'a>(
     // We'll add tasks to this, and then worker threads will take tasks from it.
     let injector = Injector::new();
 
-    let (worker_msg_tx, worker_msg_rx) = bounded(1024);
-    let worker_listener = worker_msg_tx;
-    let worker_listeners = arena.alloc([worker_listener]);
+    let (worker_wakup_tx, worker_wakup_rx) = bounded(1024);
+    let worker_waker = worker_wakup_tx;
+    let worker_wakers = [worker_waker];
 
     let worker = Worker::new_fifo();
     let stealer = worker.stealer();
@@ -1558,7 +1581,7 @@ pub fn load_single_threaded<'a>(
 
     // now we just manually interleave stepping the state "thread" and the worker "thread"
     loop {
-        match state_thread_step(arena, state, worker_listeners, &injector, &msg_tx, &msg_rx) {
+        match state_thread_step(arena, state, &worker_wakers, &injector, &msg_tx, &msg_rx) {
             Ok(ControlFlow::Break(done)) => return Ok(done),
             Ok(ControlFlow::Continue(new_state)) => {
                 state = new_state;
@@ -1568,7 +1591,7 @@ pub fn load_single_threaded<'a>(
 
         // then check if the worker can step
         let control_flow =
-            roc_worker::worker_task_step(&worker, &injector, stealers, &worker_msg_rx, |task| {
+            roc_worker::worker_task_step(&worker, &injector, stealers, &worker_wakup_rx, |task| {
                 run_task(task, arena, &src_dir, msg_tx.clone(), roc_cache_dir, target)
             });
 
@@ -1585,7 +1608,7 @@ pub fn load_single_threaded<'a>(
 fn state_thread_step<'a>(
     arena: &'a Bump,
     state: State<'a>,
-    worker_listeners: &'a [Sender<WorkerMsg>],
+    worker_wakers: &[Sender<()>],
     injector: &Injector<BuildTask<'a>>,
     msg_tx: &crossbeam::channel::Sender<Msg<'a>>,
     msg_rx: &crossbeam::channel::Receiver<Msg<'a>>,
@@ -1652,7 +1675,7 @@ fn state_thread_step<'a>(
                     Ok(ControlFlow::Break(LoadResult::Monomorphized(monomorphized)))
                 }
                 Msg::FailedToReadFile { filename, error } => {
-                    let buf = to_file_problem_report_string(filename, error);
+                    let buf = to_file_problem_report_string(filename, error, true);
                     Err(LoadingProblem::FormattedReport(buf))
                 }
 
@@ -1691,14 +1714,8 @@ fn state_thread_step<'a>(
                     let render = state.render;
                     let palette = state.palette;
 
-                    let res_state = update(
-                        state,
-                        msg,
-                        msg_tx.clone(),
-                        injector,
-                        worker_listeners,
-                        arena,
-                    );
+                    let res_state =
+                        update(state, msg, msg_tx.clone(), injector, worker_wakers, arena);
 
                     match res_state {
                         Ok(new_state) => Ok(ControlFlow::Continue(new_state)),
@@ -1826,7 +1843,7 @@ pub fn report_loading_problem(
         }
         LoadingProblem::FormattedReport(report) => report,
         LoadingProblem::FileProblem { filename, error } => {
-            to_file_problem_report_string(filename, error)
+            to_file_problem_report_string(filename, error, true)
         }
         LoadingProblem::NoPlatformPackage {
             filename,
@@ -1972,15 +1989,21 @@ fn load_multi_threaded<'a>(
 
     {
         let thread_result = thread::scope(|thread_scope| {
-            let mut worker_listeners =
-                bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
+            // Careful! It's important that worker listeners aren't allocated in the arena,
+            // since they need to be correctly dropped if we have a panic in this thread::scope code.
+            // Making sure they're owned means they'll be dropped correctly on either normal exit
+            // of this thread::scope block or on panicking. When they're dropped, the worker threads
+            // will correctly exit their message processing loops.
+            // If these were allocated in the arena, we might panic without shutting down the worker threads,
+            // causing the thread::scope block to hang while it waits for the worker threads to exit.
+            let mut worker_wakers = Vec::with_capacity(num_workers);
 
             for worker_arena in it {
                 let msg_tx = msg_tx.clone();
                 let worker = worker_queues.pop().unwrap();
 
-                let (worker_msg_tx, worker_msg_rx) = bounded(1024);
-                worker_listeners.push(worker_msg_tx);
+                let (worker_wakup_tx, worker_wakup_rx) = bounded(1024);
+                worker_wakers.push(worker_wakup_tx);
 
                 // We only want to move a *reference* to the main task queue's
                 // injector in the thread, not the injector itself
@@ -1994,16 +2017,22 @@ fn load_multi_threaded<'a>(
                     .stack_size(EXPANDED_STACK_SIZE)
                     .spawn(move |_| {
                         // will process messages until we run out
-                        roc_worker::worker_task(worker, injector, stealers, worker_msg_rx, |task| {
-                            run_task(
-                                task,
-                                worker_arena,
-                                src_dir,
-                                msg_tx.clone(),
-                                roc_cache_dir,
-                                target,
-                            )
-                        })
+                        roc_worker::worker_task(
+                            worker,
+                            injector,
+                            stealers,
+                            worker_wakup_rx,
+                            |task| {
+                                run_task(
+                                    task,
+                                    worker_arena,
+                                    src_dir,
+                                    msg_tx.clone(),
+                                    roc_cache_dir,
+                                    target,
+                                )
+                            },
+                        )
                     });
 
                 res_join_handle.unwrap_or_else(|_| {
@@ -2018,31 +2047,13 @@ fn load_multi_threaded<'a>(
 
             // Grab a reference to these Senders outside the loop, so we can share
             // it across each iteration of the loop.
-            let worker_listeners = worker_listeners.into_bump_slice();
             let msg_tx = msg_tx.clone();
-
-            macro_rules! shut_down_worker_threads {
-                () => {
-                    for listener in worker_listeners {
-                        // We intentionally don't propagate this Result, because even if
-                        // shutting down a worker failed (which can happen if a a panic
-                        // occurred on that thread), we want to continue shutting down
-                        // the others regardless.
-                        if listener.send(WorkerMsg::Shutdown).is_err() {
-                            log!("There was an error trying to shutdown a worker thread. One reason this can happen is if the thread panicked.");
-                        }
-                    }
-                };
-            }
 
             // The root module will have already queued up messages to process,
             // and processing those messages will in turn queue up more messages.
             loop {
-                match state_thread_step(arena, state, worker_listeners, &injector, &msg_tx, &msg_rx)
-                {
+                match state_thread_step(arena, state, &worker_wakers, &injector, &msg_tx, &msg_rx) {
                     Ok(ControlFlow::Break(load_result)) => {
-                        shut_down_worker_threads!();
-
                         return Ok(load_result);
                     }
                     Ok(ControlFlow::Continue(new_state)) => {
@@ -2050,8 +2061,6 @@ fn load_multi_threaded<'a>(
                         continue;
                     }
                     Err(e) => {
-                        shut_down_worker_threads!();
-
                         return Err(e);
                     }
                 }
@@ -2090,13 +2099,13 @@ fn start_tasks<'a>(
     state: &mut State<'a>,
     work: MutSet<(ModuleId, Phase)>,
     injector: &Injector<BuildTask<'a>>,
-    worker_listeners: &'a [Sender<WorkerMsg>],
+    worker_wakers: &[Sender<()>],
 ) -> Result<(), LoadingProblem<'a>> {
     for (module_id, phase) in work {
         let tasks = start_phase(module_id, phase, arena, state);
 
         for task in tasks {
-            enqueue_task(injector, worker_listeners, task)?
+            enqueue_task(injector, worker_wakers, task)?
         }
     }
 
@@ -2158,7 +2167,7 @@ fn update<'a>(
     msg: Msg<'a>,
     msg_tx: MsgSender<'a>,
     injector: &Injector<BuildTask<'a>>,
-    worker_listeners: &'a [Sender<WorkerMsg>],
+    worker_wakers: &[Sender<()>],
     arena: &'a Bump,
 ) -> Result<State<'a>, LoadingProblem<'a>> {
     use self::Msg::*;
@@ -2216,6 +2225,7 @@ fn update<'a>(
                     config_shorthand,
                     provides,
                     exposes_ids,
+                    requires,
                     ..
                 } => {
                     work.extend(state.dependencies.notify_package(config_shorthand));
@@ -2250,6 +2260,12 @@ fn update<'a>(
                     if header.is_root_module {
                         state.exposed_modules = exposes_ids;
                     }
+
+                    if requires.iter().any(|requires| {
+                        IdentSuffix::from_name(requires.value.ident.value).is_bang()
+                    }) {
+                        state.fx_mode = FxMode::PurityInference;
+                    }
                 }
                 Builtin { .. } | Module { .. } => {
                     if header.is_root_module {
@@ -2257,10 +2273,17 @@ fn update<'a>(
                         state.platform_path = PlatformPath::RootIsModule;
                     }
                 }
-                Hosted { .. } => {
+                Hosted { exposes, .. } => {
                     if header.is_root_module {
                         debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
                         state.platform_path = PlatformPath::RootIsHosted;
+                    }
+
+                    if exposes
+                        .iter()
+                        .any(|exposed| exposed.value.is_effectful_fn())
+                    {
+                        state.fx_mode = FxMode::PurityInference;
                     }
                 }
             }
@@ -2270,7 +2293,7 @@ fn update<'a>(
             work.extend(state.dependencies.notify(home, Phase::LoadHeader));
             work.insert((home, Phase::Parse));
 
-            start_tasks(arena, &mut state, work, injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, injector, worker_wakers)?;
 
             Ok(state)
         }
@@ -2316,6 +2339,7 @@ fn update<'a>(
                 extend_module_with_builtin_import(parsed, ModuleId::DECODE);
                 extend_module_with_builtin_import(parsed, ModuleId::HASH);
                 extend_module_with_builtin_import(parsed, ModuleId::INSPECT);
+                extend_module_with_builtin_import(parsed, ModuleId::TASK);
             }
 
             state
@@ -2346,7 +2370,7 @@ fn update<'a>(
                 }
             };
 
-            start_tasks(arena, &mut state, work, injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, injector, worker_wakers)?;
 
             state
                 .module_cache
@@ -2357,7 +2381,7 @@ fn update<'a>(
 
             let work = state.dependencies.notify(module_id, Phase::Parse);
 
-            start_tasks(arena, &mut state, work, injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, injector, worker_wakers)?;
 
             Ok(state)
         }
@@ -2399,6 +2423,13 @@ fn update<'a>(
                 .pending_abilities
                 .insert(module_id, constrained_module.module.abilities_store.clone());
 
+            if let Some(module_params) = constrained_module.module.module_params.clone() {
+                state
+                    .module_cache
+                    .module_params
+                    .insert(module_id, module_params);
+            }
+
             state
                 .module_cache
                 .constrained
@@ -2408,7 +2439,7 @@ fn update<'a>(
                 .dependencies
                 .notify(module_id, Phase::CanonicalizeAndConstrain);
 
-            start_tasks(arena, &mut state, work, injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, injector, worker_wakers)?;
 
             Ok(state)
         }
@@ -2614,7 +2645,7 @@ fn update<'a>(
                     work
                 };
 
-                start_tasks(arena, &mut state, work, injector, worker_listeners)?;
+                start_tasks(arena, &mut state, work, injector, worker_wakers)?;
             }
 
             Ok(state)
@@ -2633,7 +2664,7 @@ fn update<'a>(
 
             let subs = solved_subs.into_inner();
 
-            if !toplevel_expects.pure.is_empty() || !toplevel_expects.fx.is_empty() {
+            if !toplevel_expects.pure.is_empty() {
                 state.toplevel_expects.insert(module_id, toplevel_expects);
             }
 
@@ -2662,7 +2693,7 @@ fn update<'a>(
                 .dependencies
                 .notify(module_id, Phase::FindSpecializations);
 
-            start_tasks(arena, &mut state, work, injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, injector, worker_wakers)?;
 
             Ok(state)
         }
@@ -2952,13 +2983,13 @@ fn update<'a>(
 
                     let work = state.dependencies.reload_make_specialization_pass();
 
-                    start_tasks(arena, &mut state, work, injector, worker_listeners)?;
+                    start_tasks(arena, &mut state, work, injector, worker_wakers)?;
 
                     Ok(state)
                 }
 
                 NextStep::MakingInPhase => {
-                    start_tasks(arena, &mut state, work, injector, worker_listeners)?;
+                    start_tasks(arena, &mut state, work, injector, worker_wakers)?;
 
                     Ok(state)
                 }
@@ -3155,7 +3186,7 @@ fn finish_specialization<'a>(
                             let proc_layout =
                                 proc_layout_for(state.procedures.keys().copied(), symbol);
 
-                            buf.push((symbol, proc_layout));
+                            buf.push(("", symbol, proc_layout));
                         }
 
                         buf.into_bump_slice()
@@ -3169,13 +3200,14 @@ fn finish_specialization<'a>(
                         let mut buf =
                             bumpalo::collections::Vec::with_capacity_in(provides.len(), arena);
 
-                        for (loc_name, _loc_typed_ident) in provides {
-                            let ident_id = ident_ids.get_or_insert(loc_name.value.as_str());
+                        for loc_name in provides {
+                            let fn_name = loc_name.value.as_str();
+                            let ident_id = ident_ids.get_or_insert(fn_name);
                             let symbol = Symbol::new(module_id, ident_id);
                             let proc_layout =
                                 proc_layout_for(state.procedures.keys().copied(), symbol);
 
-                            buf.push((symbol, proc_layout));
+                            buf.push((fn_name, symbol, proc_layout));
                         }
 
                         buf.into_bump_slice()
@@ -3213,7 +3245,7 @@ fn finish_specialization<'a>(
         .collect();
 
     let module_id = state.root_id;
-    let uses_prebuilt_platform = match platform_data {
+    let needs_prebuilt_host = match platform_data {
         Some(data) => data.is_prebuilt,
         // If there's no platform data (e.g. because we're building a module)
         // then there's no prebuilt platform either!
@@ -3236,7 +3268,7 @@ fn finish_specialization<'a>(
         timings: state.timings,
         toplevel_expects,
         glue_layouts: GlueLayouts { getters: vec![] },
-        uses_prebuilt_platform,
+        needs_prebuilt_host,
     })
 }
 
@@ -3368,7 +3400,7 @@ fn load_package_from_disk<'a>(
             let parse_start = Instant::now();
             let bytes = arena.alloc(bytes_vec);
             let parse_state = roc_parse::state::State::new(bytes);
-            let parsed = roc_parse::module::parse_header(arena, parse_state.clone());
+            let parsed = roc_parse::header::parse_header(arena, parse_state.clone());
             let parse_header_duration = parse_start.elapsed();
 
             // Insert the first entries for this module's timings
@@ -3379,8 +3411,8 @@ fn load_package_from_disk<'a>(
 
             match parsed {
                 Ok((
-                    ast::Module {
-                        header: ast::Header::Module(header),
+                    ast::SpacesBefore {
+                        item: ast::Header::Module(header),
                         ..
                     },
                     _parse_state,
@@ -3388,8 +3420,8 @@ fn load_package_from_disk<'a>(
                     "expected platform/package module, got Module with header\n{header:?}"
                 ))),
                 Ok((
-                    ast::Module {
-                        header: ast::Header::Hosted(header),
+                    ast::SpacesBefore {
+                        item: ast::Header::Hosted(header),
                         ..
                     },
                     _parse_state,
@@ -3397,8 +3429,8 @@ fn load_package_from_disk<'a>(
                     "expected platform/package module, got Hosted module with header\n{header:?}"
                 ))),
                 Ok((
-                    ast::Module {
-                        header: ast::Header::App(header),
+                    ast::SpacesBefore {
+                        item: ast::Header::App(header),
                         ..
                     },
                     _parse_state,
@@ -3406,9 +3438,9 @@ fn load_package_from_disk<'a>(
                     "expected platform/package module, got App with header\n{header:?}"
                 ))),
                 Ok((
-                    ast::Module {
-                        header: ast::Header::Package(header),
-                        comments,
+                    ast::SpacesBefore {
+                        item: ast::Header::Package(header),
+                        before: comments,
                     },
                     parser_state,
                 )) => {
@@ -3449,9 +3481,9 @@ fn load_package_from_disk<'a>(
                     Ok(Msg::Many(messages))
                 }
                 Ok((
-                    ast::Module {
-                        header: ast::Header::Platform(header),
-                        comments,
+                    ast::SpacesBefore {
+                        item: ast::Header::Platform(header),
+                        before: comments,
                     },
                     parser_state,
                 )) => {
@@ -3549,13 +3581,13 @@ fn load_builtin_module_help<'a>(
     let opt_shorthand = None;
     let filename = PathBuf::from(filename);
     let parse_state = roc_parse::state::State::new(src_bytes.as_bytes());
-    let parsed = roc_parse::module::parse_header(arena, parse_state.clone());
+    let parsed = roc_parse::header::parse_header(arena, parse_state.clone());
 
     match parsed {
         Ok((
-            ast::Module {
-                header: ast::Header::Module(header),
-                comments,
+            ast::SpacesBefore {
+                item: ast::Header::Module(header),
+                before: comments,
             },
             parse_state,
         )) => {
@@ -3569,7 +3601,7 @@ fn load_builtin_module_help<'a>(
                 header_type: HeaderType::Builtin {
                     name: header::ModuleName::new(name_stem),
                     exposes: unspace(arena, header.exposes.items),
-                    generates_with: &[],
+                    opt_params: header.params,
                 },
                 module_comments: comments,
                 header_imports: header.interface_imports,
@@ -3651,6 +3683,7 @@ fn load_module<'a>(
         "Decode", ModuleId::DECODE
         "Hash", ModuleId::HASH
         "Inspect", ModuleId::INSPECT
+        "Task", ModuleId::TASK
     }
 
     let (filename, opt_shorthand) = module_name_to_path(src_dir, &module_name, arc_shorthands);
@@ -3805,7 +3838,7 @@ fn parse_header<'a>(
 ) -> Result<HeaderOutput<'a>, LoadingProblem<'a>> {
     let parse_start = Instant::now();
     let parse_state = roc_parse::state::State::new(src_bytes);
-    let parsed = roc_parse::module::parse_header(arena, parse_state.clone());
+    let parsed = roc_parse::header::parse_header(arena, parse_state.clone());
     let parse_header_duration = parse_start.elapsed();
 
     if let Err(problem) = ensure_roc_file(&filename, src_bytes) {
@@ -3834,9 +3867,9 @@ fn parse_header<'a>(
 
     match parsed {
         Ok((
-            ast::Module {
-                header: ast::Header::Module(header),
-                comments,
+            ast::SpacesBefore {
+                item: ast::Header::Module(header),
+                before: comments,
             },
             parse_state,
         )) => {
@@ -3856,6 +3889,7 @@ fn parse_header<'a>(
                 header_type: HeaderType::Module {
                     name: roc_parse::header::ModuleName::new(module_name),
                     exposes: unspace(arena, header.exposes.items),
+                    opt_params: header.params,
                 },
                 module_comments: comments,
                 header_imports: header.interface_imports,
@@ -3871,9 +3905,9 @@ fn parse_header<'a>(
             })
         }
         Ok((
-            ast::Module {
-                header: ast::Header::Hosted(header),
-                comments,
+            ast::SpacesBefore {
+                item: ast::Header::Hosted(header),
+                before: comments,
             },
             parse_state,
         )) => {
@@ -3885,8 +3919,6 @@ fn parse_header<'a>(
                 header_type: HeaderType::Hosted {
                     name: header.name.value,
                     exposes: unspace(arena, header.exposes.item.items),
-                    generates: header.generates.item,
-                    generates_with: unspace(arena, header.generates_with.item.items),
                 },
                 module_comments: comments,
                 header_imports: Some(header.imports),
@@ -3902,9 +3934,9 @@ fn parse_header<'a>(
             })
         }
         Ok((
-            ast::Module {
-                header: ast::Header::App(header),
-                comments,
+            ast::SpacesBefore {
+                item: ast::Header::App(header),
+                before: comments,
             },
             parse_state,
         )) => {
@@ -4007,9 +4039,9 @@ fn parse_header<'a>(
             })
         }
         Ok((
-            ast::Module {
-                header: ast::Header::Package(header),
-                comments,
+            ast::SpacesBefore {
+                item: ast::Header::Package(header),
+                before: comments,
             },
             parse_state,
         )) => {
@@ -4034,9 +4066,9 @@ fn parse_header<'a>(
         }
 
         Ok((
-            ast::Module {
-                header: ast::Header::Platform(header),
-                comments,
+            ast::SpacesBefore {
+                item: ast::Header::Platform(header),
+                before: comments,
             },
             parse_state,
         )) => {
@@ -4321,6 +4353,8 @@ impl<'a> BuildTask<'a> {
         declarations: Declarations,
         cached_subs: CachedTypeState,
         derived_module: SharedDerivedModule,
+        exec_mode: ExecutionMode,
+        is_host_exposed: bool,
 
         #[cfg(debug_assertions)] checkmate: Option<roc_checkmate::Collector>,
     ) -> Self {
@@ -4344,6 +4378,8 @@ impl<'a> BuildTask<'a> {
             module_timing,
             cached_subs,
             derived_module,
+            exec_mode,
+            is_host_exposed,
 
             #[cfg(debug_assertions)]
             checkmate,
@@ -4366,7 +4402,7 @@ fn synth_list_len_type(subs: &mut Subs) -> Variable {
 
     // List.len : List a -> U64
     let a = synth_import(subs, Content::FlexVar(None));
-    let a_slice = SubsSlice::extend_new(&mut subs.variables, [a]);
+    let a_slice = slice_extend_new(&mut subs.variables, [a]);
     let list_a = synth_import(
         subs,
         Content::Structure(FlatType::Apply(Symbol::LIST_LIST, a_slice)),
@@ -4382,10 +4418,15 @@ fn synth_list_len_type(subs: &mut Subs) -> Variable {
             ambient_function: fn_var,
         }),
     );
-    let fn_args_slice = SubsSlice::extend_new(&mut subs.variables, [list_a]);
+    let fn_args_slice = slice_extend_new(&mut subs.variables, [list_a]);
     subs.set_content(
         fn_var,
-        Content::Structure(FlatType::Func(fn_args_slice, clos_list_len, Variable::U64)),
+        Content::Structure(FlatType::Func(
+            fn_args_slice,
+            clos_list_len,
+            Variable::U64,
+            Variable::PURE,
+        )),
     );
     fn_var
 }
@@ -4399,7 +4440,7 @@ pub fn add_imports(
     def_types: &mut Vec<(Symbol, Loc<TypeOrVar>)>,
     imported_rigid_vars: &mut Vec<Variable>,
     imported_flex_vars: &mut Vec<Variable>,
-) -> (Vec<Variable>, AbilitiesStore) {
+) -> (Vec<Variable>, VecMap<ModuleId, Variable>, AbilitiesStore) {
     let mut import_variables = Vec::new();
 
     let mut cached_symbol_vars = VecMap::default();
@@ -4506,7 +4547,31 @@ pub fn add_imports(
         },
     );
 
-    (import_variables, abilities_store)
+    let mut imported_param_vars = VecMap::default();
+
+    for (module_id, _) in exposed_for_module.exposed_by_module.iter_all() {
+        let ExposedModuleTypes {
+            exposed_types_storage_subs: exposed_types,
+            ..
+        } = exposed_for_module.exposed_by_module.get(module_id).unwrap();
+
+        if let Some(stored_aprams_var) = exposed_types.stored_params_var {
+            let copied_import = exposed_types
+                .storage_subs
+                .export_variable_to(subs, stored_aprams_var);
+
+            let copied_import_var = extend_imports_data_with_copied_import(
+                copied_import,
+                &mut import_variables,
+                imported_rigid_vars,
+                imported_flex_vars,
+            );
+
+            imported_param_vars.insert(*module_id, copied_import_var);
+        }
+    }
+
+    (import_variables, imported_param_vars, abilities_store)
 }
 
 enum OnSymbolNotFound {
@@ -4604,6 +4669,7 @@ struct SolveResult {
     exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     problems: Vec<TypeError>,
     abilities_store: AbilitiesStore,
+    imported_modules_with_params: Vec<ModuleId>,
 
     #[cfg(debug_assertions)]
     checkmate: Option<roc_checkmate::Collector>,
@@ -4620,6 +4686,7 @@ fn run_solve_solve(
     var_store: VarStore,
     module: Module,
     derived_module: SharedDerivedModule,
+    is_host_exposed: bool,
 
     #[cfg(debug_assertions)] checkmate: Option<roc_checkmate::Collector>,
 ) -> SolveResult {
@@ -4628,6 +4695,7 @@ fn run_solve_solve(
         aliases,
         rigid_variables,
         abilities_store: pending_abilities,
+        module_params,
         ..
     } = module;
 
@@ -4637,7 +4705,7 @@ fn run_solve_solve(
 
     let mut subs = Subs::new_from_varstore(var_store);
 
-    let (import_variables, abilities_store) = add_imports(
+    let (import_variables, imported_param_vars, abilities_store) = add_imports(
         module.module_id,
         &mut constraints,
         &mut subs,
@@ -4647,6 +4715,11 @@ fn run_solve_solve(
         &mut imported_rigid_vars,
         &mut imported_flex_vars,
     );
+
+    let imported_modules_with_params = imported_param_vars
+        .keys()
+        .copied()
+        .collect::<Vec<ModuleId>>();
 
     let actual_constraint = constraints.let_import_constraint(
         imported_rigid_vars,
@@ -4664,6 +4737,12 @@ fn run_solve_solve(
     let (solve_output, solved_implementations, exposed_vars_by_symbol) = {
         let module_id = module.module_id;
 
+        let host_exposed_idents = if is_host_exposed {
+            Some(&exposed_symbols)
+        } else {
+            None
+        };
+
         let solve_config = SolveConfig {
             home: module_id,
             types,
@@ -4675,6 +4754,9 @@ fn run_solve_solve(
             derived_module,
             #[cfg(debug_assertions)]
             checkmate,
+            module_params,
+            module_params_vars: imported_param_vars,
+            host_exposed_symbols: host_exposed_idents,
         };
 
         let solve_output = roc_solve::module::run_solve(
@@ -4728,6 +4810,7 @@ fn run_solve_solve(
         exposed_vars_by_symbol,
         problems: errors,
         abilities_store: resolved_abilities_store,
+        imported_modules_with_params,
 
         #[cfg(debug_assertions)]
         checkmate,
@@ -4749,6 +4832,8 @@ fn run_solve<'a>(
     dep_idents: IdentIdsByModule,
     cached_types: CachedTypeState,
     derived_module: SharedDerivedModule,
+    exec_mode: ExecutionMode,
+    is_host_exposed: bool,
 
     #[cfg(debug_assertions)] checkmate: Option<roc_checkmate::Collector>,
 ) -> Msg<'a> {
@@ -4758,6 +4843,9 @@ fn run_solve<'a>(
 
     // TODO remove when we write builtins in roc
     let aliases = module.aliases.clone();
+
+    let opt_params_var = module.module_params.as_ref().map(|params| params.whole_var);
+    let home_has_params = opt_params_var.is_some();
 
     let mut module = module;
     let loc_expects = std::mem::take(&mut module.loc_expects);
@@ -4777,6 +4865,7 @@ fn run_solve<'a>(
                     var_store,
                     module,
                     derived_module,
+                    is_host_exposed,
                     //
                     #[cfg(debug_assertions)]
                     checkmate,
@@ -4792,6 +4881,7 @@ fn run_solve<'a>(
                     exposed_vars_by_symbol,
                     problems: vec![],
                     abilities_store: abilities,
+                    imported_modules_with_params: vec![],
 
                     #[cfg(debug_assertions)]
                     checkmate: None,
@@ -4808,6 +4898,7 @@ fn run_solve<'a>(
                 var_store,
                 module,
                 derived_module,
+                is_host_exposed,
                 //
                 #[cfg(debug_assertions)]
                 checkmate,
@@ -4819,8 +4910,9 @@ fn run_solve<'a>(
         solved: mut solved_subs,
         solved_implementations,
         exposed_vars_by_symbol,
-        problems,
+        mut problems,
         abilities_store,
+        imported_modules_with_params,
 
         #[cfg(debug_assertions)]
         checkmate,
@@ -4830,9 +4922,24 @@ fn run_solve<'a>(
         module_id,
         &mut solved_subs,
         &exposed_vars_by_symbol,
+        opt_params_var,
         &solved_implementations,
         &abilities_store,
     );
+
+    match exec_mode {
+        ExecutionMode::Check => {
+            // Params are not lowered in check mode
+        }
+        ExecutionMode::Executable | ExecutionMode::ExecutableIfCheck | ExecutionMode::Test => {
+            roc_lower_params::type_error::remove_module_param_arguments(
+                &mut problems,
+                home_has_params,
+                &decls.symbols,
+                imported_modules_with_params,
+            );
+        }
+    }
 
     let solved_module = SolvedModule {
         exposed_vars_by_symbol,
@@ -4930,17 +5037,19 @@ fn build_platform_header<'a>(
     comments: &'a [CommentOrNewline<'a>],
     module_timing: ModuleTiming,
 ) -> Result<(ModuleId, PQModuleName<'a>, ModuleHeader<'a>), LoadingProblem<'a>> {
-    let requires = arena.alloc([Loc::at(
-        header.requires.item.signature.region,
-        header.requires.item.signature.extract_spaces().item,
-    )]);
+    let requires = header
+        .requires
+        .item
+        .signatures
+        .map_items(arena, |item| {
+            Loc::at(item.region, item.extract_spaces().item)
+        })
+        .items;
     let provides = bumpalo::collections::Vec::from_iter_in(
-        unspace(arena, header.provides.item.items)
-            .iter()
-            .copied()
-            .zip(requires.iter().copied()),
+        unspace(arena, header.provides.item.items).iter().copied(),
         arena,
     );
+    let packages = unspace(arena, header.packages.item.items);
     let exposes = bumpalo::collections::Vec::from_iter_in(
         unspace(arena, header.exposes.item.items).iter().copied(),
         arena,
@@ -4962,7 +5071,7 @@ fn build_platform_header<'a>(
         filename,
         is_root_module,
         opt_shorthand,
-        packages: &[],
+        packages,
         header_type,
         module_comments: comments,
         header_imports: Some(header.imports),
@@ -4982,6 +5091,9 @@ fn canonicalize_and_constrain<'a>(
     parsed: ParsedModule<'a>,
     skip_constraint_gen: bool,
     exposed_module_ids: &[ModuleId],
+    exec_mode: ExecutionMode,
+    imported_module_params: VecMap<ModuleId, ModuleParams>,
+    fx_mode: FxMode,
 ) -> CanAndCon {
     let canonicalize_start = Instant::now();
 
@@ -5008,7 +5120,15 @@ fn canonicalize_and_constrain<'a>(
 
     let mut var_store = VarStore::default();
 
-    let module_output = canonicalize_module_defs(
+    let fx_mode = if module_id.is_builtin() {
+        // Allow builtins to expose effectful functions
+        // even if platform is `Task`-based
+        FxMode::PurityInference
+    } else {
+        fx_mode
+    };
+
+    let mut module_output = canonicalize_module_defs(
         arena,
         parsed_defs,
         &header_type,
@@ -5025,6 +5145,7 @@ fn canonicalize_and_constrain<'a>(
         &symbols_from_requires,
         &mut var_store,
         opt_shorthand,
+        fx_mode,
     );
 
     let mut types = Types::new();
@@ -5088,6 +5209,26 @@ fn canonicalize_and_constrain<'a>(
     // _before has an underscore because it's unused in --release builds
     let _before = roc_types::types::get_type_clone_count();
 
+    match exec_mode {
+        ExecutionMode::Check => {
+            // No need to lower params for `roc check` and lang server
+            // If we did, we'd have to update the language server to exclude the extra arguments
+        }
+        ExecutionMode::Executable | ExecutionMode::ExecutableIfCheck | ExecutionMode::Test => {
+            // We need to lower params only if the current module has any or imports at least one with params
+            if module_output.module_params.is_some() || !imported_module_params.is_empty() {
+                roc_lower_params::lower::lower(
+                    module_id,
+                    &module_output.module_params,
+                    imported_module_params,
+                    &mut module_output.declarations,
+                    &mut module_output.scope.locals.ident_ids,
+                    &mut var_store,
+                );
+            }
+        }
+    }
+
     let mut constraints = Constraints::new();
 
     let constraint = if skip_constraint_gen {
@@ -5099,6 +5240,7 @@ fn canonicalize_and_constrain<'a>(
             module_output.symbols_from_requires,
             &module_output.scope.abilities_store,
             &module_output.declarations,
+            &module_output.module_params,
             module_id,
         )
     };
@@ -5136,6 +5278,7 @@ fn canonicalize_and_constrain<'a>(
                         | ModuleId::SET
                         | ModuleId::HASH
                         | ModuleId::INSPECT
+                        | ModuleId::TASK
                 );
 
                 if !name.is_builtin() || should_include_builtin {
@@ -5155,6 +5298,7 @@ fn canonicalize_and_constrain<'a>(
         abilities_store: module_output.scope.abilities_store,
         loc_expects: module_output.loc_expects,
         loc_dbgs: module_output.loc_dbgs,
+        module_params: module_output.module_params,
     };
 
     let constrained_module = ConstrainedModule {
@@ -5203,7 +5347,7 @@ fn parse<'a>(
     let parse_state = header.parse_state;
 
     let header_import_defs =
-        roc_parse::ast::Module::header_imports_to_defs(arena, header.header_imports);
+        roc_parse::ast::Header::header_imports_to_defs(arena, header.header_imports);
 
     let parsed_defs = match parse_module_defs(arena, parse_state.clone(), header_import_defs) {
         Ok(success) => success,
@@ -5396,7 +5540,7 @@ fn parse<'a>(
         if let HeaderType::Platform { provides, .. } = header.header_type {
             exposed.reserve(provides.len());
 
-            for (loc_name, _loc_typed_ident) in provides.iter() {
+            for loc_name in provides.iter() {
                 // Use get_or_insert here because the ident_ids may already
                 // created an IdentId for this, when it was imported exposed
                 // in a dependent module.
@@ -5509,6 +5653,7 @@ fn make_specializations<'a>(
 ) -> Msg<'a> {
     let make_specializations_start = Instant::now();
     let mut update_mode_ids = UpdateModeIds::new();
+
     // do the thing
     let mut mono_env = roc_mono::ir::Env {
         arena,
@@ -5933,78 +6078,6 @@ fn build_pending_specializations<'a>(
                 toplevel_expects.pure.insert(symbol, region);
                 procs_base.partial_procs.insert(symbol, proc);
             }
-            ExpectationFx => {
-                // skip expectations if we're not going to run them
-                if !build_expects {
-                    continue;
-                }
-
-                // mark this symbol as a top-level thunk before any other work on the procs
-                module_thunks.push(symbol);
-
-                let expr_var = Variable::EMPTY_RECORD;
-
-                let is_host_exposed = true;
-
-                // If this is an exposed symbol, we need to
-                // register it as such. Otherwise, since it
-                // never gets called by Roc code, it will never
-                // get specialized!
-                if is_host_exposed {
-                    let layout_result =
-                        layout_cache.raw_from_var(mono_env.arena, expr_var, mono_env.subs);
-
-                    // cannot specialize when e.g. main's type contains type variables
-                    if let Err(e) = layout_result {
-                        match e {
-                            LayoutProblem::Erroneous => {
-                                let message = "top level function has erroneous type";
-                                procs_base.runtime_errors.insert(symbol, message);
-                                continue;
-                            }
-                            LayoutProblem::UnresolvedTypeVar(v) => {
-                                let message = format!(
-                                    "top level function has unresolved type variable {v:?}"
-                                );
-                                procs_base
-                                    .runtime_errors
-                                    .insert(symbol, mono_env.arena.alloc(message));
-                                continue;
-                            }
-                        }
-                    }
-
-                    procs_base.host_specializations.insert_host_exposed(
-                        mono_env.subs,
-                        LambdaName::no_niche(symbol),
-                        None,
-                        expr_var,
-                    );
-                }
-
-                let body = roc_can::expr::toplevel_expect_to_inline_expect_fx(body);
-
-                let proc = PartialProc {
-                    annotation: expr_var,
-                    // This is a 0-arity thunk, so it has no arguments.
-                    pattern_symbols: &[],
-                    // This is a top-level definition, so it cannot capture anything
-                    captured_symbols: CapturedSymbols::None,
-                    body: body.value,
-                    body_var: expr_var,
-                    // This is a 0-arity thunk, so it cannot be recursive
-                    is_self_recursive: false,
-                };
-
-                // extend the region of the expect expression with the region of the preceding
-                // comment, so it is shown in failure/panic messages
-                let name_region = declarations.symbols[index].region;
-                let expr_region = declarations.expressions[index].region;
-                let region = Region::span_across(&name_region, &expr_region);
-
-                toplevel_expects.fx.insert(symbol, region);
-                procs_base.partial_procs.insert(symbol, proc);
-            }
         }
     }
 
@@ -6214,6 +6287,9 @@ fn run_task<'a>(
             abilities_store,
             skip_constraint_gen,
             exposed_module_ids,
+            exec_mode,
+            imported_module_params,
+            fx_mode,
         } => {
             let can_and_con = canonicalize_and_constrain(
                 arena,
@@ -6225,6 +6301,9 @@ fn run_task<'a>(
                 parsed,
                 skip_constraint_gen,
                 exposed_module_ids,
+                exec_mode,
+                imported_module_params,
+                fx_mode,
             );
 
             Ok(Msg::CanonicalizedAndConstrained(can_and_con))
@@ -6244,6 +6323,8 @@ fn run_task<'a>(
             dep_idents,
             cached_subs,
             derived_module,
+            exec_mode,
+            is_host_exposed,
 
             #[cfg(debug_assertions)]
             checkmate,
@@ -6262,6 +6343,8 @@ fn run_task<'a>(
             dep_idents,
             cached_subs,
             derived_module,
+            exec_mode,
+            is_host_exposed,
             //
             #[cfg(debug_assertions)]
             checkmate,

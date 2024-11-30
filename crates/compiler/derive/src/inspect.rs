@@ -71,8 +71,7 @@ pub(crate) fn derive_to_inspector(
             let flex_tag_labels = tags
                 .into_iter()
                 .map(|(label, arity)| {
-                    let variables_slice =
-                        VariableSubsSlice::reserve_into_subs(env.subs, arity.into());
+                    let variables_slice = env.subs.reserve_into_vars(arity.into());
                     for var_index in variables_slice {
                         env.subs[var_index] = env.subs.fresh_unnamed_flex_var();
                     }
@@ -119,7 +118,7 @@ fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
 
     // List elem
     let elem_var = env.subs.fresh_unnamed_flex_var();
-    let elem_var_slice = SubsSlice::insert_into_subs(env.subs, [elem_var]);
+    let elem_var_slice = env.subs.insert_into_vars([elem_var]);
     let list_var = synth_var(
         env.subs,
         Content::Structure(FlatType::Apply(Symbol::LIST_LIST, elem_var_slice)),
@@ -138,6 +137,7 @@ fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
             elem_var_slice,
             to_inspector_clos_var,
             elem_inspector_var,
+            Variable::PURE,
         )),
     );
 
@@ -153,6 +153,7 @@ fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
         Loc::at_zero(to_inspector_var),
         to_inspector_clos_var,
         elem_inspector_var,
+        Variable::PURE,
     ));
 
     // toInspector elem
@@ -187,6 +188,7 @@ fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
             elem_var_slice,
             to_elem_inspector_lset,
             elem_inspector_var,
+            Variable::PURE,
         )),
     );
 
@@ -195,6 +197,8 @@ fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
         function_type: to_elem_inspector_fn_var,
         closure_type: to_elem_inspector_lset,
         return_type: elem_inspector_var,
+        fx_type: Variable::PURE,
+        early_returns: vec![],
         name: to_elem_inspector_sym,
         captured_symbols: vec![],
         recursive: Recursive::NotRecursive,
@@ -212,10 +216,9 @@ fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
 
     // List elem, List.walk, to_elem_inspector_fn_var -[clos]-> t1
     let list_walk_fn_var = env.import_builtin_symbol_var(Symbol::LIST_WALK);
-    let this_inspect_list_args_slice = VariableSubsSlice::insert_into_subs(
-        env.subs,
-        [list_var, list_walk_fn_var, to_elem_inspector_fn_var],
-    );
+    let this_inspect_list_args_slice =
+        env.subs
+            .insert_into_vars([list_var, list_walk_fn_var, to_elem_inspector_fn_var]);
     let this_inspect_list_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
     let this_list_inspector_var = env.subs.fresh_unnamed_flex_var(); // t1
     let this_inspect_list_fn_var = synth_var(
@@ -224,6 +227,7 @@ fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
             this_inspect_list_args_slice,
             this_inspect_list_clos_var,
             this_list_inspector_var,
+            Variable::PURE,
         )),
     );
 
@@ -238,6 +242,7 @@ fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
         Loc::at_zero(inspect_list),
         this_inspect_list_clos_var,
         this_list_inspector_var,
+        Variable::PURE,
     ));
 
     // Inspect.list lst to_elem_inspector
@@ -279,13 +284,14 @@ fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
         }),
     );
     // List elem -[fn_name]-> Inspector fmt
-    let list_var_slice = SubsSlice::insert_into_subs(env.subs, once(list_var));
+    let list_var_slice = env.subs.insert_into_vars(once(list_var));
     env.subs.set_content(
         fn_var,
         Content::Structure(FlatType::Func(
             list_var_slice,
             fn_clos_var,
             this_inspector_var,
+            Variable::PURE,
         )),
     );
 
@@ -294,6 +300,8 @@ fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
         function_type: fn_var,
         closure_type: fn_clos_var,
         return_type: this_inspector_var,
+        fx_type: Variable::PURE,
+        early_returns: vec![],
         name: fn_name,
         captured_symbols: vec![],
         recursive: Recursive::NotRecursive,
@@ -331,7 +339,7 @@ fn to_inspector_record(
         .map(|(field_name_index, field_var_index, _)| {
             let field_name = env.subs[field_name_index].clone();
             let field_var = env.subs[field_var_index];
-            let field_var_slice = VariableSubsSlice::new(field_var_index.index, 1);
+            let field_var_slice = VariableSubsSlice::new(field_var_index.index() as u32, 1);
 
             // key: "a"
             let key_field = Field {
@@ -365,6 +373,7 @@ fn to_inspector_record(
                     field_var_slice,
                     to_inspector_clos_var,
                     inspector_var,
+                    Variable::PURE,
                 )),
             );
 
@@ -380,6 +389,7 @@ fn to_inspector_record(
                 Loc::at_zero(to_inspector_var),
                 to_inspector_clos_var,
                 inspector_var,
+                Variable::PURE,
             ));
 
             // toInspector rcd.a
@@ -421,7 +431,7 @@ fn to_inspector_record(
         .collect::<Vec<_>>();
 
     // typeof [ { key: .., value: .. }, { key: .., value: .. } ]
-    let fields_rcd_var_slice = VariableSubsSlice::insert_into_subs(env.subs, once(whole_rcd_var));
+    let fields_rcd_var_slice = env.subs.insert_into_vars(once(whole_rcd_var));
     let fields_list_var = synth_var(
         env.subs,
         Content::Structure(FlatType::Apply(Symbol::LIST_LIST, fields_rcd_var_slice)),
@@ -438,8 +448,7 @@ fn to_inspector_record(
     let inspect_record_fn_var = env.import_builtin_symbol_var(Symbol::INSPECT_RECORD);
 
     // fields_list_var -[clos]-> t1
-    let fields_list_var_slice =
-        VariableSubsSlice::insert_into_subs(env.subs, once(fields_list_var));
+    let fields_list_var_slice = env.subs.insert_into_vars(once(fields_list_var));
     let inspect_record_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
     let inspector_var = env.subs.fresh_unnamed_flex_var(); // t1
     let this_inspect_record_fn_var = synth_var(
@@ -448,6 +457,7 @@ fn to_inspector_record(
             fields_list_var_slice,
             inspect_record_clos_var,
             inspector_var,
+            Variable::PURE,
         )),
     );
 
@@ -462,6 +472,7 @@ fn to_inspector_record(
         Loc::at_zero(inspect_record_var),
         inspect_record_clos_var,
         inspector_var,
+        Variable::PURE,
     ));
 
     // Inspect.record [ { key: .., value: .. }, .. ]
@@ -490,13 +501,14 @@ fn to_inspector_record(
         }),
     );
     // typeof rcd -[fn_name]-> (typeof Inspect.record [ .. ] = Inspector fmt)
-    let record_var_slice = SubsSlice::insert_into_subs(env.subs, once(record_var));
+    let record_var_slice = env.subs.insert_into_vars(once(record_var));
     env.subs.set_content(
         fn_var,
         Content::Structure(FlatType::Func(
             record_var_slice,
             fn_clos_var,
             this_inspector_var,
+            Variable::PURE,
         )),
     );
 
@@ -505,6 +517,8 @@ fn to_inspector_record(
         function_type: fn_var,
         closure_type: fn_clos_var,
         return_type: this_inspector_var,
+        fx_type: Variable::PURE,
+        early_returns: vec![],
         name: fn_name,
         captured_symbols: vec![],
         recursive: Recursive::NotRecursive,
@@ -542,7 +556,7 @@ fn to_inspector_tuple(
         .map(|(elem_index, elem_var_index)| {
             let index = env.subs[elem_index];
             let elem_var = env.subs[elem_var_index];
-            let elem_var_slice = VariableSubsSlice::new(elem_var_index.index, 1);
+            let elem_var_slice = VariableSubsSlice::new(elem_var_index.index() as u32, 1);
 
             // tup.0
             let tuple_access = TupleAccess {
@@ -569,6 +583,7 @@ fn to_inspector_tuple(
                     elem_var_slice,
                     to_inspector_clos_var,
                     inspector_var,
+                    Variable::PURE,
                 )),
             );
 
@@ -584,6 +599,7 @@ fn to_inspector_tuple(
                 Loc::at_zero(to_inspector_var),
                 to_inspector_clos_var,
                 inspector_var,
+                Variable::PURE,
             ));
 
             // toInspector tup.0
@@ -602,7 +618,7 @@ fn to_inspector_tuple(
 
     // typeof [ toInspector tup.0, toInspector tup.1 ]
     let whole_inspector_in_list_var_slice =
-        VariableSubsSlice::insert_into_subs(env.subs, once(whole_inspector_in_list_var));
+        env.subs.insert_into_vars(once(whole_inspector_in_list_var));
     let elem_inspectors_list_var = synth_var(
         env.subs,
         Content::Structure(FlatType::Apply(
@@ -622,8 +638,7 @@ fn to_inspector_tuple(
     let inspect_tuple_fn_var = env.import_builtin_symbol_var(Symbol::INSPECT_TUPLE);
 
     // elem_inspectors_list_var -[clos]-> t1
-    let elem_inspectors_list_var_slice =
-        VariableSubsSlice::insert_into_subs(env.subs, once(elem_inspectors_list_var));
+    let elem_inspectors_list_var_slice = env.subs.insert_into_vars(once(elem_inspectors_list_var));
     let inspect_tuple_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
     let inspector_var = env.subs.fresh_unnamed_flex_var(); // t1
     let this_inspect_tuple_fn_var = synth_var(
@@ -632,6 +647,7 @@ fn to_inspector_tuple(
             elem_inspectors_list_var_slice,
             inspect_tuple_clos_var,
             inspector_var,
+            Variable::PURE,
         )),
     );
 
@@ -646,6 +662,7 @@ fn to_inspector_tuple(
         Loc::at_zero(inspect_tuple_var),
         inspect_tuple_clos_var,
         inspector_var,
+        Variable::PURE,
     ));
 
     // Inspect.tuple [ { key: .., value: .. }, .. ]
@@ -674,13 +691,14 @@ fn to_inspector_tuple(
         }),
     );
     // typeof tup -[fn_name]-> (typeof Inspect.tuple [ .. ] = Inspector fmt)
-    let tuple_var_slice = SubsSlice::insert_into_subs(env.subs, once(tuple_var));
+    let tuple_var_slice = env.subs.insert_into_vars(once(tuple_var));
     env.subs.set_content(
         fn_var,
         Content::Structure(FlatType::Func(
             tuple_var_slice,
             fn_clos_var,
             this_inspector_var,
+            Variable::PURE,
         )),
     );
 
@@ -689,6 +707,8 @@ fn to_inspector_tuple(
         function_type: fn_var,
         closure_type: fn_clos_var,
         return_type: this_inspector_var,
+        fx_type: Variable::PURE,
+        early_returns: vec![],
         name: fn_name,
         captured_symbols: vec![],
         recursive: Recursive::NotRecursive,
@@ -761,8 +781,7 @@ fn to_inspector_tag_union(
                         env.import_builtin_symbol_var(Symbol::INSPECT_TO_INSPECTOR);
 
                     // wanted: t1 -[clos]-> t'
-                    let var_slice_of_sym_var =
-                        VariableSubsSlice::insert_into_subs(env.subs, [sym_var]); // [ t1 ]
+                    let var_slice_of_sym_var = env.subs.insert_into_vars([sym_var]); // [ t1 ]
                     let to_inspector_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
                     let inspector_var = env.subs.fresh_unnamed_flex_var(); // t'
                     let this_to_inspector_fn_var = synth_var(
@@ -771,6 +790,7 @@ fn to_inspector_tag_union(
                             var_slice_of_sym_var,
                             to_inspector_clos_var,
                             inspector_var,
+                            Variable::PURE,
                         )),
                     );
 
@@ -786,6 +806,7 @@ fn to_inspector_tag_union(
                         Loc::at_zero(to_inspector_var),
                         to_inspector_clos_var,
                         inspector_var,
+                        Variable::PURE,
                     ));
 
                     // toInspector rcd.a
@@ -804,7 +825,7 @@ fn to_inspector_tag_union(
 
             // typeof [ Inspect.toInspector v1, Inspect.toInspector v2 ]
             let whole_inspectors_var_slice =
-                VariableSubsSlice::insert_into_subs(env.subs, [whole_payload_inspectors_var]);
+                env.subs.insert_into_vars([whole_payload_inspectors_var]);
             let payload_inspectors_list_var = synth_var(
                 env.subs,
                 Content::Structure(FlatType::Apply(
@@ -824,10 +845,9 @@ fn to_inspector_tag_union(
             let inspect_tag_fn_var = env.import_builtin_symbol_var(Symbol::INSPECT_TAG);
 
             // wanted: Str, List whole_inspectors_var -[clos]-> t'
-            let this_inspect_tag_args_var_slice = VariableSubsSlice::insert_into_subs(
-                env.subs,
-                [Variable::STR, payload_inspectors_list_var],
-            );
+            let this_inspect_tag_args_var_slice = env
+                .subs
+                .insert_into_vars([Variable::STR, payload_inspectors_list_var]);
             let this_inspect_tag_clos_var = env.subs.fresh_unnamed_flex_var(); // -[clos]->
             let this_inspector_var = env.subs.fresh_unnamed_flex_var(); // t'
             let this_inspect_tag_fn_var = synth_var(
@@ -836,6 +856,7 @@ fn to_inspector_tag_union(
                     this_inspect_tag_args_var_slice,
                     this_inspect_tag_clos_var,
                     this_inspector_var,
+                    Variable::PURE,
                 )),
             );
 
@@ -850,6 +871,7 @@ fn to_inspector_tag_union(
                 Loc::at_zero(inspect_tag_var),
                 this_inspect_tag_clos_var,
                 this_inspector_var,
+                Variable::PURE,
             ));
 
             // Inspect.tag "A" [ Inspect.toInspector v1, Inspect.toInspector v2 ]
@@ -917,13 +939,14 @@ fn to_inspector_tag_union(
         }),
     );
     // tag_union_var -[fn_name]-> whole_tag_inspectors_var
-    let tag_union_var_slice = SubsSlice::insert_into_subs(env.subs, once(tag_union_var));
+    let tag_union_var_slice = env.subs.insert_into_vars(once(tag_union_var));
     env.subs.set_content(
         fn_var,
         Content::Structure(FlatType::Func(
             tag_union_var_slice,
             fn_clos_var,
             this_inspector_var,
+            Variable::PURE,
         )),
     );
 
@@ -937,6 +960,8 @@ fn to_inspector_tag_union(
         function_type: fn_var,
         closure_type: fn_clos_var,
         return_type: this_inspector_var,
+        fx_type: Variable::PURE,
+        early_returns: vec![],
         name: fn_name,
         captured_symbols: vec![],
         recursive: Recursive::NotRecursive,
@@ -972,8 +997,7 @@ fn wrap_in_inspect_custom(
     let apply_fn_var = env.import_builtin_symbol_var(Symbol::INSPECT_APPLY);
 
     // wanted: Inspect.apply : inspector_var, fmt -[clos]-> fmt where fmt implements InspectorFormatter
-    let this_apply_args_var_slice =
-        VariableSubsSlice::insert_into_subs(env.subs, [inspector_var, fmt_var]);
+    let this_apply_args_var_slice = env.subs.insert_into_vars([inspector_var, fmt_var]);
     let this_apply_clos_var = env.subs.fresh_unnamed_flex_var(); // -[clos]->
     let this_apply_fn_var = synth_var(
         env.subs,
@@ -981,6 +1005,7 @@ fn wrap_in_inspect_custom(
             this_apply_args_var_slice,
             this_apply_clos_var,
             fmt_var,
+            Variable::PURE,
         )),
     );
 
@@ -994,6 +1019,7 @@ fn wrap_in_inspect_custom(
         Loc::at_zero(Var(Symbol::INSPECT_APPLY, this_apply_fn_var)),
         this_apply_clos_var,
         fmt_var,
+        Variable::PURE,
     ));
 
     // Inspect.apply inspector fmt
@@ -1025,10 +1051,15 @@ fn wrap_in_inspect_custom(
     );
 
     // fmt -[[FN_name captured_var]]-> Inspect.apply inspector fmt
-    let args_slice = SubsSlice::insert_into_subs(env.subs, vec![fmt_var]);
+    let args_slice = env.subs.insert_into_vars(vec![fmt_var]);
     env.subs.set_content(
         fn_var,
-        Content::Structure(FlatType::Func(args_slice, fn_clos_var, fmt_var)),
+        Content::Structure(FlatType::Func(
+            args_slice,
+            fn_clos_var,
+            fmt_var,
+            Variable::PURE,
+        )),
     );
 
     // \fmt -[[fn_name captured_var]]-> Inspect.apply inspector fmt
@@ -1036,6 +1067,8 @@ fn wrap_in_inspect_custom(
         function_type: fn_var,
         closure_type: fn_clos_var,
         return_type: fmt_var,
+        fx_type: Variable::PURE,
+        early_returns: vec![],
         name: fn_name,
         captured_symbols: vec![(captured_symbol, captured_var)],
         recursive: Recursive::NotRecursive,
@@ -1054,7 +1087,7 @@ fn wrap_in_inspect_custom(
     let custom_fn_var = env.import_builtin_symbol_var(Symbol::INSPECT_CUSTOM);
 
     // wanted: Inspect.custom : fn_var -[clos]-> t'
-    let this_custom_args_var_slice = VariableSubsSlice::insert_into_subs(env.subs, [fn_var]);
+    let this_custom_args_var_slice = env.subs.insert_into_vars([fn_var]);
     let this_custom_clos_var = env.subs.fresh_unnamed_flex_var(); // -[clos]->
     let this_custom_inspector_var = env.subs.fresh_unnamed_flex_var(); // t'
     let this_custom_fn_var = synth_var(
@@ -1063,6 +1096,7 @@ fn wrap_in_inspect_custom(
             this_custom_args_var_slice,
             this_custom_clos_var,
             this_custom_inspector_var,
+            Variable::PURE,
         )),
     );
 
@@ -1076,6 +1110,7 @@ fn wrap_in_inspect_custom(
         Loc::at_zero(Var(Symbol::INSPECT_CUSTOM, this_custom_fn_var)),
         this_custom_clos_var,      // -[clos]->
         this_custom_inspector_var, // t' ~ Inspector fmt
+        Variable::PURE,
     ));
 
     // Inspect.custom \fmt -> Inspect.apply inspector fmt

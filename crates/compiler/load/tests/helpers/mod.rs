@@ -51,6 +51,9 @@ pub fn infer_expr(
         exposed_by_module: &Default::default(),
         derived_module,
         function_kind: FunctionKind::LambdaSet,
+        module_params: None,
+        module_params_vars: Default::default(),
+        host_exposed_symbols: None,
         #[cfg(debug_assertions)]
         checkmate: None,
     };
@@ -159,6 +162,25 @@ pub fn can_expr_with<'a>(
     // ensure the Test module is accessible in our tests
     module_ids.get_or_insert(&PQModuleName::Unqualified("Test".into()));
 
+    let mut scope = Scope::new(
+        home,
+        "TestPath".into(),
+        IdentIds::default(),
+        Default::default(),
+    );
+
+    let dep_idents = IdentIds::exposed_builtins(0);
+    let mut env = Env::new(
+        arena,
+        expr_str,
+        home,
+        Path::new("Test.roc"),
+        &dep_idents,
+        &module_ids,
+        None,
+        roc_can::env::FxMode::PurityInference,
+    );
+
     // Desugar operators (convert them to Apply calls, taking into account
     // operator precedence and associativity rules), before doing other canonicalization.
     //
@@ -166,13 +188,7 @@ pub fn can_expr_with<'a>(
     // visited a BinOp node we'd recursively try to apply this to each of its nested
     // operators, and then again on *their* nested operators, ultimately applying the
     // rules multiple times unnecessarily.
-    let loc_expr = desugar::desugar_expr(
-        arena,
-        &loc_expr,
-        expr_str,
-        &mut None,
-        arena.alloc("TestPath"),
-    );
+    let loc_expr = desugar::desugar_expr(&mut env, &mut scope, &loc_expr);
 
     let mut scope = Scope::new(
         home,
@@ -184,11 +200,13 @@ pub fn can_expr_with<'a>(
     let dep_idents = IdentIds::exposed_builtins(0);
     let mut env = Env::new(
         arena,
+        expr_str,
         home,
         Path::new("Test.roc"),
         &dep_idents,
         &module_ids,
         None,
+        roc_can::env::FxMode::PurityInference,
     );
     let (loc_expr, output) = canonicalize_expr(
         &mut env,
@@ -205,6 +223,7 @@ pub fn can_expr_with<'a>(
             rigids: MutMap::default(),
             home,
             resolutions_to_make: vec![],
+            fx_expectation: None,
         },
         loc_expr.region,
         &loc_expr.value,

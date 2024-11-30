@@ -4,8 +4,8 @@ use roc_can::scope::Scope;
 use roc_collections::VecSet;
 use roc_module::ident::ModuleName;
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
-use roc_parse::ast::AssignedField;
 use roc_parse::ast::{self, ExtractSpaces, TypeHeader};
+use roc_parse::ast::{AssignedField, FunctionArrow};
 use roc_parse::ast::{CommentOrNewline, TypeDef, ValueDef};
 
 // Documentation generation requirements
@@ -55,6 +55,7 @@ pub enum TypeAnnotation {
     },
     Function {
         args: Vec<TypeAnnotation>,
+        arrow: FunctionArrow,
         output: Box<TypeAnnotation>,
     },
     ObscuredTagUnion,
@@ -268,14 +269,15 @@ fn generate_entry_docs(
                     // Don't generate docs for `expect`s
                 }
 
-                ValueDef::ExpectFx { .. } => {
-                    // Don't generate docs for `expect-fx`s
-                }
                 ValueDef::ModuleImport { .. } => {
                     // Don't generate docs for module imports
                 }
                 ValueDef::IngestedFileImport { .. } => {
                     // Don't generate docs for ingested file imports
+                }
+
+                ValueDef::StmtAfterExpr { .. } => {
+                    // Ignore. Canonicalization will produce an error.
                 }
 
                 ValueDef::Stmt(loc_expr) => {
@@ -439,7 +441,7 @@ fn contains_unexposed_type(
 
         Malformed(_) | Inferred | Wildcard | BoundVariable(_) => false,
 
-        Function(loc_args, loc_ret) => {
+        Function(loc_args, _arrow, loc_ret) => {
             let loc_args_contains_unexposed_type = loc_args.iter().any(|loc_arg| {
                 contains_unexposed_type(&loc_arg.value, exposed_module_ids, module_ids)
             });
@@ -461,12 +463,13 @@ fn contains_unexposed_type(
             while let Some(field) = fields_to_process.pop() {
                 match field {
                     AssignedField::RequiredValue(_field, _spaces, loc_val)
-                    | AssignedField::OptionalValue(_field, _spaces, loc_val) => {
+                    | AssignedField::OptionalValue(_field, _spaces, loc_val)
+                    | AssignedField::IgnoredValue(_field, _spaces, loc_val) => {
                         if contains_unexposed_type(&loc_val.value, exposed_module_ids, module_ids) {
                             return true;
                         }
                     }
-                    AssignedField::Malformed(_) | AssignedField::LabelOnly(_) => {
+                    AssignedField::LabelOnly(_) => {
                         // contains no unexposed types, so continue
                     }
                     AssignedField::SpaceBefore(field, _) | AssignedField::SpaceAfter(field, _) => {
@@ -513,9 +516,6 @@ fn contains_unexposed_type(
                                 return true;
                             }
                         }
-                    }
-                    Tag::Malformed(_) => {
-                        // contains no unexposed types, so continue
                     }
                     Tag::SpaceBefore(tag, _) | Tag::SpaceAfter(tag, _) => {
                         tags_to_process.push(*tag);
@@ -606,7 +606,7 @@ fn type_to_docs(in_func_type_ann: bool, type_annotation: ast::TypeAnnotation) ->
         ast::TypeAnnotation::SpaceAfter(&sub_type_ann, _) => {
             type_to_docs(in_func_type_ann, sub_type_ann)
         }
-        ast::TypeAnnotation::Function(ast_arg_anns, output_ann) => {
+        ast::TypeAnnotation::Function(ast_arg_anns, arrow, output_ann) => {
             let mut doc_arg_anns = Vec::new();
 
             for ast_arg_ann in ast_arg_anns {
@@ -615,6 +615,7 @@ fn type_to_docs(in_func_type_ann: bool, type_annotation: ast::TypeAnnotation) ->
 
             Function {
                 args: doc_arg_anns,
+                arrow,
                 output: Box::new(type_to_docs(true, output_ann.value)),
             }
         }
@@ -717,7 +718,7 @@ fn record_field_to_doc(
         AssignedField::LabelOnly(label) => Some(RecordField::LabelOnly {
             name: label.value.to_string(),
         }),
-        AssignedField::Malformed(_) => None,
+        AssignedField::IgnoredValue(_, _, _) => None,
     }
 }
 
@@ -738,7 +739,6 @@ fn tag_to_doc(in_func_ann: bool, tag: ast::Tag) -> Option<Tag> {
         }),
         ast::Tag::SpaceBefore(&sub_tag, _) => tag_to_doc(in_func_ann, sub_tag),
         ast::Tag::SpaceAfter(&sub_tag, _) => tag_to_doc(in_func_ann, sub_tag),
-        ast::Tag::Malformed(_) => None,
     }
 }
 

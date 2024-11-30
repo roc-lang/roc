@@ -1,85 +1,164 @@
 (() => {
     let sidebar = document.getElementById("sidebar-nav");
+
+    if (sidebar != null) {
+      // Un-hide everything
+      sidebar
+        .querySelectorAll(".sidebar-entry a")
+        .forEach((entry) => entry.classList.remove("hidden"));
+
+      // Re-hide all the sub-entries except for those of the current module
+      let currentModuleName = document.querySelector(".module-name").textContent;
+
+      sidebar.querySelectorAll(".sidebar-entry").forEach((entry) => {
+        let entryName = entry.querySelector(".sidebar-module-link").textContent;
+        if (currentModuleName === entryName) {
+          entry.firstChild.classList.add("active");
+          return;
+        }
+        entry
+          .querySelectorAll(".sidebar-sub-entries a")
+          .forEach((subEntry) => subEntry.classList.add("hidden"));
+      });
+    }
+
+    let searchTypeAhead = document.getElementById("search-type-ahead");
     let searchBox = document.getElementById("module-search");
+    let searchForm = document.getElementById("module-search-form");
+    let topSearchResultListItem = undefined;
+
+    // Hide the results whenever anyone clicks outside the search results.
+    window.addEventListener("click", function(event) {
+        if (!searchForm?.contains(event.target)) {
+            searchTypeAhead.classList.add("hidden");
+        }
+    });
 
     if (searchBox != null) {
+        function searchKeyDown(event) {
+          switch (event.key) {
+            case "ArrowDown": {
+              event.preventDefault();
+
+              const focused = document.querySelector("#search-type-ahead > li:not([class*='hidden']) > a:focus");
+
+              // Find the next element to focus.
+              let nextToFocus = focused?.parentElement?.nextElementSibling;
+
+              while (nextToFocus != null && nextToFocus.classList.contains("hidden")) {
+                nextToFocus = nextToFocus.nextElementSibling;
+              }
+
+              if (nextToFocus == null) {
+                // If none of the links were focused, focus the first one.
+                // Also if we've reached the last one in the list, wrap around to the first.
+                document.querySelector("#search-type-ahead > li:not([class*='hidden']) > a")?.focus();
+              } else {
+                nextToFocus.querySelector("a").focus();
+              }
+
+              break;
+            }
+            case "ArrowUp": {
+              event.preventDefault();
+
+              const focused = document.querySelector("#search-type-ahead > li:not([class*='hidden']) > a:focus");
+
+              // Find the next element to focus.
+              let nextToFocus = focused?.parentElement?.previousElementSibling;
+              while (nextToFocus != null && nextToFocus.classList.contains("hidden")) {
+                nextToFocus = nextToFocus.previousElementSibling;
+              }
+
+              if (nextToFocus == null) {
+                // If none of the links were focused, or we're at the first one, focus the search box again.
+                searchBox?.focus();
+              } else {
+                // If one of the links was focused, focus the previous one
+                nextToFocus.querySelector("a").focus();
+              }
+
+              break;
+            }
+          }
+        }
+
+        searchForm.addEventListener("keydown", searchKeyDown);
+
         function search() {
+            topSearchResultListItem = undefined;
             let text = searchBox.value.toLowerCase(); // Search is case-insensitive.
 
-            if (text === "") {
-                // Un-hide everything
-                sidebar
-                    .querySelectorAll(".sidebar-entry a")
-                    .forEach((entry) => entry.classList.remove("hidden"));
+                if (text === "") {
+                    searchTypeAhead.classList.add("hidden");
+                } else {
+                    let totalResults = 0;
+                    // Firsttype-ahead-signature", show/hide all the sub-entries within each module (top-level functions etc.)
+                    searchTypeAhead.querySelectorAll("li").forEach((entry) => {
+                        const entryName = entry
+                            .querySelector(".type-ahead-def-name")
+                            .textContent.toLowerCase();
+                        const entrySignature = entry
+                            .querySelector(".type-ahead-signature")
+                            ?.textContent?.toLowerCase()
+                            ?.replace(/\s+/g, "");
 
-                // Re-hide all the sub-entries except for those of the current module
-                let currentModuleName =
-                    document.querySelector(".module-name")?.textContent ?? "";
-
-                sidebar.querySelectorAll(".sidebar-entry").forEach((entry) => {
-                    let entryName = entry.querySelector(
-                        ".sidebar-module-link"
-                    ).textContent;
-                    if (currentModuleName === entryName) {
-                        entry.firstChild.classList.add("active");
-                        return;
+                        if ((entryName.includes(text) || entrySignature?.includes(text.replace(/\s+/g, "")))) {
+                            totalResults++;
+                            entry.classList.remove("hidden");
+                            if (topSearchResultListItem === undefined) {
+                                topSearchResultListItem = entry;
+                            }
+                        } else {
+                            entry.classList.add("hidden");
+                        }
+                    });
+                    if (totalResults < 1) {
+                        searchTypeAhead.classList.add("hidden");
+                    } else {
+                        searchTypeAhead.classList.remove("hidden");
                     }
-                    entry
-                        .querySelectorAll(".sidebar-sub-entries a")
-                        .forEach((subEntry) =>
-                            subEntry.classList.add("hidden")
-                        );
-                });
-            } else {
-                // First, show/hide all the sub-entries within each module (top-level functions etc.)
-                sidebar
-                    .querySelectorAll(".sidebar-sub-entries a")
-                    .forEach((entry) => {
-                        if (entry.textContent.toLowerCase().includes(text)) {
-                            entry.classList.remove("hidden");
-                        } else {
-                            entry.classList.add("hidden");
-                        }
-                    });
-
-                // Then, show/hide modules based on whether they match, or any of their sub-entries matched
-                sidebar
-                    .querySelectorAll(".sidebar-module-link")
-                    .forEach((entry) => {
-                        if (
-                            entry.textContent.toLowerCase().includes(text) ||
-                            entry.parentNode.querySelectorAll(
-                                ".sidebar-sub-entries a:not(.hidden)"
-                            ).length > 0
-                        ) {
-                            entry.classList.remove("hidden");
-                        } else {
-                            entry.classList.add("hidden");
-                        }
-                    });
-            }
+                }
         }
 
         searchBox.addEventListener("input", search);
 
         search();
 
+        function searchSubmit(e) {
+            // pick the top result if the user submits search form
+            e.preventDefault();
+            if (topSearchResultListItem !== undefined) {
+                let topSearchResultListItemAnchor =
+                    topSearchResultListItem.querySelector("a");
+                if (topSearchResultListItemAnchor !== null) {
+                    topSearchResultListItemAnchor.click();
+                }
+            }
+        }
+        searchForm.addEventListener("submit", searchSubmit);
+
         // Capture '/' keypress for quick search
         window.addEventListener("keyup", (e) => {
             if (e.key === "s" && document.activeElement !== searchBox) {
-                e.preventDefault;
+                e.preventDefault();
                 searchBox.focus();
                 searchBox.value = "";
             }
 
-            if (e.key === "Escape" && document.activeElement === searchBox) {
-                e.preventDefault;
-
-                // De-focus input box
+            if (e.key === "Escape") {
+              if (document.activeElement === searchBox) {
+                // De-focus and clear input box
+                searchBox.value = "";
                 searchBox.blur();
+              } else {
+                // Hide the search results
+                searchTypeAhead.classList.add("hidden");
 
-                // Reset sidebar state
-                search();
+                if (searchTypeAhead.contains(document.activeElement)) {
+                  searchBox.focus();
+                }
+              }
             }
         });
     }
