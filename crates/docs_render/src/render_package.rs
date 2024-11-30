@@ -14,14 +14,14 @@ pub trait SidebarEntry<'a, StrIter> {
     ///     Baz,
     ///     Blah,
     /// ]
-    fn link_text(&self) -> &'a str;
+    fn link_text(&'a self) -> &'a str;
 
     /// The entries this module exposes (types, values, abilities)
-    fn exposed(&self) -> StrIter;
+    fn exposed(&'a self) -> StrIter;
 
     /// These doc comments get interpreted as flat strings; Markdown is not allowed
     /// in them, because they will be rendered in the sidebar as plain text.
-    fn doc_comment(&self) -> Option<&'a str>;
+    fn doc_comment(&'a self) -> &'a str;
 }
 
 pub struct RecordField<'a, Type> {
@@ -63,8 +63,8 @@ pub trait Docs<
     AbilityIter: Iterator<Item = &'a Ability>,
     AbilityMemberIter: Iterator<Item = &'a AbilityMember<'a, Type>>,
     ModuleNames: Iterator<Item = &'a (ModuleId, &'a str)>,
-    SBEntry: SidebarEntry<'a, StrIter> + 'a,
-    SBEntries: Iterator<Item = &'a mut SBEntry>,
+    SBEntry: SidebarEntry<'a, StrIter> + Debug + 'a,
+    SBEntries: Iterator<Item = &'a SBEntry>,
     StrIter: Iterator<Item = &'a &'a str> + 'a,
     BodyEntries: Iterator<Item = &'a BodyEntry<'a, Type>>,
     VisitAbleVars: Iterator<Item = &'a (&'a str, TypesIter)>,
@@ -72,24 +72,24 @@ pub trait Docs<
 >: Sized
 {
     // Required constants
-    fn package_name(&self) -> &'a str;
-    fn user_specified_base_url(&self) -> Option<&'a str>;
-    fn raw_template_html(&self) -> &'a str;
-    fn package_doc_comment_markdown(&self) -> &'a str;
+    fn package_name(&'a self) -> &'a str;
+    fn user_specified_base_url(&'a self) -> Option<&'a str>;
+    fn raw_template_html(&'a self) -> &'a str;
+    fn package_doc_comment_markdown(&'a self) -> &'a str;
 
     // Required iterators
-    fn module_names(&self) -> ModuleNames;
-    fn package_sidebar_entries(&self) -> SBEntries;
-    fn body_entries(&self) -> BodyEntries;
+    fn module_names(&'a self) -> ModuleNames;
+    fn package_sidebar_entries(&'a self) -> SBEntries;
+    fn body_entries(&'a self) -> BodyEntries;
 
     // Required lookups
-    fn base_url(&self, module_id: ModuleId) -> &'a str;
-    fn module_name(&self, module_id: ModuleId) -> &'a str;
-    fn ident_name(&self, module_id: ModuleId, ident_id: IdentId) -> &'a str;
-    fn opt_type(&self, module_id: ModuleId, ident_id: IdentId) -> Option<Type>;
-    fn opt_alias(&self, module_id: ModuleId, ident_id: IdentId) -> Option<Alias>;
+    fn base_url(&'a self, module_id: ModuleId) -> &'a str;
+    fn module_name(&'a self, module_id: ModuleId) -> &'a str;
+    fn ident_name(&'a self, module_id: ModuleId, ident_id: IdentId) -> &'a str;
+    fn opt_type(&'a self, module_id: ModuleId, ident_id: IdentId) -> Option<Type>;
+    fn opt_alias(&'a self, module_id: ModuleId, ident_id: IdentId) -> Option<Alias>;
     fn visit_type<'b>(
-        &self,
+        &'a self,
         arena: &'b Bump,
         renderer: &mut TypeRenderer,
         typ: &Type,
@@ -98,7 +98,7 @@ pub trait Docs<
 
     // Implementation
     fn render_to_disk<Problem>(
-        &self,
+        &'a self,
         arena: &'a Bump,
         // Takes the module name to be used as the directory name (or None if this is the root index.html),
         // as well as the contents of the file.
@@ -223,9 +223,11 @@ pub trait Docs<
         Ok(())
     }
 
-    fn render_sidebar(&self, buf: &mut String<'_>) {
+    fn render_sidebar(&'a self, buf: &mut String<'_>) {
         for entry in self.package_sidebar_entries() {
-            if let Some(heading) = entry.doc_comment() {
+            let heading = entry.doc_comment();
+
+            if !heading.is_empty() {
                 let _ = write!(buf, "\t<h3 class=\"sidebar-heading\">{heading}</a>\n");
             }
 
@@ -245,7 +247,7 @@ pub trait Docs<
         }
     }
 
-    fn render_type(&self, arena: &'a Bump, typ: &Type, buf: &mut String<'a>) {
+    fn render_type(&'a self, arena: &'a Bump, typ: &Type, buf: &mut String<'a>) {
         use roc_docs_types::TypeVisitor;
 
         let mut renderer = TypeRenderer::default();
@@ -260,7 +262,7 @@ pub trait Docs<
         );
     }
 
-    fn render_absolute_url(&self, ident_id: IdentId, module_id: ModuleId, buf: &mut String<'_>) {
+    fn render_absolute_url(&'a self, ident_id: IdentId, module_id: ModuleId, buf: &mut String<'_>) {
         let base_url = self.base_url(module_id);
 
         let _ = write!(
@@ -272,7 +274,7 @@ pub trait Docs<
         );
     }
 
-    fn render_module(&self, arena: &'a Bump, module_id: ModuleId, buf: &mut String<'a>) {
+    fn render_module(&'a self, arena: &'a Bump, module_id: ModuleId, buf: &mut String<'a>) {
         let module_name = self.module_name(module_id);
         let _ = write!(
             buf,
@@ -307,7 +309,7 @@ pub trait Docs<
     }
 
     fn render_ability_decl(
-        &self,
+        &'a self,
         arena: &'a Bump,
         members: AbilityMemberIter,
         buf: &mut String<'a>,
@@ -338,7 +340,7 @@ pub trait Docs<
     }
 
     fn render_type_alias_decl(
-        &self,
+        &'a self,
         arena: &'a Bump,
         type_var_names: StrIter,
         alias: &'a Type,
@@ -357,7 +359,7 @@ pub trait Docs<
     }
 
     fn render_opaque_type_decl(
-        &self,
+        &'a self,
         _arena: &'a Bump, // TODO this will be needed in the future arena API
         type_var_names: impl Iterator<Item = impl AsRef<str>>,
         abilities: impl Iterator<Item = &'a Ability>,
@@ -392,7 +394,7 @@ pub trait Docs<
         }
     }
 
-    fn render_val_decl(&self, arena: &'a Bump, typ: &'a Type, buf: &mut String<'a>) {
+    fn render_val_decl(&'a self, arena: &'a Bump, typ: &'a Type, buf: &mut String<'a>) {
         buf.push_str(" <span class='kw'>:</span>");
 
         self.render_type(arena, &typ, buf)
@@ -400,8 +402,8 @@ pub trait Docs<
 }
 
 pub trait AbilityImpl<'a> {
-    fn name(&self) -> &'a str;
-    fn docs_url(&self) -> &'a str;
+    fn name(&'a self) -> &'a str;
+    fn docs_url(&'a self) -> &'a str;
 }
 
 pub trait TypeAnn<

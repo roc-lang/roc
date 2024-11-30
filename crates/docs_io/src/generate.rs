@@ -1,5 +1,6 @@
 use crate::file::{self, Assets};
 use crate::problem::Problem;
+use bumpalo::collections::Vec;
 use bumpalo::{collections::string::String, Bump};
 use core::{fmt::Debug, slice};
 use roc_can::scope::Scope;
@@ -79,27 +80,78 @@ pub fn generate_docs_html<'a>(
     // under the shell.
     file::populate_build_dir(arena, out_dir.as_ref(), &assets)?;
 
-    IoDocs {
+    IoDocs::new(
         arena,
-        loaded_module,
-        raw_template_html: assets.raw_template_html.as_ref(),
+        &loaded_module,
+        assets.raw_template_html.as_ref(),
         // TODO get this from the platform's source file rather than hardcoding it!
         // github.com/roc-lang/roc/issues/5712
-        pkg_name: "Documentation",
+        "Documentation",
         opt_user_specified_base_url,
-    }
+    )
     .generate(out_dir)
 }
 
 struct IoDocs<'a> {
     arena: &'a Bump,
-    loaded_module: LoadedModule,
+    header_doc_comment: &'a str,
     raw_template_html: &'a str,
     pkg_name: &'a str,
     opt_user_specified_base_url: Option<&'a str>,
+    sb_entries: Vec<'a, SBEntry<'a>>,
+    module_names: Vec<'a, (ModuleId, &'a str)>,
 }
 
 impl<'a> IoDocs<'a> {
+    pub fn new(
+        arena: &'a Bump,
+        loaded_module: &LoadedModule,
+        raw_template_html: &'a str,
+        pkg_name: &'a str,
+        opt_user_specified_base_url: Option<&'a str>,
+    ) -> IoDocs<'a> {
+        let mut module_names: Vec<'a, (ModuleId, &'a str)> =
+            Vec::with_capacity_in(loaded_module.docs_by_module.len(), arena);
+        let mut sb_entries: Vec<'a, SBEntry<'a>> =
+            Vec::with_capacity_in(loaded_module.exposed_modules.len(), arena);
+        let header_doc_comment = arena.alloc_str(&loaded_module.header_doc_comment);
+
+        for (module_id, docs) in loaded_module.docs_by_module.iter() {
+            module_names.push((*module_id, &*arena.alloc_str(&docs.name)));
+        }
+
+        for module_id in loaded_module.exposed_modules.iter() {
+            if let Some(docs) = loaded_module.docs_by_module.get(module_id) {
+                let mut exposed = Vec::with_capacity_in(docs.exposed_symbols.len(), arena);
+                for symbol in docs.exposed_symbols.iter() {
+                    if let Some(ident_ids) =
+                        loaded_module.interns.all_ident_ids.get(&symbol.module_id())
+                    {
+                        if let Some(name) = ident_ids.get_name(symbol.ident_id()) {
+                            exposed.push(&*arena.alloc_str(name));
+                        }
+                    }
+                }
+
+                sb_entries.push(SBEntry {
+                    link_text: arena.alloc_str(&docs.name),
+                    exposed,
+                    doc_comment: arena.alloc_str(&docs.header_doc_comment),
+                });
+            }
+        }
+
+        Self {
+            header_doc_comment,
+            sb_entries,
+            raw_template_html,
+            pkg_name,
+            opt_user_specified_base_url,
+            module_names,
+            arena,
+        }
+    }
+
     fn generate(self, build_dir: impl AsRef<Path>) -> Result<(), Problem> {
         let arena = &self.arena;
         let build_dir = build_dir.as_ref();
@@ -128,7 +180,7 @@ impl<'a> IoDocs<'a> {
     }
 
     fn header_doc_comment(&self) -> &'a str {
-        self.arena.alloc_str(&self.loaded_module.header_doc_comment)
+        self.header_doc_comment
     }
 }
 
@@ -202,6 +254,7 @@ impl<'a>
     }
 }
 
+#[derive(Debug)]
 struct SBEntry<'a> {
     /// In the source code, this will appear in a module's `exposes` list like:
     ///
@@ -215,23 +268,23 @@ struct SBEntry<'a> {
     pub link_text: &'a str,
 
     /// The entries this module exposes (types, values, abilities)
-    pub exposed: &'a [&'a str],
+    pub exposed: Vec<'a, &'a str>,
 
     /// These doc comments get interpreted as flat strings; Markdown is not allowed
     /// in them, because they will be rendered in the sidebar as plain text.
-    pub doc_comment: Option<&'a str>,
+    pub doc_comment: &'a str,
 }
 
 impl<'a> SidebarEntry<'a, slice::Iter<'a, &'a str>> for SBEntry<'a> {
-    fn link_text(&self) -> &'a str {
+    fn link_text(&'a self) -> &'a str {
         self.link_text
     }
 
-    fn exposed(&self) -> slice::Iter<'a, &'a str> {
-        self.exposed.into_iter()
+    fn exposed(&'a self) -> slice::Iter<'a, &'a str> {
+        self.exposed.iter()
     }
 
-    fn doc_comment(&self) -> Option<&'a str> {
+    fn doc_comment(&'a self) -> &'a str {
         self.doc_comment
     }
 }
@@ -250,7 +303,7 @@ impl<'a>
         slice::Iter<'a, AbilityMember<'a, Annotation>>,
         slice::Iter<'a, (ModuleId, &'a str)>,
         SBEntry<'a>,
-        slice::IterMut<'a, SBEntry<'a>>,
+        slice::Iter<'a, SBEntry<'a>>,
         slice::Iter<'a, &'a str>,
         slice::Iter<'a, BodyEntry<'a, Annotation>>,
         slice::Iter<'a, (&'a str, slice::Iter<'a, Annotation>)>,
@@ -277,8 +330,11 @@ impl<'a>
         "TODO base_url"
     }
 
-    fn module_name(&self, module_id: ModuleId) -> &'a str {
-        "TODO module_name"
+    fn module_name(&'a self, module_id: ModuleId) -> &'a str {
+        self.module_names()
+            .find(|(id, _name)| *id == module_id)
+            .map(|(_module_id, name)| *name)
+            .unwrap_or_default()
     }
 
     fn ident_name(&self, module_id: ModuleId, ident_id: IdentId) -> &'a str {
@@ -291,16 +347,12 @@ impl<'a>
         None
     }
 
-    fn module_names(&self) -> slice::Iter<'a, (ModuleId, &'a str)> {
-        let todo = ();
-
-        [].iter()
+    fn module_names(&'a self) -> slice::Iter<'a, (ModuleId, &'a str)> {
+        self.module_names.iter()
     }
 
-    fn package_sidebar_entries(&self) -> slice::IterMut<'a, SBEntry<'a>> {
-        let todo = ();
-
-        [].iter_mut()
+    fn package_sidebar_entries(&'a self) -> slice::Iter<'a, SBEntry<'a>> {
+        self.sb_entries.iter()
     }
 
     fn body_entries(&self) -> slice::Iter<'a, BodyEntry<'a, Annotation>> {
