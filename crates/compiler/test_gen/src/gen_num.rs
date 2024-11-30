@@ -1928,6 +1928,13 @@ fn pow_int() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+#[should_panic(expected = r#"Roc failed with message: "Integer raised to power overflowed!"#)]
+fn pow_int_overflow() {
+    assert_evals_to!("Num.powInt 2u8 8", 0, u8);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn atan() {
     assert_evals_to!("Num.atan 10f64", 1.4711276743037347, f64);
 }
