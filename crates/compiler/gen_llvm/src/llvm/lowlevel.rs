@@ -1164,6 +1164,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             let llvm_max_dec_i = to.const_int_arbitrary_precision(&[MAX_DEC_IL,MAX_DEC_IH]);
             let llvm_min_dec_i = to.const_int_arbitrary_precision(&[MAX_DEC_IL,MAX_DEC_IH]).const_not();
             let llvm_divisor = float_type.const_float(DEC_RIGHT_DIGITS as f64);
+                    
             arguments_with_layouts!((arg, arg_layout));
             //Get the actual value that we are converting to
             let result = match layout_interner.get_repr(arg_layout) {
@@ -1249,12 +1250,15 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                         }
                     }
                     LayoutRepr::Builtin(Builtin::Float(_)) => {
+                        
+                        
                         env.builder.new_build_float_compare(
                             inkwell::FloatPredicate::OGT,
                             arg.into_float_value(),
                             llvm_max_dec_f,
                             "float_compare",
                         )
+                    
                     }
                     //A decimal can obviously fit itself
                     LayoutRepr::Builtin(Builtin::Decimal) => bool_false,
