@@ -2480,7 +2480,7 @@ pub fn one_or_more<'a, Output, E: 'a>(
 macro_rules! debug {
     ($parser:expr) => {
         move |arena, state: $crate::state::State<'a>, min_indent: u32| {
-            dbg!($parser.parse(arena, state, min_indent))
+            eprintln!("{:?}", $parser.parse(arena, state, min_indent))
         }
     };
 }
