@@ -10,6 +10,8 @@ use core::{
     ptr::{self, NonNull},
 };
 
+use std::os::raw::c_void;
+
 #[repr(C)]
 pub struct RocBox<T>
 where
@@ -69,16 +71,15 @@ where
     }
 
     fn storage(&self) -> &Cell<Storage> {
-        let alignment = Self::alloc_alignment();
+        unsafe { &*self.as_ptr().cast::<Cell<Storage>>() }
+    }
 
-        unsafe {
-            &*self
-                .contents
-                .as_ptr()
-                .cast::<u8>()
-                .sub(alignment)
-                .cast::<Cell<Storage>>()
-        }
+    /// The raw pointer to a roc box, including the leading refcount
+    /// Intended for use by platforms in roc_dealloc
+    pub unsafe fn as_ptr(&self) -> *mut c_void {
+        let alignment = Self::alloc_alignment();
+        let with_offset = unsafe { self.contents.as_ptr().cast::<u8>().sub(alignment) };
+        with_offset as *mut c_void
     }
 }
 
