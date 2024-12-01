@@ -324,6 +324,7 @@ mod test_snapshots {
         pass/dbg.expr,
         pass/dbg_double.expr,
         pass/dbg_double_newline.expr,
+        pass/dbg_extra_parens.expr,
         pass/dbg_newline_apply.expr,
         pass/dbg_stmt.expr,
         pass/dbg_stmt_multiline.expr,
