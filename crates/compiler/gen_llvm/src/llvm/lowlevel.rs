@@ -23,7 +23,6 @@ use roc_mono::{
 use roc_target::{PtrWidth, Target};
 
 use crate::llvm::{
-    self,
     bitcode::{
         call_bitcode_fn, call_bitcode_fn_fixing_for_convention, call_bitcode_fn_returning_record,
         call_bitcode_fn_with_record_arg, call_list_bitcode_fn, call_str_bitcode_fn,
@@ -1162,17 +1161,18 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             let checked = matches!(op, NumToDecChecked);
             const DEC_RIGHT_DIGITS: u64 = 10u64.pow(18);
             const MAX_DEC_F: f64 = 170_141_183_460_469_231_731.687_303_715_884_105_727;
-            const MAX_DEC_I: i128 = 170_141_183_460_469_231_731;
             const MAX_DEC_IH: u64 = 9;
             const MAX_DEC_IL: u64 = 4120486797000000000;
             let to = env.context.i128_type();
             let float_type = env.context.f64_type();
             let llvm_digits = to.const_int(DEC_RIGHT_DIGITS, false);
             let llvm_max_dec_f = float_type.const_float(MAX_DEC_F);
-            let llvm_max_dec_i = to.const_int_arbitrary_precision(&[MAX_DEC_IL,MAX_DEC_IH]);
-            let llvm_min_dec_i = to.const_int_arbitrary_precision(&[MAX_DEC_IL,MAX_DEC_IH]).const_not();
+            let llvm_max_dec_i = to.const_int_arbitrary_precision(&[MAX_DEC_IL, MAX_DEC_IH]);
+            let llvm_min_dec_i = to
+                .const_int_arbitrary_precision(&[MAX_DEC_IL, MAX_DEC_IH])
+                .const_not();
             let llvm_divisor = float_type.const_float(DEC_RIGHT_DIGITS as f64);
-                    
+
             arguments_with_layouts!((arg, arg_layout));
             //Get the actual value that we are converting to
             let result = match layout_interner.get_repr(arg_layout) {
@@ -1220,66 +1220,70 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             };
             //Look and see if the conversion is checked or not
             if checked {
-                let layout = env.context.i128_type();
                 let bool_false = env.context.bool_type().const_zero();
-                let bool_true = env.context.bool_type().const_all_ones();
-
                 let with_overflow = match layout_interner.get_repr(arg_layout) {
                     //If the value being is converted into a integer
                     LayoutRepr::Builtin(Builtin::Int(width)) => {
                         //`Dec` can always fit `I64`s and `U64`s and smaller, no need to check at runtime
                         if width.stack_size() <= 4 {
                             bool_false
-                        } else {
-                            if width.is_signed() {
-                                let compare_arg = env.builder.build_int_z_extend_or_bit_cast(arg.into_int_value(), to, "int_cast").unwrap();
-                                //If VA > +Dec
-                                let pos_res = env.builder.new_build_int_compare(
-                                    inkwell::IntPredicate::SGT,
-                                    compare_arg,
-                                    llvm_max_dec_i,
-                                    "int_compare",
-                                );
-                                //If VA < -Dec
-                                let neg_res = env.builder.new_build_int_compare(
-                                    inkwell::IntPredicate::SGT,
-                                    llvm_min_dec_i,
-                                    compare_arg,
-                                    "int_compare",
-                                );
-                                env.builder.new_build_or(pos_res,neg_res,"or_ops")
-                            } else {
-                                env.builder.new_build_int_compare(
-                                    inkwell::IntPredicate::SGT,
+                        } else if width.is_signed() {
+                            let compare_arg = env
+                                .builder
+                                .build_int_z_extend_or_bit_cast(
                                     arg.into_int_value(),
-                                    llvm_max_dec_i,
-                                    "int_compare",
+                                    to,
+                                    "int_cast",
                                 )
-                            }
+                                .unwrap();
+                            //If VA > +Dec
+                            let pos_res = env.builder.new_build_int_compare(
+                                inkwell::IntPredicate::SGT,
+                                compare_arg,
+                                llvm_max_dec_i,
+                                "int_compare",
+                            );
+                            //If VA < -Dec
+                            let neg_res = env.builder.new_build_int_compare(
+                                inkwell::IntPredicate::SGT,
+                                llvm_min_dec_i,
+                                compare_arg,
+                                "int_compare",
+                            );
+                            env.builder.new_build_or(pos_res, neg_res, "or_ops")
+                        } else {
+                            env.builder.new_build_int_compare(
+                                inkwell::IntPredicate::SGT,
+                                arg.into_int_value(),
+                                llvm_max_dec_i,
+                                "int_compare",
+                            )
                         }
                     }
-                    LayoutRepr::Builtin(Builtin::Float(_)) => {
-                        
-                        
-                        env.builder.new_build_float_compare(
-                            inkwell::FloatPredicate::OGT,
-                            arg.into_float_value(),
-                            llvm_max_dec_f,
-                            "float_compare",
-                        )
-                    
-                    }
+                    LayoutRepr::Builtin(Builtin::Float(_)) => env.builder.new_build_float_compare(
+                        inkwell::FloatPredicate::OGT,
+                        arg.into_float_value(),
+                        llvm_max_dec_f,
+                        "float_compare",
+                    ),
                     //A decimal can obviously fit itself
                     LayoutRepr::Builtin(Builtin::Decimal) => bool_false,
                     _ => {
                         unreachable!()
                     }
                 };
-                
-                let return_int_type : BasicTypeEnum = env.context.i128_type().into();
-                result_with(env,return_int_type,result,env.context.bool_type().into(),with_overflow).into()
+
+                let return_int_type: BasicTypeEnum = env.context.i128_type().into();
+                result_with(
+                    env,
+                    return_int_type,
+                    result,
+                    env.context.bool_type().into(),
+                    with_overflow,
+                )
+                .into()
             } else {
-                result.into()
+                result
             }
         }
         NumToFloatCast => {
@@ -2998,16 +3002,12 @@ use inkwell::types::BasicTypeEnum;
 ///Change from a basic LLVM value to a Roc `Result`
 fn result_with<'ctx>(
     env: &Env<'_, 'ctx, '_>,
-    good_type : BasicTypeEnum,
-    good_value : impl BasicValue<'ctx>,
-    bad_type : BasicTypeEnum,
-    bad_value : impl BasicValue<'ctx>
+    good_type: BasicTypeEnum,
+    good_value: impl BasicValue<'ctx>,
+    bad_type: BasicTypeEnum,
+    bad_value: impl BasicValue<'ctx>,
 ) -> StructValue<'ctx> {
-    use LowLevel::*;
-    
-    let struct_type = env
-        .context
-        .struct_type(&[good_type.into(), bad_type.into()], false);
+    let struct_type = env.context.struct_type(&[good_type, bad_type], false);
     let return_value = struct_type.const_zero();
     let return_value = env
         .builder
