@@ -1162,22 +1162,18 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                     env.builder
                         .build_int_s_extend(arg.into_int_value(), to, "inc_cast")
                 }
-
                 //U16 -> X32
                 (false, _, true) => {
                     env.builder
                         .build_int_z_extend(arg.into_int_value(), to, "inc_cast")
                 },
-                
                 //I16 -> U32
-                (true,false,true) 
+                (true,false,true)
                 //Any case where it is not an extension, also perhaps warn here?
-                | (_, _, false) => { 
+                | (_, _, false) => {
                     Ok(env.builder
                     .new_build_int_cast_sign_flag(arg.into_int_value(), to, to_signed, "inc_cast"))
-                    
                 }
-                
             };
 
             let Ok(value) = result else { todo!() };

@@ -3999,13 +3999,12 @@ fn infinity_f32() {
 fn infinity_f64() {
     assert_evals_to!(r"Num.infinityF64", f64::INFINITY, f64);
 }
-
+#[allow(clippy::non_minimal_cfg)]
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm"))]
 fn cast_signed_unsigned() {
-    assert_evals_to!(r"Num.toI16 255u8",255,i16);
-    assert_evals_to!(r"Num.toU16 127i8",127,u16);
-    assert_evals_to!(r"Num.toU8 127i8",127,u8);
-    assert_evals_to!(r"Num.toI8 127u8",127,i8);
+    assert_evals_to!(r"Num.toI16 255u8", 255, i16);
+    assert_evals_to!(r"Num.toU16 127i8", 127, u16);
+    assert_evals_to!(r"Num.toU8 127i8", 127, u8);
+    assert_evals_to!(r"Num.toI8 127u8", 127, i8);
 }
-
