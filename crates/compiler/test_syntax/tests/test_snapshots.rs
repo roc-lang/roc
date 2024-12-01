@@ -222,6 +222,7 @@ mod test_snapshots {
         fail/module_params_with_missing_arrow.header,
         fail/module_with_unfinished_params.header,
         fail/multi_no_end.expr,
+        fail/nested_tuples_annotation_terrible_perf.expr,
         fail/newline_before_operator_with_defs.expr,
         fail/opaque_type_def_with_newline.expr,
         fail/pattern_binds_keyword.expr,

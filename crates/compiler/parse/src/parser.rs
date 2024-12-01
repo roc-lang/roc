@@ -836,7 +836,7 @@ where
         }
 
         // This should be enough for anyone. Right? RIGHT?
-        let indent_text = "| ; : ! ".repeat(20);
+        let indent_text = "| ; : ! ".repeat(100);
 
         let cur_indent = INDENT.with(|i| *i.borrow());
 
@@ -1666,6 +1666,21 @@ where
 {
     move |_arena: &'a bumpalo::Bump, state: State<'a>, _min_indent: u32| {
         Err((NoProgress, f(state.pos())))
+    }
+}
+
+/// Creates a parser that fails if the next byte is the given byte.
+pub fn error_on_byte<'a, T, E, F>(byte_to_match: u8, to_error: F) -> impl Parser<'a, T, E>
+where
+    T: 'a,
+    E: 'a,
+    F: Fn(Position) -> E,
+{
+    debug_assert_ne!(byte_to_match, b'\n');
+
+    move |_arena: &'a Bump, state: State<'a>, _min_indent: u32| match state.bytes().first() {
+        Some(x) if *x == byte_to_match => Err((MadeProgress, to_error(state.pos()))),
+        _ => Err((NoProgress, to_error(state.pos()))),
     }
 }
 
