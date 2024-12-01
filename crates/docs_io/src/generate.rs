@@ -273,136 +273,128 @@ impl<'a> Docs<'a> {
 
 /// After generating a type annotation, clean up its generated variables -
 /// e.g. if we have a tag union with a variable in it, drop that from the annotation.
-fn clean_annotation(ann: TypeAnnotation) -> TypeAnnotation {
+fn clean_annotation(mut ann: TypeAnnotation) -> TypeAnnotation {
     let mut var_counts = MutMap::default();
 
     count_var_names(&ann, &mut var_counts);
+    clean_annotation_help(&mut ann, &var_counts);
 
-    match ann {
-        TypeAnnotation::TagUnion { tags, extension } => todo!(),
-        TypeAnnotation::Function {
-            args,
-            arrow,
-            output,
-        } => todo!(),
-        TypeAnnotation::ObscuredTagUnion => todo!(),
-        TypeAnnotation::ObscuredRecord => todo!(),
-        TypeAnnotation::BoundVariable(_) => todo!(),
-        TypeAnnotation::Apply { name, parts } => todo!(),
-        TypeAnnotation::Record { fields, extension } => todo!(),
-        TypeAnnotation::Tuple { elems, extension } => todo!(),
-        TypeAnnotation::Ability { members } => todo!(),
-        TypeAnnotation::Wildcard => todo!(),
-        TypeAnnotation::NoTypeAnn => todo!(),
-        TypeAnnotation::Where { ann, implements } => todo!(),
-        TypeAnnotation::As { ann, name, vars } => todo!(),
-    }
+    ann
 }
 
-fn clean_annotation_help(
-    ann: TypeAnnotation,
-    var_counts: &MutMap<std::string::String, u32>,
-) -> TypeAnnotation {
+fn clean_annotation_help(ann: &mut TypeAnnotation, var_counts: &MutMap<std::string::String, u32>) {
     match ann {
-        TypeAnnotation::TagUnion { tags, extension } => TypeAnnotation::TagUnion {
-            tags: tags
-                .into_iter()
-                .map(|tag| Tag {
-                    name: tag.name,
-                    values: tag
-                        .values
-                        .into_iter()
-                        .map(|v| clean_annotation_help(v, var_counts))
-                        .collect(),
-                })
-                .collect(),
-            extension: Box::new(clean_annotation_help(*extension, var_counts)),
-        },
-        TypeAnnotation::Function {
-            args,
-            arrow,
-            output,
-        } => TypeAnnotation::Function {
-            args: args
-                .into_iter()
-                .map(|arg| clean_annotation_help(arg, var_counts))
-                .collect(),
-            arrow,
-            output: Box::new(clean_annotation_help(*output, var_counts)),
-        },
-        TypeAnnotation::ObscuredTagUnion => TypeAnnotation::ObscuredTagUnion,
-        TypeAnnotation::ObscuredRecord => TypeAnnotation::ObscuredRecord,
-        TypeAnnotation::BoundVariable(var_name) => {
-            if var_counts.get(&var_name) == Some(&1) {
-                TypeAnnotation::BoundVariable("*".to_string())
-            } else {
-                TypeAnnotation::BoundVariable(var_name)
+        TypeAnnotation::TagUnion { tags, extension } => {
+            for tag in tags.iter_mut() {
+                for v in tag.values.iter_mut() {
+                    clean_annotation_help(v, var_counts);
+                }
+            }
+
+            match &mut **extension {
+                TypeAnnotation::BoundVariable(ext_var) if var_counts.get(ext_var) == Some(&1) => {
+                    // If the extension is an unbound var, don't render it.
+                    *ext_var = std::string::String::new();
+                }
+                _ => {
+                    clean_annotation_help(extension, var_counts);
+                }
             }
         }
-        TypeAnnotation::Apply { name, parts } => TypeAnnotation::Apply {
-            name,
-            parts: parts
-                .into_iter()
-                .map(|part| clean_annotation_help(part, var_counts))
-                .collect(),
-        },
-        TypeAnnotation::Record { fields, extension } => TypeAnnotation::Record {
-            fields: fields
-                .into_iter()
-                .map(|field| match field {
+        TypeAnnotation::Function {
+            args,
+            arrow: _,
+            output,
+        } => {
+            for arg in args.iter_mut() {
+                clean_annotation_help(arg, var_counts);
+            }
+
+            clean_annotation_help(output, var_counts);
+        }
+        TypeAnnotation::ObscuredTagUnion => {}
+        TypeAnnotation::ObscuredRecord => {}
+        TypeAnnotation::BoundVariable(var_name) => {
+            if var_counts.get(var_name) == Some(&1) {
+                *var_name = "*".to_string();
+            }
+        }
+        TypeAnnotation::Apply { name: _, parts } => {
+            for part in parts.iter_mut() {
+                clean_annotation_help(part, var_counts);
+            }
+        }
+        TypeAnnotation::Record { fields, extension } => {
+            for field in fields.iter_mut() {
+                match field {
                     RecordField::RecordField {
-                        name,
+                        name: _,
                         type_annotation,
-                    } => RecordField::RecordField {
-                        name,
-                        type_annotation: clean_annotation_help(type_annotation, var_counts),
-                    },
+                    } => {
+                        clean_annotation_help(type_annotation, var_counts);
+                    }
                     RecordField::OptionalField {
-                        name,
+                        name: _,
                         type_annotation,
-                    } => RecordField::OptionalField {
-                        name,
-                        type_annotation: clean_annotation_help(type_annotation, var_counts),
-                    },
-                    RecordField::LabelOnly { name } => RecordField::LabelOnly { name },
-                })
-                .collect(),
-            extension: Box::new(clean_annotation_help(*extension, var_counts)),
-        },
-        TypeAnnotation::Tuple { elems, extension } => TypeAnnotation::Tuple {
-            elems: elems
-                .into_iter()
-                .map(|elem| clean_annotation_help(elem, var_counts))
-                .collect(),
-            extension: Box::new(clean_annotation_help(*extension, var_counts)),
-        },
-        TypeAnnotation::Ability { members } => TypeAnnotation::Ability {
-            members: members
-                .into_iter()
-                .map(|member| AbilityMember {
-                    name: member.name,
-                    type_annotation: clean_annotation_help(member.type_annotation, var_counts),
-                    docs: member.docs,
-                    able_variables: member
-                        .able_variables
-                        .into_iter()
-                        .map(|(name, abilities)| {
-                            (
-                                name,
-                                abilities
-                                    .into_iter()
-                                    .map(|ability| clean_annotation_help(ability, var_counts))
-                                    .collect(),
-                            )
-                        })
-                        .collect(),
-                })
-                .collect(),
-        },
-        TypeAnnotation::Wildcard => TypeAnnotation::Wildcard,
-        TypeAnnotation::NoTypeAnn => TypeAnnotation::NoTypeAnn,
-        TypeAnnotation::Where { ann, implements } => todo!(),
-        TypeAnnotation::As { ann, name, vars } => todo!(),
+                    } => {
+                        clean_annotation_help(type_annotation, var_counts);
+                    }
+                    RecordField::LabelOnly { name: _ } => {}
+                }
+            }
+
+            match &mut **extension {
+                TypeAnnotation::BoundVariable(ext_var) if var_counts.get(ext_var) == Some(&1) => {
+                    // If the extension is an unbound var, don't render it.
+                    *ext_var = std::string::String::new();
+                }
+                _ => {
+                    clean_annotation_help(extension, var_counts);
+                }
+            }
+        }
+        TypeAnnotation::Tuple { elems, extension } => {
+            for elem in elems.iter_mut() {
+                clean_annotation_help(elem, var_counts);
+            }
+
+            match &mut **extension {
+                TypeAnnotation::BoundVariable(ext_var) if var_counts.get(ext_var) == Some(&1) => {
+                    // If the extension is an unbound var, don't render it.
+                    *ext_var = std::string::String::new();
+                }
+                _ => {
+                    clean_annotation_help(extension, var_counts);
+                }
+            }
+        }
+        TypeAnnotation::Ability { members } => {
+            for member in members.iter_mut() {
+                clean_annotation_help(&mut member.type_annotation, var_counts);
+                for (_, abilities) in member.able_variables.iter_mut() {
+                    for ability in abilities.iter_mut() {
+                        clean_annotation_help(ability, var_counts);
+                    }
+                }
+            }
+        }
+        TypeAnnotation::Wildcard => {}
+        TypeAnnotation::NoTypeAnn => {}
+        TypeAnnotation::Where { ann, implements } => {
+            clean_annotation_help(ann, var_counts);
+            for implement in implements.iter_mut() {
+                for ability in implement.abilities.iter_mut() {
+                    clean_annotation_help(ability, var_counts);
+                }
+            }
+        }
+        TypeAnnotation::As {
+            ann,
+            name: _,
+            vars: _,
+        } => {
+            clean_annotation_help(ann, var_counts);
+        }
     }
 }
 
@@ -905,102 +897,6 @@ impl<'a> Docs<'a> {
             buf.push_str("</section>");
         }
     }
-
-    fn render_ability_decl(
-        &'a self,
-        arena: &'a Bump,
-        members: impl Iterator<Item = &'a AbilityMember<'a, TypeAnnotation>>,
-        buf: &mut String<'a>,
-    ) {
-        buf.push_str(" <span class='kw'>implements {</span>");
-
-        let mut any_rendered = false;
-
-        for (index, member) in members.enumerate() {
-            if index == 0 {
-                buf.push_str(" <h4 class='kw'>implements</h4><ul class='opaque-abilities'>");
-                any_rendered = true;
-            }
-
-            let _ = write!(buf, "<li>{} : ", member.entry_name);
-            // TODO should we render docs for each member individually?
-
-            self.render_type(arena, &member.type_annotation, buf);
-
-            buf.push_str("</li>");
-        }
-
-        if any_rendered {
-            buf.push_str("</ul>");
-        }
-
-        buf.push_str("<span class='kw'>}</span>");
-    }
-
-    fn render_type_alias_decl(
-        &'a self,
-        arena: &'a Bump,
-        type_var_names: impl Iterator<Item = &'a str>,
-        alias: &'a TypeAnnotation,
-        buf: &mut String<'a>,
-    ) {
-        // Render the type variables
-        // e.g. if the alias is `Foo a b c :`, render the `a b c` part
-        for type_var_name in type_var_names {
-            buf.push(' ');
-            buf.push_str(type_var_name);
-        }
-
-        buf.push_str(" <span class='kw'>:</span>");
-
-        self.render_type(arena, &alias, buf);
-    }
-
-    fn render_opaque_type_decl(
-        &'a self,
-        _arena: &'a Bump, // TODO this will be needed in the future arena API
-        type_var_names: impl Iterator<Item = impl AsRef<str>>,
-        abilities: impl Iterator<Item = &'a Ability<'a>>,
-        buf: &mut String<'_>,
-    ) {
-        // Render the type variables
-        // e.g. if the opaque type is `Foo a b c :=`, render the `a b c` part
-        for type_var_name in type_var_names {
-            buf.push(' ');
-            buf.push_str(type_var_name.as_ref());
-        }
-
-        buf.push_str(" <span class='kw'>:=</span> <a class='opaque-note-link' href='#opaque-note'>(opaque - TODO: put this in italics, have a section at the end of the page with a note, have JS hide it on load unless that's the anchor of the page e.g. you opened it in a new tab - and then have JS display it inline on click here)</a>");
-        let mut any_rendered = false;
-
-        for (index, ability) in abilities.enumerate() {
-            let name = ability.name;
-            let href = ability.docs_url;
-
-            if index == 0 {
-                buf.push_str(" <h4 class='kw'>implements</h4><ul class='opaque-abilities'>");
-                any_rendered = true;
-            } else {
-                buf.push_str(",</li> ")
-            }
-
-            let _ = write!(buf, "<li><a href='{href}'>{name}</a>");
-        }
-
-        if any_rendered {
-            buf.push_str("</li></ul>");
-        }
-    }
-
-    fn render_val_decl(&'a self, arena: &'a Bump, typ: &'a TypeAnnotation, buf: &mut String<'a>) {
-        buf.push_str(" <span class='kw'>:</span>");
-
-        self.render_type(arena, &typ, buf)
-    }
-}
-#[derive(Debug)]
-pub struct AbilityAnn<'a> {
-    name: &'a str,
 }
 
 // fn render_package_index(root_module: &LoadedModule) -> String {
