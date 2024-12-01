@@ -18,6 +18,7 @@ use roc_region::all::Region;
 use roc_target::Target;
 use roc_types::subs::Variable;
 use roc_types::types::{Alias, AliasCommon, Type, TypeExtension};
+use std::borrow::{Borrow, Cow};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -1199,11 +1200,31 @@ fn type_annotation_to_html(
     let is_multiline = should_be_multiline(type_ann);
     match type_ann {
         TypeAnnotation::TagUnion { tags, extension } => {
-            if tags.is_empty() {
+            let mut extension = Cow::Borrowed(&**extension);
+            let mut var = std::string::String::new();
+            let mut extra_tags = std::vec::Vec::new();
+
+            loop {
+                match extension.borrow() {
+                    TypeAnnotation::TagUnion {
+                        tags: ext_tags,
+                        extension: ext_extension,
+                    } => {
+                        extra_tags.extend_from_slice(&ext_tags);
+                        extension = Cow::Owned((**ext_extension).clone());
+                    }
+                    TypeAnnotation::BoundVariable(var_name) => {
+                        var = (*var_name).to_string();
+                        break;
+                    }
+                    _ => break,
+                }
+            }
+
+            if tags.is_empty() && extra_tags.is_empty() {
                 buf.push_str("[]");
             } else {
                 let tags_len = tags.len();
-
                 let tag_union_indent = indent_level + 1;
 
                 if is_multiline {
@@ -1220,7 +1241,7 @@ fn type_annotation_to_html(
 
                 let next_indent_level = tag_union_indent + 1;
 
-                for (index, tag) in tags.iter().enumerate() {
+                for (index, tag) in tags.iter().chain(extra_tags.iter()).enumerate() {
                     if is_multiline {
                         indent(buf, next_indent_level);
                     }
@@ -1248,7 +1269,7 @@ fn type_annotation_to_html(
                 buf.push(']');
             }
 
-            type_annotation_to_html(indent_level, buf, extension, true);
+            buf.push_str(&var);
         }
         TypeAnnotation::BoundVariable(var_name) => {
             buf.push_str(var_name);
