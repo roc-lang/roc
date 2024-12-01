@@ -849,37 +849,6 @@ listGet = \index ->
 
 `Result.try` is often used to chain two functions that return `Result` (as in the example above). This prevents you from needing to add error handling code at every intermediate step.
 
-### [The `try` keyword](#the-try-keyword) {#the-try-keyword}
-
-Roc also has a special `try` keyword, which is convenient syntax sugar for `Result.try`. For example, consider the following `getLetter` function:
-
-```roc
-getLetter : Str -> Result Str [OutOfBounds, InvalidNumStr]
-getLetter = \indexStr ->
-    index = try Str.toU64 indexStr
-    List.get ["a", "b", "c", "d"] index
-```
-
-Here's what this does:
-
-- If the `Str.toU64` function returns an `Ok` value, then `try` will return what's inside the `Ok`. For example:
-  - If we call `getLetter "2"`, then `Str.toU64` returns `Ok 2`, and the `try` unwraps to the integer 2, so `index` is set to 2 (not `Ok 2`). Then the `List.get` function is called and returns `Ok "c"`.
-- If the `Str.toU64` function returns an `Err` value, then the `try` keyword immediately interrupts the `getLetter` function and makes it return this error.
-  - For example, if we call `getLetter "abc"`, then the call to `Str.toU64` returns `Err InvalidNumStr`, and the `try` keyword ensures that the `getLetter` function returns this error immediately, without executing the rest of the function.
-
-Thanks to the `try` keyword, your code can focus on the "happy path" (where nothing fails) and simply bubble up to the caller any error that might occur. Your error handling code can be neatly separated, and you can rest assured that you won't forget to handle any errors, since the compiler will let you know. See this [code example](https://github.com/roc-lang/examples/blob/main/examples/Results/main.roc) for more details on error handling.
-
-### [The `?` postfix "try" operator](#the-?-postfix-try-operator) {#the-?-postfix-try-operator}
-
-Roc also has a `?` postfix operator version of the `try` keyword:
-
-```roc
-getLetter : Str -> Result Str [OutOfBounds, InvalidNumStr]
-getLetter = \indexStr ->
-    index = Str.toU64? indexStr
-    List.get ["a", "b", "c", "d"] index
-```
-
 Now let's get back to lists!
 
 ### [Walking the elements in a list](#walking-the-elements-in-a-list) {#walking-the-elements-in-a-list}
@@ -1825,7 +1794,7 @@ This is a useful technique to use when we don't want to write out a bunch of err
 - If we're using an editor that supports it, hovering over the `_` might display the inferred type that goes there.
 - We can put an obviously wrong type in there (e.g. replace the `{}` with `Str`, which is totally wrong) and look at the compiler error to see what it inferred as the correct type.
 
-### [The `!` postfix "await" operator](#the-!-postfix-await-operator) {#the-!-postfix-await-operator}
+### [The `!` postfix "await" operator](#the-postfix-await-operator) {#the-postfix-await-operator}
 
 The `!` postfix operator is syntax sugar for the `Task.await` function, which has this type:
 
@@ -2013,7 +1982,58 @@ Well done on making it this far!
 
 We've covered all of the basic syntax and features of Roc in this Tutorial. You should now have a good foundation and be ready to start writing your own applications.
 
-You can continue reading through more advanced topics below, or perhaps checkout some of the [Examples](/examples) for more a detailed exploration of ways to do various things.
+You can continue reading through more-advanced topics below, or perhaps checkout some of the [Examples](/examples) for more a detailed exploration of ways to do various things.
+
+## [Under Construction](#under-construction) {#under-construction}
+
+Here are some features that are either coming soon or leaving soon. You may see these used in others' code, but for now you can choose to ignore them all!
+
+### [Purity inference (PI)](#purity-inference) {#purity-inference}
+
+STATUS: Almost ready! For now, this may only work on supporting platforms and supported OSes.
+
+Soon, the `!` postfix "await" operator will evolve into a suffix character inside function names themselves, marking them as effectful. For example, a platform supporting PI may evolve from requiring `main` to requiring `main!`.
+
+Effectful functions are also identifiable from their type signature alone, using `a => b` instead of `a -> b`.
+
+Additionally, app developers will no longer learn or interact with `Task`s as a concept, as they shift to be a lower-level platform implementation detail.
+
+For more information, see [this recent talk](https://www.youtube.com/watch?v=42TUAKhzlRI) and [relevant Zulip threads](https://roc.zulipchat.com/#narrow/search/purity.20inference).
+
+### [The `try` keyword](#the-try-keyword) {#the-try-keyword}
+
+STATUS: Almost ready! For now, this may only work within PI contexts.
+
+Roc has a `try` keyword, which is convenient syntax sugar for `Result.try`. For example, consider the following `getLetter` function:
+
+```roc
+getLetter : Str -> Result Str [OutOfBounds, InvalidNumStr]
+getLetter = \indexStr ->
+    index = try Str.toU64 indexStr
+    List.get ["a", "b", "c", "d"] index
+```
+
+Here's what this does:
+
+- If the `Str.toU64` function returns an `Ok` value, then `try` will return what's inside the `Ok`. For example:
+  - If we call `getLetter "2"`, then `Str.toU64` returns `Ok 2`, and the `try` unwraps to the integer 2, so `index` is set to 2 (not `Ok 2`). Then the `List.get` function is called and returns `Ok "c"`.
+- If the `Str.toU64` function returns an `Err` value, then the `try` keyword immediately interrupts the `getLetter` function and makes it return this error.
+  - For example, if we call `getLetter "abc"`, then the call to `Str.toU64` returns `Err InvalidNumStr`, and the `try` keyword ensures that the `getLetter` function returns this error immediately, without executing the rest of the function.
+
+Thanks to the `try` keyword, your code can focus on the "happy path" (where nothing fails) and simply bubble up to the caller any error that might occur. Your error handling code can be neatly separated, and you can rest assured that you won't forget to handle any errors, since the compiler will let you know. See this [code example](https://github.com/roc-lang/examples/blob/main/examples/Results/main.roc) for more details on error handling.
+
+### [The `?` postfix "try" operator](#the-postfix-try-operator) {#the-postfix-try-operator}
+
+STATUS: Deprecated! For now, this may only work within non-PI contexts.
+
+Roc also has a `?` postfix operator version of the `try` keyword:
+
+```roc
+getLetter : Str -> Result Str [OutOfBounds, InvalidNumStr]
+getLetter = \indexStr ->
+    index = Str.toU64? indexStr
+    List.get ["a", "b", "c", "d"] index
+```
 
 ## [Advanced Concepts](#advanced-concepts) {#advanced-concepts}
 
