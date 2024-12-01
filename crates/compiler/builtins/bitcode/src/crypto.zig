@@ -66,11 +66,16 @@ pub fn sha256Digest(sha: Sha256) callconv(.C) Digest256 {
 }
 
 fn sameBytesAsHex(comptime expected_hex: [:0]const u8, input: []const u8) bool {
+    if (expected_hex.len != 2 * input.len) {
+        return false;
+    }
+
     for (input, 0..) |input_byte, i| {
         const hex_byte = std.fmt.parseInt(u8, expected_hex[2 * i .. 2 * i + 2], 16) catch unreachable;
         if (hex_byte != input_byte) {
             return false;
         }
     }
+
     return true;
 }
