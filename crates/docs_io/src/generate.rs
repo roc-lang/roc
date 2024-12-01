@@ -1294,7 +1294,28 @@ fn type_annotation_to_html(
             }
         }
         TypeAnnotation::Record { fields, extension } => {
-            if fields.is_empty() {
+            let mut extension = Cow::Borrowed(&**extension);
+            let mut var = std::string::String::new();
+            let mut extra_fields = std::vec::Vec::new();
+
+            loop {
+                match extension.borrow() {
+                    TypeAnnotation::Record {
+                        fields: ext_fields,
+                        extension: ext_extension,
+                    } => {
+                        extra_fields.extend_from_slice(&ext_fields);
+                        extension = Cow::Owned((**ext_extension).clone());
+                    }
+                    TypeAnnotation::BoundVariable(var_name) => {
+                        var = (*var_name).to_string();
+                        break;
+                    }
+                    _ => break,
+                }
+            }
+
+            if fields.is_empty() && extra_fields.is_empty() {
                 buf.push_str("{}");
             } else {
                 let fields_len = fields.len();
@@ -1313,7 +1334,7 @@ fn type_annotation_to_html(
 
                 let next_indent_level = record_indent + 1;
 
-                for (index, field) in fields.iter().enumerate() {
+                for (index, field) in fields.iter().chain(extra_fields.iter()).enumerate() {
                     if is_multiline {
                         indent(buf, next_indent_level);
                     } else {
@@ -1362,7 +1383,7 @@ fn type_annotation_to_html(
                 buf.push('}');
             }
 
-            type_annotation_to_html(indent_level, buf, extension, true);
+            buf.push_str(&var);
         }
         TypeAnnotation::Function {
             args,
@@ -1477,45 +1498,72 @@ fn type_annotation_to_html(
         TypeAnnotation::NoTypeAnn => {}
         TypeAnnotation::Wildcard => buf.push('*'),
         TypeAnnotation::Tuple { elems, extension } => {
-            let elems_len = elems.len();
-            let tuple_indent = indent_level + 1;
+            let mut extension = Cow::Borrowed(&**extension);
+            let mut var = std::string::String::new();
+            let mut extra_elems = std::vec::Vec::new();
 
-            if is_multiline {
-                new_line(buf);
-                indent(buf, tuple_indent);
+            loop {
+                match extension.borrow() {
+                    TypeAnnotation::Tuple {
+                        elems: ext_elems,
+                        extension: ext_extension,
+                    } => {
+                        extra_elems.extend_from_slice(&ext_elems);
+                        extension = Cow::Owned((**ext_extension).clone());
+                    }
+                    TypeAnnotation::BoundVariable(var_name) => {
+                        var = (*var_name).to_string();
+                        break;
+                    }
+                    _ => break,
+                }
             }
 
-            buf.push('(');
+            if elems.is_empty() && extra_elems.is_empty() {
+                buf.push_str("()");
+            } else {
+                let elems_len = elems.len() + extra_elems.len();
+                let tuple_indent = indent_level + 1;
 
-            if is_multiline {
-                new_line(buf);
-            }
-
-            let next_indent_level = tuple_indent + 1;
-
-            for (index, elem) in elems.iter().enumerate() {
                 if is_multiline {
-                    indent(buf, next_indent_level);
+                    new_line(buf);
+                    indent(buf, tuple_indent);
                 }
 
-                type_annotation_to_html(next_indent_level, buf, elem, false);
+                buf.push('(');
 
                 if is_multiline {
-                    if index < (elems_len - 1) {
-                        buf.push(',');
-                    }
-
                     new_line(buf);
                 }
+
+                let next_indent_level = tuple_indent + 1;
+
+                for (index, elem) in elems.iter().chain(extra_elems.iter()).enumerate() {
+                    if is_multiline {
+                        indent(buf, next_indent_level);
+                    }
+
+                    type_annotation_to_html(next_indent_level, buf, elem, false);
+
+                    if is_multiline {
+                        if index < (elems_len - 1) {
+                            buf.push(',');
+                        }
+
+                        new_line(buf);
+                    } else if index < (elems_len - 1) {
+                        buf.push_str(", ");
+                    }
+                }
+
+                if is_multiline {
+                    indent(buf, tuple_indent);
+                }
+
+                buf.push(')');
             }
 
-            if is_multiline {
-                indent(buf, tuple_indent);
-            }
-
-            buf.push(')');
-
-            type_annotation_to_html(indent_level, buf, extension, true);
+            buf.push_str(&var);
         }
         TypeAnnotation::Where { ann, implements } => {
             type_annotation_to_html(indent_level, buf, ann, false);
