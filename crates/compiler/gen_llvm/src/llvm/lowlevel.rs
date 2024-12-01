@@ -1148,7 +1148,15 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             )
         }
         NumIntCast => {
-            todo!()
+            arguments!(arg);
+
+            let to = basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout))
+                .into_int_type();
+            let to_signed = intwidth_from_layout(layout).is_signed();
+
+            env.builder
+                .new_build_int_cast_sign_flag(arg.into_int_value(), to, to_signed, "inc_cast")
+                .into()
         }
         NumToDecCast | NumToDecChecked => {
             let checked = matches!(op, NumToDecChecked);
