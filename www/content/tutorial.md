@@ -862,7 +862,7 @@ getLetter = \indexStr ->
 
 Here's what this does:
 
-- If the `Str.toU64` function returns an `Ok` value, then its payload is unwrapped.
+- If the `Str.toU64` function returns an `Ok` value, then `try` will return what's inside the `Ok`. For example:
   - For example, if we call `getLetter "2"`, then `Str.toU64` returns `Ok 2`, and the `try` keyword unwraps the integer 2, so `index` is set to 2 (not `Ok 2`). Then the `List.get` function is called and returns `Ok "c"`.
 - If the `Str.toU64` function returns an `Err` value, then the `try` keyword immediately interrupts the `getLetter` function and makes it return this error.
   - For example, if we call `getLetter "abc"`, then the call to `Str.toU64` returns `Err InvalidNumStr`, and the `try` keyword ensures that the `getLetter` function returns this error immediately, without executing the rest of the function.
