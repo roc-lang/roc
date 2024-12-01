@@ -182,12 +182,12 @@ impl<'a> Docs<'a> {
                                             .ann_from_symbol(def.symbol)
                                             .map(|result| {
                                                 result.ok().map(|ann| {
-                                                    type_to_ann(
+                                                    clean_annotation(type_to_ann(
                                                         &ann.signature,
                                                         &loaded_module.interns,
                                                         &loaded_module.aliases,
                                                         &mut MutMap::default(),
-                                                    )
+                                                    ))
                                                 })
                                             })
                                             .flatten()
@@ -200,12 +200,12 @@ impl<'a> Docs<'a> {
                                             .and_then(|aliases| {
                                                 aliases.get(&def.symbol).map(
                                                     |(_imported, alias)| {
-                                                        type_to_ann(
+                                                        clean_annotation(type_to_ann(
                                                             &alias.typ,
                                                             &loaded_module.interns,
                                                             &loaded_module.aliases,
                                                             &mut MutMap::default(),
-                                                        )
+                                                        ))
                                                     },
                                                 )
                                             })
@@ -269,6 +269,230 @@ impl<'a> Docs<'a> {
             .iter()
             .find_map(|(id, name)| if *id == module_id { Some(*name) } else { None })
             .unwrap_or("")
+    }
+}
+
+/// After generating a type annotation, clean up its generated variables -
+/// e.g. if we have a tag union with a variable in it, drop that from the annotation.
+fn clean_annotation(ann: TypeAnnotation) -> TypeAnnotation {
+    let mut var_counts = MutMap::default();
+
+    count_var_names(&ann, &mut var_counts);
+
+    match ann {
+        TypeAnnotation::TagUnion { tags, extension } => todo!(),
+        TypeAnnotation::Function {
+            args,
+            arrow,
+            output,
+        } => todo!(),
+        TypeAnnotation::ObscuredTagUnion => todo!(),
+        TypeAnnotation::ObscuredRecord => todo!(),
+        TypeAnnotation::BoundVariable(_) => todo!(),
+        TypeAnnotation::Apply { name, parts } => todo!(),
+        TypeAnnotation::Record { fields, extension } => todo!(),
+        TypeAnnotation::Tuple { elems, extension } => todo!(),
+        TypeAnnotation::Ability { members } => todo!(),
+        TypeAnnotation::Wildcard => todo!(),
+        TypeAnnotation::NoTypeAnn => todo!(),
+        TypeAnnotation::Where { ann, implements } => todo!(),
+        TypeAnnotation::As { ann, name, vars } => todo!(),
+    }
+}
+
+fn clean_annotation_help(
+    ann: TypeAnnotation,
+    var_counts: &MutMap<std::string::String, u32>,
+) -> TypeAnnotation {
+    match ann {
+        TypeAnnotation::TagUnion { tags, extension } => TypeAnnotation::TagUnion {
+            tags: tags
+                .into_iter()
+                .map(|tag| Tag {
+                    name: tag.name,
+                    values: tag
+                        .values
+                        .into_iter()
+                        .map(|v| clean_annotation_help(v, var_counts))
+                        .collect(),
+                })
+                .collect(),
+            extension: Box::new(clean_annotation_help(*extension, var_counts)),
+        },
+        TypeAnnotation::Function {
+            args,
+            arrow,
+            output,
+        } => TypeAnnotation::Function {
+            args: args
+                .into_iter()
+                .map(|arg| clean_annotation_help(arg, var_counts))
+                .collect(),
+            arrow,
+            output: Box::new(clean_annotation_help(*output, var_counts)),
+        },
+        TypeAnnotation::ObscuredTagUnion => TypeAnnotation::ObscuredTagUnion,
+        TypeAnnotation::ObscuredRecord => TypeAnnotation::ObscuredRecord,
+        TypeAnnotation::BoundVariable(var_name) => {
+            if var_counts.get(&var_name) == Some(&1) {
+                TypeAnnotation::BoundVariable("*".to_string())
+            } else {
+                TypeAnnotation::BoundVariable(var_name)
+            }
+        }
+        TypeAnnotation::Apply { name, parts } => TypeAnnotation::Apply {
+            name,
+            parts: parts
+                .into_iter()
+                .map(|part| clean_annotation_help(part, var_counts))
+                .collect(),
+        },
+        TypeAnnotation::Record { fields, extension } => TypeAnnotation::Record {
+            fields: fields
+                .into_iter()
+                .map(|field| match field {
+                    RecordField::RecordField {
+                        name,
+                        type_annotation,
+                    } => RecordField::RecordField {
+                        name,
+                        type_annotation: clean_annotation_help(type_annotation, var_counts),
+                    },
+                    RecordField::OptionalField {
+                        name,
+                        type_annotation,
+                    } => RecordField::OptionalField {
+                        name,
+                        type_annotation: clean_annotation_help(type_annotation, var_counts),
+                    },
+                    RecordField::LabelOnly { name } => RecordField::LabelOnly { name },
+                })
+                .collect(),
+            extension: Box::new(clean_annotation_help(*extension, var_counts)),
+        },
+        TypeAnnotation::Tuple { elems, extension } => TypeAnnotation::Tuple {
+            elems: elems
+                .into_iter()
+                .map(|elem| clean_annotation_help(elem, var_counts))
+                .collect(),
+            extension: Box::new(clean_annotation_help(*extension, var_counts)),
+        },
+        TypeAnnotation::Ability { members } => TypeAnnotation::Ability {
+            members: members
+                .into_iter()
+                .map(|member| AbilityMember {
+                    name: member.name,
+                    type_annotation: clean_annotation_help(member.type_annotation, var_counts),
+                    able_variables: member
+                        .able_variables
+                        .into_iter()
+                        .map(|(name, anns)| {
+                            (
+                                name,
+                                anns.into_iter()
+                                    .map(|ann| clean_annotation_help(ann, var_counts))
+                                    .collect(),
+                            )
+                        })
+                        .collect(),
+                    docs: member.docs,
+                })
+                .collect(),
+        },
+        TypeAnnotation::Wildcard => TypeAnnotation::Wildcard,
+        TypeAnnotation::NoTypeAnn => TypeAnnotation::NoTypeAnn,
+        TypeAnnotation::Where { ann, implements } => TypeAnnotation::Where {
+            ann: Box::new(clean_do!(),
+        TypeAnnotation::As { ann, name, vars } => todo!(),
+    }
+}
+
+fn count_var_names(ann: &TypeAnnotation, var_counts: &mut MutMap<std::string::String, u32>) {
+    match ann {
+        TypeAnnotation::TagUnion { tags, extension } => {
+            for tag in tags {
+                for value in &tag.values {
+                    count_var_names(value, var_counts);
+                }
+            }
+            count_var_names(extension, var_counts);
+        }
+        TypeAnnotation::Function {
+            args,
+            arrow: _,
+            output,
+        } => {
+            for arg in args {
+                count_var_names(arg, var_counts);
+            }
+            count_var_names(output, var_counts);
+        }
+        TypeAnnotation::BoundVariable(var) => {
+            var_counts
+                .entry(var.to_string())
+                .and_modify(|count| *count += 1)
+                .or_insert(1);
+        }
+        TypeAnnotation::Apply { name: _, parts } => {
+            for part in parts {
+                count_var_names(part, var_counts);
+            }
+        }
+        TypeAnnotation::Record { fields, extension } => {
+            for field in fields {
+                match field {
+                    RecordField::RecordField {
+                        name: _,
+                        type_annotation,
+                    }
+                    | RecordField::OptionalField {
+                        name: _,
+                        type_annotation,
+                    } => {
+                        count_var_names(type_annotation, var_counts);
+                    }
+                    RecordField::LabelOnly { name: _ } => {}
+                }
+            }
+            count_var_names(extension, var_counts);
+        }
+        TypeAnnotation::Tuple { elems, extension } => {
+            for elem in elems {
+                count_var_names(elem, var_counts);
+            }
+            count_var_names(extension, var_counts);
+        }
+        TypeAnnotation::Ability { members } => {
+            for member in members {
+                count_var_names(&member.type_annotation, var_counts);
+                for (_, ability_anns) in &member.able_variables {
+                    for ability_ann in ability_anns {
+                        count_var_names(ability_ann, var_counts);
+                    }
+                }
+            }
+        }
+        TypeAnnotation::Wildcard => {}
+        TypeAnnotation::Where { ann, implements } => {
+            count_var_names(ann, var_counts);
+            for implement in implements {
+                for ability in &implement.abilities {
+                    count_var_names(ability, var_counts);
+                }
+            }
+        }
+        TypeAnnotation::As {
+            ann,
+            name: _,
+            vars: _,
+        } => {
+            count_var_names(ann, var_counts);
+        }
+        TypeAnnotation::ObscuredTagUnion
+        | TypeAnnotation::ObscuredRecord
+        | TypeAnnotation::NoTypeAnn => {
+            // No-op
+        }
     }
 }
 
