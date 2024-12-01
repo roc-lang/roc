@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 const LINK_SVG: &str = include_str!("./static/link.svg");
 
 pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
-    let mut loaded_module = load_module_for_docs(root_file);
+    let loaded_module = load_module_for_docs(root_file);
     let modules = &loaded_module.exposed_module_docs;
 
     // TODO get these from the platform's source file rather than hardcoding them!

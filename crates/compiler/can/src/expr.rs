@@ -3267,7 +3267,7 @@ impl Declarations {
             .and_then(|index| match self.annotations.get(index) {
                 Some(Some(ann)) => Some(Ok(ann)),
                 _ => {
-                    if let Some(&var) = self.variables.get(index) {
+                    if let Some(&var) = dbg!(self.variables.get(index)) {
                         Some(Err(var))
                     } else {
                         None

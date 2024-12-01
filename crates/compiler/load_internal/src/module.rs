@@ -142,6 +142,7 @@ pub struct TypeCheckedModule<'a> {
     pub ident_ids: IdentIds,
     pub abilities_store: AbilitiesStore,
     pub expectations: Option<Expectations>,
+    pub aliases: MutMap<Symbol, (bool, Alias)>,
 
     #[cfg(debug_assertions)]
     pub checkmate: Option<roc_checkmate::Collector>,

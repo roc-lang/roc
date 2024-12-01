@@ -387,7 +387,7 @@ fn start_phase<'a>(
                     ident_ids,
                     abilities_store,
                     expectations,
-                    //
+                    aliases: _,
                     #[cfg(debug_assertions)]
                         checkmate: _,
                 } = typechecked;
@@ -2609,7 +2609,7 @@ fn update<'a>(
                         ident_ids,
                         abilities_store,
                         expectations: opt_expectations,
-
+                        aliases: solved_module.aliases,
                         #[cfg(debug_assertions)]
                         checkmate,
                     };

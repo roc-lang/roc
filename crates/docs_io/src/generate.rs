@@ -1,17 +1,24 @@
 use crate::file::{self, Assets};
 use crate::problem::Problem;
+use crate::render_markdown::{markdown_to_html, LookupOrTag};
 use crate::render_package::AbilityMember;
 use bumpalo::collections::Vec;
 use bumpalo::{collections::string::String, Bump};
 use core::fmt::{Debug, Write};
-use roc_load::docs::{DocEntry, RecordField, TypeAnnotation};
+use roc_can::scope::Scope;
+use roc_collections::{MutMap, VecMap};
+use roc_load::docs::{DocEntry, RecordField, Tag, TypeAnnotation};
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
-use roc_module::symbol::{IdentId, ModuleId};
+use roc_module::symbol::{IdentId, Interns, ModuleId, Symbol};
 use roc_packaging::cache::{self, RocCacheDir};
 use roc_parse::ast::FunctionArrow;
+use roc_parse::ident::Accessor;
 use roc_parse::keyword;
+use roc_parse::state::State;
+use roc_region::all::Region;
 use roc_target::Target;
-use std::any::Any;
+use roc_types::subs::Variable;
+use roc_types::types::{Alias, AliasCommon, Type, TypeExtension};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -72,13 +79,11 @@ pub fn generate_docs_html<'a>(
     // under the shell.
     file::populate_build_dir(arena, out_dir.as_ref(), &assets)?;
 
-    IoDocs::new(
+    Docs::new(
         arena,
         loaded_module,
         assets.raw_template_html.as_ref(),
-        // TODO get this from the platform's source file rather than hardcoding it!
-        // github.com/roc-lang/roc/issues/5712
-        "Documentation",
+        pkg_name,
         opt_user_specified_base_url,
     )
     .generate(out_dir)
@@ -96,7 +101,7 @@ struct BodyEntry<'a> {
     pub docs: Option<&'a str>,
 }
 
-struct IoDocs<'a> {
+struct Docs<'a> {
     arena: &'a Bump,
     header_doc_comment: &'a str,
     raw_template_html: &'a str,
@@ -104,25 +109,34 @@ struct IoDocs<'a> {
     opt_user_specified_base_url: Option<&'a str>,
     sb_entries: Vec<'a, SBEntry<'a>>,
     body_entries_by_module: Vec<'a, (ModuleId, &'a [BodyEntry<'a>])>,
+    scopes_by_module: Vec<'a, (ModuleId, Scope)>,
+    interns: Interns,
     module_names: Vec<'a, (ModuleId, &'a str)>,
 }
 
-impl<'a> IoDocs<'a> {
+impl<'a> Docs<'a> {
     pub fn new(
         arena: &'a Bump,
         loaded_module: LoadedModule,
         raw_template_html: &'a str,
         pkg_name: &'a str,
         opt_user_specified_base_url: Option<&'a str>,
-    ) -> IoDocs<'a> {
+    ) -> Docs<'a> {
         let mut module_names =
             Vec::with_capacity_in(loaded_module.exposed_module_docs.len(), arena);
         let mut sb_entries = Vec::with_capacity_in(loaded_module.exposed_modules.len(), arena);
         let mut body_entries_by_module =
             Vec::with_capacity_in(loaded_module.exposed_modules.len(), arena);
+        let mut scopes_by_module =
+            Vec::with_capacity_in(loaded_module.exposed_modules.len(), arena);
         let header_doc_comment = arena.alloc_str(&loaded_module.header_doc_comment);
 
         for (module_id, docs) in loaded_module.exposed_module_docs.into_iter() {
+            let opt_decls = loaded_module
+                .typechecked
+                .get(&module_id)
+                .map(|checked| &checked.decls);
+
             module_names.push((module_id, &*arena.alloc_str(&docs.name)));
 
             let mut exposed = Vec::with_capacity_in(docs.exposed_symbols.len(), arena);
@@ -159,19 +173,63 @@ impl<'a> IoDocs<'a> {
                             arena,
                         )
                         .into_bump_slice(),
-                        type_annotation: def.type_annotation,
+                        type_annotation: {
+                            if let TypeAnnotation::NoTypeAnn = def.type_annotation {
+                                // If the user didn't specify a type annotation, infer it!
+                                opt_decls
+                                    .and_then(|decls| {
+                                        decls
+                                            .ann_from_symbol(def.symbol)
+                                            .map(|result| {
+                                                result.ok().map(|ann| {
+                                                    type_to_ann(
+                                                        &ann.signature,
+                                                        &loaded_module.interns,
+                                                        &loaded_module.aliases,
+                                                        &mut MutMap::default(),
+                                                    )
+                                                })
+                                            })
+                                            .flatten()
+                                    })
+                                    .unwrap_or_else(|| {
+                                        // We couldn't find it in decls, but it might have been a type alias.
+                                        loaded_module
+                                            .aliases
+                                            .get(&def.symbol.module_id())
+                                            .and_then(|aliases| {
+                                                aliases.get(&def.symbol).map(
+                                                    |(_imported, alias)| {
+                                                        type_to_ann(
+                                                            &alias.typ,
+                                                            &loaded_module.interns,
+                                                            &loaded_module.aliases,
+                                                            &mut MutMap::default(),
+                                                        )
+                                                    },
+                                                )
+                                            })
+                                            .unwrap_or(TypeAnnotation::NoTypeAnn)
+                                    })
+                            } else {
+                                def.type_annotation
+                            }
+                        },
                         docs: def.docs.map(|str| &*arena.alloc_str(&str)),
                     });
                 }
             }
 
             body_entries_by_module.push((module_id, body_entries.into_bump_slice()));
+            scopes_by_module.push((module_id, docs.scope));
         }
 
         Self {
+            interns: loaded_module.interns,
             header_doc_comment,
             sb_entries,
             body_entries_by_module,
+            scopes_by_module,
             raw_template_html,
             pkg_name,
             opt_user_specified_base_url,
@@ -206,15 +264,177 @@ impl<'a> IoDocs<'a> {
         )
     }
 
-    fn header_doc_comment(&self) -> &'a str {
-        self.header_doc_comment
-    }
-
     fn module_name(&'a self, module_id: ModuleId) -> &'a str {
         self.module_names
             .iter()
             .find_map(|(id, name)| if *id == module_id { Some(*name) } else { None })
             .unwrap_or("")
+    }
+}
+
+fn type_to_ann(
+    typ: &Type,
+    interns: &Interns,
+    aliases: &MutMap<ModuleId, MutMap<Symbol, (bool, Alias)>>,
+    var_names: &mut MutMap<Variable, std::string::String>,
+) -> TypeAnnotation {
+    use roc_types::types::RecordField;
+    use std::vec::Vec;
+
+    match typ {
+        Type::EmptyRec => TypeAnnotation::Record {
+            fields: Vec::new(),
+            extension: Box::new(TypeAnnotation::NoTypeAnn),
+        },
+        Type::EmptyTagUnion => TypeAnnotation::TagUnion {
+            tags: Vec::new(),
+            extension: Box::new(TypeAnnotation::NoTypeAnn),
+        },
+        Type::Function(args, _lambda_set, ret, fx) => TypeAnnotation::Function {
+            args: args
+                .iter()
+                .map(|arg| type_to_ann(arg, interns, aliases, var_names))
+                .collect(),
+            arrow: if **fx == Type::Effectful {
+                FunctionArrow::Effectful
+            } else {
+                FunctionArrow::Pure
+            },
+            output: Box::new(type_to_ann(ret, interns, aliases, var_names)),
+        },
+        Type::Record(fields, ext) => TypeAnnotation::Record {
+            fields: fields
+                .iter()
+                .map(|(name, field)| match field {
+                    RecordField::Required(t)
+                    | RecordField::Demanded(t)
+                    | RecordField::RigidRequired(t) => roc_load::docs::RecordField::RecordField {
+                        name: name.to_string(),
+                        type_annotation: type_to_ann(t, interns, aliases, var_names),
+                    },
+                    RecordField::Optional(t) | RecordField::RigidOptional(t) => {
+                        roc_load::docs::RecordField::OptionalField {
+                            name: name.to_string(),
+                            type_annotation: type_to_ann(t, interns, aliases, var_names),
+                        }
+                    }
+                })
+                .collect(),
+            extension: Box::new(match ext {
+                TypeExtension::Open(t, _) => type_to_ann(t, interns, aliases, var_names),
+                TypeExtension::Closed => TypeAnnotation::NoTypeAnn,
+            }),
+        },
+        Type::Tuple(elems, ext) => TypeAnnotation::Tuple {
+            elems: elems
+                .iter()
+                .map(|(_, t)| type_to_ann(t, interns, aliases, var_names))
+                .collect(),
+            extension: Box::new(match ext {
+                TypeExtension::Open(t, _) => type_to_ann(t, interns, aliases, var_names),
+                TypeExtension::Closed => TypeAnnotation::NoTypeAnn,
+            }),
+        },
+        Type::TagUnion(tags, ext) => TypeAnnotation::TagUnion {
+            tags: tags
+                .iter()
+                .map(|(name, args)| Tag {
+                    name: name.0.to_string(),
+                    values: args
+                        .iter()
+                        .map(|arg| type_to_ann(arg, interns, aliases, var_names))
+                        .collect(),
+                })
+                .collect(),
+            extension: Box::new(match ext {
+                TypeExtension::Open(t, _) => type_to_ann(t, interns, aliases, var_names),
+                TypeExtension::Closed => TypeAnnotation::NoTypeAnn,
+            }),
+        },
+        Type::FunctionOrTagUnion(tag_name, _, ext) => TypeAnnotation::TagUnion {
+            tags: vec![Tag {
+                name: tag_name.0.to_string(),
+                values: Vec::new(),
+            }],
+            extension: Box::new(match ext {
+                TypeExtension::Open(t, _) => type_to_ann(t, interns, aliases, var_names),
+                TypeExtension::Closed => TypeAnnotation::NoTypeAnn,
+            }),
+        },
+        Type::ClosureTag { name, captures, .. } => TypeAnnotation::Apply {
+            name: name.as_str(interns).to_string(),
+            parts: captures
+                .iter()
+                .map(|t| type_to_ann(t, interns, aliases, var_names))
+                .collect(),
+        },
+        Type::UnspecializedLambdaSet { .. } => TypeAnnotation::NoTypeAnn,
+        Type::DelayedAlias(AliasCommon {
+            symbol,
+            type_arguments: _, // TODO should we make use of these in the unwrapped type?
+            lambda_set_variables: _,
+            infer_ext_in_output_types: _,
+        }) => {
+            // Unwrap delayed aliases
+            aliases
+                .get(&symbol.module_id())
+                .and_then(|module_aliases| {
+                    module_aliases.get(&symbol).map(|(_imported, alias)| {
+                        type_to_ann(&alias.typ, interns, aliases, var_names)
+                    })
+                })
+                .unwrap_or(TypeAnnotation::NoTypeAnn)
+        }
+        Type::Alias { actual, .. } => type_to_ann(actual, interns, aliases, var_names),
+        Type::RecursiveTagUnion(_, tags, ext) => TypeAnnotation::TagUnion {
+            tags: tags
+                .iter()
+                .map(|(name, args)| Tag {
+                    name: name.0.to_string(),
+                    values: args
+                        .iter()
+                        .map(|arg| type_to_ann(arg, interns, aliases, var_names))
+                        .collect(),
+                })
+                .collect(),
+            extension: Box::new(match ext {
+                TypeExtension::Open(t, _) => type_to_ann(t, interns, aliases, var_names),
+                TypeExtension::Closed => TypeAnnotation::NoTypeAnn,
+            }),
+        },
+        Type::Apply(symbol, args, _) => TypeAnnotation::Apply {
+            name: symbol.as_str(interns).to_string(),
+            parts: args
+                .iter()
+                .map(|arg| type_to_ann(&arg.value, interns, aliases, var_names))
+                .collect(),
+        },
+        Type::Variable(var) => TypeAnnotation::BoundVariable({
+            let vars_named = var_names.len();
+
+            var_names
+                .entry(*var)
+                .or_insert_with(|| {
+                    // 'a', 'b', 'c', ...etc.
+                    // If we get to 'z' and still need more, continue with 'a2', 'a3', etc.
+                    let letter = (b'a' + (vars_named % 26) as u8) as char;
+                    let number = (vars_named / 26) + 1;
+
+                    if number > 1 {
+                        format!("{}{}", letter, number)
+                    } else {
+                        letter.to_string()
+                    }
+                })
+                .clone()
+        }),
+        Type::RangedNumber(_) => TypeAnnotation::Apply {
+            name: "Num".to_string(),
+            parts: Vec::new(),
+        },
+        Type::Error => TypeAnnotation::NoTypeAnn,
+        Type::Pure => TypeAnnotation::NoTypeAnn,
+        Type::Effectful => TypeAnnotation::NoTypeAnn,
     }
 }
 
@@ -239,7 +459,7 @@ struct SBEntry<'a> {
     pub doc_comment: &'a str,
 }
 
-impl<'a> IoDocs<'a> {
+impl<'a> Docs<'a> {
     fn render_to_disk<Problem>(
         &'a self,
         arena: &'a Bump,
@@ -448,7 +668,17 @@ impl<'a> IoDocs<'a> {
             }
 
             buf.push_str("</h3>");
-            buf.push_str(entry.docs.unwrap_or_default());
+
+            if let Some(docs) = entry.docs {
+                if let Some((_id, scope)) = self
+                    .scopes_by_module
+                    .iter()
+                    .find(|(id, _scope)| *id == module_id)
+                {
+                    markdown_to_html(arena, buf, arena, scope, &self.interns, docs);
+                }
+            }
+
             buf.push_str("</section>");
         }
     }
@@ -545,7 +775,6 @@ impl<'a> IoDocs<'a> {
         self.render_type(arena, &typ, buf)
     }
 }
-
 #[derive(Debug)]
 pub struct AbilityAnn<'a> {
     name: &'a str,

@@ -25,7 +25,9 @@ fn main() -> io::Result<()> {
     // Populate roc_files
     match roc_docs_io::generate_docs_html(
         &arena,
-        "DOCUMENTATION",
+        // TODO get this from the platform's source file rather than hardcoding it!
+        // github.com/roc-lang/roc/issues/5712
+        "Documentation",
         matches.get_one::<PathBuf>(ROC_FILE).unwrap().to_owned(),
         &PathBuf::from("./generated-docs"),
         None,

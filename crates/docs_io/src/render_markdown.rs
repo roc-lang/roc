@@ -1,9 +1,13 @@
-use crate::render_doc_url::{AutolinkProblem, DocUrl, ModuleInfo};
+// use crate::render_doc_url::{AutolinkProblem, DocUrl, ModuleInfo};
 use bumpalo::{
     collections::{String, Vec},
     Bump,
 };
 use pulldown_cmark::{BrokenLink, CodeBlockKind, CowStr, Event, LinkType, Tag::*};
+use roc_can::scope::Scope;
+use roc_module::symbol::{Interns, Symbol};
+use roc_parse::{ident::Accessor, state::State};
+use roc_region::all::Region;
 
 pub enum LookupOrTag<'a> {
     Lookup {
@@ -16,17 +20,14 @@ pub enum LookupOrTag<'a> {
 }
 
 pub fn markdown_to_html<'a>(
-    // TODO This arena will be needed in the future when the arena API changes
-    _buf_arena: &'a Bump,
+    buf_arena: &'a Bump,
     // The buffer we'll be appending to
-    buf: &'a mut String,
+    buf: &mut String,
     // This is used for some temporary allocations and can be reset once this function returns.
     scratch_arena: &'a Bump,
     // Needed by render_doc_url::DocUrl::new
-    lookup: impl Fn(Option<&'a str>, &str) -> Result<ModuleInfo<'a>, AutolinkProblem<'a>>,
-    // Note: this should return None for things that are neither lookups nor tags,
-    // *but also* for things that are more than lookups, e.g. record access like `foo.bar`
-    parse_ident: impl Fn(&[u8]) -> Option<LookupOrTag<'a>>,
+    scope: &Scope,
+    interns: &Interns,
     markdown: &str,
 ) {
     let mut broken_link_callback = |link: BrokenLink| {
@@ -38,27 +39,36 @@ pub fn markdown_to_html<'a>(
         // [myFunction] and have them resolve to the docs for what you wrote.
         match link.link_type {
             LinkType::Shortcut => {
-                match parse_ident(link.reference.as_bytes()) {
+                match parse_ident(buf_arena, link.reference.as_bytes()) {
                     Some(lookup_or_tag) => {
-                        let doc_url_result = match lookup_or_tag {
-                            LookupOrTag::Lookup {
-                                opt_module_name,
-                                ident_name,
-                            } => DocUrl::new(scratch_arena, opt_module_name, ident_name, &lookup),
-                            LookupOrTag::Tag { tag_name } => {
-                                DocUrl::new(scratch_arena, None, tag_name, &lookup)
-                            }
-                        };
+                        let todo = (); // TODO use doc_url
 
-                        match doc_url_result {
-                            Ok(DocUrl { url, title }) => Some((url.into(), title.into())),
-                            Err(problem) => {
-                                // TODO report the problem to stderr immediately.
-                                // It's annoying that this callback doesn't return anything
-                                // that would let us propagate the error, but such is the API.
-                                None
-                            }
-                        }
+                        Some(("".into(), "".into()))
+                        // let doc_url_result = match lookup_or_tag {
+                        //     LookupOrTag::Lookup {
+                        //         opt_module_name,
+                        //         ident_name,
+                        //     } => DocUrl::new(
+                        //         scratch_arena,
+                        //         opt_module_name,
+                        //         ident_name,
+                        //         scope,
+                        //         interns,
+                        //     ),
+                        //     LookupOrTag::Tag { tag_name } => {
+                        //         DocUrl::new(scratch_arena, None, tag_name, scope, interns)
+                        //     }
+                        // };
+
+                        // match doc_url_result {
+                        //     Ok(DocUrl { url, title }) => Some((url.into(), title.into())),
+                        //     Err(problem) => {
+                        //         // TODO report the problem to stderr immediately.
+                        //         // It's annoying that this callback doesn't return anything
+                        //         // that would let us propagate the error, but such is the API.
+                        //         None
+                        //     }
+                        // }
                     }
                     _ => None,
                 }
@@ -170,3 +180,206 @@ pub fn markdown_to_html<'a>(
         buf.push_str(&temp_buf);
     }
 }
+
+fn parse_ident<'a>(arena: &'a Bump, bytes: &[u8]) -> Option<LookupOrTag<'a>> {
+    use roc_parse::ident::Ident;
+
+    match roc_parse::ident::parse_ident(arena, State::new(bytes), 0)
+        .ok()?
+        .1
+    {
+        Ident::Tag(tag_name) => Some(LookupOrTag::Tag {
+            tag_name: &*arena.alloc_str(tag_name),
+        }),
+        Ident::Access { module_name, parts } => {
+            if module_name.is_empty() {
+                match parts.first() {
+                    Some(Accessor::RecordField(ident_name)) => Some(LookupOrTag::Lookup {
+                        opt_module_name: None,
+                        ident_name: &*arena.alloc_str(ident_name),
+                    }),
+                    Some(Accessor::TupleIndex(_)) | None => None,
+                }
+            } else {
+                match parts.first() {
+                    Some(Accessor::RecordField(ident_name)) => Some(LookupOrTag::Lookup {
+                        opt_module_name: Some(&*arena.alloc_str(module_name)),
+                        ident_name: &*arena.alloc_str(ident_name),
+                    }),
+                    Some(Accessor::TupleIndex(_)) => None,
+                    None => Some(LookupOrTag::Tag {
+                        tag_name: &*arena.alloc_str(module_name),
+                    }),
+                }
+            }
+        }
+        Ident::OpaqueRef(_)
+        | Ident::AccessorFunction(_)
+        | Ident::RecordUpdaterFunction(_)
+        | Ident::Malformed(_, _) => None,
+    }
+}
+
+#[derive(Debug)]
+pub enum LinkProblem {
+    MalformedAutoLink,
+    AutoLinkIdentNotInScope,
+    AutoLinkNotExposed,
+    AutoLinkModuleNotImported,
+}
+
+// fn doc_url<'a>(
+//     arena: &'a Bump,
+//     base_url: &'a str,
+//     is_exposed: impl Fn(Symbol) -> bool,
+//     scope: &Scope,
+//     interns: &'a Interns,
+//     mut module_name: &'a str,
+//     ident: &'a str,
+// ) -> Result<DocUrl<'a>, ((Option<&'a str>, &'a str), LinkProblem)> {
+//     if module_name.is_empty() {
+//         // This is an unqualified lookup, so look for the ident
+//         // in scope!
+//         match scope.lookup_str(ident, Region::zero()) {
+//             Ok(symbol) => {
+//                 // Get the exact module_name from scope. It could be the
+//                 // current module's name, but it also could be a different
+//                 // module - for example, if this is in scope from an
+//                 // unqualified import.
+//                 module_name = symbol.symbol.module_string(interns);
+//             }
+//             Err(_) => {
+//                 return Err(((None, ident), LinkProblem::AutoLinkIdentNotInScope));
+//             }
+//         }
+//     } else {
+//         match interns.module_ids.get_id(&module_name.into()) {
+//             Some(module_id) => {
+//                 let symbol = interns.symbol(module_id, ident.into());
+
+//                 if symbol.is_builtin() {
+//                     // We can always generate links for builtin modules.
+//                     // TODO add a `--include-builtins` CLI flag for generating offline docs locally
+//                     // which include builtins; if that flag is omitted, have this code path generate
+//                     // a link directly to the builtin docs on roc-lang.org instead of to a localhost
+//                     // URL that will 404.
+//                     module_name = symbol.module_string(interns);
+//                 }
+//                 // Note: You can do qualified lookups on your own module, e.g.
+//                 // if I'm in the Foo module, I can do a `Foo.bar` lookup.
+//                 else if !is_exposed(symbol) {
+//                     return Err(((Some(module_name), ident), LinkProblem::AutoLinkNotExposed));
+//                 }
+
+//                 // This is a valid symbol for this dependency,
+//                 // so proceed using the current module's name.
+//                 //
+//                 // TODO: In the future, this is where we'll
+//                 // incorporate the package name into the link.
+//             }
+//             None => {
+//                 return Err((
+//                     (Some(module_name), ident),
+//                     LinkProblem::AutoLinkModuleNotImported,
+//                 ));
+//             }
+//         }
+//     }
+
+//     let mut url = bumpalo::collections::string::String::with_capacity_in(24, arena);
+
+//     url.push_str(base_url);
+
+//     // Example:
+//     //
+//     // module_name: "Str", ident: "join" => "/Str#join"
+//     url.push_str(module_name);
+//     url.push('#');
+//     url.push_str(ident);
+
+//     let mut title = bumpalo::collections::string::String::with_capacity_in(24, arena);
+
+//     title.push_str("Docs for ");
+//     title.push_str(module_name);
+//     title.push('.');
+//     title.push_str(ident);
+
+//     Ok(DocUrl {
+//         url: url.into_bump_str(),
+//         title: title.into_bump_str(),
+//     })
+// }
+
+// fn doc_url<'a>(
+//     all_exposed_symbols: &VecSet<Symbol>,
+//     scope: &Scope,
+//     interns: &'a Interns,
+//     mut module_name: &'a str,
+//     ident: &str,
+// ) -> Result<DocUrl, (String, LinkProblem)> {
+//     if module_name.is_empty() {
+//         // This is an unqualified lookup, so look for the ident
+//         // in scope!
+//         match scope.lookup_str(ident, Region::zero()) {
+//             Ok(symbol) => {
+//                 // Get the exact module_name from scope. It could be the
+//                 // current module's name, but it also could be a different
+//                 // module - for example, if this is in scope from an
+//                 // unqualified import.
+//                 module_name = symbol.symbol.module_string(interns);
+//             }
+//             Err(_) => {
+//                 return Err((format!("[{ident}]"), LinkProblem::AutoLinkIdentNotInScope));
+//             }
+//         }
+//     } else {
+//         match interns.module_ids.get_id(&module_name.into()) {
+//             Some(module_id) => {
+//                 let symbol = interns.symbol(module_id, ident.into());
+
+//                 if symbol.is_builtin() {
+//                     // We can always generate links for builtin modules.
+//                     // TODO add a `--include-builtins` CLI flag for generating offline docs locally
+//                     // which include builtins; if that flag is omitted, have this code path generate
+//                     // a link directly to the builtin docs on roc-lang.org instead of to a localhost
+//                     // URL that will 404.
+//                     module_name = symbol.module_string(interns);
+//                 }
+//                 // Note: You can do qualified lookups on your own module, e.g.
+//                 // if I'm in the Foo module, I can do a `Foo.bar` lookup.
+//                 else if !all_exposed_symbols.contains(&symbol) {
+//                     return Err((
+//                         format!("[{module_name}.{ident}]"),
+//                         LinkProblem::AutoLinkNotExposed,
+//                     ));
+//                 }
+
+//                 // This is a valid symbol for this dependency,
+//                 // so proceed using the current module's name.
+//                 //
+//                 // TODO: In the future, this is where we'll
+//                 // incorporate the package name into the link.
+//             }
+//             None => {
+//                 return Err((
+//                     format!("[{module_name}.{ident}]"),
+//                     LinkProblem::AutoLinkModuleNotImported,
+//                 ));
+//             }
+//         }
+//     }
+
+//     let mut url = base_url();
+
+//     // Example:
+//     //
+//     // module_name: "Str", ident: "join" => "/Str#join"
+//     url.push_str(module_name);
+//     url.push('#');
+//     url.push_str(ident);
+
+//     Ok(DocUrl {
+//         url,
+//         title: format!("Docs for {module_name}.{ident}"),
+//     })
+// }

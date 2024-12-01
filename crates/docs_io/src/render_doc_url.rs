@@ -1,4 +1,7 @@
 use bumpalo::{collections::String, Bump};
+use roc_can::scope::Scope;
+use roc_module::symbol::Interns;
+use roc_region::all::Region;
 
 pub struct DocUrl<'a> {
     pub url: &'a str,
@@ -38,12 +41,13 @@ impl<'a> DocUrl<'a> {
         // If the ident was fully qualified, include the module name here.
         opt_module_name: Option<&'a str>,
         ident: &'a str,
-        lookup: impl Fn(Option<&'a str>, &str) -> Result<ModuleInfo<'a>, AutolinkProblem<'a>>,
+        scope: &Scope,
+        interns: &Interns,
     ) -> Result<Self, AutolinkProblem<'a>> {
         let ModuleInfo {
             module_name,
             module_base_url,
-        } = lookup(opt_module_name, ident)?;
+        } = lookup(scope, interns, opt_module_name, ident)?;
         let url = {
             let mut buf = String::with_capacity_in(
                 module_base_url.len() + module_name.len() + ident.len()
@@ -87,5 +91,32 @@ impl<'a> DocUrl<'a> {
             url: url.into_bump_str(),
             title: title.into_bump_str(),
         })
+    }
+}
+
+fn lookup<'a>(
+    scope: &Scope,
+    interns: &Interns,
+    opt_module_name: Option<&str>,
+    ident: &str,
+) -> Result<ModuleInfo<'a>, AutolinkProblem<'a>> {
+    match scope.lookup_str(ident, Region::zero()) {
+        Ok(symbol_lookup) => {
+            let module_name = interns.module_name(symbol_lookup.symbol.module_id());
+            let module_base_url = {
+                let todo = (); // TODO pass through an actual module base URL.
+                ""
+            };
+
+            Ok(ModuleInfo {
+                module_name,
+                module_base_url,
+            })
+        }
+        Err(_) => {
+            let todo = todo!();
+
+            Err(todo)
+        }
     }
 }
