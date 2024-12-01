@@ -31,10 +31,11 @@ sha256AddBytes : Sha256, List U8 -> Sha256
 ## Returns the digest of the cryptographic hashing function represented by a SHA-256 hasher..
 sha256Digest : Sha256 -> Digest256
 
-## Applies the SHA-256 crytographic hashing function to some bytes.
+## Applies the SHA-256 cryptographic hashing function to some bytes.
 hashSha256 : List U8 -> Digest256
 hashSha256 = \bytes -> emptySha256 {} |> sha256AddBytes bytes |> sha256Digest
 
+# Assumes little-endian. Probably shouldn't.
 u128Bytes : U128 -> List U8
 u128Bytes = \number ->
     loop = \n, bytes, place ->
@@ -42,8 +43,16 @@ u128Bytes = \number ->
             bytes
         else
             newByte = n |> Num.bitwiseAnd 255 |> Num.toU8
-            loop (Num.shiftRightBy n 8) (List.prepend bytes newByte) (place + 1)
+            loop (Num.shiftRightBy n 8) (List.append bytes newByte) (place + 1)
     loop number [] 0
+
+expect
+    bytes1 = u128Bytes 1
+    bytes1 == [1,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0]
+
+expect
+    bytes257 = u128Bytes 0x000102030405060708090a0b0c0d0e0f
+    bytes257 == [15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0]
 
 ## Returns the bytes of a SHA-256 digest as a list.
 digest256ToBytes : Digest256 -> List U8
