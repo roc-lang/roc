@@ -2269,18 +2269,18 @@ fn update<'a>(
                         state.fx_mode = FxMode::PurityInference;
                     }
                 }
-                Builtin { .. } | Module { .. } => {
+                Builtin { .. } => {
                     if header.is_root_module {
                         debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
                         state.platform_path = PlatformPath::RootIsModule;
                     }
                 }
-                Hosted { exposes, .. } => {
+                Hosted { exposes, .. } | Module { exposes, .. } => {
                     if header.is_root_module {
                         debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
                         state.platform_path = PlatformPath::RootIsHosted;
                     }
-
+                    // WARNING: This will be bypassed if we export a record of effectful functions. This is a temporary hacky method
                     if exposes
                         .iter()
                         .any(|exposed| exposed.value.is_effectful_fn())
