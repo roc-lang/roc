@@ -4,6 +4,8 @@
 #[cfg(any(unix, windows, target_arch = "wasm32"))]
 use core::fmt;
 
+use core::sync::atomic::{self, AtomicBool};
+
 #[cfg(unix)]
 extern "C" {
     fn write(fd: i32, buf: *const u8, count: usize) -> isize;
@@ -29,6 +31,12 @@ extern "C" {
 #[cfg(windows)]
 const STD_ERROR_HANDLE: i32 = -12;
 
+static PANIC_NOT_EXIT: AtomicBool = AtomicBool::new(false);
+/// You should only call this once to make the compiler panic instead of exiting on an error
+pub fn set_panic_not_exit(inp: bool) {
+    PANIC_NOT_EXIT.store(inp, atomic::Ordering::Relaxed);
+}
+
 /// Print each of the given strings to stderr (if it's available; on wasm, nothing will
 /// be printed) and then immediately exit the program with an error.
 /// On wasm, this will trap, and on UNIX or Windows it will exit with a code of 1.
@@ -36,61 +44,66 @@ const STD_ERROR_HANDLE: i32 = -12;
 #[cold]
 #[cfg(any(unix, windows, target_arch = "wasm32"))]
 pub fn error_and_exit(args: fmt::Arguments) -> ! {
+    use core::panic;
+
     use fmt::Write;
 
-    struct StderrWriter;
+    if PANIC_NOT_EXIT.load(atomic::Ordering::Relaxed) {
+        panic!("{}", args)
+    } else {
+        struct StderrWriter;
 
-    impl Write for StderrWriter {
-        #[cfg(unix)]
-        fn write_str(&mut self, s: &str) -> fmt::Result {
-            unsafe {
-                let _ = write(STDERR_FD, s.as_ptr(), s.len());
+        impl Write for StderrWriter {
+            #[cfg(unix)]
+            fn write_str(&mut self, s: &str) -> fmt::Result {
+                unsafe {
+                    let _ = write(STDERR_FD, s.as_ptr(), s.len());
+                }
+                Ok(())
             }
-            Ok(())
+
+            #[cfg(windows)]
+            fn write_str(&mut self, s: &str) -> fmt::Result {
+                unsafe {
+                    let handle = GetStdHandle(STD_ERROR_HANDLE);
+                    let mut written = 0;
+                    let _ = WriteFile(
+                        handle,
+                        s.as_ptr(),
+                        s.len() as u32,
+                        &mut written,
+                        core::ptr::null_mut(),
+                    );
+                }
+                Ok(())
+            }
+
+            #[cfg(target_arch = "wasm32")]
+            fn write_str(&mut self, _s: &str) -> fmt::Result {
+                Ok(())
+            }
+        }
+
+        let _ = fmt::write(&mut StderrWriter, args);
+
+        // Write a newline at the end to make sure stderr gets flushed.
+        let _ = StderrWriter.write_str("\n");
+        #[cfg(unix)]
+        unsafe {
+            exit(1)
         }
 
         #[cfg(windows)]
-        fn write_str(&mut self, s: &str) -> fmt::Result {
-            unsafe {
-                let handle = GetStdHandle(STD_ERROR_HANDLE);
-                let mut written = 0;
-                let _ = WriteFile(
-                    handle,
-                    s.as_ptr(),
-                    s.len() as u32,
-                    &mut written,
-                    core::ptr::null_mut(),
-                );
-            }
-            Ok(())
+        unsafe {
+            ExitProcess(1)
         }
 
         #[cfg(target_arch = "wasm32")]
-        fn write_str(&mut self, _s: &str) -> fmt::Result {
-            Ok(())
+        {
+            // We have no way to write to any stderr equivalent in wasm,
+            // so just trap to end the program immediately.
+            core::arch::wasm32::unreachable()
         }
-    }
-
-    let _ = fmt::write(&mut StderrWriter, args);
-
-    // Write a newline at the end to make sure stderr gets flushed.
-    let _ = StderrWriter.write_str("\n");
-
-    #[cfg(unix)]
-    unsafe {
-        exit(1)
-    }
-
-    #[cfg(windows)]
-    unsafe {
-        ExitProcess(1)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        // We have no way to write to any stderr equivalent in wasm,
-        // so just trap to end the program immediately.
-        core::arch::wasm32::unreachable()
     }
 }
 
