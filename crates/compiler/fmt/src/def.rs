@@ -617,6 +617,7 @@ impl<'a> Formattable for ModuleImport<'a> {
 
         let indent = if !before_name.is_empty()
             || (params.is_multiline() && exposed.is_some())
+            || params.map(|p| !p.before.is_empty()).unwrap_or(false)
             || alias.is_multiline()
             || exposed.map_or(false, |e| e.keyword.is_multiline())
         {

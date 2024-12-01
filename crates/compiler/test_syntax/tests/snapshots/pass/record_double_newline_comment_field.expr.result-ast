@@ -1,0 +1,12 @@
+Record(
+    Collection {
+        items: [],
+        final_comments: [
+            Newline,
+            Newline,
+            LineComment(
+                "",
+            ),
+        ],
+    },
+)

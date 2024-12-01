@@ -1819,7 +1819,10 @@ fn fmt_record_like<'a, 'b: 'a, Field, Format, ToSpacesAround>(
 
         if is_multiline {
             let field_indent = indent + INDENT;
-            for (index, field) in loc_fields.iter().enumerate() {
+
+            let mut last_after: &[CommentOrNewline<'_>] = &[];
+
+            for field in loc_fields.iter() {
                 // comma addition is handled by the `format_field_multiline` function
                 // since we can have stuff like:
                 // { x # comment
@@ -1827,53 +1830,33 @@ fn fmt_record_like<'a, 'b: 'a, Field, Format, ToSpacesAround>(
                 // }
                 // In this case, we have to move the comma before the comment.
 
-                let is_first_item = index == 0;
                 let field_lifted = to_space_around(buf.text.bump(), &field.value);
-                if !field_lifted.before.is_empty() {
-                    let is_only_newlines = field_lifted.before.iter().all(|s| s.is_newline());
-                    if !is_first_item
-                        && !is_only_newlines
-                        && count_leading_newlines(field_lifted.before.iter()) > 1
-                    {
-                        buf.newline();
-                    }
 
-                    fmt_comments_only(
-                        buf,
-                        field_lifted.before.iter(),
-                        NewlineAt::Top,
-                        field_indent,
-                    );
+                let before = merge_spaces(buf.text.bump(), last_after, field_lifted.before);
 
-                    if !is_only_newlines
-                        && count_leading_newlines(field_lifted.before.iter().rev()) > 0
-                    {
-                        buf.newline();
-                    }
-                }
-
-                fmt_comments_only(
-                    buf,
-                    field_lifted.before.iter(),
-                    NewlineAt::Bottom,
-                    field_indent,
-                );
+                // if index == 0
+                //     && field_lifted
+                //         .before
+                //         .first()
+                //         .map_or(false, |s| s.is_comment())
+                // {
+                //     buf.ensure_ends_with_newline();
+                // }
+                fmt_comments_only(buf, before.iter(), NewlineAt::Bottom, field_indent);
+                buf.ensure_ends_with_newline();
                 format_field_multiline(buf, &field_lifted.item, field_indent, "");
-                fmt_comments_only(
-                    buf,
-                    field_lifted.after.iter(),
-                    NewlineAt::Bottom,
-                    field_indent,
-                );
+                last_after = field_lifted.after;
             }
 
-            if count_leading_newlines(final_comments.iter()) > 1 {
-                buf.newline();
-            }
+            let after = merge_spaces(buf.text.bump(), last_after, final_comments);
 
-            fmt_comments_only(buf, final_comments.iter(), NewlineAt::Bottom, field_indent);
+            // if count_leading_newlines(final_comments.iter()) > 1 {
+            //     buf.newline();
+            // }
 
-            buf.newline();
+            fmt_comments_only(buf, after.iter(), NewlineAt::Both, field_indent);
+
+            buf.ensure_ends_with_newline();
         } else {
             // is_multiline == false
             buf.spaces(1);
