@@ -3910,6 +3910,10 @@ where
         }
         "<-" => good!(OperatorOrDef::Backpassing, 2),
         "!" => Err((NoProgress, to_error("!", state.pos()))),
+        "&" => {
+            // makes no progress, so it does not interfere with record updaters / `&foo`
+            Err((NoProgress, to_error("&", state.pos())))
+        }
         _ => bad_made_progress!(chomped),
     }
 }

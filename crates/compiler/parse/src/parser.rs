@@ -1059,7 +1059,7 @@ where
             Some(
                 b' ' | b'#' | b'\n' | b'\r' | b'\t' | b',' | b'(' | b')' | b'[' | b']' | b'{'
                 | b'}' | b'"' | b'\'' | b'/' | b'\\' | b'+' | b'*' | b'%' | b'^' | b'&' | b'|'
-                | b'<' | b'>' | b'=' | b'!' | b'~' | b'`' | b';' | b':' | b'?' | b'.',
+                | b'<' | b'>' | b'=' | b'!' | b'~' | b'`' | b';' | b':' | b'?' | b'.' | b'@' | b'-',
             ) => {
                 state = state.advance(width);
                 Ok((MadeProgress, (), state))
