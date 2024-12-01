@@ -2172,7 +2172,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::If { .. }
         | Expr::When(_, _)
         | Expr::Dbg
-        | Expr::DbgStmt(_, _)
+        | Expr::DbgStmt { .. }
         | Expr::LowLevelDbg(_, _, _)
         | Expr::Return(_, _)
         | Expr::MalformedSuffixed(..)
@@ -3086,16 +3086,13 @@ fn stmts_to_defs<'a>(
                         _,
                     ) = e
                     {
-                        if args.len() != 1 {
-                            // TODO: this should be done in can, not parsing!
-                            return Err(EExpr::Dbg(
-                                EExpect::DbgArity(sp_stmt.item.region.start()),
-                                sp_stmt.item.region.start(),
-                            ));
-                        }
                         let condition = &args[0];
                         let rest = stmts_to_expr(&stmts[i + 1..], arena)?;
-                        let e = Expr::DbgStmt(condition, arena.alloc(rest));
+                        let e = Expr::DbgStmt {
+                            first: condition,
+                            extra_args: &args[1..],
+                            continuation: arena.alloc(rest),
+                        };
 
                         let e = if sp_stmt.before.is_empty() {
                             e
@@ -3211,7 +3208,11 @@ fn stmts_to_defs<'a>(
                     if exprify_dbg {
                         let e = if i + 1 < stmts.len() {
                             let rest = stmts_to_expr(&stmts[i + 1..], arena)?;
-                            Expr::DbgStmt(arena.alloc(condition), arena.alloc(rest))
+                            Expr::DbgStmt {
+                                first: arena.alloc(condition),
+                                extra_args: &[],
+                                continuation: arena.alloc(rest),
+                            }
                         } else {
                             Expr::Apply(
                                 arena.alloc(Loc {

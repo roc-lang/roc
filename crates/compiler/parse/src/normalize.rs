@@ -713,33 +713,22 @@ impl<'a> Normalize<'a> for Expr<'a> {
                 arena.alloc(b.normalize(arena)),
             ),
             Expr::Crash => Expr::Crash,
-            Expr::Defs(a, b) => {
-                let mut defs = a.clone();
-                defs.space_before = vec![Default::default(); defs.len()];
-                defs.space_after = vec![Default::default(); defs.len()];
-                defs.regions = vec![Region::zero(); defs.len()];
-                defs.spaces.clear();
-
-                for type_def in defs.type_defs.iter_mut() {
-                    *type_def = type_def.normalize(arena);
-                }
-
-                for value_def in defs.value_defs.iter_mut() {
-                    *value_def = value_def.normalize(arena);
-                }
-
-                Expr::Defs(arena.alloc(defs), arena.alloc(b.normalize(arena)))
-            }
+            Expr::Defs(a, b) => fold_defs(arena, a.defs(), b.value.normalize(arena)),
             Expr::Backpassing(a, b, c) => Expr::Backpassing(
                 arena.alloc(a.normalize(arena)),
                 arena.alloc(b.normalize(arena)),
                 arena.alloc(c.normalize(arena)),
             ),
             Expr::Dbg => Expr::Dbg,
-            Expr::DbgStmt(a, b) => Expr::DbgStmt(
-                arena.alloc(a.normalize(arena)),
-                arena.alloc(b.normalize(arena)),
-            ),
+            Expr::DbgStmt {
+                first,
+                extra_args,
+                continuation,
+            } => Expr::DbgStmt {
+                first: arena.alloc(first.normalize(arena)),
+                extra_args: extra_args.normalize(arena),
+                continuation: arena.alloc(continuation.normalize(arena)),
+            },
             Expr::LowLevelDbg(x, a, b) => Expr::LowLevelDbg(
                 x,
                 arena.alloc(a.normalize(arena)),
@@ -789,6 +778,61 @@ impl<'a> Normalize<'a> for Expr<'a> {
             ),
         }
     }
+}
+
+fn fold_defs<'a>(
+    arena: &'a Bump,
+    mut defs: impl Iterator<Item = Result<&'a TypeDef<'a>, &'a ValueDef<'a>>>,
+    final_expr: Expr<'a>,
+) -> Expr<'a> {
+    let mut new_defs = Defs::default();
+
+    while let Some(def) = defs.next() {
+        match def {
+            Ok(td) => {
+                let td = td.normalize(arena);
+                new_defs.push_type_def(td, Region::zero(), &[], &[]);
+            }
+            Err(vd) => {
+                let vd = vd.normalize(arena);
+
+                match vd {
+                    ValueDef::Stmt(&Loc {
+                        value:
+                            Expr::Apply(
+                                &Loc {
+                                    value: Expr::Dbg, ..
+                                },
+                                args,
+                                _,
+                            ),
+                        ..
+                    }) => {
+                        let rest = fold_defs(arena, defs, final_expr);
+                        let new_final = Expr::DbgStmt {
+                            first: args[0],
+                            extra_args: &args[1..],
+                            continuation: arena.alloc(Loc::at_zero(rest)),
+                        };
+                        if new_defs.is_empty() {
+                            return new_final;
+                        }
+                        return Expr::Defs(
+                            arena.alloc(new_defs),
+                            arena.alloc(Loc::at_zero(new_final)),
+                        );
+                    }
+                    _ => {
+                        new_defs.push_value_def(vd, Region::zero(), &[], &[]);
+                    }
+                }
+            }
+        }
+    }
+    if new_defs.is_empty() {
+        return final_expr;
+    }
+    Expr::Defs(arena.alloc(new_defs), arena.alloc(Loc::at_zero(final_expr)))
 }
 
 fn remove_spaces_bad_ident(ident: BadIdent) -> BadIdent {
@@ -1465,7 +1509,6 @@ impl<'a> Normalize<'a> for EExpect<'a> {
                 EExpect::Continuation(arena.alloc(inner_err.normalize(arena)), Position::zero())
             }
             EExpect::IndentCondition(_) => EExpect::IndentCondition(Position::zero()),
-            EExpect::DbgArity(_) => EExpect::DbgArity(Position::zero()),
         }
     }
 }

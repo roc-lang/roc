@@ -7,6 +7,7 @@ use crate::spaces::{
     INDENT,
 };
 use crate::Buf;
+use bumpalo::collections::Vec;
 use roc_module::called_via::{self, BinOp};
 use roc_parse::ast::{
     is_expr_suffixed, AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces,
@@ -64,7 +65,9 @@ impl<'a> Formattable for Expr<'a> {
                 loc_expr.is_multiline() || args.iter().any(|loc_arg| loc_arg.is_multiline())
             }
 
-            DbgStmt(condition, _) => condition.is_multiline(),
+            DbgStmt {
+                first, extra_args, ..
+            } => first.is_multiline() || extra_args.iter().any(|arg| arg.is_multiline()),
             LowLevelDbg(_, _, _) => unreachable!(
                 "LowLevelDbg should only exist after desugaring, not during formatting"
             ),
@@ -446,8 +449,12 @@ impl<'a> Formattable for Expr<'a> {
                 buf.indent(indent);
                 buf.push_str("dbg");
             }
-            DbgStmt(condition, continuation) => {
-                fmt_dbg_stmt(buf, condition, continuation, parens, indent);
+            DbgStmt {
+                first,
+                extra_args,
+                continuation,
+            } => {
+                fmt_dbg_stmt(buf, first, extra_args, continuation, parens, indent);
             }
             LowLevelDbg(_, _, _) => unreachable!(
                 "LowLevelDbg should only exist after desugaring, not during formatting"
@@ -1021,19 +1028,24 @@ fn fmt_when<'a>(
 fn fmt_dbg_stmt<'a>(
     buf: &mut Buf,
     condition: &'a Loc<Expr<'a>>,
+    extra_args: &'a [&'a Loc<Expr<'a>>],
     continuation: &'a Loc<Expr<'a>>,
     parens: Parens,
     indent: u16,
 ) {
+    let mut args = Vec::with_capacity_in(extra_args.len() + 1, buf.text.bump());
+    args.push(condition);
+    args.extend_from_slice(extra_args);
+
     Expr::Apply(
         &Loc::at_zero(Expr::Dbg),
-        &[condition],
+        args.into_bump_slice(),
         called_via::CalledVia::Space,
     )
     .format_with_options(buf, parens, Newlines::Yes, indent);
 
-    // Always put a blank line after the `dbg` line(s)
-    buf.ensure_ends_with_blank_line();
+    // Always put a newline after the `dbg` line(s)
+    buf.ensure_ends_with_newline();
 
     continuation.format(buf, indent);
 }
