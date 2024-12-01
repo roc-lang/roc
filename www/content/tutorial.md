@@ -1957,7 +1957,7 @@ when err is
 
 ### [The early `return` keyword](#the-early-return-keyword) {#the-early-return-keyword}
 
-Just as the `try` keyword can interrupt a function in response to return a Result error, the `return` keyword can interrupt and return any value we want.
+The `return` keyword can interrupt a function and return any value we want.
 
 This is rarely necessary, due to Roc's powerful syntax for expressions and pattern matching, but it's included as a comfort to developers familiar with its frequent use in primarily-imperative programing languages.
 
