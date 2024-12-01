@@ -1190,7 +1190,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                     result.as_basic_value_enum()
                 }
                 LayoutRepr::Builtin(Builtin::Float(_)) => {
-                    let Ok(float_result) = env.builder.build_float_div(
+                    let Ok(float_result) = env.builder.build_float_mul(
                         arg.into_float_value(),
                         llvm_divisor,
                         "decf_cast",
@@ -1224,10 +1224,11 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                             bool_false
                         } else {
                             if width.is_signed() {
+                                let compare_arg = env.builder.build_int_z_extend_or_bit_cast(arg.into_int_value(), to, "int_cast").unwrap();
                                 //If VA > +Dec
                                 let pos_res = env.builder.new_build_int_compare(
                                     inkwell::IntPredicate::SGT,
-                                    arg.into_int_value(),
+                                    compare_arg,
                                     llvm_max_dec_i,
                                     "int_compare",
                                 );
@@ -1235,7 +1236,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                                 let neg_res = env.builder.new_build_int_compare(
                                     inkwell::IntPredicate::SGT,
                                     llvm_min_dec_i,
-                                    arg.into_int_value(),
+                                    compare_arg,
                                     "int_compare",
                                 );
                                 env.builder.new_build_or(pos_res,neg_res,"or_ops")
