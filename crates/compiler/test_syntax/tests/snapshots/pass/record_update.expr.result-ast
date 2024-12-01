@@ -19,4 +19,5 @@ RecordUpdate {
             ),
         ),
     ],
+    kind: Prefix,
 }
