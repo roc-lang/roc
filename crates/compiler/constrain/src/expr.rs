@@ -64,6 +64,15 @@ pub struct Env {
 }
 
 impl Env {
+    pub fn new(home: ModuleId) -> Self {
+        Self {
+            rigids: MutMap::default(),
+            resolutions_to_make: Vec::new(),
+            home,
+            fx_expectation: None,
+        }
+    }
+
     pub fn with_fx_expectation<F, T>(
         &mut self,
         fx_var: Variable,
@@ -1805,15 +1814,6 @@ pub fn constrain_expr(
             let eq = constraints.equal_types_var(*ret_var, expected, category, region);
             arg_cons.push(eq);
             constraints.exists_many(vars, arg_cons)
-        }
-        TypedHole(var) => {
-            // store the expected type for this position
-            constraints.equal_types_var(
-                *var,
-                expected,
-                Category::Storage(std::file!(), std::line!()),
-                region,
-            )
         }
         RuntimeError(_) => {
             // Runtime Errors are always going to crash, so they don't introduce any new
@@ -4405,7 +4405,6 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             | Expect { .. }
             | Dbg { .. }
             | Return { .. }
-            | TypedHole(_)
             | RuntimeError(..)
             | ZeroArgumentTag { .. }
             | Tag { .. }

@@ -52,12 +52,12 @@ Full(
                 @157-187,
             ],
             space_before: [
-                Slice { start: 0, length: 3 },
-                Slice { start: 6, length: 2 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 3 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 6, length: 2 },
             ],
             space_after: [
-                Slice { start: 3, length: 3 },
-                Slice { start: 8, length: 2 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 3, length: 3 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 8, length: 2 },
             ],
             spaces: [
                 Newline,

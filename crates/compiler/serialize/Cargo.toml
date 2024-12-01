@@ -8,4 +8,4 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-roc_collections = { path = "../collections" }
+roc_collections.workspace = true

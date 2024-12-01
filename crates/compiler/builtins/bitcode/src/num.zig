@@ -110,7 +110,21 @@ pub fn exportNumToFloatCast(comptime T: type, comptime F: type, comptime name: [
 pub fn exportPow(comptime T: type, comptime name: []const u8) void {
     comptime var f = struct {
         fn func(base: T, exp: T) callconv(.C) T {
-            return std.math.pow(T, base, exp);
+            switch (@typeInfo(T)) {
+                // std.math.pow can handle ints via powi, but it turns any errors to unreachable
+                // we want to catch overflow and report a proper error to the user
+                .Int => {
+                    if (std.math.powi(T, base, exp)) |value| {
+                        return value;
+                    } else |err| switch (err) {
+                        error.Overflow => roc_panic("Integer raised to power overflowed!", 0),
+                        error.Underflow => return 0,
+                    }
+                },
+                else => {
+                    return std.math.pow(T, base, exp);
+                },
+            }
         }
     }.func;
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });

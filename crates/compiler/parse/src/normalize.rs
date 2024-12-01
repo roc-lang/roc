@@ -1465,6 +1465,7 @@ impl<'a> Normalize<'a> for EExpect<'a> {
                 EExpect::Continuation(arena.alloc(inner_err.normalize(arena)), Position::zero())
             }
             EExpect::IndentCondition(_) => EExpect::IndentCondition(Position::zero()),
+            EExpect::DbgArity(_) => EExpect::DbgArity(Position::zero()),
         }
     }
 }

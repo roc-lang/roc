@@ -1,0 +1,13 @@
+[package]
+name = "limits"
+description = "Things like maximum number of arguments supported per function, etc."
+path = "src/limits.rs"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+
+[dev-dependencies]

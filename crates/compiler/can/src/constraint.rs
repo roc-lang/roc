@@ -929,7 +929,7 @@ pub struct FxExpectation {
     pub ann_region: Option<Region>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FxCallKind {
     Call(Option<Symbol>),
     Stmt,
@@ -943,7 +943,7 @@ pub struct FxSuffixConstraint {
     pub region: Region,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FxSuffixKind {
     Let(Symbol),
     Pattern(Symbol),
@@ -957,9 +957,16 @@ impl FxSuffixKind {
             Self::UnsuffixedRecordField => IdentSuffix::None,
         }
     }
+
+    pub fn symbol(&self) -> Option<&Symbol> {
+        match self {
+            Self::Let(symbol) | Self::Pattern(symbol) => Some(symbol),
+            Self::UnsuffixedRecordField => None,
+        }
+    }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ExpectEffectfulReason {
     Stmt,
     Ignored,

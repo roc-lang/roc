@@ -1070,7 +1070,6 @@ fn expr_contains_symbol(expr: &Expr, needle: Symbol) -> bool {
         }),
         Expr::EmptyArray => false,
         Expr::Reset { symbol, .. } | Expr::ResetRef { symbol, .. } => needle == *symbol,
-        Expr::RuntimeErrorFunction(_) => false,
         Expr::ErasedMake { value, callee } => {
             value.map(|v| v == needle).unwrap_or(false) || needle == *callee
         }

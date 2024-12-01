@@ -12,8 +12,8 @@ use crate::llvm::refcounting::{
 use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::types::{BasicType, BasicTypeEnum, StructType};
 use inkwell::values::{
-    BasicValueEnum, CallSiteValue, FunctionValue, InstructionValue, IntValue, PointerValue,
-    StructValue,
+    BasicValue, BasicValueEnum, CallSiteValue, FunctionValue, InstructionValue, IntValue,
+    PointerValue, StructValue,
 };
 use inkwell::AddressSpace;
 use roc_error_macros::internal_error;
@@ -46,6 +46,28 @@ pub fn call_bitcode_fn<'ctx>(
                 .builder
                 .build_bitcast(ret, env.context.i128_type(), "return_i128")
                 .unwrap();
+        }
+    } else if env.target == roc_target::Target::MacArm64 {
+        // Essentially the same happens on macos arm64, but with array type [2xi64].
+        let i64_type = env.context.i64_type();
+        let arr_type = i64_type.array_type(2);
+        if ret.get_type() == arr_type.into() {
+            let alloca = env
+                .builder
+                .build_array_alloca(i64_type, i64_type.const_int(2, false), "dec_alloca")
+                .unwrap_or_else(|err| internal_error!("failed to build array alloca: {err}"));
+            let instruction = alloca.as_instruction_value().unwrap_or_else(|| {
+                internal_error!("failed to convert pointer to instruction value ({alloca:?})");
+            });
+            instruction.set_alignment(16).unwrap_or_else(|err| {
+                internal_error!(
+                    "failed to set 16-byte alignment on instruction ({instruction:?}): {err}"
+                );
+            });
+            env.builder.new_build_store(alloca, ret);
+            return env
+                .builder
+                .new_build_load(env.context.i128_type(), alloca, "return_i128");
         }
     }
 

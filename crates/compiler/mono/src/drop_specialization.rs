@@ -244,8 +244,7 @@ fn specialize_drops_stmt<'a, 'i>(
                         }
                     }
                     Reset { .. } | Expr::ResetRef { .. } => { /* do nothing */ }
-                    RuntimeErrorFunction(_)
-                    | FunctionPointer { .. }
+                    FunctionPointer { .. }
                     | GetTagId { .. }
                     | Alloca { .. }
                     | EmptyArray

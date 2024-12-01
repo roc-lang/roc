@@ -350,6 +350,8 @@ fn start_phase<'a>(
                     None
                 };
 
+                let is_host_exposed = state.root_id == module.module_id;
+
                 BuildTask::solve_module(
                     module,
                     ident_ids,
@@ -367,6 +369,7 @@ fn start_phase<'a>(
                     state.cached_types.clone(),
                     derived_module,
                     state.exec_mode,
+                    is_host_exposed,
                     //
                     #[cfg(debug_assertions)]
                     checkmate,
@@ -658,7 +661,7 @@ struct CanAndCon {
     module_docs: Option<ModuleDocumentation>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 enum PlatformPath<'a> {
     NotSpecified,
     Valid(To<'a>),
@@ -922,6 +925,7 @@ enum BuildTask<'a> {
         cached_subs: CachedTypeState,
         derived_module: SharedDerivedModule,
         exec_mode: ExecutionMode,
+        is_host_exposed: bool,
 
         #[cfg(debug_assertions)]
         checkmate: Option<roc_checkmate::Collector>,
@@ -1141,7 +1145,6 @@ impl<'a> LoadStart<'a> {
 
         // Load the root module synchronously; we can't proceed until we have its id.
         let root_start_time = Instant::now();
-
         let load_result = load_filename(
             arena,
             filename.clone(),
@@ -1286,7 +1289,6 @@ fn handle_root_type<'a>(
                 if let (Some(main_path), Some(cache_dir)) = (main_path.clone(), cache_dir) {
                     let mut messages = Vec::with_capacity(4);
                     messages.push(header_output.msg);
-
                     load_packages_from_main(
                         arena,
                         src_dir.clone(),
@@ -2245,7 +2247,9 @@ fn update<'a>(
 
                     // If we're building an app module, and this was the platform
                     // specified in its header's `to` field, record it as our platform.
-                    if state.opt_platform_shorthand == Some(config_shorthand) {
+                    if state.opt_platform_shorthand == Some(config_shorthand)
+                        || state.platform_path == PlatformPath::RootIsModule
+                    {
                         debug_assert!(state.platform_data.is_none());
 
                         state.platform_data = Some(PlatformData {
@@ -2339,7 +2343,6 @@ fn update<'a>(
                 extend_module_with_builtin_import(parsed, ModuleId::INSPECT);
                 extend_module_with_builtin_import(parsed, ModuleId::TASK);
             }
-
             state
                 .module_cache
                 .imports
@@ -4331,6 +4334,7 @@ impl<'a> BuildTask<'a> {
         cached_subs: CachedTypeState,
         derived_module: SharedDerivedModule,
         exec_mode: ExecutionMode,
+        is_host_exposed: bool,
 
         #[cfg(debug_assertions)] checkmate: Option<roc_checkmate::Collector>,
     ) -> Self {
@@ -4355,6 +4359,7 @@ impl<'a> BuildTask<'a> {
             cached_subs,
             derived_module,
             exec_mode,
+            is_host_exposed,
 
             #[cfg(debug_assertions)]
             checkmate,
@@ -4661,6 +4666,7 @@ fn run_solve_solve(
     var_store: VarStore,
     module: Module,
     derived_module: SharedDerivedModule,
+    is_host_exposed: bool,
 
     #[cfg(debug_assertions)] checkmate: Option<roc_checkmate::Collector>,
 ) -> SolveResult {
@@ -4711,6 +4717,12 @@ fn run_solve_solve(
     let (solve_output, solved_implementations, exposed_vars_by_symbol) = {
         let module_id = module.module_id;
 
+        let host_exposed_idents = if is_host_exposed {
+            Some(&exposed_symbols)
+        } else {
+            None
+        };
+
         let solve_config = SolveConfig {
             home: module_id,
             types,
@@ -4724,6 +4736,7 @@ fn run_solve_solve(
             checkmate,
             module_params,
             module_params_vars: imported_param_vars,
+            host_exposed_symbols: host_exposed_idents,
         };
 
         let solve_output = roc_solve::module::run_solve(
@@ -4800,6 +4813,7 @@ fn run_solve<'a>(
     cached_types: CachedTypeState,
     derived_module: SharedDerivedModule,
     exec_mode: ExecutionMode,
+    is_host_exposed: bool,
 
     #[cfg(debug_assertions)] checkmate: Option<roc_checkmate::Collector>,
 ) -> Msg<'a> {
@@ -4831,6 +4845,7 @@ fn run_solve<'a>(
                     var_store,
                     module,
                     derived_module,
+                    is_host_exposed,
                     //
                     #[cfg(debug_assertions)]
                     checkmate,
@@ -4863,6 +4878,7 @@ fn run_solve<'a>(
                 var_store,
                 module,
                 derived_module,
+                is_host_exposed,
                 //
                 #[cfg(debug_assertions)]
                 checkmate,
@@ -6256,6 +6272,7 @@ fn run_task<'a>(
             cached_subs,
             derived_module,
             exec_mode,
+            is_host_exposed,
 
             #[cfg(debug_assertions)]
             checkmate,
@@ -6275,6 +6292,7 @@ fn run_task<'a>(
             cached_subs,
             derived_module,
             exec_mode,
+            is_host_exposed,
             //
             #[cfg(debug_assertions)]
             checkmate,
