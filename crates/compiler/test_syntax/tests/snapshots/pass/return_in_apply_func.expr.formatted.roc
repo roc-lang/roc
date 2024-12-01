@@ -1,2 +1,3 @@
 (
-    return -3e) g
+    return -3e)
+    g

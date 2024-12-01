@@ -28,8 +28,13 @@ Defs(
                         ),
                     ],
                 },
-                ann: @6-7 BoundVariable(
-                    "e",
+                ann: @6-7 SpaceBefore(
+                    BoundVariable(
+                        "e",
+                    ),
+                    [
+                        Newline,
+                    ],
                 ),
             },
         ],

@@ -1161,9 +1161,7 @@ fn parse_stmt_alias_or_opaque<'a>(
             AliasOrOpaque::Alias => {
                 let (_, signature, state) = alias_signature().parse(arena, state, min_indent)?;
 
-                // TODO: this code used to be broken and it dropped the spaces after the operator.
-                // The formatter is not expecting this, so let's keep it as is for now.
-                // let signature = signature.map(|v| v.maybe_before(arena, spaces_after_operator));
+                let signature = signature.map(|v| v.maybe_before(arena, spaces_after_operator));
 
                 let header = TypeHeader {
                     name: Loc::at(expr.region, name),
@@ -1182,9 +1180,7 @@ fn parse_stmt_alias_or_opaque<'a>(
                 let (_, (signature, derived), state) =
                     opaque_signature().parse(arena, state, indented_more)?;
 
-                // TODO: this code used to be broken and it dropped the spaces after the operator.
-                // The formatter is not expecting this, so let's keep it as is for now.
-                // let signature = signature.map(|v| v.maybe_before(arena, spaces_after_operator));
+                let signature = signature.map(|v| v.maybe_before(arena, spaces_after_operator));
 
                 let header = TypeHeader {
                     name: Loc::at(expr.region, name),

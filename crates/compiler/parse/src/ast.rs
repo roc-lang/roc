@@ -28,9 +28,23 @@ pub struct Spaces<'a, T> {
     pub after: &'a [CommentOrNewline<'a>],
 }
 
+impl<'a, T: Copy> ExtractSpaces<'a> for Spaces<'a, T> {
+    type Item = T;
+
+    fn extract_spaces(&self) -> Spaces<'a, T> {
+        *self
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct SpacesBefore<'a, T> {
     pub before: &'a [CommentOrNewline<'a>],
+    pub item: T,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct SpacesAfter<'a, T> {
+    pub after: &'a [CommentOrNewline<'a>],
     pub item: T,
 }
 
@@ -2330,6 +2344,7 @@ impl_extract_spaces!(Tag);
 impl_extract_spaces!(AssignedField<T>);
 impl_extract_spaces!(TypeAnnotation);
 impl_extract_spaces!(ImplementsAbility);
+impl_extract_spaces!(ImplementsAbilities);
 
 impl<'a, T: Copy> ExtractSpaces<'a> for Spaced<'a, T> {
     type Item = T;
