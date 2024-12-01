@@ -8,14 +8,13 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-roc_builtins = { path = "../builtins" }
-roc_collections = { path = "../collections" }
-roc_error_macros = { path = "../../error_macros" }
-roc_module = { path = "../module" }
-roc_mono = { path = "../mono" }
-roc_std = { path = "../../roc_std" }
-roc_target = { path = "../roc_target" }
-roc_wasm_module = { path = "../../wasm_module" }
-
+roc_builtins.workspace = true
+roc_collections.workspace = true
+roc_error_macros.workspace = true
+roc_module.workspace = true
+roc_mono.workspace = true
+roc_std.workspace = true
+roc_target.workspace = true
+roc_wasm_module.workspace = true
 bitvec.workspace = true
 bumpalo.workspace = true

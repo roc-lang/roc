@@ -27,7 +27,64 @@
     let searchForm = document.getElementById("module-search-form");
     let topSearchResultListItem = undefined;
 
+    // Hide the results whenever anyone clicks outside the search results.
+    window.addEventListener("click", function(event) {
+        if (!searchForm?.contains(event.target)) {
+            searchTypeAhead.classList.add("hidden");
+        }
+    });
+
     if (searchBox != null) {
+        function searchKeyDown(event) {
+          switch (event.key) {
+            case "ArrowDown": {
+              event.preventDefault();
+
+              const focused = document.querySelector("#search-type-ahead > li:not([class*='hidden']) > a:focus");
+
+              // Find the next element to focus.
+              let nextToFocus = focused?.parentElement?.nextElementSibling;
+
+              while (nextToFocus != null && nextToFocus.classList.contains("hidden")) {
+                nextToFocus = nextToFocus.nextElementSibling;
+              }
+
+              if (nextToFocus == null) {
+                // If none of the links were focused, focus the first one.
+                // Also if we've reached the last one in the list, wrap around to the first.
+                document.querySelector("#search-type-ahead > li:not([class*='hidden']) > a")?.focus();
+              } else {
+                nextToFocus.querySelector("a").focus();
+              }
+
+              break;
+            }
+            case "ArrowUp": {
+              event.preventDefault();
+
+              const focused = document.querySelector("#search-type-ahead > li:not([class*='hidden']) > a:focus");
+
+              // Find the next element to focus.
+              let nextToFocus = focused?.parentElement?.previousElementSibling;
+              while (nextToFocus != null && nextToFocus.classList.contains("hidden")) {
+                nextToFocus = nextToFocus.previousElementSibling;
+              }
+
+              if (nextToFocus == null) {
+                // If none of the links were focused, or we're at the first one, focus the search box again.
+                searchBox?.focus();
+              } else {
+                // If one of the links was focused, focus the previous one
+                nextToFocus.querySelector("a").focus();
+              }
+
+              break;
+            }
+          }
+        }
+
+        searchForm.addEventListener("keydown", searchKeyDown);
+
         function search() {
             topSearchResultListItem = undefined;
             let text = searchBox.value.toLowerCase(); // Search is case-insensitive.
@@ -46,11 +103,7 @@
                             ?.textContent?.toLowerCase()
                             ?.replace(/\s+/g, "");
 
-                        if (
-                            totalResults < 5 &&
-                            (entryName.includes(text) ||
-                                entrySignature?.includes(text.replace(/\s+/g, "")))
-                        ) {
+                        if ((entryName.includes(text) || entrySignature?.includes(text.replace(/\s+/g, "")))) {
                             totalResults++;
                             entry.classList.remove("hidden");
                             if (topSearchResultListItem === undefined) {
@@ -88,29 +141,27 @@
         // Capture '/' keypress for quick search
         window.addEventListener("keyup", (e) => {
             if (e.key === "s" && document.activeElement !== searchBox) {
-                e.preventDefault;
+                e.preventDefault();
                 searchBox.focus();
                 searchBox.value = "";
             }
 
-            if (e.key === "Escape" && document.activeElement === searchBox) {
-                e.preventDefault;
-
-                // De-focus input box
+            if (e.key === "Escape") {
+              if (document.activeElement === searchBox) {
+                // De-focus and clear input box
+                searchBox.value = "";
                 searchBox.blur();
-            } else if (
-                e.key === "Escape" &&
-                searchTypeAhead.contains(document.activeElement)
-            ) {
-                e.preventDefault;
+              } else {
+                // Hide the search results
+                searchTypeAhead.classList.add("hidden");
 
-                // De-focus type ahead
-                searchBox.focus();
-                searchBox.blur();
+                if (searchTypeAhead.contains(document.activeElement)) {
+                  searchBox.focus();
+                }
+              }
             }
         });
     }
-
 
     const isTouchSupported = () => {
         try {

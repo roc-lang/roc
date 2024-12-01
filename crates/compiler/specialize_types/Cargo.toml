@@ -8,12 +8,12 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-roc_can = { path = "../can" }
-roc_region = { path = "../region" }
-roc_types = { path = "../types" }
-roc_collections = { path = "../collections" }
-roc_module = { path = "../module" }
-roc_solve = { path = "../solve" }
+roc_can.workspace = true
+roc_region.workspace = true
+roc_types.workspace = true
+roc_collections.workspace = true
+roc_module.workspace = true
+roc_solve.workspace = true
 
 bitvec.workspace = true
 arrayvec.workspace = true
@@ -26,15 +26,15 @@ indoc.workspace = true
 soa.workspace = true
 
 [dev-dependencies]
-roc_builtins = { path = "../builtins" }
-roc_derive = { path = "../derive", features = ["debug-derived-symbols"] }
-roc_load = { path = "../load" }
-roc_parse = { path = "../parse" }
-roc_problem = { path = "../problem" }
-roc_reporting = { path = "../../reporting" }
-roc_target = { path = "../roc_target" }
-roc_solve = { path = "../solve" }
-test_solve_helpers = { path = "../test_solve_helpers" }
+roc_builtins.workspace = true
+roc_derive = { workspace = true, features = ["debug-derived-symbols"] }
+roc_load.workspace = true
+roc_parse.workspace = true
+roc_problem.workspace = true
+roc_reporting.workspace = true
+roc_target.workspace = true
+roc_solve.workspace = true
+test_solve_helpers.workspace = true
 
 test_compile.workspace = true
 pretty_assertions.workspace = true

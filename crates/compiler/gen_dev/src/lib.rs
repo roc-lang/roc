@@ -1005,7 +1005,7 @@ trait Backend<'a> {
         }
     }
 
-    /// build_run_low_level builds the low level opertation and outputs to the specified symbol.
+    /// build_run_low_level builds the low level operation and outputs to the specified symbol.
     /// The builder must keep track of the symbol because it may be referred to later.
     fn build_run_low_level(
         &mut self,
@@ -1067,9 +1067,6 @@ trait Backend<'a> {
             }
             LowLevel::NumAddChecked => {
                 self.build_num_add_checked(sym, &args[0], &args[1], &arg_layouts[0], ret_layout)
-            }
-            LowLevel::NumSubChecked => {
-                self.build_num_sub_checked(sym, &args[0], &args[1], &arg_layouts[0], ret_layout)
             }
             LowLevel::NumAcos => self.build_fn_call(
                 sym,
@@ -1239,27 +1236,12 @@ trait Backend<'a> {
                 );
                 self.build_num_sub_wrap(sym, &args[0], &args[1], ret_layout)
             }
-            LowLevel::NumSubSaturated => match self.interner().get_repr(*ret_layout) {
-                LayoutRepr::Builtin(Builtin::Int(int_width)) => self.build_fn_call(
-                    sym,
-                    bitcode::NUM_SUB_SATURATED_INT[int_width].to_string(),
-                    args,
-                    arg_layouts,
-                    ret_layout,
-                ),
-                LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
-                    self.build_num_sub(sym, &args[0], &args[1], ret_layout)
-                }
-                LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
-                    // saturated sub is just normal sub
-                    self.build_num_sub(sym, &args[0], &args[1], ret_layout)
-                }
-                LayoutRepr::Builtin(Builtin::Decimal) => {
-                    // self.load_args_and_call_zig(backend, bitcode::DEC_SUB_SATURATED)
-                    todo!()
-                }
-                _ => internal_error!("invalid return type"),
-            },
+            LowLevel::NumSubSaturated => {
+                self.build_num_sub_saturated(*sym, args[0], args[1], *ret_layout)
+            }
+            LowLevel::NumSubChecked => {
+                self.build_num_sub_checked(sym, &args[0], &args[1], &arg_layouts[0], ret_layout)
+            }
             LowLevel::NumBitwiseAnd => {
                 if let LayoutRepr::Builtin(Builtin::Int(int_width)) =
                     self.interner().get_repr(*ret_layout)
@@ -2392,16 +2374,6 @@ trait Backend<'a> {
         layout: &InLayout<'a>,
     );
 
-    /// build_num_sub_checked stores the sum of src1 and src2 into dst.
-    fn build_num_sub_checked(
-        &mut self,
-        dst: &Symbol,
-        src1: &Symbol,
-        src2: &Symbol,
-        num_layout: &InLayout<'a>,
-        return_layout: &InLayout<'a>,
-    );
-
     /// build_num_mul stores `src1 * src2` into dst.
     fn build_num_mul(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>);
 
@@ -2458,6 +2430,25 @@ trait Backend<'a> {
         src1: &Symbol,
         src2: &Symbol,
         layout: &InLayout<'a>,
+    );
+
+    /// build_num_sub_saturated stores the `src1 - src2` difference into dst.
+    fn build_num_sub_saturated(
+        &mut self,
+        dst: Symbol,
+        src1: Symbol,
+        src2: Symbol,
+        layout: InLayout<'a>,
+    );
+
+    /// build_num_sub_checked stores the difference of src1 and src2 into dst.
+    fn build_num_sub_checked(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        num_layout: &InLayout<'a>,
+        return_layout: &InLayout<'a>,
     );
 
     /// stores the `src1 & src2` into dst.

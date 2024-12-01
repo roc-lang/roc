@@ -1432,28 +1432,20 @@ impl<
         src2: Symbol,
         layout: InLayout<'a>,
     ) {
-        match self.layout_interner.get_repr(layout) {
-            LayoutRepr::Builtin(Builtin::Int(width @ quadword_and_smaller!())) => {
-                let intrinsic = bitcode::NUM_ADD_SATURATED_INT[width].to_string();
+        match self.interner().get_repr(layout) {
+            LayoutRepr::Builtin(Builtin::Int(int_width)) => {
+                let intrinsic = bitcode::NUM_ADD_SATURATED_INT[int_width].to_string();
                 self.build_fn_call(&dst, intrinsic, &[src1, src2], &[layout, layout], &layout);
             }
-            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
-                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, &dst);
-                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, &src1);
-                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, &src2);
-                ASM::add_freg64_freg64_freg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
-            }
-            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
-                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, &dst);
-                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, &src1);
-                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, &src2);
-                ASM::add_freg32_freg32_freg32(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            LayoutRepr::Builtin(Builtin::Float(_)) => {
+                // saturated add is just normal add
+                self.build_num_add(&dst, &src1, &src2, &layout)
             }
             LayoutRepr::Builtin(Builtin::Decimal) => {
                 let intrinsic = bitcode::DEC_ADD_SATURATED.to_string();
                 self.build_fn_call(&dst, intrinsic, &[src1, src2], &[layout, layout], &layout);
             }
-            x => todo!("NumAddSaturated: layout, {:?}", x),
+            other => internal_error!("NumAddSaturated is not defined for {other:?}"),
         }
     }
 
@@ -1479,6 +1471,30 @@ impl<
             &[*num_layout, *num_layout],
             return_layout,
         )
+    }
+
+    fn build_num_sub_saturated(
+        &mut self,
+        dst: Symbol,
+        src1: Symbol,
+        src2: Symbol,
+        layout: InLayout<'a>,
+    ) {
+        match self.interner().get_repr(layout) {
+            LayoutRepr::Builtin(Builtin::Int(int_width)) => {
+                let intrinsic = bitcode::NUM_SUB_SATURATED_INT[int_width].to_string();
+                self.build_fn_call(&dst, intrinsic, &[src1, src2], &[layout, layout], &layout);
+            }
+            LayoutRepr::Builtin(Builtin::Float(_)) => {
+                // saturated sub is just normal sub
+                self.build_num_sub(&dst, &src1, &src2, &layout)
+            }
+            LayoutRepr::Builtin(Builtin::Decimal) => {
+                let intrinsic = bitcode::DEC_SUB_SATURATED.to_string();
+                self.build_fn_call(&dst, intrinsic, &[src1, src2], &[layout, layout], &layout);
+            }
+            other => internal_error!("NumSubSaturated is not defined for {other:?}"),
+        }
     }
 
     fn build_num_sub_checked(
@@ -1619,28 +1635,20 @@ impl<
         src2: Symbol,
         layout: InLayout<'a>,
     ) {
-        match self.layout_interner.get_repr(layout) {
-            LayoutRepr::Builtin(Builtin::Int(width @ quadword_and_smaller!())) => {
-                let intrinsic = bitcode::NUM_MUL_SATURATED_INT[width].to_string();
+        match self.interner().get_repr(layout) {
+            LayoutRepr::Builtin(Builtin::Int(int_width)) => {
+                let intrinsic = bitcode::NUM_MUL_SATURATED_INT[int_width].to_string();
                 self.build_fn_call(&dst, intrinsic, &[src1, src2], &[layout, layout], &layout);
             }
-            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
-                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, &dst);
-                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, &src1);
-                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, &src2);
-                ASM::mul_freg64_freg64_freg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
-            }
-            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
-                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, &dst);
-                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, &src1);
-                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, &src2);
-                ASM::mul_freg32_freg32_freg32(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            LayoutRepr::Builtin(Builtin::Float(_)) => {
+                // saturated mul is just normal mul
+                self.build_num_mul(&dst, &src1, &src2, &layout)
             }
             LayoutRepr::Builtin(Builtin::Decimal) => {
                 let intrinsic = bitcode::DEC_MUL_SATURATED.to_string();
                 self.build_fn_call(&dst, intrinsic, &[src1, src2], &[layout, layout], &layout);
             }
-            x => todo!("NumMulSaturated: layout, {:?}", x),
+            other => internal_error!("NumMulSaturated is not defined for {other:?}"),
         }
     }
 
