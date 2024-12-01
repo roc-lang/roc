@@ -2333,11 +2333,11 @@ Here are various Roc expressions involving operators, and what they desugar to.
 | `f!`                         | [see example](https://www.roc-lang.org/examples/DesugaringAwait/README.html)     |
 | `f?`                         | [see example](https://www.roc-lang.org/examples/DesugaringTry/README.html)     |
 
-</section>
-<script type="text/javascript" src="/builtins/search.js" defer></script>
-
-### [Additional Resources]
+### [Additional Resources](#additional-resources) {#additional-resources}
 
 You've completed the tutorial, well done!
 
 If you are looking for more resources to learn Roc, check out [these links](/install#additional-learning-resources).
+
+</section>
+<script type="text/javascript" src="/builtins/search.js" defer></script>
