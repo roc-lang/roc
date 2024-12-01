@@ -43,8 +43,6 @@ pub fn sha256AddBytes(sha: Sha256, data: list.RocList) callconv(.C) Sha256 {
     return out;
 }
 
-fn rcNone(_: ?[*]u8) callconv(.C) void {}
-
 test "sha256AddBytes" {
     const empty_sha = emptySha256();
     defer std.testing.allocator.destroy(empty_sha.location);
@@ -57,13 +55,25 @@ test "sha256AddBytes" {
 }
 
 pub const Digest256 = extern struct {
-    firstHalf: u128,
-    secondHalf: u128,
+    first_half: u128,
+    second_half: u128,
 };
 
 pub fn sha256Digest(sha: Sha256) callconv(.C) Digest256 {
     return @bitCast(sha.location.*.peek());
 }
+
+test "sha256Digest" {
+    const empty_sha = emptySha256();
+    defer std.testing.allocator.destroy(empty_sha.location);
+    const digest = sha256Digest(empty_sha);
+    const first_half_bytes: [16]u8 = @bitCast(digest.first_half);
+    const second_half_bytes: [16]u8 = @bitCast(digest.second_half);
+    try std.testing.expect(sameBytesAsHex("e3b0c44298fc1c149afbf4c8996fb924", first_half_bytes[0..first_half_bytes.len]));
+    try std.testing.expect(sameBytesAsHex("27ae41e4649b934ca495991b7852b855", second_half_bytes[0..second_half_bytes.len]));
+}
+//----------------test utilities ------------------------
+fn rcNone(_: ?[*]u8) callconv(.C) void {}
 
 fn sameBytesAsHex(comptime expected_hex: [:0]const u8, input: []const u8) bool {
     if (expected_hex.len != 2 * input.len) {
