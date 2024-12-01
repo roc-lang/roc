@@ -239,7 +239,7 @@ impl<'a> Input<'a> {
                 self.as_str(),
                 output.as_ref().as_str(),
                 actual,
-                reparsed_ast
+                reparsed_ast_normalized
             );
         }
 

@@ -2559,7 +2559,6 @@ dependencies = [
  "roc_module",
  "roc_parse",
  "roc_region",
- "soa",
 ]
 
 [[package]]

@@ -15,4 +15,3 @@ roc_region.workspace = true
 roc_error_macros.workspace = true
 
 bumpalo.workspace = true
-soa.workspace = true

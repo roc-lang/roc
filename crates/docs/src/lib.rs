@@ -241,20 +241,45 @@ fn render_package_index(docs_by_module: &[(ModuleId, ModuleDocumentation)]) -> S
         push_html(&mut module_list_buf, "li", [], link_buf.as_str());
     }
 
+    let header = {
+        let mut header_buf = String::new();
+
+        push_html(
+            &mut header_buf,
+            "h2",
+            [("class", "module-name")],
+            "Exposed Modules",
+        );
+
+        push_html(
+            &mut header_buf,
+            "a",
+            [
+                ("class", "llm-prompt-link"),
+                ("title", "Documentation in a LLM-friendly format"),
+                ("href", "llms.txt"),
+            ],
+            "LLM docs",
+        );
+
+        header_buf
+    };
+
     // The HTML for the index page
     let mut index_buf = String::new();
 
     push_html(
         &mut index_buf,
-        "h2",
-        [("class", "module-name")],
-        "Exposed Modules",
+        "div",
+        [("class", "module-header-container")],
+        &header,
     );
+
     push_html(
         &mut index_buf,
         "ul",
         [("class", "index-module-links")],
-        module_list_buf.as_str(),
+        &module_list_buf,
     );
 
     index_buf
