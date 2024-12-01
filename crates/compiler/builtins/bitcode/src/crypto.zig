@@ -34,7 +34,7 @@ test "emptySha256" {
 }
 
 pub fn sha256AddBytes(sha: Sha256, data: list.RocList) callconv(.C) Sha256 {
-    var out = emptySha256();
+    const out = emptySha256();
     out.location.* = sha.location.*;
     if (data.bytes) |bytes| {
         const byteSlice: []u8 = bytes[0..data.length];
