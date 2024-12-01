@@ -988,7 +988,8 @@ fn build_loaded_file<'a>(
     )
 }
 
-fn link_loaded_file<'a>(
+#[allow(clippy::too_many_arguments)]
+fn link_loaded_file(
     target: Target,
     code_gen_options: CodeGenOptions,
     emit_timings: bool,
@@ -1000,8 +1001,8 @@ fn link_loaded_file<'a>(
     output_exe_path: PathBuf,
     built_host_opt: BuiltHostOpt,
     platform_main_roc_path: PathBuf,
-    expect_metadata: ExpectMetadata<'a>,
-) -> Result<BuiltFile<'a>, BuildFileError<'a>> {
+    expect_metadata: ExpectMetadata,
+) -> Result<BuiltFile, BuildFileError> {
     // link the prebuilt platform and compiled app
     let link_start = Instant::now();
 
