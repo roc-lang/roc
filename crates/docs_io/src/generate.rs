@@ -1,13 +1,12 @@
 use crate::file::{self, Assets};
 use crate::problem::Problem;
 use crate::render_markdown::{markdown_to_html, LookupOrTag};
-use crate::render_package::AbilityMember;
 use bumpalo::collections::Vec;
 use bumpalo::{collections::string::String, Bump};
 use core::fmt::{Debug, Write};
 use roc_can::scope::Scope;
 use roc_collections::{MutMap, VecMap};
-use roc_load::docs::{DocEntry, RecordField, Tag, TypeAnnotation};
+use roc_load::docs::{AbilityMember, DocEntry, RecordField, Tag, TypeAnnotation};
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
 use roc_module::symbol::{IdentId, Interns, ModuleId, Symbol};
 use roc_packaging::cache::{self, RocCacheDir};
@@ -383,26 +382,26 @@ fn clean_annotation_help(
                 .map(|member| AbilityMember {
                     name: member.name,
                     type_annotation: clean_annotation_help(member.type_annotation, var_counts),
+                    docs: member.docs,
                     able_variables: member
                         .able_variables
                         .into_iter()
-                        .map(|(name, anns)| {
+                        .map(|(name, abilities)| {
                             (
                                 name,
-                                anns.into_iter()
-                                    .map(|ann| clean_annotation_help(ann, var_counts))
+                                abilities
+                                    .into_iter()
+                                    .map(|ability| clean_annotation_help(ability, var_counts))
                                     .collect(),
                             )
                         })
                         .collect(),
-                    docs: member.docs,
                 })
                 .collect(),
         },
         TypeAnnotation::Wildcard => TypeAnnotation::Wildcard,
         TypeAnnotation::NoTypeAnn => TypeAnnotation::NoTypeAnn,
-        TypeAnnotation::Where { ann, implements } => TypeAnnotation::Where {
-            ann: Box::new(clean_do!(),
+        TypeAnnotation::Where { ann, implements } => todo!(),
         TypeAnnotation::As { ann, name, vars } => todo!(),
     }
 }
