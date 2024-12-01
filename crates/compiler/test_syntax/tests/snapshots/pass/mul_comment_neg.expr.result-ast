@@ -1,0 +1,35 @@
+BinOps(
+    [
+        (
+            @0-1 Var {
+                module_name: "",
+                ident: "n",
+            },
+            @1-2 Star,
+        ),
+    ],
+    @2-8 Apply(
+        @2-3 SpaceAfter(
+            Var {
+                module_name: "",
+                ident: "f",
+            },
+            [
+                Newline,
+                LineComment(
+                    "",
+                ),
+            ],
+        ),
+        [
+            @6-8 UnaryOp(
+                @7-8 Var {
+                    module_name: "",
+                    ident: "f",
+                },
+                @6-7 Negate,
+            ),
+        ],
+        Space,
+    ),
+)
