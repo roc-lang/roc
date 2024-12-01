@@ -1758,7 +1758,7 @@ fn build_float_binop<'ctx>(
     };
 
     match op {
-        NumAdd => bd.new_build_float_add(lhs, rhs, "add_float").into(),
+        NumAdd | NumAddSaturated => bd.new_build_float_add(lhs, rhs, "add_float").into(),
         NumAddChecked => {
             let context = env.context;
 
@@ -1785,7 +1785,7 @@ fn build_float_binop<'ctx>(
             struct_value.into()
         }
         NumAddWrap => unreachable!("wrapping addition is not defined on floats"),
-        NumSub => bd.new_build_float_sub(lhs, rhs, "sub_float").into(),
+        NumSub | NumSubSaturated => bd.new_build_float_sub(lhs, rhs, "sub_float").into(),
         NumSubChecked => {
             let context = env.context;
 
@@ -1812,8 +1812,7 @@ fn build_float_binop<'ctx>(
             struct_value.into()
         }
         NumSubWrap => unreachable!("wrapping subtraction is not defined on floats"),
-        NumMul => bd.new_build_float_mul(lhs, rhs, "mul_float").into(),
-        NumMulSaturated => bd.new_build_float_mul(lhs, rhs, "mul_float").into(),
+        NumMul | NumMulSaturated => bd.new_build_float_mul(lhs, rhs, "mul_float").into(),
         NumMulChecked => {
             let context = env.context;
 
@@ -1855,7 +1854,7 @@ fn build_float_binop<'ctx>(
             &bitcode::NUM_POW[float_width],
         ),
         _ => {
-            unreachable!("Unrecognized int binary operation: {:?}", op);
+            unreachable!("Unrecognized float binary operation: {:?}", op);
         }
     }
 }
@@ -2286,6 +2285,9 @@ fn build_dec_binop<'a, 'ctx>(
             rhs,
             "Decimal multiplication overflowed",
         ),
+        NumAddSaturated => dec_binary_op(env, bitcode::DEC_ADD_SATURATED, lhs, rhs),
+        NumSubSaturated => dec_binary_op(env, bitcode::DEC_SUB_SATURATED, lhs, rhs),
+        NumMulSaturated => dec_binary_op(env, bitcode::DEC_MUL_SATURATED, lhs, rhs),
         NumDivFrac => dec_binop_with_unchecked(env, bitcode::DEC_DIV, lhs, rhs),
 
         NumLt => call_bitcode_fn(env, &[lhs, rhs], &bitcode::NUM_LESS_THAN[IntWidth::I128]),

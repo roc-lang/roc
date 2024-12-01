@@ -1434,6 +1434,20 @@ mod cli_tests {
         .run()
         .assert_clean_success();
     }
+
+    #[test]
+    fn module_params_effectful_param() {
+        let cli_check = ExecCli::new(
+            CMD_CHECK,
+            file_from_root(
+                "crates/cli/tests/test-projects/module_params",
+                "effect_module.roc",
+            ),
+        );
+
+        let cli_check_out = cli_check.run();
+        cli_check_out.assert_clean_success();
+    }
 }
 
 #[cfg(feature = "wasm32-cli-run")]

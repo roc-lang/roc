@@ -44,7 +44,7 @@ Once you've installed <code>roc</code>, check out the [tutorial](/tutorial) to l
 
 <a class="btn-small" href="/tutorial">Start Tutorial</a>
 
-### [Additional Learning Resources] {#additional-learning-resources}
+### [Additional Learning Resources](#additional-learning-resources) {#additional-learning-resources}
 
 If you are looking for more resources to learn about Roc, check out the following:
 
