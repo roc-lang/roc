@@ -661,7 +661,7 @@ struct CanAndCon {
     module_docs: Option<ModuleDocumentation>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 enum PlatformPath<'a> {
     NotSpecified,
     Valid(To<'a>),
@@ -1145,7 +1145,6 @@ impl<'a> LoadStart<'a> {
 
         // Load the root module synchronously; we can't proceed until we have its id.
         let root_start_time = Instant::now();
-
         let load_result = load_filename(
             arena,
             filename.clone(),
@@ -1290,7 +1289,6 @@ fn handle_root_type<'a>(
                 if let (Some(main_path), Some(cache_dir)) = (main_path.clone(), cache_dir) {
                     let mut messages = Vec::with_capacity(4);
                     messages.push(header_output.msg);
-
                     load_packages_from_main(
                         arena,
                         src_dir.clone(),
@@ -2249,7 +2247,9 @@ fn update<'a>(
 
                     // If we're building an app module, and this was the platform
                     // specified in its header's `to` field, record it as our platform.
-                    if state.opt_platform_shorthand == Some(config_shorthand) {
+                    if state.opt_platform_shorthand == Some(config_shorthand)
+                        || state.platform_path == PlatformPath::RootIsModule
+                    {
                         debug_assert!(state.platform_data.is_none());
 
                         state.platform_data = Some(PlatformData {
@@ -2343,7 +2343,6 @@ fn update<'a>(
                 extend_module_with_builtin_import(parsed, ModuleId::INSPECT);
                 extend_module_with_builtin_import(parsed, ModuleId::TASK);
             }
-
             state
                 .module_cache
                 .imports
