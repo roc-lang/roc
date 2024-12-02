@@ -1204,6 +1204,37 @@ fn is_when_patterns_multiline(when_branch: &WhenBranch) -> bool {
     is_multiline_patterns
 }
 
+fn fmt_if_or_when_condition<'a>(buf: &mut Buf, loc_condition: &'a Loc<Expr<'a>>, indent: u16) {
+    let is_multiline_condition = loc_condition.is_multiline();
+
+    if is_multiline_condition {
+        let condition = expr_lift_spaces(Parens::NotNeeded, buf.text.bump(), &loc_condition.value);
+        fmt_comments_only(
+            buf,
+            condition.before.iter(),
+            NewlineAt::Both,
+            indent + INDENT,
+        );
+        buf.ensure_ends_with_newline();
+        condition.item.format(buf, indent + INDENT);
+        if condition.after.iter().any(|s| s.is_newline()) {
+            buf.ensure_ends_with_newline();
+        }
+        fmt_comments_only(
+            buf,
+            condition.after.iter(),
+            NewlineAt::Bottom,
+            indent + INDENT,
+        );
+        buf.ensure_ends_with_newline();
+        buf.indent(indent);
+    } else {
+        buf.spaces(1);
+        loc_condition.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
+        buf.spaces(1);
+    }
+}
+
 fn fmt_when<'a>(
     buf: &mut Buf,
     loc_condition: &'a Loc<Expr<'a>>,
@@ -1211,61 +1242,10 @@ fn fmt_when<'a>(
 
     indent: u16,
 ) {
-    let is_multiline_condition = loc_condition.is_multiline();
     buf.ensure_ends_with_newline();
     buf.indent(indent);
     buf.push_str("when");
-    if is_multiline_condition {
-        let condition_indent = indent + INDENT;
-
-        match &loc_condition.value {
-            Expr::SpaceBefore(expr_below, spaces_above_expr) => {
-                fmt_comments_only(
-                    buf,
-                    spaces_above_expr.iter(),
-                    NewlineAt::Top,
-                    condition_indent,
-                );
-                buf.newline();
-                match &expr_below {
-                    Expr::SpaceAfter(expr_above, spaces_below_expr) => {
-                        // If any of the spaces is a newline, add a newline at the top.
-                        // Otherwise leave it as just a comment.
-                        let newline_at = if spaces_below_expr
-                            .iter()
-                            .any(|spaces| matches!(spaces, CommentOrNewline::Newline))
-                        {
-                            NewlineAt::Top
-                        } else {
-                            NewlineAt::None
-                        };
-
-                        expr_above.format(buf, condition_indent);
-                        fmt_comments_only(
-                            buf,
-                            spaces_below_expr.iter(),
-                            newline_at,
-                            condition_indent,
-                        );
-                        buf.newline();
-                    }
-                    _ => {
-                        expr_below.format(buf, condition_indent);
-                    }
-                }
-            }
-            _ => {
-                buf.newline();
-                loc_condition.format(buf, condition_indent);
-                buf.newline();
-            }
-        }
-        buf.indent(indent);
-    } else {
-        buf.spaces(1);
-        loc_condition.format(buf, indent);
-        buf.spaces(1);
-    }
+    fmt_if_or_when_condition(buf, loc_condition, indent);
     buf.push_str("is");
     buf.newline();
 
@@ -1477,8 +1457,6 @@ fn fmt_if<'a>(
     };
 
     for (i, (loc_condition, loc_then)) in branches.iter().enumerate() {
-        let is_multiline_condition = loc_condition.is_multiline();
-
         buf.indent(indent);
 
         if i > 0 {
@@ -1487,30 +1465,7 @@ fn fmt_if<'a>(
         }
 
         buf.push_str("if");
-
-        if is_multiline_condition {
-            let condition =
-                expr_lift_spaces(Parens::NotNeeded, buf.text.bump(), &loc_condition.value);
-            fmt_comments_only(buf, condition.before.iter(), NewlineAt::Both, return_indent);
-            buf.ensure_ends_with_newline();
-            condition.item.format(buf, return_indent);
-            if condition.after.iter().any(|s| s.is_newline()) {
-                buf.ensure_ends_with_newline();
-            }
-            fmt_comments_only(
-                buf,
-                condition.after.iter(),
-                NewlineAt::Bottom,
-                return_indent,
-            );
-            buf.ensure_ends_with_newline();
-            buf.indent(indent);
-        } else {
-            buf.spaces(1);
-            loc_condition.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
-            buf.spaces(1);
-        }
-
+        fmt_if_or_when_condition(buf, loc_condition, indent);
         buf.push_str("then");
 
         if is_multiline {
