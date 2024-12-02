@@ -18,5 +18,4 @@ jobs:
           to: "contributing"
           type: "stream"
           topic: "High Priority Issues Bot"
-          content: |
-            [${github.event.issue.title}](${github.event.issue.html_url})
+          content: '[${{ github.event.issue.title }}](${{ github.event.issue.html_url }})'
