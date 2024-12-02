@@ -885,6 +885,63 @@ pub fn ann_lift_spaces<'a, 'b: 'a>(
             inner.after = merge_spaces_conservative(arena, inner.after, spaces);
             inner
         }
+        TypeAnnotation::Tuple { elems, ext } => {
+            if let Some(ext) = ext {
+                let lifted = ann_lift_spaces_after(arena, &ext.value);
+                Spaces {
+                    before: &[],
+                    item: TypeAnnotation::Tuple {
+                        elems: *elems,
+                        ext: Some(arena.alloc(Loc::at_zero(lifted.item))),
+                    },
+                    after: lifted.after,
+                }
+            } else {
+                Spaces {
+                    before: &[],
+                    item: *ann,
+                    after: &[],
+                }
+            }
+        }
+        TypeAnnotation::Record { fields, ext } => {
+            if let Some(ext) = ext {
+                let lifted = ann_lift_spaces_after(arena, &ext.value);
+                Spaces {
+                    before: &[],
+                    item: TypeAnnotation::Record {
+                        fields: *fields,
+                        ext: Some(arena.alloc(Loc::at_zero(lifted.item))),
+                    },
+                    after: lifted.after,
+                }
+            } else {
+                Spaces {
+                    before: &[],
+                    item: *ann,
+                    after: &[],
+                }
+            }
+        }
+        TypeAnnotation::TagUnion { ext, tags } => {
+            if let Some(ext) = ext {
+                let lifted = ann_lift_spaces_after(arena, &ext.value);
+                Spaces {
+                    before: &[],
+                    item: TypeAnnotation::TagUnion {
+                        ext: Some(arena.alloc(Loc::at_zero(lifted.item))),
+                        tags: *tags,
+                    },
+                    after: lifted.after,
+                }
+            } else {
+                Spaces {
+                    before: &[],
+                    item: *ann,
+                    after: &[],
+                }
+            }
+        }
         _ => Spaces {
             before: &[],
             item: *ann,
