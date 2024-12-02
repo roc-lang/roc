@@ -1328,6 +1328,7 @@ fn fmt_when<'a>(
             guard_expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent + INDENT);
         }
 
+        buf.indent(indent + INDENT);
         buf.push_str(" ->");
 
         match expr.value {
