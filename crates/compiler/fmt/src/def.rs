@@ -475,10 +475,10 @@ impl<'a> Formattable for TypeDef<'a> {
                 header.format_with_options(buf, Parens::NotNeeded, Newlines::No, indent);
                 buf.spaces(1);
                 buf.push_str(roc_parse::keyword::IMPLEMENTS);
+                buf.spaces(1);
 
                 if !self.is_multiline() {
                     debug_assert_eq!(members.len(), 1);
-                    buf.spaces(1);
                     members[0].format_with_options(
                         buf,
                         Parens::NotNeeded,

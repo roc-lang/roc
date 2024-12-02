@@ -1,2 +1,2 @@
-t : (w -> p)ca
-it
+t : (w => p)a
+t

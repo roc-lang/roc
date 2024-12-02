@@ -493,6 +493,7 @@ mod test_snapshots {
         pass/newline_in_type_def.expr,
         pass/newline_inside_empty_list.expr,
         pass/newline_singleton_list.expr,
+        pass/no_newline_after_implements.expr,
         pass/nonempty_hosted_header.header,
         pass/nonempty_package_header.header,
         pass/nonempty_platform_header.header,
