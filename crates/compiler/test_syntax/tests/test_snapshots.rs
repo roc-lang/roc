@@ -615,6 +615,7 @@ mod test_snapshots {
         pass/ten_times_eleven.expr,
         pass/three_arg_closure.expr,
         pass/triple_paren_pat_ann.expr,
+        pass/triple_quote_craziness.expr,
         pass/try_blank_in_list.expr,
         pass/try_function_after_pipe.expr,
         pass/try_pipe_suffix.expr,

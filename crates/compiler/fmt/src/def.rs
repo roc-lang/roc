@@ -1011,8 +1011,14 @@ pub fn fmt_body<'a>(
     }
 
     pattern.format_with_options(buf, Parens::InApply, Newlines::No, indent);
-    buf.indent(indent);
-    buf.push_str(" =");
+
+    if pattern.is_multiline() {
+        buf.ensure_ends_with_newline();
+        buf.indent(indent);
+    } else {
+        buf.spaces(1);
+    }
+    buf.push_str("=");
 
     let body = expr_lift_and_lower(Parens::NotNeeded, buf.text.bump(), body);
 
