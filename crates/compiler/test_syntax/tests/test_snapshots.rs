@@ -274,6 +274,7 @@ mod test_snapshots {
         pass/ability_multi_line.expr,
         pass/ability_single_line.expr,
         pass/ability_two_in_a_row.expr,
+        pass/accidentally_indented_else.expr,
         pass/add_var_with_spaces.expr,
         pass/add_with_spaces.expr,
         pass/alias_ann_in_parens.expr,

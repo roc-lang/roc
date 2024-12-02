@@ -2762,8 +2762,12 @@ fn if_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EIf<
             }
         };
 
+        let has_newline_next = require_newline_or_eof(EExpr::IndentEnd)
+            .parse(arena, state_final_else.clone(), min_indent)
+            .is_ok();
+
         let else_indent = state_final_else.line_indent();
-        let indented_else = else_indent > if_indent;
+        let indented_else = else_indent > if_indent && has_newline_next;
 
         let min_indent = if !indented_else {
             else_indent + 1
