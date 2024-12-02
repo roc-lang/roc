@@ -400,6 +400,16 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
                 Variable::NULL,
             );
         }
+        Expr::Try {
+            result_expr,
+            result_var,
+            return_var: _,
+            ok_payload_var: _,
+            err_payload_var: _,
+            err_ext_var: _,
+        } => {
+            visitor.visit_expr(&result_expr.value, result_expr.region, *result_var);
+        }
         Expr::Return {
             return_value,
             return_var,

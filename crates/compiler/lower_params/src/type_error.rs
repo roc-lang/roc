@@ -104,7 +104,8 @@ pub fn remove_module_param_arguments(
             | TypeError::FxInTopLevel(_, _)
             | TypeError::ExpectedEffectful(_, _)
             | TypeError::UnsuffixedEffectfulFunction(_, _)
-            | TypeError::SuffixedPureFunction(_, _) => {}
+            | TypeError::SuffixedPureFunction(_, _)
+            | TypeError::InvalidTryTarget(_, _) => {}
         }
     }
 }
@@ -188,7 +189,8 @@ fn remove_for_reason(
         | Reason::CrashArg
         | Reason::ImportParams(_)
         | Reason::Stmt(_)
-        | Reason::FunctionOutput => {}
+        | Reason::FunctionOutput
+        | Reason::TryResult => {}
     }
 }
 
