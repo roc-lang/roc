@@ -23,7 +23,7 @@ fn main() -> io::Result<()> {
     let arena = Bump::new();
 
     // Populate roc_files
-    match roc_docs_io::generate_docs_html(
+    match roc_docs::generate_docs_html(
         &arena,
         // TODO get this from the platform's source file rather than hardcoding it!
         // github.com/roc-lang/roc/issues/5712
@@ -34,10 +34,18 @@ fn main() -> io::Result<()> {
     ) {
         Ok(()) => Ok(()),
         Err(problem) => match problem {
-            Problem::FailedToLoadModule => todo!(),
-            Problem::FailedToDeleteDir(_, _) => todo!(),
-            Problem::FailedToCreateDir(_, _) => todo!(),
-            Problem::FailedToWrite(_, _) => todo!(),
+            Problem::FailedToLoadModule => {
+                let todo = todo!();
+            }
+            Problem::FailedToDeleteDir(_, _) => {
+                let todo = todo!();
+            }
+            Problem::FailedToCreateDir(_, _) => {
+                let todo = todo!();
+            }
+            Problem::FailedToWrite(_, _) => {
+                let todo = todo!();
+            }
         },
     }
 }

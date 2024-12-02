@@ -309,9 +309,11 @@ fn main() -> io::Result<()> {
             let todo = (); // TODO make this a CLI flag to the `docs` subcommand instead of an env var
             let user_specified_base_url = std::env::var("ROC_DOCS_URL_ROOT").ok();
 
-            match roc_docs_io::generate_docs_html(
+            match roc_docs::generate_docs_html(
                 &arena,
-                "DOCUMENTATION",
+                // TODO get this from the platform's source file rather than hardcoding it!
+                // github.com/roc-lang/roc/issues/5712
+                "Documentation",
                 root_path,
                 out_dir,
                 user_specified_base_url.as_deref(),
@@ -324,7 +326,7 @@ fn main() -> io::Result<()> {
                     );
                 }
                 Err(problem) => {
-                    use roc_docs_io::Problem::*;
+                    use roc_docs::Problem::*;
 
                     match problem {
                         FailedToLoadModule => todo!(),

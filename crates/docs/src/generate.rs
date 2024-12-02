@@ -1,20 +1,17 @@
 use crate::file::{self, Assets};
 use crate::problem::Problem;
-use crate::render_markdown::{markdown_to_html, LookupOrTag};
+use crate::render_markdown::markdown_to_html;
 use bumpalo::collections::Vec;
 use bumpalo::{collections::string::String, Bump};
 use core::fmt::{Debug, Write};
 use roc_can::scope::Scope;
-use roc_collections::{MutMap, VecMap};
-use roc_load::docs::{AbilityMember, DocEntry, RecordField, Tag, TypeAnnotation};
+use roc_collections::MutMap;
+use roc_load::docs::{DocEntry, RecordField, Tag, TypeAnnotation};
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
 use roc_module::symbol::{IdentId, Interns, ModuleId, Symbol};
 use roc_packaging::cache::{self, RocCacheDir};
 use roc_parse::ast::FunctionArrow;
-use roc_parse::ident::Accessor;
 use roc_parse::keyword;
-use roc_parse::state::State;
-use roc_region::all::Region;
 use roc_target::Target;
 use roc_types::subs::Variable;
 use roc_types::types::{Alias, AliasCommon, Type, TypeExtension};
@@ -38,12 +35,14 @@ pub fn generate_docs_html<'a>(
     #[cfg(not(debug_assertions))]
     let assets = {
         let search_js = include_str!("./static/search.js");
+        let llms_txt = include_str!("./static/llms.txt");
         let styles_css = include_str!("./static/styles.css");
         let favicon_svg = include_str!("../../../www/public/favicon.svg");
         let raw_template_html = include_str!("./static/index.html");
 
         Assets {
             search_js,
+            llms_txt,
             styles_css,
             favicon_svg,
             raw_template_html,
@@ -54,10 +53,11 @@ pub fn generate_docs_html<'a>(
     let assets = {
         // Construct the absolute path to the static assets
         let workspace_dir = std::env!("ROC_WORKSPACE_DIR");
-        let static_dir = Path::new(workspace_dir).join("crates/docs_io/src/static");
+        let static_dir = Path::new(workspace_dir).join("crates/docs/src/static");
 
         // Read the assets from the filesystem
         let search_js = fs::read_to_string(static_dir.join("search.js")).unwrap();
+        let llms_txt = fs::read_to_string(static_dir.join("llms.txt")).unwrap();
         let styles_css = fs::read_to_string(static_dir.join("styles.css")).unwrap();
         let favicon_svg =
             fs::read_to_string(static_dir.join("../../../../www/public/favicon.svg")).unwrap();
@@ -65,6 +65,7 @@ pub fn generate_docs_html<'a>(
 
         Assets {
             search_js,
+            llms_txt,
             styles_css,
             favicon_svg,
             raw_template_html,
@@ -95,7 +96,7 @@ struct Ability<'a> {
 }
 
 struct BodyEntry<'a> {
-    pub entry_name: &'a str,
+    pub name: &'a str,
     pub type_vars_names: &'a [&'a str],
     pub type_annotation: TypeAnnotation,
     pub docs: Option<&'a str>,
@@ -121,7 +122,7 @@ impl<'a> Docs<'a> {
         raw_template_html: &'a str,
         pkg_name: &'a str,
         opt_user_specified_base_url: Option<&'a str>,
-    ) -> Docs<'a> {
+    ) -> Self {
         let mut module_names =
             Vec::with_capacity_in(loaded_module.exposed_module_docs.len(), arena);
         let mut sb_entries = Vec::with_capacity_in(loaded_module.exposed_modules.len(), arena);
@@ -166,57 +167,60 @@ impl<'a> Docs<'a> {
 
             for entry in docs.entries.into_iter() {
                 if let DocEntry::DocDef(def) = entry {
-                    body_entries.push(BodyEntry {
-                        entry_name: &*arena.alloc_str(&def.name),
-                        type_vars_names: Vec::from_iter_in(
+                    if docs.exposed_symbols.contains(&def.symbol) {
+                        let type_annotation = if let TypeAnnotation::NoTypeAnn = def.type_annotation
+                        {
+                            // If the user didn't specify a type annotation, infer it!
+                            opt_decls
+                                .and_then(|decls| {
+                                    decls
+                                        .ann_from_symbol(def.symbol)
+                                        .map(|result| {
+                                            result.ok().map(|ann| {
+                                                clean_annotation(type_to_ann(
+                                                    &ann.signature,
+                                                    &loaded_module.interns,
+                                                    &loaded_module.aliases,
+                                                    &mut MutMap::default(),
+                                                ))
+                                            })
+                                        })
+                                        .flatten()
+                                })
+                                .unwrap_or_else(|| {
+                                    // We couldn't find it in decls, but it might have been a type alias.
+                                    loaded_module
+                                        .aliases
+                                        .get(&def.symbol.module_id())
+                                        .and_then(|aliases| {
+                                            aliases.get(&def.symbol).map(|(_imported, alias)| {
+                                                clean_annotation(type_to_ann(
+                                                    &alias.typ,
+                                                    &loaded_module.interns,
+                                                    &loaded_module.aliases,
+                                                    &mut MutMap::default(),
+                                                ))
+                                            })
+                                        })
+                                        .unwrap_or(TypeAnnotation::NoTypeAnn)
+                                })
+                        } else {
+                            def.type_annotation
+                        };
+
+                        let type_vars_names = Vec::from_iter_in(
                             def.type_vars.iter().map(|s| &*arena.alloc_str(s)),
                             arena,
                         )
-                        .into_bump_slice(),
-                        type_annotation: {
-                            if let TypeAnnotation::NoTypeAnn = def.type_annotation {
-                                // If the user didn't specify a type annotation, infer it!
-                                opt_decls
-                                    .and_then(|decls| {
-                                        decls
-                                            .ann_from_symbol(def.symbol)
-                                            .map(|result| {
-                                                result.ok().map(|ann| {
-                                                    clean_annotation(type_to_ann(
-                                                        &ann.signature,
-                                                        &loaded_module.interns,
-                                                        &loaded_module.aliases,
-                                                        &mut MutMap::default(),
-                                                    ))
-                                                })
-                                            })
-                                            .flatten()
-                                    })
-                                    .unwrap_or_else(|| {
-                                        // We couldn't find it in decls, but it might have been a type alias.
-                                        loaded_module
-                                            .aliases
-                                            .get(&def.symbol.module_id())
-                                            .and_then(|aliases| {
-                                                aliases.get(&def.symbol).map(
-                                                    |(_imported, alias)| {
-                                                        clean_annotation(type_to_ann(
-                                                            &alias.typ,
-                                                            &loaded_module.interns,
-                                                            &loaded_module.aliases,
-                                                            &mut MutMap::default(),
-                                                        ))
-                                                    },
-                                                )
-                                            })
-                                            .unwrap_or(TypeAnnotation::NoTypeAnn)
-                                    })
-                            } else {
-                                def.type_annotation
-                            }
-                        },
-                        docs: def.docs.map(|str| &*arena.alloc_str(&str)),
-                    });
+                        .into_bump_slice();
+
+                        body_entries.push(BodyEntry {
+                            name: &*arena.alloc_str(&def.name),
+                            docs: def.docs.map(|str| &*arena.alloc_str(&str)),
+                            type_annotation,
+                            type_vars_names,
+                        });
+                    }
                 }
             }
 
@@ -241,6 +245,9 @@ impl<'a> Docs<'a> {
     fn generate(self, build_dir: impl AsRef<Path>) -> Result<(), Problem> {
         let arena = &self.arena;
         let build_dir = build_dir.as_ref();
+
+        // Generate llms.txt
+        file::write(arena, "llms.txt", self.llm_prompt())?;
 
         self.render_to_disk(
             self.arena,
@@ -269,6 +276,390 @@ impl<'a> Docs<'a> {
             .iter()
             .find_map(|(id, name)| if *id == module_id { Some(*name) } else { None })
             .unwrap_or("")
+    }
+
+    fn write_search_type_ahead(&self, buf: &mut String) {
+        let arena = self.arena;
+
+        for (module_id, module_name) in self.module_names.iter() {
+            let entries = self
+                .body_entries_by_module
+                .iter()
+                .find_map(|(id, entries)| {
+                    if id == module_id {
+                        Some(*entries)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(&[]);
+
+            for entry in entries.iter() {
+                let mut entry_contents_buf = String::new_in(arena);
+
+                push_html(
+                    &mut entry_contents_buf,
+                    "span",
+                    [("class", "type-ahead-module-name")],
+                    module_name,
+                );
+
+                push_html(
+                    &mut entry_contents_buf,
+                    "span",
+                    [("class", "type-ahead-module-dot")],
+                    ".",
+                );
+
+                push_html(
+                    &mut entry_contents_buf,
+                    "span",
+                    [("class", "type-ahead-def-name")],
+                    &entry.name,
+                );
+
+                let mut type_ann_buf = String::new_in(arena);
+                type_annotation_to_html(0, &mut type_ann_buf, &entry.type_annotation, false);
+
+                if !type_ann_buf.is_empty() {
+                    push_html(
+                        &mut entry_contents_buf,
+                        "span",
+                        [("class", "type-ahead-signature")],
+                        format!(" : {type_ann_buf}"),
+                    );
+                }
+
+                let mut entry_href = String::new_in(arena);
+
+                entry_href.push_str(module_name);
+                entry_href.push('#');
+                entry_href.push_str(&entry.name);
+
+                let mut anchor_buf = String::new_in(arena);
+
+                push_html(
+                    &mut anchor_buf,
+                    "a",
+                    [("href", entry_href.as_str()), ("class", "type-ahead-link")],
+                    &entry_contents_buf,
+                );
+
+                push_html(buf, "li", [("role", "option")], &anchor_buf);
+            }
+        }
+    }
+
+    fn llm_prompt(&self) -> &'a str {
+        let arena = self.arena;
+        let mut example_type_question_buf = String::new_in(arena);
+        let mut example_description_question_buf = String::new_in(arena);
+        let mut buf = String::new_in(arena);
+        buf.push_str(format!("# LLM Prompt for {}\n\n", self.pkg_name).as_str());
+        buf.push_str("## Documentation\n\n");
+        for (module_id, module_name) in self.module_names.iter() {
+            buf.push_str(format!("### {}\n\n", module_name).as_str());
+
+            let entries = self
+                .body_entries_by_module
+                .iter()
+                .find_map(|(id, entries)| {
+                    if id == module_id {
+                        Some(*entries)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(&[]);
+
+            for entry in entries.iter() {
+                let mut doc_def_buf = String::new_in(arena);
+                doc_def_buf.push_str(format!("#### {}\n\n", entry.name).as_str());
+
+                doc_def_buf.push_str("**Type Annotation**\n\n");
+                let mut annotation_buf = String::new_in(arena);
+                type_annotation_to_html(0, &mut annotation_buf, &entry.type_annotation, false);
+
+                if !annotation_buf.is_empty() {
+                    doc_def_buf.push_str("```roc\n");
+                    doc_def_buf.push_str(format!("{}\n", annotation_buf).as_str());
+                    doc_def_buf.push_str("```\n\n");
+                }
+
+                let mut description_buf = String::new_in(arena);
+                if let Some(docs) = &entry.docs {
+                    doc_def_buf.push_str("**Description**\n\n");
+                    doc_def_buf.push_str(format!("{}\n", docs).as_str());
+                    description_buf.push_str(docs);
+                }
+
+                buf.push_str(doc_def_buf.as_str());
+
+                if example_type_question_buf.is_empty() && !annotation_buf.is_empty() {
+                    example_type_question_buf.push_str("**Annotation Question Example**\n\n");
+                    example_type_question_buf.push_str("**Question:**\n");
+                    example_type_question_buf.push_str(
+                        format!("What is the type definition for `{}`?\n\n", entry.name).as_str(),
+                    );
+                    example_type_question_buf.push_str("**Response:**\n");
+                    example_type_question_buf.push_str(format!("{}\n\n", annotation_buf).as_str());
+                    example_type_question_buf.push_str("**Source:**\n");
+                    example_description_question_buf.push_str("```md\n");
+                    example_type_question_buf.push_str(format!("{}\n", annotation_buf).as_str());
+                    example_description_question_buf.push_str("```\n\n");
+                }
+
+                if example_description_question_buf.is_empty() && !description_buf.is_empty() {
+                    example_description_question_buf
+                        .push_str("**Description Question Example**\n\n");
+                    example_description_question_buf.push_str("**Question:**\n");
+                    example_description_question_buf
+                        .push_str(format!("What does `{}` do?\n\n", entry.name).as_str());
+                    example_description_question_buf.push_str("**Response:**\n");
+                    example_description_question_buf
+                        .push_str(format!("{}\n\n", description_buf).as_str());
+                    example_description_question_buf.push_str("**Source:**\n");
+                    example_description_question_buf.push_str("```md\n");
+                    example_description_question_buf
+                        .push_str(format!("{}\n", doc_def_buf).as_str());
+                    example_description_question_buf.push_str("```\n\n");
+                }
+            }
+        }
+
+        buf.into_bump_str()
+    }
+
+    fn render_to_disk<Problem>(
+        &'a self,
+        arena: &'a Bump,
+        // Takes the module name to be used as the directory name (or None if this is the root index.html),
+        // as well as the contents of the file.
+        write_to_disk: impl Fn(Option<&str>, &str) -> Result<(), Problem>,
+    ) -> Result<(), Problem> {
+        let package_doc_comment_html = self.header_doc_comment;
+        let raw_template_html = self.raw_template_html;
+        let package_name = self.pkg_name;
+        let mut buf = String::with_capacity_in(raw_template_html.len() + 2048, arena);
+        let mut module_template_html =
+            String::with_capacity_in(raw_template_html.len() + 2048, arena);
+        let mut sidebar_links = String::with_capacity_in(4096, arena);
+        let sidebar_links = &mut sidebar_links;
+
+        self.render_sidebar(sidebar_links);
+
+        // Write index.html for package (/index.html)
+        {
+            let mut src = raw_template_html;
+
+            {
+                src = advance_past("<!-- base -->", src, &mut buf);
+                write_base_url(self.opt_user_specified_base_url, &mut buf);
+            }
+
+            {
+                src = advance_past("<!-- Prefetch links -->", src, &mut buf);
+
+                for (index, (_, module_name)) in self.module_names.iter().enumerate() {
+                    if index > 0 {
+                        buf.push_str("\n    ");
+                    }
+
+                    let _ = write!(buf, "<link rel='prefetch' href='{module_name}'/>",);
+                }
+            }
+
+            // Set module_template_html to be all the replacements we've made so far,
+            // plus the rest of the source template. We'll use this partially-completed
+            // template later on for the individual modules.
+            {
+                module_template_html.push_str(&buf);
+                module_template_html.push_str(&src);
+            }
+
+            {
+                src = advance_past("<!-- Page title -->", src, &mut buf);
+                let _ = write!(buf, "<title>{package_name}</title>");
+            }
+
+            {
+                src = advance_past("<!-- Module links -->", src, &mut buf);
+                buf.push_str(&sidebar_links);
+            }
+
+            {
+                src = advance_past("<!-- Package Name -->", src, &mut buf);
+                render_package_name_link(package_name, &mut buf);
+            }
+
+            {
+                src = advance_past("<!-- Search Type Ahead -->", src, &mut buf);
+                self.write_search_type_ahead(&mut buf);
+            }
+
+            {
+                src = advance_past("<!-- Module Docs -->", src, &mut buf);
+
+                if package_doc_comment_html.is_empty() {
+                    buf.push_str("Choose a module from the list to see its documentation.");
+                } else {
+                    buf.push_str(package_doc_comment_html);
+                }
+            }
+
+            {
+                // Write the rest of the template into the buffer.
+                buf.push_str(&src);
+
+                // Finally, write the accumulated buffer to disk.
+                write_to_disk(None, &buf)?;
+
+                buf.clear(); // We're done with this now. It's ready to be reused!
+            }
+        }
+
+        // Write each package module's index.html file
+        for (module_id, module_name) in self.module_names.iter() {
+            let mut src = module_template_html.as_str();
+
+            {
+                {
+                    src = advance_past("<!-- Page title -->", src, &mut buf);
+                    let _ = write!(buf, "<title>{module_name} - {package_name}</title>",);
+                }
+
+                {
+                    src = advance_past("<!-- Module links -->", src, &mut buf);
+                    buf.push_str(sidebar_links);
+                }
+
+                {
+                    src = advance_past("<!-- Package Name -->", src, &mut buf);
+                    render_package_name_link(package_name, &mut buf);
+                }
+
+                {
+                    src = advance_past("<!-- Search Type Ahead -->", src, &mut buf);
+                    self.write_search_type_ahead(&mut buf);
+                }
+            }
+
+            {
+                src = advance_past("<!-- Module Docs -->", src, &mut buf);
+                self.render_module(arena, *module_id, &mut buf);
+            }
+
+            {
+                // Write the rest of the template into the buffer.
+                buf.push_str(&src);
+            }
+
+            {
+                // Finally, write the accumulated buffer to disk.
+                write_to_disk(Some(module_name), &buf)?;
+            }
+
+            buf.clear(); // We're done with this now. It's ready to be reused in the next iteration of the loop!
+        }
+
+        Ok(())
+    }
+
+    fn render_sidebar(&'a self, buf: &mut String<'_>) {
+        for entry in self.sb_entries.iter() {
+            let heading = entry.doc_comment;
+
+            if !heading.is_empty() {
+                let _ = write!(buf, "\t<h3 class=\"sidebar-heading\">{heading}</a>\n");
+            }
+
+            let module_name = entry.link_text;
+
+            // Sidebar entries should all be relative URLs and unqualified names
+            let _ = write!(
+                buf,
+                "<div class='sidebar-entry'><a class='sidebar-module-link' href='{module_name}'>{module_name}</a><div class='sidebar-sub-entries'>",
+            );
+
+            for name in entry.exposed.iter() {
+                let _ = write!(buf, "<a href='{module_name}#{name}'>{name}</a>",);
+            }
+
+            buf.push_str("</div></div>");
+        }
+    }
+
+    fn render_type(&'a self, arena: &'a Bump, typ: &TypeAnnotation, buf: &mut String<'a>) {
+        todo!("implement render_type");
+    }
+
+    fn render_absolute_url(&'a self, ident_id: IdentId, module_id: ModuleId, buf: &mut String<'_>) {
+        todo!();
+        // let base_url = self.base_url(module_id);
+
+        // let _ = write!(
+        //     buf,
+        //     // e.g. "https://example.com/Str#isEmpty"
+        //     "{base_url}{}#{}",
+        //     self.module_name(module_id),
+        //     self.ident_name(module_id, ident_id)
+        // );
+    }
+
+    fn render_module(&'a self, arena: &'a Bump, module_id: ModuleId, buf: &mut String<'a>) {
+        let module_name = self.module_name(module_id);
+        let _ = write!(
+            buf,
+            "<h2 class='module-name'><a href='/{module_name}'>{module_name}</a></h2>"
+        );
+
+        let entries = self
+            .body_entries_by_module
+            .iter()
+            .find_map(|(id, entries)| {
+                if *id == module_id {
+                    Some(*entries)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(&[]);
+
+        for entry in entries {
+            let name = entry.name;
+
+            let _ = write!(
+                buf,
+                "<section><h3 id='{name}' class='entry-name'><a href='{module_name}#{name}'>{name}</a>"
+            );
+
+            const TYPE_START: &str = " : ";
+
+            buf.push_str(TYPE_START);
+
+            let old_buf_len = buf.len();
+
+            type_annotation_to_html(0, buf, &entry.type_annotation, false);
+
+            if buf.len() == old_buf_len {
+                // If we didn't add any actual anntoation, trim off the `:` from the end
+                buf.truncate(buf.len() - TYPE_START.len());
+            }
+
+            buf.push_str("</h3>");
+
+            if let Some(docs) = entry.docs {
+                if let Some((_id, scope)) = self
+                    .scopes_by_module
+                    .iter()
+                    .find(|(id, _scope)| *id == module_id)
+                {
+                    markdown_to_html(arena, buf, arena, scope, &self.interns, docs);
+                }
+            }
+
+            buf.push_str("</section>");
+        }
     }
 }
 
@@ -675,238 +1066,13 @@ struct SBEntry<'a> {
     pub doc_comment: &'a str,
 }
 
-impl<'a> Docs<'a> {
-    fn render_to_disk<Problem>(
-        &'a self,
-        arena: &'a Bump,
-        // Takes the module name to be used as the directory name (or None if this is the root index.html),
-        // as well as the contents of the file.
-        write_to_disk: impl Fn(Option<&str>, &str) -> Result<(), Problem>,
-    ) -> Result<(), Problem> {
-        let package_doc_comment_html = self.header_doc_comment;
-        let raw_template_html = self.raw_template_html;
-        let package_name = self.pkg_name;
-        let mut buf = String::with_capacity_in(raw_template_html.len() + 2048, arena);
-        let mut module_template_html =
-            String::with_capacity_in(raw_template_html.len() + 2048, arena);
-        let mut sidebar_links = String::with_capacity_in(4096, arena);
-
-        let sidebar_links = &mut sidebar_links;
-
-        self.render_sidebar(sidebar_links);
-
-        // Write index.html for package (/index.html)
-        {
-            let mut src = raw_template_html;
-
-            {
-                src = advance_past("<!-- base -->", src, &mut buf);
-                write_base_url(self.opt_user_specified_base_url, &mut buf);
-            }
-
-            {
-                src = advance_past("<!-- Prefetch links -->", src, &mut buf);
-
-                for (index, (_, module_name)) in self.module_names.iter().enumerate() {
-                    if index > 0 {
-                        buf.push_str("\n    ");
-                    }
-
-                    let _ = write!(buf, "<link rel='prefetch' href='{module_name}'/>",);
-                }
-            }
-
-            // Set module_template_html to be all the replacements we've made so far,
-            // plus the rest of the source template. We'll use this partially-completed
-            // template later on for the individual modules.
-            {
-                module_template_html.push_str(&buf);
-                module_template_html.push_str(&src);
-            }
-
-            {
-                src = advance_past("<!-- Page title -->", src, &mut buf);
-                let _ = write!(buf, "<title>{package_name}</title>");
-            }
-
-            {
-                src = advance_past("<!-- Module links -->", src, &mut buf);
-                buf.push_str(&sidebar_links);
-            }
-
-            {
-                src = advance_past("<!-- Package Name -->", src, &mut buf);
-                render_package_name_link(package_name, &mut buf);
-            }
-
-            {
-                src = advance_past("<!-- Module Docs -->", src, &mut buf);
-
-                if package_doc_comment_html.is_empty() {
-                    buf.push_str("Choose a module from the list to see its documentation.");
-                } else {
-                    buf.push_str(package_doc_comment_html);
-                }
-            }
-
-            {
-                // Write the rest of the template into the buffer.
-                buf.push_str(&src);
-
-                // Finally, write the accumulated buffer to disk.
-                write_to_disk(None, &buf)?;
-
-                buf.clear(); // We're done with this now. It's ready to be reused!
-            }
-        }
-
-        // Write each package module's index.html file
-        for (module_id, module_name) in self.module_names.iter() {
-            let mut src = module_template_html.as_str();
-
-            {
-                {
-                    src = advance_past("<!-- Page title -->", src, &mut buf);
-                    let _ = write!(buf, "<title>{module_name} - {package_name}</title>",);
-                }
-
-                {
-                    src = advance_past("<!-- Module links -->", src, &mut buf);
-                    buf.push_str(sidebar_links);
-                }
-
-                {
-                    src = advance_past("<!-- Package Name -->", src, &mut buf);
-                    render_package_name_link(package_name, &mut buf);
-                }
-            }
-
-            {
-                src = advance_past("<!-- Module Docs -->", src, &mut buf);
-                self.render_module(arena, *module_id, &mut buf);
-            }
-
-            {
-                // Write the rest of the template into the buffer.
-                buf.push_str(&src);
-            }
-
-            {
-                // Finally, write the accumulated buffer to disk.
-                write_to_disk(Some(module_name), &buf)?;
-            }
-
-            buf.clear(); // We're done with this now. It's ready to be reused in the next iteration of the loop!
-        }
-
-        Ok(())
-    }
-
-    fn render_sidebar(&'a self, buf: &mut String<'_>) {
-        for entry in self.sb_entries.iter() {
-            let heading = entry.doc_comment;
-
-            if !heading.is_empty() {
-                let _ = write!(buf, "\t<h3 class=\"sidebar-heading\">{heading}</a>\n");
-            }
-
-            let module_name = entry.link_text;
-
-            // Sidebar entries should all be relative URLs and unqualified names
-            let _ = write!(
-                buf,
-                "<div class='sidebar-entry'><a class='sidebar-module-link' href='{module_name}'>{module_name}</a><div class='sidebar-sub-entries'>",
-            );
-
-            for name in entry.exposed.iter() {
-                let _ = write!(buf, "<a href='{module_name}#{name}'>{name}</a>",);
-            }
-
-            buf.push_str("</div></div>");
-        }
-    }
-
-    fn render_type(&'a self, arena: &'a Bump, typ: &TypeAnnotation, buf: &mut String<'a>) {
-        todo!("implement render_type");
-    }
-
-    fn render_absolute_url(&'a self, ident_id: IdentId, module_id: ModuleId, buf: &mut String<'_>) {
-        todo!();
-        // let base_url = self.base_url(module_id);
-
-        // let _ = write!(
-        //     buf,
-        //     // e.g. "https://example.com/Str#isEmpty"
-        //     "{base_url}{}#{}",
-        //     self.module_name(module_id),
-        //     self.ident_name(module_id, ident_id)
-        // );
-    }
-
-    fn render_module(&'a self, arena: &'a Bump, module_id: ModuleId, buf: &mut String<'a>) {
-        let module_name = self.module_name(module_id);
-        let _ = write!(
-            buf,
-            "<h2 class='module-name'><a href='/{module_name}'>{module_name}</a></h2>"
-        );
-
-        let entries = self
-            .body_entries_by_module
-            .iter()
-            .find_map(|(id, entries)| {
-                if *id == module_id {
-                    Some(*entries)
-                } else {
-                    None
-                }
-            })
-            .unwrap_or(&[]);
-
-        for entry in entries {
-            let name = entry.entry_name;
-
-            let _ = write!(
-                buf,
-                "<section><h3 id='{name}' class='entry-name'><a href='{module_name}#{name}'>{name}</a>"
-            );
-
-            const TYPE_START: &str = " : ";
-
-            buf.push_str(TYPE_START);
-
-            let old_buf_len = buf.len();
-
-            type_annotation_to_html(0, buf, &entry.type_annotation, false);
-
-            if buf.len() == old_buf_len {
-                // If we didn't add any actual anntoation, trim off the `:` from the end
-                buf.truncate(buf.len() - TYPE_START.len());
-            }
-
-            buf.push_str("</h3>");
-
-            if let Some(docs) = entry.docs {
-                if let Some((_id, scope)) = self
-                    .scopes_by_module
-                    .iter()
-                    .find(|(id, _scope)| *id == module_id)
-                {
-                    markdown_to_html(arena, buf, arena, scope, &self.interns, docs);
-                }
-            }
-
-            buf.push_str("</section>");
-        }
-    }
-}
-
 // fn render_package_index(root_module: &LoadedModule) -> String {
 //     // The list items containing module links
-//     let mut module_list_buf = String::new();
+//     let mut module_list_buf = String::new_in(arena);
 
 //     for (_, module) in root_module.docs_by_module.iter() {
 //         // The anchor tag containing the module link
-//         let mut link_buf = String::new();
+//         let mut link_buf = String::new_in(arena);
 
 //         push_html(
 //             &mut link_buf,
@@ -919,7 +1085,7 @@ impl<'a> Docs<'a> {
 //     }
 
 //     // The HTML for the index page
-//     let mut index_buf = String::new();
+//     let mut index_buf = String::new_in(arena);
 
 //     push_html(
 //         &mut index_buf,
@@ -942,11 +1108,11 @@ impl<'a> Docs<'a> {
 //     root_module: &LoadedModule,
 //     all_exposed_symbols: &VecSet<Symbol>,
 // ) -> String {
-//     let mut buf = String::new();
+//     let mut buf = String::new_in(arena);
 //     let module_name = module.name.as_str();
 
 //     push_html(&mut buf, "h2", vec![("class", "module-name")], {
-//         let mut link_buf = String::new();
+//         let mut link_buf = String::new_in(arena);
 
 //         push_html(&mut link_buf, "a", vec![("href", "/")], module_name);
 
@@ -962,7 +1128,7 @@ impl<'a> Docs<'a> {
 
 //                     let def_name = doc_def.name.as_str();
 //                     let href = format!("{module_name}#{def_name}");
-//                     let mut content = String::new();
+//                     let mut content = String::new_in(arena);
 
 //                     push_html(&mut content, "a", vec![("href", href.as_str())], LINK_SVG);
 //                     push_html(&mut content, "strong", vec![], def_name);
@@ -1077,10 +1243,10 @@ impl<'a> Docs<'a> {
 
 // // TODO render version as well
 // fn render_name_link(name: &str) -> String {
-//     let mut buf = String::new();
+//     let mut buf = String::new_in(arena);
 
 //     push_html(&mut buf, "h1", vec![("class", "pkg-full-name")], {
-//         let mut link_buf = String::new();
+//         let mut link_buf = String::new_in(arena);
 
 //         // link to root (= docs overview page)
 //         push_html(
@@ -1097,11 +1263,11 @@ impl<'a> Docs<'a> {
 // }
 
 // fn render_sidebar<'a, I: Iterator<Item = &'a ModuleDocumentation>>(modules: I) -> String {
-//     let mut buf = String::new();
+//     let mut buf = String::new_in(arena);
 
 //     for module in modules {
 //         let href = module.name.as_str();
-//         let mut sidebar_entry_content = String::new();
+//         let mut sidebar_entry_content = String::new_in(arena);
 
 //         push_html(
 //             &mut sidebar_entry_content,
@@ -1111,12 +1277,12 @@ impl<'a> Docs<'a> {
 //         );
 
 //         let entries = {
-//             let mut entries_buf = String::new();
+//             let mut entries_buf = String::new_in(arena);
 
 //             for entry in &module.entries {
 //                 if let DocEntry::DocDef(doc_def) = entry {
 //                     if module.exposed_symbols.contains(&doc_def.symbol) {
-//                         let mut entry_href = String::new();
+//                         let mut entry_href = String::new_in(arena);
 
 //                         entry_href.push_str(href);
 //                         entry_href.push('#');
@@ -1721,4 +1887,29 @@ fn write_base_url(user_specified_base_url: Option<impl AsRef<str>>, buf: &mut St
             buf.push('/');
         }
     }
+}
+
+fn push_html<'a, 'b, I>(buf: &mut String, tag_name: &str, attrs: I, content: impl AsRef<str>)
+where
+    I: IntoIterator<Item = (&'a str, &'b str)>,
+{
+    buf.push('<');
+    buf.push_str(tag_name);
+    buf.push(' ');
+
+    for (key, value) in attrs.into_iter() {
+        buf.push_str(key);
+        buf.push_str("=\"");
+        buf.push_str(value);
+        buf.push('"');
+        buf.push(' ');
+    }
+
+    buf.push('>');
+
+    buf.push_str(content.as_ref());
+
+    buf.push_str("</");
+    buf.push_str(tag_name);
+    buf.push('>');
 }

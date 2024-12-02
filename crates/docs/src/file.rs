@@ -8,6 +8,7 @@ use std::{
 
 pub struct Assets<S: AsRef<str>> {
     pub search_js: S,
+    pub llms_txt: S,
     pub styles_css: S,
     pub favicon_svg: S,
     pub raw_template_html: S,
@@ -26,6 +27,7 @@ pub fn populate_build_dir<'a, S: AsRef<str>>(
 
     // Write CSS, JS, and favicon
     // (The HTML requires more work!)
+    write(arena, &build_dir.join("llms.txt"), assets.llms_txt.as_ref())?;
     write(
         arena,
         &build_dir.join("search.js"),

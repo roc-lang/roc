@@ -24,7 +24,6 @@ members = [
     "crates/tracing",
     "crates/utils/*",
     "crates/soa",
-    "crates/docs_io",
     "crates/docs",
     "crates/docs_cli",
     "crates/linker",
@@ -200,7 +199,6 @@ roc_debug_flags = { path = "crates/compiler/debug_flags" }
 roc_derive = { path = "crates/compiler/derive" }
 roc_derive_key = { path = "crates/compiler/derive_key" }
 roc_docs = { path = "crates/docs" }
-roc_docs_io = { path = "crates/docs_io" }
 roc_error_macros = { path = "crates/error_macros" }
 roc_exhaustive = { path = "crates/compiler/exhaustive" }
 roc_fmt = { path = "crates/compiler/fmt" }

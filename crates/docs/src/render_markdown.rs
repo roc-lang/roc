@@ -5,9 +5,8 @@ use bumpalo::{
 };
 use pulldown_cmark::{BrokenLink, CodeBlockKind, CowStr, Event, LinkType, Tag::*};
 use roc_can::scope::Scope;
-use roc_module::symbol::{Interns, Symbol};
+use roc_module::symbol::Interns;
 use roc_parse::{ident::Accessor, state::State};
-use roc_region::all::Region;
 
 pub enum LookupOrTag<'a> {
     Lookup {

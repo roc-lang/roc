@@ -48,7 +48,6 @@ roc_builtins.workspace = true
 roc_can.workspace = true
 roc_collections.workspace = true
 roc_docs.workspace = true
-roc_docs_io.workspace = true
 roc_error_macros.workspace = true
 roc_fmt.workspace = true
 roc_gen_llvm.workspace = true
@@ -88,6 +87,7 @@ tempfile.workspace = true
 # for now, uses unix/libc functions that windows does not support
 [target.'cfg(not(windows))'.dependencies]
 roc_repl_expect.workspace = true
+
 
 [dev-dependencies]
 cli_test_utils.workspace = true

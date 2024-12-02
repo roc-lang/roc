@@ -19,7 +19,6 @@ test = false
 bench = false
 
 [dependencies]
-roc_docs_io.workspace = true
 roc_docs.workspace = true
 
 clap.workspace = true
