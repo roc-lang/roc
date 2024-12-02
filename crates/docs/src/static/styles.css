@@ -481,6 +481,7 @@ pre>samp {
 }
 
 #module-search:focus, #module-search:hover {
+  transition: outline 0.1s ease-in-out;
   outline: 2px solid var(--faded-color);
 }
 
