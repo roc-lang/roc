@@ -6,9 +6,8 @@ on:
 
 jobs:
   notify:
-    runs-on: ubuntu-22.04
-    # TODO enable 
-    #if: github.event.label.name == 'P-high'
+    runs-on: ubuntu-22.04 
+    if: github.event.label.name == 'P-high'
     steps:
       - name: Send a stream message
         uses: zulip/github-actions-zulip/send-message@v1
@@ -19,5 +18,5 @@ jobs:
           to: "contributing"
           type: "stream"
           topic: "High Priority Issues Bot"
-          content: 
+          content: |
             [${github.event.issue.title}](${github.event.issue.html_url})
