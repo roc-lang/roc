@@ -597,9 +597,9 @@ fn format_assigned_field_help<T>(
         OptionalValue(name, spaces, ann) => {
             if is_multiline {
                 buf.newline();
-                buf.indent(indent);
             }
 
+            buf.indent(indent);
             buf.push_str(name.value);
 
             if !spaces.is_empty() {
@@ -626,6 +626,7 @@ fn format_assigned_field_help<T>(
             }
 
             buf.spaces(separator_spaces);
+            buf.indent(indent);
             buf.push(':');
             buf.spaces(1);
             ann.value.format(buf, indent);

@@ -479,6 +479,7 @@ mod test_snapshots {
         pass/nested_list_comment_in_closure_arg.expr,
         pass/newline_after_equals.expr, // Regression test for https://github.com/roc-lang/roc/issues/51
         pass/newline_after_mul.expr,
+        pass/newline_after_opt_field.expr,
         pass/newline_after_paren.expr,
         pass/newline_after_sub.expr,
         pass/newline_and_spaces_before_less_than.expr,
