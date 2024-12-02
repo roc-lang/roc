@@ -76,6 +76,10 @@ where
 
     /// The raw pointer to a roc box, including the leading refcount
     /// Intended for use by platforms in roc_dealloc
+    ///
+    /// # Safety
+    ///
+    /// Returns a raw pointer to the roc box
     pub unsafe fn as_refcount_ptr(&self) -> *mut c_void {
         let alignment = Self::alloc_alignment();
         let with_offset = unsafe { self.contents.as_ptr().cast::<u8>().sub(alignment) };
