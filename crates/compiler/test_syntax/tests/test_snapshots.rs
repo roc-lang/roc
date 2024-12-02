@@ -388,6 +388,7 @@ mod test_snapshots {
         pass/expect.expr,
         pass/expect_defs.moduledefs,
         pass/expect_single_line.expr,
+        pass/ext_on_fn_ty.expr,
         pass/extra_newline.expr,
         pass/extra_newline_in_parens.expr,
         pass/f_not_not_f.expr,
