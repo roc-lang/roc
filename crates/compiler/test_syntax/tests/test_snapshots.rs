@@ -331,6 +331,7 @@ mod test_snapshots {
         pass/closure_with_underscores.expr,
         pass/comma_prefixed_indented_record.expr,
         pass/comment_after_annotation.expr,
+        pass/comment_after_dbg_in_empty_record_assignment.expr,
         pass/comment_after_def.moduledefs,
         pass/comment_after_expr_in_parens.expr,
         pass/comment_after_op.expr,

@@ -1387,10 +1387,26 @@ fn fmt_dbg_stmt<'a>(
     )
     .format_with_options(buf, parens, Newlines::Yes, indent);
 
+    let cont_lifted = expr_lift_spaces(Parens::NotNeeded, buf.text.bump(), &continuation.value);
+
+    if !cont_lifted.before.is_empty() {
+        format_spaces(buf, cont_lifted.before, Newlines::Yes, indent);
+    }
+
     // Always put a newline after the `dbg` line(s)
     buf.ensure_ends_with_newline();
 
-    continuation.format(buf, indent);
+    format_expr_only(
+        &cont_lifted.item,
+        buf,
+        Parens::NotNeeded,
+        Newlines::Yes,
+        indent,
+    );
+
+    if !cont_lifted.after.is_empty() {
+        format_spaces(buf, cont_lifted.after, Newlines::Yes, indent);
+    }
 }
 
 fn fmt_return<'a>(
