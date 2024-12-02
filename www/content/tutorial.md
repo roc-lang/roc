@@ -2006,6 +2006,8 @@ For more information, see [this recent talk](https://www.youtube.com/watch?v=42T
 
 STATUS: Almost ready! For now, this may only work within PI contexts.
 
+Note: Right now, this can lead to confusing and unhelpful error messages.
+
 Roc has a `try` keyword, which is convenient syntax sugar for `Result.try`. For example, consider the following `getLetter` function:
 
 ```roc
@@ -2028,7 +2030,9 @@ Thanks to the `try` keyword, your code can focus on the "happy path" (where noth
 
 STATUS: Deprecated! For now, this may only work within non-PI contexts.
 
-Roc also has a `?` postfix operator version of the `try` keyword:
+Note: Right now, this can lead to confusing and unhelpful error messages.
+
+Roc also has a `?` postfix operator, which is like a version of the `try` keyword for `Task`s:
 
 ```roc
 getLetter : Str -> Result Str [OutOfBounds, InvalidNumStr]
