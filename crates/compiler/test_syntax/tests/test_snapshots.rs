@@ -480,6 +480,7 @@ mod test_snapshots {
         pass/nested_def_annotation.moduledefs,
         pass/nested_if.expr,
         pass/nested_list_comment_in_closure_arg.expr,
+        pass/nested_parens_in_pattern.expr,
         pass/newline_after_equals.expr, // Regression test for https://github.com/roc-lang/roc/issues/51
         pass/newline_after_mul.expr,
         pass/newline_after_opt_field.expr,
