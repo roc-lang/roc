@@ -633,9 +633,9 @@ fn format_assigned_field_help<T>(
         LabelOnly(name) => {
             if is_multiline {
                 buf.newline();
-                buf.indent(indent);
             }
 
+            buf.indent(indent);
             buf.push_str(name.value);
         }
         AssignedField::SpaceBefore(sub_field, spaces) => {

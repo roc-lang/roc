@@ -1,5 +1,4 @@
 x = foo {
-
     bar
     : blah,
 }

@@ -3,8 +3,8 @@ use crate::collection::{fmt_collection, Braces};
 use crate::def::{fmt_defs, valdef_lift_spaces_before};
 use crate::pattern::{fmt_pattern, pattern_lift_spaces, starts_with_inline_comment};
 use crate::spaces::{
-    count_leading_newlines, fmt_comments_only, fmt_spaces, fmt_spaces_no_blank_lines, NewlineAt,
-    INDENT,
+    count_leading_newlines, fmt_comments_only, fmt_spaces, fmt_spaces_no_blank_lines,
+    fmt_spaces_with_newline_mode, NewlineAt, SpacesNewlineMode, INDENT,
 };
 use crate::Buf;
 use bumpalo::collections::Vec;
@@ -1822,7 +1822,7 @@ fn fmt_record_like<'a, 'b: 'a, Field, Format, ToSpacesAround>(
 
             let mut last_after: &[CommentOrNewline<'_>] = &[];
 
-            for field in loc_fields.iter() {
+            for (iter, field) in loc_fields.iter().enumerate() {
                 // comma addition is handled by the `format_field_multiline` function
                 // since we can have stuff like:
                 // { x # comment
@@ -1842,19 +1842,46 @@ fn fmt_record_like<'a, 'b: 'a, Field, Format, ToSpacesAround>(
                 // {
                 //     buf.ensure_ends_with_newline();
                 // }
-                fmt_comments_only(buf, before.iter(), NewlineAt::Bottom, field_indent);
-                buf.ensure_ends_with_newline();
-                format_field_multiline(buf, &field_lifted.item, field_indent, "");
+
+                if iter == 0 || count_leading_newlines(before.iter()) == 0 {
+                    buf.ensure_ends_with_newline();
+                }
+
+                let newline_mode = if iter == 0 {
+                    if loc_fields.len() == 1 {
+                        SpacesNewlineMode::SkipNewlinesAtBoth
+                    } else {
+                        SpacesNewlineMode::SkipNewlinesAtStart
+                    }
+                } else {
+                    SpacesNewlineMode::Normal
+                };
+
+                fmt_spaces_with_newline_mode(buf, before, field_indent, newline_mode);
+                // buf.ensure_ends_with_newline();
+                // fmt_comments_only(buf, before.iter(), NewlineAt::Bottom, field_indent);
+                field_lifted.item.format_with_options(
+                    buf,
+                    Parens::NotNeeded,
+                    Newlines::No,
+                    field_indent,
+                );
+                buf.push_str(",");
                 last_after = field_lifted.after;
             }
 
             let after = merge_spaces(buf.text.bump(), last_after, final_comments);
 
-            // if count_leading_newlines(final_comments.iter()) > 1 {
-            //     buf.newline();
-            // }
+            if count_leading_newlines(after.iter()) == 0 {
+                buf.ensure_ends_with_newline();
+            }
 
-            fmt_comments_only(buf, after.iter(), NewlineAt::Both, field_indent);
+            fmt_spaces_with_newline_mode(
+                buf,
+                after,
+                field_indent,
+                SpacesNewlineMode::SkipNewlinesAtEnd,
+            );
 
             buf.ensure_ends_with_newline();
         } else {
@@ -1894,7 +1921,7 @@ fn format_assigned_field_multiline<T>(
     use self::AssignedField::*;
     match field {
         RequiredValue(name, spaces, ann) => {
-            buf.newline();
+            buf.ensure_ends_with_newline();
             buf.indent(indent);
             buf.push_str(name.value);
 
@@ -1910,7 +1937,7 @@ fn format_assigned_field_multiline<T>(
             buf.push(',');
         }
         OptionalValue(name, spaces, ann) => {
-            buf.newline();
+            buf.ensure_ends_with_newline();
             buf.indent(indent);
             buf.push_str(name.value);
 
@@ -1926,7 +1953,7 @@ fn format_assigned_field_multiline<T>(
             buf.push(',');
         }
         IgnoredValue(name, spaces, ann) => {
-            buf.newline();
+            buf.ensure_ends_with_newline();
             buf.indent(indent);
             buf.push('_');
             buf.push_str(name.value);
@@ -1943,7 +1970,7 @@ fn format_assigned_field_multiline<T>(
             buf.push(',');
         }
         LabelOnly(name) => {
-            buf.newline();
+            buf.ensure_ends_with_newline();
             buf.indent(indent);
             buf.push_str(name.value);
             buf.push(',');

@@ -1,7 +1,6 @@
 x = foo
     (
         baz {
-
             bar: blah,
         }
     )
