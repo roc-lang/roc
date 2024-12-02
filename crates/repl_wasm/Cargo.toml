@@ -11,9 +11,9 @@ version = "0.0.1"
 crate-type = ["cdylib"]
 
 [build-dependencies]
-roc_bitcode = { path = "../compiler/builtins/bitcode" }
-roc_builtins = { path = "../compiler/builtins" }
-wasi_libc_sys = { path = "../wasi-libc-sys" }
+roc_bitcode.workspace = true
+roc_builtins.workspace = true
+wasi_libc_sys.workspace = true
 
 tempfile.workspace = true
 
@@ -21,21 +21,23 @@ tempfile.workspace = true
 bumpalo.workspace = true
 console_error_panic_hook = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
-getrandom = { version = "0.2", features = ["js"] } # not a direct dependency, needed because of https://docs.rs/getrandom/latest/getrandom/#webassembly-support
+getrandom = { version = "0.2", features = [
+    "js",
+] } # not a direct dependency, needed because of https://docs.rs/getrandom/latest/getrandom/#webassembly-support
 js-sys.workspace = true
 wasm-bindgen-futures.workspace = true
 wasm-bindgen.workspace = true
 
-roc_collections = { path = "../compiler/collections" }
-roc_gen_wasm = { path = "../compiler/gen_wasm" }
-roc_load = { path = "../compiler/load" }
-roc_parse = { path = "../compiler/parse" }
-roc_repl_eval = { path = "../repl_eval" }
-roc_repl_ui = { path = "../repl_ui" }
-roc_reporting = { path = "../reporting" }
-roc_solve = { path = "../compiler/solve" }
-roc_target = { path = "../compiler/roc_target" }
-roc_types = { path = "../compiler/types" }
+roc_collections.workspace = true
+roc_gen_wasm.workspace = true
+roc_load.workspace = true
+roc_parse.workspace = true
+roc_repl_eval.workspace = true
+roc_repl_ui.workspace = true
+roc_reporting.workspace = true
+roc_solve.workspace = true
+roc_target.workspace = true
+roc_types.workspace = true
 
 [features]
 wasi_test = ["futures"]

@@ -10,10 +10,9 @@ edition = "2021"
 cargo-fuzz = true
 
 [dependencies]
-test_syntax = { path = "../../test_syntax" }
-roc_parse = { path = "../../parse" }
-
-bumpalo = { version = "3.12.0", features = ["collections"] }
+test_syntax.workspace = true
+roc_parse.workspace = true
+bumpalo = { workspace = true, features = ["collections"] }
 libfuzzer-sys = "0.4"
 
 # Prevent this from interfering with workspaces

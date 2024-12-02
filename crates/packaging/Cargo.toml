@@ -9,8 +9,8 @@ repository.workspace = true
 version.workspace = true
 
 [dependencies]
-roc_error_macros = { path = "../error_macros" }
-roc_parse = { path = "../compiler/parse" }
+roc_error_macros.workspace = true
+roc_parse.workspace = true
 
 base64-url.workspace = true
 blake3.workspace = true

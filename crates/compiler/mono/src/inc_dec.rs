@@ -881,12 +881,8 @@ fn insert_refcount_operations_binding<'a>(
     }
 
     match expr {
-        Expr::Literal(_)
-        | Expr::NullPointer
-        | Expr::FunctionPointer { .. }
-        | Expr::EmptyArray
-        | Expr::RuntimeErrorFunction(_) => {
-            // Literals, empty arrays, and runtime errors are not (and have nothing) reference counted.
+        Expr::Literal(_) | Expr::NullPointer | Expr::FunctionPointer { .. } | Expr::EmptyArray => {
+            // Literals and empty arrays are not (and have nothing) reference counted.
             new_let!(stmt)
         }
 
