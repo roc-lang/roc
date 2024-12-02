@@ -14727,6 +14727,25 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
+        function_with_early_return_generalizes,
+        indoc!(
+            r#"
+            parseItemsWith = \parser ->
+                when List.mapTry ["123", "456"] parser is
+                    Ok ok -> Ok ok
+                    Err err ->
+                        return Err err
+
+            u64Nums = parseItemsWith Str.toU64
+            u8Nums = parseItemsWith Str.toU8
+
+            "$(Inspect.toStr u64Nums) $(Inspect.toStr u8Nums)"
+            "#
+        ),
+        @"" // no errors
+    );
+
+    test_report!(
         leftover_statement,
         indoc!(
             r#"
