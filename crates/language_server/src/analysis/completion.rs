@@ -55,8 +55,42 @@ pub fn get_completion_items(
     make_completion_items(subs, module_id, interns, docs, completions)
 }
 
+/// Super basic tag completion. Doesn't include any type documentation for the tags being completed
+pub(super) fn get_tag_completion_items(
+    prefix: &String,
+    module_id: &ModuleId,
+    modules_info: &ModulesInfo,
+) -> Vec<CompletionItem> {
+    modules_info
+        .subs_by_module
+        .get(module_id)
+        .iter()
+        .flat_map(|a| {
+            let mut lock = a.lock();
+            lock.tag_names.dedup();
+            lock.tag_names
+                .iter()
+                .filter_map(|a| {
+                    if a.as_ident_str().starts_with(prefix) {
+                        Some(CompletionItem {
+                            label: a.as_ident_str().to_string(),
+                            kind: Some(CompletionItemKind::ENUM),
+                            documentation: Some(lsp_types::Documentation::String(
+                                a.as_ident_str().to_string(),
+                            )),
+                            ..Default::default()
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>() //we have to collect so that we can release the lock
+        })
+        .collect()
+}
+
 pub(super) fn get_module_completion_items(
-    prefix: String,
+    prefix: &String,
     interns: &Interns,
     imported_modules: &HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>,
     modules_info: &ModulesInfo,
@@ -68,7 +102,7 @@ pub(super) fn get_module_completion_items(
             let mod_name = mod_id.to_ident_str(interns).to_string();
 
             // Completion for modules themselves
-            if mod_name.starts_with(&prefix) {
+            if mod_name.starts_with(prefix) {
                 let item = CompletionItem {
                     label: mod_name.clone(),
                     kind: Some(CompletionItemKind::MODULE),
