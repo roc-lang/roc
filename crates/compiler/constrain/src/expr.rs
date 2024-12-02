@@ -1438,14 +1438,16 @@ pub fn constrain_expr(
                 return_value.region,
             ));
 
-            constrain_expr(
+            let return_con = constrain_expr(
                 types,
                 constraints,
                 env,
                 return_value.region,
                 &return_value.value,
                 expected_return_value,
-            )
+            );
+
+            constraints.exists([*return_var], return_con)
         }
         Tag {
             tag_union_var: variant_var,
