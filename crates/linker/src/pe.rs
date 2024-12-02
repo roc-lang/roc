@@ -614,7 +614,6 @@ impl DynamicRelocationsPe {
         let mut it = import_table.descriptors()?;
         while let Some(descriptor) = it.next()? {
             let name = import_table.name(descriptor.name.get(LE))?;
-            // dbg!(String::from_utf8_lossy(name));
 
             if name == APP_DLL.as_bytes() {
                 return Ok(Some((*descriptor, index)));

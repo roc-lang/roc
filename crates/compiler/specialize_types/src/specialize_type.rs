@@ -155,7 +155,7 @@ impl<'a, 'c, 'd, 'e, 'f, 'm, 'p, P: Push<Problem>> Env<'a, 'c, 'd, 'e, 'f, 'm, '
         }
 
         // Convert the Content to a MonoType, often by passing an iterator. None of these iterators introduce allocations.
-        let mono_id = match dbg!(*subs.get_content_without_compacting(root_var)) {
+        let mono_id = match *subs.get_content_without_compacting(root_var) {
             Content::Structure(flat_type) => match flat_type {
                 FlatType::Apply(symbol, args) => {
                     if symbol.is_builtin() {
