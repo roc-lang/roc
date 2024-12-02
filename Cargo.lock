@@ -2684,6 +2684,7 @@ dependencies = [
  "parking_lot",
  "roc_can",
  "roc_collections",
+ "roc_error_macros",
  "roc_fmt",
  "roc_load",
  "roc_module",
