@@ -427,9 +427,9 @@ impl Expr {
             | Self::EmptyRecord
             | Self::RecordAccessor(_)
             | Self::ZeroArgumentTag { .. }
-            | Self::OpaqueWrapFunction(_) => false,
+            | Self::OpaqueWrapFunction(_)
+            | Self::RuntimeError(..) => false,
             Self::Return { .. } => true,
-            Self::TypedHole(_) | Self::RuntimeError(..) => false,
             Self::List { loc_elems, .. } => loc_elems
                 .iter()
                 .any(|elem| elem.value.contains_any_early_returns()),
