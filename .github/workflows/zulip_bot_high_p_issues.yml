@@ -1,0 +1,24 @@
+name: Notify zulip high priority issues
+
+on:
+  # for testing
+  pull_request:
+  issues:
+    types: [labeled]
+
+jobs:
+  notify:
+    runs-on: ubuntu-22.04
+    # TODO enable 
+    #if: github.event.label.name == 'P-high'
+    steps:
+      - name: Send a stream message
+        uses: zulip/github-actions-zulip/send-message@v1
+        with:
+          api-key: ${{ secrets.ZULIP_API_KEY_ISSUE_BOT }}
+          email: "high-priority-issues-bot@roc.zulipchat.com"
+          organization-url: "https://roc.zulipchat.com"
+          to: "contributing"
+          type: "stream"
+          topic: "High Priority Issues Bot"
+          content: "ping from github"
