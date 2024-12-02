@@ -1,7 +1,9 @@
 use crate::annotation::{except_last, is_collection_multiline, Formattable, Newlines, Parens};
 use crate::collection::{fmt_collection, Braces};
 use crate::def::{fmt_defs, valdef_lift_spaces_before};
-use crate::pattern::{fmt_pattern, pattern_lift_spaces, starts_with_inline_comment};
+use crate::pattern::{
+    fmt_pattern, pattern_lift_spaces, pattern_lift_spaces_before, starts_with_inline_comment,
+};
 use crate::spaces::{
     count_leading_newlines, fmt_comments_only, fmt_spaces, fmt_spaces_no_blank_lines,
     fmt_spaces_with_newline_mode, NewlineAt, SpacesNewlineMode, INDENT,
@@ -1014,6 +1016,37 @@ pub fn expr_lift_spaces<'a, 'b: 'a>(
                 }
             };
             dbg!(res)
+        }
+        Expr::Backpassing(pats, call, continuation) => {
+            let pats = arena.alloc_slice_copy(pats);
+            let before = if let Some(first) = pats.first_mut() {
+                let lifted = pattern_lift_spaces_before(arena, &first.value);
+                *first = Loc::at(first.region, lifted.item);
+                lifted.before
+            } else {
+                &[]
+            };
+            let continuation_lifted =
+                expr_lift_spaces_after(Parens::NotNeeded, arena, &continuation.value);
+
+            let mut res = Spaces {
+                before,
+                item: Expr::Backpassing(
+                    pats,
+                    call,
+                    arena.alloc(Loc::at(continuation.region, continuation_lifted.item)),
+                ),
+                after: continuation_lifted.after,
+            };
+
+            if parens == Parens::InApply || parens == Parens::InApplyLastArg {
+                res = Spaces {
+                    before: &[],
+                    item: Expr::ParensAround(arena.alloc(lower(arena, res))),
+                    after: &[],
+                };
+            }
+            res
         }
         Expr::SpaceBefore(expr, spaces) => {
             let mut inner = expr_lift_spaces(parens, arena, expr);

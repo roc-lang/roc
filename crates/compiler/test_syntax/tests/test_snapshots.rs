@@ -309,6 +309,7 @@ mod test_snapshots {
         pass/apply_unary_not.expr,
         pass/arg_pattern_as.expr,
         pass/backpassing_bananza.expr,
+        pass/backpassing_in_parens_in_tuple.expr,
         pass/bang_newline_double_accessor.expr,
         pass/basic_apply.expr,
         pass/basic_docs.expr,
