@@ -763,11 +763,6 @@ fn gen_macho_le(
                 //             .set(LE , old_offset + md.added_byte_count as u32);
                 //     }
 
-                //     // dbg!(&section.reloff.get(LE));
-                //     // dbg!(section.reloff.get(LE) as i32);
-                //     // dbg!(&section);
-                //     // dbg!(&md.added_byte_count);
-                //     // dbg!(String::from_utf8_lossy(&section.sectname));
                 //     if section.nreloc.get(LE) > 0 {
                 //         section.reloff.set(
                 //             LE ,

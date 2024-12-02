@@ -340,8 +340,6 @@ pub(crate) fn asm_evals_to<T, U, F>(
     let result = crate::helpers::dev::run_test_main::<T>(&lib);
 
     if !errors.is_empty() {
-        dbg!(&errors);
-
         assert_eq!(
             errors,
             std::vec::Vec::new(),

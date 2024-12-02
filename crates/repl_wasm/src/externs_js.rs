@@ -20,7 +20,7 @@ extern "C" {
 
 // To debug in the browser, start up the web REPL as per instructions in repl_www/README.md
 // and sprinkle your code with console_log!("{:?}", my_value);
-// (Or if you're running the unit tests with WASI, you can just use println! or dbg!)
+// (Or if you're running the unit tests with WASI, you can just use println! or dbg)
 #[macro_export]
 macro_rules! console_log {
     ($($t:tt)*) => (log(&format_args!($($t)*).to_string()))
