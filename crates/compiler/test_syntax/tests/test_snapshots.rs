@@ -220,6 +220,7 @@ mod test_snapshots {
         fail/list_pattern_not_terminated.expr,
         fail/list_pattern_weird_rest_pattern.expr,
         fail/list_without_end.expr,
+        fail/m_at_s_minus_s_implements.expr,
         fail/module_params_with_missing_arrow.header,
         fail/module_with_unfinished_params.header,
         fail/multi_no_end.expr,

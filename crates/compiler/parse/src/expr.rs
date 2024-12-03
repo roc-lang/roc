@@ -414,15 +414,13 @@ fn parse_expr_operator_chain<'a>(
         .parse(arena, state, min_indent)?;
 
     let mut initial_state = state.clone();
-    let end = state.pos();
+    let mut end = state.pos();
 
     let (spaces_before_op, state) =
         match space0_e(EExpr::IndentEnd).parse(arena, state.clone(), min_indent) {
             Err((_, _)) => return Ok((MadeProgress, expr.value, state)),
             Ok((_, spaces_before_op, state)) => (spaces_before_op, state),
         };
-
-    let allow_negate = state.pos() > end;
 
     let mut expr_state = ExprState {
         operators: Vec::new_in(arena),
@@ -437,11 +435,13 @@ fn parse_expr_operator_chain<'a>(
     let call_min_indent = line_indent + 1;
 
     loop {
+        let allow_negate = state.pos() > end;
         let parser = skip_first(
             crate::blankspace::check_indent(EExpr::IndentEnd),
             loc_possibly_negative_or_negated_term(options, allow_negate, false),
         )
         .trace("term_or_underscore");
+        end = state.pos();
         match parser.parse(arena, state.clone(), call_min_indent) {
             Err((MadeProgress, f)) => return Err((MadeProgress, f)),
             Err((NoProgress, _)) => {
@@ -612,15 +612,13 @@ fn parse_stmt_operator_chain<'a>(
         .parse(arena, state, min_indent)?;
 
     let mut initial_state = state.clone();
-    let end = state.pos();
+    let mut end = state.pos();
 
     let (spaces_before_op, state) =
         match space0_e(EExpr::IndentEnd).parse(arena, state.clone(), min_indent) {
             Err((_, _)) => return Ok((MadeProgress, Stmt::Expr(expr.value), state)),
             Ok((_, spaces_before_op, state)) => (spaces_before_op, state),
         };
-
-    let allow_negate = state.pos() > end;
 
     let mut expr_state = ExprState {
         operators: Vec::new_in(arena),
@@ -635,11 +633,13 @@ fn parse_stmt_operator_chain<'a>(
     let call_min_indent = line_indent + 1;
 
     loop {
+        let allow_negate = state.pos() > end;
         let parser = skip_first(
             crate::blankspace::check_indent(EExpr::IndentEnd),
             loc_possibly_negative_or_negated_term(options, allow_negate, false),
         );
-        match parser.parse(arena, state.clone(), call_min_indent) {
+        end = state.pos();
+        match dbg!(parser.parse(arena, state.clone(), call_min_indent)) {
             Err((MadeProgress, f)) => return Err((MadeProgress, f)),
             Ok((
                 _,
@@ -653,7 +653,7 @@ fn parse_stmt_operator_chain<'a>(
                     ..
                 },
                 state,
-            )) if matches!(expr_state.expr.value, Expr::Tag(..)) => {
+            )) if matches!(dbg!(expr_state.expr.value), Expr::Tag(..)) => {
                 return parse_ability_def(expr_state, state, arena, implements, call_min_indent)
                     .map(|(td, s)| (MadeProgress, Stmt::TypeDef(td), s));
             }
