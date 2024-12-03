@@ -253,7 +253,6 @@ pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EStri
                     };
                 }
                 b'\'' if is_single_quote => {
-                    preceded_by_dollar = false;
                     end_segment!(StrSegment::Plaintext);
 
                     let expr = if segments.len() == 1 {
@@ -355,7 +354,6 @@ pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EStri
                     }
                 }
                 b'\\' => {
-                    preceded_by_dollar = false;
                     // We're about to begin an escaped segment of some sort!
                     //
                     // Record the current segment so we can begin a new one.
