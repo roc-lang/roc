@@ -306,6 +306,7 @@ mod test_snapshots {
         pass/apply_record_ann.expr,
         pass/apply_tag.expr,
         pass/apply_three_args.expr,
+        pass/apply_tuple_ext_parens_ty.expr,
         pass/apply_two_args.expr,
         pass/apply_unary_negation.expr,
         pass/apply_unary_not.expr,
