@@ -368,6 +368,7 @@ mod test_snapshots {
         pass/dbg_stmt_in_parens.expr,
         pass/dbg_stmt_multiline.expr,
         pass/dbg_stmt_two_exprs.expr,
+        pass/dbg_then_double_parens_cont.expr,
         pass/def_bang.expr,
         pass/def_multistring_apply.expr,
         pass/defs_suffixed_middle_extra_indents.moduledefs,

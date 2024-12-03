@@ -1084,11 +1084,109 @@ pub fn expr_lift_spaces<'a, 'b: 'a>(
                 }
             }
         }
-        _ => Spaces {
+        Expr::Float(_)
+        | Expr::Num(_)
+        | Expr::NonBase10Int { .. }
+        | Expr::Str(_)
+        | Expr::SingleQuote(_)
+        | Expr::AccessorFunction(_)
+        | Expr::RecordUpdater(_)
+        | Expr::RecordAccess(_, _)
+        | Expr::TupleAccess(_, _)
+        | Expr::Var { .. }
+        | Expr::Underscore(_)
+        | Expr::Crash
+        | Expr::Tag(_)
+        | Expr::OpaqueRef(_)
+        | Expr::Dbg
+        | Expr::Try
+        | Expr::List(_)
+        | Expr::Record(_)
+        | Expr::Tuple(_)
+        | Expr::RecordBuilder { .. }
+        | Expr::RecordUpdate { .. } => Spaces {
             before: &[],
             item: *expr,
             after: &[],
         },
+
+        Expr::TrySuffix { target, expr } => {
+            let expr_lifted = expr_lift_spaces_after(Parens::InApply, arena, expr);
+
+            Spaces {
+                before: &[],
+                item: Expr::TrySuffix {
+                    target: *target,
+                    expr: arena.alloc(expr_lifted.item),
+                },
+                after: expr_lifted.after,
+            }
+        }
+        Expr::DbgStmt {
+            first,
+            extra_args,
+            continuation,
+        } => {
+            let continuation_lifted =
+                expr_lift_spaces_after(Parens::NotNeeded, arena, &continuation.value);
+
+            Spaces {
+                before: &[],
+                item: Expr::DbgStmt {
+                    first: *first,
+                    extra_args,
+                    continuation: arena
+                        .alloc(Loc::at(continuation.region, continuation_lifted.item)),
+                },
+                after: continuation_lifted.after,
+            }
+        }
+        Expr::LowLevelDbg(_, _, _) => {
+            unreachable!("LowLevelDbg should only exist after desugaring, not during formatting")
+        }
+        Expr::BinOps(lefts, right) => {
+            let lefts = arena.alloc_slice_copy(lefts);
+
+            let before = if let Some(first) = lefts.first_mut() {
+                let lifted = expr_lift_spaces_before(Parens::InOperator, arena, &first.0.value);
+                *first = (Loc::at(first.0.region, lifted.item), first.1);
+                lifted.before
+            } else {
+                &[]
+            };
+
+            let right_lifted = expr_lift_spaces_after(Parens::InOperator, arena, &right.value);
+
+            Spaces {
+                before,
+                item: Expr::BinOps(lefts, arena.alloc(Loc::at(right.region, right_lifted.item))),
+                after: right_lifted.after,
+            }
+        }
+        Expr::UnaryOp(expr, op) => {
+            let expr_lifted = expr_lift_spaces_after(Parens::InOperator, arena, &expr.value);
+
+            Spaces {
+                before: &[],
+                item: Expr::UnaryOp(arena.alloc(Loc::at(expr.region, expr_lifted.item)), *op),
+                after: expr_lifted.after,
+            }
+        }
+
+        Expr::MalformedIdent(_, _)
+        | Expr::MalformedSuffixed(_)
+        | Expr::PrecedenceConflict(_)
+        | Expr::EmptyRecordBuilder(_)
+        | Expr::SingleFieldRecordBuilder(_)
+        | Expr::OptionalFieldInRecordBuilder(_, _) => Spaces {
+            before: &[],
+            item: *expr,
+            after: &[],
+        }, // _ => Spaces {
+           //     before: &[],
+           //     item: *expr,
+           //     after: &[],
+           // },
     }
 }
 
