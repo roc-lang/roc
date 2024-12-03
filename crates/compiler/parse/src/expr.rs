@@ -182,26 +182,25 @@ fn record_field_access_chain<'a>() -> impl Parser<'a, Vec<'a, Suffix<'a>>, EExpr
 /// pattern later
 fn loc_term_or_underscore_or_conditional<'a>(
     options: ExprParseOptions,
+    allow_conditional: bool,
 ) -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
+    move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
+        if allow_conditional {
+            match loc_conditional(options).parse(arena, state.clone(), min_indent) {
+                Ok((_, expr, state)) => return Ok((MadeProgress, expr, state)),
+                Err((MadeProgress, e)) => return Err((MadeProgress, e)),
+                Err((NoProgress, _)) => {}
+            }
+        }
+
+        loc_term_or_underscore(options).parse(arena, state, min_indent)
+    }
+}
+fn loc_conditional<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
     one_of!(
-        loc_expr_in_parens_etc_help(),
         loc(specialize_err(EExpr::If, if_expr_help(options))),
         loc(specialize_err(EExpr::When, when::when_expr_help(options))),
-        loc(specialize_err(EExpr::Str, string_like_literal_help())),
-        loc(specialize_err(
-            EExpr::Number,
-            positive_number_literal_help()
-        )),
-        loc(specialize_err(EExpr::Closure, closure_help(options))),
-        loc(crash_kw()),
-        loc(specialize_err(EExpr::Dbg, dbg_kw())),
-        loc(try_kw()),
-        loc(underscore_expression()),
-        loc(record_literal_help()),
-        loc(specialize_err(EExpr::List, list_literal_help())),
-        ident_seq(),
     )
-    .trace("term_or_underscore_or_conditional")
 }
 
 /// In some contexts we want to parse the `_` as an expression, so it can then be turned into a
@@ -217,6 +216,7 @@ fn loc_term_or_underscore<'a>(
             positive_number_literal_help()
         )),
         loc(specialize_err(EExpr::Closure, closure_help(options))),
+        loc(crash_kw()),
         loc(specialize_err(EExpr::Dbg, dbg_kw())),
         loc(try_kw()),
         loc(underscore_expression()),
@@ -295,6 +295,7 @@ fn crash_kw<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
 fn loc_possibly_negative_or_negated_term<'a>(
     options: ExprParseOptions,
     allow_negate: bool,
+    allow_conditional: bool,
 ) -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
     let parse_unary_negate = move |arena, state: State<'a>, min_indent: u32| {
         let initial = state.clone();
@@ -305,7 +306,7 @@ fn loc_possibly_negative_or_negated_term<'a>(
 
         let (_, (loc_op, loc_expr), state) = and(
             loc(unary_negate()),
-            loc_possibly_negative_or_negated_term(options, true),
+            loc_possibly_negative_or_negated_term(options, true, allow_conditional),
         )
         .parse(arena, state, min_indent)?;
 
@@ -322,7 +323,7 @@ fn loc_possibly_negative_or_negated_term<'a>(
             and(
                 loc(unary_not()).trace("not"),
                 space0_before_e(
-                    loc_possibly_negative_or_negated_term(options, true),
+                    loc_possibly_negative_or_negated_term(options, true, allow_conditional),
                     EExpr::IndentStart
                 )
                 .trace("not_expr")
@@ -332,7 +333,7 @@ fn loc_possibly_negative_or_negated_term<'a>(
             }
         ))
         .trace("not_expr"),
-        loc_term_or_underscore_or_conditional(options)
+        loc_term_or_underscore_or_conditional(options, allow_conditional)
     ]
     .trace("loc_possibly_negative_or_negated_term")
 }
@@ -409,16 +410,19 @@ fn parse_expr_operator_chain<'a>(
 ) -> Result<(Progress, Expr<'a>, State<'a>), (Progress, EExpr<'a>)> {
     let line_indent = state.line_indent();
 
-    let (_, expr, state) =
-        loc_possibly_negative_or_negated_term(options, true).parse(arena, state, min_indent)?;
+    let (_, expr, state) = loc_possibly_negative_or_negated_term(options, true, true)
+        .parse(arena, state, min_indent)?;
 
     let mut initial_state = state.clone();
+    let end = state.pos();
 
     let (spaces_before_op, state) =
         match space0_e(EExpr::IndentEnd).parse(arena, state.clone(), min_indent) {
             Err((_, _)) => return Ok((MadeProgress, expr.value, state)),
             Ok((_, spaces_before_op, state)) => (spaces_before_op, state),
         };
+
+    let allow_negate = state.pos() > end;
 
     let mut expr_state = ExprState {
         operators: Vec::new_in(arena),
@@ -435,7 +439,7 @@ fn parse_expr_operator_chain<'a>(
     loop {
         let parser = skip_first(
             crate::blankspace::check_indent(EExpr::IndentEnd),
-            loc_term_or_underscore(options),
+            loc_possibly_negative_or_negated_term(options, allow_negate, false),
         )
         .trace("term_or_underscore");
         match parser.parse(arena, state.clone(), call_min_indent) {
@@ -604,8 +608,8 @@ fn parse_stmt_operator_chain<'a>(
 ) -> Result<(Progress, Stmt<'a>, State<'a>), (Progress, EExpr<'a>)> {
     let line_indent = state.line_indent();
 
-    let (_, expr, state) =
-        loc_possibly_negative_or_negated_term(options, true).parse(arena, state, min_indent)?;
+    let (_, expr, state) = loc_possibly_negative_or_negated_term(options, true, true)
+        .parse(arena, state, min_indent)?;
 
     let mut initial_state = state.clone();
     let end = state.pos();
@@ -633,7 +637,7 @@ fn parse_stmt_operator_chain<'a>(
     loop {
         let parser = skip_first(
             crate::blankspace::check_indent(EExpr::IndentEnd),
-            loc_possibly_negative_or_negated_term(options, allow_negate),
+            loc_possibly_negative_or_negated_term(options, allow_negate, false),
         );
         match parser.parse(arena, state.clone(), call_min_indent) {
             Err((MadeProgress, f)) => return Err((MadeProgress, f)),
@@ -1590,7 +1594,7 @@ fn parse_after_binop<'a>(
     mut expr_state: ExprState<'a>,
     loc_op: Loc<BinOp>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
-    match loc_possibly_negative_or_negated_term(options, true).parse(
+    match loc_possibly_negative_or_negated_term(options, true, true).parse(
         arena,
         state.clone(),
         min_indent,

@@ -382,6 +382,7 @@ mod test_snapshots {
         pass/empty_record.expr,
         pass/empty_record_assign_tag.expr,
         pass/empty_record_assignment.expr,
+        pass/empty_record_assignment_d_when_bang.expr,
         pass/empty_record_eq_dbg.expr,
         pass/empty_record_eq_newlines_doubleeq.expr,
         pass/empty_record_newline_assign.expr,
