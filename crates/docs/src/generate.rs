@@ -13,7 +13,7 @@ use roc_packaging::cache::{self, RocCacheDir};
 use roc_parse::ast::FunctionArrow;
 use roc_parse::keyword;
 use roc_target::Target;
-use roc_types::subs::Variable;
+use roc_types::subs::{Content, FlatType, GetSubsSlice, Subs, Variable};
 use roc_types::types::{Alias, AliasCommon, Type, TypeExtension};
 use std::borrow::{Borrow, Cow};
 use std::fs;
@@ -175,17 +175,30 @@ impl<'a> Docs<'a> {
                                 .and_then(|decls| {
                                     decls
                                         .ann_from_symbol(def.symbol)
-                                        .map(|result| {
-                                            result.ok().map(|ann| {
-                                                clean_annotation(type_to_ann(
-                                                    &ann.signature,
+                                        .map(|result| match result {
+                                            Ok(ann) => clean_annotation(type_to_ann(
+                                                &ann.signature,
+                                                &loaded_module.interns,
+                                                &loaded_module.aliases,
+                                                &mut MutMap::default(),
+                                            )),
+                                            Err(var) => {
+                                                // It wasn't annotated at all; look up its inferred type in Subs!
+                                                let subs = loaded_module
+                                                    .typechecked
+                                                    .get(&def.symbol.module_id()).unwrap_or_else(|| {
+                                                        unreachable!("Got a loaded module with a symbol from a module that was not typechecked! module_id.is_builtin() = {:?}", def.symbol.module_id().is_builtin());
+                                                    }).solved_subs.inner();
+
+                                                clean_annotation(content_to_ann(
+                                                    subs.get_content_without_compacting(var),
+                                                    subs,
                                                     &loaded_module.interns,
                                                     &loaded_module.aliases,
                                                     &mut MutMap::default(),
                                                 ))
-                                            })
+                                            }
                                         })
-                                        .flatten()
                                 })
                                 .unwrap_or_else(|| {
                                     // We couldn't find it in decls, but it might have been a type alias.
@@ -1042,6 +1055,258 @@ fn type_to_ann(
         Type::Error => TypeAnnotation::NoTypeAnn,
         Type::Pure => TypeAnnotation::NoTypeAnn,
         Type::Effectful => TypeAnnotation::NoTypeAnn,
+    }
+}
+
+fn content_to_ann(
+    content: &Content,
+    subs: &Subs,
+    interns: &Interns,
+    aliases: &MutMap<ModuleId, MutMap<Symbol, (bool, Alias)>>,
+    var_names: &mut MutMap<Variable, std::string::String>,
+) -> TypeAnnotation {
+    match content {
+        Content::FlexVar(opt_name) | Content::FlexAbleVar(opt_name, _) => {
+            TypeAnnotation::BoundVariable(opt_name.map_or_else(
+                || get_var_name(var_names),
+                |index| subs.field_names[index.index()].to_string(),
+            ))
+        }
+        Content::RigidVar(name) | Content::RigidAbleVar(name, _) => {
+            TypeAnnotation::BoundVariable(subs.field_names[name.index()].to_string())
+        }
+        Content::RecursionVar { structure, .. } => content_to_ann(
+            subs.get_content_without_compacting(*structure),
+            subs,
+            interns,
+            aliases,
+            var_names,
+        ),
+        Content::LambdaSet(_) | Content::ErasedLambda => TypeAnnotation::NoTypeAnn,
+        Content::Structure(flat_type) => match flat_type {
+            FlatType::Apply(symbol, args) => TypeAnnotation::Apply {
+                name: symbol.as_str(interns).to_string(),
+                parts: subs
+                    .get_subs_slice(*args)
+                    .iter()
+                    .map(|&arg| {
+                        content_to_ann(
+                            subs.get_content_without_compacting(arg),
+                            subs,
+                            interns,
+                            aliases,
+                            var_names,
+                        )
+                    })
+                    .collect(),
+            },
+            FlatType::Func(args, closure_var, ret, fx) => TypeAnnotation::Function {
+                args: subs
+                    .get_subs_slice(*args)
+                    .iter()
+                    .map(|&arg| {
+                        content_to_ann(
+                            subs.get_content_without_compacting(arg),
+                            subs,
+                            interns,
+                            aliases,
+                            var_names,
+                        )
+                    })
+                    .collect(),
+                arrow: if matches!(subs.get_content_without_compacting(*fx), Content::Effectful) {
+                    FunctionArrow::Effectful
+                } else {
+                    FunctionArrow::Pure
+                },
+                output: Box::new(content_to_ann(
+                    subs.get_content_without_compacting(*ret),
+                    subs,
+                    interns,
+                    aliases,
+                    var_names,
+                )),
+            },
+            FlatType::Record(fields, ext) => TypeAnnotation::Record {
+                fields: fields
+                    .sorted_iterator(subs, *ext)
+                    .map(|(name, field)| {
+                        use roc_types::types::RecordField;
+
+                        match field {
+                            RecordField::Required(v)
+                            | RecordField::Demanded(v)
+                            | RecordField::RigidRequired(v) => {
+                                roc_load::docs::RecordField::RecordField {
+                                    name: name.to_string(),
+                                    type_annotation: content_to_ann(
+                                        subs.get_content_without_compacting(v),
+                                        subs,
+                                        interns,
+                                        aliases,
+                                        var_names,
+                                    ),
+                                }
+                            }
+                            RecordField::Optional(v) | RecordField::RigidOptional(v) => {
+                                roc_load::docs::RecordField::OptionalField {
+                                    name: name.to_string(),
+                                    type_annotation: content_to_ann(
+                                        subs.get_content_without_compacting(v),
+                                        subs,
+                                        interns,
+                                        aliases,
+                                        var_names,
+                                    ),
+                                }
+                            }
+                        }
+                    })
+                    .collect(),
+                extension: Box::new(content_to_ann(
+                    subs.get_content_without_compacting(*ext),
+                    subs,
+                    interns,
+                    aliases,
+                    var_names,
+                )),
+            },
+            FlatType::Tuple(elems, ext) => TypeAnnotation::Tuple {
+                elems: elems
+                    .sorted_iterator(subs, *ext)
+                    .map(|(_, elem)| {
+                        content_to_ann(
+                            subs.get_content_without_compacting(elem),
+                            subs,
+                            interns,
+                            aliases,
+                            var_names,
+                        )
+                    })
+                    .collect(),
+                extension: Box::new(content_to_ann(
+                    subs.get_content_without_compacting(*ext),
+                    subs,
+                    interns,
+                    aliases,
+                    var_names,
+                )),
+            },
+            FlatType::TagUnion(tags, ext) => TypeAnnotation::TagUnion {
+                tags: tags
+                    .unsorted_iterator(subs, *ext)
+                    .map(|(name, vars)| Tag {
+                        name: name.0.to_string(),
+                        values: vars
+                            .iter()
+                            .map(|&var| {
+                                content_to_ann(
+                                    subs.get_content_without_compacting(var),
+                                    subs,
+                                    interns,
+                                    aliases,
+                                    var_names,
+                                )
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+                extension: Box::new(content_to_ann(
+                    subs.get_content_without_compacting(ext.var()),
+                    subs,
+                    interns,
+                    aliases,
+                    var_names,
+                )),
+            },
+            FlatType::FunctionOrTagUnion(_, _, ext) => content_to_ann(
+                subs.get_content_without_compacting(ext.var()),
+                subs,
+                interns,
+                aliases,
+                var_names,
+            ),
+            FlatType::RecursiveTagUnion(rec_var, tags, ext) => TypeAnnotation::TagUnion {
+                tags: tags
+                    .unsorted_iterator(subs, *ext)
+                    .map(|(name, vars)| Tag {
+                        name: name.0.to_string(),
+                        values: vars
+                            .iter()
+                            .map(|&var| {
+                                content_to_ann(
+                                    subs.get_content_without_compacting(var),
+                                    subs,
+                                    interns,
+                                    aliases,
+                                    var_names,
+                                )
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+                extension: Box::new(content_to_ann(
+                    subs.get_content_without_compacting(ext.var()),
+                    subs,
+                    interns,
+                    aliases,
+                    var_names,
+                )),
+            },
+            FlatType::EmptyRecord => TypeAnnotation::Record {
+                fields: std::vec::Vec::new(),
+                extension: Box::new(TypeAnnotation::NoTypeAnn),
+            },
+            FlatType::EmptyTagUnion => TypeAnnotation::TagUnion {
+                tags: std::vec::Vec::new(),
+                extension: Box::new(TypeAnnotation::NoTypeAnn),
+            },
+            FlatType::EffectfulFunc => TypeAnnotation::NoTypeAnn,
+        },
+        Content::Alias(symbol, args, actual, kind) => {
+            let actual_ann = content_to_ann(
+                subs.get_content_without_compacting(*actual),
+                subs,
+                interns,
+                aliases,
+                var_names,
+            );
+            TypeAnnotation::Apply {
+                name: symbol.as_str(interns).to_string(),
+                parts: args
+                    .type_variables()
+                    .into_iter()
+                    .map(|var_index| {
+                        let var = subs[var_index];
+                        content_to_ann(
+                            subs.get_content_without_compacting(var),
+                            subs,
+                            interns,
+                            aliases,
+                            var_names,
+                        )
+                    })
+                    .collect(),
+            }
+        }
+        Content::RangedNumber(_) => TypeAnnotation::Apply {
+            name: "Num".to_string(),
+            parts: std::vec::Vec::new(),
+        },
+        Content::Error => TypeAnnotation::NoTypeAnn,
+        Content::Pure | Content::Effectful => TypeAnnotation::NoTypeAnn,
+    }
+}
+
+fn get_var_name(var_names: &mut MutMap<Variable, std::string::String>) -> std::string::String {
+    let vars_named = var_names.len();
+    let letter = (b'a' + (vars_named % 26) as u8) as char;
+    let number = (vars_named / 26) + 1;
+
+    if number > 1 {
+        format!("{}{}", letter, number)
+    } else {
+        letter.to_string()
     }
 }
 
