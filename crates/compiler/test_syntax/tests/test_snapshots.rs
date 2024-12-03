@@ -415,6 +415,7 @@ mod test_snapshots {
         pass/implements_newlines_comments.expr,
         pass/import.moduledefs,
         pass/import_from_package.moduledefs,
+        pass/import_in_closure_with_curlies_after.expr,
         pass/import_with_alias.moduledefs,
         pass/import_with_comments.moduledefs,
         pass/import_with_exposed.moduledefs,

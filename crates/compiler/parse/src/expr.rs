@@ -2723,9 +2723,9 @@ fn try_kw<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
 
 fn import<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>> {
     skip_second(
-        skip_first(
+        indented_seq_skip_first(
             parser::keyword(keyword::IMPORT, EImport::Import),
-            increment_min_indent(one_of!(import_body(), import_ingested_file_body())),
+            one_of!(import_body(), import_ingested_file_body()),
         ),
         require_newline_or_eof(EImport::EndNewline),
     )
