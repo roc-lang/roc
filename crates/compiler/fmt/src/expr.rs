@@ -134,14 +134,7 @@ fn format_expr_only(
             buf.push_str(string);
         }
         Expr::Record(fields) => {
-            fmt_record_like(
-                buf,
-                None,
-                *fields,
-                indent,
-                format_assigned_field_multiline,
-                assigned_field_to_spaces,
-            );
+            fmt_record_like(buf, None, *fields, indent, assigned_field_to_spaces);
         }
         Expr::RecordUpdate { update, fields } => {
             fmt_record_like(
@@ -149,7 +142,6 @@ fn format_expr_only(
                 Some(RecordPrefix::Update(update)),
                 *fields,
                 indent,
-                format_assigned_field_multiline,
                 assigned_field_to_spaces,
             );
         }
@@ -159,7 +151,6 @@ fn format_expr_only(
                 Some(RecordPrefix::Mapper(mapper)),
                 *fields,
                 indent,
-                format_assigned_field_multiline,
                 assigned_field_to_spaces,
             );
         }
@@ -769,7 +760,7 @@ fn fmt_str_body(body: &str, buf: &mut Buf) {
     }
 }
 
-fn format_str_segment(seg: &StrSegment, buf: &mut Buf, indent: u16) {
+fn format_str_segment(seg: &StrSegment, buf: &mut Buf) {
     use StrSegment::*;
 
     match seg {
@@ -858,7 +849,7 @@ pub fn fmt_str_literal(buf: &mut Buf, literal: StrLiteral, indent: u16) {
             buf.indent(indent);
             buf.push('"');
             for seg in segments.iter() {
-                format_str_segment(seg, buf, 0)
+                format_str_segment(seg, buf)
             }
             buf.push('"');
         }
@@ -874,7 +865,7 @@ pub fn fmt_str_literal(buf: &mut Buf, literal: StrLiteral, indent: u16) {
                     // only add indent if the line isn't empty
                     if *seg != StrSegment::Plaintext("\n") {
                         buf.indent(indent);
-                        format_str_segment(seg, buf, indent);
+                        format_str_segment(seg, buf);
                     } else {
                         buf.push_newline_literal();
                     }
@@ -1890,16 +1881,14 @@ enum RecordPrefix<'a> {
     Mapper(&'a Loc<Expr<'a>>),
 }
 
-fn fmt_record_like<'a, 'b: 'a, Field, Format, ToSpacesAround>(
+fn fmt_record_like<'a, 'b: 'a, Field, ToSpacesAround>(
     buf: &'a mut Buf,
     prefix: Option<RecordPrefix<'b>>,
     fields: Collection<'b, Loc<Field>>,
     indent: u16,
-    format_field_multiline: Format,
     to_space_around: ToSpacesAround,
 ) where
     Field: Formattable,
-    Format: Fn(&mut Buf, &Field, u16, &str),
     ToSpacesAround: Fn(&'a Bump, &'b Field) -> Spaces<'a, Field>,
 {
     let loc_fields = fields.items;
@@ -2022,100 +2011,6 @@ fn fmt_record_like<'a, 'b: 'a, Field, Format, ToSpacesAround>(
         // closes the initial bracket
         buf.indent(indent);
         buf.push('}');
-    }
-}
-
-fn format_assigned_field_multiline<T>(
-    buf: &mut Buf,
-    field: &AssignedField<T>,
-
-    indent: u16,
-    separator_prefix: &str,
-) where
-    T: Formattable,
-{
-    use self::AssignedField::*;
-    match field {
-        RequiredValue(name, spaces, ann) => {
-            buf.ensure_ends_with_newline();
-            buf.indent(indent);
-            buf.push_str(name.value);
-
-            if !spaces.is_empty() {
-                fmt_spaces(buf, spaces.iter(), indent);
-                buf.indent(indent);
-            }
-
-            buf.push_str(separator_prefix);
-            buf.push_str(":");
-            buf.spaces(1);
-            ann.value.format(buf, indent);
-            buf.push(',');
-        }
-        OptionalValue(name, spaces, ann) => {
-            buf.ensure_ends_with_newline();
-            buf.indent(indent);
-            buf.push_str(name.value);
-
-            if !spaces.is_empty() {
-                fmt_spaces(buf, spaces.iter(), indent);
-                buf.indent(indent);
-            }
-
-            buf.push_str(separator_prefix);
-            buf.push_str("?");
-            buf.spaces(1);
-            ann.value.format(buf, indent);
-            buf.push(',');
-        }
-        IgnoredValue(name, spaces, ann) => {
-            buf.ensure_ends_with_newline();
-            buf.indent(indent);
-            buf.push('_');
-            buf.push_str(name.value);
-
-            if !spaces.is_empty() {
-                fmt_spaces(buf, spaces.iter(), indent);
-                buf.indent(indent);
-            }
-
-            buf.push_str(separator_prefix);
-            buf.push_str(":");
-            buf.spaces(1);
-            ann.value.format(buf, indent);
-            buf.push(',');
-        }
-        LabelOnly(name) => {
-            buf.ensure_ends_with_newline();
-            buf.indent(indent);
-            buf.push_str(name.value);
-            buf.push(',');
-        }
-        AssignedField::SpaceBefore(sub_field, _spaces) => {
-            // We have something like that:
-            // ```
-            // # comment
-            // field,
-            // ```
-            // we'd like to preserve this
-
-            format_assigned_field_multiline(buf, sub_field, indent, separator_prefix);
-        }
-        AssignedField::SpaceAfter(sub_field, spaces) => {
-            // We have something like that:
-            // ```
-            // field # comment
-            // , otherfield
-            // ```
-            // we'd like to transform it into:
-            // ```
-            // field,
-            // # comment
-            // otherfield
-            // ```
-            format_assigned_field_multiline(buf, sub_field, indent, separator_prefix);
-            fmt_comments_only(buf, spaces.iter(), NewlineAt::Top, indent);
-        }
     }
 }
 
