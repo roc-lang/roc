@@ -246,6 +246,7 @@ mod test_snapshots {
         fail/tag_union_open.expr,
         fail/tag_union_second_lowercase_tag_name.expr,
         fail/trailing_operator.expr,
+        fail/triple_quote_newline_after_dollar.expr,
         fail/type_annotation_double_colon.expr,
         fail/type_apply_stray_dot.expr,
         fail/type_argument_arrow_then_nothing.expr,
