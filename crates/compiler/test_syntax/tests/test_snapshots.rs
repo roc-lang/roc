@@ -442,6 +442,7 @@ mod test_snapshots {
         pass/list_patterns.expr,
         pass/lowest_float.expr,
         pass/lowest_int.expr,
+        pass/mega_parens_pat.expr,
         pass/min_parens_number.expr,
         pass/minimal_app_header.header,
         pass/minus_minus_block_string.expr,
