@@ -1413,10 +1413,7 @@ fn type_annotation_to_html(
                     }
 
                     if is_multiline {
-                        if index < (tags_len - 1) {
-                            buf.push(',');
-                        }
-
+                        buf.push(',');
                         new_line(buf);
                     }
                 }
@@ -1519,10 +1516,7 @@ fn type_annotation_to_html(
                     }
 
                     if is_multiline {
-                        if index < (fields_len - 1) {
-                            buf.push(',');
-                        }
-
+                        buf.push(',');
                         new_line(buf);
                     }
                 }
@@ -1693,10 +1687,7 @@ fn type_annotation_to_html(
                     type_annotation_to_html(next_indent_level, buf, elem, false);
 
                     if is_multiline {
-                        if index < (elems_len - 1) {
-                            buf.push(',');
-                        }
-
+                        buf.push(',');
                         new_line(buf);
                     } else if index < (elems_len - 1) {
                         buf.push_str(", ");
