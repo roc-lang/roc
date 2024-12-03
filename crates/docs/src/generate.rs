@@ -1391,13 +1391,6 @@ fn type_annotation_to_html(
                 buf.push_str("[]");
             } else {
                 let tags_len = tags.len();
-                let tag_union_indent = indent_level + 1;
-
-                if is_multiline {
-                    new_line(buf);
-
-                    indent(buf, tag_union_indent);
-                }
 
                 buf.push('[');
 
@@ -1405,7 +1398,7 @@ fn type_annotation_to_html(
                     new_line(buf);
                 }
 
-                let next_indent_level = tag_union_indent + 1;
+                let next_indent_level = indent_level + 1;
 
                 for (index, tag) in tags.iter().chain(extra_tags.iter()).enumerate() {
                     if is_multiline {
@@ -1429,7 +1422,7 @@ fn type_annotation_to_html(
                 }
 
                 if is_multiline {
-                    indent(buf, tag_union_indent);
+                    indent(buf, indent_level);
                 }
 
                 buf.push(']');
@@ -1485,12 +1478,6 @@ fn type_annotation_to_html(
                 buf.push_str("{}");
             } else {
                 let fields_len = fields.len();
-                let record_indent = indent_level + 1;
-
-                if is_multiline {
-                    new_line(buf);
-                    indent(buf, record_indent);
-                }
 
                 buf.push('{');
 
@@ -1498,7 +1485,7 @@ fn type_annotation_to_html(
                     new_line(buf);
                 }
 
-                let next_indent_level = record_indent + 1;
+                let next_indent_level = indent_level + 1;
 
                 for (index, field) in fields.iter().chain(extra_fields.iter()).enumerate() {
                     if is_multiline {
@@ -1541,7 +1528,7 @@ fn type_annotation_to_html(
                 }
 
                 if is_multiline {
-                    indent(buf, record_indent);
+                    indent(buf, indent_level);
                 } else {
                     buf.push(' ');
                 }
@@ -1689,12 +1676,6 @@ fn type_annotation_to_html(
                 buf.push_str("()");
             } else {
                 let elems_len = elems.len() + extra_elems.len();
-                let tuple_indent = indent_level + 1;
-
-                if is_multiline {
-                    new_line(buf);
-                    indent(buf, tuple_indent);
-                }
 
                 buf.push('(');
 
@@ -1702,7 +1683,7 @@ fn type_annotation_to_html(
                     new_line(buf);
                 }
 
-                let next_indent_level = tuple_indent + 1;
+                let next_indent_level = indent_level + 1;
 
                 for (index, elem) in elems.iter().chain(extra_elems.iter()).enumerate() {
                     if is_multiline {
@@ -1723,7 +1704,7 @@ fn type_annotation_to_html(
                 }
 
                 if is_multiline {
-                    indent(buf, tuple_indent);
+                    indent(buf, indent_level);
                 }
 
                 buf.push(')');
