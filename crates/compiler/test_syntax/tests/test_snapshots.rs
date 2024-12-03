@@ -358,6 +358,7 @@ mod test_snapshots {
         pass/crazy_backpassing_parens.expr,
         pass/crazy_pat_ann.expr,
         pass/dbg.expr,
+        pass/dbg_bang_neg_bang_if_bang.expr,
         pass/dbg_double.expr,
         pass/dbg_double_newline.expr,
         pass/dbg_extra_parens.expr,

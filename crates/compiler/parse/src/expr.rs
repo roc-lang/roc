@@ -306,7 +306,7 @@ fn loc_possibly_negative_or_negated_term<'a>(
 
         let (_, (loc_op, loc_expr), state) = and(
             loc(unary_negate()),
-            loc_possibly_negative_or_negated_term(options, true, allow_conditional),
+            loc_possibly_negative_or_negated_term(options, true, false),
         )
         .parse(arena, state, min_indent)?;
 
@@ -323,7 +323,7 @@ fn loc_possibly_negative_or_negated_term<'a>(
             and(
                 loc(unary_not()).trace("not"),
                 space0_before_e(
-                    loc_possibly_negative_or_negated_term(options, true, allow_conditional),
+                    loc_possibly_negative_or_negated_term(options, true, false),
                     EExpr::IndentStart
                 )
                 .trace("not_expr")
