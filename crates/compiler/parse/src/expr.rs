@@ -639,7 +639,7 @@ fn parse_stmt_operator_chain<'a>(
             loc_possibly_negative_or_negated_term(options, allow_negate, false),
         );
         end = state.pos();
-        match dbg!(parser.parse(arena, state.clone(), call_min_indent)) {
+        match parser.parse(arena, state.clone(), call_min_indent) {
             Err((MadeProgress, f)) => return Err((MadeProgress, f)),
             Ok((
                 _,

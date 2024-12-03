@@ -1124,7 +1124,7 @@ pub fn expr_lift_spaces<'a, 'b: 'a>(
             Spaces {
                 before: &[],
                 item: Expr::DbgStmt {
-                    first: *first,
+                    first,
                     extra_args,
                     continuation: arena
                         .alloc(Loc::at(continuation.region, continuation_lifted.item)),
