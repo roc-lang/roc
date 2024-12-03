@@ -328,6 +328,7 @@ mod test_snapshots {
         pass/body_with_unneeded_parens.expr,
         pass/call_bang.expr,
         pass/call_bang_no_space.expr,
+        pass/capture_body_parens_comment.expr,
         pass/closure_in_apply_in_binop.expr,
         pass/closure_in_binop_with_spaces.expr,
         pass/closure_pat_reccord_comment.expr,

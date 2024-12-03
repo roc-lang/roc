@@ -999,10 +999,24 @@ pub fn expr_lift_spaces<'a, 'b: 'a>(
                 after: final_expr_lifted.after,
             }
         }
-        Expr::If { .. } | Expr::When(_, _) | Expr::Return(_, _) | Expr::Closure(..) => {
-            let res = if parens == Parens::InApply
-                || (parens == Parens::InApplyLastArg && !matches!(expr, Expr::Closure(..)))
-            {
+        Expr::Closure(pats, body) => {
+            if parens == Parens::InApply {
+                return Spaces {
+                    before: &[],
+                    item: Expr::ParensAround(arena.alloc(*expr)),
+                    after: &[],
+                };
+            }
+            let body_lifted = expr_lift_spaces_after(Parens::NotNeeded, arena, &body.value);
+
+            Spaces {
+                before: &[],
+                item: Expr::Closure(pats, arena.alloc(Loc::at(body.region, body_lifted.item))),
+                after: body_lifted.after,
+            }
+        }
+        Expr::If { .. } | Expr::When(_, _) | Expr::Return(_, _) => {
+            if parens == Parens::InApply || parens == Parens::InApplyLastArg {
                 Spaces {
                     before: &[],
                     item: Expr::ParensAround(arena.alloc(*expr)),
@@ -1014,8 +1028,7 @@ pub fn expr_lift_spaces<'a, 'b: 'a>(
                     item: *expr,
                     after: &[],
                 }
-            };
-            dbg!(res)
+            }
         }
         Expr::Backpassing(pats, call, continuation) => {
             let pats = arena.alloc_slice_copy(pats);
