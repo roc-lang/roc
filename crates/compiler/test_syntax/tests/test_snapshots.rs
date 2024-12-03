@@ -543,6 +543,7 @@ mod test_snapshots {
         pass/parens_empty_record_apply.expr,
         pass/parens_func_apply_type.expr,
         pass/parens_in_type_def_apply.expr,
+        pass/parens_newline_in_func_type.expr,
         pass/parens_record_updater.expr,
         pass/parenthesized_type_def.expr,
         pass/parenthesized_type_def_space_before.expr,

@@ -875,6 +875,27 @@ pub fn ann_lift_spaces<'a, 'b: 'a>(
                 after,
             }
         }
+        TypeAnnotation::Function(args, purity, res) => {
+            let new_args = arena.alloc_slice_copy(args);
+            let before = if let Some(first) = new_args.first_mut() {
+                let lifted = ann_lift_spaces_before(arena, &first.value);
+                first.value = lifted.item;
+                lifted.before
+            } else {
+                &[]
+            };
+            let new_res = ann_lift_spaces_after(arena, &res.value);
+            let new_ann = TypeAnnotation::Function(
+                new_args,
+                *purity,
+                arena.alloc(Loc::at_zero(new_res.item)),
+            );
+            Spaces {
+                before,
+                item: new_ann,
+                after: new_res.after,
+            }
+        }
         TypeAnnotation::SpaceBefore(expr, spaces) => {
             let mut inner = ann_lift_spaces(arena, expr);
             inner.before = merge_spaces_conservative(arena, spaces, inner.before);
