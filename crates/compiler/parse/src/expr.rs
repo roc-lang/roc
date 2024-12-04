@@ -3201,7 +3201,7 @@ fn stmts_to_defs<'a>(
                     )),
                 ) = (td, stmts.get(i + 1).map(|s| (s.before, s.item.value)))
                 {
-                    if spaces_middle.len() <= 1
+                    if (spaces_middle.len() <= 1 && !ends_with_spaces_conservative(&ann_type.value))
                         || header
                             .vars
                             .first()
@@ -3289,7 +3289,8 @@ fn stmts_to_defs<'a>(
                     )),
                 ) = (vd, stmts.get(i + 1).map(|s| (s.before, s.item.value)))
                 {
-                    if spaces_middle.len() <= 1 || ann_pattern.value.equivalent(&loc_pattern.value)
+                    if (spaces_middle.len() <= 1 && !ends_with_spaces_conservative(&ann_type.value))
+                        || ann_pattern.value.equivalent(&loc_pattern.value)
                     {
                         let region = Region::span_across(&loc_pattern.region, &loc_def_expr.region);
 
@@ -3320,6 +3321,64 @@ fn stmts_to_defs<'a>(
         i += 1;
     }
     Ok((defs, last_expr))
+}
+
+fn ends_with_spaces_conservative(ty: &TypeAnnotation<'_>) -> bool {
+    match ty {
+        TypeAnnotation::Function(_, _, res) => ends_with_spaces_conservative(&res.value),
+        TypeAnnotation::Apply(_, _, args) => args
+            .last()
+            .map_or(false, |a| ends_with_spaces_conservative(&a.value)),
+        TypeAnnotation::As(_, _, type_header) => type_header
+            .vars
+            .last()
+            .map_or(false, |v| pat_ends_with_spaces_conservative(&v.value)),
+        TypeAnnotation::Record { fields: _, ext }
+        | TypeAnnotation::Tuple { elems: _, ext }
+        | TypeAnnotation::TagUnion { ext, tags: _ } => {
+            ext.map_or(false, |e| ends_with_spaces_conservative(&e.value))
+        }
+        TypeAnnotation::BoundVariable(_) | TypeAnnotation::Inferred | TypeAnnotation::Wildcard => {
+            false
+        }
+        TypeAnnotation::Where(_, clauses) => clauses.last().map_or(false, |c| {
+            c.value
+                .abilities
+                .last()
+                .map_or(false, |a| ends_with_spaces_conservative(&a.value))
+        }),
+        TypeAnnotation::SpaceBefore(inner, _) => ends_with_spaces_conservative(inner),
+        TypeAnnotation::SpaceAfter(_, _) => true,
+        TypeAnnotation::Malformed(_) => false,
+    }
+}
+
+fn pat_ends_with_spaces_conservative(pat: &Pattern<'_>) -> bool {
+    match pat {
+        Pattern::Identifier { .. }
+        | Pattern::QualifiedIdentifier { .. }
+        | Pattern::Tag(_)
+        | Pattern::NumLiteral(_)
+        | Pattern::FloatLiteral(_)
+        | Pattern::StrLiteral(_)
+        | Pattern::Underscore(_)
+        | Pattern::SingleQuote(_)
+        | Pattern::Tuple(_)
+        | Pattern::List(_)
+        | Pattern::NonBase10Literal { .. }
+        | Pattern::ListRest(_)
+        | Pattern::As(_, _)
+        | Pattern::OpaqueRef(_) => false,
+        Pattern::Apply(_, args) => args
+            .last()
+            .map_or(false, |a| pat_ends_with_spaces_conservative(&a.value)),
+        Pattern::RecordDestructure(_) => false,
+        Pattern::RequiredField(_, _) => unreachable!(),
+        Pattern::OptionalField(_, _) => unreachable!(),
+        Pattern::SpaceBefore(inner, _) => pat_ends_with_spaces_conservative(inner),
+        Pattern::SpaceAfter(_, _) => true,
+        Pattern::Malformed(_) | Pattern::MalformedIdent(_, _) => false,
+    }
 }
 
 /// Given a type alias and a value definition, join them into a AnnotatedBody
