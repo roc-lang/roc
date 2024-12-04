@@ -2041,6 +2041,7 @@ getLetter = \indexStr ->
     List.get ["a", "b", "c", "d"] index
 ```
 
+If you're working with [purity inference](#purity-inference) you'll want to use `try` and if your code is using `Task` you'll want to use `?.`
 ## [Advanced Concepts](#advanced-concepts) {#advanced-concepts}
 
 Here are some concepts you likely won't need as a beginner, but may want to know about eventually. This is listed as an appendix rather than the main tutorial, to emphasize that it's totally fine to stop reading here and go build things!
