@@ -653,7 +653,7 @@ fn parse_stmt_operator_chain<'a>(
                     ..
                 },
                 state,
-            )) if matches!(dbg!(expr_state.expr.value), Expr::Tag(..)) => {
+            )) if matches!(expr_state.expr.value, Expr::Tag(..)) => {
                 return parse_ability_def(expr_state, state, arena, implements, call_min_indent)
                     .map(|(td, s)| (MadeProgress, Stmt::TypeDef(td), s));
             }
