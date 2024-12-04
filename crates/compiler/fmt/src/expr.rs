@@ -894,6 +894,10 @@ pub fn expr_lift_spaces<'a, 'b: 'a>(
 ) -> Spaces<'a, Expr<'a>> {
     match expr {
         Expr::Apply(func, args, called_via) => {
+            if args.is_empty() {
+                return expr_lift_spaces(Parens::NotNeeded, arena, &func.value);
+            }
+
             let func_lifted = expr_lift_spaces(Parens::InApply, arena, &func.value);
             let args = arena.alloc_slice_copy(args);
             let mut res = if let Some(last) = args.last_mut() {
