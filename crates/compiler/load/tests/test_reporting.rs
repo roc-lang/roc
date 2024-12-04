@@ -10696,7 +10696,7 @@ All branches in an `if` must have the same type!
                 4│      f__arg = \x, y, z -> x + y + z
                         ^^^^^^
 
-                While snake case is allowed here, only a single consecutive underscore
+                Snake case is allowed here, but only a single consecutive underscore
                 should be used.
                 "
             ),

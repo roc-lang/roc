@@ -348,7 +348,7 @@ pub fn build_app() -> Command {
             .arg(
                 Arg::new(FLAG_MIGRATE)
                     .long(FLAG_MIGRATE)
-                    .help("Will fixup syntax to match the latest preferred style.  This can cause changes to variable names and more.")
+                    .help("Will change syntax to match the latest preferred style. This can cause changes to variable names and more.")
                     .action(ArgAction::SetTrue)
                     .required(false),
             )

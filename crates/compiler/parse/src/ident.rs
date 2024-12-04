@@ -446,7 +446,7 @@ fn chomp_opaque_ref(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
             } else {
                 let value = unsafe { std::str::from_utf8_unchecked(&buffer[..width]) };
                 if value.contains('_') {
-                    // we don't allow underscores in the middle of an identifier
+                    // we don't allow underscores in the middle of a type identifier
                     // but still parse them (and generate a malformed identifier)
                     // to give good error messages for this case
                     Err(BadIdent::UnderscoreInMiddle(pos.bump_column(width as u32)))
@@ -583,7 +583,7 @@ fn chomp_identifier_chain<'a>(
         // just one segment, starting with an uppercase letter; that's a tag
         let value = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
         if value.contains('_') {
-            // we don't allow underscores in the middle of an identifier
+            // we don't allow underscores in the middle of a tag identifier
             // but still parse them (and generate a malformed identifier)
             // to give good error messages for this case
             Err((
@@ -769,10 +769,10 @@ mod tests {
         let arena = Bump::new();
         assert_ident_parses_simple_access(&arena, "hello_world");
         assert_ident_parses_simple_access(&arena, "hello_world23");
-        assert_ident_parses_simple_access(&arena, "hello_world_this_is_quite_a_tag");
-        assert_ident_parses_simple_access(&arena, "hello_world_this_is_quite_a_tag_");
-        assert_ident_parses_simple_access(&arena, "hello_world_this_is_quite_a_tag23");
-        assert_ident_parses_simple_access(&arena, "hello_world_this_is_quite_a_tag23_");
+        assert_ident_parses_simple_access(&arena, "hello_world_this_is_quite_a_var");
+        assert_ident_parses_simple_access(&arena, "hello_world_this_is_quite_a_var_");
+        assert_ident_parses_simple_access(&arena, "hello_world_this_is_quite_a_var23");
+        assert_ident_parses_simple_access(&arena, "hello_world_this_is_quite_a_var23_");
     }
 
     #[test]

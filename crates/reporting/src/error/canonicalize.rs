@@ -1864,7 +1864,7 @@ fn to_bad_ident_pattern_report<'b>(
                 alloc.reflow("I am trying to parse an identifier here:"),
                 alloc.region(lines.convert_region(surroundings), severity),
                 alloc.concat([
-                    alloc.reflow(r"While snake case is allowed here, only a single consecutive underscore should be used.")
+                    alloc.reflow(r"Snake case is allowed here, but only a single consecutive underscore should be used.")
                 ]),
             ])
         }
