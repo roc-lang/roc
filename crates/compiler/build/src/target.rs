@@ -25,22 +25,6 @@ pub fn target_triple_str(target: Target) -> &'static str {
     }
 }
 
-pub fn target_zig_str(target: Target) -> &'static str {
-    // Zig has its own architecture mappings, defined here:
-    // https://github.com/ziglang/zig/blob/master/tools/process_headers.zig
-    //
-    // and an open proposal to unify them with the more typical "target triples":
-    // https://github.com/ziglang/zig/issues/4911
-    match target {
-        Target::LinuxArm64 => "aarch64-linux-gnu",
-        Target::LinuxX32 => "i386-linux-gnu",
-        Target::LinuxX64 => "x86_64-linux-gnu",
-        Target::MacArm64 => "aarch64-macos-none",
-        Target::MacX64 => "x86_64-macos-none",
-        _ => internal_error!("TODO gracefully handle unsupported target: {:?}", target),
-    }
-}
-
 pub fn init_arch(target: Target) {
     match target.architecture() {
         Architecture::X86_64 | Architecture::X86_32

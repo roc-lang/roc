@@ -14,11 +14,6 @@ impl IntrinsicName {
 }
 
 #[repr(u8)]
-pub enum DecWidth {
-    Dec,
-}
-
-#[repr(u8)]
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub enum FloatWidth {
     F32,
@@ -168,14 +163,6 @@ impl IntWidth {
             Self::U64 => "u64",
             Self::U128 => "u128",
         }
-    }
-}
-
-impl Index<DecWidth> for IntrinsicName {
-    type Output = str;
-
-    fn index(&self, _: DecWidth) -> &Self::Output {
-        self.options[0]
     }
 }
 

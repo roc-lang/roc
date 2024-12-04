@@ -5,9 +5,7 @@ use crate::annotation::{canonicalize_annotation, AnnotationFor};
 use crate::def::{canonicalize_defs, report_unused_imports, Def, DefKind};
 use crate::desugar::desugar_record_destructures;
 use crate::env::{Env, FxMode};
-use crate::expr::{
-    ClosureData, DbgLookup, Declarations, ExpectLookup, Expr, Output, PendingDerives,
-};
+use crate::expr::{ClosureData, Declarations, ExpectLookup, Expr, Output, PendingDerives};
 use crate::pattern::{
     canonicalize_record_destructs, BindingsFromPattern, Pattern, PermitShadows, RecordDestruct,
 };
@@ -137,7 +135,7 @@ pub struct Module {
     pub rigid_variables: RigidVariables,
     pub abilities_store: PendingAbilitiesStore,
     pub loc_expects: VecMap<Region, Vec<ExpectLookup>>,
-    pub loc_dbgs: VecMap<Symbol, DbgLookup>,
+    pub has_dbgs: bool,
     pub module_params: Option<ModuleParams>,
 }
 
@@ -188,7 +186,7 @@ pub struct ModuleOutput {
     pub pending_derives: PendingDerives,
     pub scope: Scope,
     pub loc_expects: VecMap<Region, Vec<ExpectLookup>>,
-    pub loc_dbgs: VecMap<Symbol, DbgLookup>,
+    pub has_dbgs: bool,
 }
 
 fn has_no_implementation(expr: &Expr) -> bool {
@@ -763,7 +761,7 @@ pub fn canonicalize_module_defs<'a>(
         symbols_from_requires,
         pending_derives,
         loc_expects: collected.expects,
-        loc_dbgs: collected.dbgs,
+        has_dbgs: collected.has_dbgs,
         exposed_symbols,
     }
 }

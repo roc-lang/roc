@@ -929,14 +929,6 @@ fn fmt_expect<'a>(buf: &mut Buf, condition: &'a Loc<Expr<'a>>, is_multiline: boo
     condition.format(buf, return_indent);
 }
 
-pub fn fmt_value_def(buf: &mut Buf, def: &roc_parse::ast::ValueDef, indent: u16) {
-    def.format(buf, indent);
-}
-
-pub fn fmt_type_def(buf: &mut Buf, def: &roc_parse::ast::TypeDef, indent: u16) {
-    def.format(buf, indent);
-}
-
 pub fn fmt_defs(buf: &mut Buf, defs: &Defs, indent: u16) {
     defs.format(buf, indent);
 }

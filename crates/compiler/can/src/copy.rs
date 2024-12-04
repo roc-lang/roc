@@ -217,7 +217,6 @@ pub fn deep_copy_type_vars_into_expr(
     deep_copy_expr_top(subs, var, expr)
 }
 
-#[allow(unused)] // TODO to be removed when this is used for the derivers
 pub fn deep_copy_expr_across_subs(
     source: &mut Subs,
     target: &mut Subs,
