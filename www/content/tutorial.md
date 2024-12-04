@@ -2032,7 +2032,7 @@ STATUS: Deprecated! For now, this may only work within non-PI contexts.
 
 Note: Right now, this can lead to confusing and unhelpful error messages.
 
-Roc also has a `?` postfix operator, which is like a version of the `try` keyword for `Task`s:
+Roc also has a `?` postfix operator, which behaves similar to the `try` keyword. An example:
 
 ```roc
 getLetter : Str -> Result Str [OutOfBounds, InvalidNumStr]
