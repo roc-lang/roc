@@ -763,8 +763,8 @@ impl RuntimeError {
                 record: _,
                 field: region,
             }
-            | RuntimeError::ReadIngestedFileError { region, .. } => *region,
-            RuntimeError::InvalidUnicodeCodePt(region) => *region,
+            | RuntimeError::ReadIngestedFileError { region, .. }
+            | RuntimeError::InvalidUnicodeCodePt(region) => *region,
             RuntimeError::UnresolvedTypeVar | RuntimeError::ErroneousType => Region::zero(),
             RuntimeError::LookupNotInScope { loc_name, .. } => loc_name.region,
             RuntimeError::OpaqueNotDefined { usage, .. } => usage.region,

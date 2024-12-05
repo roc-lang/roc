@@ -25,8 +25,9 @@ pub fn format_answer<'a>(arena: &'a Bump, answer: Expr<'_>) -> &'a str {
         Expr::Closure(_, _) => "<function>",
         _ => {
             let mut expr = roc_fmt::Buf::new_in(arena);
+            let flags = roc_fmt::annotation::MigrationFlags::new(false);
 
-            answer.format_with_options(&mut expr, Parens::NotNeeded, Newlines::Yes, 0);
+            answer.format_with_options(&mut expr, Parens::NotNeeded, Newlines::Yes, &flags, 0);
 
             expr.into_bump_str()
         }

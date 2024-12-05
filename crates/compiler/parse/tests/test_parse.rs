@@ -372,10 +372,10 @@ mod test_parse {
         let parsed = parse_module_defs(arena, state, ast::Defs::default());
         match parsed {
             Ok(_) => {
-                // dbg!(_state);
+                // eprintln!("{:?}", _state);
             }
             Err(_) => {
-                // dbg!(_fail, _state);
+                // eprintln!("{:?}, {:?}", _fail, _state);
                 panic!("Failed to parse!");
             }
         }

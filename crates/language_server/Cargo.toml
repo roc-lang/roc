@@ -40,3 +40,5 @@ log.workspace = true
 indoc.workspace = true
 env_logger = "0.10.1"
 futures.workspace = true
+roc_error_macros.workspace = true
+

@@ -1438,14 +1438,16 @@ pub fn constrain_expr(
                 return_value.region,
             ));
 
-            constrain_expr(
+            let return_con = constrain_expr(
                 types,
                 constraints,
                 env,
                 return_value.region,
                 &return_value.value,
                 expected_return_value,
-            )
+            );
+
+            constraints.exists([*return_var], return_con)
         }
         Tag {
             tag_union_var: variant_var,
@@ -3435,12 +3437,18 @@ fn constrain_let_def(
                         )
                     });
 
-                    // Ignored def must be effectful, otherwise it's dead code
-                    let effectful_constraint = Constraint::ExpectEffectful(
-                        fx_var,
-                        ExpectEffectfulReason::Ignored,
-                        def.loc_pattern.region,
-                    );
+                    let effectful_constraint = if def.loc_expr.value.contains_any_early_returns() {
+                        // If the statement has early returns, it doesn't need to be effectful to
+                        // potentially affect the output of the containing function
+                        Constraint::True
+                    } else {
+                        // If there are no early returns, it must be effectful or else it's dead code
+                        Constraint::ExpectEffectful(
+                            fx_var,
+                            ExpectEffectfulReason::Ignored,
+                            def.loc_pattern.region,
+                        )
+                    };
 
                     let enclosing_fx_constraint = constraints.fx_call(
                         fx_var,
@@ -3527,9 +3535,14 @@ fn constrain_stmt_def(
         generalizable,
     );
 
-    // Stmt expr must be effectful, otherwise it's dead code
-    let effectful_constraint =
-        Constraint::ExpectEffectful(fx_var, ExpectEffectfulReason::Stmt, region);
+    let effectful_constraint = if def.loc_expr.value.contains_any_early_returns() {
+        // If the statement has early returns, it doesn't need to be effectful to
+        // potentially affect the output of the containing function
+        Constraint::True
+    } else {
+        // If there are no early returns, it must be effectful or else it's dead code
+        Constraint::ExpectEffectful(fx_var, ExpectEffectfulReason::Stmt, region)
+    };
 
     let fx_call_kind = match fn_name {
         None => FxCallKind::Stmt,

@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use bumpalo::Bump;
 use roc_error_macros::{internal_error, user_error};
+use roc_fmt::annotation::MigrationFlags;
 use roc_fmt::def::fmt_defs;
 use roc_fmt::header::fmt_header;
 use roc_fmt::Buf;
@@ -63,14 +64,18 @@ fn is_roc_file(path: &Path) -> bool {
     matches!(path.extension().and_then(OsStr::to_str), Some("roc"))
 }
 
-pub fn format_files(files: std::vec::Vec<PathBuf>, mode: FormatMode) -> Result<(), String> {
+pub fn format_files(
+    files: std::vec::Vec<PathBuf>,
+    mode: FormatMode,
+    flags: &MigrationFlags,
+) -> Result<(), String> {
     let arena = Bump::new();
     let mut files_to_reformat = Vec::new(); // to track which files failed `roc format --check`
 
     for file in flatten_directories(files) {
         let src = std::fs::read_to_string(&file).unwrap();
 
-        match format_src(&arena, &src) {
+        match format_src(&arena, &src, flags) {
             Ok(buf) => {
                 match mode {
                     FormatMode::CheckOnly => {
@@ -183,12 +188,16 @@ pub enum FormatProblem {
     },
 }
 
-pub fn format_src(arena: &Bump, src: &str) -> Result<String, FormatProblem> {
+pub fn format_src(
+    arena: &Bump,
+    src: &str,
+    flags: &MigrationFlags,
+) -> Result<String, FormatProblem> {
     let ast = arena.alloc(parse_all(arena, src).unwrap_or_else(|e| {
         user_error!("Unexpected parse failure when parsing this formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, e)
     }));
     let mut buf = Buf::new_in(arena);
-    fmt_all(&mut buf, ast);
+    fmt_all(&mut buf, ast, flags);
 
     let reparsed_ast = match arena.alloc(parse_all(arena, buf.as_str())) {
         Ok(ast) => ast,
@@ -208,7 +217,9 @@ pub fn format_src(arena: &Bump, src: &str) -> Result<String, FormatProblem> {
     // the PartialEq implementation is returning `false` even when the Debug-formatted impl is exactly the same.
     // I don't have the patience to debug this right now, so let's leave it for another day...
     // TODO: fix PartialEq impl on ast types
-    if format!("{ast_normalized:?}") != format!("{reparsed_ast_normalized:?}") {
+    if !flags.at_least_one_active()
+        && format!("{ast_normalized:?}") != format!("{reparsed_ast_normalized:?}")
+    {
         return Err(FormatProblem::ReformattingChangedAst {
             formatted_src: buf.as_str().to_string(),
             ast_before: format!("{ast_normalized:#?}\n"),
@@ -219,7 +230,7 @@ pub fn format_src(arena: &Bump, src: &str) -> Result<String, FormatProblem> {
     // Now verify that the resultant formatting is _stable_ - i.e. that it doesn't change again if re-formatted
     let mut reformatted_buf = Buf::new_in(arena);
 
-    fmt_all(&mut reformatted_buf, reparsed_ast);
+    fmt_all(&mut reformatted_buf, reparsed_ast, flags);
 
     if buf.as_str() != reformatted_buf.as_str() {
         return Err(FormatProblem::ReformattingUnstable {
@@ -248,10 +259,10 @@ fn parse_all<'a>(arena: &'a Bump, src: &'a str) -> Result<FullAst<'a>, SyntaxErr
     })
 }
 
-fn fmt_all<'a>(buf: &mut Buf<'a>, ast: &'a FullAst) {
-    fmt_header(buf, &ast.header);
+fn fmt_all<'a>(buf: &mut Buf<'a>, ast: &'a FullAst, flags: &MigrationFlags) {
+    fmt_header(buf, &ast.header, flags);
 
-    fmt_defs(buf, &ast.defs, 0);
+    fmt_defs(buf, &ast.defs, flags, 0);
 
     buf.fmt_end_of_file();
 }
@@ -298,8 +309,9 @@ main =
     fn test_single_file_needs_reformatting() {
         let dir = tempdir().unwrap();
         let file_path = setup_test_file(dir.path(), "test1.roc", UNFORMATTED_ROC);
+        let flags = MigrationFlags::new(false);
 
-        let result = format_files(vec![file_path.clone()], FormatMode::CheckOnly);
+        let result = format_files(vec![file_path.clone()], FormatMode::CheckOnly, &flags);
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err(),
@@ -317,8 +329,9 @@ main =
         let dir = tempdir().unwrap();
         let file1 = setup_test_file(dir.path(), "test1.roc", UNFORMATTED_ROC);
         let file2 = setup_test_file(dir.path(), "test2.roc", UNFORMATTED_ROC);
+        let flags = MigrationFlags::new(false);
 
-        let result = format_files(vec![file1, file2], FormatMode::CheckOnly);
+        let result = format_files(vec![file1, file2], FormatMode::CheckOnly, &flags);
         assert!(result.is_err());
         let error_message = result.unwrap_err();
         assert!(error_message.contains("test1.roc") && error_message.contains("test2.roc"));
@@ -330,8 +343,9 @@ main =
     fn test_no_files_need_reformatting() {
         let dir = tempdir().unwrap();
         let file_path = setup_test_file(dir.path(), "formatted.roc", FORMATTED_ROC);
+        let flags = MigrationFlags::new(false);
 
-        let result = format_files(vec![file_path], FormatMode::CheckOnly);
+        let result = format_files(vec![file_path], FormatMode::CheckOnly, &flags);
         assert!(result.is_ok());
 
         cleanup_temp_dir(dir);
@@ -343,10 +357,12 @@ main =
         let file_formatted = setup_test_file(dir.path(), "formatted.roc", FORMATTED_ROC);
         let file1_unformated = setup_test_file(dir.path(), "test1.roc", UNFORMATTED_ROC);
         let file2_unformated = setup_test_file(dir.path(), "test2.roc", UNFORMATTED_ROC);
+        let flags = MigrationFlags::new(false);
 
         let result = format_files(
             vec![file_formatted, file1_unformated, file2_unformated],
             FormatMode::CheckOnly,
+            &flags,
         );
         assert!(result.is_err());
         let error_message = result.unwrap_err();

@@ -1,5 +1,5 @@
 use bumpalo::Bump;
-use roc_fmt::Buf;
+use roc_fmt::{annotation::MigrationFlags, Buf};
 use roc_parse::{
     ast::{Defs, Header, SpacesBefore},
     header::parse_module_defs,
@@ -40,12 +40,12 @@ impl<'a> Ast<'a> {
         })
     }
 
-    pub fn fmt(&self) -> FormattedAst<'a> {
+    pub fn fmt(&self, flags: &MigrationFlags) -> FormattedAst<'a> {
         let mut buf = Buf::new_in(self.arena);
 
-        roc_fmt::header::fmt_header(&mut buf, &self.module);
+        roc_fmt::header::fmt_header(&mut buf, &self.module, flags);
 
-        roc_fmt::def::fmt_defs(&mut buf, &self.defs, 0);
+        roc_fmt::def::fmt_defs(&mut buf, &self.defs, flags, 0);
 
         buf.fmt_end_of_file();
 

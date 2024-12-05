@@ -10,8 +10,8 @@ main =
 
     # what about this?
     "Bar"
-        |> B.y?
-            { config: "config" }
+    |> B.y?
+        { config: "config" }
 
     C.z "Bar"
 

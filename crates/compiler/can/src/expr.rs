@@ -411,6 +411,106 @@ impl Expr {
             Self::RuntimeError(..) => Category::Unknown,
         }
     }
+
+    pub fn contains_any_early_returns(&self) -> bool {
+        match self {
+            Self::Num { .. }
+            | Self::Int { .. }
+            | Self::Float { .. }
+            | Self::Str { .. }
+            | Self::IngestedFile { .. }
+            | Self::SingleQuote { .. }
+            | Self::Var { .. }
+            | Self::AbilityMember { .. }
+            | Self::ParamsVar { .. }
+            | Self::Closure(..)
+            | Self::EmptyRecord
+            | Self::RecordAccessor(_)
+            | Self::ZeroArgumentTag { .. }
+            | Self::OpaqueWrapFunction(_)
+            | Self::RuntimeError(..) => false,
+            Self::Return { .. } => true,
+            Self::List { loc_elems, .. } => loc_elems
+                .iter()
+                .any(|elem| elem.value.contains_any_early_returns()),
+            Self::When {
+                loc_cond, branches, ..
+            } => {
+                loc_cond.value.contains_any_early_returns()
+                    || branches.iter().any(|branch| {
+                        branch
+                            .guard
+                            .as_ref()
+                            .is_some_and(|guard| guard.value.contains_any_early_returns())
+                            || branch.value.value.contains_any_early_returns()
+                    })
+            }
+            Self::If {
+                branches,
+                final_else,
+                ..
+            } => {
+                final_else.value.contains_any_early_returns()
+                    || branches.iter().any(|(cond, then)| {
+                        cond.value.contains_any_early_returns()
+                            || then.value.contains_any_early_returns()
+                    })
+            }
+            Self::LetRec(defs, expr, _cycle_mark) => {
+                expr.value.contains_any_early_returns()
+                    || defs
+                        .iter()
+                        .any(|def| def.loc_expr.value.contains_any_early_returns())
+            }
+            Self::LetNonRec(def, expr) => {
+                def.loc_expr.value.contains_any_early_returns()
+                    || expr.value.contains_any_early_returns()
+            }
+            Self::Call(_func, args, _called_via) => args
+                .iter()
+                .any(|(_var, arg_expr)| arg_expr.value.contains_any_early_returns()),
+            Self::RunLowLevel { args, .. } | Self::ForeignCall { args, .. } => args
+                .iter()
+                .any(|(_var, arg_expr)| arg_expr.contains_any_early_returns()),
+            Self::Tuple { elems, .. } => elems
+                .iter()
+                .any(|(_var, loc_elem)| loc_elem.value.contains_any_early_returns()),
+            Self::Record { fields, .. } => fields
+                .iter()
+                .any(|(_field_name, field)| field.loc_expr.value.contains_any_early_returns()),
+            Self::RecordAccess { loc_expr, .. } => loc_expr.value.contains_any_early_returns(),
+            Self::TupleAccess { loc_expr, .. } => loc_expr.value.contains_any_early_returns(),
+            Self::RecordUpdate { updates, .. } => {
+                updates.iter().any(|(_field_name, field_update)| {
+                    field_update.loc_expr.value.contains_any_early_returns()
+                })
+            }
+            Self::ImportParams(_module_id, _region, params) => params
+                .as_ref()
+                .is_some_and(|(_var, p)| p.contains_any_early_returns()),
+            Self::Tag { arguments, .. } => arguments
+                .iter()
+                .any(|(_var, arg)| arg.value.contains_any_early_returns()),
+            Self::OpaqueRef { argument, .. } => argument.1.value.contains_any_early_returns(),
+            Self::Crash { msg, .. } => msg.value.contains_any_early_returns(),
+            Self::Dbg {
+                loc_message,
+                loc_continuation,
+                ..
+            } => {
+                loc_message.value.contains_any_early_returns()
+                    || loc_continuation.value.contains_any_early_returns()
+            }
+            Self::Expect {
+                loc_condition,
+                loc_continuation,
+                ..
+            } => {
+                loc_condition.value.contains_any_early_returns()
+                    || loc_continuation.value.contains_any_early_returns()
+            }
+        }
+    }
 }
 
 /// Stores exhaustiveness-checking metadata for a closure argument that may
@@ -1245,7 +1345,7 @@ pub fn canonicalize_expr<'a>(
 
             (loc_expr.value, output)
         }
-        ast::Expr::DbgStmt(_, _) => {
+        ast::Expr::DbgStmt { .. } => {
             internal_error!("DbgStmt should have been desugared by now")
         }
         ast::Expr::LowLevelDbg((source_location, source), message, continuation) => {
@@ -2546,7 +2646,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         | ast::Expr::Tag(_)
         | ast::Expr::OpaqueRef(_) => true,
         // Newlines are disallowed inside interpolation, and these all require newlines
-        ast::Expr::DbgStmt(_, _)
+        ast::Expr::DbgStmt { .. }
         | ast::Expr::LowLevelDbg(_, _, _)
         | ast::Expr::Return(_, _)
         | ast::Expr::When(_, _)
