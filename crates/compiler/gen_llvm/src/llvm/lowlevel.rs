@@ -1147,15 +1147,37 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             )
         }
         NumIntCast => {
-            arguments!(arg);
+            arguments_with_layouts!((arg, arg_layout));
 
             let to = basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout))
                 .into_int_type();
             let to_signed = intwidth_from_layout(layout).is_signed();
+            let from_signed = intwidth_from_layout(arg_layout).is_signed();
+            let extend = intwidth_from_layout(layout).stack_size()
+                > intwidth_from_layout(arg_layout).stack_size();
+            //Examples given with sizes of 32, 16, and 8
+            let result = match (from_signed, to_signed, extend) {
+                //I16 -> I32
+                (true, true, true) => {
+                    env.builder
+                        .build_int_s_extend(arg.into_int_value(), to, "inc_cast")
+                }
+                //U16 -> X32
+                (false, _, true) => {
+                    env.builder
+                        .build_int_z_extend(arg.into_int_value(), to, "inc_cast")
+                },
+                //I16 -> U32
+                (true,false,true)
+                //Any case where it is not an extension, also perhaps warn here?
+                | (_, _, false) => {
+                    Ok(env.builder
+                    .new_build_int_cast_sign_flag(arg.into_int_value(), to, to_signed, "inc_cast"))
+                }
+            };
 
-            env.builder
-                .new_build_int_cast_sign_flag(arg.into_int_value(), to, to_signed, "inc_cast")
-                .into()
+            let Ok(value) = result else { todo!() };
+            value.into()
         }
         NumToFloatCast => {
             arguments_with_layouts!((arg, arg_layout));
