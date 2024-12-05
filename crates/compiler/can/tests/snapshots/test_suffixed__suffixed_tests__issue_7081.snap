@@ -143,79 +143,70 @@ Defs {
                                         ident: "i",
                                     },
                                 ],
-                                @132-172 Apply(
-                                    @132-172 Var {
-                                        module_name: "Result",
-                                        ident: "try",
-                                    },
-                                    [
-                                        @132-152 Apply(
-                                            @132-152 Var {
-                                                module_name: "",
-                                                ident: "inc",
-                                            },
-                                            [
-                                                @132-133 Var {
-                                                    module_name: "",
-                                                    ident: "i",
+                                @113-189 Defs(
+                                    Defs {
+                                        tags: [
+                                            EitherIndex(2147483648),
+                                        ],
+                                        regions: [
+                                            @132-172,
+                                        ],
+                                        space_before: [
+                                            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                                        ],
+                                        space_after: [
+                                            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                                        ],
+                                        spaces: [],
+                                        type_defs: [],
+                                        value_defs: [
+                                            Body(
+                                                @113-117 Identifier {
+                                                    ident: "newi",
                                                 },
-                                            ],
-                                            BinOp(
-                                                Pizza,
-                                            ),
-                                        ),
-                                        @132-172 Closure(
-                                            [
-                                                @132-152 Identifier {
-                                                    ident: "#!0_arg",
-                                                },
-                                            ],
-                                            @132-172 Apply(
-                                                @132-172 Var {
-                                                    module_name: "Result",
-                                                    ident: "try",
-                                                },
-                                                [
+                                                @132-172 LowLevelTry(
                                                     @132-172 Apply(
-                                                        @132-172 Var {
+                                                        @169-172 Var {
                                                             module_name: "",
                                                             ident: "inc",
                                                         },
                                                         [
-                                                            @132-152 Var {
-                                                                module_name: "",
-                                                                ident: "#!0_arg",
-                                                            },
-                                                        ],
-                                                        BinOp(
-                                                            Pizza,
-                                                        ),
-                                                    ),
-                                                    @132-172 Closure(
-                                                        [
-                                                            @113-117 Identifier {
-                                                                ident: "newi",
-                                                            },
-                                                        ],
-                                                        @182-189 Apply(
-                                                            @182-184 Tag(
-                                                                "Ok",
+                                                            @132-152 LowLevelTry(
+                                                                @132-152 Apply(
+                                                                    @149-152 Var {
+                                                                        module_name: "",
+                                                                        ident: "inc",
+                                                                    },
+                                                                    [
+                                                                        @132-133 Var {
+                                                                            module_name: "",
+                                                                            ident: "i",
+                                                                        },
+                                                                    ],
+                                                                    Try,
+                                                                ),
+                                                                OperatorSuffix,
                                                             ),
-                                                            [
-                                                                @185-189 Var {
-                                                                    module_name: "",
-                                                                    ident: "newi",
-                                                                },
-                                                            ],
-                                                            Space,
-                                                        ),
+                                                        ],
+                                                        Try,
                                                     ),
-                                                ],
-                                                QuestionSuffix,
+                                                    OperatorSuffix,
+                                                ),
                                             ),
+                                        ],
+                                    },
+                                    @182-189 Apply(
+                                        @182-184 Tag(
+                                            "Ok",
                                         ),
-                                    ],
-                                    QuestionSuffix,
+                                        [
+                                            @185-189 Var {
+                                                module_name: "",
+                                                ident: "newi",
+                                            },
+                                        ],
+                                        Space,
+                                    ),
                                 ),
                             ),
                         ),
