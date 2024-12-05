@@ -2180,7 +2180,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::Dbg
         | Expr::DbgStmt { .. }
         | Expr::LowLevelDbg(_, _, _)
-        | Expr::LowLevelTry(_)
+        | Expr::LowLevelTry(_, _)
         | Expr::Return(_, _)
         | Expr::MalformedSuffixed(..)
         | Expr::PrecedenceConflict { .. }

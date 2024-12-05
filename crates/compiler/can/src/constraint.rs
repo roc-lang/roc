@@ -5,6 +5,7 @@ use std::sync::Arc;
 use crate::abilities::SpecializationId;
 use crate::exhaustive::{ExhaustiveContext, SketchedRows};
 use crate::expected::{Expected, PExpected};
+use crate::expr::TryKind;
 use roc_collections::soa::{index_push_new, slice_extend_new};
 use roc_module::ident::{IdentSuffix, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
@@ -643,12 +644,14 @@ impl Constraints {
         ok_payload_var: Variable,
         err_payload_var: Variable,
         region: Region,
+        kind: TryKind,
     ) -> Constraint {
         let constraint = TryTargetConstraint {
             target_type_index: result_type_index,
             ok_payload_var,
             err_payload_var,
             region,
+            kind,
         };
 
         let constraint_index = index_push_new(&mut self.try_target_constraints, constraint);
@@ -939,6 +942,7 @@ pub struct TryTargetConstraint {
     pub ok_payload_var: Variable,
     pub err_payload_var: Variable,
     pub region: Region,
+    pub kind: TryKind,
 }
 
 #[derive(Debug, Clone, Copy)]

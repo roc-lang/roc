@@ -6,6 +6,7 @@ use itertools::EitherOrBoth;
 use itertools::Itertools;
 use roc_can::constraint::{ExpectEffectfulReason, FxCallKind, FxSuffixKind};
 use roc_can::expected::{Expected, PExpected};
+use roc_can::expr::TryKind;
 use roc_collections::all::{HumanIndex, MutSet, SendMap};
 use roc_collections::VecMap;
 use roc_error_macros::internal_error;
@@ -472,13 +473,22 @@ pub fn type_problem<'b>(
                 severity,
             })
         }
-        InvalidTryTarget(region, actual_type) => {
-            let stack = [
-                alloc.concat([
+        InvalidTryTarget(region, actual_type, try_kind) => {
+            let invalid_usage_message = match try_kind {
+                TryKind::KeywordPrefix => alloc.concat([
                     alloc.reflow("This expression cannot be used as a "),
                     alloc.keyword("try"),
                     alloc.reflow(" target:"),
                 ]),
+                TryKind::OperatorSuffix => alloc.concat([
+                    alloc.reflow("This expression cannot be tried with the "),
+                    alloc.keyword("?"),
+                    alloc.reflow(" operator:"),
+                ]),
+            };
+
+            let stack = [
+                invalid_usage_message,
                 alloc.region(lines.convert_region(region), severity),
                 alloc.concat([
                     alloc.reflow("I expected a "),
@@ -2296,30 +2306,15 @@ fn format_category<'b>(
             alloc.text(" of type:"),
         ),
         TryTarget => (
-            alloc.concat([
-                this_is,
-                alloc.reflow(" a "),
-                alloc.keyword("try"),
-                alloc.reflow(" target"),
-            ]),
+            alloc.concat([this_is, alloc.reflow(" a try target")]),
             alloc.text(" of type:"),
         ),
         TrySuccess => (
-            alloc.concat([
-                this_is,
-                alloc.reflow(" a "),
-                alloc.keyword("try"),
-                alloc.reflow(" expression"),
-            ]),
+            alloc.concat([this_is, alloc.reflow(" a try expression")]),
             alloc.text(" that succeeds with type:"),
         ),
         TryFailure => (
-            alloc.concat([
-                this_is,
-                alloc.reflow(" a "),
-                alloc.keyword("try"),
-                alloc.reflow(" expression"),
-            ]),
+            alloc.concat([this_is, alloc.reflow(" a try expression")]),
             alloc.text(" that fails with type:"),
         ),
     }

@@ -415,6 +415,12 @@ pub enum TryTarget {
     Result,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResultTryKind {
+    KeywordPrefix,
+    OperatorSuffix,
+}
+
 /// A parsed expression. This uses lifetimes extensively for two reasons:
 ///
 /// 1. It uses Bump::alloc for all allocations, which returns a reference.
@@ -514,7 +520,7 @@ pub enum Expr<'a> {
     /// The `try` keyword that performs early return on errors
     Try,
     // This form of try is a desugared Result unwrapper
-    LowLevelTry(&'a Loc<Expr<'a>>),
+    LowLevelTry(&'a Loc<Expr<'a>>, ResultTryKind),
 
     // This form of debug is a desugared call to roc_dbg
     LowLevelDbg(&'a (&'a str, &'a str), &'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
@@ -702,7 +708,7 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         }
         Expr::LowLevelDbg(_, a, b) => is_expr_suffixed(&a.value) || is_expr_suffixed(&b.value),
         Expr::Try => false,
-        Expr::LowLevelTry(loc_expr) => is_expr_suffixed(&loc_expr.value),
+        Expr::LowLevelTry(loc_expr, _) => is_expr_suffixed(&loc_expr.value),
         Expr::UnaryOp(a, _) => is_expr_suffixed(&a.value),
         Expr::When(cond, branches) => {
             is_expr_suffixed(&cond.value) || branches.iter().any(|x| is_when_branch_suffixed(x))
@@ -976,7 +982,7 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                     expr_stack.push(&condition.value);
                     expr_stack.push(&cont.value);
                 }
-                LowLevelTry(loc_expr) => {
+                LowLevelTry(loc_expr, _) => {
                     expr_stack.push(&loc_expr.value);
                 }
                 Return(return_value, after_return) => {
@@ -2519,7 +2525,7 @@ impl<'a> Malformed for Expr<'a> {
             DbgStmt { first, extra_args, continuation } => first.is_malformed() || extra_args.iter().any(|a| a.is_malformed()) || continuation.is_malformed(),
             LowLevelDbg(_, condition, continuation) => condition.is_malformed() || continuation.is_malformed(),
             Try => false,
-            LowLevelTry(loc_expr) => loc_expr.is_malformed(),
+            LowLevelTry(loc_expr, _) => loc_expr.is_malformed(),
             Return(return_value, after_return) => return_value.is_malformed() || after_return.is_some_and(|ar| ar.is_malformed()),
             Apply(func, args, _) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
             BinOps(firsts, last) => firsts.iter().any(|(expr, _)| expr.is_malformed()) || last.is_malformed(),

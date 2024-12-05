@@ -917,6 +917,7 @@ fn solve(
                     ok_payload_var,
                     err_payload_var,
                     region,
+                    kind,
                 } = try_target_constraint;
 
                 let target_actual = either_type_index_to_var(
@@ -990,7 +991,7 @@ fn solve(
                     Failure(vars, actual_type, _expected_type, _bad_impls) => {
                         env.introduce(rank, &vars);
 
-                        let problem = TypeError::InvalidTryTarget(*region, actual_type);
+                        let problem = TypeError::InvalidTryTarget(*region, actual_type, *kind);
 
                         problems.push(problem);
 

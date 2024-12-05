@@ -11,8 +11,8 @@ use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
 use roc_parse::ast::{
-    is_expr_suffixed, AssignedField, Collection, Defs, ModuleImportParams, Pattern, StrLiteral,
-    StrSegment, TypeAnnotation, ValueDef, WhenBranch,
+    is_expr_suffixed, AssignedField, Collection, Defs, ModuleImportParams, Pattern, ResultTryKind,
+    StrLiteral, StrSegment, TryTarget, TypeAnnotation, ValueDef, WhenBranch,
 };
 use roc_problem::can::Problem;
 use roc_region::all::{Loc, Region};
@@ -44,7 +44,10 @@ fn new_op_call_expr<'a>(
             match right_without_spaces {
                 Try => {
                     let desugared_left = desugar_expr(env, scope, left);
-                    return Loc::at(region, Expr::LowLevelTry(desugared_left));
+                    return Loc::at(
+                        region,
+                        Expr::LowLevelTry(desugared_left, ResultTryKind::KeywordPrefix),
+                    );
                 }
                 Apply(&Loc { value: Try, .. }, arguments, _called_via) => {
                     let try_fn = desugar_expr(env, scope, arguments.first().unwrap());
@@ -60,10 +63,71 @@ fn new_op_call_expr<'a>(
 
                     return Loc::at(
                         region,
-                        Expr::LowLevelTry(env.arena.alloc(Loc::at(
-                            region,
-                            Expr::Apply(try_fn, args.into_bump_slice(), CalledVia::Try),
-                        ))),
+                        Expr::LowLevelTry(
+                            env.arena.alloc(Loc::at(
+                                region,
+                                Expr::Apply(try_fn, args.into_bump_slice(), CalledVia::Try),
+                            )),
+                            ResultTryKind::KeywordPrefix,
+                        ),
+                    );
+                }
+                TrySuffix {
+                    target: TryTarget::Result,
+                    expr: fn_expr,
+                } => {
+                    let loc_fn = env.arena.alloc(Loc::at(right.region, **fn_expr));
+                    let function = desugar_expr(env, scope, loc_fn);
+
+                    return Loc::at(
+                        region,
+                        LowLevelTry(
+                            env.arena.alloc(Loc::at(
+                                region,
+                                Expr::Apply(
+                                    function,
+                                    env.arena.alloc([desugar_expr(env, scope, left)]),
+                                    CalledVia::Try,
+                                ),
+                            )),
+                            ResultTryKind::OperatorSuffix,
+                        ),
+                    );
+                }
+                Apply(
+                    &Loc {
+                        value:
+                            TrySuffix {
+                                target: TryTarget::Result,
+                                expr: fn_expr,
+                            },
+                        region: fn_region,
+                    },
+                    loc_args,
+                    _called_via,
+                ) => {
+                    let loc_fn = env.arena.alloc(Loc::at(fn_region, *fn_expr));
+                    let function = desugar_expr(env, scope, loc_fn);
+
+                    let mut desugared_args = Vec::with_capacity_in(loc_args.len() + 1, env.arena);
+                    desugared_args.push(desugar_expr(env, scope, left));
+                    for loc_arg in &loc_args[..] {
+                        desugared_args.push(desugar_expr(env, scope, loc_arg));
+                    }
+
+                    return Loc::at(
+                        region,
+                        LowLevelTry(
+                            env.arena.alloc(Loc::at(
+                                region,
+                                Expr::Apply(
+                                    function,
+                                    desugared_args.into_bump_slice(),
+                                    CalledVia::Try,
+                                ),
+                            )),
+                            ResultTryKind::OperatorSuffix,
+                        ),
                     );
                 }
                 _ => {}
@@ -456,23 +520,32 @@ pub fn desugar_expr<'a>(
 
             env.arena.alloc(Loc { region, value })
         }
-        // desugar the sub_expression, but leave the TrySuffix as this will
-        // be unwrapped later in desugar_value_def_suffixed
         TrySuffix {
             expr: sub_expr,
             target,
         } => {
             let intermediate = env.arena.alloc(Loc::at(loc_expr.region, **sub_expr));
             let new_sub_loc_expr = desugar_expr(env, scope, intermediate);
-            let new_sub_expr = env.arena.alloc(new_sub_loc_expr.value);
 
-            env.arena.alloc(Loc::at(
-                loc_expr.region,
-                TrySuffix {
-                    expr: new_sub_expr,
-                    target: *target,
-                },
-            ))
+            match target {
+                TryTarget::Result => env.arena.alloc(Loc::at(
+                    loc_expr.region,
+                    LowLevelTry(new_sub_loc_expr, ResultTryKind::OperatorSuffix),
+                )),
+                TryTarget::Task => {
+                    let new_sub_expr = env.arena.alloc(new_sub_loc_expr.value);
+
+                    // desugar the sub_expression, but leave the TrySuffix as this will
+                    // be unwrapped later in desugar_value_def_suffixed
+                    env.arena.alloc(Loc::at(
+                        loc_expr.region,
+                        TrySuffix {
+                            expr: new_sub_expr,
+                            target: *target,
+                        },
+                    ))
+                }
+            }
         }
         RecordAccess(sub_expr, paths) => {
             let region = loc_expr.region;
@@ -965,8 +1038,43 @@ pub fn desugar_expr<'a>(
                 ))
             };
 
-            env.arena
-                .alloc(Loc::at(loc_expr.region, Expr::LowLevelTry(result_expr)))
+            env.arena.alloc(Loc::at(
+                loc_expr.region,
+                Expr::LowLevelTry(result_expr, ResultTryKind::KeywordPrefix),
+            ))
+        }
+        Apply(
+            Loc {
+                value:
+                    TrySuffix {
+                        target: TryTarget::Result,
+                        expr: fn_expr,
+                    },
+                region: fn_region,
+            },
+            loc_args,
+            _called_via,
+        ) => {
+            let loc_fn = env.arena.alloc(Loc::at(*fn_region, **fn_expr));
+            let function = desugar_expr(env, scope, loc_fn);
+
+            let mut desugared_args = Vec::with_capacity_in(loc_args.len(), env.arena);
+            for loc_arg in &loc_args[..] {
+                desugared_args.push(desugar_expr(env, scope, loc_arg));
+            }
+
+            let args_region =
+                Region::span_across(&loc_args[0].region, &loc_args[loc_args.len() - 1].region);
+
+            let result_expr = env.arena.alloc(Loc::at(
+                args_region,
+                Expr::Apply(function, desugared_args.into_bump_slice(), CalledVia::Try),
+            ));
+
+            env.arena.alloc(Loc::at(
+                loc_expr.region,
+                Expr::LowLevelTry(result_expr, ResultTryKind::OperatorSuffix),
+            ))
         }
         Apply(loc_fn, loc_args, called_via) => {
             let mut desugared_args = Vec::with_capacity_in(loc_args.len(), env.arena);
@@ -1138,7 +1246,7 @@ pub fn desugar_expr<'a>(
         }
 
         // note these only exist after desugaring
-        LowLevelDbg(_, _, _) | LowLevelTry(_) => loc_expr,
+        LowLevelDbg(_, _, _) | LowLevelTry(_, _) => loc_expr,
     }
 }
 

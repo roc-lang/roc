@@ -380,6 +380,7 @@ impl<'a> LowerParams<'a> {
                     ok_payload_var: _,
                     err_payload_var: _,
                     err_ext_var: _,
+                    kind: _,
                 } => {
                     expr_stack.push(&mut result_expr.value);
                 }

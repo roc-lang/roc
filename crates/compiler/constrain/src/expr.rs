@@ -870,6 +870,7 @@ pub fn constrain_expr(
             ok_payload_var,
             err_payload_var,
             err_ext_var,
+            kind,
         } => {
             let result_var_index = constraints.push_variable(*result_var);
             let result_expected_type = constraints.push_expected_type(ForReason(
@@ -891,6 +892,7 @@ pub fn constrain_expr(
                 *ok_payload_var,
                 *err_payload_var,
                 result_expr.region,
+                *kind,
             );
 
             let return_type_index = constraints.push_variable(*return_var);

@@ -5878,6 +5878,7 @@ pub fn with_hole<'a>(
             ok_payload_var,
             err_payload_var,
             err_ext_var,
+            kind: _,
         } => {
             let ok_symbol = env.unique_symbol();
             let err_symbol = env.unique_symbol();
