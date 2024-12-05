@@ -1,6 +1,7 @@
 use crate::{
     collection::{fmt_collection, Braces},
     expr::merge_spaces_conservative,
+    pattern::pattern_lift_spaces_after,
     spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT},
     Buf,
 };
@@ -963,11 +964,64 @@ pub fn ann_lift_spaces<'a, 'b: 'a>(
                 }
             }
         }
-        _ => Spaces {
+        TypeAnnotation::BoundVariable(_)
+        | TypeAnnotation::Inferred
+        | TypeAnnotation::Wildcard
+        | TypeAnnotation::Malformed(_) => Spaces {
             before: &[],
             item: *ann,
             after: &[],
         },
+        TypeAnnotation::Where(inner, clauses) => {
+            let new_inner = ann_lift_spaces_before(arena, &inner.value);
+            let new_clauses = arena.alloc_slice_copy(clauses);
+            let after = if let Some(last) = new_clauses.last_mut() {
+                let lifted = implements_clause_lift_spaces_after(arena, &last.value);
+                last.value = lifted.item;
+                lifted.after
+            } else {
+                &[]
+            };
+            Spaces {
+                before: new_inner.before,
+                item: TypeAnnotation::Where(arena.alloc(Loc::at_zero(new_inner.item)), new_clauses),
+                after,
+            }
+        }
+        TypeAnnotation::As(ann, comments, type_header) => {
+            let new_ann = ann_lift_spaces_before(arena, &ann.value);
+            let new_header = type_head_lift_spaces_after(arena, type_header);
+            Spaces {
+                before: new_ann.before,
+                item: TypeAnnotation::As(
+                    arena.alloc(Loc::at_zero(new_ann.item)),
+                    comments,
+                    new_header.item,
+                ),
+                after: new_header.after,
+            }
+        }
+    }
+}
+
+fn implements_clause_lift_spaces_after<'a, 'b: 'a>(
+    arena: &'a Bump,
+    value: &ImplementsClause<'b>,
+) -> SpacesAfter<'a, ImplementsClause<'a>> {
+    let new_abilities = arena.alloc_slice_copy(value.abilities);
+    let after = if let Some(last) = new_abilities.last_mut() {
+        let lifted = ann_lift_spaces_after(arena, &last.value);
+        last.value = lifted.item;
+        lifted.after
+    } else {
+        &[]
+    };
+    SpacesAfter {
+        item: ImplementsClause {
+            var: value.var,
+            abilities: new_abilities,
+        },
+        after,
     }
 }
 
@@ -990,6 +1044,27 @@ pub fn ann_lift_spaces_after<'a, 'b: 'a>(
     SpacesAfter {
         item: lifted.item.maybe_before(arena, lifted.before),
         after: lifted.after,
+    }
+}
+
+pub fn type_head_lift_spaces_after<'a, 'b: 'a>(
+    arena: &'a Bump,
+    header: &TypeHeader<'b>,
+) -> SpacesAfter<'a, TypeHeader<'a>> {
+    let new_vars = arena.alloc_slice_copy(header.vars);
+    let after = if let Some(last) = new_vars.last_mut() {
+        let lifted = pattern_lift_spaces_after(arena, &last.value);
+        last.value = lifted.item;
+        lifted.after
+    } else {
+        &[]
+    };
+    SpacesAfter {
+        item: TypeHeader {
+            name: header.name,
+            vars: new_vars,
+        },
+        after,
     }
 }
 

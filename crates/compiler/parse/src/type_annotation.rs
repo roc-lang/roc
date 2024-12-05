@@ -111,7 +111,9 @@ fn parse_type_alias_after_as<'a>() -> impl Parser<'a, TypeHeader<'a>, EType<'a>>
     )
 }
 
-fn term<'a>(stop_at_surface_has: bool) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
+fn term_fragment<'a>(
+    stop_at_surface_has: bool,
+) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
     one_of!(
         loc_wildcard(),
         loc_inferred(),
@@ -124,8 +126,14 @@ fn term<'a>(stop_at_surface_has: bool) -> impl Parser<'a, Loc<TypeAnnotation<'a>
             EType::TTagUnion,
             tag_union_type(stop_at_surface_has)
         )),
-        loc(specialize_err(EType::TApply, concrete_type())),
         loc(parse_type_variable(stop_at_surface_has)),
+    )
+}
+
+fn term<'a>(stop_at_surface_has: bool) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
+    one_of!(
+        term_fragment(stop_at_surface_has),
+        loc(specialize_err(EType::TApply, concrete_type())),
         fail(EType::TStart),
     )
     .trace("type_annotation:term")
@@ -137,19 +145,8 @@ fn term_or_apply_with_as<'a>(
     map_with_arena(
         and(
             one_of!(
-                loc_wildcard(),
-                loc_inferred(),
-                specialize_err(EType::TInParens, loc_type_in_parens(stop_at_surface_has)),
-                loc(specialize_err(
-                    EType::TRecord,
-                    record_type(stop_at_surface_has)
-                )),
-                loc(specialize_err(
-                    EType::TTagUnion,
-                    tag_union_type(stop_at_surface_has)
-                )),
+                term_fragment(stop_at_surface_has),
                 loc(applied_type(stop_at_surface_has)),
-                loc(parse_type_variable(stop_at_surface_has)),
                 fail(EType::TStart),
             ),
             // Inline alias notation, e.g. [Nil, Cons a (List a)] as List a

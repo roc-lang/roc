@@ -37,17 +37,22 @@ pub fn fmt_spaces_with_newline_mode(
         mode,
         SpacesNewlineMode::SkipNewlinesAtStart | SpacesNewlineMode::SkipNewlinesAtBoth
     ) {
-        while let Some(CommentOrNewline::Newline) = spaces.first() {
-            spaces = &spaces[1..];
-        }
+        let skip_count = spaces
+            .iter()
+            .take_while(|s| *s == &CommentOrNewline::Newline)
+            .count();
+        spaces = &spaces[skip_count..];
     }
     if matches!(
         mode,
         SpacesNewlineMode::SkipNewlinesAtEnd | SpacesNewlineMode::SkipNewlinesAtBoth
     ) {
-        while let Some(CommentOrNewline::Newline) = spaces.last() {
-            spaces = &spaces[..spaces.len() - 1];
-        }
+        let skip_count = spaces
+            .iter()
+            .rev()
+            .take_while(|s| *s == &CommentOrNewline::Newline)
+            .count();
+        spaces = &spaces[..spaces.len() - skip_count];
     }
     fmt_spaces(buf, spaces.iter(), indent);
 }
