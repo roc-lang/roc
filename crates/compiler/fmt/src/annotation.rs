@@ -67,34 +67,13 @@ impl Newlines {
     }
 }
 
-pub struct MigrationFlags {
-    pub(crate) snakify: bool,
-}
-
-impl MigrationFlags {
-    pub fn new(snakify: bool) -> Self {
-        MigrationFlags { snakify }
-    }
-
-    pub fn at_least_one_active(&self) -> bool {
-        self.snakify
-    }
-}
-
 pub trait Formattable {
     fn is_multiline(&self) -> bool;
 
-    fn format_with_options(
-        &self,
-        buf: &mut Buf,
-        _parens: Parens,
-        _newlines: Newlines,
-        flags: &MigrationFlags,
-        indent: u16,
-    );
+    fn format_with_options(&self, buf: &mut Buf, _parens: Parens, _newlines: Newlines, indent: u16);
 
-    fn format(&self, buf: &mut Buf, flags: &MigrationFlags, indent: u16) {
-        self.format_with_options(buf, Parens::NotNeeded, Newlines::No, flags, indent);
+    fn format(&self, buf: &mut Buf, indent: u16) {
+        self.format_with_options(buf, Parens::NotNeeded, Newlines::No, indent);
     }
 }
 
@@ -107,19 +86,12 @@ where
         (*self).is_multiline()
     }
 
-    fn format_with_options(
-        &self,
-        buf: &mut Buf,
-        parens: Parens,
-        newlines: Newlines,
-        flags: &MigrationFlags,
-        indent: u16,
-    ) {
-        (*self).format_with_options(buf, parens, newlines, flags, indent)
+    fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
+        (*self).format_with_options(buf, parens, newlines, indent)
     }
 
-    fn format(&self, buf: &mut Buf, flags: &MigrationFlags, indent: u16) {
-        (*self).format(buf, flags, indent)
+    fn format(&self, buf: &mut Buf, indent: u16) {
+        (*self).format(buf, indent)
     }
 }
 
@@ -141,20 +113,13 @@ where
         self.value.is_multiline()
     }
 
-    fn format_with_options(
-        &self,
-        buf: &mut Buf,
-        parens: Parens,
-        newlines: Newlines,
-        flags: &MigrationFlags,
-        indent: u16,
-    ) {
+    fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
         self.value
-            .format_with_options(buf, parens, newlines, flags, indent)
+            .format_with_options(buf, parens, newlines, indent)
     }
 
-    fn format(&self, buf: &mut Buf, flags: &MigrationFlags, indent: u16) {
-        self.value.format(buf, flags, indent)
+    fn format(&self, buf: &mut Buf, indent: u16) {
+        self.value.format(buf, indent)
     }
 }
 
@@ -168,7 +133,6 @@ impl<'a> Formattable for UppercaseIdent<'a> {
         buf: &mut Buf,
         _parens: Parens,
         _newlines: Newlines,
-        _flags: &MigrationFlags,
         _indent: u16,
     ) {
         buf.push_str((*self).into())
@@ -231,22 +195,15 @@ impl<'a> Formattable for TypeAnnotation<'a> {
         }
     }
 
-    fn format_with_options(
-        &self,
-        buf: &mut Buf,
-        parens: Parens,
-        newlines: Newlines,
-        flags: &MigrationFlags,
-        indent: u16,
-    ) {
-        fmt_ty_ann(self, buf, flags, indent, parens, newlines, false);
+    fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
+        fmt_ty_ann(self, buf, indent, parens, newlines, false);
     }
 }
 
 fn fmt_ty_ann(
     me: &TypeAnnotation<'_>,
     buf: &mut Buf<'_>,
-    flags: &MigrationFlags,
+
     indent: u16,
     parens: Parens,
     newlines: Newlines,
@@ -292,7 +249,6 @@ fn fmt_ty_ann(
                 fmt_ty_ann(
                     &argument.value,
                     buf,
-                    flags,
                     indent,
                     Parens::InFunctionType,
                     Newlines::Yes,
@@ -315,7 +271,7 @@ fn fmt_ty_ann(
             buf.spaces(1);
 
             ret.value
-                .format_with_options(buf, Parens::InFunctionType, Newlines::No, flags, indent);
+                .format_with_options(buf, Parens::InFunctionType, Newlines::No, indent);
 
             if needs_parens {
                 buf.push(')')
@@ -357,17 +313,12 @@ fn fmt_ty_ann(
                     let arg = arg.extract_spaces();
                     fmt_spaces(buf, arg.before.iter(), arg_indent);
                     buf.ensure_ends_with_newline();
-                    arg.item.format_with_options(
-                        buf,
-                        Parens::InApply,
-                        Newlines::Yes,
-                        flags,
-                        arg_indent,
-                    );
+                    arg.item
+                        .format_with_options(buf, Parens::InApply, Newlines::Yes, arg_indent);
                     fmt_spaces(buf, arg.after.iter(), arg_indent);
                 } else {
                     buf.spaces(1);
-                    arg.format_with_options(buf, Parens::InApply, Newlines::No, flags, arg_indent);
+                    arg.format_with_options(buf, Parens::InApply, Newlines::No, arg_indent);
                 }
             }
 
@@ -389,24 +340,24 @@ fn fmt_ty_ann(
         }
 
         TypeAnnotation::TagUnion { tags, ext } => {
-            fmt_collection(buf, flags, indent, Braces::Square, *tags, newlines);
-            fmt_ext(ext, buf, flags, indent);
+            fmt_collection(buf, indent, Braces::Square, *tags, newlines);
+            fmt_ext(ext, buf, indent);
         }
 
         TypeAnnotation::Tuple { elems: fields, ext } => {
-            fmt_ty_collection(buf, flags, indent, Braces::Round, *fields, newlines);
-            fmt_ext(ext, buf, flags, indent);
+            fmt_ty_collection(buf, indent, Braces::Round, *fields, newlines);
+            fmt_ext(ext, buf, indent);
         }
 
         TypeAnnotation::Record { fields, ext } => {
-            fmt_collection(buf, flags, indent, Braces::Curly, *fields, newlines);
-            fmt_ext(ext, buf, flags, indent);
+            fmt_collection(buf, indent, Braces::Curly, *fields, newlines);
+            fmt_ext(ext, buf, indent);
         }
 
         TypeAnnotation::As(lhs, _spaces, TypeHeader { name, vars }) => {
             // TODO use _spaces?
             lhs.value
-                .format_with_options(buf, Parens::InFunctionType, Newlines::No, flags, indent);
+                .format_with_options(buf, Parens::InFunctionType, Newlines::No, indent);
             buf.spaces(1);
             buf.push_str("as");
             buf.spaces(1);
@@ -414,12 +365,12 @@ fn fmt_ty_ann(
             for var in *vars {
                 buf.spaces(1);
                 var.value
-                    .format_with_options(buf, Parens::NotNeeded, Newlines::No, flags, indent);
+                    .format_with_options(buf, Parens::NotNeeded, Newlines::No, indent);
             }
         }
 
         TypeAnnotation::Where(annot, implements_clauses) => {
-            annot.format_with_options(buf, parens, newlines, flags, indent);
+            annot.format_with_options(buf, parens, newlines, indent);
             if implements_clauses
                 .iter()
                 .any(|implements| implements.is_multiline())
@@ -436,7 +387,7 @@ fn fmt_ty_ann(
                     ","
                 });
                 buf.spaces(1);
-                has.format_with_options(buf, parens, newlines, flags, indent);
+                has.format_with_options(buf, parens, newlines, indent);
             }
         }
         TypeAnnotation::Malformed(raw) => {
@@ -473,7 +424,7 @@ fn lower<'a, 'b: 'a>(
 
 fn fmt_ty_collection(
     buf: &mut Buf<'_>,
-    flags: &MigrationFlags,
+
     indent: u16,
     braces: Braces,
     items: Collection<'_, Loc<TypeAnnotation<'_>>>,
@@ -510,15 +461,10 @@ fn fmt_ty_collection(
     let new_items =
         Collection::with_items_and_comments(arena, new_items.into_bump_slice(), final_comments);
 
-    fmt_collection(buf, flags, indent, braces, new_items, newlines)
+    fmt_collection(buf, indent, braces, new_items, newlines)
 }
 
-fn fmt_ext(
-    ext: &Option<&Loc<TypeAnnotation<'_>>>,
-    buf: &mut Buf<'_>,
-    flags: &MigrationFlags,
-    indent: u16,
-) {
+fn fmt_ext(ext: &Option<&Loc<TypeAnnotation<'_>>>, buf: &mut Buf<'_>, indent: u16) {
     if let Some(loc_ext_ann) = *ext {
         let me = ann_lift_spaces(buf.text.bump(), &loc_ext_ann.value);
         let parens_needed = !me.before.is_empty() || ext_needs_parens(me.item);
@@ -526,11 +472,11 @@ fn fmt_ext(
             // We need to make sure to not have whitespace before the ext of a type,
             // since that would make it parse as something else.
             buf.push('(');
-            loc_ext_ann.value.format(buf, flags, indent + INDENT);
+            loc_ext_ann.value.format(buf, indent + INDENT);
             buf.indent(indent);
             buf.push(')');
         } else {
-            loc_ext_ann.value.format(buf, flags, indent + INDENT);
+            loc_ext_ann.value.format(buf, indent + INDENT);
         }
     }
 }
@@ -586,16 +532,9 @@ impl<'a> Formattable for AssignedField<'a, TypeAnnotation<'a>> {
         is_multiline_assigned_field_help(self)
     }
 
-    fn format_with_options(
-        &self,
-        buf: &mut Buf,
-        _parens: Parens,
-        newlines: Newlines,
-        flags: &MigrationFlags,
-        indent: u16,
-    ) {
+    fn format_with_options(&self, buf: &mut Buf, _parens: Parens, newlines: Newlines, indent: u16) {
         // we abuse the `Newlines` type to decide between multiline or single-line layout
-        format_assigned_field_help(self, buf, flags, indent, 1, newlines == Newlines::Yes);
+        format_assigned_field_help(self, buf, indent, 1, newlines == Newlines::Yes);
     }
 }
 
@@ -604,16 +543,9 @@ impl<'a> Formattable for AssignedField<'a, Expr<'a>> {
         is_multiline_assigned_field_help(self)
     }
 
-    fn format_with_options(
-        &self,
-        buf: &mut Buf,
-        _parens: Parens,
-        newlines: Newlines,
-        flags: &MigrationFlags,
-        indent: u16,
-    ) {
+    fn format_with_options(&self, buf: &mut Buf, _parens: Parens, newlines: Newlines, indent: u16) {
         // we abuse the `Newlines` type to decide between multiline or single-line layout
-        format_assigned_field_help(self, buf, flags, indent, 0, newlines == Newlines::Yes);
+        format_assigned_field_help(self, buf, indent, 0, newlines == Newlines::Yes);
     }
 }
 
@@ -632,7 +564,7 @@ fn is_multiline_assigned_field_help<T: Formattable>(afield: &AssignedField<'_, T
 fn format_assigned_field_help<T>(
     zelf: &AssignedField<T>,
     buf: &mut Buf,
-    flags: &MigrationFlags,
+
     indent: u16,
     separator_spaces: usize,
     is_multiline: bool,
@@ -658,7 +590,7 @@ fn format_assigned_field_help<T>(
             buf.indent(indent);
             buf.push(':');
             buf.spaces(1);
-            ann.value.format(buf, flags, indent);
+            ann.value.format(buf, indent);
         }
         OptionalValue(name, spaces, ann) => {
             if is_multiline {
@@ -676,7 +608,7 @@ fn format_assigned_field_help<T>(
             buf.indent(indent);
             buf.push('?');
             buf.spaces(1);
-            ann.value.format(buf, flags, indent);
+            ann.value.format(buf, indent);
         }
         IgnoredValue(name, spaces, ann) => {
             if is_multiline {
@@ -694,7 +626,7 @@ fn format_assigned_field_help<T>(
             buf.spaces(separator_spaces);
             buf.push(':');
             buf.spaces(1);
-            ann.value.format(buf, flags, indent);
+            ann.value.format(buf, indent);
         }
         LabelOnly(name) => {
             if is_multiline {
@@ -706,24 +638,10 @@ fn format_assigned_field_help<T>(
         }
         AssignedField::SpaceBefore(sub_field, spaces) => {
             fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
-            format_assigned_field_help(
-                sub_field,
-                buf,
-                flags,
-                indent,
-                separator_spaces,
-                is_multiline,
-            );
+            format_assigned_field_help(sub_field, buf, indent, separator_spaces, is_multiline);
         }
         AssignedField::SpaceAfter(sub_field, spaces) => {
-            format_assigned_field_help(
-                sub_field,
-                buf,
-                flags,
-                indent,
-                separator_spaces,
-                is_multiline,
-            );
+            format_assigned_field_help(sub_field, buf, indent, separator_spaces, is_multiline);
             fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
         }
     }
@@ -744,7 +662,7 @@ impl<'a> Formattable for Tag<'a> {
         buf: &mut Buf,
         _parens: Parens,
         _newlines: Newlines,
-        flags: &MigrationFlags,
+
         indent: u16,
     ) {
         let is_multiline = self.is_multiline();
@@ -762,14 +680,13 @@ impl<'a> Formattable for Tag<'a> {
                             buf,
                             Parens::InApply,
                             Newlines::No,
-                            flags,
                             arg_indent,
                         );
                     }
                 } else {
                     for arg in *args {
                         buf.spaces(1);
-                        arg.format_with_options(buf, Parens::InApply, Newlines::No, flags, indent);
+                        arg.format_with_options(buf, Parens::InApply, Newlines::No, indent);
                     }
                 }
             }
@@ -784,14 +701,7 @@ impl<'a> Formattable for ImplementsClause<'a> {
         false
     }
 
-    fn format_with_options(
-        &self,
-        buf: &mut Buf,
-        parens: Parens,
-        newlines: Newlines,
-        flags: &MigrationFlags,
-        indent: u16,
-    ) {
+    fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
         buf.push_str(self.var.value.extract_spaces().item);
         buf.spaces(1);
         buf.push_str(roc_parse::keyword::IMPLEMENTS);
@@ -803,7 +713,7 @@ impl<'a> Formattable for ImplementsClause<'a> {
                 buf.push('&');
                 buf.spaces(1);
             }
-            ab.format_with_options(buf, parens, newlines, flags, indent);
+            ab.format_with_options(buf, parens, newlines, indent);
         }
     }
 }
@@ -816,30 +726,23 @@ impl<'a> Formattable for AbilityImpls<'a> {
         }
     }
 
-    fn format_with_options(
-        &self,
-        buf: &mut Buf,
-        parens: Parens,
-        newlines: Newlines,
-        flags: &MigrationFlags,
-        indent: u16,
-    ) {
+    fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
         match self {
             AbilityImpls::AbilityImpls(impls) => {
                 if newlines == Newlines::Yes {
                     buf.newline();
                     buf.indent(indent);
                 }
-                fmt_collection(buf, flags, indent, Braces::Curly, *impls, Newlines::No);
+                fmt_collection(buf, indent, Braces::Curly, *impls, Newlines::No);
             }
             AbilityImpls::SpaceBefore(impls, spaces) => {
                 buf.newline();
                 buf.indent(indent);
                 fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
-                impls.format_with_options(buf, parens, Newlines::No, flags, indent);
+                impls.format_with_options(buf, parens, Newlines::No, indent);
             }
             AbilityImpls::SpaceAfter(impls, spaces) => {
-                impls.format_with_options(buf, parens, newlines, flags, indent);
+                impls.format_with_options(buf, parens, newlines, indent);
                 fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
             }
         }
@@ -856,34 +759,27 @@ impl<'a> Formattable for ImplementsAbility<'a> {
         }
     }
 
-    fn format_with_options(
-        &self,
-        buf: &mut Buf,
-        parens: Parens,
-        newlines: Newlines,
-        flags: &MigrationFlags,
-        indent: u16,
-    ) {
+    fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
         match self {
             ImplementsAbility::ImplementsAbility { ability, impls } => {
                 if newlines == Newlines::Yes {
                     buf.newline();
                     buf.indent(indent);
                 }
-                ability.format_with_options(buf, parens, newlines, flags, indent);
+                ability.format_with_options(buf, parens, newlines, indent);
                 if let Some(impls) = impls {
                     buf.spaces(1);
-                    impls.format_with_options(buf, parens, newlines, flags, indent);
+                    impls.format_with_options(buf, parens, newlines, indent);
                 }
             }
             ImplementsAbility::SpaceBefore(ab, spaces) => {
                 buf.newline();
                 buf.indent(indent);
                 fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
-                ab.format_with_options(buf, parens, Newlines::No, flags, indent)
+                ab.format_with_options(buf, parens, Newlines::No, indent)
             }
             ImplementsAbility::SpaceAfter(ab, spaces) => {
-                ab.format_with_options(buf, parens, newlines, flags, indent);
+                ab.format_with_options(buf, parens, newlines, indent);
                 fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
             }
         }
@@ -900,14 +796,7 @@ impl<'a> Formattable for ImplementsAbilities<'a> {
         }
     }
 
-    fn format_with_options(
-        &self,
-        buf: &mut Buf,
-        parens: Parens,
-        newlines: Newlines,
-        flags: &MigrationFlags,
-        indent: u16,
-    ) {
+    fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
         match self {
             ImplementsAbilities::Implements(has_abilities) => {
                 if newlines == Newlines::Yes {
@@ -916,23 +805,16 @@ impl<'a> Formattable for ImplementsAbilities<'a> {
                 }
                 buf.push_str(roc_parse::keyword::IMPLEMENTS);
                 buf.spaces(1);
-                fmt_collection(
-                    buf,
-                    flags,
-                    indent,
-                    Braces::Square,
-                    *has_abilities,
-                    Newlines::No,
-                );
+                fmt_collection(buf, indent, Braces::Square, *has_abilities, Newlines::No);
             }
             ImplementsAbilities::SpaceBefore(has_abilities, spaces) => {
                 buf.newline();
                 buf.indent(indent);
                 fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
-                has_abilities.format_with_options(buf, parens, Newlines::No, flags, indent)
+                has_abilities.format_with_options(buf, parens, Newlines::No, indent)
             }
             ImplementsAbilities::SpaceAfter(has_abilities, spaces) => {
-                has_abilities.format_with_options(buf, parens, newlines, flags, indent);
+                has_abilities.format_with_options(buf, parens, newlines, indent);
                 fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
             }
         }
@@ -1056,14 +938,7 @@ impl<'a> Formattable for Node<'a> {
         }
     }
 
-    fn format_with_options(
-        &self,
-        buf: &mut Buf,
-        parens: Parens,
-        newlines: Newlines,
-        flags: &MigrationFlags,
-        indent: u16,
-    ) {
+    fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
         match self {
             Node::DelimitedSequence(braces, lefts, right) => {
                 buf.indent(indent);
@@ -1074,7 +949,7 @@ impl<'a> Formattable for Node<'a> {
                         fmt_spaces(buf, sp.iter(), indent);
                     }
 
-                    l.format_with_options(buf, parens, newlines, flags, indent);
+                    l.format_with_options(buf, parens, newlines, indent);
                 }
 
                 if !right.is_empty() {
@@ -1085,7 +960,7 @@ impl<'a> Formattable for Node<'a> {
                 buf.push(braces.end());
             }
             Node::TypeAnnotation(type_annotation) => {
-                type_annotation.format_with_options(buf, parens, newlines, flags, indent);
+                type_annotation.format_with_options(buf, parens, newlines, indent);
             }
         }
     }
@@ -1222,12 +1097,11 @@ impl<'a, V: Formattable> Formattable for NodeSpaces<'a, V> {
         buf: &mut Buf,
         parens: crate::annotation::Parens,
         newlines: Newlines,
-        flags: &MigrationFlags,
+
         indent: u16,
     ) {
         fmt_spaces(buf, self.before.iter(), indent);
-        self.item
-            .format_with_options(buf, parens, newlines, flags, indent);
+        self.item.format_with_options(buf, parens, newlines, indent);
         fmt_spaces(buf, self.after.iter(), indent);
     }
 }

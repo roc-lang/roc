@@ -35,7 +35,7 @@ impl Braces {
 
 pub fn fmt_collection<'a, 'buf, T: ExtractSpaces<'a> + Formattable + std::fmt::Debug>(
     buf: &mut Buf<'buf>,
-    flags: &crate::annotation::MigrationFlags,
+
     indent: u16,
     braces: Braces,
     items: Collection<'a, T>,
@@ -110,7 +110,7 @@ pub fn fmt_collection<'a, 'buf, T: ExtractSpaces<'a> + Formattable + std::fmt::D
             }
 
             buf.indent(item_indent);
-            item.item.format(buf, flags, item_indent);
+            item.item.format(buf, item_indent);
 
             buf.indent(item_indent);
             buf.push(',');
@@ -153,7 +153,7 @@ pub fn fmt_collection<'a, 'buf, T: ExtractSpaces<'a> + Formattable + std::fmt::D
                 buf.spaces(1);
             }
 
-            item.format(buf, flags, indent);
+            item.format(buf, indent);
             if iter.peek().is_some() {
                 buf.push(',');
             }
