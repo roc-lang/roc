@@ -1,4 +1,4 @@
-SpaceAfter(
+@0-5 SpaceAfter(
     DbgStmt {
         first: @4-5 Var {
             module_name: "",

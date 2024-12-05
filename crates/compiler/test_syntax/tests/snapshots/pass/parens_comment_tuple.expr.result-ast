@@ -1,4 +1,4 @@
-SpaceAfter(
+@0-9 SpaceAfter(
     Tuple(
         [
             @1-6 ParensAround(
