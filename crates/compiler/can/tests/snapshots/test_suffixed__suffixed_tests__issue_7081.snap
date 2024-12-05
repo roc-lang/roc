@@ -178,15 +178,10 @@ Defs {
                                                                         ident: "inc",
                                                                     },
                                                                     [
-                                                                        @132-133 SpaceAfter(
-                                                                            Var {
-                                                                                module_name: "",
-                                                                                ident: "i",
-                                                                            },
-                                                                            [
-                                                                                Newline,
-                                                                            ],
-                                                                        ),
+                                                                        @132-133 Var {
+                                                                            module_name: "",
+                                                                            ident: "i",
+                                                                        },
                                                                     ],
                                                                     Try,
                                                                 ),

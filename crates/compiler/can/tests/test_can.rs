@@ -892,7 +892,9 @@ mod test_can {
 
         assert_eq!(cond_args.len(), 2);
 
-        let ok_tag = assert_try_expr(&cond_args[0].1.value);
+        assert_str_value(&cond_args[0].1.value, "123");
+
+        let ok_tag = assert_try_expr(&cond_args[1].1.value);
         let tag_args = assert_tag_application(ok_tag, "Ok");
 
         assert_eq!(tag_args.len(), 1);
