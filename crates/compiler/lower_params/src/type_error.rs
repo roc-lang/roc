@@ -105,7 +105,7 @@ pub fn remove_module_param_arguments(
             | TypeError::ExpectedEffectful(_, _)
             | TypeError::UnsuffixedEffectfulFunction(_, _)
             | TypeError::SuffixedPureFunction(_, _)
-            | TypeError::InvalidTryTarget(_, _) => {}
+            | TypeError::InvalidTryTarget(_, _, _) => {}
         }
     }
 }

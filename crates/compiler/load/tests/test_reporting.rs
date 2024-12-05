@@ -14998,11 +14998,12 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        try_with_non_result_target,
+        keyword_try_with_non_result_target,
         indoc!(
             r#"
             invalidTry = \{} ->
-                x = try 64
+                nonResult = "abc"
+                x = try nonResult
 
                 Ok (x * 2)
 
@@ -15014,12 +15015,41 @@ All branches in an `if` must have the same type!
 
     This expression cannot be used as a `try` target:
 
-    5│          x = try 64
-                        ^^
+    6│          x = try nonResult
+                        ^^^^^^^^^
 
     I expected a Result, but it actually has type:
 
-        Num *
+        Str
+
+    Hint: Did you forget to wrap the value with an `Ok` or an `Err` tag?
+    "
+    );
+
+    test_report!(
+        question_try_with_non_result_target,
+        indoc!(
+            r#"
+            invalidTry = \{} ->
+                nonResult = "abc"
+                x = nonResult?
+
+                Ok (x * 2)
+
+            invalidTry {}
+            "#
+        ),
+        @r"
+    ── INVALID TRY TARGET in /code/proj/Main.roc ───────────────────────────────────
+
+    This expression cannot be tried with the `?` operator:
+
+    6│          x = nonResult?
+                    ^^^^^^^^^^
+
+    I expected a Result, but it actually has type:
+
+        Str
 
     Hint: Did you forget to wrap the value with an `Ok` or an `Err` tag?
     "
@@ -15062,7 +15092,7 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        try_prefix_in_pipe,
+        keyword_try_prefix_in_pipe,
         indoc!(
             r#"
             readFile : Str -> Str
@@ -15097,7 +15127,7 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        try_suffix_in_pipe,
+        keyword_try_suffix_in_pipe,
         indoc!(
             r#"
             readFile : Str -> Str
@@ -15127,6 +15157,41 @@ All branches in an `if` must have the same type!
         Str
 
     But |> needs its 1st argument to be:
+
+        Result ok a
+    "
+    );
+
+    test_report!(
+        question_try_in_pipe,
+        indoc!(
+            r#"
+            readFile : Str -> Str
+
+            getFileContents : Str -> Result Str _
+            getFileContents = \filePath ->
+                contents =
+                    readFile filePath
+                    |> Result.mapErr? ErrWrapper
+
+                contents
+
+            getFileContents "file.txt"
+            "#
+        ),
+        @r"
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+
+    This 1st argument to this function has an unexpected type:
+
+     9│>              readFile filePath
+    10│               |> Result.mapErr? ErrWrapper
+
+    This `readFile` call produces:
+
+        Str
+
+    But this function needs its 1st argument to be:
 
         Result ok a
     "

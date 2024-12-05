@@ -201,7 +201,7 @@ impl<'a> Formattable for Expr<'a> {
                 buf.indent(indent);
                 buf.push_str("try");
             }
-            LowLevelTry(_) => unreachable!(
+            LowLevelTry(_, _) => unreachable!(
                 "LowLevelTry should only exist after desugaring, not during formatting"
             ),
             Return(return_value, after_return) => {
@@ -370,7 +370,7 @@ pub fn expr_is_multiline(me: &Expr<'_>, comments_only: bool) -> bool {
         | Expr::Crash
         | Expr::Dbg
         | Expr::Try => false,
-        Expr::LowLevelTry(_) => {
+        Expr::LowLevelTry(_, _) => {
             unreachable!("LowLevelTry should only exist after desugaring, not during formatting")
         }
 

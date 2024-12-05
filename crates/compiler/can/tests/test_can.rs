@@ -803,6 +803,104 @@ mod test_can {
     }
 
     #[test]
+    fn question_suffix_simple() {
+        let src = indoc!(
+            r#"
+                (Str.toU64 "123")?
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems, Vec::new());
+
+        // Assert that we desugar to:
+        //
+        // Try(Str.toU64 "123")
+
+        let cond_expr = assert_try_expr(&out.loc_expr.value);
+        let cond_args = assert_func_call(cond_expr, "toU64", CalledVia::Space, &out.interns);
+
+        assert_eq!(cond_args.len(), 1);
+        assert_str_value(&cond_args[0].1.value, "123");
+    }
+
+    #[test]
+    fn question_suffix_after_function() {
+        let src = indoc!(
+            r#"
+                Str.toU64? "123"
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems, Vec::new());
+
+        // Assert that we desugar to:
+        //
+        // Try(Str.toU64 "123")
+
+        let cond_expr = assert_try_expr(&out.loc_expr.value);
+        let cond_args = assert_func_call(cond_expr, "toU64", CalledVia::Try, &out.interns);
+
+        assert_eq!(cond_args.len(), 1);
+        assert_str_value(&cond_args[0].1.value, "123");
+    }
+
+    #[test]
+    fn question_suffix_pipe() {
+        let src = indoc!(
+            r#"
+                "123" |> Str.toU64?
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems, Vec::new());
+
+        // Assert that we desugar to:
+        //
+        // Try(Str.toU64 "123")
+
+        let cond_expr = assert_try_expr(&out.loc_expr.value);
+        let cond_args = assert_func_call(cond_expr, "toU64", CalledVia::Try, &out.interns);
+
+        assert_eq!(cond_args.len(), 1);
+        assert_str_value(&cond_args[0].1.value, "123");
+    }
+
+    #[test]
+    fn question_suffix_pipe_nested() {
+        let src = indoc!(
+            r#"
+                "123" |> Str.toU64? (Ok 123)?
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems, Vec::new());
+
+        // Assert that we desugar to:
+        //
+        // Try(Str.toU64 "123" Try(Ok 123))
+
+        let cond_expr = assert_try_expr(&out.loc_expr.value);
+        let cond_args = assert_func_call(cond_expr, "toU64", CalledVia::Try, &out.interns);
+
+        assert_eq!(cond_args.len(), 1);
+
+        let ok_tag = assert_try_expr(&cond_args[0].1.value);
+        let tag_args = assert_tag_application(ok_tag, "Ok");
+
+        assert_eq!(tag_args.len(), 1);
+
+        assert_num_value(&tag_args[0].1.value, 123);
+    }
+
+    #[test]
     fn try_desugar_plain_prefix() {
         let src = indoc!(
             r#"
@@ -970,6 +1068,16 @@ mod test_can {
                 "Expr was not a Call with CalledVia={:?}: {:?}",
                 called_via, expr
             ),
+        }
+    }
+
+    fn assert_tag_application(expr: &Expr, tag_name: &str) -> Vec<(Variable, Loc<Expr>)> {
+        match expr {
+            Expr::LetNonRec(_, loc_expr) => assert_tag_application(&loc_expr.value, tag_name),
+            Expr::Tag {
+                name, arguments, ..
+            } if *name == tag_name.into() => arguments.clone(),
+            _ => panic!("Expr was not a Tag named {tag_name:?}: {expr:?}",),
         }
     }
 

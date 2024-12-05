@@ -19,7 +19,7 @@ use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentId, ModuleId, Symbol};
-use roc_parse::ast::{self, Defs, PrecedenceConflict, StrLiteral};
+use roc_parse::ast::{self, Defs, PrecedenceConflict, ResultTryKind, StrLiteral};
 use roc_parse::ident::Accessor;
 use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
@@ -337,6 +337,7 @@ pub enum Expr {
         ok_payload_var: Variable,
         err_payload_var: Variable,
         err_ext_var: Variable,
+        kind: TryKind,
     },
 
     Return {
@@ -346,6 +347,12 @@ pub enum Expr {
 
     /// Compiles, but will crash if reached
     RuntimeError(RuntimeError),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TryKind {
+    KeywordPrefix,
+    OperatorSuffix,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1397,7 +1404,7 @@ pub fn canonicalize_expr<'a>(
                 output,
             )
         }
-        ast::Expr::LowLevelTry(loc_expr) => {
+        ast::Expr::LowLevelTry(loc_expr, kind) => {
             let (loc_result_expr, output) =
                 canonicalize_expr(env, var_store, scope, loc_expr.region, &loc_expr.value);
 
@@ -1415,6 +1422,10 @@ pub fn canonicalize_expr<'a>(
                     ok_payload_var: var_store.fresh(),
                     err_payload_var: var_store.fresh(),
                     err_ext_var: var_store.fresh(),
+                    kind: match kind {
+                        ResultTryKind::KeywordPrefix => TryKind::KeywordPrefix,
+                        ResultTryKind::OperatorSuffix => TryKind::OperatorSuffix,
+                    },
                 },
                 output,
             )
@@ -2394,6 +2405,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
             ok_payload_var,
             err_payload_var,
             err_ext_var,
+            kind,
         } => {
             let loc_result_expr = Loc {
                 region: result_expr.region,
@@ -2407,6 +2419,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
                 ok_payload_var,
                 err_payload_var,
                 err_ext_var,
+                kind,
             }
         }
 
@@ -2704,7 +2717,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         | ast::Expr::MalformedIdent(_, _)
         | ast::Expr::Tag(_)
         | ast::Expr::OpaqueRef(_) => true,
-        ast::Expr::LowLevelTry(loc_expr) => is_valid_interpolation(&loc_expr.value),
+        ast::Expr::LowLevelTry(loc_expr, _) => is_valid_interpolation(&loc_expr.value),
         // Newlines are disallowed inside interpolation, and these all require newlines
         ast::Expr::DbgStmt { .. }
         | ast::Expr::LowLevelDbg(_, _, _)

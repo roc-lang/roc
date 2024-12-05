@@ -727,7 +727,7 @@ impl<'a> Normalize<'a> for Expr<'a> {
                 arena.alloc(b.normalize(arena)),
             ),
             Expr::Try => Expr::Try,
-            Expr::LowLevelTry(a) => Expr::LowLevelTry(arena.alloc(a.normalize(arena))),
+            Expr::LowLevelTry(a, kind) => Expr::LowLevelTry(arena.alloc(a.normalize(arena)), kind),
             Expr::Return(a, b) => Expr::Return(
                 arena.alloc(a.normalize(arena)),
                 b.map(|loc_b| &*arena.alloc(loc_b.normalize(arena))),

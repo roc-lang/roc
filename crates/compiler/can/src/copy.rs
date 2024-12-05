@@ -725,6 +725,7 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             ok_payload_var,
             err_payload_var,
             err_ext_var,
+            kind,
         } => Try {
             result_expr: Box::new(result_expr.map(|e| go_help!(e))),
             result_var: sub!(*result_var),
@@ -732,6 +733,7 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             ok_payload_var: sub!(*ok_payload_var),
             err_payload_var: sub!(*err_payload_var),
             err_ext_var: sub!(*err_ext_var),
+            kind: *kind,
         },
 
         RuntimeError(err) => RuntimeError(err.clone()),
