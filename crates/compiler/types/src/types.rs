@@ -3483,6 +3483,7 @@ pub enum Reason {
     CrashArg,
     ImportParams(ModuleId),
     FunctionOutput,
+    TryResult,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -3532,8 +3533,19 @@ pub enum Category {
 
     Expect,
     Dbg,
-    Return,
+
+    TryTarget,
+    TrySuccess,
+    TryFailure,
+
+    Return(EarlyReturnKind),
     Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EarlyReturnKind {
+    Return,
+    Try,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

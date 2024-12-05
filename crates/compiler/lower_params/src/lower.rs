@@ -373,6 +373,16 @@ impl<'a> LowerParams<'a> {
                     expr_stack.push(&mut loc_message.value);
                     expr_stack.push(&mut loc_continuation.value);
                 }
+                Try {
+                    result_expr,
+                    result_var: _,
+                    return_var: _,
+                    ok_payload_var: _,
+                    err_payload_var: _,
+                    err_ext_var: _,
+                } => {
+                    expr_stack.push(&mut result_expr.value);
+                }
                 Return {
                     return_value,
                     return_var: _,

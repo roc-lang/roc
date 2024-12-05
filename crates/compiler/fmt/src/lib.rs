@@ -19,17 +19,38 @@ pub struct Buf<'a> {
     newlines_to_flush: usize,
     beginning_of_line: bool,
     line_indent: u16,
+    flags: MigrationFlags,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct MigrationFlags {
+    pub(crate) snakify: bool,
+}
+
+impl MigrationFlags {
+    pub fn new(snakify: bool) -> Self {
+        MigrationFlags { snakify }
+    }
+
+    pub fn at_least_one_active(&self) -> bool {
+        self.snakify
+    }
 }
 
 impl<'a> Buf<'a> {
-    pub fn new_in(arena: &'a Bump) -> Buf<'a> {
+    pub fn new_in(arena: &'a Bump, flags: MigrationFlags) -> Buf<'a> {
         Buf {
             text: String::new_in(arena),
             line_indent: 0,
             spaces_to_flush: 0,
             newlines_to_flush: 0,
             beginning_of_line: true,
+            flags,
         }
+    }
+
+    pub fn flags(&self) -> MigrationFlags {
+        self.flags
     }
 
     pub fn as_str(&'a self) -> &'a str {

@@ -9,7 +9,7 @@ use roc_problem::can::{
 };
 use roc_problem::Severity;
 use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Loc, Region};
-use roc_types::types::AliasKind;
+use roc_types::types::{AliasKind, EarlyReturnKind};
 use std::path::PathBuf;
 
 use crate::error::r#type::suggest;
@@ -1350,18 +1350,25 @@ pub fn can_problem<'b>(
             title = report.title;
         }
 
-        Problem::ReturnOutsideOfFunction { region } => {
+        Problem::ReturnOutsideOfFunction {
+            region,
+            return_kind,
+        } => {
+            let return_keyword;
+            (title, return_keyword) = match return_kind {
+                EarlyReturnKind::Return => ("RETURN OUTSIDE OF FUNCTION".to_string(), "return"),
+                EarlyReturnKind::Try => ("TRY OUTSIDE OF FUNCTION".to_string(), "try"),
+            };
+
             doc = alloc.stack([
                 alloc.concat([
                     alloc.reflow("This "),
-                    alloc.keyword("return"),
-                    alloc.reflow(" statement doesn't belong to a function:"),
+                    alloc.keyword(return_keyword),
+                    alloc.reflow(" doesn't belong to a function:"),
                 ]),
                 alloc.region(lines.convert_region(region), severity),
                 alloc.reflow("I wouldn't know where to return to if I used it!"),
             ]);
-
-            title = "RETURN OUTSIDE OF FUNCTION".to_string();
         }
 
         Problem::StatementsAfterReturn { region } => {

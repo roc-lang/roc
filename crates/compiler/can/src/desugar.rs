@@ -44,7 +44,7 @@ fn new_op_call_expr<'a>(
             match right_without_spaces {
                 Try => {
                     let desugared_left = desugar_expr(env, scope, left);
-                    return desugar_try_expr(env, scope, desugared_left);
+                    return Loc::at(region, Expr::LowLevelTry(desugared_left));
                 }
                 Apply(&Loc { value: Try, .. }, arguments, _called_via) => {
                     let try_fn = desugar_expr(env, scope, arguments.first().unwrap());
@@ -58,13 +58,12 @@ fn new_op_call_expr<'a>(
                             .map(|a| desugar_expr(env, scope, a)),
                     );
 
-                    return desugar_try_expr(
-                        env,
-                        scope,
-                        env.arena.alloc(Loc::at(
-                            right.region,
+                    return Loc::at(
+                        region,
+                        Expr::LowLevelTry(env.arena.alloc(Loc::at(
+                            region,
                             Expr::Apply(try_fn, args.into_bump_slice(), CalledVia::Try),
-                        )),
+                        ))),
                     );
                 }
                 _ => {}
@@ -957,13 +956,17 @@ pub fn desugar_expr<'a>(
                     desugared_args.push(desugar_expr(env, scope, loc_arg));
                 }
 
+                let args_region =
+                    Region::span_across(&loc_args[0].region, &loc_args[loc_args.len() - 1].region);
+
                 env.arena.alloc(Loc::at(
-                    loc_expr.region,
+                    args_region,
                     Expr::Apply(function, desugared_args.into_bump_slice(), CalledVia::Try),
                 ))
             };
 
-            env.arena.alloc(desugar_try_expr(env, scope, result_expr))
+            env.arena
+                .alloc(Loc::at(loc_expr.region, Expr::LowLevelTry(result_expr)))
         }
         Apply(loc_fn, loc_args, called_via) => {
             let mut desugared_args = Vec::with_capacity_in(loc_args.len(), env.arena);
@@ -1134,75 +1137,9 @@ pub fn desugar_expr<'a>(
             })
         }
 
-        // note this only exists after desugaring
-        LowLevelDbg(_, _, _) => loc_expr,
+        // note these only exist after desugaring
+        LowLevelDbg(_, _, _) | LowLevelTry(_) => loc_expr,
     }
-}
-
-pub fn desugar_try_expr<'a>(
-    env: &mut Env<'a>,
-    scope: &mut Scope,
-    result_expr: &'a Loc<Expr<'a>>,
-) -> Loc<Expr<'a>> {
-    let region = result_expr.region;
-    let ok_symbol = env.arena.alloc(scope.gen_unique_symbol_name().to_string());
-    let err_symbol = env.arena.alloc(scope.gen_unique_symbol_name().to_string());
-
-    let ok_branch = env.arena.alloc(WhenBranch {
-        patterns: env.arena.alloc([Loc::at(
-            region,
-            Pattern::Apply(
-                env.arena.alloc(Loc::at(region, Pattern::Tag("Ok"))),
-                env.arena
-                    .alloc([Loc::at(region, Pattern::Identifier { ident: ok_symbol })]),
-            ),
-        )]),
-        value: Loc::at(
-            region,
-            Expr::Var {
-                module_name: "",
-                ident: ok_symbol,
-            },
-        ),
-        guard: None,
-    });
-
-    let err_branch = env.arena.alloc(WhenBranch {
-        patterns: env.arena.alloc([Loc::at(
-            region,
-            Pattern::Apply(
-                env.arena.alloc(Loc::at(region, Pattern::Tag("Err"))),
-                env.arena
-                    .alloc([Loc::at(region, Pattern::Identifier { ident: err_symbol })]),
-            ),
-        )]),
-        value: Loc::at(
-            region,
-            Expr::Return(
-                env.arena.alloc(Loc::at(
-                    region,
-                    Expr::Apply(
-                        env.arena.alloc(Loc::at(region, Expr::Tag("Err"))),
-                        &*env.arena.alloc([&*env.arena.alloc(Loc::at(
-                            region,
-                            Expr::Var {
-                                module_name: "",
-                                ident: err_symbol,
-                            },
-                        ))]),
-                        CalledVia::Try,
-                    ),
-                )),
-                None,
-            ),
-        ),
-        guard: None,
-    });
-
-    Loc::at(
-        region,
-        Expr::When(result_expr, &*env.arena.alloc([&*ok_branch, &*err_branch])),
-    )
 }
 
 fn desugar_str_segments<'a>(

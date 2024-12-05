@@ -4,10 +4,9 @@ extern crate indoc;
 #[cfg(test)]
 mod test_fmt {
     use bumpalo::Bump;
-    use roc_fmt::annotation::MigrationFlags;
     use roc_fmt::def::fmt_defs;
     use roc_fmt::header::fmt_header;
-    use roc_fmt::Buf;
+    use roc_fmt::{Buf, MigrationFlags};
     use roc_parse::ast::{Defs, Header, SpacesBefore};
     use roc_parse::header::{self, parse_module_defs};
     use roc_parse::state::State;
@@ -37,12 +36,11 @@ mod test_fmt {
         state: State<'a>,
         buf: &mut Buf<'_>,
     ) {
-        let flags = MigrationFlags::new(false);
-        fmt_header(buf, header, &flags);
+        fmt_header(buf, header);
 
         match parse_module_defs(arena, state, Defs::default()) {
             Ok(loc_defs) => {
-                fmt_defs(buf, &loc_defs, &flags, 0);
+                fmt_defs(buf, &loc_defs, 0);
             }
             Err(error) => {
                 let src = if src.len() > 1000 {
@@ -67,7 +65,8 @@ mod test_fmt {
             Ok((actual, state)) => {
                 use roc_parse::normalize::Normalize;
 
-                let mut buf = Buf::new_in(&arena);
+                let flags = MigrationFlags::new(false);
+                let mut buf = Buf::new_in(&arena, flags);
 
                 fmt_module_and_defs(&arena, src, &actual, state, &mut buf);
 
@@ -96,7 +95,7 @@ mod test_fmt {
                 }
 
                 // Now verify that the resultant formatting is _stable_ - i.e. that it doesn't change again if re-formatted
-                let mut reformatted_buf = Buf::new_in(&arena);
+                let mut reformatted_buf = Buf::new_in(&arena, flags);
 
                 fmt_module_and_defs(&arena, output, &reparsed_ast, state, &mut reformatted_buf);
 

@@ -452,6 +452,7 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
         ),
         Dbg { .. } => todo!(),
         Expect { .. } => todo!(),
+        Try { .. } => todo!(),
         Return { .. } => todo!(),
         RuntimeError(_) => todo!(),
     }
