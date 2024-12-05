@@ -2306,30 +2306,15 @@ fn format_category<'b>(
             alloc.text(" of type:"),
         ),
         TryTarget => (
-            alloc.concat([
-                this_is,
-                alloc.reflow(" a "),
-                alloc.keyword("try"),
-                alloc.reflow(" target"),
-            ]),
+            alloc.concat([this_is, alloc.reflow(" a try target")]),
             alloc.text(" of type:"),
         ),
         TrySuccess => (
-            alloc.concat([
-                this_is,
-                alloc.reflow(" a "),
-                alloc.keyword("try"),
-                alloc.reflow(" expression"),
-            ]),
+            alloc.concat([this_is, alloc.reflow(" a try expression")]),
             alloc.text(" that succeeds with type:"),
         ),
         TryFailure => (
-            alloc.concat([
-                this_is,
-                alloc.reflow(" a "),
-                alloc.keyword("try"),
-                alloc.reflow(" expression"),
-            ]),
+            alloc.concat([this_is, alloc.reflow(" a try expression")]),
             alloc.text(" that fails with type:"),
         ),
     }

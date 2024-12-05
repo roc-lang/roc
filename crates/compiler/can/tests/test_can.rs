@@ -890,7 +890,7 @@ mod test_can {
         let cond_expr = assert_try_expr(&out.loc_expr.value);
         let cond_args = assert_func_call(cond_expr, "toU64", CalledVia::Try, &out.interns);
 
-        assert_eq!(cond_args.len(), 1);
+        assert_eq!(cond_args.len(), 2);
 
         let ok_tag = assert_try_expr(&cond_args[0].1.value);
         let tag_args = assert_tag_application(ok_tag, "Ok");
