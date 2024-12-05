@@ -4,10 +4,10 @@ use std::path::{Path, PathBuf};
 
 use bumpalo::Bump;
 use roc_error_macros::{internal_error, user_error};
-use roc_fmt::annotation::MigrationFlags;
 use roc_fmt::def::fmt_defs;
 use roc_fmt::header::fmt_header;
 use roc_fmt::Buf;
+use roc_fmt::MigrationFlags;
 use roc_parse::ast::{FullAst, SpacesBefore};
 use roc_parse::header::parse_module_defs;
 use roc_parse::normalize::Normalize;
@@ -67,7 +67,7 @@ fn is_roc_file(path: &Path) -> bool {
 pub fn format_files(
     files: std::vec::Vec<PathBuf>,
     mode: FormatMode,
-    flags: &MigrationFlags,
+    flags: MigrationFlags,
 ) -> Result<(), String> {
     let arena = Bump::new();
     let mut files_to_reformat = Vec::new(); // to track which files failed `roc format --check`
@@ -188,16 +188,12 @@ pub enum FormatProblem {
     },
 }
 
-pub fn format_src(
-    arena: &Bump,
-    src: &str,
-    flags: &MigrationFlags,
-) -> Result<String, FormatProblem> {
+pub fn format_src(arena: &Bump, src: &str, flags: MigrationFlags) -> Result<String, FormatProblem> {
     let ast = arena.alloc(parse_all(arena, src).unwrap_or_else(|e| {
         user_error!("Unexpected parse failure when parsing this formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, e)
     }));
-    let mut buf = Buf::new_in(arena);
-    fmt_all(&mut buf, ast, flags);
+    let mut buf = Buf::new_in(arena, flags);
+    fmt_all(&mut buf, ast);
 
     let reparsed_ast = match arena.alloc(parse_all(arena, buf.as_str())) {
         Ok(ast) => ast,
@@ -228,9 +224,9 @@ pub fn format_src(
     }
 
     // Now verify that the resultant formatting is _stable_ - i.e. that it doesn't change again if re-formatted
-    let mut reformatted_buf = Buf::new_in(arena);
+    let mut reformatted_buf = Buf::new_in(arena, flags);
 
-    fmt_all(&mut reformatted_buf, reparsed_ast, flags);
+    fmt_all(&mut reformatted_buf, reparsed_ast);
 
     if buf.as_str() != reformatted_buf.as_str() {
         return Err(FormatProblem::ReformattingUnstable {
@@ -259,10 +255,10 @@ fn parse_all<'a>(arena: &'a Bump, src: &'a str) -> Result<FullAst<'a>, SyntaxErr
     })
 }
 
-fn fmt_all<'a>(buf: &mut Buf<'a>, ast: &'a FullAst, flags: &MigrationFlags) {
-    fmt_header(buf, &ast.header, flags);
+fn fmt_all<'a>(buf: &mut Buf<'a>, ast: &'a FullAst) {
+    fmt_header(buf, &ast.header);
 
-    fmt_defs(buf, &ast.defs, flags, 0);
+    fmt_defs(buf, &ast.defs, 0);
 
     buf.fmt_end_of_file();
 }
@@ -311,7 +307,7 @@ main =
         let file_path = setup_test_file(dir.path(), "test1.roc", UNFORMATTED_ROC);
         let flags = MigrationFlags::new(false);
 
-        let result = format_files(vec![file_path.clone()], FormatMode::CheckOnly, &flags);
+        let result = format_files(vec![file_path.clone()], FormatMode::CheckOnly, flags);
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err(),
@@ -331,7 +327,7 @@ main =
         let file2 = setup_test_file(dir.path(), "test2.roc", UNFORMATTED_ROC);
         let flags = MigrationFlags::new(false);
 
-        let result = format_files(vec![file1, file2], FormatMode::CheckOnly, &flags);
+        let result = format_files(vec![file1, file2], FormatMode::CheckOnly, flags);
         assert!(result.is_err());
         let error_message = result.unwrap_err();
         assert!(error_message.contains("test1.roc") && error_message.contains("test2.roc"));
@@ -345,7 +341,7 @@ main =
         let file_path = setup_test_file(dir.path(), "formatted.roc", FORMATTED_ROC);
         let flags = MigrationFlags::new(false);
 
-        let result = format_files(vec![file_path], FormatMode::CheckOnly, &flags);
+        let result = format_files(vec![file_path], FormatMode::CheckOnly, flags);
         assert!(result.is_ok());
 
         cleanup_temp_dir(dir);
@@ -362,7 +358,7 @@ main =
         let result = format_files(
             vec![file_formatted, file1_unformated, file2_unformated],
             FormatMode::CheckOnly,
-            &flags,
+            flags,
         );
         assert!(result.is_err());
         let error_message = result.unwrap_err();

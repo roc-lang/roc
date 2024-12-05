@@ -1,4 +1,4 @@
-use crate::annotation::{Formattable, MigrationFlags, Newlines, Parens};
+use crate::annotation::{Formattable, Newlines, Parens};
 use crate::expr::{
     expr_is_multiline, expr_lift_spaces_after, fmt_str_literal, format_sq_literal, is_str_multiline,
 };
@@ -11,14 +11,8 @@ use roc_parse::ast::{
 use roc_parse::expr::merge_spaces;
 use roc_region::all::Loc;
 
-pub fn fmt_pattern<'a>(
-    buf: &mut Buf,
-    pattern: &'a Pattern<'a>,
-    flags: &MigrationFlags,
-    indent: u16,
-    parens: Parens,
-) {
-    pattern.format_with_options(buf, parens, Newlines::No, flags, indent);
+pub fn fmt_pattern<'a>(buf: &mut Buf, pattern: &'a Pattern<'a>, indent: u16, parens: Parens) {
+    pattern.format_with_options(buf, parens, Newlines::No, indent);
 }
 
 impl<'a> Formattable for PatternAs<'a> {
@@ -31,7 +25,6 @@ impl<'a> Formattable for PatternAs<'a> {
         buf: &mut Buf,
         _parens: Parens,
         _newlines: Newlines,
-        _flags: &MigrationFlags,
         indent: u16,
     ) {
         buf.indent(indent);
@@ -100,15 +93,8 @@ impl<'a> Formattable for Pattern<'a> {
         }
     }
 
-    fn format_with_options(
-        &self,
-        buf: &mut Buf,
-        parens: Parens,
-        _newlines: Newlines,
-        flags: &MigrationFlags,
-        indent: u16,
-    ) {
-        fmt_pattern_inner(self, buf, parens, flags, indent, self.is_multiline());
+    fn format_with_options(&self, buf: &mut Buf, parens: Parens, _newlines: Newlines, indent: u16) {
+        fmt_pattern_inner(self, buf, parens, indent, self.is_multiline());
     }
 }
 
@@ -116,7 +102,7 @@ fn fmt_pattern_inner(
     pat: &Pattern<'_>,
     buf: &mut Buf,
     parens: Parens,
-    flags: &MigrationFlags,
+
     indent: u16,
     outer_is_multiline: bool,
 ) {
@@ -137,7 +123,7 @@ fn fmt_pattern_inner(
     match me.item {
         Identifier { ident: string } => {
             buf.indent(indent);
-            snakify_camel_ident(buf, string, flags);
+            snakify_camel_ident(buf, string);
         }
         Tag(name) | OpaqueRef(name) => {
             buf.indent(indent);
@@ -169,7 +155,7 @@ fn fmt_pattern_inner(
                 }
             }
 
-            fmt_pattern_inner(&pat.item, buf, Parens::InApply, flags, indent, is_multiline);
+            fmt_pattern_inner(&pat.item, buf, Parens::InApply, indent, is_multiline);
 
             if !pat.after.is_empty() {
                 if !is_multiline {
@@ -185,7 +171,6 @@ fn fmt_pattern_inner(
                     &loc_arg.value,
                     buf,
                     Parens::InApply,
-                    flags,
                     indent_more,
                     is_multiline,
                 );
@@ -213,14 +198,7 @@ fn fmt_pattern_inner(
                         }
                     }
 
-                    fmt_pattern_inner(
-                        &item.item,
-                        buf,
-                        Parens::NotNeeded,
-                        flags,
-                        indent,
-                        is_multiline,
-                    );
+                    fmt_pattern_inner(&item.item, buf, Parens::NotNeeded, indent, is_multiline);
 
                     let is_multiline = item.item.is_multiline();
 
@@ -250,14 +228,13 @@ fn fmt_pattern_inner(
 
         RequiredField(name, loc_pattern) => {
             buf.indent(indent);
-            snakify_camel_ident(buf, name, flags);
+            snakify_camel_ident(buf, name);
             buf.push_str(":");
             buf.spaces(1);
             fmt_pattern_inner(
                 &loc_pattern.value,
                 buf,
                 Parens::NotNeeded,
-                flags,
                 indent,
                 is_multiline,
             );
@@ -265,10 +242,10 @@ fn fmt_pattern_inner(
 
         OptionalField(name, loc_pattern) => {
             buf.indent(indent);
-            snakify_camel_ident(buf, name, flags);
+            snakify_camel_ident(buf, name);
             buf.push_str(" ?");
             buf.spaces(1);
-            loc_pattern.format(buf, flags, indent);
+            loc_pattern.format(buf, indent);
         }
 
         NumLiteral(string) => {
@@ -298,7 +275,7 @@ fn fmt_pattern_inner(
             buf.indent(indent);
             buf.push_str(string);
         }
-        StrLiteral(literal) => fmt_str_literal(buf, literal, flags, indent),
+        StrLiteral(literal) => fmt_str_literal(buf, literal, indent),
         SingleQuote(string) => {
             buf.indent(indent);
             format_sq_literal(buf, string);
@@ -318,7 +295,6 @@ fn fmt_pattern_inner(
                     &loc_pattern.value,
                     buf,
                     Parens::NotNeeded,
-                    flags,
                     indent,
                     is_multiline,
                 );
@@ -343,7 +319,6 @@ fn fmt_pattern_inner(
                     &loc_pattern.value,
                     buf,
                     Parens::NotNeeded,
-                    flags,
                     indent,
                     is_multiline,
                 );
@@ -366,7 +341,7 @@ fn fmt_pattern_inner(
                 // these spaces "belong" to the `..`, which can never be multiline
                 fmt_comments_only(buf, list_rest_spaces.iter(), NewlineAt::Bottom, indent);
 
-                pattern_as.format(buf, flags, indent + INDENT);
+                pattern_as.format(buf, indent + INDENT);
             }
         }
 
@@ -378,9 +353,9 @@ fn fmt_pattern_inner(
                 buf.push('(');
             }
 
-            fmt_pattern(buf, &pattern.value, flags, indent, parens);
+            fmt_pattern(buf, &pattern.value, indent, parens);
 
-            pattern_as.format(buf, flags, indent + INDENT);
+            pattern_as.format(buf, indent + INDENT);
 
             if needs_parens {
                 buf.indent(indent);
@@ -402,7 +377,7 @@ fn fmt_pattern_inner(
                 buf.push('.');
             }
 
-            snakify_camel_ident(buf, ident, flags);
+            snakify_camel_ident(buf, ident);
         }
     }
 
@@ -528,9 +503,9 @@ pub fn pattern_lift_spaces_after<'a, 'b: 'a>(
 }
 
 /// Convert camelCase identifier to snake case
-fn snakify_camel_ident(buf: &mut Buf, string: &str, flags: &MigrationFlags) {
+fn snakify_camel_ident(buf: &mut Buf, string: &str) {
     let chars: Vec<char> = string.chars().collect();
-    if !flags.snakify || (string.contains('_') && !string.ends_with('_')) {
+    if !buf.flags().snakify || (string.contains('_') && !string.ends_with('_')) {
         buf.push_str(string);
         return;
     }
@@ -572,13 +547,13 @@ mod snakify_test {
     use bumpalo::Bump;
 
     use super::snakify_camel_ident;
-    use crate::{annotation::MigrationFlags, Buf};
+    use crate::{Buf, MigrationFlags};
 
     fn check_snakify(arena: &Bump, original: &str) -> String {
-        let mut buf = Buf::new_in(arena);
-        buf.indent(0);
         let flags = MigrationFlags::new(true);
-        snakify_camel_ident(&mut buf, original, &flags);
+        let mut buf = Buf::new_in(arena, flags);
+        buf.indent(0);
+        snakify_camel_ident(&mut buf, original);
         buf.text.to_string()
     }
 
