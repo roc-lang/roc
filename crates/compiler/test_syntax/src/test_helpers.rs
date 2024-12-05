@@ -1,5 +1,5 @@
 use bumpalo::Bump;
-use roc_fmt::{annotation::Formattable, header::fmt_header};
+use roc_fmt::{annotation::Formattable, annotation::MigrationFlags, header::fmt_header};
 use roc_parse::{
     ast::{Defs, Expr, FullAst, Header, Malformed, SpacesBefore},
     header::parse_module_defs,
@@ -83,24 +83,25 @@ impl<'a> Output<'a> {
     pub fn format(&self) -> InputOwned {
         let arena = Bump::new();
         let mut buf = Buf::new_in(&arena);
+        let flags = MigrationFlags::new(false);
         match self {
             Output::Header(header) => {
-                fmt_header(&mut buf, header);
+                fmt_header(&mut buf, header, &flags);
                 buf.fmt_end_of_file();
                 InputOwned::Header(buf.as_str().to_string())
             }
             Output::ModuleDefs(defs) => {
-                defs.format(&mut buf, 0);
+                defs.format(&mut buf, &flags, 0);
                 buf.fmt_end_of_file();
                 InputOwned::ModuleDefs(buf.as_str().to_string())
             }
             Output::Expr(expr) => {
-                expr.format(&mut buf, 0);
+                expr.format(&mut buf, &flags, 0);
                 InputOwned::Expr(buf.as_str().to_string())
             }
             Output::Full(full) => {
-                fmt_header(&mut buf, &full.header);
-                full.defs.format(&mut buf, 0);
+                fmt_header(&mut buf, &full.header, &flags);
+                full.defs.format(&mut buf, &flags, 0);
                 buf.fmt_end_of_file();
                 InputOwned::Full(buf.as_str().to_string())
             }

@@ -1,0 +1,15 @@
+SpaceAfter(
+    Closure(
+        [
+            @1-11 Identifier {
+                ident: "the_answer",
+            },
+        ],
+        @15-17 Num(
+            "42",
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

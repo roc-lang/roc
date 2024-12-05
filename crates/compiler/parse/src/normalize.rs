@@ -855,6 +855,7 @@ fn remove_spaces_bad_ident(ident: BadIdent) -> BadIdent {
             position: Position::zero(),
             declaration_region,
         },
+        BadIdent::TooManyUnderscores(_) => BadIdent::TooManyUnderscores(Position::zero()),
         BadIdent::QualifiedTag(_) => BadIdent::QualifiedTag(Position::zero()),
         BadIdent::WeirdAccessor(_) => BadIdent::WeirdAccessor(Position::zero()),
         BadIdent::WeirdDotAccess(_) => BadIdent::WeirdDotAccess(Position::zero()),

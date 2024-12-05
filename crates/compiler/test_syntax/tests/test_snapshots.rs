@@ -265,12 +265,10 @@ mod test_snapshots {
         fail/where_type_variable.expr,
         fail/wild_case_arrow.expr,
         malformed/bad_opaque_ref.expr,
-        malformed/malformed_ident_due_to_underscore.expr,
         malformed/malformed_pattern_field_access.expr, // See https://github.com/roc-lang/roc/issues/399
         malformed/malformed_pattern_module_name.expr, // See https://github.com/roc-lang/roc/issues/399
         malformed/module_dot_tuple.expr,
         malformed/qualified_tag.expr,
-        malformed/underscore_expr_in_def.expr,
         pass/ability_demand_signature_is_multiline.expr,
         pass/ability_multi_line.expr,
         pass/ability_single_line.expr,
@@ -575,6 +573,7 @@ mod test_snapshots {
         pass/return_with_after.expr,
         pass/separate_defs.moduledefs,
         pass/single_arg_closure.expr,
+        pass/single_arg_with_underscore_closure.expr,
         pass/single_underscore_closure.expr,
         pass/space_before_colon.full,
         pass/space_before_parens_space_after.expr,
@@ -627,6 +626,7 @@ mod test_snapshots {
         pass/unary_not.expr,
         pass/unary_not_with_parens.expr,
         pass/underscore_backpassing.expr,
+        pass/underscore_expr_in_def.expr,
         pass/underscore_in_assignment_pattern.expr,
         pass/value_def_confusion.expr,
         pass/var_else.expr,
