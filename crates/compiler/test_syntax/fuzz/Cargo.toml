@@ -10,6 +10,9 @@ edition = "2021"
 cargo-fuzz = true
 
 [dependencies]
+# WARNING! Do not update these dependencies to use the dot workspace syntax.
+# this crate is intentionally not a part of the overall workspace, so making changes here
+# is neither necessary nor desired.
 test_syntax = { path = "../../test_syntax" }
 roc_parse = { path = "../../parse" }
 bumpalo = { version = "3.12.0", features = ["collections"] }
