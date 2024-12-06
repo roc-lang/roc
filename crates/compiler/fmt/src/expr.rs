@@ -1139,6 +1139,9 @@ pub fn expr_lift_spaces<'a, 'b: 'a>(
         Expr::LowLevelDbg(_, _, _) => {
             unreachable!("LowLevelDbg should only exist after desugaring, not during formatting")
         }
+        Expr::LowLevelTry(..) => {
+            unreachable!("LowLevelTry should only exist after desugaring, not during formatting")
+        }
         Expr::BinOps(lefts, right) => {
             let lefts = arena.alloc_slice_copy(lefts);
 
