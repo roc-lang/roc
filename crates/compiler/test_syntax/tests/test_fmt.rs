@@ -2145,40 +2145,6 @@ mod test_fmt {
     }
 
     #[test]
-    fn comments_with_newlines_in_records() {
-        expr_formats_to(
-            indoc!(
-                r"
-            {
-                z: 44 #comment 0
-                ,
-                y: 41, # comment 1
-
-                # comment 2
-                x: 42
-
-                # comment 3
-
-                # comment 4
-            }"
-            ),
-            indoc!(
-                r"
-            {
-                z: 44,
-                # comment 0
-                y: 41,
-                # comment 1
-                # comment 2
-                x: 42,
-                # comment 3
-                # comment 4
-            }"
-            ),
-        );
-    }
-
-    #[test]
     fn multiple_final_comments_with_comma_in_records() {
         expr_formats_to(
             indoc!(

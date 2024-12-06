@@ -1,28 +1,33 @@
-BinOps(
-    [
-        (
-            @0-1 Var {
-                module_name: "",
-                ident: "i",
-            },
-            @1-2 Slash,
-        ),
-    ],
-    @3-7 SpaceBefore(
-        UnaryOp(
-            @6-7 SpaceBefore(
-                Var {
-                    module_name: "",
-                    ident: "g",
-                },
-                [
-                    Newline,
-                ],
-            ),
-            @3-4 Not,
-        ),
+SpaceAfter(
+    BinOps(
         [
-            Newline,
+            (
+                @0-1 Var {
+                    module_name: "",
+                    ident: "i",
+                },
+                @1-2 Slash,
+            ),
         ],
+        @4-8 SpaceBefore(
+            UnaryOp(
+                @7-8 SpaceBefore(
+                    Var {
+                        module_name: "",
+                        ident: "g",
+                    },
+                    [
+                        Newline,
+                    ],
+                ),
+                @4-5 Not,
+            ),
+            [
+                Newline,
+            ],
+        ),
     ),
+    [
+        Newline,
+    ],
 )

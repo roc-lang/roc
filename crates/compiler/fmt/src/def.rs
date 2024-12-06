@@ -454,7 +454,15 @@ impl<'a> Formattable for TypeDef<'a> {
 
                 let make_multiline = ann.is_multiline() || has_abilities_multiline;
 
-                fmt_general_def(header, buf, indent, ":=", &ann.value, newlines);
+                fmt_general_def(
+                    header,
+                    Parens::NotNeeded,
+                    buf,
+                    indent,
+                    ":=",
+                    &ann.value,
+                    newlines,
+                );
 
                 if let Some(has_abilities) = has_abilities {
                     buf.spaces(1);
@@ -475,10 +483,10 @@ impl<'a> Formattable for TypeDef<'a> {
                 header.format_with_options(buf, Parens::NotNeeded, Newlines::No, indent);
                 buf.spaces(1);
                 buf.push_str(roc_parse::keyword::IMPLEMENTS);
+                buf.spaces(1);
 
                 if !self.is_multiline() {
                     debug_assert_eq!(members.len(), 1);
-                    buf.spaces(1);
                     members[0].format_with_options(
                         buf,
                         Parens::NotNeeded,
@@ -617,6 +625,7 @@ impl<'a> Formattable for ModuleImport<'a> {
 
         let indent = if !before_name.is_empty()
             || (params.is_multiline() && exposed.is_some())
+            || params.map(|p| !p.before.is_empty()).unwrap_or(false)
             || alias.is_multiline()
             || exposed.map_or(false, |e| e.keyword.is_multiline())
         {
@@ -823,8 +832,14 @@ impl<'a> Formattable for ValueDef<'a> {
         use roc_parse::ast::ValueDef::*;
         match self {
             Annotation(loc_pattern, loc_annotation) => {
+                let pat_parens = if ann_pattern_needs_parens(&loc_pattern.value) {
+                    Parens::InApply
+                } else {
+                    Parens::NotNeeded
+                };
                 fmt_general_def(
                     loc_pattern,
+                    pat_parens,
                     buf,
                     indent,
                     ":",
@@ -844,7 +859,20 @@ impl<'a> Formattable for ValueDef<'a> {
                 body_pattern,
                 body_expr,
             } => {
-                fmt_general_def(ann_pattern, buf, indent, ":", &ann_type.value, newlines);
+                let pat_parens = if ann_pattern_needs_parens(&ann_pattern.value) {
+                    Parens::InApply
+                } else {
+                    Parens::NotNeeded
+                };
+                fmt_general_def(
+                    ann_pattern,
+                    pat_parens,
+                    buf,
+                    indent,
+                    ":",
+                    &ann_type.value,
+                    newlines,
+                );
 
                 fmt_annotated_body_comment(buf, indent, lines_between);
 
@@ -859,8 +887,19 @@ impl<'a> Formattable for ValueDef<'a> {
     }
 }
 
+fn ann_pattern_needs_parens(value: &Pattern<'_>) -> bool {
+    match value.extract_spaces().item {
+        Pattern::Tag(_) => true,
+        Pattern::Apply(func, _args) if matches!(func.extract_spaces().item, Pattern::Tag(..)) => {
+            true
+        }
+        _ => false,
+    }
+}
+
 fn fmt_general_def<L: Formattable>(
     lhs: L,
+    lhs_parens: Parens,
     buf: &mut Buf,
 
     indent: u16,
@@ -868,7 +907,7 @@ fn fmt_general_def<L: Formattable>(
     rhs: &TypeAnnotation,
     newlines: Newlines,
 ) {
-    lhs.format(buf, indent);
+    lhs.format_with_options(buf, lhs_parens, Newlines::Yes, indent);
     buf.indent(indent);
 
     if rhs.is_multiline() {
@@ -1000,6 +1039,7 @@ pub fn fmt_body<'a>(
             && collection.is_empty()
             && pattern_extracted.before.iter().all(|s| s.is_newline())
             && pattern_extracted.after.iter().all(|s| s.is_newline())
+            && !matches!(body.extract_spaces().item, Expr::Defs(..))
     } else {
         false
     };
@@ -1010,8 +1050,14 @@ pub fn fmt_body<'a>(
     }
 
     pattern.format_with_options(buf, Parens::InApply, Newlines::No, indent);
-    buf.indent(indent);
-    buf.push_str(" =");
+
+    if pattern.is_multiline() {
+        buf.ensure_ends_with_newline();
+        buf.indent(indent);
+    } else {
+        buf.spaces(1);
+    }
+    buf.push_str("=");
 
     let body = expr_lift_and_lower(Parens::NotNeeded, buf.text.bump(), body);
 
