@@ -79,23 +79,24 @@ fn testing_roc_alloc(size: usize, nominal_alignment: u32) callconv(.C) ?*anyopaq
     if (nominal_alignment > real_alignment) {
         @panic("alignments larger than that of usize are not currently supported");
     }
+    // We store an extra usize which is the size of the data plus the size of the size, directly before the data.
+    // We need enough clocks of the alignment size to fit this (usually this will be one)
     const size_of_size = @sizeOf(usize);
     const alignments_needed = size_of_size / real_alignment + comptime if (size_of_size % real_alignment == 0) 0 else 1;
     const extra_bytes = alignments_needed * size_of_size;
-    // We store an extra usize which is the size of the data plus the size.
+
     const full_size = size + extra_bytes;
+    const whole_ptr = (std.testing.allocator.alignedAlloc(u8, real_alignment, full_size) catch unreachable).ptr;
     const written_to_size = size + size_of_size;
-    const raw_ptr = (std.testing.allocator.alignedAlloc(u8, real_alignment, full_size) catch unreachable).ptr;
+    @as([*]align(real_alignment) usize, @ptrCast(whole_ptr))[extra_bytes - size_of_size] = written_to_size;
 
-    @as([*]align(real_alignment) usize, @ptrCast(raw_ptr))[extra_bytes - size_of_size] = written_to_size;
-
-    const ptr = @as(?*anyopaque, @ptrCast(raw_ptr + extra_bytes));
+    const data_ptr = @as(?*anyopaque, @ptrCast(whole_ptr + extra_bytes));
 
     if (DEBUG_TESTING_ALLOC and builtin.target.cpu.arch != .wasm32) {
-        std.debug.print("+ alloc {*}: {} bytes\n", .{ ptr, size });
+        std.debug.print("+ alloc {*}: {} bytes\n", .{ data_ptr, size });
     }
 
-    return ptr;
+    return data_ptr;
 }
 
 fn testing_roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, _: u32) callconv(.C) ?*anyopaque {
@@ -121,11 +122,11 @@ fn testing_roc_dealloc(c_ptr: *anyopaque, _: u32) callconv(.C) void {
     const alignments_needed = size_of_size / alignment + comptime if (size_of_size % alignment == 0) 0 else 1;
     const extra_bytes = alignments_needed * size_of_size;
     const byte_array = @as([*]u8, @ptrCast(c_ptr)) - extra_bytes;
-    const raw_ptr = @as([*]align(alignment) u8, @alignCast(byte_array));
-    const offset_from_raw_to_size = extra_bytes - size_of_size;
-    const size_of_data_and_size = @as([*]usize, @alignCast(@ptrCast(raw_ptr)))[offset_from_raw_to_size];
-    const full_size = size_of_data_and_size + offset_from_raw_to_size;
-    const slice = raw_ptr[0..full_size];
+    const allocation_ptr = @as([*]align(alignment) u8, @alignCast(byte_array));
+    const offset_from_allocation_to_size = extra_bytes - size_of_size;
+    const size_of_data_and_size = @as([*]usize, @alignCast(@ptrCast(allocation_ptr)))[offset_from_allocation_to_size];
+    const full_size = size_of_data_and_size + offset_from_allocation_to_size;
+    const slice = allocation_ptr[0..full_size];
 
     if (DEBUG_TESTING_ALLOC and builtin.target.cpu.arch != .wasm32) {
         std.debug.print("💀 dealloc {*}\n", .{slice.ptr});
