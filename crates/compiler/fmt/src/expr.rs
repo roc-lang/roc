@@ -90,7 +90,6 @@ fn format_expr_only(
         }
         Expr::Apply(loc_expr, loc_args, _) => {
             let apply_needs_parens = parens == Parens::InApply || parens == Parens::InApplyLastArg;
-            // || (parens == Parens::InOperator && apply_has_closure(self));
 
             if apply_needs_parens && !loc_args.is_empty() {
                 fmt_parens(item, buf, indent);
@@ -1946,15 +1945,6 @@ fn fmt_record_like<'a, 'b: 'a, Field, ToSpacesAround>(
 
                 let before = merge_spaces(buf.text.bump(), last_after, field_lifted.before);
 
-                // if index == 0
-                //     && field_lifted
-                //         .before
-                //         .first()
-                //         .map_or(false, |s| s.is_comment())
-                // {
-                //     buf.ensure_ends_with_newline();
-                // }
-
                 if iter == 0 || count_leading_newlines(before.iter()) == 0 {
                     buf.ensure_ends_with_newline();
                 }
@@ -1970,8 +1960,6 @@ fn fmt_record_like<'a, 'b: 'a, Field, ToSpacesAround>(
                 };
 
                 fmt_spaces_with_newline_mode(buf, before, field_indent, newline_mode);
-                // buf.ensure_ends_with_newline();
-                // fmt_comments_only(buf, before.iter(), NewlineAt::Bottom, field_indent);
                 field_lifted.item.format_with_options(
                     buf,
                     Parens::NotNeeded,
