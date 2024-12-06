@@ -74,10 +74,13 @@ comptime {
     }
 }
 
-fn testing_roc_alloc(size: usize, _: u32) callconv(.C) ?*anyopaque {
+fn testing_roc_alloc(size: usize, alignment: u32) callconv(.C) ?*anyopaque {
+    if (alignment > @alignOf(usize)) {
+        @panic("alignments larger than that of usize are not currently supported");
+    }
     // We store an extra usize which is the size of the full allocation.
     const full_size = size + @sizeOf(usize);
-    var raw_ptr = (std.testing.allocator.alloc(u8, full_size) catch unreachable).ptr;
+    var raw_ptr = (std.testing.allocator.alignedAlloc(u8, @alignOf(usize), full_size) catch unreachable).ptr;
     @as([*]usize, @alignCast(@ptrCast(raw_ptr)))[0] = full_size;
     raw_ptr += @sizeOf(usize);
     const ptr = @as(?*anyopaque, @ptrCast(raw_ptr));
@@ -107,7 +110,7 @@ fn testing_roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, _: u
 }
 
 fn testing_roc_dealloc(c_ptr: *anyopaque, _: u32) callconv(.C) void {
-    const raw_ptr = @as([*]u8, @ptrCast(c_ptr)) - @sizeOf(usize);
+    const raw_ptr = @as([*]align(@alignOf(usize)) u8, @alignCast(@ptrCast(c_ptr))) - @sizeOf(usize);
     const full_size = @as([*]usize, @alignCast(@ptrCast(raw_ptr)))[0];
     const slice = raw_ptr[0..full_size];
 
