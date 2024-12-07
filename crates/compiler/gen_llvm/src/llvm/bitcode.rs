@@ -12,8 +12,8 @@ use crate::llvm::refcounting::{
 use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::types::{BasicType, BasicTypeEnum, StructType};
 use inkwell::values::{
-    BasicValue, BasicValueEnum, CallSiteValue, FunctionValue, InstructionValue, IntValue,
-    PointerValue, StructValue,
+    BasicMetadataValueEnum, BasicValue, BasicValueEnum, CallSiteValue, FunctionValue,
+    InstructionValue, IntValue, PointerValue, StructValue,
 };
 use inkwell::AddressSpace;
 use roc_error_macros::internal_error;
@@ -726,13 +726,18 @@ pub fn build_compare_wrapper<'a, 'ctx>(
                         "load_opaque",
                     );
 
-                    let closure_data =
-                        env.builder
-                            .new_build_load(closure_type, closure_cast, "load_opaque");
+                    let closure_data: BasicMetadataValueEnum =
+                        if layout_interner.is_passed_by_reference(closure_data_repr) {
+                            closure_cast.into()
+                        } else {
+                            env.builder
+                                .new_build_load(closure_type, closure_cast, "load_opaque")
+                                .into()
+                        };
 
                     env.arena
                         .alloc([value1.into(), value2.into(), closure_data.into()])
-                        as &[_]
+                        as &[BasicMetadataValueEnum]
                 }
             };
 
