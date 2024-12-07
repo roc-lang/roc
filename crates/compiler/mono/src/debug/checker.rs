@@ -346,6 +346,8 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 self.check_stmt(remainder);
             }
             &Stmt::Expect {
+                source_location: _,
+                source: _,
                 condition,
                 region: _,
                 lookups,

@@ -685,14 +685,22 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
         }),
 
         Expect {
+            source_location: _,
+            source: _,
             loc_condition,
             loc_continuation,
             lookups_in_cond,
-        } => Expect {
-            loc_condition: Box::new(loc_condition.map(|e| go_help!(e))),
-            loc_continuation: Box::new(loc_continuation.map(|e| go_help!(e))),
-            lookups_in_cond: lookups_in_cond.to_vec(),
-        },
+        } => {
+            let boxed_raw_str: Box<str> = r"HOW DO WE GET SOURCE TO CAN?".into();
+
+            Expect {
+                source_location: boxed_raw_str.clone(),
+                source: boxed_raw_str,
+                loc_condition: Box::new(loc_condition.map(|e| go_help!(e))),
+                loc_continuation: Box::new(loc_continuation.map(|e| go_help!(e))),
+                lookups_in_cond: lookups_in_cond.to_vec(),
+            }
+        }
 
         Return {
             return_value,

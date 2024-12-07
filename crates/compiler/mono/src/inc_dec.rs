@@ -655,6 +655,8 @@ fn insert_refcount_operations_stmt<'v, 'a>(
         }
         Stmt::Refcounting(_, _) => unreachable!("refcounting should not be in the AST yet"),
         Stmt::Expect {
+            source_location,
+            source,
             condition,
             region,
             lookups,
@@ -671,6 +673,8 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             );
 
             arena.alloc(Stmt::Expect {
+                source_location,
+                source,
                 condition: *condition,
                 region: *region,
                 lookups,

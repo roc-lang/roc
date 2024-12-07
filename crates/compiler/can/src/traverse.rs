@@ -374,6 +374,8 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
             visitor.visit_expr(&le.value, le.region, *var);
         }
         Expr::Expect {
+            source_location,
+            source,
             loc_condition,
             loc_continuation,
             lookups_in_cond: _,

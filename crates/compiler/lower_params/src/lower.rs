@@ -353,6 +353,8 @@ impl<'a> LowerParams<'a> {
                     lambda_set_variables: _,
                 } => expr_stack.push(&mut argument.1.value),
                 Expect {
+                    source_location: _,
+                    source: _,
                     loc_condition,
                     loc_continuation,
                     lookups_in_cond: _,

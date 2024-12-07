@@ -429,6 +429,7 @@ pub const DEC_FLOOR: IntrinsicName = int_intrinsic!("roc_builtins.dec.floor");
 pub const DEC_CEILING: IntrinsicName = int_intrinsic!("roc_builtins.dec.ceiling");
 
 pub const UTILS_DBG_IMPL: &str = "roc_builtins.utils.dbg_impl";
+pub const UTILS_EXPECT_IMPL: &str = "roc_builtins.utils.expect_impl";
 pub const UTILS_TEST_PANIC: &str = "roc_builtins.utils.test_panic";
 pub const UTILS_ALLOCATE_WITH_REFCOUNT: &str = "roc_builtins.utils.allocate_with_refcount";
 pub const UTILS_INCREF_RC_PTR: &str = "roc_builtins.utils.incref_rc_ptr";
@@ -440,13 +441,6 @@ pub const UTILS_FREE_DATA_PTR: &str = "roc_builtins.utils.free_data_ptr";
 pub const UTILS_IS_UNIQUE: &str = "roc_builtins.utils.is_unique";
 pub const UTILS_DECREF_CHECK_NULL: &str = "roc_builtins.utils.decref_check_null";
 pub const UTILS_DICT_PSEUDO_SEED: &str = "roc_builtins.utils.dict_pseudo_seed";
-
-pub const UTILS_EXPECT_FAILED_START_SHARED_BUFFER: &str =
-    "roc_builtins.utils.expect_failed_start_shared_buffer";
-pub const UTILS_EXPECT_FAILED_START_SHARED_FILE: &str =
-    "roc_builtins.utils.expect_failed_start_shared_file";
-pub const UTILS_EXPECT_READ_ENV_SHARED_BUFFER: &str = "roc_builtins.utils.read_env_shared_buffer";
-pub const NOTIFY_PARENT_EXPECT: &str = "roc_builtins.utils.notify_parent_expect";
 
 pub const UTILS_LONGJMP: &str = "longjmp";
 pub const UTILS_SETJMP: &str = "setjmp";

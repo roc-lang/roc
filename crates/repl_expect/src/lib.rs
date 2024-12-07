@@ -154,32 +154,33 @@ mod test {
         let arena = &bumpalo::Bump::new();
         let interns = arena.alloc(interns);
 
-        const BUFFER_SIZE: usize = 1024;
+        // const BUFFER_SIZE: usize = 1024;
 
-        let mut shared_buffer = [0u8; BUFFER_SIZE];
-        let mut memory = crate::run::ExpectMemory::from_slice(&mut shared_buffer);
+        // let mut shared_buffer = [0u8; BUFFER_SIZE];
+        // let mut memory = crate::run::ExpectMemory::from_slice(&mut shared_buffer);
 
         // communicate the mmapped name to zig/roc
-        let set_shared_buffer = run_roc_dylib!(dy_lib, "set_shared_buffer", (*mut u8, usize), ());
-        let mut result = RocCallResult::default();
-        unsafe { set_shared_buffer((shared_buffer.as_mut_ptr(), BUFFER_SIZE), &mut result) };
+        // let set_shared_buffer = run_roc_dylib!(dy_lib, "set_shared_buffer", (*mut u8, usize), ());
+        // let mut result = RocCallResult::default();
+        // unsafe { set_shared_buffer((shared_buffer.as_mut_ptr(), BUFFER_SIZE), &mut result) };
 
         let mut writer = Vec::with_capacity(1024);
 
         let global_layout_interner = layout_interner.into_global();
         for (_, expect_funcs) in expects_by_module {
-            let (_failed, _passed) = crate::run::run_expects_with_memory(
-                &mut writer,
-                RenderTarget::ColorTerminal,
-                arena,
-                interns,
-                &global_layout_interner,
-                &dy_lib,
-                &mut expectations,
-                expect_funcs,
-                &mut memory,
-            )
-            .unwrap();
+            todo!();
+            // let (_failed, _passed) = crate::run::run_expects_with_memory(
+            //     &mut writer,
+            //     RenderTarget::ColorTerminal,
+            //     arena,
+            //     interns,
+            //     &global_layout_interner,
+            //     &dy_lib,
+            //     &mut expectations,
+            //     expect_funcs,
+            //     &mut memory,
+            // )
+            // .unwrap();
         }
 
         // Remove ANSI escape codes from the answer - for example:
