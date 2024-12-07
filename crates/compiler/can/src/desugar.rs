@@ -270,7 +270,9 @@ fn desugar_value_def<'a>(
 
             let desugared_expr = desugar_expr(env, scope, stmt_expr);
 
-            if !is_expr_suffixed(&desugared_expr.value) {
+            if !is_expr_suffixed(&desugared_expr.value)
+                && !matches!(&desugared_expr.value, LowLevelTry(_, _))
+            {
                 env.problems.push(Problem::StmtAfterExpr(stmt_expr.region));
 
                 return ValueDef::StmtAfterExpr;
