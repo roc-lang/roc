@@ -736,7 +736,7 @@ pub fn build_compare_wrapper<'a, 'ctx>(
                         };
 
                     env.arena
-                        .alloc([value1.into(), value2.into(), closure_data.into()])
+                        .alloc([value1.into(), value2.into(), closure_data])
                         as &[BasicMetadataValueEnum]
                 }
             };
