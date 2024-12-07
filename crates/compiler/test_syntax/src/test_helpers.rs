@@ -18,7 +18,6 @@ use roc_parse::{
     ast::{Defs, Expr, FullAst, Header, SpacesBefore},
     test_helpers::{parse_defs_with, parse_header_with},
 };
-// use roc_problem::can::Problem;
 use roc_region::all::Loc;
 use roc_region::all::Region;
 use roc_test_utils::assert_multiline_str_eq;
