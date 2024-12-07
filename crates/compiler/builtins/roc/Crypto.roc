@@ -48,7 +48,7 @@ u128Bytes = \number ->
 
 expect
     bytes1 = u128Bytes 1
-    bytes1 == [1,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0]
+    bytes1 == [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 
 expect
     bytes257 = u128Bytes 0x000102030405060708090a0b0c0d0e0f
