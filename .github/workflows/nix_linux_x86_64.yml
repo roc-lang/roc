@@ -44,3 +44,8 @@ jobs:
 
       - name: test building wasm repl
         run: nix develop -c ./ci/www-repl.sh
+
+      - name: run fuzz tests
+        run: |
+          cd crates/compiler/test_syntax/fuzz
+          nix develop -c cargo +nightly fuzz run -j4 fuzz_expr --sanitizer=none -- -dict=dict.txt -max_total_time=60
