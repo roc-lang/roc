@@ -5421,9 +5421,9 @@ mod test_reporting {
     6│       2 -> 2
                ^^
 
-    Looks like you are trying to define a function.
+    Looks like you are trying to define a function. 
 
-    In Roc, functions are always written as a lambda, like
+    In Roc, functions are always written as a lambda, like 
 
         increment = \n -> n + 1
     "###
@@ -8146,7 +8146,7 @@ All branches in an `if` must have the same type!
             alt
             "#
         ),
-        @r"
+        @r###"
     ── MODULE NOT IMPORTED in /code/proj/Main.roc ──────────────────────────────────
 
     The `Unimported` module is not imported:
@@ -8160,8 +8160,8 @@ All branches in an `if` must have the same type!
         Encode
         Inspect
         Dict
-        Crypto
-    "
+        List
+    "###
     );
 
     test_report!(
