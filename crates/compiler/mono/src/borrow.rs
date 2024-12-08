@@ -198,18 +198,6 @@ pub(crate) fn infer_borrow_signatures<'a>(
     borrow_signatures
 }
 
-#[allow(unused)]
-fn infer_borrow_signature<'a>(
-    arena: &'a Bump,
-    interner: &impl LayoutInterner<'a>,
-    borrow_signatures: &'a mut BorrowSignatures<'a>,
-    proc: &Proc<'a>,
-) -> BorrowSignature {
-    let mut state = State::new(arena, interner, borrow_signatures, proc);
-    state.inspect_stmt(interner, borrow_signatures, &proc.body);
-    state.borrow_signature
-}
-
 struct State<'state, 'arena> {
     /// Argument symbols with a layout of `List *` or `Str`, i.e. the layouts
     /// for which borrow inference might decide to pass as borrowed
@@ -235,29 +223,6 @@ fn layout_to_ownership<'a>(
 }
 
 impl<'state, 'a> State<'state, 'a> {
-    fn new(
-        arena: &'a Bump,
-        interner: &impl LayoutInterner<'a>,
-        borrow_signatures: &mut BorrowSignatures<'a>,
-        proc: &Proc<'a>,
-    ) -> Self {
-        let key = (proc.name.name(), proc.proc_layout(arena));
-
-        // initialize the borrow signature based on the layout if first time
-        let borrow_signature = borrow_signatures
-            .procs
-            .entry(key)
-            .or_insert_with(|| BorrowSignature::from_layouts(interner, key.1.arguments.iter()));
-
-        Self {
-            args: proc.args,
-            borrow_signature: *borrow_signature,
-            join_point_stack: Vec::new_in(arena),
-            join_points: MutMap::default(),
-            modified: false,
-        }
-    }
-
     /// Mark the given argument symbol as Owned if the symbol participates in borrow inference
     ///
     /// Currently argument symbols participate if `layout_to_ownership` returns `Borrowed` for their layout.

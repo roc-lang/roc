@@ -34,9 +34,6 @@ pub struct Env<'a> {
     /// Symbols of values/functions which were referenced by qualified lookups.
     pub qualified_value_lookups: VecSet<Symbol>,
 
-    /// Symbols of types which were referenced by qualified lookups.
-    pub qualified_type_lookups: VecSet<Symbol>,
-
     pub top_level_symbols: VecSet<Symbol>,
 
     pub home_params_record: Option<(Symbol, Variable)>,
@@ -77,7 +74,6 @@ impl<'a> Env<'a> {
             problems: Vec::new(),
             closures: MutMap::default(),
             qualified_value_lookups: VecSet::default(),
-            qualified_type_lookups: VecSet::default(),
             tailcallable_symbol: None,
             top_level_symbols: VecSet::default(),
             home_params_record: None,
@@ -152,9 +148,7 @@ impl<'a> Env<'a> {
                 Some(ident_id) => {
                     let symbol = Symbol::new(module.id, ident_id);
 
-                    if is_type_name {
-                        self.qualified_type_lookups.insert(symbol);
-                    } else {
+                    if !is_type_name {
                         self.qualified_value_lookups.insert(symbol);
                     }
 
@@ -183,9 +177,7 @@ impl<'a> Env<'a> {
                     Some(ident_id) => {
                         let symbol = Symbol::new(module.id, ident_id);
 
-                        if is_type_name {
-                            self.qualified_type_lookups.insert(symbol);
-                        } else {
+                        if !is_type_name {
                             self.qualified_value_lookups.insert(symbol);
                         }
 

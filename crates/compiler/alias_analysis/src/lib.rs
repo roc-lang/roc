@@ -1203,12 +1203,6 @@ fn recursive_variant_types<'a>(
     Ok(result)
 }
 
-#[allow(dead_code)]
-fn worst_case_type(context: &mut impl TypeContext) -> Result<TypeId> {
-    let cell = context.add_heap_cell_type();
-    context.add_bag_type(cell)
-}
-
 fn expr_spec<'a>(
     builder: &mut FuncDefBuilder,
     interner: &STLayoutInterner<'a>,

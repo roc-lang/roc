@@ -1,6 +1,6 @@
 use crate::docs::ModuleDocumentation;
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
-use roc_can::expr::{DbgLookup, ExpectLookup};
+use roc_can::expr::ExpectLookup;
 use roc_can::{
     abilities::AbilitiesStore,
     expr::{Declarations, PendingDerives},
@@ -223,7 +223,6 @@ pub struct Expectations {
     pub subs: roc_types::subs::Subs,
     pub path: PathBuf,
     pub expectations: VecMap<Region, Vec<ExpectLookup>>,
-    pub dbgs: VecMap<Symbol, DbgLookup>,
     pub ident_ids: IdentIds,
 }
 

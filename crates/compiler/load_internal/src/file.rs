@@ -16,7 +16,7 @@ use roc_builtins::roc::module_source;
 use roc_can::abilities::{AbilitiesStore, PendingAbilitiesStore, ResolvedImpl};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints, TypeOrVar};
 use roc_can::env::FxMode;
-use roc_can::expr::{DbgLookup, Declarations, ExpectLookup, PendingDerives};
+use roc_can::expr::{Declarations, ExpectLookup, PendingDerives};
 use roc_can::module::{
     canonicalize_module_defs, ExposedByModule, ExposedForModule, ExposedModuleTypes, Module,
     ModuleParams, ResolvedImplementations, TypeState,
@@ -571,7 +571,6 @@ pub struct ExpectMetadata<'a> {
 }
 
 type LocExpects = VecMap<Region, Vec<ExpectLookup>>;
-type LocDbgs = VecMap<Symbol, DbgLookup>;
 
 /// A message sent out _from_ a worker thread,
 /// representing a result of work done, or a request for further work
@@ -591,7 +590,7 @@ enum Msg<'a> {
         module_timing: ModuleTiming,
         abilities_store: AbilitiesStore,
         loc_expects: LocExpects,
-        loc_dbgs: LocDbgs,
+        has_dbgs: bool,
 
         #[cfg(debug_assertions)]
         checkmate: Option<roc_checkmate::Collector>,
@@ -881,7 +880,6 @@ impl std::fmt::Display for ModuleTiming {
 
 /// A message sent _to_ a worker thread, describing the work to be done
 #[derive(Debug)]
-#[allow(dead_code)]
 enum BuildTask<'a> {
     LoadModule {
         module_name: PQModuleName<'a>,
@@ -1464,8 +1462,6 @@ pub fn load<'a>(
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     enum Threads {
         Single,
-
-        #[allow(dead_code)]
         Many(usize),
     }
 
@@ -2448,7 +2444,7 @@ fn update<'a>(
             mut module_timing,
             abilities_store,
             loc_expects,
-            loc_dbgs,
+            has_dbgs,
 
             #[cfg(debug_assertions)]
             checkmate,
@@ -2465,7 +2461,7 @@ fn update<'a>(
                 .exposes
                 .insert(module_id, solved_module.exposed_vars_by_symbol.clone());
 
-            let should_include_expects = (!loc_expects.is_empty() || !loc_dbgs.is_empty()) && {
+            let should_include_expects = (!loc_expects.is_empty() || has_dbgs) && {
                 let modules = state.arc_modules.lock();
                 modules
                     .package_eq(module_id, state.root_id)
@@ -2477,7 +2473,6 @@ fn update<'a>(
 
                 Some(Expectations {
                     expectations: loc_expects,
-                    dbgs: loc_dbgs,
                     subs: solved_subs.clone().into_inner(),
                     path: path.to_owned(),
                     ident_ids: ident_ids.clone(),
@@ -3684,8 +3679,6 @@ fn load_module<'a>(
 #[derive(Debug)]
 enum ShorthandPath {
     /// e.g. "/home/rtfeldman/.cache/roc/0.1.0/oUkxSOI9zFGtSoIaMB40QPdrXphr1p1780eiui2iO9Mz"
-    #[allow(dead_code)]
-    // wasm warns FromHttpsUrl is unused, but errors if it is removed ¯\_(ツ)_/¯
     FromHttpsUrl {
         /// e.g. "/home/rtfeldman/.cache/roc/0.1.0/oUkxSOI9zFGtSoIaMB40QPdrXphr1p1780eiui2iO9Mz"
         root_module_dir: PathBuf,
@@ -4829,7 +4822,7 @@ fn run_solve<'a>(
 
     let mut module = module;
     let loc_expects = std::mem::take(&mut module.loc_expects);
-    let loc_dbgs = std::mem::take(&mut module.loc_dbgs);
+    let has_dbgs = module.has_dbgs;
     let module = module;
 
     let solve_result = {
@@ -4944,7 +4937,7 @@ fn run_solve<'a>(
         module_timing,
         abilities_store,
         loc_expects,
-        loc_dbgs,
+        has_dbgs,
 
         #[cfg(debug_assertions)]
         checkmate,
@@ -5256,7 +5249,7 @@ fn canonicalize_and_constrain<'a>(
         rigid_variables: module_output.rigid_variables,
         abilities_store: module_output.scope.abilities_store,
         loc_expects: module_output.loc_expects,
-        loc_dbgs: module_output.loc_dbgs,
+        has_dbgs: module_output.has_dbgs,
         module_params: module_output.module_params,
     };
 

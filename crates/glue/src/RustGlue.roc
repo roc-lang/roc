@@ -2228,22 +2228,6 @@ typeName = \types, id ->
         TagUnion (SingleTagStruct { name }) -> escapeKW name
         Function { functionName } -> escapeKW functionName
 
-getSizeRoundedToAlignment = \types, id ->
-    alignment = Types.alignment types id
-
-    Types.size types id
-    |> roundUpToAlignment alignment
-
-roundUpToAlignment = \width, alignment ->
-    when alignment is
-        0 -> width
-        1 -> width
-        _ ->
-            if width % alignment > 0 then
-                width + alignment - (width % alignment)
-            else
-                width
-
 archName = \arch ->
     when arch is
         Aarch32 ->

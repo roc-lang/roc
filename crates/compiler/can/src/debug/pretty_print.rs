@@ -19,14 +19,6 @@ pub struct Ctx<'a> {
     pub print_lambda_names: bool,
 }
 
-pub fn pretty_print_declarations(c: &Ctx, declarations: &Declarations) -> String {
-    let f = Arena::new();
-    print_declarations_help(c, &f, declarations)
-        .1
-        .pretty(80)
-        .to_string()
-}
-
 pub fn pretty_write_declarations(
     writer: &mut impl std::io::Write,
     c: &Ctx,

@@ -214,7 +214,6 @@ impl CompletionVisitor<'_> {
             DeclarationInfo::Value {
                 expr_var, pattern, ..
             } => self.patterns(pattern, expr_var),
-            DeclarationInfo::Return { .. } => vec![],
             DeclarationInfo::Function {
                 expr_var,
                 pattern,

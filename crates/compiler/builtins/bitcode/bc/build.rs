@@ -3,8 +3,8 @@ use roc_error_macros::internal_error;
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::process::Command;
 use std::str;
-use std::{env, path::PathBuf, process::Command};
 
 #[cfg(target_os = "macos")]
 use tempfile::tempdir;
@@ -80,17 +80,6 @@ fn generate_bc_file(bitcode_path: &Path, zig_object: &str, file_name: &str) {
         .args(["build", zig_object, "-Drelease=true"]);
 
     run_command(zig_cmd, 0);
-}
-
-pub fn get_lib_dir() -> PathBuf {
-    // Currently we have the OUT_DIR variable which points to `/target/debug/build/roc_builtins-*/out/`.
-    // So we just need to add "/bitcode" to that.
-    let dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
-
-    // create dir if it does not exist
-    fs::create_dir_all(&dir).expect("Failed to make $OUT_DIR/ dir.");
-
-    dir
 }
 
 fn run_command(mut command: Command, flaky_fail_counter: usize) {
