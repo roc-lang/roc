@@ -14,7 +14,7 @@ use roc_parse::ast::FunctionArrow;
 use roc_parse::keyword;
 use roc_target::Target;
 use roc_types::subs::{Content, FlatType, GetSubsSlice, Subs, Variable};
-use roc_types::types::{Alias, AliasCommon, Type, TypeExtension};
+use roc_types::types::{Alias, AliasCommon, AliasKind, Type, TypeExtension};
 use std::borrow::{Borrow, Cow};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -1268,31 +1268,24 @@ fn content_to_ann(
             },
             FlatType::EffectfulFunc => TypeAnnotation::NoTypeAnn,
         },
-        Content::Alias(symbol, args, actual, kind) => {
-            let actual_ann = content_to_ann(
-                subs.get_content_without_compacting(*actual),
-                subs,
-                interns,
-                aliases,
-                var_names,
-            );
-            TypeAnnotation::Apply {
-                name: symbol.as_str(interns).to_string(),
-                parts: args
-                    .type_variables()
-                    .into_iter()
-                    .map(|var_index| {
-                        let var = subs[var_index];
-                        content_to_ann(
-                            subs.get_content_without_compacting(var),
-                            subs,
-                            interns,
-                            aliases,
-                            var_names,
-                        )
-                    })
-                    .collect(),
+        Content::Alias(_symbol, args, actual_var, kind) => {
+            // Unwrap all type aliases. Docs should never show type aliases; they should always be followed!
+            let todo_propagate_arg_names_to_annotation = args;
+            let mut actual_content = subs.get_content_without_compacting(*actual_var);
+
+            while let AliasKind::Structural = kind {
+                match actual_content {
+                    Content::Alias(_symbol, _args, actual_var, AliasKind::Structural) => {
+                        actual_content = subs.get_content_without_compacting(*actual_var);
+                    }
+                    non_alias_content => {
+                        actual_content = non_alias_content;
+                        break;
+                    }
+                }
             }
+
+            content_to_ann(actual_content, subs, interns, aliases, var_names)
         }
         Content::RangedNumber(_) => TypeAnnotation::Apply {
             name: "Num".to_string(),
