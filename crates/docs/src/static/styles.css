@@ -6,6 +6,7 @@
   --green: #0b8400;
   --cyan: #067c94;
   --blue: #05006d;
+  --blue-code-border: #66a4f2;
   --violet: #7c38f5;
   --violet-bg: #ece2fd;
   --magenta: #a20031;
@@ -27,6 +28,8 @@
   --module-search-height: 48px;
   --module-search-padding-height: 12px;
   --module-search-form-padding-width: 20px;
+
+  --docs-section-side-padding: 2.5em;
 }
 
 a {
@@ -90,7 +93,22 @@ table tr td {
   width: auto;
   margin-top: 0;
   margin-bottom: 24px;
-  padding: 8px 16px;
+  margin-left: 1em;
+  padding: 16px 24px;
+  background-color: var(--code-bg);
+  border: 2px solid var(--blue-code-border);
+}
+
+.entry-name a:first-of-type {
+    font-weight: bold;
+    font-size: 1.25em;
+}
+
+code {
+  font-family: var(--font-mono);
+  color: var(--code-color);
+  background-color: var(--code-bg);
+  display: inline-block;
 }
 
 .pkg-full-name a {
@@ -181,30 +199,27 @@ main {
 }
 
 section {
-  padding: 4px 4px 12px 0;
-  border: 2px solid var(--code-bg);
-  box-shadow: 4px 4px 0 var(--faded-color);
-  margin: 36px 0;
+  padding: 32px 0;
 }
 
 section blockquote {
   font-style: italic;
   position: relative;
-  margin: 0;
-  margin-left: 16px;
   border-left: 2px solid var(--gray);
-}
-
-section > *:last-child {
-  margin-bottom: 0;
 }
 
 section h1,
 section h2,
 section h3,
 section h4,
-section p {
-padding: 0px 16px;
+section p,
+section pre,
+section blockquote {
+    margin: 1em var(--docs-section-side-padding);
+}
+
+section blockquote p {
+    margin: 1em;
 }
 
 #sidebar-nav {
@@ -591,6 +606,7 @@ pre>samp {
       --green: #8ecc88;
       --cyan: #12c9be;
       --blue: #b1afdf;
+      --blue-code-border: #66a4f2;
       --violet: #CAADFB;
       --violet-bg: #332944;
       --magenta: #f39bac;
