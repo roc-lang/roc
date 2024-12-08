@@ -299,12 +299,14 @@ pub const INT_TO_FLOAT_CAST_F64: IntrinsicName =
 
 pub const NUM_ADD_OR_PANIC_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.add_or_panic");
 pub const NUM_ADD_SATURATED_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.add_saturated");
+pub const NUM_ADD_WRAP_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.add_wrapped");
 pub const NUM_ADD_CHECKED_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.add_with_overflow");
 pub const NUM_ADD_CHECKED_FLOAT: IntrinsicName =
     float_intrinsic!("roc_builtins.num.add_with_overflow");
 
 pub const NUM_SUB_OR_PANIC_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.sub_or_panic");
 pub const NUM_SUB_SATURATED_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.sub_saturated");
+pub const NUM_SUB_WRAP_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.sub_wrapped");
 pub const NUM_SUB_CHECKED_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.sub_with_overflow");
 pub const NUM_SUB_CHECKED_FLOAT: IntrinsicName =
     float_intrinsic!("roc_builtins.num.sub_with_overflow");

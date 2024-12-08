@@ -940,8 +940,7 @@ impl<'a> LowLevelCall<'a> {
             NumAddWrap => match self.ret_layout_raw {
                 LayoutRepr::Builtin(Builtin::Int(width)) => match width {
                     IntWidth::I128 | IntWidth::U128 => {
-                        // TODO: don't panic
-                        self.load_args_and_call_zig(backend, &bitcode::NUM_ADD_OR_PANIC_INT[width])
+                        self.load_args_and_call_zig(backend, &bitcode::NUM_ADD_WRAP_INT[width])
                     }
                     IntWidth::I64 | IntWidth::U64 => {
                         self.load_args(backend);
@@ -1031,8 +1030,7 @@ impl<'a> LowLevelCall<'a> {
             NumSubWrap => match self.ret_layout_raw {
                 LayoutRepr::Builtin(Builtin::Int(width)) => match width {
                     IntWidth::I128 | IntWidth::U128 => {
-                        // TODO: don't panic
-                        self.load_args_and_call_zig(backend, &bitcode::NUM_SUB_OR_PANIC_INT[width])
+                        self.load_args_and_call_zig(backend, &bitcode::NUM_SUB_WRAP_INT[width])
                     }
                     IntWidth::I64 | IntWidth::U64 => {
                         self.load_args(backend);
