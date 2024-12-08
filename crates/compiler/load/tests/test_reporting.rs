@@ -1203,7 +1203,8 @@ mod test_reporting {
         @r"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
-    This expression is used in an unexpected way:
+    This returns something that's incompatible with the return type of the
+    enclosing function:
 
     5│      f = \x -> g x
                       ^^^
@@ -1212,7 +1213,7 @@ mod test_reporting {
 
         List List a
 
-    But you are trying to use it as:
+    But I expected the function to have return type:
 
         List a
 
@@ -1239,7 +1240,8 @@ mod test_reporting {
         @r"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
-    This expression is used in an unexpected way:
+    This returns something that's incompatible with the return type of the
+    enclosing function:
 
     7│      g = \x -> f [x]
                       ^^^^^
@@ -1248,7 +1250,7 @@ mod test_reporting {
 
         List List b
 
-    But you are trying to use it as:
+    But I expected the function to have return type:
 
         List b
 
@@ -6607,7 +6609,7 @@ All branches in an `if` must have the same type!
         @r"
     ── UNFINISHED FUNCTION in tmp/unfinished_closure_pattern_in_parens/Test.roc ────
 
-    I was partway through parsing a  function, but I got stuck here:
+    I was partway through parsing a function, but I got stuck here:
 
     4│      x = \( a
     5│      )
@@ -10239,16 +10241,17 @@ All branches in an `if` must have the same type!
         @r"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
-    This expression is used in an unexpected way:
+    This returns something that's incompatible with the return type of the
+    enclosing function:
 
     5│      f = \_ -> if Bool.true then {} else f {}
                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    It is a value of type:
+    It a value of type:
 
         {}
 
-    But you are trying to use it as:
+    But I expected the function to have return type:
 
         * -> Str
     "
@@ -10395,11 +10398,12 @@ All branches in an `if` must have the same type!
 
     Something is off with the 2nd branch of this `when` expression:
 
-    10│       olist : OList
-    11│       olist =
-    12│>          when alist is
-    13│>              Nil -> @OList Nil
-    14│>              Cons _ lst -> lst
+    10│      olist : OList
+    11│      olist =
+    12│          when alist is
+    13│              Nil -> @OList Nil
+    14│              Cons _ lst -> lst
+                                   ^^^
 
     This `lst` value is a:
 
@@ -10430,6 +10434,7 @@ All branches in an `if` must have the same type!
 
     This 2nd argument to `map` has an unexpected type:
 
+    4│      A := U8
     5│      List.map [1u16, 2u16, 3u16] @A
                                         ^^
 
@@ -14537,7 +14542,7 @@ All branches in an `if` must have the same type!
         @r###"
         ── RETURN OUTSIDE OF FUNCTION in /code/proj/Main.roc ───────────────────────────
 
-        This `return` statement doesn't belong to a function:
+        This `return` doesn't belong to a function:
 
         7│              return x
                         ^^^^^^^^
@@ -14615,25 +14620,25 @@ All branches in an `if` must have the same type!
             myFunction 3
             "#
         ),
-        @r###"
-        ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+        @r#"
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
-        This `return` statement doesn't match the return type of its enclosing
-        function:
+    This returns something that's incompatible with the return type of the
+    enclosing function:
 
-        5│           if x == 5 then
-        6│>              return "abc"
-        7│           else
-        8│               x
+    5│           if x == 5 then
+    6│>              return "abc"
+    7│           else
+    8│               x
 
-        This returns a value of type:
+    This returns a value of type:
 
-            Str
+        Str
 
-        But I expected the function to have return type:
+    But I expected the function to have return type:
 
-            Num *
-        "###
+        Num *
+    "#
     );
 
     test_report!(
@@ -14683,6 +14688,54 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
+        return_in_bare_statement,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../crates/cli/tests/test-projects/test-platform-effects-zig/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                Effect.putLine! "hello"
+
+                # this outputs {}, so it's ignored
+                if 7 > 5 then
+                    {}
+                else
+                    return Err TooBig
+
+                # this outputs a value, so we are incorrectly
+                # dropping the parsed value
+                when List.get [1, 2, 3] 5 is
+                    Ok item -> item
+                    Err err ->
+                        return Err err
+
+                Ok {}
+            "#
+        ),
+        @r#"
+    ── IGNORED RESULT in /code/proj/Main.roc ───────────────────────────────────────
+
+    The result of this expression is ignored:
+
+    16│>      when List.get [1, 2, 3] 5 is
+    17│>          Ok item -> item
+    18│>          Err err ->
+    19│>              return Err err
+
+    Standalone statements are required to produce an empty record, but the
+    type of this one is:
+
+        Num *
+
+    If you still want to ignore it, assign it to `_`, like this:
+
+        _ = File.delete! "data.json"
+    "#
+    );
+
+    test_report!(
         mismatch_only_early_returns,
         indoc!(
             r#"
@@ -14695,26 +14748,26 @@ All branches in an `if` must have the same type!
             myFunction 3
             "#
         ),
-        @r###"
-        ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
-        
-        This `return` statement doesn't match the return type of its enclosing
-        function:
-        
-        5│          if x == 5 then
-        6│              return "abc"
-        7│          else
-        8│              return 123
-                        ^^^^^^^^^^
-        
-        This returns a value of type:
-        
-            Num *
-        
-        But I expected the function to have return type:
-        
-            Str
-        "###
+        @r#"
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+
+    This returns something that's incompatible with the return type of the
+    enclosing function:
+
+    5│          if x == 5 then
+    6│              return "abc"
+    7│          else
+    8│              return 123
+                    ^^^^^^^^^^
+
+    This returns a value of type:
+
+        Num *
+
+    But I expected the function to have return type:
+
+        Str
+    "#
     );
 
     test_report!(
@@ -14755,6 +14808,61 @@ All branches in an `if` must have the same type!
         
             _ = File.delete! "data.json"
         "###
+    );
+
+    test_report!(
+        return_with_ignored_output,
+        indoc!(
+            r#"
+            app [main!] { pf: platform "../../../../../crates/cli/tests/test-projects/test-platform-effects-zig/main.roc" }
+
+            import pf.Effect
+
+            main! = \{} ->
+                Effect.putLine! "hello"
+
+                # not ignored, warning
+                when List.get [1, 2, 3] 5 is
+                    Ok item -> item
+                    Err err ->
+                        return Err err
+
+                # ignored, OK
+                _ =
+                    when List.get [1, 2, 3] 5 is
+                        Ok item -> item
+                        Err err ->
+                            return Err err
+
+                # also ignored, also OK
+                _ignored =
+                    when List.get [1, 2, 3] 5 is
+                        Ok item -> item
+                        Err err ->
+                            return Err err
+
+                Ok {}
+            "#
+        ),
+        @r#"
+    ── IGNORED RESULT in /code/proj/Main.roc ───────────────────────────────────────
+
+    The result of this expression is ignored:
+
+     9│>      when List.get [1, 2, 3] 5 is
+    10│>          Ok item -> item
+    11│>          Err err ->
+    12│>              return Err err
+
+    Standalone statements are required to produce an empty record, but the
+    type of this one is:
+
+        Num *
+
+    If you still want to ignore it, assign it to `_`, like this:
+
+        _ = File.delete! "data.json"
+    "#
     );
 
     test_report!(
@@ -14887,6 +14995,206 @@ All branches in an `if` must have the same type!
             "#
         ),
         @"" // no errors
+    );
+
+    test_report!(
+        keyword_try_with_non_result_target,
+        indoc!(
+            r#"
+            invalidTry = \{} ->
+                nonResult = "abc"
+                x = try nonResult
+
+                Ok (x * 2)
+
+            invalidTry {}
+            "#
+        ),
+        @r"
+    ── INVALID TRY TARGET in /code/proj/Main.roc ───────────────────────────────────
+
+    This expression cannot be used as a `try` target:
+
+    6│          x = try nonResult
+                        ^^^^^^^^^
+
+    I expected a Result, but it actually has type:
+
+        Str
+
+    Hint: Did you forget to wrap the value with an `Ok` or an `Err` tag?
+    "
+    );
+
+    test_report!(
+        question_try_with_non_result_target,
+        indoc!(
+            r#"
+            invalidTry = \{} ->
+                nonResult = "abc"
+                x = nonResult?
+
+                Ok (x * 2)
+
+            invalidTry {}
+            "#
+        ),
+        @r"
+    ── INVALID TRY TARGET in /code/proj/Main.roc ───────────────────────────────────
+
+    This expression cannot be tried with the `?` operator:
+
+    6│          x = nonResult?
+                    ^^^^^^^^^^
+
+    I expected a Result, but it actually has type:
+
+        Str
+
+    Hint: Did you forget to wrap the value with an `Ok` or an `Err` tag?
+    "
+    );
+
+    test_report!(
+        incompatible_try_errs,
+        indoc!(
+            r#"
+            incompatibleTrys = \{} ->
+                x = try Err 123
+
+                y = try Err "abc"
+
+                Ok (x + y)
+
+            incompatibleTrys {}
+            "#
+        ),
+        @r#"
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+
+    This returns something that's incompatible with the return type of the
+    enclosing function:
+
+    5│           x = try Err 123
+    6│
+    7│>          y = try Err "abc"
+    8│
+    9│           Ok (x + y)
+
+    This returns an `Err` of type:
+
+        [Err Str, …]
+
+    But I expected the function to have return type:
+
+        [Err (Num *), …]a
+    "#
+    );
+
+    test_report!(
+        keyword_try_prefix_in_pipe,
+        indoc!(
+            r#"
+            readFile : Str -> Str
+
+            getFileContents : Str -> Result Str _
+            getFileContents = \filePath ->
+                contents =
+                    readFile filePath
+                    |> try Result.mapErr ErrWrapper
+
+                contents
+
+            getFileContents "file.txt"
+            "#
+        ),
+        @r"
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+
+    This 1st argument to this function has an unexpected type:
+
+     9│>              readFile filePath
+    10│               |> try Result.mapErr ErrWrapper
+
+    This `readFile` call produces:
+
+        Str
+
+    But this function needs its 1st argument to be:
+
+        Result ok a
+    "
+    );
+
+    test_report!(
+        keyword_try_suffix_in_pipe,
+        indoc!(
+            r#"
+            readFile : Str -> Str
+
+            getFileContents : Str -> Result Str _
+            getFileContents = \filePath ->
+                contents =
+                    readFile filePath
+                    |> Result.mapErr ErrWrapper
+                    |> try
+
+                contents
+
+            getFileContents "file.txt"
+            "#
+        ),
+        @r"
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+
+    This 1st argument to |> has an unexpected type:
+
+     9│>              readFile filePath
+    10│               |> Result.mapErr ErrWrapper
+
+    This `readFile` call produces:
+
+        Str
+
+    But |> needs its 1st argument to be:
+
+        Result ok a
+    "
+    );
+
+    test_report!(
+        question_try_in_pipe,
+        indoc!(
+            r#"
+            readFile : Str -> Str
+
+            getFileContents : Str -> Result Str _
+            getFileContents = \filePath ->
+                contents =
+                    readFile filePath
+                    |> Result.mapErr? ErrWrapper
+
+                contents
+
+            getFileContents "file.txt"
+            "#
+        ),
+        @r"
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+
+    This 1st argument to this function has an unexpected type:
+
+     9│>              readFile filePath
+    10│               |> Result.mapErr? ErrWrapper
+
+    This `readFile` call produces:
+
+        Str
+
+    But this function needs its 1st argument to be:
+
+        Result ok a
+    "
     );
 
     test_report!(

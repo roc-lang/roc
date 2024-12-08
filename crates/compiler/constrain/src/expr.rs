@@ -30,8 +30,8 @@ use roc_region::all::{Loc, Region};
 use roc_types::subs::{IllegalCycleMark, Variable};
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
-    AliasKind, AnnotationSource, Category, IndexOrField, OptAbleType, PReason, Reason, RecordField,
-    TypeExtension, TypeTag, Types,
+    AliasKind, AnnotationSource, Category, EarlyReturnKind, IndexOrField, OptAbleType, PReason,
+    Reason, RecordField, TypeExtension, TypeTag, Types,
 };
 use soa::{Index, Slice};
 
@@ -152,7 +152,7 @@ fn constrain_untyped_closure(
     closure_var: Variable,
     ret_var: Variable,
     fx_var: Variable,
-    early_returns: &[(Variable, Region)],
+    early_returns: &[(Variable, Region, EarlyReturnKind)],
     arguments: &[(Variable, AnnotatedMark, Loc<Pattern>)],
     loc_body_expr: &Loc<Expr>,
     captured_symbols: &[(Symbol, Variable)],
@@ -184,30 +184,16 @@ fn constrain_untyped_closure(
     ));
 
     let returns_constraint = env.with_fx_expectation(fx_var, None, |env| {
-        let return_con = constrain_expr(
+        constrain_function_return(
             types,
             constraints,
             env,
-            loc_body_expr.region,
-            &loc_body_expr.value,
+            loc_body_expr,
+            early_returns,
             return_type_index,
-        );
-
-        let mut return_constraints = Vec::with_capacity(early_returns.len() + 1);
-        return_constraints.push(return_con);
-
-        for (early_return_variable, early_return_region) in early_returns {
-            let early_return_con = constraints.equal_types_var(
-                *early_return_variable,
-                return_type_index,
-                Category::Return,
-                *early_return_region,
-            );
-
-            return_constraints.push(early_return_con);
-        }
-
-        constraints.and_constraint(return_constraints)
+            ret_var,
+            false,
+        )
     });
 
     // make sure the captured symbols are sorted!
@@ -257,6 +243,51 @@ fn constrain_untyped_closure(
     ];
 
     constraints.exists_many(vars, cons)
+}
+
+pub fn constrain_function_return(
+    types: &mut Types,
+    constraints: &mut Constraints,
+    env: &mut Env,
+    body_expr: &Loc<Expr>,
+    early_returns: &[(Variable, Region, EarlyReturnKind)],
+    return_type_expected: ExpectedTypeIndex,
+    ret_var: Variable,
+    should_attach_res_constraints: bool,
+) -> Constraint {
+    let return_con = constrain_expr(
+        types,
+        constraints,
+        env,
+        body_expr.region,
+        &body_expr.value,
+        return_type_expected,
+    );
+
+    let mut return_constraints = Vec::with_capacity(early_returns.len() + 1);
+    let mut return_type_vars = Vec::with_capacity(early_returns.len() + 1);
+    return_constraints.push(return_con);
+    return_type_vars.push(ret_var);
+
+    for (early_return_variable, early_return_region, early_return_kind) in early_returns {
+        let early_return_con = constraints.equal_types_var(
+            *early_return_variable,
+            return_type_expected,
+            Category::Return(*early_return_kind),
+            *early_return_region,
+        );
+
+        return_constraints.push(early_return_con);
+        return_type_vars.push(*early_return_variable);
+    }
+
+    let returns_constraint = constraints.exists_many(return_type_vars, return_constraints);
+
+    if should_attach_res_constraints {
+        attach_resolution_constraints(constraints, env, returns_constraint)
+    } else {
+        returns_constraint
+    }
 }
 
 pub fn constrain_expr(
@@ -576,7 +607,6 @@ pub fn constrain_expr(
             let mut arg_cons = Vec::with_capacity(loc_args.len());
 
             for (index, (arg_var, loc_arg)) in loc_args.iter().enumerate() {
-                let region = loc_arg.region;
                 let arg_type = Variable(*arg_var);
                 let arg_type_index = constraints.push_variable(*arg_var);
 
@@ -833,6 +863,80 @@ pub fn constrain_expr(
             constraints.exists_many([*variable], [message_con, continuation_con])
         }
 
+        Try {
+            result_expr,
+            result_var,
+            return_var,
+            ok_payload_var,
+            err_payload_var,
+            err_ext_var,
+            kind,
+        } => {
+            let result_var_index = constraints.push_variable(*result_var);
+            let result_expected_type = constraints.push_expected_type(ForReason(
+                Reason::TryResult,
+                result_var_index,
+                result_expr.region,
+            ));
+            let result_constraint = constrain_expr(
+                types,
+                constraints,
+                env,
+                result_expr.region,
+                &result_expr.value,
+                result_expected_type,
+            );
+
+            let try_target_constraint = constraints.try_target(
+                result_var_index,
+                *ok_payload_var,
+                *err_payload_var,
+                result_expr.region,
+                *kind,
+            );
+
+            let return_type_index = constraints.push_variable(*return_var);
+            let expected_return_value = constraints.push_expected_type(ForReason(
+                Reason::TryResult,
+                return_type_index,
+                result_expr.region,
+            ));
+
+            let try_failure_type_index = {
+                let typ = types.from_old_type(&Type::TagUnion(
+                    vec![("Err".into(), vec![Type::Variable(*err_payload_var)])],
+                    TypeExtension::from_non_annotation_type(Type::Variable(*err_ext_var)),
+                ));
+                constraints.push_type(types, typ)
+            };
+            let try_failure_constraint = constraints.equal_types(
+                try_failure_type_index,
+                expected_return_value,
+                Category::TryFailure,
+                region,
+            );
+
+            let ok_type_index = constraints.push_variable(*ok_payload_var);
+            let try_success_constraint =
+                constraints.equal_types(ok_type_index, expected, Category::TrySuccess, region);
+
+            constraints.exists_many(
+                [
+                    *return_var,
+                    *result_var,
+                    *ok_payload_var,
+                    *err_payload_var,
+                    *err_ext_var,
+                ],
+                [
+                    result_constraint,
+                    try_target_constraint,
+                    try_failure_constraint,
+                    try_success_constraint,
+                ],
+            )
+        }
+
         If {
             cond_var,
             branch_var,
@@ -1018,26 +1122,25 @@ pub fn constrain_expr(
                 Region::span_across(&loc_cond.region, &branches.last().unwrap().value.region)
             };
 
-            let branch_expr_reason =
-                |expected: &Expected<TypeOrVar>, index, branch_region| match expected {
-                    FromAnnotation(name, arity, ann_source, _typ) => {
-                        // NOTE deviation from elm.
-                        //
-                        // in elm, `_typ` is used, but because we have this `expr_var` too
-                        // and need to constrain it, this is what works and gives better error messages
-                        FromAnnotation(
-                            name.clone(),
-                            *arity,
-                            AnnotationSource::TypedWhenBranch {
-                                index,
-                                region: ann_source.region(),
-                            },
-                            body_type_index,
-                        )
-                    }
+            let branch_expr_reason = |expected: &Expected<TypeOrVar>, index| match expected {
+                FromAnnotation(name, arity, ann_source, _typ) => {
+                    // NOTE deviation from elm.
+                    //
+                    // in elm, `_typ` is used, but because we have this `expr_var` too
+                    // and need to constrain it, this is what works and gives better error messages
+                    FromAnnotation(
+                        name.clone(),
+                        *arity,
+                        AnnotationSource::TypedWhenBranch {
+                            index,
+                            region: ann_source.region(),
+                        },
+                        body_type_index,
+                    )
+                }
 
-                    _ => ForReason(Reason::WhenBranch { index }, body_type_index, branch_region),
-                };
+                _ => ForReason(Reason::WhenBranch { index }, body_type_index, region),
+            };
 
             // Our goal is to constrain and introduce variables in all pattern when branch patterns before
             // looking at their bodies.
@@ -1091,11 +1194,7 @@ pub fn constrain_expr(
                     region,
                     when_branch,
                     expected_pattern,
-                    branch_expr_reason(
-                        &constraints[expected],
-                        HumanIndex::zero_based(index),
-                        when_branch.value.region,
-                    ),
+                    branch_expr_reason(&constraints[expected], HumanIndex::zero_based(index)),
                 );
 
                 pattern_vars.extend(new_pattern_vars);
@@ -2074,43 +2173,19 @@ fn constrain_function_def(
                 constraints.push_type(types, fn_type)
             };
 
-            let returns_constraint = {
-                let return_con = constrain_expr(
-                    types,
-                    constraints,
-                    env,
-                    loc_body_expr.region,
-                    &loc_body_expr.value,
-                    return_type_annotation_expected,
-                );
-
-                let mut return_constraints =
-                    Vec::with_capacity(function_def.early_returns.len() + 1);
-                return_constraints.push(return_con);
-
-                for (early_return_variable, early_return_region) in &function_def.early_returns {
-                    let early_return_type_expected =
-                        constraints.push_expected_type(Expected::ForReason(
-                            Reason::FunctionOutput,
-                            ret_type_index,
-                            *early_return_region,
-                        ));
-
-                    vars.push(*early_return_variable);
-                    let early_return_con = constraints.equal_types_var(
-                        *early_return_variable,
-                        early_return_type_expected,
-                        Category::Return,
-                        *early_return_region,
-                    );
-
-                    return_constraints.push(early_return_con);
-                }
-
-                let returns_constraint = constraints.and_constraint(return_constraints);
-
-                attach_resolution_constraints(constraints, env, returns_constraint)
-            };
+            let returns_constraint =
+                env.with_fx_expectation(function_def.fx_type, Some(annotation.region), |env| {
+                    constrain_function_return(
+                        types,
+                        constraints,
+                        env,
+                        loc_body_expr,
+                        &function_def.early_returns,
+                        return_type_annotation_expected,
+                        function_def.return_type,
+                        true,
+                    )
+                });
 
             vars.push(expr_var);
 
@@ -2459,7 +2534,7 @@ fn constrain_when_branch_help(
         types,
         constraints,
         env,
-        region,
+        when_branch.value.region,
         &when_branch.value.value,
         expr_expected,
     );
@@ -2966,32 +3041,16 @@ fn constrain_typed_def(
 
             let returns_constraint =
                 env.with_fx_expectation(fx_var, Some(annotation.region), |env| {
-                    let return_con = constrain_expr(
+                    constrain_function_return(
                         types,
                         constraints,
                         env,
-                        loc_body_expr.region,
-                        &loc_body_expr.value,
+                        loc_body_expr,
+                        early_returns,
                         return_type,
-                    );
-
-                    let mut return_constraints = Vec::with_capacity(early_returns.len() + 1);
-                    return_constraints.push(return_con);
-
-                    for (early_return_variable, early_return_region) in early_returns {
-                        let early_return_con = constraints.equal_types_var(
-                            *early_return_variable,
-                            return_type,
-                            Category::Return,
-                            *early_return_region,
-                        );
-
-                        return_constraints.push(early_return_con);
-                    }
-
-                    let returns_constraint = constraints.and_constraint(return_constraints);
-
-                    attach_resolution_constraints(constraints, env, returns_constraint)
+                        ret_var,
+                        true,
+                    )
                 });
 
             vars.push(*fn_var);
@@ -4025,35 +4084,22 @@ fn constraint_recursive_function(
 
             let returns_constraint =
                 env.with_fx_expectation(fx_var, Some(annotation.region), |env| {
-                    let expected = constraints.push_expected_type(NoExpectation(ret_type_index));
-                    let return_con = constrain_expr(
+                    let expected = constraints.push_expected_type(ForReason(
+                        Reason::FunctionOutput,
+                        ret_type_index,
+                        region,
+                    ));
+
+                    constrain_function_return(
                         types,
                         constraints,
                         env,
-                        loc_body_expr.region,
-                        &loc_body_expr.value,
+                        loc_body_expr,
+                        &function_def.early_returns,
                         expected,
-                    );
-
-                    let mut return_constraints =
-                        Vec::with_capacity(function_def.early_returns.len() + 1);
-                    return_constraints.push(return_con);
-
-                    for (early_return_variable, early_return_region) in &function_def.early_returns
-                    {
-                        let early_return_con = constraints.equal_types_var(
-                            *early_return_variable,
-                            expected,
-                            Category::Return,
-                            *early_return_region,
-                        );
-
-                        return_constraints.push(early_return_con);
-                    }
-
-                    let returns_constraint = constraints.and_constraint(return_constraints);
-
-                    attach_resolution_constraints(constraints, env, returns_constraint)
+                        ret_var,
+                        true,
+                    )
                 });
 
             vars.push(expr_var);
@@ -4406,6 +4452,7 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             | RecordUpdate { .. }
             | Expect { .. }
             | Dbg { .. }
+            | Try { .. }
             | Return { .. }
             | RuntimeError(..)
             | ZeroArgumentTag { .. }
@@ -4597,37 +4644,20 @@ fn rec_defs_help(
                         };
                         let returns_constraint =
                             env.with_fx_expectation(fx_var, Some(annotation.region), |env| {
-                                let return_type_expected =
-                                    constraints.push_expected_type(NoExpectation(ret_type_index));
+                                let return_type_expected = constraints.push_expected_type(
+                                    ForReason(Reason::FunctionOutput, ret_type_index, region),
+                                );
 
-                                let return_con = constrain_expr(
+                                constrain_function_return(
                                     types,
                                     constraints,
                                     env,
-                                    loc_body_expr.region,
-                                    &loc_body_expr.value,
+                                    loc_body_expr,
+                                    early_returns,
                                     return_type_expected,
-                                );
-
-                                let mut return_constraints =
-                                    Vec::with_capacity(early_returns.len() + 1);
-                                return_constraints.push(return_con);
-
-                                for (early_return_variable, early_return_region) in early_returns {
-                                    let early_return_con = constraints.equal_types_var(
-                                        *early_return_variable,
-                                        return_type_expected,
-                                        Category::Return,
-                                        *early_return_region,
-                                    );
-
-                                    return_constraints.push(early_return_con);
-                                }
-
-                                let returns_constraint =
-                                    constraints.and_constraint(return_constraints);
-
-                                attach_resolution_constraints(constraints, env, returns_constraint)
+                                    ret_var,
+                                    true,
+                                )
                             });
 
                         vars.push(*fn_var);

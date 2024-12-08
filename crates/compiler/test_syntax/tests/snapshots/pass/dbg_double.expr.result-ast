@@ -1,4 +1,4 @@
-SpaceAfter(
+@0-11 SpaceAfter(
     Apply(
         @0-3 Dbg,
         [

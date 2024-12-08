@@ -1,6 +1,7 @@
 use crate::{
     collection::{fmt_collection, Braces},
     expr::merge_spaces_conservative,
+    pattern::pattern_lift_spaces_after,
     spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT},
     Buf,
 };
@@ -43,6 +44,7 @@ pub enum Parens {
     InApply,
     InOperator,
     InAsPattern,
+    InApplyLastArg,
 }
 
 /// In an AST node, do we show newlines around it
@@ -238,6 +240,7 @@ fn fmt_ty_ann(
                 let is_first = index == 0;
 
                 if !is_first {
+                    buf.indent(indent);
                     buf.push_str(",");
                     if !self_is_multiline {
                         buf.spaces(1);
@@ -595,9 +598,9 @@ fn format_assigned_field_help<T>(
         OptionalValue(name, spaces, ann) => {
             if is_multiline {
                 buf.newline();
-                buf.indent(indent);
             }
 
+            buf.indent(indent);
             buf.push_str(name.value);
 
             if !spaces.is_empty() {
@@ -624,6 +627,7 @@ fn format_assigned_field_help<T>(
             }
 
             buf.spaces(separator_spaces);
+            buf.indent(indent);
             buf.push(':');
             buf.spaces(1);
             ann.value.format(buf, indent);
@@ -631,9 +635,9 @@ fn format_assigned_field_help<T>(
         LabelOnly(name) => {
             if is_multiline {
                 buf.newline();
-                buf.indent(indent);
             }
 
+            buf.indent(indent);
             buf.push_str(name.value);
         }
         AssignedField::SpaceBefore(sub_field, spaces) => {
@@ -872,6 +876,27 @@ pub fn ann_lift_spaces<'a, 'b: 'a>(
                 after,
             }
         }
+        TypeAnnotation::Function(args, purity, res) => {
+            let new_args = arena.alloc_slice_copy(args);
+            let before = if let Some(first) = new_args.first_mut() {
+                let lifted = ann_lift_spaces_before(arena, &first.value);
+                first.value = lifted.item;
+                lifted.before
+            } else {
+                &[]
+            };
+            let new_res = ann_lift_spaces_after(arena, &res.value);
+            let new_ann = TypeAnnotation::Function(
+                new_args,
+                *purity,
+                arena.alloc(Loc::at_zero(new_res.item)),
+            );
+            Spaces {
+                before,
+                item: new_ann,
+                after: new_res.after,
+            }
+        }
         TypeAnnotation::SpaceBefore(expr, spaces) => {
             let mut inner = ann_lift_spaces(arena, expr);
             inner.before = merge_spaces_conservative(arena, spaces, inner.before);
@@ -882,11 +907,121 @@ pub fn ann_lift_spaces<'a, 'b: 'a>(
             inner.after = merge_spaces_conservative(arena, inner.after, spaces);
             inner
         }
-        _ => Spaces {
+        TypeAnnotation::Tuple { elems, ext } => {
+            if let Some(ext) = ext {
+                let lifted = ann_lift_spaces_after(arena, &ext.value);
+                Spaces {
+                    before: &[],
+                    item: TypeAnnotation::Tuple {
+                        elems: *elems,
+                        ext: Some(arena.alloc(Loc::at_zero(lifted.item))),
+                    },
+                    after: lifted.after,
+                }
+            } else {
+                Spaces {
+                    before: &[],
+                    item: *ann,
+                    after: &[],
+                }
+            }
+        }
+        TypeAnnotation::Record { fields, ext } => {
+            if let Some(ext) = ext {
+                let lifted = ann_lift_spaces_after(arena, &ext.value);
+                Spaces {
+                    before: &[],
+                    item: TypeAnnotation::Record {
+                        fields: *fields,
+                        ext: Some(arena.alloc(Loc::at_zero(lifted.item))),
+                    },
+                    after: lifted.after,
+                }
+            } else {
+                Spaces {
+                    before: &[],
+                    item: *ann,
+                    after: &[],
+                }
+            }
+        }
+        TypeAnnotation::TagUnion { ext, tags } => {
+            if let Some(ext) = ext {
+                let lifted = ann_lift_spaces_after(arena, &ext.value);
+                Spaces {
+                    before: &[],
+                    item: TypeAnnotation::TagUnion {
+                        ext: Some(arena.alloc(Loc::at_zero(lifted.item))),
+                        tags: *tags,
+                    },
+                    after: lifted.after,
+                }
+            } else {
+                Spaces {
+                    before: &[],
+                    item: *ann,
+                    after: &[],
+                }
+            }
+        }
+        TypeAnnotation::BoundVariable(_)
+        | TypeAnnotation::Inferred
+        | TypeAnnotation::Wildcard
+        | TypeAnnotation::Malformed(_) => Spaces {
             before: &[],
             item: *ann,
             after: &[],
         },
+        TypeAnnotation::Where(inner, clauses) => {
+            let new_inner = ann_lift_spaces_before(arena, &inner.value);
+            let new_clauses = arena.alloc_slice_copy(clauses);
+            let after = if let Some(last) = new_clauses.last_mut() {
+                let lifted = implements_clause_lift_spaces_after(arena, &last.value);
+                last.value = lifted.item;
+                lifted.after
+            } else {
+                &[]
+            };
+            Spaces {
+                before: new_inner.before,
+                item: TypeAnnotation::Where(arena.alloc(Loc::at_zero(new_inner.item)), new_clauses),
+                after,
+            }
+        }
+        TypeAnnotation::As(ann, comments, type_header) => {
+            let new_ann = ann_lift_spaces_before(arena, &ann.value);
+            let new_header = type_head_lift_spaces_after(arena, type_header);
+            Spaces {
+                before: new_ann.before,
+                item: TypeAnnotation::As(
+                    arena.alloc(Loc::at_zero(new_ann.item)),
+                    comments,
+                    new_header.item,
+                ),
+                after: new_header.after,
+            }
+        }
+    }
+}
+
+fn implements_clause_lift_spaces_after<'a, 'b: 'a>(
+    arena: &'a Bump,
+    value: &ImplementsClause<'b>,
+) -> SpacesAfter<'a, ImplementsClause<'a>> {
+    let new_abilities = arena.alloc_slice_copy(value.abilities);
+    let after = if let Some(last) = new_abilities.last_mut() {
+        let lifted = ann_lift_spaces_after(arena, &last.value);
+        last.value = lifted.item;
+        lifted.after
+    } else {
+        &[]
+    };
+    SpacesAfter {
+        item: ImplementsClause {
+            var: value.var,
+            abilities: new_abilities,
+        },
+        after,
     }
 }
 
@@ -909,6 +1044,27 @@ pub fn ann_lift_spaces_after<'a, 'b: 'a>(
     SpacesAfter {
         item: lifted.item.maybe_before(arena, lifted.before),
         after: lifted.after,
+    }
+}
+
+pub fn type_head_lift_spaces_after<'a, 'b: 'a>(
+    arena: &'a Bump,
+    header: &TypeHeader<'b>,
+) -> SpacesAfter<'a, TypeHeader<'a>> {
+    let new_vars = arena.alloc_slice_copy(header.vars);
+    let after = if let Some(last) = new_vars.last_mut() {
+        let lifted = pattern_lift_spaces_after(arena, &last.value);
+        last.value = lifted.item;
+        lifted.after
+    } else {
+        &[]
+    };
+    SpacesAfter {
+        item: TypeHeader {
+            name: header.name,
+            vars: new_vars,
+        },
+        after,
     }
 }
 
@@ -1024,7 +1180,7 @@ fn ann_lift_to_node<'a, 'b: 'a>(
             inner.after = merge_spaces_conservative(arena, inner.after, spaces);
             inner
         }
-        TypeAnnotation::Function(args, _purity, res) => {
+        TypeAnnotation::Function(args, purity, res) => {
             let new_args = arena.alloc_slice_copy(args);
             let before = if let Some(first) = new_args.first_mut() {
                 let lifted = ann_lift_spaces_before(arena, &first.value);
@@ -1036,7 +1192,7 @@ fn ann_lift_to_node<'a, 'b: 'a>(
             let new_res = ann_lift_spaces_after(arena, &res.value);
             let new_ann = TypeAnnotation::Function(
                 new_args,
-                FunctionArrow::Pure,
+                *purity,
                 arena.alloc(Loc::at_zero(new_res.item)),
             );
             let inner = Spaces {

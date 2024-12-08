@@ -1,0 +1,50 @@
+@0-11 Defs(
+    Defs {
+        tags: [
+            EitherIndex(0),
+        ],
+        regions: [
+            @0-9,
+        ],
+        space_before: [
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        ],
+        space_after: [
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        ],
+        spaces: [],
+        type_defs: [
+            Alias {
+                header: TypeHeader {
+                    name: @0-1 "C",
+                    vars: [],
+                },
+                ann: @4-9 Function(
+                    [
+                        @4-5 SpaceBefore(
+                            BoundVariable(
+                                "h",
+                            ),
+                            [
+                                Newline,
+                            ],
+                        ),
+                    ],
+                    Pure,
+                    @8-9 BoundVariable(
+                        "a",
+                    ),
+                ),
+            },
+        ],
+        value_defs: [],
+    },
+    @10-11 SpaceBefore(
+        Tag(
+            "C",
+        ),
+        [
+            Newline,
+        ],
+    ),
+)

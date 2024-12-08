@@ -12,13 +12,16 @@ version.workspace = true
 
 [dependencies]
 bumpalo.workspace = true
+roc_can.workspace = true
 roc_collections.workspace = true
+roc_error_macros.workspace = true
 roc_fmt.workspace = true
 roc_module.workspace = true
 roc_parse.workspace = true
 roc_region.workspace = true
 roc_test_utils.workspace = true
 roc_test_utils_dir.workspace = true
+roc_types.workspace = true
 
 [dev-dependencies]
 indoc.workspace = true

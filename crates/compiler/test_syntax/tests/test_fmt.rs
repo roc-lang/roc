@@ -22,11 +22,19 @@ mod test_fmt {
     }
 
     fn expr_formats_to(input: &str, expected: &str) {
-        Input::Expr(input.trim()).check_invariants(check_formatting(expected.trim()), true)
+        Input::Expr(input.trim()).check_invariants(
+            check_formatting(expected.trim()),
+            true,
+            Some(false),
+        )
     }
 
     fn expr_formats_same(input: &str) {
-        Input::Expr(input.trim()).check_invariants(check_formatting(input.trim()), true)
+        Input::Expr(input.trim()).check_invariants(
+            check_formatting(input.trim()),
+            true,
+            Some(false),
+        )
     }
 
     fn fmt_module_and_defs<'a>(
@@ -2139,40 +2147,6 @@ mod test_fmt {
                 x: 42,
                 # comment 1
                 # comment 2
-            }"
-            ),
-        );
-    }
-
-    #[test]
-    fn comments_with_newlines_in_records() {
-        expr_formats_to(
-            indoc!(
-                r"
-            {
-                z: 44 #comment 0
-                ,
-                y: 41, # comment 1
-
-                # comment 2
-                x: 42
-
-                # comment 3
-
-                # comment 4
-            }"
-            ),
-            indoc!(
-                r"
-            {
-                z: 44,
-                # comment 0
-                y: 41,
-                # comment 1
-                # comment 2
-                x: 42,
-                # comment 3
-                # comment 4
             }"
             ),
         );

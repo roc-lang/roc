@@ -1005,7 +1005,7 @@ fn to_unfinished_lambda_report<'a>(
     let doc = alloc.stack([
         alloc.concat([
             alloc.reflow(r"I was partway through parsing a "),
-            alloc.reflow(r" function, but I got stuck here:"),
+            alloc.reflow(r"function, but I got stuck here:"),
         ]),
         alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
         message,
