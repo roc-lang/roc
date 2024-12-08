@@ -101,7 +101,6 @@ table tr td {
 
 .entry-name a:first-of-type {
     font-weight: bold;
-    font-size: 1.25em;
 }
 
 code {
@@ -281,6 +280,7 @@ footer {
   grid-row-start: footer;
   grid-row-end: footer;
   max-width: var(--main-content-max-width);
+  color: var(--faded-color);
   font-size: 14px;
   box-sizing: border-box;
   padding: 16px;
@@ -314,7 +314,7 @@ footer p {
 
 .sidebar-entry a,
 .sidebar-entry a:visited {
-  color: var(--text-color);
+  color: var(--faded-color);
 }
 
 .sidebar-sub-entries a {
@@ -324,8 +324,7 @@ footer p {
   overflow: hidden;
   text-overflow: ellipsis;
   margin-left: 14px;
-  padding-left: 26px;
-  border-left: 2px solid var(--violet);
+  padding-left: 1.4em;
 }
 
 .module-name {
