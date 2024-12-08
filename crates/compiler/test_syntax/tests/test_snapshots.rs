@@ -704,10 +704,7 @@ mod test_snapshots {
             // This is the current list as of writing.
             // We should be driving these down to zero over time.
             // Adding this protection in now to avoid accidentally adding more.
-            "all_the_bangs"
-            | "import_in_closure_with_curlies_after"
-            | "inline_import"
-            | "newline_before_import_curlies" => true,
+            "all_the_bangs" => true,
 
             // When adding new snapshot tests, strongly prefer fixing any canonicalization panics
             // they may run into rather than adding them to this list.
