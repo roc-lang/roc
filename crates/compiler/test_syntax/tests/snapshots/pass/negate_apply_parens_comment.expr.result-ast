@@ -1,4 +1,4 @@
-SpaceAfter(
+@0-9 SpaceAfter(
     UnaryOp(
         @2-8 ParensAround(
             Apply(

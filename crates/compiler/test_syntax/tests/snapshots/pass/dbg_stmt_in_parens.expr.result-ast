@@ -1,4 +1,4 @@
-ParensAround(
+@0-12 ParensAround(
     DbgStmt {
         first: @5-6 Tag(
             "D",

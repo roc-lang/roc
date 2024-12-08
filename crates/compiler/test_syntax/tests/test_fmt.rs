@@ -22,11 +22,19 @@ mod test_fmt {
     }
 
     fn expr_formats_to(input: &str, expected: &str) {
-        Input::Expr(input.trim()).check_invariants(check_formatting(expected.trim()), true)
+        Input::Expr(input.trim()).check_invariants(
+            check_formatting(expected.trim()),
+            true,
+            Some(false),
+        )
     }
 
     fn expr_formats_same(input: &str) {
-        Input::Expr(input.trim()).check_invariants(check_formatting(input.trim()), true)
+        Input::Expr(input.trim()).check_invariants(
+            check_formatting(input.trim()),
+            true,
+            Some(false),
+        )
     }
 
     fn fmt_module_and_defs<'a>(
