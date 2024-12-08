@@ -2068,6 +2068,12 @@ impl<'a> LowLevelCall<'a> {
                     _ => todo!("{:?}: {:?} -> {:?}", self.lowlevel, arg_type, ret_type),
                 }
             }
+            NumToDecCast => {
+                todo!("Need to implement this");
+            }
+            NumToDecChecked => {
+                todo!("Need to implement this");
+            }
             NumToFloatCast => {
                 self.load_args(backend);
                 let arg_layout = backend.storage.symbol_layouts[&self.arguments[0]];
