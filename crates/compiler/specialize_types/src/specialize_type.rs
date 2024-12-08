@@ -155,7 +155,7 @@ impl<'a, 'c, 'd, 'e, 'f, 'm, 'p, P: Push<Problem>> Env<'a, 'c, 'd, 'e, 'f, 'm, '
         }
 
         // Convert the Content to a MonoType, often by passing an iterator. None of these iterators introduce allocations.
-        let mono_id = match dbg!(*subs.get_content_without_compacting(root_var)) {
+        let mono_id = match *subs.get_content_without_compacting(root_var) {
             Content::Structure(flat_type) => match flat_type {
                 FlatType::Apply(symbol, args) => {
                     if symbol.is_builtin() {
@@ -452,12 +452,11 @@ fn number_args_to_mono_id(
             // Unroll aliases in this loop, as many aliases as we encounter.
             loop {
                 match content {
-                    Content::Structure(flat_type) => {
-                        if let FlatType::Apply(outer_symbol, args) = flat_type {
-                            return num_num_args_to_mono_id(*outer_symbol, *args, subs, problems);
-                        } else {
-                            break;
-                        }
+                    Content::Structure(FlatType::Apply(outer_symbol, args)) => {
+                        return num_num_args_to_mono_id(*outer_symbol, *args, subs, problems);
+                    }
+                    Content::Structure(_) => {
+                        break;
                     }
                     Content::FlexVar(_) => {
                         // Num *

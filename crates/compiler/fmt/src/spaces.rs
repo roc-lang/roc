@@ -20,6 +20,43 @@ pub fn fmt_default_newline(buf: &mut Buf, spaces: &[CommentOrNewline], indent: u
     }
 }
 
+pub enum SpacesNewlineMode {
+    Normal,
+    SkipNewlinesAtStart,
+    SkipNewlinesAtEnd,
+    SkipNewlinesAtBoth,
+}
+
+pub fn fmt_spaces_with_newline_mode(
+    buf: &mut Buf<'_>,
+    mut spaces: &[CommentOrNewline<'_>],
+    indent: u16,
+    mode: SpacesNewlineMode,
+) {
+    if matches!(
+        mode,
+        SpacesNewlineMode::SkipNewlinesAtStart | SpacesNewlineMode::SkipNewlinesAtBoth
+    ) {
+        let skip_count = spaces
+            .iter()
+            .take_while(|s| *s == &CommentOrNewline::Newline)
+            .count();
+        spaces = &spaces[skip_count..];
+    }
+    if matches!(
+        mode,
+        SpacesNewlineMode::SkipNewlinesAtEnd | SpacesNewlineMode::SkipNewlinesAtBoth
+    ) {
+        let skip_count = spaces
+            .iter()
+            .rev()
+            .take_while(|s| *s == &CommentOrNewline::Newline)
+            .count();
+        spaces = &spaces[..spaces.len() - skip_count];
+    }
+    fmt_spaces(buf, spaces.iter(), indent);
+}
+
 /// Like fmt_spaces, but disallows two consecutive newlines.
 pub fn fmt_spaces_no_blank_lines<'a, 'buf, I>(buf: &mut Buf<'buf>, spaces: I, indent: u16)
 where

@@ -1,0 +1,48 @@
+@0-14 Defs(
+    Defs {
+        tags: [
+            EitherIndex(2147483648),
+        ],
+        regions: [
+            @0-12,
+        ],
+        space_before: [
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        ],
+        space_after: [
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        ],
+        spaces: [],
+        type_defs: [],
+        value_defs: [
+            Body(
+                @0-1 Identifier {
+                    ident: "t",
+                },
+                @2-12 Apply(
+                    @2-10 Str(
+                        PlainLine(
+                            "\" ",
+                        ),
+                    ),
+                    [
+                        @10-12 Str(
+                            PlainLine(
+                                "",
+                            ),
+                        ),
+                    ],
+                    Space,
+                ),
+            ),
+        ],
+    },
+    @13-14 SpaceBefore(
+        Tag(
+            "S",
+        ),
+        [
+            Newline,
+        ],
+    ),
+)

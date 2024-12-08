@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use bumpalo::Bump;
+use roc_fmt::MigrationFlags;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_parse::ast::Expr;
 use roc_problem::Severity;
@@ -57,7 +58,7 @@ impl<'a> Renderer<'a> {
     ) -> RocDocBuilder<'a> {
         use roc_fmt::annotation::Formattable;
 
-        let mut buf = roc_fmt::Buf::new_in(self.arena);
+        let mut buf = roc_fmt::Buf::new_in(self.arena, MigrationFlags::new(false));
         expr.format(&mut buf, 0);
 
         self.alloc.vcat([
@@ -201,7 +202,7 @@ impl<'a> Renderer<'a> {
 
         let expr = expressions[0];
 
-        let mut buf = roc_fmt::Buf::new_in(self.arena);
+        let mut buf = roc_fmt::Buf::new_in(self.arena, MigrationFlags::new(false));
         {
             use roc_fmt::annotation::Formattable;
             expr.format(&mut buf, 0);

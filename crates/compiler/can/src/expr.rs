@@ -19,14 +19,16 @@ use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentId, ModuleId, Symbol};
-use roc_parse::ast::{self, Defs, PrecedenceConflict, StrLiteral};
+use roc_parse::ast::{self, Defs, PrecedenceConflict, ResultTryKind, StrLiteral};
 use roc_parse::ident::Accessor;
 use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::num::SingleQuoteBound;
 use roc_types::subs::{ExhaustiveMark, IllegalCycleMark, RedundantMark, VarStore, Variable};
-use roc_types::types::{Alias, Category, IndexOrField, LambdaSet, OptAbleVar, Type};
+use roc_types::types::{
+    Alias, Category, EarlyReturnKind, IndexOrField, LambdaSet, OptAbleVar, Type,
+};
 use soa::Index;
 use std::fmt::{Debug, Display};
 use std::path::PathBuf;
@@ -328,6 +330,16 @@ pub enum Expr {
         symbol: Symbol,
     },
 
+    Try {
+        result_expr: Box<Loc<Expr>>,
+        result_var: Variable,
+        return_var: Variable,
+        ok_payload_var: Variable,
+        err_payload_var: Variable,
+        err_ext_var: Variable,
+        kind: TryKind,
+    },
+
     Return {
         return_value: Box<Loc<Expr>>,
         return_var: Variable,
@@ -335,6 +347,12 @@ pub enum Expr {
 
     /// Compiles, but will crash if reached
     RuntimeError(RuntimeError),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TryKind {
+    KeywordPrefix,
+    OperatorSuffix,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -403,12 +421,113 @@ impl Expr {
             }
             Self::Expect { .. } => Category::Expect,
             Self::Crash { .. } => Category::Crash,
-            Self::Return { .. } => Category::Return,
+            Self::Return { .. } => Category::Return(EarlyReturnKind::Return),
 
             Self::Dbg { .. } => Category::Expect,
+            Self::Try { .. } => Category::TrySuccess,
 
             // these nodes place no constraints on the expression's type
             Self::RuntimeError(..) => Category::Unknown,
+        }
+    }
+
+    pub fn contains_any_early_returns(&self) -> bool {
+        match self {
+            Self::Num { .. }
+            | Self::Int { .. }
+            | Self::Float { .. }
+            | Self::Str { .. }
+            | Self::IngestedFile { .. }
+            | Self::SingleQuote { .. }
+            | Self::Var { .. }
+            | Self::AbilityMember { .. }
+            | Self::ParamsVar { .. }
+            | Self::Closure(..)
+            | Self::EmptyRecord
+            | Self::RecordAccessor(_)
+            | Self::ZeroArgumentTag { .. }
+            | Self::OpaqueWrapFunction(_)
+            | Self::RuntimeError(..) => false,
+            Self::Return { .. } | Self::Try { .. } => true,
+            Self::List { loc_elems, .. } => loc_elems
+                .iter()
+                .any(|elem| elem.value.contains_any_early_returns()),
+            Self::When {
+                loc_cond, branches, ..
+            } => {
+                loc_cond.value.contains_any_early_returns()
+                    || branches.iter().any(|branch| {
+                        branch
+                            .guard
+                            .as_ref()
+                            .is_some_and(|guard| guard.value.contains_any_early_returns())
+                            || branch.value.value.contains_any_early_returns()
+                    })
+            }
+            Self::If {
+                branches,
+                final_else,
+                ..
+            } => {
+                final_else.value.contains_any_early_returns()
+                    || branches.iter().any(|(cond, then)| {
+                        cond.value.contains_any_early_returns()
+                            || then.value.contains_any_early_returns()
+                    })
+            }
+            Self::LetRec(defs, expr, _cycle_mark) => {
+                expr.value.contains_any_early_returns()
+                    || defs
+                        .iter()
+                        .any(|def| def.loc_expr.value.contains_any_early_returns())
+            }
+            Self::LetNonRec(def, expr) => {
+                def.loc_expr.value.contains_any_early_returns()
+                    || expr.value.contains_any_early_returns()
+            }
+            Self::Call(_func, args, _called_via) => args
+                .iter()
+                .any(|(_var, arg_expr)| arg_expr.value.contains_any_early_returns()),
+            Self::RunLowLevel { args, .. } | Self::ForeignCall { args, .. } => args
+                .iter()
+                .any(|(_var, arg_expr)| arg_expr.contains_any_early_returns()),
+            Self::Tuple { elems, .. } => elems
+                .iter()
+                .any(|(_var, loc_elem)| loc_elem.value.contains_any_early_returns()),
+            Self::Record { fields, .. } => fields
+                .iter()
+                .any(|(_field_name, field)| field.loc_expr.value.contains_any_early_returns()),
+            Self::RecordAccess { loc_expr, .. } => loc_expr.value.contains_any_early_returns(),
+            Self::TupleAccess { loc_expr, .. } => loc_expr.value.contains_any_early_returns(),
+            Self::RecordUpdate { updates, .. } => {
+                updates.iter().any(|(_field_name, field_update)| {
+                    field_update.loc_expr.value.contains_any_early_returns()
+                })
+            }
+            Self::ImportParams(_module_id, _region, params) => params
+                .as_ref()
+                .is_some_and(|(_var, p)| p.contains_any_early_returns()),
+            Self::Tag { arguments, .. } => arguments
+                .iter()
+                .any(|(_var, arg)| arg.value.contains_any_early_returns()),
+            Self::OpaqueRef { argument, .. } => argument.1.value.contains_any_early_returns(),
+            Self::Crash { msg, .. } => msg.value.contains_any_early_returns(),
+            Self::Dbg {
+                loc_message,
+                loc_continuation,
+                ..
+            } => {
+                loc_message.value.contains_any_early_returns()
+                    || loc_continuation.value.contains_any_early_returns()
+            }
+            Self::Expect {
+                loc_condition,
+                loc_continuation,
+                ..
+            } => {
+                loc_condition.value.contains_any_early_returns()
+                    || loc_continuation.value.contains_any_early_returns()
+            }
         }
     }
 }
@@ -445,7 +564,7 @@ pub struct ClosureData {
     pub closure_type: Variable,
     pub return_type: Variable,
     pub fx_type: Variable,
-    pub early_returns: Vec<(Variable, Region)>,
+    pub early_returns: Vec<(Variable, Region, EarlyReturnKind)>,
     pub name: Symbol,
     pub captured_symbols: Vec<(Symbol, Variable)>,
     pub recursive: Recursive,
@@ -1245,7 +1364,7 @@ pub fn canonicalize_expr<'a>(
 
             (loc_expr.value, output)
         }
-        ast::Expr::DbgStmt(_, _) => {
+        ast::Expr::DbgStmt { .. } => {
             internal_error!("DbgStmt should have been desugared by now")
         }
         ast::Expr::LowLevelDbg((source_location, source), message, continuation) => {
@@ -1285,6 +1404,32 @@ pub fn canonicalize_expr<'a>(
                 output,
             )
         }
+        ast::Expr::LowLevelTry(loc_expr, kind) => {
+            let (loc_result_expr, output) =
+                canonicalize_expr(env, var_store, scope, loc_expr.region, &loc_expr.value);
+
+            let return_var = var_store.fresh();
+
+            scope
+                .early_returns
+                .push((return_var, loc_expr.region, EarlyReturnKind::Try));
+
+            (
+                Try {
+                    result_expr: Box::new(loc_result_expr),
+                    result_var: var_store.fresh(),
+                    return_var,
+                    ok_payload_var: var_store.fresh(),
+                    err_payload_var: var_store.fresh(),
+                    err_ext_var: var_store.fresh(),
+                    kind: match kind {
+                        ResultTryKind::KeywordPrefix => TryKind::KeywordPrefix,
+                        ResultTryKind::OperatorSuffix => TryKind::OperatorSuffix,
+                    },
+                },
+                output,
+            )
+        }
         ast::Expr::Return(return_expr, after_return) => {
             let mut output = Output::default();
 
@@ -1309,7 +1454,9 @@ pub fn canonicalize_expr<'a>(
 
             let return_var = var_store.fresh();
 
-            scope.early_returns.push((return_var, return_expr.region));
+            scope
+                .early_returns
+                .push((return_var, return_expr.region, EarlyReturnKind::Return));
 
             (
                 Return {
@@ -2251,6 +2398,31 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
             }
         }
 
+        Try {
+            result_expr,
+            result_var,
+            return_var,
+            ok_payload_var,
+            err_payload_var,
+            err_ext_var,
+            kind,
+        } => {
+            let loc_result_expr = Loc {
+                region: result_expr.region,
+                value: inline_calls(var_store, result_expr.value),
+            };
+
+            Try {
+                result_expr: Box::new(loc_result_expr),
+                result_var,
+                return_var,
+                ok_payload_var,
+                err_payload_var,
+                err_ext_var,
+                kind,
+            }
+        }
+
         LetRec(defs, loc_expr, mark) => {
             let mut new_defs = Vec::with_capacity(defs.len());
 
@@ -2545,8 +2717,9 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         | ast::Expr::MalformedIdent(_, _)
         | ast::Expr::Tag(_)
         | ast::Expr::OpaqueRef(_) => true,
+        ast::Expr::LowLevelTry(loc_expr, _) => is_valid_interpolation(&loc_expr.value),
         // Newlines are disallowed inside interpolation, and these all require newlines
-        ast::Expr::DbgStmt(_, _)
+        ast::Expr::DbgStmt { .. }
         | ast::Expr::LowLevelDbg(_, _, _)
         | ast::Expr::Return(_, _)
         | ast::Expr::When(_, _)
@@ -3301,7 +3474,7 @@ pub struct FunctionDef {
     pub closure_type: Variable,
     pub return_type: Variable,
     pub fx_type: Variable,
-    pub early_returns: Vec<(Variable, Region)>,
+    pub early_returns: Vec<(Variable, Region, EarlyReturnKind)>,
     pub captured_symbols: Vec<(Symbol, Variable)>,
     pub arguments: Vec<(Variable, AnnotatedMark, Loc<Pattern>)>,
 }
@@ -3442,6 +3615,9 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
 
                 // Intentionally ignore the lookups in the nested `expect` condition itself,
                 // because they couldn't possibly influence the outcome of this `expect`!
+            }
+            Expr::Try { result_expr, .. } => {
+                stack.push(&result_expr.value);
             }
             Expr::Return { return_value, .. } => {
                 stack.push(&return_value.value);

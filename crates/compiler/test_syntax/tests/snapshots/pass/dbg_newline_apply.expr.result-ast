@@ -1,0 +1,30 @@
+@0-24 SpaceAfter(
+    Apply(
+        @0-3 Dbg,
+        [
+            @6-10 SpaceBefore(
+                Var {
+                    module_name: "",
+                    ident: "izzb",
+                },
+                [
+                    Newline,
+                    Newline,
+                ],
+            ),
+            @13-24 SpaceBefore(
+                Var {
+                    module_name: "",
+                    ident: "interfacesb",
+                },
+                [
+                    Newline,
+                ],
+            ),
+        ],
+        Space,
+    ),
+    [
+        Newline,
+    ],
+)

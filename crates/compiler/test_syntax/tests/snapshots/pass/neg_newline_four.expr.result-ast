@@ -1,0 +1,13 @@
+@0-5 UnaryOp(
+    @3-4 ParensAround(
+        SpaceBefore(
+            Num(
+                "4",
+            ),
+            [
+                Newline,
+            ],
+        ),
+    ),
+    @0-1 Negate,
+)

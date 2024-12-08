@@ -1,0 +1,72 @@
+@0-71 SpaceAfter(
+    BinOps(
+        [
+            (
+                @0-3 SpaceAfter(
+                    Var {
+                        module_name: "",
+                        ident: "foo",
+                    },
+                    [
+                        Newline,
+                    ],
+                ),
+                @4-6 Pizza,
+            ),
+        ],
+        @7-71 Apply(
+            @7-18 Var {
+                module_name: "Dict",
+                ident: "keepIf",
+            },
+            [
+                @19-71 Closure(
+                    [
+                        @20-27 Tuple(
+                            [
+                                @21-22 Identifier {
+                                    ident: "k",
+                                },
+                                @24-26 Underscore(
+                                    "v",
+                                ),
+                            ],
+                        ),
+                    ],
+                    @31-71 BinOps(
+                        [
+                            (
+                                @31-59 Apply(
+                                    @31-44 Var {
+                                        module_name: "List",
+                                        ident: "contains",
+                                    },
+                                    [
+                                        @45-57 Var {
+                                            module_name: "",
+                                            ident: "keysToDelete",
+                                        },
+                                        @58-59 Var {
+                                            module_name: "",
+                                            ident: "k",
+                                        },
+                                    ],
+                                    Space,
+                                ),
+                                @60-62 Pizza,
+                            ),
+                        ],
+                        @63-71 Var {
+                            module_name: "Bool",
+                            ident: "not",
+                        },
+                    ),
+                ),
+            ],
+            Space,
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

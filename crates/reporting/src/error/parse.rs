@@ -1005,7 +1005,7 @@ fn to_unfinished_lambda_report<'a>(
     let doc = alloc.stack([
         alloc.concat([
             alloc.reflow(r"I was partway through parsing a "),
-            alloc.reflow(r" function, but I got stuck here:"),
+            alloc.reflow(r"function, but I got stuck here:"),
         ]),
         alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
         message,
@@ -1512,7 +1512,6 @@ fn to_dbg_or_expect_report<'a>(
             to_space_report(alloc, lines, filename, err, *pos)
         }
 
-        roc_parse::parser::EExpect::DbgArity(_) => todo!(),
         roc_parse::parser::EExpect::Dbg(_) => unreachable!("another branch would be taken"),
         roc_parse::parser::EExpect::Expect(_) => unreachable!("another branch would be taken"),
 

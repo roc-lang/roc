@@ -334,7 +334,7 @@ mod cli_tests {
             );
 
             let expected_out =
-                "0 error and 0 warning found in <ignored for test> ms\n0 error and 0 warning found in <ignored for test> ms\n";
+                "0 errors and 0 warnings found in <ignored for test> ms.\n\n0 errors and 0 warnings found in <ignored for test> ms.\n\n";
 
             cli_build.run().assert_clean_stdout(expected_out);
         }

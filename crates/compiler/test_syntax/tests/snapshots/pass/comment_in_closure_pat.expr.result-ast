@@ -1,0 +1,28 @@
+@0-10 Closure(
+    [
+        @1-6 Apply(
+            @1-2 Tag(
+                "L",
+            ),
+            [
+                @5-6 SpaceBefore(
+                    Identifier {
+                        ident: "i",
+                    },
+                    [
+                        LineComment(
+                            "",
+                        ),
+                    ],
+                ),
+            ],
+        ),
+    ],
+    @8-10 UnaryOp(
+        @9-10 Var {
+            module_name: "",
+            ident: "e",
+        },
+        @8-9 Negate,
+    ),
+)

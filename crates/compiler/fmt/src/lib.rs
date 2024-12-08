@@ -18,16 +18,39 @@ pub struct Buf<'a> {
     spaces_to_flush: usize,
     newlines_to_flush: usize,
     beginning_of_line: bool,
+    line_indent: u16,
+    flags: MigrationFlags,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct MigrationFlags {
+    pub(crate) snakify: bool,
+}
+
+impl MigrationFlags {
+    pub fn new(snakify: bool) -> Self {
+        MigrationFlags { snakify }
+    }
+
+    pub fn at_least_one_active(&self) -> bool {
+        self.snakify
+    }
 }
 
 impl<'a> Buf<'a> {
-    pub fn new_in(arena: &'a Bump) -> Buf<'a> {
+    pub fn new_in(arena: &'a Bump, flags: MigrationFlags) -> Buf<'a> {
         Buf {
             text: String::new_in(arena),
+            line_indent: 0,
             spaces_to_flush: 0,
             newlines_to_flush: 0,
             beginning_of_line: true,
+            flags,
         }
+    }
+
+    pub fn flags(&self) -> MigrationFlags {
+        self.flags
     }
 
     pub fn as_str(&'a self) -> &'a str {
@@ -40,11 +63,18 @@ impl<'a> Buf<'a> {
 
     pub fn indent(&mut self, indent: u16) {
         if self.beginning_of_line {
+            self.line_indent = indent;
             self.spaces_to_flush = indent as usize;
         }
         self.beginning_of_line = false;
     }
 
+    pub fn cur_line_indent(&self) -> u16 {
+        debug_assert!(!self.beginning_of_line, "cur_line_indent before indent");
+        self.line_indent
+    }
+
+    #[track_caller]
     pub fn push(&mut self, ch: char) {
         debug_assert!(!self.beginning_of_line);
         debug_assert!(
@@ -61,6 +91,7 @@ impl<'a> Buf<'a> {
         self.text.push(ch);
     }
 
+    #[track_caller]
     pub fn push_str_allow_spaces(&mut self, s: &str) {
         debug_assert!(
             !self.beginning_of_line,
@@ -73,6 +104,7 @@ impl<'a> Buf<'a> {
         self.text.push_str(s);
     }
 
+    #[track_caller]
     pub fn push_str(&mut self, s: &str) {
         debug_assert!(
             !self.beginning_of_line,
@@ -126,6 +158,12 @@ impl<'a> Buf<'a> {
             self.spaces_to_flush = 0;
             self.newlines_to_flush = 2;
             self.beginning_of_line = true;
+        }
+    }
+
+    pub fn ensure_ends_with_whitespace(&mut self) {
+        if !self.text.is_empty() && self.newlines_to_flush == 0 && self.spaces_to_flush == 0 {
+            self.spaces_to_flush = 1;
         }
     }
 

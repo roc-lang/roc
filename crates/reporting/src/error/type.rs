@@ -6,6 +6,7 @@ use itertools::EitherOrBoth;
 use itertools::Itertools;
 use roc_can::constraint::{ExpectEffectfulReason, FxCallKind, FxSuffixKind};
 use roc_can::expected::{Expected, PExpected};
+use roc_can::expr::TryKind;
 use roc_collections::all::{HumanIndex, MutSet, SendMap};
 use roc_collections::VecMap;
 use roc_error_macros::internal_error;
@@ -21,8 +22,8 @@ use roc_solve_problem::{
 use roc_std::RocDec;
 use roc_types::pretty_print::{Parens, WILDCARD};
 use roc_types::types::{
-    AbilitySet, AliasKind, Category, ErrorType, IndexOrField, PatternCategory, Polarity, Reason,
-    RecordField, TypeExt,
+    AbilitySet, AliasKind, Category, EarlyReturnKind, ErrorType, IndexOrField, PatternCategory,
+    Polarity, Reason, RecordField, TypeExt,
 };
 use std::path::PathBuf;
 use ven_pretty::{text, DocAllocator};
@@ -467,6 +468,46 @@ pub fn type_problem<'b>(
 
             Some(Report {
                 title: "UNNECESSARY EXCLAMATION".to_string(),
+                filename,
+                doc: alloc.stack(stack),
+                severity,
+            })
+        }
+        InvalidTryTarget(region, actual_type, try_kind) => {
+            let invalid_usage_message = match try_kind {
+                TryKind::KeywordPrefix => alloc.concat([
+                    alloc.reflow("This expression cannot be used as a "),
+                    alloc.keyword("try"),
+                    alloc.reflow(" target:"),
+                ]),
+                TryKind::OperatorSuffix => alloc.concat([
+                    alloc.reflow("This expression cannot be tried with the "),
+                    alloc.keyword("?"),
+                    alloc.reflow(" operator:"),
+                ]),
+            };
+
+            let stack = [
+                invalid_usage_message,
+                alloc.region(lines.convert_region(region), severity),
+                alloc.concat([
+                    alloc.reflow("I expected a "),
+                    alloc.type_str("Result"),
+                    alloc.reflow(", but it actually has type:"),
+                ]),
+                alloc.type_block(error_type_to_doc(alloc, actual_type)),
+                alloc.concat([
+                    alloc.hint(""),
+                    alloc.reflow("Did you forget to wrap the value with an "),
+                    alloc.tag("Ok".into()),
+                    alloc.reflow(" or an "),
+                    alloc.tag("Err".into()),
+                    alloc.reflow(" tag?"),
+                ]),
+            ];
+
+            Some(Report {
+                title: "INVALID TRY TARGET".to_string(),
                 filename,
                 doc: alloc.stack(stack),
                 severity,
@@ -1237,8 +1278,8 @@ fn to_expr_report<'b>(
                 &category,
                 found,
                 expected_type,
-                region,
-                Some(expr_region),
+                expr_region,
+                Some(region),
                 alloc.concat([
                     alloc.reflow("The "),
                     alloc.string(index.ordinal()),
@@ -1526,8 +1567,8 @@ fn to_expr_report<'b>(
                     &category,
                     found,
                     expected_type,
-                    region,
-                    Some(expr_region),
+                    expr_region,
+                    Some(region),
                     alloc.concat([
                         alloc.string(format!("This {argument} to ")),
                         this_function.clone(),
@@ -1806,11 +1847,8 @@ fn to_expr_report<'b>(
 
             Reason::FunctionOutput => {
                 let problem = alloc.concat([
-                    alloc.text("This "),
-                    alloc.keyword("return"),
-                    alloc.reflow(
-                        " statement doesn't match the return type of its enclosing function:",
-                    ),
+                    alloc.reflow("This returns something that's incompatible "),
+                    alloc.reflow("with the return type of the enclosing function:"),
                 ]);
 
                 let comparison = type_comparison(
@@ -1875,6 +1913,45 @@ fn to_expr_report<'b>(
                     filename,
                     title: "IGNORED RESULT".to_string(),
                     doc: alloc.stack(lines),
+                    severity,
+                }
+            }
+
+            Reason::TryResult => {
+                let problem = alloc.concat([
+                    alloc.text("This "),
+                    alloc.keyword("try"),
+                    alloc.reflow(
+                        " statement doesn't match the return type of its enclosing function:",
+                    ),
+                ]);
+
+                let comparison = type_comparison(
+                    alloc,
+                    found,
+                    expected_type,
+                    ExpectationContext::Arbitrary,
+                    add_category(alloc, alloc.text("It is"), &category),
+                    alloc.concat([
+                        alloc.reflow("But I need every "),
+                        alloc.keyword("return"),
+                        alloc.reflow(" statement in that function to return:"),
+                    ]),
+                    None,
+                );
+
+                Report {
+                    title: "TYPE MISMATCH".to_string(),
+                    filename,
+                    doc: alloc.stack([
+                        problem,
+                        alloc.region_with_subregion(
+                            lines.convert_region(region),
+                            lines.convert_region(expr_region),
+                            severity,
+                        ),
+                        comparison,
+                    ]),
                     severity,
                 }
             }
@@ -2216,9 +2293,29 @@ fn format_category<'b>(
             alloc.concat([this_is, alloc.text(" a dbg statement")]),
             alloc.text(" of type:"),
         ),
-        Return => (
+        Return(EarlyReturnKind::Return) => (
             alloc.concat([text!(alloc, "{}his", t), alloc.reflow(" returns a value")]),
             alloc.text(" of type:"),
+        ),
+        Return(EarlyReturnKind::Try) => (
+            alloc.concat([
+                text!(alloc, "{}his", t),
+                alloc.reflow(" returns an "),
+                alloc.tag_name("Err".into()),
+            ]),
+            alloc.text(" of type:"),
+        ),
+        TryTarget => (
+            alloc.concat([this_is, alloc.reflow(" a try target")]),
+            alloc.text(" of type:"),
+        ),
+        TrySuccess => (
+            alloc.concat([this_is, alloc.reflow(" a try expression")]),
+            alloc.text(" that succeeds with type:"),
+        ),
+        TryFailure => (
+            alloc.concat([this_is, alloc.reflow(" a try expression")]),
+            alloc.text(" that fails with type:"),
         ),
     }
 }

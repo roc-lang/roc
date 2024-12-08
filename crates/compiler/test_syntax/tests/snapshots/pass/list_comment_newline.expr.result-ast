@@ -1,0 +1,20 @@
+@0-8 List(
+    Collection {
+        items: [
+            @1-2 SpaceAfter(
+                Tag(
+                    "L",
+                ),
+                [
+                    LineComment(
+                        "",
+                    ),
+                ],
+            ),
+        ],
+        final_comments: [
+            Newline,
+            Newline,
+        ],
+    },
+)

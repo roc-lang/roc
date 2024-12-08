@@ -1,0 +1,48 @@
+@0-6 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-1,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Stmt(
+                    @0-1 Var {
+                        module_name: "",
+                        ident: "i",
+                    },
+                ),
+            ],
+        },
+        @2-6 SpaceBefore(
+            ParensAround(
+                SpaceAfter(
+                    Num(
+                        "4",
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+            ),
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        LineComment(
+            "(",
+        ),
+    ],
+)

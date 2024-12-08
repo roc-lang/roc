@@ -6,7 +6,7 @@ mod test_fmt {
     use bumpalo::Bump;
     use roc_fmt::def::fmt_defs;
     use roc_fmt::header::fmt_header;
-    use roc_fmt::Buf;
+    use roc_fmt::{Buf, MigrationFlags};
     use roc_parse::ast::{Defs, Header, SpacesBefore};
     use roc_parse::header::{self, parse_module_defs};
     use roc_parse::state::State;
@@ -22,11 +22,19 @@ mod test_fmt {
     }
 
     fn expr_formats_to(input: &str, expected: &str) {
-        Input::Expr(input.trim()).check_invariants(check_formatting(expected.trim()), true)
+        Input::Expr(input.trim()).check_invariants(
+            check_formatting(expected.trim()),
+            true,
+            Some(false),
+        )
     }
 
     fn expr_formats_same(input: &str) {
-        Input::Expr(input.trim()).check_invariants(check_formatting(input.trim()), true)
+        Input::Expr(input.trim()).check_invariants(
+            check_formatting(input.trim()),
+            true,
+            Some(false),
+        )
     }
 
     fn fmt_module_and_defs<'a>(
@@ -65,7 +73,8 @@ mod test_fmt {
             Ok((actual, state)) => {
                 use roc_parse::normalize::Normalize;
 
-                let mut buf = Buf::new_in(&arena);
+                let flags = MigrationFlags::new(false);
+                let mut buf = Buf::new_in(&arena, flags);
 
                 fmt_module_and_defs(&arena, src, &actual, state, &mut buf);
 
@@ -94,7 +103,7 @@ mod test_fmt {
                 }
 
                 // Now verify that the resultant formatting is _stable_ - i.e. that it doesn't change again if re-formatted
-                let mut reformatted_buf = Buf::new_in(&arena);
+                let mut reformatted_buf = Buf::new_in(&arena, flags);
 
                 fmt_module_and_defs(&arena, output, &reparsed_ast, state, &mut reformatted_buf);
 
@@ -1492,7 +1501,7 @@ mod test_fmt {
     fn parenthetical_def() {
         expr_formats_same(indoc!(
             r"
-            (UserId userId) = 5
+            (UserId user_id) = 5
             y = 10
 
             42
@@ -1502,7 +1511,7 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r"
             # A
-            (UserId userId) = 5
+            (UserId user_id) = 5
             # B
             y = 10
 
@@ -1539,13 +1548,13 @@ mod test_fmt {
     fn lambda_returns_record() {
         expr_formats_same(indoc!(
             r"
-                toRecord = \_ -> {
+                to_record = \_ -> {
                     x: 1,
                     y: 2,
                     z: 3,
                 }
 
-                toRecord
+                to_record
             "
         ));
 
@@ -1560,7 +1569,7 @@ mod test_fmt {
 
         expr_formats_same(indoc!(
             r"
-                toRecord = \_ ->
+                to_record = \_ ->
                     val = 0
 
                     {
@@ -1569,32 +1578,32 @@ mod test_fmt {
                         z: 3,
                     }
 
-                toRecord
+                to_record
             "
         ));
 
         expr_formats_to(
             indoc!(
                 r"
-                    toRecord = \_ ->
+                    to_record = \_ ->
                         {
                             x: 1,
                             y: 2,
                             z: 3,
                         }
 
-                    toRecord
+                    to_record
                 "
             ),
             indoc!(
                 r"
-                    toRecord = \_ -> {
+                    to_record = \_ -> {
                         x: 1,
                         y: 2,
                         z: 3,
                     }
 
-                    toRecord
+                    to_record
                 "
             ),
         );
@@ -1604,13 +1613,13 @@ mod test_fmt {
     fn lambda_returns_list() {
         expr_formats_same(indoc!(
             r"
-                toList = \_ -> [
+                to_list = \_ -> [
                     1,
                     2,
                     3,
                 ]
 
-                toList
+                to_list
             "
         ));
 
@@ -1625,7 +1634,7 @@ mod test_fmt {
 
         expr_formats_same(indoc!(
             r"
-                toList = \_ ->
+                to_list = \_ ->
                     val = 0
 
                     [
@@ -1634,32 +1643,32 @@ mod test_fmt {
                         3,
                     ]
 
-                toList
+                to_list
             "
         ));
 
         expr_formats_to(
             indoc!(
                 r"
-                    toList = \_ ->
+                    to_list = \_ ->
                         [
                             1,
                             2,
                             3,
                         ]
 
-                    toList
+                    to_list
                 "
             ),
             indoc!(
                 r"
-                    toList = \_ -> [
+                    to_list = \_ -> [
                         1,
                         2,
                         3,
                     ]
 
-                    toList
+                    to_list
                 "
             ),
         );
@@ -2144,40 +2153,6 @@ mod test_fmt {
     }
 
     #[test]
-    fn comments_with_newlines_in_records() {
-        expr_formats_to(
-            indoc!(
-                r"
-            {
-                z: 44 #comment 0
-                ,
-                y: 41, # comment 1
-
-                # comment 2
-                x: 42
-
-                # comment 3
-
-                # comment 4
-            }"
-            ),
-            indoc!(
-                r"
-            {
-                z: 44,
-                # comment 0
-                y: 41,
-                # comment 1
-                # comment 2
-                x: 42,
-                # comment 3
-                # comment 4
-            }"
-            ),
-        );
-    }
-
-    #[test]
     fn multiple_final_comments_with_comma_in_records() {
         expr_formats_to(
             indoc!(
@@ -2283,15 +2258,25 @@ mod test_fmt {
             "
         ));
 
-        expr_formats_same(indoc!(
-            r"
-                f :
-                    {
+        expr_formats_to(
+            indoc!(
+                r"
+                    f :
+                        {
+                        }
+
+                    f
+                "
+            ),
+            indoc!(
+                r"
+                    f : {
                     }
 
-                f
-            "
-        ));
+                    f
+                "
+            ),
+        );
     }
 
     #[test]
@@ -3106,7 +3091,7 @@ mod test_fmt {
 
         expr_formats_same(indoc!(
             r"
-                myDef =
+                my_def =
                     list = [
                         a,
                         b,
@@ -3117,7 +3102,7 @@ mod test_fmt {
                         d,
                     }
 
-                myDef
+                my_def
             "
         ));
 
@@ -3662,7 +3647,7 @@ mod test_fmt {
     fn def_when() {
         expr_formats_same(indoc!(
             r"
-            myLongFunctionName = \x ->
+            my_long_function_name = \x ->
                 when b is
                     1 | 2 ->
                         when c is
@@ -4731,8 +4716,6 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r"
                 blah :
-                    Str,
-                    # comment
                     (Str -> Str)
                     -> Str
 
@@ -4966,10 +4949,10 @@ mod test_fmt {
                         exposes []
                         packages {}
                         imports []
-                        provides [ mainForHost ]
+                        provides [ main_for_host ]
 
-                    mainForHost : { init : ({} -> Model) as Init, update : (Model, Str -> Model) as Update, view : (Model -> Str) as View }
-                    mainForHost = main
+                    main_for_host : { init : ({} -> Model) as Init, update : (Model, Str -> Model) as Update, view : (Model -> Str) as View }
+                    main_for_host = main
                 "#
             ),
             indoc!(
@@ -4979,10 +4962,10 @@ mod test_fmt {
                         exposes []
                         packages {}
                         imports []
-                        provides [mainForHost]
+                        provides [main_for_host]
 
-                    mainForHost : { init : ({} -> Model) as Init, update : (Model, Str -> Model) as Update, view : (Model -> Str) as View }
-                    mainForHost = main
+                    main_for_host : { init : ({} -> Model) as Init, update : (Model, Str -> Model) as Update, view : (Model -> Str) as View }
+                    main_for_host = main
                 "#
             ),
         );
@@ -5305,8 +5288,8 @@ mod test_fmt {
     fn backpassing_simple() {
         expr_formats_same(indoc!(
             r"
-                getChar = \ctx ->
-                    x <- Task.await (getCharScope scope)
+                get_char = \ctx ->
+                    x <- Task.await (get_char_scope scope)
                     42
 
                 42
@@ -5318,8 +5301,8 @@ mod test_fmt {
     fn backpassing_apply_tag() {
         expr_formats_same(indoc!(
             r"
-                getChar = \ctx ->
-                    (T val newScope) <- Task.await (getCharScope scope)
+                get_char = \ctx ->
+                    (T val new_scope) <- Task.await (get_char_scope scope)
                     42
 
                 42
@@ -5398,9 +5381,9 @@ mod test_fmt {
     fn backpassing_body_on_newline() {
         expr_formats_same(indoc!(
             r"
-                getChar = \ctx ->
+                get_char = \ctx ->
                     x <-
-                        Task.await (getCharScope scope)
+                        Task.await (get_char_scope scope)
                     42
 
                 42
@@ -5489,25 +5472,15 @@ mod test_fmt {
             "
         ));
 
-        expr_formats_to(
-            indoc!(
-                r"
+        expr_formats_same(indoc!(
+            r"
                 A :=
                     U8
                     implements [Eq, Hash]
 
                 0
                 "
-            ),
-            indoc!(
-                r"
-                A := U8
-                    implements [Eq, Hash]
-
-                0
-                "
-            ),
-        );
+        ));
 
         expr_formats_to(
             indoc!(
