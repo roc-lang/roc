@@ -381,22 +381,6 @@ fn fmt_exposes<N: Formattable + Copy + core::fmt::Debug>(
     fmt_collection(buf, indent, Braces::Square, loc_entries, Newlines::No)
 }
 
-pub trait FormatName {
-    fn format(&self, buf: &mut Buf);
-}
-
-impl<'a> FormatName for &'a str {
-    fn format(&self, buf: &mut Buf) {
-        buf.push_str(self)
-    }
-}
-
-impl<'a> FormatName for ModuleName<'a> {
-    fn format(&self, buf: &mut Buf) {
-        buf.push_str(self.as_str());
-    }
-}
-
 impl<'a> Formattable for ModuleName<'a> {
     fn is_multiline(&self) -> bool {
         false
@@ -426,12 +410,6 @@ impl<'a> Formattable for ExposedName<'a> {
         indent: u16,
     ) {
         buf.indent(indent);
-        buf.push_str(self.as_str());
-    }
-}
-
-impl<'a> FormatName for ExposedName<'a> {
-    fn format(&self, buf: &mut Buf) {
         buf.push_str(self.as_str());
     }
 }

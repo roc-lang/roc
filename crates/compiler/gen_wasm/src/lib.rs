@@ -38,8 +38,6 @@ const PTR_SIZE: u32 = {
 const PTR_TYPE: ValueType = ValueType::I32;
 
 pub const MEMORY_NAME: &str = "memory";
-pub const BUILTINS_IMPORT_MODULE_NAME: &str = "env";
-pub const STACK_POINTER_NAME: &str = "__stack_pointer";
 
 pub struct Env<'a> {
     pub arena: &'a Bump,
