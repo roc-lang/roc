@@ -610,7 +610,7 @@ pre>samp {
       --cyan: #12c9be;
       --blue: #b1afdf;
       --entry-name-border: var(--violet);
-      --entry-name-bg: rgb(35, 27, 43);
+      --entry-name-bg: var(--violet-bg);
       --violet: #CAADFB;
       --violet-bg: #332944;
       --magenta: #f39bac;
