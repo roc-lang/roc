@@ -1651,9 +1651,9 @@ fn type_annotation_to_html(
             }
 
             if tags.is_empty() && extra_tags.is_empty() {
-                push_docs_link(buf, "[]", TAG_UNION_DOCS);
+                push_punct(buf, "[]");
             } else {
-                push_docs_link(buf, "[", TAG_UNION_DOCS);
+                push_punct(buf, "[");
 
                 if is_multiline {
                     new_line(buf);
@@ -1683,7 +1683,7 @@ fn type_annotation_to_html(
                     indent(buf, indent_level);
                 }
 
-                push_docs_link(buf, "]", TAG_UNION_DOCS);
+                push_punct(buf, "]");
             }
 
             buf.push_str(&var);
@@ -1750,9 +1750,9 @@ fn type_annotation_to_html(
             }
 
             if fields.is_empty() && extra_fields.is_empty() {
-                push_docs_link(buf, "{}", RECORD_DOCS);
+                push_punct(buf, "{}");
             } else {
-                push_docs_link(buf, "{", RECORD_DOCS);
+                push_punct(buf, "{");
 
                 if is_multiline {
                     new_line(buf);
@@ -1803,7 +1803,7 @@ fn type_annotation_to_html(
                     buf.push(' ');
                 }
 
-                push_docs_link(buf, "}", RECORD_DOCS);
+                push_punct(buf, "}");
             }
 
             buf.push_str(&var);
@@ -1849,11 +1849,7 @@ fn type_annotation_to_html(
                 FunctionArrow::Effectful => "=>",
             };
 
-            push_docs_link(
-                buf,
-                arrow,
-                "https://www.roc-lang.org/tutorial#defining-functions",
-            );
+            push_punct(buf, arrow);
             buf.push(' ');
 
             let mut next_indent_level = indent_level;
@@ -1918,10 +1914,10 @@ fn type_annotation_to_html(
             }
         }
         TypeAnnotation::ObscuredTagUnion => {
-            push_docs_link(buf, "[@..]", TAG_UNION_DOCS);
+            push_punct(buf, "[@..]");
         }
         TypeAnnotation::ObscuredRecord => {
-            push_docs_link(buf, "{ @.. }", RECORD_DOCS);
+            push_punct(buf, "{ @.. }");
         }
         TypeAnnotation::NoTypeAnn => {}
         TypeAnnotation::Wildcard => {
@@ -1950,11 +1946,11 @@ fn type_annotation_to_html(
             }
 
             if elems.is_empty() && extra_elems.is_empty() {
-                push_docs_link(buf, "()", TUPLE_DOCS);
+                push_punct(buf, "()");
             } else {
                 let elems_len = elems.len() + extra_elems.len();
 
-                push_docs_link(buf, "(", TUPLE_DOCS);
+                push_punct(buf, "(");
 
                 if is_multiline {
                     new_line(buf);
@@ -1981,7 +1977,7 @@ fn type_annotation_to_html(
                     indent(buf, indent_level);
                 }
 
-                push_docs_link(buf, ")", TUPLE_DOCS);
+                push_punct(buf, ")");
             }
 
             buf.push_str(&var);

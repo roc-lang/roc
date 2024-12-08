@@ -6,7 +6,8 @@
   --green: #0b8400;
   --cyan: #067c94;
   --blue: #05006d;
-  --blue-code-border: #66a4f2;
+  --entry-name-border: var(--violet);
+  --entry-name-bg: var(--violet-bg);
   --violet: #7c38f5;
   --violet-bg: #ece2fd;
   --magenta: #a20031;
@@ -76,13 +77,7 @@ table tr td {
 }
 
 .entry-name .punct {
-    color: var(--violet);
-    opacity: 0.50;
-}
-
-.entry-name .brace {
-    color: var(--violet);
-    opacity: 0.50;
+    color: var(--text-color);
 }
 
 .entry-name {
@@ -94,13 +89,15 @@ table tr td {
   margin-top: 0;
   margin-bottom: 24px;
   margin-left: 1em;
+  margin-right: 1em;
   padding: 16px 24px;
-  background-color: var(--code-bg);
-  border: 2px solid var(--blue-code-border);
+  background-color: var(--entry-name-bg);
+  border: 2px solid var(--entry-name-border);
 }
 
 .entry-name a:first-of-type {
     font-weight: bold;
+    color: var(--entry-name-border);
 }
 
 code {
@@ -212,13 +209,20 @@ section h2,
 section h3,
 section h4,
 section p,
+section ul,
+section ol,
 section pre,
 section blockquote {
-    margin: 1em var(--docs-section-side-padding);
+    margin: 1em 1em 1em var(--docs-section-side-padding)
 }
 
 section blockquote p {
     margin: 1em;
+}
+
+section ul,
+section ol {
+    padding-left: 1em;
 }
 
 #sidebar-nav {
@@ -605,7 +609,8 @@ pre>samp {
       --green: #8ecc88;
       --cyan: #12c9be;
       --blue: #b1afdf;
-      --blue-code-border: #66a4f2;
+      --entry-name-border: var(--violet);
+      --entry-name-bg: rgb(35, 27, 43);
       --violet: #CAADFB;
       --violet-bg: #332944;
       --magenta: #f39bac;
