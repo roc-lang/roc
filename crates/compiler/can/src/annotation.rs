@@ -887,7 +887,9 @@ fn can_annotation_help(
                 "tuples should never be implicitly inferred open"
             );
 
-            debug_assert!(!elems.is_empty()); // We don't allow empty tuples
+            if elems.is_empty() {
+                env.problem(roc_problem::can::Problem::EmptyTupleType(region));
+            }
 
             let elem_types = can_assigned_tuple_elems(
                 env,

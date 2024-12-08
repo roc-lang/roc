@@ -255,6 +255,7 @@ pub enum Problem {
     StmtAfterExpr(Region),
     UnsuffixedEffectfulRecordField(Region),
     SuffixedPureRecordField(Region),
+    EmptyTupleType(Region),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -343,6 +344,7 @@ impl Problem {
             Problem::UnsuffixedEffectfulRecordField(_) | Problem::SuffixedPureRecordField(..) => {
                 Warning
             }
+            Problem::EmptyTupleType(_) => Warning,
         }
     }
 
@@ -455,6 +457,7 @@ impl Problem {
             | Problem::RuntimeError(RuntimeError::ReadIngestedFileError { region, .. })
             | Problem::InvalidAliasRigid { region, .. }
             | Problem::InvalidInterpolation(region)
+            | Problem::EmptyTupleType(region)
             | Problem::InvalidHexadecimal(region)
             | Problem::InvalidUnicodeCodePt(region)
             | Problem::NestedDatatype {
@@ -791,4 +794,5 @@ pub enum MalformedPatternProblem {
     EmptySingleQuote,
     MultipleCharsInSingleQuote,
     DuplicateListRestPattern,
+    CantApplyPattern,
 }

@@ -67,6 +67,7 @@ const INCOMPLETE_ABILITY_IMPLEMENTATION: &str = "INCOMPLETE ABILITY IMPLEMENTATI
 const STATEMENT_AFTER_EXPRESSION: &str = "STATEMENT AFTER EXPRESSION";
 const MISSING_EXCLAMATION: &str = "MISSING EXCLAMATION";
 const UNNECESSARY_EXCLAMATION: &str = "UNNECESSARY EXCLAMATION";
+const EMPTY_TUPLE_TYPE: &str = "EMPTY TUPLE TYPE";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -1472,6 +1473,16 @@ pub fn can_problem<'b>(
 
             title = UNNECESSARY_EXCLAMATION.to_string();
         }
+
+        Problem::EmptyTupleType(region) => {
+            doc = alloc.stack([
+                alloc.reflow("This tuple type is empty:"),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.reflow("Empty tuple types are not allowed in Roc."),
+            ]);
+
+            title = EMPTY_TUPLE_TYPE.to_string();
+        }
     };
 
     Report {
@@ -2092,7 +2103,7 @@ fn pretty_runtime_error<'b>(
 
                     return (doc, title);
                 }
-                Unknown => " ",
+                Unknown | CantApplyPattern => " ",
                 QualifiedIdentifier => " qualified ",
                 EmptySingleQuote => " empty character literal ",
                 MultipleCharsInSingleQuote => " overfull literal ",
@@ -2103,9 +2114,11 @@ fn pretty_runtime_error<'b>(
                 MalformedInt | MalformedFloat | MalformedBase(_) => alloc
                     .tip()
                     .append(alloc.reflow("Learn more about number literals at TODO")),
-                EmptySingleQuote | MultipleCharsInSingleQuote | Unknown | BadIdent(_) => {
-                    alloc.nil()
-                }
+                EmptySingleQuote
+                | MultipleCharsInSingleQuote
+                | Unknown
+                | BadIdent(_)
+                | CantApplyPattern => alloc.nil(),
                 QualifiedIdentifier => alloc
                     .tip()
                     .append(alloc.reflow("In patterns, only tags can be qualified")),
