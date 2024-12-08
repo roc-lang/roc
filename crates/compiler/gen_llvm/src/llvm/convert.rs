@@ -1,7 +1,7 @@
-use crate::llvm::build::{BuilderExt, Env, FunctionSpec, RocReturn};
+use crate::llvm::build::{BuilderExt, Env};
 use crate::llvm::erased;
 use crate::llvm::memcpy::build_memcpy;
-use bumpalo::collections::{CollectIn, Vec as AVec};
+use bumpalo::collections::Vec as AVec;
 use inkwell::context::Context;
 use inkwell::types::{BasicType, BasicTypeEnum, FloatType, IntType, StructType};
 use inkwell::values::PointerValue;
@@ -32,37 +32,18 @@ pub fn basic_type_from_layout<'a, 'ctx>(
             layout_interner.get_repr(lambda_set.runtime_representation()),
         ),
 
-        Ptr(inner_layout) => {
-            let inner_type = basic_type_from_layout(
-                env,
-                layout_interner,
-                layout_interner.get_repr(inner_layout),
-            );
-
-            inner_type.ptr_type(AddressSpace::default()).into()
-        }
+        Ptr(..) => env.context.ptr_type(AddressSpace::default()).into(),
         Union(union_layout) => basic_type_from_union_layout(env, layout_interner, &union_layout),
 
         RecursivePointer(_) => env
             .context
-            .i64_type()
             .ptr_type(AddressSpace::default())
             .as_basic_type_enum(),
 
-        FunctionPointer(self::FunctionPointer { args, ret }) => {
-            let args = args.iter().map(|arg| {
-                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(*arg))
-            });
-
-            let ret_repr = layout_interner.get_repr(ret);
-            let ret = basic_type_from_layout(env, layout_interner, ret_repr);
-
-            let roc_return = RocReturn::from_layout(layout_interner, ret_repr);
-
-            let fn_spec = FunctionSpec::fastcc(env, roc_return, ret, args.collect_in(env.arena));
-
-            fn_spec.typ.ptr_type(AddressSpace::default()).into()
+        FunctionPointer(self::FunctionPointer { .. }) => {
+            env.context.ptr_type(AddressSpace::default()).into()
         }
+
         Erased(_) => erased::basic_type(env).into(),
 
         Builtin(builtin) => basic_type_from_builtin(env, &builtin),
@@ -136,7 +117,7 @@ fn basic_type_from_union_layout<'a, 'ctx>(
         Recursive(_)
         | NonNullableUnwrapped(_)
         | NullableWrapped { .. }
-        | NullableUnwrapped { .. } => struct_type.ptr_type(AddressSpace::default()).into(),
+        | NullableUnwrapped { .. } => env.context.ptr_type(AddressSpace::default()).into(),
     }
 }
 
@@ -188,7 +169,7 @@ pub fn argument_type_from_layout<'a, 'ctx>(
             let base = basic_type_from_layout(env, layout_interner, layout);
 
             if layout.is_passed_by_reference(layout_interner) {
-                base.ptr_type(AddressSpace::default()).into()
+                env.context.ptr_type(AddressSpace::default()).into()
             } else {
                 base
             }
@@ -208,7 +189,7 @@ fn argument_type_from_struct_layout<'a, 'ctx>(
     let stack_type = basic_type_from_layout(env, layout_interner, struct_layout);
 
     if struct_layout.is_passed_by_reference(layout_interner) {
-        stack_type.ptr_type(AddressSpace::default()).into()
+        env.context.ptr_type(AddressSpace::default()).into()
     } else {
         stack_type
     }
@@ -223,7 +204,7 @@ pub fn argument_type_from_union_layout<'a, 'ctx>(
     let heap_type = basic_type_from_union_layout(env, layout_interner, union_layout);
 
     if let UnionLayout::NonRecursive(_) = union_layout {
-        heap_type.ptr_type(AddressSpace::default()).into()
+        env.context.ptr_type(AddressSpace::default()).into()
     } else {
         heap_type
     }
@@ -415,7 +396,7 @@ impl<'ctx> RocUnion<'ctx> {
             RocStruct::ByValue(value) => {
                 let cast_pointer = env.builder.new_build_pointer_cast(
                     data_buffer,
-                    value.get_type().ptr_type(AddressSpace::default()),
+                    env.context.ptr_type(AddressSpace::default()),
                     "to_data_ptr",
                 );
                 env.builder.new_build_store(cast_pointer, value);
@@ -482,7 +463,7 @@ pub fn zig_dec_type<'ctx>(env: &Env<'_, 'ctx, '_>) -> StructType<'ctx> {
 }
 
 pub fn zig_has_tag_id_type<'ctx>(env: &Env<'_, 'ctx, '_>) -> StructType<'ctx> {
-    let u8_ptr_t = env.context.i8_type().ptr_type(AddressSpace::default());
+    let u8_ptr_t = env.context.ptr_type(AddressSpace::default());
 
     env.context
         .struct_type(&[env.context.bool_type().into(), u8_ptr_t.into()], false)

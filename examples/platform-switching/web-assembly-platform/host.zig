@@ -39,7 +39,7 @@ extern fn roc__mainForHost_1_exposed(*RocStr) void;
 
 extern fn js_display_roc_string(str_bytes: ?[*]u8, str_len: usize) void;
 
-pub fn main() u8 {
+pub export fn main() u8 {
     // actually call roc to populate the callresult
     var callresult = RocStr.empty();
     roc__mainForHost_1_exposed(&callresult);

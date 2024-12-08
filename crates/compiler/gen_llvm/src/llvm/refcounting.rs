@@ -11,7 +11,7 @@ use crate::llvm::struct_::RocStruct;
 use bumpalo::collections::Vec;
 use inkwell::basic_block::BasicBlock;
 use inkwell::module::Linkage;
-use inkwell::types::{AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
+use inkwell::types::{AnyTypeEnum, BasicMetadataTypeEnum, BasicTypeEnum};
 use inkwell::values::{BasicValueEnum, FunctionValue, InstructionValue, IntValue, PointerValue};
 use inkwell::{AddressSpace, IntPredicate};
 use roc_builtins::bitcode;
@@ -37,12 +37,9 @@ impl<'ctx> PointerToRefcount<'ctx> {
     /// not the data, and only is the start of the allocated buffer if the
     /// alignment works out that way.
     pub unsafe fn from_ptr<'a, 'env>(env: &Env<'a, 'ctx, 'env>, ptr: PointerValue<'ctx>) -> Self {
-        // must make sure it's a pointer to usize
-        let refcount_type = env.ptr_int();
-
         let value = env.builder.new_build_pointer_cast(
             ptr,
-            refcount_type.ptr_type(AddressSpace::default()),
+            env.context.ptr_type(AddressSpace::default()),
             "to_refcount_ptr",
         );
 
@@ -56,7 +53,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
         let builder = env.builder;
         // pointer to usize
         let refcount_type = env.ptr_int();
-        let refcount_ptr_type = refcount_type.ptr_type(AddressSpace::default());
+        let refcount_ptr_type = env.context.ptr_type(AddressSpace::default());
 
         let ptr_as_usize_ptr =
             builder.new_build_pointer_cast(data_ptr, refcount_ptr_type, "as_usize_ptr");
@@ -145,7 +142,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
             None => {
                 // inc and dec return void
                 let fn_type = context.void_type().fn_type(
-                    &[env.ptr_int().ptr_type(AddressSpace::default()).into()],
+                    &[env.context.ptr_type(AddressSpace::default()).into()],
                     false,
                 );
 
@@ -231,7 +228,7 @@ fn incref_pointer<'ctx>(
             env.builder
                 .new_build_pointer_cast(
                     pointer,
-                    env.ptr_int().ptr_type(AddressSpace::default()),
+                    env.context.ptr_type(AddressSpace::default()),
                     "to_isize_ptr",
                 )
                 .into(),
@@ -255,7 +252,7 @@ fn free_pointer<'ctx>(
             env.builder
                 .new_build_pointer_cast(
                     pointer,
-                    env.ptr_int().ptr_type(AddressSpace::default()),
+                    env.context.ptr_type(AddressSpace::default()),
                     "to_isize_ptr",
                 )
                 .into(),
@@ -280,7 +277,7 @@ fn decref_pointer<'ctx>(
             env.builder
                 .new_build_pointer_cast(
                     pointer,
-                    env.ptr_int().ptr_type(AddressSpace::default()),
+                    env.context.ptr_type(AddressSpace::default()),
                     "to_isize_ptr",
                 )
                 .into(),
@@ -306,7 +303,7 @@ pub fn decref_pointer_check_null<'ctx>(
             env.builder
                 .new_build_pointer_cast(
                     pointer,
-                    env.context.i8_type().ptr_type(AddressSpace::default()),
+                    env.context.ptr_type(AddressSpace::default()),
                     "to_i8_ptr",
                 )
                 .into(),
@@ -1320,7 +1317,7 @@ fn build_rec_union_recursive_decrement<'a, 'ctx>(
         // cast the opaque pointer to a pointer of the correct shape
         let struct_ptr = env.builder.new_build_pointer_cast(
             value_ptr,
-            wrapper_type.ptr_type(AddressSpace::default()),
+            env.context.ptr_type(AddressSpace::default()),
             "opaque_to_correct_recursive_decrement",
         );
 
@@ -1340,7 +1337,7 @@ fn build_rec_union_recursive_decrement<'a, 'ctx>(
                 );
 
                 let ptr_as_i64_ptr = env.builder.new_build_load(
-                    env.context.i64_type().ptr_type(AddressSpace::default()),
+                    env.context.ptr_type(AddressSpace::default()),
                     elem_pointer,
                     "load_recursive_pointer",
                 );
@@ -1792,7 +1789,7 @@ fn modify_refcount_nonrecursive_help<'a, 'ctx>(
 
         let cast_tag_data_pointer = env.builder.new_build_pointer_cast(
             opaque_tag_data_ptr,
-            data_struct_type.ptr_type(AddressSpace::default()),
+            env.context.ptr_type(AddressSpace::default()),
             "cast_to_concrete_tag",
         );
 
@@ -1810,7 +1807,7 @@ fn modify_refcount_nonrecursive_help<'a, 'ctx>(
 
                 // This is the actual pointer to the recursive data.
                 let field_value = env.builder.new_build_load(
-                    env.context.i64_type().ptr_type(AddressSpace::default()),
+                    env.context.ptr_type(AddressSpace::default()),
                     field_ptr,
                     "load_recursive_pointer",
                 );
