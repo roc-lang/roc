@@ -19,9 +19,6 @@ use std::borrow::{Borrow, Cow};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const RECORD_DOCS: &str = "https://www.roc-lang.org/tutorial#records";
-const TUPLE_DOCS: &str = "https://www.roc-lang.org/tutorial#tuples";
-const TAG_UNION_DOCS: &str = "https://www.roc-lang.org/tutorial#tag-union-types";
 const ABILITIES_DOCS: &str = "https://www.roc-lang.org/abilities";
 
 pub fn generate_docs_html<'a>(
