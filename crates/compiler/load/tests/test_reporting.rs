@@ -658,9 +658,9 @@ mod test_reporting {
 
     Did you mean one of these?
 
-        Str
         Frac
         Num
+        Str
         U8
     "###
     );
@@ -8146,7 +8146,7 @@ All branches in an `if` must have the same type!
             alt
             "#
         ),
-        @r"
+        @r###"
     ── MODULE NOT IMPORTED in /code/proj/Main.roc ──────────────────────────────────
 
     The `Unimported` module is not imported:
@@ -8161,7 +8161,7 @@ All branches in an `if` must have the same type!
         Inspect
         Dict
         List
-    "
+    "###
     );
 
     test_report!(

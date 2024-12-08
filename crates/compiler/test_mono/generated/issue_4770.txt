@@ -199,8 +199,8 @@ procedure Test.1 (#Derived_gen.5):
                         let Test.30 : Int1 = CallByName Num.22 Test.31 Test.32;
                         ret Test.30;
                     else
-                        dec Test.12;
                         dec Test.14;
+                        dec Test.12;
                         let Test.28 : Int1 = CallByName Bool.1;
                         ret Test.28;
                 in
