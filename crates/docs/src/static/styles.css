@@ -72,6 +72,16 @@ table tr td {
   height: 100%;
 }
 
+.entry-name .punct {
+    color: var(--violet);
+    opacity: 0.50;
+}
+
+.entry-name .brace {
+    color: var(--violet);
+    opacity: 0.50;
+}
+
 .entry-name {
   white-space: pre-wrap;
   font-family: var(--font-mono);
@@ -81,7 +91,6 @@ table tr td {
   margin-top: 0;
   margin-bottom: 24px;
   padding: 8px 16px;
-  border-left: 2px solid var(--violet);
 }
 
 .pkg-full-name a {
@@ -154,7 +163,7 @@ main {
   font-size: 18px;
   line-height: 1.85em;
   margin-top: 2px;
-  padding: 48px;
+  padding: 36px;
   max-width: 740px;
   /* necessary for text-overflow: ellipsis to work in descendants */
   min-width: 0;
@@ -172,27 +181,19 @@ main {
 }
 
 section {
-  padding: 0px 0px 16px 0px;
-  margin: 72px 0px;
+  padding: 4px 4px 12px 0;
+  border: 2px solid var(--code-bg);
+  box-shadow: 4px 4px 0 var(--faded-color);
+  margin: 36px 0;
 }
 
 section blockquote {
   font-style: italic;
   position: relative;
-  margin-left: 0;
-  margin-right: 0;
+  margin: 0;
+  margin-left: 16px;
+  border-left: 2px solid var(--gray);
 }
-
-section blockquote:before {
-  content: "";
-  position: absolute;
-  top: 0;
-  right: 0;
-  width: 2px;
-  height: 100%;
-  background-color: var(--gray);
-}
-
 
 section > *:last-child {
   margin-bottom: 0;
@@ -313,6 +314,7 @@ footer p {
 }
 
 .module-name {
+  flex-grow: 1;
   font-size: 56px;
   line-height: 1em;
   font-family: var(--font-mono);
@@ -320,6 +322,7 @@ footer p {
   margin-top: 18px;
   margin-bottom: 48px;
   color: var(--violet);
+  padding: 8px 16px;
 }
 
 .module-name a,
@@ -400,7 +403,7 @@ a:visited code {
 }
 
 pre {
-  margin: 36px 0;
+  margin: 36px 16px;
   padding: 8px 16px;
   box-sizing: border-box;
   background-color: var(--code-bg);
@@ -579,11 +582,6 @@ pre>samp {
   flex-shrink: 0;
 }
 
-.module-name {
-    flex-grow: 1;
-    margin-bottom: 0;
-}
-
 @media (prefers-color-scheme: dark) {
   :root {
       /* WCAG AAA Compliant colors */
@@ -651,11 +649,6 @@ pre>samp {
       width: 100%;
       height: auto;
       margin-bottom: 16px;
-  }
-
-  /* Hide the Copy Link button on mobile. */
-  .entry-name a:first-of-type {
-      display: none;
   }
 
   .search-button {

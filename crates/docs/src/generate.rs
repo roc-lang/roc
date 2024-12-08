@@ -19,6 +19,11 @@ use std::borrow::{Borrow, Cow};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+const RECORD_DOCS: &str = "https://www.roc-lang.org/tutorial#records";
+const TUPLE_DOCS: &str = "https://www.roc-lang.org/tutorial#tuples";
+const TAG_UNION_DOCS: &str = "https://www.roc-lang.org/tutorial#tag-union-types";
+const ABILITIES_DOCS: &str = "https://www.roc-lang.org/abilities";
+
 pub fn generate_docs_html<'a>(
     arena: &'a Bump,
     pkg_name: &str,
@@ -648,7 +653,7 @@ impl<'a> Docs<'a> {
 
             const TYPE_START: &str = " : ";
 
-            buf.push_str(TYPE_START);
+            push_punct(buf, TYPE_START);
 
             let old_buf_len = buf.len();
 
@@ -1653,11 +1658,9 @@ fn type_annotation_to_html(
             }
 
             if tags.is_empty() && extra_tags.is_empty() {
-                buf.push_str("[]");
+                push_docs_link(buf, "[]", TAG_UNION_DOCS);
             } else {
-                let tags_len = tags.len();
-
-                buf.push('[');
+                push_docs_link(buf, "[", TAG_UNION_DOCS);
 
                 if is_multiline {
                     new_line(buf);
@@ -1665,7 +1668,7 @@ fn type_annotation_to_html(
 
                 let next_indent_level = indent_level + 1;
 
-                for (index, tag) in tags.iter().chain(extra_tags.iter()).enumerate() {
+                for tag in tags.iter().chain(extra_tags.iter()) {
                     if is_multiline {
                         indent(buf, next_indent_level);
                     }
@@ -1678,7 +1681,7 @@ fn type_annotation_to_html(
                     }
 
                     if is_multiline {
-                        buf.push(',');
+                        push_punct(buf, ",");
                         new_line(buf);
                     }
                 }
@@ -1687,7 +1690,7 @@ fn type_annotation_to_html(
                     indent(buf, indent_level);
                 }
 
-                buf.push(']');
+                push_docs_link(buf, "]", TAG_UNION_DOCS);
             }
 
             buf.push_str(&var);
@@ -1696,21 +1699,38 @@ fn type_annotation_to_html(
             buf.push_str(var_name);
         }
         TypeAnnotation::Apply { name, parts } => {
+            let todo = (); // TODO hack! Get this from a Symbol or something, and use the appropriate URL
+            let is_builtin =
+                name.as_str() == "Str" || name.as_str() == "List" || name.as_str() == "Num";
+
             if parts.is_empty() {
+                // Don't print parens (regardless of needs_parens) if it's a standalone name.
+                if is_builtin {
+                    buf.push_str("<a href='https://example.com'>");
+                }
                 buf.push_str(name);
+                if is_builtin {
+                    buf.push_str("</a>");
+                }
             } else {
                 if needs_parens {
-                    buf.push('(');
+                    push_punct(buf, "(");
                 }
 
+                if is_builtin {
+                    buf.push_str("<a href='https://example.com'>");
+                }
                 buf.push_str(name);
+                if is_builtin {
+                    buf.push_str("</a>");
+                }
                 for part in parts {
                     buf.push(' ');
                     type_annotation_to_html(indent_level, buf, part, true);
                 }
 
                 if needs_parens {
-                    buf.push(')');
+                    push_punct(buf, ")");
                 }
             }
         }
@@ -1737,11 +1757,9 @@ fn type_annotation_to_html(
             }
 
             if fields.is_empty() && extra_fields.is_empty() {
-                buf.push_str("{}");
+                push_docs_link(buf, "{}", RECORD_DOCS);
             } else {
-                let fields_len = fields.len();
-
-                buf.push('{');
+                push_docs_link(buf, "{", RECORD_DOCS);
 
                 if is_multiline {
                     new_line(buf);
@@ -1749,7 +1767,7 @@ fn type_annotation_to_html(
 
                 let next_indent_level = indent_level + 1;
 
-                for (index, field) in fields.iter().chain(extra_fields.iter()).enumerate() {
+                for field in fields.iter().chain(extra_fields.iter()) {
                     if is_multiline {
                         indent(buf, next_indent_level);
                     } else {
@@ -1768,20 +1786,20 @@ fn type_annotation_to_html(
                         RecordField::RecordField {
                             type_annotation, ..
                         } => {
-                            buf.push_str(" : ");
+                            push_punct(buf, " : ");
                             type_annotation_to_html(next_indent_level, buf, type_annotation, false);
                         }
                         RecordField::OptionalField {
                             type_annotation, ..
                         } => {
-                            buf.push_str(" ? ");
+                            push_punct(buf, " ? ");
                             type_annotation_to_html(next_indent_level, buf, type_annotation, false);
                         }
                         RecordField::LabelOnly { .. } => {}
                     }
 
                     if is_multiline {
-                        buf.push(',');
+                        push_punct(buf, ",");
                         new_line(buf);
                     }
                 }
@@ -1792,7 +1810,7 @@ fn type_annotation_to_html(
                     buf.push(' ');
                 }
 
-                buf.push('}');
+                push_docs_link(buf, "}", RECORD_DOCS);
             }
 
             buf.push_str(&var);
@@ -1813,7 +1831,7 @@ fn type_annotation_to_html(
                     indent(buf, indent_level + 1);
                 }
                 if needs_parens && !paren_is_open {
-                    buf.push('(');
+                    push_punct(buf, "(");
                     paren_is_open = true;
                 }
 
@@ -1821,7 +1839,7 @@ fn type_annotation_to_html(
                 type_annotation_to_html(indent_level, buf, arg, child_needs_parens);
 
                 if peekable_args.peek().is_some() {
-                    buf.push_str(", ");
+                    push_punct(buf, ", ");
                 }
             }
 
@@ -1833,13 +1851,17 @@ fn type_annotation_to_html(
             }
 
             // Push either `->` or `=>` depending on whether it's a pure or effectful function.
-            let arrow_body = match arrow {
-                FunctionArrow::Pure => '-',
-                FunctionArrow::Effectful => '=',
+            let arrow = match arrow {
+                FunctionArrow::Pure => "->",
+                FunctionArrow::Effectful => "=>",
             };
 
-            buf.push(arrow_body);
-            buf.push_str("> ");
+            push_docs_link(
+                buf,
+                arrow,
+                "https://www.roc-lang.org/tutorial#defining-functions",
+            );
+            buf.push(' ');
 
             let mut next_indent_level = indent_level;
 
@@ -1849,11 +1871,11 @@ fn type_annotation_to_html(
 
             type_annotation_to_html(next_indent_level, buf, output, false);
             if needs_parens && paren_is_open {
-                buf.push(')');
+                push_punct(buf, ")");
             }
         }
         TypeAnnotation::Ability { members } => {
-            buf.push_str(keyword::IMPLEMENTS);
+            push_docs_link(buf, keyword::IMPLEMENTS, ABILITIES_DOCS);
 
             for member in members {
                 new_line(buf);
@@ -1869,28 +1891,29 @@ fn type_annotation_to_html(
                 // }
 
                 buf.push_str(&member.name);
-                buf.push_str(" : ");
+                push_punct(buf, " : ");
 
                 type_annotation_to_html(indent_level + 1, buf, &member.type_annotation, false);
 
                 if !member.able_variables.is_empty() {
                     new_line(buf);
                     indent(buf, indent_level + 2);
-                    buf.push_str(keyword::WHERE);
+
+                    push_docs_link(buf, keyword::WHERE, ABILITIES_DOCS);
 
                     for (index, (name, type_anns)) in member.able_variables.iter().enumerate() {
                         if index != 0 {
-                            buf.push(',');
+                            push_punct(buf, ",");
                         }
 
                         buf.push(' ');
                         buf.push_str(name);
                         buf.push(' ');
-                        buf.push_str(keyword::IMPLEMENTS);
+                        push_docs_link(buf, keyword::IMPLEMENTS, ABILITIES_DOCS);
 
                         for (index, ann) in type_anns.iter().enumerate() {
                             if index != 0 {
-                                buf.push_str(" &");
+                                push_punct(buf, " &");
                             }
 
                             buf.push(' ');
@@ -1902,13 +1925,15 @@ fn type_annotation_to_html(
             }
         }
         TypeAnnotation::ObscuredTagUnion => {
-            buf.push_str("[@..]");
+            push_docs_link(buf, "[@..]", TAG_UNION_DOCS);
         }
         TypeAnnotation::ObscuredRecord => {
-            buf.push_str("{ @.. }");
+            push_docs_link(buf, "{ @.. }", RECORD_DOCS);
         }
         TypeAnnotation::NoTypeAnn => {}
-        TypeAnnotation::Wildcard => buf.push('*'),
+        TypeAnnotation::Wildcard => {
+            push_punct(buf, "*");
+        }
         TypeAnnotation::Tuple { elems, extension } => {
             let mut extension = Cow::Borrowed(&**extension);
             let mut var = std::string::String::new();
@@ -1932,11 +1957,11 @@ fn type_annotation_to_html(
             }
 
             if elems.is_empty() && extra_elems.is_empty() {
-                buf.push_str("()");
+                push_docs_link(buf, "()", TUPLE_DOCS);
             } else {
                 let elems_len = elems.len() + extra_elems.len();
 
-                buf.push('(');
+                push_docs_link(buf, "(", TUPLE_DOCS);
 
                 if is_multiline {
                     new_line(buf);
@@ -1952,10 +1977,10 @@ fn type_annotation_to_html(
                     type_annotation_to_html(next_indent_level, buf, elem, false);
 
                     if is_multiline {
-                        buf.push(',');
+                        push_punct(buf, ",");
                         new_line(buf);
                     } else if index < (elems_len - 1) {
-                        buf.push_str(", ");
+                        push_punct(buf, ", ");
                     }
                 }
 
@@ -1963,7 +1988,7 @@ fn type_annotation_to_html(
                     indent(buf, indent_level);
                 }
 
-                buf.push(')');
+                push_docs_link(buf, ")", TUPLE_DOCS);
             }
 
             buf.push_str(&var);
@@ -1974,7 +1999,7 @@ fn type_annotation_to_html(
             new_line(buf);
             indent(buf, indent_level + 1);
 
-            buf.push_str(keyword::WHERE);
+            push_docs_link(buf, keyword::WHERE, ABILITIES_DOCS);
 
             let multiline_implements = implements
                 .iter()
@@ -1982,7 +2007,7 @@ fn type_annotation_to_html(
 
             for (index, imp) in implements.iter().enumerate() {
                 if index != 0 {
-                    buf.push(',');
+                    push_punct(buf, ",");
                 }
 
                 if multiline_implements {
@@ -1994,12 +2019,12 @@ fn type_annotation_to_html(
 
                 buf.push_str(&imp.name);
                 buf.push(' ');
-                buf.push_str(keyword::IMPLEMENTS);
+                push_docs_link(buf, keyword::IMPLEMENTS, ABILITIES_DOCS);
                 buf.push(' ');
 
                 for (index, ability) in imp.abilities.iter().enumerate() {
                     if index != 0 {
-                        buf.push_str(" & ");
+                        push_punct(buf, " & ");
                     }
 
                     type_annotation_to_html(indent_level, buf, ability, false);
@@ -2149,4 +2174,18 @@ where
     buf.push_str("</");
     buf.push_str(tag_name);
     buf.push('>');
+}
+
+fn push_punct(buf: &mut String, punctuation: &str) {
+    buf.push_str("<span class='punct'>");
+    buf.push_str(punctuation);
+    buf.push_str("</span>");
+}
+
+fn push_docs_link(buf: &mut String, link_text: &str, docs_url: &str) {
+    buf.push_str("<a href='");
+    buf.push_str(docs_url);
+    buf.push_str("'>");
+    buf.push_str(link_text);
+    buf.push_str("</a>");
 }
