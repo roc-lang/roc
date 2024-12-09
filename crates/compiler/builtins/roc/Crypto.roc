@@ -10,12 +10,12 @@ module [
 
 import Bool exposing [Eq]
 import List
-import Num exposing [U8, U128]
+import Num exposing [U8, U64, U128]
 import Result
 import Str
 
 ## Represents the state of a SHA-256 cryptographic hashing function, after some (or no) data has been added to the hash.
-Sha256 := { block0 : U128, block1 : U128, block2 : U128, block3 : U128, block4 : U128, block5 : U128, block6 : U128, block7 : U128 }
+Sha256 := { location : U64 }
 
 ## Represents the digest of some data produced by the SHA-256 cryptographic hashing function as an opaque type.
 
@@ -25,10 +25,10 @@ Digest256 := { firstHalf : U128, secondHalf : U128 } implements [Eq]
 ## Returns an empty SHA-256 hasher.
 emptySha256 : {} -> Sha256
 
-## Adds bytes of data to be hashed by a SHA-256 hasher.
+## Adds bytes of data to be hashed by a SHA-256 hasher..
 sha256AddBytes : Sha256, List U8 -> Sha256
 
-## Returns the digest of the cryptographic hashing function represented by a SHA-256 hasher.
+## Returns the digest of the cryptographic hashing function represented by a SHA-256 hasher..
 sha256Digest : Sha256 -> Digest256
 
 ## Applies the SHA-256 cryptographic hashing function to some bytes.

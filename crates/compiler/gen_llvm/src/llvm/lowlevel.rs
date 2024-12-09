@@ -1449,7 +1449,14 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             // Crypto.sha256Digest : Sha256 -> Digest256
             arguments!(sha);
 
-            call_bitcode_fn(env, &[sha], bitcode::CRYPTO_SHA256_DIGEST)
+            call_bitcode_fn_fixing_for_convention(
+                env,
+                layout_interner,
+                env.module.get_struct_type("crypto.Digest256").unwrap(),
+                &[sha],
+                layout,
+                bitcode::CRYPTO_SHA256_DIGEST,
+            )
         }
 
         ListIncref | ListDecref | SetJmp | LongJmp | SetLongJmpBuffer => {
