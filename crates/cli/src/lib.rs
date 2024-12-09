@@ -81,7 +81,6 @@ pub const FLAG_OUTPUT: &str = "output";
 pub const FLAG_FUZZ: &str = "fuzz";
 pub const FLAG_MAIN: &str = "main";
 pub const ROC_FILE: &str = "ROC_FILE";
-pub const ROC_DIR: &str = "ROC_DIR";
 pub const GLUE_DIR: &str = "GLUE_DIR";
 pub const GLUE_SPEC: &str = "GLUE_SPEC";
 pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";

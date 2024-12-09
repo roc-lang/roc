@@ -95,6 +95,9 @@
                     let totalResults = 0;
                     // Firsttype-ahead-signature", show/hide all the sub-entries within each module (top-level functions etc.)
                     searchTypeAhead.querySelectorAll("li").forEach((entry) => {
+                        const entryModule = entry
+                            .querySelector(".type-ahead-module-name")
+                            .textContent.toLowerCase()
                         const entryName = entry
                             .querySelector(".type-ahead-def-name")
                             .textContent.toLowerCase();
@@ -103,7 +106,9 @@
                             ?.textContent?.toLowerCase()
                             ?.replace(/\s+/g, "");
 
-                        if ((entryName.includes(text) || entrySignature?.includes(text.replace(/\s+/g, "")))) {
+                        const qualifiedEntryName = `${entryModule}.${entryName}`
+
+                        if ((qualifiedEntryName.includes(text) || entrySignature?.includes(text.replace(/\s+/g, "")))) {
                             totalResults++;
                             entry.classList.remove("hidden");
                             if (topSearchResultListItem === undefined) {

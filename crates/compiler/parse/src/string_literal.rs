@@ -181,6 +181,7 @@ pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EStri
 
             match one_byte {
                 b'"' if !is_single_quote => {
+                    preceded_by_dollar = false;
                     if segment_parsed_bytes == 1 && segments.is_empty() {
                         // special case of the empty string
                         if is_multiline {
@@ -318,6 +319,7 @@ pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EStri
                     ));
                 }
                 b'\n' => {
+                    preceded_by_dollar = false;
                     if is_multiline {
                         let without_newline = &state.bytes()[0..(segment_parsed_bytes - 1)];
                         let with_newline = &state.bytes()[0..segment_parsed_bytes];
@@ -456,7 +458,8 @@ pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EStri
                     let (_progress, loc_expr, new_state) = skip_second(
                         specialize_err_ref(
                             EString::Format,
-                            loc(allocated(reset_min_indent(expr::expr_help()))),
+                            loc(allocated(reset_min_indent(expr::expr_help())))
+                                .trace("str_interpolation"),
                         ),
                         byte(b')', EString::FormatEnd),
                     )
