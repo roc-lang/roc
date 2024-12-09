@@ -15,7 +15,7 @@ import Result
 import Str
 
 ## Represents the state of a SHA-256 cryptographic hashing function, after some (or no) data has been added to the hash.
-Sha256 := { block0 : U128, block1 : U128, block2 : U128, block3 : U128, block4 : U128, block5 : U128, block6 : U128, block7 : U128}
+Sha256 := { block0 : U128, block1 : U128, block2 : U128, block3 : U128, block4 : U128, block5 : U128, block6 : U128, block7 : U128 }
 
 ## Represents the digest of some data produced by the SHA-256 cryptographic hashing function as an opaque type.
 
