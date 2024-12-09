@@ -1,4 +1,4 @@
-MalformedIdent(
+@0-3 MalformedIdent(
     "I.5",
     QualifiedTupleAccessor(
         @1,

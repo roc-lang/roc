@@ -727,6 +727,7 @@ impl<'a> Normalize<'a> for Expr<'a> {
                 arena.alloc(b.normalize(arena)),
             ),
             Expr::Try => Expr::Try,
+            Expr::LowLevelTry(a, kind) => Expr::LowLevelTry(arena.alloc(a.normalize(arena)), kind),
             Expr::Return(a, b) => Expr::Return(
                 arena.alloc(a.normalize(arena)),
                 b.map(|loc_b| &*arena.alloc(loc_b.normalize(arena))),
@@ -855,6 +856,7 @@ fn remove_spaces_bad_ident(ident: BadIdent) -> BadIdent {
             position: Position::zero(),
             declaration_region,
         },
+        BadIdent::TooManyUnderscores(_) => BadIdent::TooManyUnderscores(Position::zero()),
         BadIdent::QualifiedTag(_) => BadIdent::QualifiedTag(Position::zero()),
         BadIdent::WeirdAccessor(_) => BadIdent::WeirdAccessor(Position::zero()),
         BadIdent::WeirdDotAccess(_) => BadIdent::WeirdDotAccess(Position::zero()),

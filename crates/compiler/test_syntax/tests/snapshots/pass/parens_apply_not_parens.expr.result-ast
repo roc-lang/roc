@@ -1,4 +1,4 @@
-ParensAround(
+@0-8 ParensAround(
     Apply(
         @1-6 UnaryOp(
             @3-4 ParensAround(

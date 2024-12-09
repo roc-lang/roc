@@ -94,7 +94,7 @@ impl<'a> Formattable for Pattern<'a> {
     }
 
     fn format_with_options(&self, buf: &mut Buf, parens: Parens, _newlines: Newlines, indent: u16) {
-        fmt_pattern_inner(self, buf, parens, indent, self.is_multiline());
+        fmt_pattern_inner(self, buf, parens, indent, self.is_multiline(), false);
     }
 }
 
@@ -102,33 +102,67 @@ fn fmt_pattern_inner(
     pat: &Pattern<'_>,
     buf: &mut Buf,
     parens: Parens,
+
     indent: u16,
     outer_is_multiline: bool,
-) {
-    use self::Pattern::*;
-
+    force_newline_at_start: bool,
+) -> bool {
     let me = pattern_lift_spaces(buf.text.bump(), pat);
+
+    let mut was_multiline = me.item.is_multiline();
 
     if !me.before.is_empty() {
         if !outer_is_multiline {
+            was_multiline |= me.before.iter().any(|s| s.is_comment());
             fmt_comments_only(buf, me.before.iter(), NewlineAt::Bottom, indent)
         } else {
+            was_multiline |= true;
             fmt_spaces(buf, me.before.iter(), indent);
         }
     }
 
+    if force_newline_at_start {
+        buf.ensure_ends_with_newline();
+    }
+
     let is_multiline = me.item.is_multiline();
 
-    match me.item {
-        Identifier { ident: string } => {
-            buf.indent(indent);
-            buf.push_str(string);
+    fmt_pattern_only(me, buf, indent, parens, is_multiline);
+
+    if !me.after.is_empty() {
+        if starts_with_inline_comment(me.after.iter()) {
+            buf.spaces(1);
         }
-        Tag(name) | OpaqueRef(name) => {
+
+        if !outer_is_multiline {
+            was_multiline |= me.before.iter().any(|s| s.is_comment());
+            fmt_comments_only(buf, me.after.iter(), NewlineAt::Bottom, indent)
+        } else {
+            was_multiline |= true;
+            fmt_spaces(buf, me.after.iter(), indent);
+        }
+    }
+
+    was_multiline
+}
+
+fn fmt_pattern_only(
+    me: Spaces<'_, Pattern<'_>>,
+    buf: &mut Buf<'_>,
+    indent: u16,
+    parens: Parens,
+    is_multiline: bool,
+) {
+    match me.item {
+        Pattern::Identifier { ident: string } => {
+            buf.indent(indent);
+            snakify_camel_ident(buf, string);
+        }
+        Pattern::Tag(name) | Pattern::OpaqueRef(name) => {
             buf.indent(indent);
             buf.push_str(name);
         }
-        Apply(loc_pattern, loc_arg_patterns) => {
+        Pattern::Apply(loc_pattern, loc_arg_patterns) => {
             buf.indent(indent);
             // Sometimes, an Apply pattern needs parens around it.
             // In particular when an Apply's argument is itself an Apply (> 0) arguments
@@ -154,7 +188,7 @@ fn fmt_pattern_inner(
                 }
             }
 
-            fmt_pattern_inner(&pat.item, buf, Parens::InApply, indent, is_multiline);
+            fmt_pattern_inner(&pat.item, buf, Parens::InApply, indent, is_multiline, false);
 
             if !pat.after.is_empty() {
                 if !is_multiline {
@@ -164,22 +198,26 @@ fn fmt_pattern_inner(
                 }
             }
 
+            let mut add_newlines = false;
+
             for loc_arg in loc_arg_patterns.iter() {
                 buf.spaces(1);
-                fmt_pattern_inner(
+                let was_multiline = fmt_pattern_inner(
                     &loc_arg.value,
                     buf,
                     Parens::InApply,
                     indent_more,
                     is_multiline,
+                    add_newlines,
                 );
+                add_newlines |= was_multiline;
             }
 
             if parens {
                 buf.push(')');
             }
         }
-        RecordDestructure(loc_patterns) => {
+        Pattern::RecordDestructure(loc_patterns) => {
             buf.indent(indent);
             buf.push_str("{");
 
@@ -197,13 +235,19 @@ fn fmt_pattern_inner(
                         }
                     }
 
-                    fmt_pattern_inner(&item.item, buf, Parens::NotNeeded, indent, is_multiline);
+                    fmt_pattern_inner(
+                        &item.item,
+                        buf,
+                        Parens::NotNeeded,
+                        indent,
+                        is_multiline,
+                        false,
+                    );
 
                     let is_multiline = item.item.is_multiline();
 
                     if it.peek().is_some() {
                         buf.push_str(",");
-                        buf.spaces(1);
                     }
 
                     if !item.after.is_empty() {
@@ -217,6 +261,9 @@ fn fmt_pattern_inner(
                             fmt_spaces(buf, item.after.iter(), indent);
                         }
                     }
+                    if it.peek().is_some() {
+                        buf.ensure_ends_with_whitespace();
+                    }
                 }
                 buf.spaces(1);
             }
@@ -225,9 +272,9 @@ fn fmt_pattern_inner(
             buf.push_str("}");
         }
 
-        RequiredField(name, loc_pattern) => {
+        Pattern::RequiredField(name, loc_pattern) => {
             buf.indent(indent);
-            buf.push_str(name);
+            snakify_camel_ident(buf, name);
             buf.push_str(":");
             buf.spaces(1);
             fmt_pattern_inner(
@@ -236,22 +283,23 @@ fn fmt_pattern_inner(
                 Parens::NotNeeded,
                 indent,
                 is_multiline,
+                false,
             );
         }
 
-        OptionalField(name, loc_pattern) => {
+        Pattern::OptionalField(name, loc_pattern) => {
             buf.indent(indent);
-            buf.push_str(name);
+            snakify_camel_ident(buf, name);
             buf.push_str(" ?");
             buf.spaces(1);
             loc_pattern.format(buf, indent);
         }
 
-        NumLiteral(string) => {
+        Pattern::NumLiteral(string) => {
             buf.indent(indent);
             buf.push_str(string);
         }
-        NonBase10Literal {
+        Pattern::NonBase10Literal {
             base,
             string,
             is_negative,
@@ -270,21 +318,21 @@ fn fmt_pattern_inner(
 
             buf.push_str(string);
         }
-        FloatLiteral(string) => {
+        Pattern::FloatLiteral(string) => {
             buf.indent(indent);
             buf.push_str(string);
         }
-        StrLiteral(literal) => fmt_str_literal(buf, literal, indent),
-        SingleQuote(string) => {
+        Pattern::StrLiteral(literal) => fmt_str_literal(buf, literal, indent),
+        Pattern::SingleQuote(string) => {
             buf.indent(indent);
             format_sq_literal(buf, string);
         }
-        Underscore(name) => {
+        Pattern::Underscore(name) => {
             buf.indent(indent);
             buf.push('_');
             buf.push_str(name);
         }
-        Tuple(loc_patterns) => {
+        Pattern::Tuple(loc_patterns) => {
             buf.indent(indent);
             buf.push_str("(");
 
@@ -296,6 +344,7 @@ fn fmt_pattern_inner(
                     Parens::NotNeeded,
                     indent,
                     is_multiline,
+                    false,
                 );
 
                 if it.peek().is_some() {
@@ -308,7 +357,7 @@ fn fmt_pattern_inner(
             buf.indent(indent);
             buf.push_str(")");
         }
-        List(loc_patterns) => {
+        Pattern::List(loc_patterns) => {
             buf.indent(indent);
             buf.push_str("[");
 
@@ -320,6 +369,7 @@ fn fmt_pattern_inner(
                     Parens::NotNeeded,
                     indent,
                     is_multiline,
+                    false,
                 );
 
                 if it.peek().is_some() {
@@ -332,7 +382,7 @@ fn fmt_pattern_inner(
             buf.indent(indent);
             buf.push_str("]");
         }
-        ListRest(opt_pattern_as) => {
+        Pattern::ListRest(opt_pattern_as) => {
             buf.indent(indent);
             buf.push_str("..");
 
@@ -344,7 +394,7 @@ fn fmt_pattern_inner(
             }
         }
 
-        As(pattern, pattern_as) => {
+        Pattern::As(pattern, pattern_as) => {
             let needs_parens = parens == Parens::InAsPattern;
 
             if needs_parens {
@@ -362,33 +412,23 @@ fn fmt_pattern_inner(
             }
         }
 
-        SpaceBefore(..) | SpaceAfter(..) => unreachable!("handled by lift_spaces"),
+        Pattern::SpaceBefore(..) | Pattern::SpaceAfter(..) => {
+            unreachable!("handled by lift_spaces")
+        }
 
         // Malformed
-        Malformed(string) | MalformedIdent(string, _) => {
+        Pattern::Malformed(string) | Pattern::MalformedIdent(string, _) => {
             buf.indent(indent);
             buf.push_str(string);
         }
-        QualifiedIdentifier { module_name, ident } => {
+        Pattern::QualifiedIdentifier { module_name, ident } => {
             buf.indent(indent);
             if !module_name.is_empty() {
                 buf.push_str(module_name);
                 buf.push('.');
             }
 
-            buf.push_str(ident);
-        }
-    }
-
-    if !me.after.is_empty() {
-        if starts_with_inline_comment(me.after.iter()) {
-            buf.spaces(1);
-        }
-
-        if !outer_is_multiline {
-            fmt_comments_only(buf, me.after.iter(), NewlineAt::Bottom, indent)
-        } else {
-            fmt_spaces(buf, me.after.iter(), indent);
+            snakify_camel_ident(buf, ident);
         }
     }
 }
@@ -498,5 +538,95 @@ pub fn pattern_lift_spaces_after<'a, 'b: 'a>(
     SpacesAfter {
         item: lifted.item.maybe_before(arena, lifted.before),
         after: lifted.after,
+    }
+}
+
+/// Convert camelCase identifier to snake case
+fn snakify_camel_ident(buf: &mut Buf, string: &str) {
+    let chars: Vec<char> = string.chars().collect();
+    if !buf.flags().snakify || (string.contains('_') && !string.ends_with('_')) {
+        buf.push_str(string);
+        return;
+    }
+    let mut index = 0;
+    let len = chars.len();
+
+    while index < len {
+        let prev = if index == 0 {
+            None
+        } else {
+            Some(chars[index - 1])
+        };
+        let c = chars[index];
+        let next = chars.get(index + 1);
+        let boundary = match (prev, c, next) {
+            // LUU, LUN, and LUL (simplified to LU_)
+            (Some(p), curr, _) if !p.is_ascii_uppercase() && curr.is_ascii_uppercase() => true,
+            // UUL
+            (Some(p), curr, Some(n))
+                if p.is_ascii_uppercase()
+                    && curr.is_ascii_uppercase()
+                    && n.is_ascii_lowercase() =>
+            {
+                true
+            }
+            _ => false,
+        };
+        // those are boundary transitions - should push _ and curr
+        if boundary {
+            buf.push('_');
+        }
+        buf.push(c.to_ascii_lowercase());
+        index += 1;
+    }
+}
+
+#[cfg(test)]
+mod snakify_test {
+    use bumpalo::Bump;
+
+    use super::snakify_camel_ident;
+    use crate::{Buf, MigrationFlags};
+
+    fn check_snakify(arena: &Bump, original: &str) -> String {
+        let flags = MigrationFlags::new(true);
+        let mut buf = Buf::new_in(arena, flags);
+        buf.indent(0);
+        snakify_camel_ident(&mut buf, original);
+        buf.text.to_string()
+    }
+
+    #[test]
+    fn test_snakify_camel_ident() {
+        let arena = Bump::new();
+        assert_eq!(check_snakify(&arena, "A"), "a");
+        assert_eq!(check_snakify(&arena, "Ba"), "ba");
+        assert_eq!(check_snakify(&arena, "aB"), "a_b");
+        assert_eq!(check_snakify(&arena, "aBa"), "a_ba");
+        assert_eq!(check_snakify(&arena, "mBB"), "m_bb");
+        assert_eq!(check_snakify(&arena, "NbA"), "nb_a");
+        assert_eq!(check_snakify(&arena, "doIT"), "do_it");
+        assert_eq!(check_snakify(&arena, "ROC"), "roc");
+        assert_eq!(
+            check_snakify(&arena, "someHTTPRequest"),
+            "some_http_request"
+        );
+        assert_eq!(check_snakify(&arena, "usingXML"), "using_xml");
+        assert_eq!(check_snakify(&arena, "some123"), "some123");
+        assert_eq!(
+            check_snakify(&arena, "theHTTPStatus404"),
+            "the_http_status404"
+        );
+        assert_eq!(
+            check_snakify(&arena, "inThe99thPercentile"),
+            "in_the99th_percentile"
+        );
+        assert_eq!(
+            check_snakify(&arena, "all400SeriesErrorCodes"),
+            "all400_series_error_codes",
+        );
+        assert_eq!(check_snakify(&arena, "number4Yellow"), "number4_yellow");
+        assert_eq!(check_snakify(&arena, "useCases4Cobol"), "use_cases4_cobol");
+        assert_eq!(check_snakify(&arena, "c3PO"), "c3_po")
     }
 }

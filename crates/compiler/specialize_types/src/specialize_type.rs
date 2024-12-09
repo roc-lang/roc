@@ -452,12 +452,11 @@ fn number_args_to_mono_id(
             // Unroll aliases in this loop, as many aliases as we encounter.
             loop {
                 match content {
-                    Content::Structure(flat_type) => {
-                        if let FlatType::Apply(outer_symbol, args) = flat_type {
-                            return num_num_args_to_mono_id(*outer_symbol, *args, subs, problems);
-                        } else {
-                            break;
-                        }
+                    Content::Structure(FlatType::Apply(outer_symbol, args)) => {
+                        return num_num_args_to_mono_id(*outer_symbol, *args, subs, problems);
+                    }
+                    Content::Structure(_) => {
+                        break;
                     }
                     Content::FlexVar(_) => {
                         // Num *

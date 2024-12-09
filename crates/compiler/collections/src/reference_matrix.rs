@@ -50,7 +50,6 @@ impl ReferenceMatrix {
 //
 // Thank you, Samuel!
 impl ReferenceMatrix {
-    #[allow(dead_code)]
     pub fn topological_sort_into_groups(&self) -> TopologicalSort {
         if self.length == 0 {
             return TopologicalSort::Groups { groups: Vec::new() };

@@ -217,7 +217,6 @@ pub fn deep_copy_type_vars_into_expr(
     deep_copy_expr_top(subs, var, expr)
 }
 
-#[allow(unused)] // TODO to be removed when this is used for the derivers
 pub fn deep_copy_expr_across_subs(
     source: &mut Subs,
     target: &mut Subs,
@@ -479,7 +478,7 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             fx_type: sub!(*fx_type),
             early_returns: early_returns
                 .iter()
-                .map(|(var, region)| (sub!(*var), *region))
+                .map(|(var, region, type_)| (sub!(*var), *region, *type_))
                 .collect(),
             name: *name,
             captured_symbols: captured_symbols
@@ -716,6 +715,24 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             loc_continuation: Box::new(loc_continuation.map(|e| go_help!(e))),
             variable: sub!(*variable),
             symbol: *symbol,
+        },
+
+        Try {
+            result_expr,
+            result_var,
+            return_var,
+            ok_payload_var,
+            err_payload_var,
+            err_ext_var,
+            kind,
+        } => Try {
+            result_expr: Box::new(result_expr.map(|e| go_help!(e))),
+            result_var: sub!(*result_var),
+            return_var: sub!(*return_var),
+            ok_payload_var: sub!(*ok_payload_var),
+            err_payload_var: sub!(*err_payload_var),
+            err_ext_var: sub!(*err_ext_var),
+            kind: *kind,
         },
 
         RuntimeError(err) => RuntimeError(err.clone()),

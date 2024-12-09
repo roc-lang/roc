@@ -340,43 +340,10 @@ impl PendingTypeDef<'_> {
 pub enum Declaration {
     Declare(Def),
     DeclareRec(Vec<Def>, IllegalCycleMark),
-    Builtin(Def),
     Expects(ExpectsOrDbgs),
     /// If we know a cycle is illegal during canonicalization.
     /// Otherwise we will try to detect this during solving; see [`IllegalCycleMark`].
     InvalidCycle(Vec<CycleEntry>),
-}
-
-impl Declaration {
-    pub fn def_count(&self) -> usize {
-        use Declaration::*;
-        match self {
-            Declare(_) => 1,
-            DeclareRec(defs, _) => defs.len(),
-            InvalidCycle { .. } => 0,
-            Builtin(_) => 0,
-            Expects(_) => 0,
-        }
-    }
-
-    pub fn region(&self) -> Region {
-        match self {
-            Declaration::Declare(def) => def.region(),
-            Declaration::DeclareRec(defs, _) => Region::span_across(
-                &defs.first().unwrap().region(),
-                &defs.last().unwrap().region(),
-            ),
-            Declaration::Builtin(def) => def.region(),
-            Declaration::InvalidCycle(cycles) => Region::span_across(
-                &cycles.first().unwrap().expr_region,
-                &cycles.last().unwrap().expr_region,
-            ),
-            Declaration::Expects(expects) => Region::span_across(
-                expects.regions.first().unwrap(),
-                expects.regions.last().unwrap(),
-            ),
-        }
-    }
 }
 
 /// Returns a topologically sorted sequence of alias/opaque names
@@ -2804,10 +2771,6 @@ fn decl_to_let(decl: Declaration, loc_ret: Loc<Expr>) -> Loc<Expr> {
         }
         Declaration::InvalidCycle(entries) => {
             Loc::at_zero(Expr::RuntimeError(RuntimeError::CircularDef(entries)))
-        }
-        Declaration::Builtin(_) => {
-            // Builtins should only be added to top-level decls, not to let-exprs!
-            unreachable!()
         }
         Declaration::Expects(expects) => {
             let mut loc_ret = loc_ret;

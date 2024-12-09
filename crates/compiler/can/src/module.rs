@@ -5,9 +5,7 @@ use crate::annotation::{canonicalize_annotation, AnnotationFor};
 use crate::def::{canonicalize_defs, report_unused_imports, Def, DefKind};
 use crate::desugar::desugar_record_destructures;
 use crate::env::{Env, FxMode};
-use crate::expr::{
-    ClosureData, DbgLookup, Declarations, ExpectLookup, Expr, Output, PendingDerives,
-};
+use crate::expr::{ClosureData, Declarations, ExpectLookup, Expr, Output, PendingDerives};
 use crate::pattern::{
     canonicalize_record_destructs, BindingsFromPattern, Pattern, PermitShadows, RecordDestruct,
 };
@@ -137,7 +135,7 @@ pub struct Module {
     pub rigid_variables: RigidVariables,
     pub abilities_store: PendingAbilitiesStore,
     pub loc_expects: VecMap<Region, Vec<ExpectLookup>>,
-    pub loc_dbgs: VecMap<Symbol, DbgLookup>,
+    pub has_dbgs: bool,
     pub module_params: Option<ModuleParams>,
 }
 
@@ -188,7 +186,7 @@ pub struct ModuleOutput {
     pub pending_derives: PendingDerives,
     pub scope: Scope,
     pub loc_expects: VecMap<Region, Vec<ExpectLookup>>,
-    pub loc_dbgs: VecMap<Symbol, DbgLookup>,
+    pub has_dbgs: bool,
 }
 
 fn has_no_implementation(expr: &Expr) -> bool {
@@ -371,9 +369,10 @@ pub fn canonicalize_module_defs<'a>(
         PatternType::TopLevelDef,
     );
 
-    for (_early_return_var, early_return_region) in &scope.early_returns {
+    for (_early_return_var, early_return_region, early_return_kind) in &scope.early_returns {
         env.problem(Problem::ReturnOutsideOfFunction {
             region: *early_return_region,
+            return_kind: *early_return_kind,
         });
     }
 
@@ -763,7 +762,7 @@ pub fn canonicalize_module_defs<'a>(
         symbols_from_requires,
         pending_derives,
         loc_expects: collected.expects,
-        loc_dbgs: collected.dbgs,
+        has_dbgs: collected.has_dbgs,
         exposed_symbols,
     }
 }
@@ -959,6 +958,14 @@ fn fix_values_captured_in_closure_expr(
             );
             fix_values_captured_in_closure_expr(
                 &mut loc_continuation.value,
+                no_capture_symbols,
+                closure_captures,
+            );
+        }
+
+        Try { result_expr, .. } => {
+            fix_values_captured_in_closure_expr(
+                &mut result_expr.value,
                 no_capture_symbols,
                 closure_captures,
             );

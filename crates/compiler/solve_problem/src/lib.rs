@@ -2,6 +2,7 @@
 use std::{path::PathBuf, str::Utf8Error};
 
 use roc_can::constraint::{ExpectEffectfulReason, FxSuffixKind};
+use roc_can::expr::TryKind;
 use roc_can::{
     constraint::FxCallKind,
     expected::{Expected, PExpected},
@@ -48,6 +49,7 @@ pub enum TypeError {
     ExpectedEffectful(Region, ExpectEffectfulReason),
     UnsuffixedEffectfulFunction(Region, FxSuffixKind),
     SuffixedPureFunction(Region, FxSuffixKind),
+    InvalidTryTarget(Region, ErrorType, TryKind),
 }
 
 impl TypeError {
@@ -77,6 +79,7 @@ impl TypeError {
             TypeError::FxInTopLevel(_, _) => Warning,
             TypeError::UnsuffixedEffectfulFunction(_, _) => Warning,
             TypeError::SuffixedPureFunction(_, _) => Warning,
+            TypeError::InvalidTryTarget(_, _, _) => RuntimeError,
         }
     }
 
@@ -97,7 +100,8 @@ impl TypeError {
             | TypeError::FxInTopLevel(region, _)
             | TypeError::ExpectedEffectful(region, _)
             | TypeError::UnsuffixedEffectfulFunction(region, _)
-            | TypeError::SuffixedPureFunction(region, _) => Some(*region),
+            | TypeError::SuffixedPureFunction(region, _)
+            | TypeError::InvalidTryTarget(region, _, _) => Some(*region),
             TypeError::UnfulfilledAbility(ab, ..) => ab.region(),
             TypeError::Exhaustive(e) => Some(e.region()),
             TypeError::CircularDef(c) => c.first().map(|ce| ce.symbol_region),

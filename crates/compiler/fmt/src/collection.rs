@@ -35,6 +35,7 @@ impl Braces {
 
 pub fn fmt_collection<'a, 'buf, T: ExtractSpaces<'a> + Formattable + std::fmt::Debug>(
     buf: &mut Buf<'buf>,
+
     indent: u16,
     braces: Braces,
     items: Collection<'a, T>,

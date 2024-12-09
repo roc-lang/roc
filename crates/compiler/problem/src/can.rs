@@ -8,7 +8,7 @@ use roc_module::symbol::{ModuleId, Symbol};
 use roc_parse::ast::Base;
 use roc_parse::pattern::PatternType;
 use roc_region::all::{Loc, Region};
-use roc_types::types::AliasKind;
+use roc_types::types::{AliasKind, EarlyReturnKind};
 
 use crate::Severity;
 
@@ -244,6 +244,7 @@ pub enum Problem {
     },
     ReturnOutsideOfFunction {
         region: Region,
+        return_kind: EarlyReturnKind,
     },
     StatementsAfterReturn {
         region: Region,
@@ -504,7 +505,7 @@ impl Problem {
             | Problem::OverAppliedDbg { region }
             | Problem::UnappliedDbg { region }
             | Problem::DefsOnlyUsedInRecursion(_, region)
-            | Problem::ReturnOutsideOfFunction { region }
+            | Problem::ReturnOutsideOfFunction { region, .. }
             | Problem::StatementsAfterReturn { region }
             | Problem::ReturnAtEndOfFunction { region }
             | Problem::UnsuffixedEffectfulRecordField(region)
@@ -763,8 +764,8 @@ impl RuntimeError {
                 record: _,
                 field: region,
             }
-            | RuntimeError::ReadIngestedFileError { region, .. } => *region,
-            RuntimeError::InvalidUnicodeCodePt(region) => *region,
+            | RuntimeError::ReadIngestedFileError { region, .. }
+            | RuntimeError::InvalidUnicodeCodePt(region) => *region,
             RuntimeError::UnresolvedTypeVar | RuntimeError::ErroneousType => Region::zero(),
             RuntimeError::LookupNotInScope { loc_name, .. } => loc_name.region,
             RuntimeError::OpaqueNotDefined { usage, .. } => usage.region,

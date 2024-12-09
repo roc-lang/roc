@@ -273,6 +273,14 @@ pub fn canonicalize_def_header_pattern<'a>(
                 region,
             ) {
                 Ok((symbol, shadowing_ability_member)) => {
+                    if name.contains("__") {
+                        env.problem(Problem::RuntimeError(RuntimeError::MalformedPattern(
+                            MalformedPatternProblem::BadIdent(
+                                roc_parse::ident::BadIdent::TooManyUnderscores(region.start()),
+                            ),
+                            region,
+                        )));
+                    }
                     let can_pattern = match shadowing_ability_member {
                         // A fresh identifier.
                         None => {

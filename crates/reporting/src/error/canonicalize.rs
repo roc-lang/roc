@@ -9,7 +9,7 @@ use roc_problem::can::{
 };
 use roc_problem::Severity;
 use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Loc, Region};
-use roc_types::types::AliasKind;
+use roc_types::types::{AliasKind, EarlyReturnKind};
 use std::path::PathBuf;
 
 use crate::error::r#type::suggest;
@@ -1350,18 +1350,25 @@ pub fn can_problem<'b>(
             title = report.title;
         }
 
-        Problem::ReturnOutsideOfFunction { region } => {
+        Problem::ReturnOutsideOfFunction {
+            region,
+            return_kind,
+        } => {
+            let return_keyword;
+            (title, return_keyword) = match return_kind {
+                EarlyReturnKind::Return => ("RETURN OUTSIDE OF FUNCTION".to_string(), "return"),
+                EarlyReturnKind::Try => ("TRY OUTSIDE OF FUNCTION".to_string(), "try"),
+            };
+
             doc = alloc.stack([
                 alloc.concat([
                     alloc.reflow("This "),
-                    alloc.keyword("return"),
-                    alloc.reflow(" statement doesn't belong to a function:"),
+                    alloc.keyword(return_keyword),
+                    alloc.reflow(" doesn't belong to a function:"),
                 ]),
                 alloc.region(lines.convert_region(region), severity),
                 alloc.reflow("I wouldn't know where to return to if I used it!"),
             ]);
-
-            title = "RETURN OUTSIDE OF FUNCTION".to_string();
         }
 
         Problem::StatementsAfterReturn { region } => {
@@ -1649,10 +1656,10 @@ fn to_bad_ident_expr_report<'b>(
 
         UnderscoreInMiddle(_pos) => {
             alloc.stack([
-                alloc.reflow("Underscores are not allowed in identifier names:"),
+                alloc.reflow("Underscores are not allowed in tag or opaque ref names:"),
                 alloc.region(lines.convert_region(surroundings), severity),
                 alloc.concat([alloc
-                    .reflow(r"I recommend using camelCase. It's the standard style in Roc code!")]),
+                    .reflow(r"I recommend using PascalCase. It's the standard style in Roc code!")]),
             ])
         }
 
@@ -1677,6 +1684,16 @@ fn to_bad_ident_expr_report<'b>(
                         None => alloc.reflow(r"But it looks like the variable is being used here!"),
                         Some(_) => alloc.reflow(r"Since you are using this variable, you could remove the underscore from its name in both places."),
                     }
+                ]),
+            ])
+        }
+
+        TooManyUnderscores(_pos) => {
+            alloc.stack([
+                alloc.reflow("This variable's name is using snake case, but has more than one consecutive underscore ('_') characters."),
+                alloc.region(lines.convert_region(surroundings), severity),
+                alloc.concat([
+                    alloc.reflow(r"When using snake case, Roc style recommends only using a single underscore consecutively. This will be fixed by the formatter.")
                 ]),
             ])
         }
@@ -1849,18 +1866,28 @@ fn to_bad_ident_pattern_report<'b>(
             )
         }
 
+        TooManyUnderscores(_pos) => {
+            alloc.stack([
+                alloc.reflow("I am trying to parse an identifier here:"),
+                alloc.region(lines.convert_region(surroundings), severity),
+                alloc.concat([
+                    alloc.reflow(r"Snake case is allowed here, but only a single consecutive underscore should be used.")
+                ]),
+            ])
+        }
+
         UnderscoreInMiddle(pos) => {
             let region = Region::from_pos(pos.sub(1));
 
             alloc.stack([
-                alloc.reflow("I am trying to parse an identifier here:"),
+                alloc.reflow("I am trying to parse a tag or opaque ref here:"),
                 alloc.region_with_subregion(
                     lines.convert_region(surroundings),
                     lines.convert_region(region),
                     severity,
                 ),
                 alloc.concat([alloc.reflow(
-                    r"Underscores are not allowed in identifiers. Use camelCase instead!",
+                    r"Underscores are not allowed in tags or opaque refs. Use PascalCase instead!",
                 )]),
             ])
         }

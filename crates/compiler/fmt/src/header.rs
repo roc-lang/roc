@@ -84,6 +84,7 @@ impl<V: Formattable> Formattable for Option<V> {
         buf: &mut Buf,
         parens: crate::annotation::Parens,
         newlines: Newlines,
+
         indent: u16,
     ) {
         if let Some(v) = self {
@@ -109,6 +110,7 @@ impl<'a> Formattable for ProvidesTo<'a> {
         buf: &mut Buf,
         _parens: crate::annotation::Parens,
         _newlines: Newlines,
+
         indent: u16,
     ) {
         self.provides_keyword.format(buf, indent);
@@ -128,6 +130,7 @@ impl<'a> Formattable for PlatformRequires<'a> {
         buf: &mut Buf,
         _parens: crate::annotation::Parens,
         _newlines: Newlines,
+
         indent: u16,
     ) {
         fmt_requires(buf, self, indent);
@@ -144,6 +147,7 @@ impl<'a, V: Formattable> Formattable for Spaces<'a, V> {
         buf: &mut Buf,
         parens: crate::annotation::Parens,
         newlines: Newlines,
+
         indent: u16,
     ) {
         fmt_default_spaces(buf, self.before, indent);
@@ -280,6 +284,7 @@ impl<'a> Formattable for TypedIdent<'a> {
         buf: &mut Buf,
         _parens: Parens,
         _newlines: Newlines,
+
         indent: u16,
     ) {
         buf.indent(indent);
@@ -316,6 +321,7 @@ impl<'a, T: Formattable> Formattable for Spaced<'a, T> {
         buf: &mut Buf,
         parens: crate::annotation::Parens,
         newlines: Newlines,
+
         indent: u16,
     ) {
         match self {
@@ -337,6 +343,7 @@ impl<'a, T: Formattable> Formattable for Spaced<'a, T> {
 fn fmt_imports<'a>(
     buf: &mut Buf,
     loc_entries: Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>,
+
     indent: u16,
 ) {
     fmt_collection(buf, indent, Braces::Square, loc_entries, Newlines::No)
@@ -346,6 +353,7 @@ fn fmt_provides<'a>(
     buf: &mut Buf,
     loc_exposed_names: Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
     loc_provided_types: Option<Collection<'a, Loc<Spaced<'a, UppercaseIdent<'a>>>>>,
+
     indent: u16,
 ) {
     fmt_collection(buf, indent, Braces::Square, loc_exposed_names, Newlines::No);
@@ -367,25 +375,10 @@ fn fmt_to(buf: &mut Buf, to: To, indent: u16) {
 fn fmt_exposes<N: Formattable + Copy + core::fmt::Debug>(
     buf: &mut Buf,
     loc_entries: Collection<'_, Loc<Spaced<'_, N>>>,
+
     indent: u16,
 ) {
     fmt_collection(buf, indent, Braces::Square, loc_entries, Newlines::No)
-}
-
-pub trait FormatName {
-    fn format(&self, buf: &mut Buf);
-}
-
-impl<'a> FormatName for &'a str {
-    fn format(&self, buf: &mut Buf) {
-        buf.push_str(self)
-    }
-}
-
-impl<'a> FormatName for ModuleName<'a> {
-    fn format(&self, buf: &mut Buf) {
-        buf.push_str(self.as_str());
-    }
 }
 
 impl<'a> Formattable for ModuleName<'a> {
@@ -421,12 +414,6 @@ impl<'a> Formattable for ExposedName<'a> {
     }
 }
 
-impl<'a> FormatName for ExposedName<'a> {
-    fn format(&self, buf: &mut Buf) {
-        buf.push_str(self.as_str());
-    }
-}
-
 fn fmt_packages<'a>(
     buf: &mut Buf,
     loc_entries: Collection<'a, Loc<Spaced<'a, PackageEntry<'a>>>>,
@@ -445,6 +432,7 @@ impl<'a> Formattable for PackageEntry<'a> {
         buf: &mut Buf,
         _parens: Parens,
         _newlines: Newlines,
+
         indent: u16,
     ) {
         fmt_packages_entry(buf, self, indent);
@@ -461,6 +449,7 @@ impl<'a> Formattable for ImportsEntry<'a> {
         buf: &mut Buf,
         _parens: Parens,
         _newlines: Newlines,
+
         indent: u16,
     ) {
         fmt_imports_entry(buf, self, indent);
