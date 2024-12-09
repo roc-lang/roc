@@ -1256,6 +1256,9 @@ pub(crate) fn lowlevel_borrow_signature(op: LowLevel) -> &'static [Ownership] {
         ListSwap => &[OWNED, IRRELEVANT, IRRELEVANT],
         ListReleaseExcessCapacity => &[OWNED],
         StrReleaseExcessCapacity => &[OWNED],
+        CryptoEmptySha256 => &[IRRELEVANT],
+        CryptoSha256AddBytes => &[OWNED, BORROWED],
+        CryptoSha256Digest => &[BORROWED],
         ListIncref => &[OWNED],
         ListDecref => &[OWNED],
 
