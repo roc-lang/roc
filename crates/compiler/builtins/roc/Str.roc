@@ -538,14 +538,14 @@ toUtf8 : Str -> List U8
 ## expect Str.fromUtf8 [] == Ok ""
 ## expect Str.fromUtf8 [255] |> Result.isErr
 ## ```
-fromUtf8 : List U8 -> Result Str [BadUtf8 Utf8ByteProblem U64]
+fromUtf8 : List U8 -> Result Str [BadUtf8 { problem : Utf8ByteProblem, index : U64 }]
 fromUtf8 = \bytes ->
     result = fromUtf8Lowlevel bytes
 
     if result.cIsOk then
         Ok result.bString
     else
-        Err (BadUtf8 result.dProblemCode result.aByteIndex)
+        Err (BadUtf8 { problem: result.dProblemCode, index: result.aByteIndex })
 
 expect (Str.fromUtf8 [82, 111, 99]) == Ok "Roc"
 expect (Str.fromUtf8 [224, 174, 154, 224, 174, 191]) == Ok "சி"
