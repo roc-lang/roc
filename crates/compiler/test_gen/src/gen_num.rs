@@ -4114,3 +4114,39 @@ fn cast_signed_unsigned() {
     assert_evals_to!(r"Num.toU8 127i8", 127, u8);
     assert_evals_to!(r"Num.toI8 127u8", 127, i8);
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn min_max_dec() {
+    assert_evals_to!(r"Num.minDec", i128::MIN, i128);
+    assert_evals_to!(r"Num.maxDec", i128::MAX, i128);
+}
+#[allow(clippy::non_minimal_cfg)]
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn float_to_dec() {
+    assert_evals_to!(r"Num.toDec 0f64", RocDec::from_str("0").unwrap(), RocDec);
+    assert_evals_to!(r"Num.toDecChecked 0f64",RocResult::ok(RocDec::from_str("0").unwrap()),RocResult<RocDec,()>);
+    assert_evals_to!(r"Num.toDecChecked 999999999999999999999999999.999999999f64",RocResult::err(()),RocResult<RocDec,()>);
+    assert_evals_to!(r"Num.toDecChecked 0f64", RocResult::ok(RocDec::from_str("0").unwrap()), RocResult<RocDec, ()>);
+}
+#[allow(clippy::non_minimal_cfg)]
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn num_to_dec() {
+    assert_evals_to!(r"Num.toDec 0u64", RocDec::from_str("0").unwrap(), RocDec);
+    assert_evals_to!(
+        r"Num.toDec 100u64",
+        RocDec::from_str("100").unwrap(),
+        RocDec
+    );
+    assert_evals_to!(r"Num.toDec 0i64", RocDec::from_str("0").unwrap(), RocDec);
+    assert_evals_to!(
+        r"Num.toDec 100i64",
+        RocDec::from_str("100").unwrap(),
+        RocDec
+    );
+    assert_evals_to!(r"Num.toDecChecked -100i64",RocResult::ok(RocDec::from_str("-100").unwrap()), RocResult<RocDec, ()>);
+    assert_evals_to!(r"Num.toDecChecked 100i64",RocResult::ok(RocDec::from_str("100").unwrap()), RocResult<RocDec, ()>);
+    assert_evals_to!(r"Num.toDecChecked 999999999999999999999999999u128",RocResult::err(()),RocResult<RocDec,()>);
+}
