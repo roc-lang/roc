@@ -418,7 +418,6 @@ pub const DEC_FLOOR: IntrinsicName = int_intrinsic!("roc_builtins.dec.floor");
 pub const DEC_CEILING: IntrinsicName = int_intrinsic!("roc_builtins.dec.ceiling");
 
 pub const CRYPTO_EMPTY_SHA256: &str = "roc_builtins.crypto.emptySha256";
-pub const CRYPTO_EMPTY_DUMMY: &str = "roc_builtins.crypto.emptyDummy";
 pub const CRYPTO_SHA256_ADD_BYTES: &str = "roc_builtins.crypto.sha256AddBytes";
 pub const CRYPTO_SHA256_DIGEST: &str = "roc_builtins.crypto.sha256Digest";
 

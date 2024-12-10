@@ -211,7 +211,6 @@ map_symbol_to_lowlevel_and_arity! {
     NumF64FromParts; NUM_F64_FROM_PARTS; 1,
 
     CryptoEmptySha256;  CRYPTO_EMPTY_SHA_256; 1,
-    CryptoEmptyDummy;  CRYPTO_EMPTY_DUMMY; 1,
     CryptoSha256AddBytes;  CRYPTO_SHA256_ADD_BYTES; 2,
     CryptoSha256Digest; CRYPTO_SHA256_DIGEST; 1,
 

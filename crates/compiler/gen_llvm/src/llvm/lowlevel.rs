@@ -1431,11 +1431,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
 
             call_bitcode_fn(env, &[], bitcode::UTILS_DICT_PSEUDO_SEED)
         }
-        
         CryptoEmptySha256 => call_bitcode_fn(env, &[], bitcode::CRYPTO_EMPTY_SHA256),
-        
-        CryptoEmptyDummy => call_bitcode_fn(env, &[], bitcode::CRYPTO_EMPTY_DUMMY),
-        
         CryptoSha256AddBytes => {
             // Crypto.sha256AddBytes : Sha256, List U8 -> Sha256
             arguments!(sha, data);
@@ -1449,7 +1445,6 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 bitcode::CRYPTO_SHA256_ADD_BYTES,
             )
         }
-
         CryptoSha256Digest => {
             // Crypto.sha256Digest : Sha256 -> Digest256
             arguments!(sha);

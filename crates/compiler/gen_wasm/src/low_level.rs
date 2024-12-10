@@ -2165,7 +2165,6 @@ impl<'a> LowLevelCall<'a> {
             NumF64FromParts => self.load_args_and_call_zig(backend, bitcode::NUM_F64_FROM_PARTS),
             // Crypto
             CryptoEmptySha256 => self.load_args_and_call_zig(backend, bitcode::CRYPTO_EMPTY_SHA256),
-            CryptoEmptyDummy => self.load_args_and_call_zig(backend, bitcode::CRYPTO_EMPTY_DUMMY),
             CryptoSha256AddBytes => {
                 self.load_args_and_call_zig(backend, bitcode::CRYPTO_SHA256_ADD_BYTES)
             }
