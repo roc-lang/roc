@@ -16,8 +16,8 @@ use roc_target::Target;
 use roc_types::subs::{Content, FlatType, GetSubsSlice, Subs, Variable};
 use roc_types::types::{Alias, AliasCommon, AliasKind, Type, TypeExtension};
 use std::borrow::{Borrow, Cow};
-use std::fs;
 use std::path::{Path, PathBuf};
+use std::{fs, iter};
 
 const ABILITIES_DOCS: &str = "https://www.roc-lang.org/abilities";
 
@@ -28,8 +28,6 @@ pub fn generate_docs_html<'a>(
     out_dir: impl AsRef<Path>,
     opt_user_specified_base_url: Option<&'a str>,
 ) -> Result<(), Problem> {
-    let loaded_module = load_module_for_docs(root_file.as_ref().to_path_buf());
-
     // Copy over the assets
     // For debug builds, read assets from fs to speed up build
     // Otherwise, include as string literal
@@ -82,14 +80,24 @@ pub fn generate_docs_html<'a>(
     // under the shell.
     file::populate_build_dir(arena, out_dir.as_ref(), &assets)?;
 
-    Docs::new(
-        arena,
-        loaded_module,
-        assets.raw_template_html.as_ref(),
-        pkg_name,
-        opt_user_specified_base_url,
-    )
-    .generate(out_dir)
+    let loaded_module = load_module_for_docs(root_file.as_ref().to_path_buf());
+    let mut paths_by_shorthand = Vec::from_iter_in(iter::once((PathBuf::new(), root_file)), arena);
+
+    // TODO add the other shorthands to paths_by_shorthand
+
+    while let Some((path_prefix, path)) = paths_by_shorthand.pop() {
+        Docs::new(
+            arena,
+            loaded_module,
+            assets.raw_template_html.as_ref(),
+            pkg_name,
+            &path_prefix,
+            opt_user_specified_base_url,
+        )
+        .generate(&out_dir)?;
+    }
+
+    Ok(())
 }
 
 struct Ability<'a> {
@@ -123,6 +131,7 @@ impl<'a> Docs<'a> {
         loaded_module: LoadedModule,
         raw_template_html: &'a str,
         pkg_name: &'a str,
+        path_prefix: &'a Path,
         opt_user_specified_base_url: Option<&'a str>,
     ) -> Self {
         let mut module_names =
