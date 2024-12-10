@@ -896,7 +896,7 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
         }
     }
 
-    fn push_pending_from_expr(&mut self, expr: &'b Expr<'a>) {
+    pub fn push_pending_from_expr(&mut self, expr: &'b Expr<'a>) {
         let mut expr_stack = vec![expr];
 
         use Expr::*;
