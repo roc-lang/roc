@@ -1,11 +1,13 @@
 module [
     emptySha256,
+    emptyDummy,
     sha256AddBytes,
     sha256Digest,
     hashSha256,
     digest256ToBytes,
     Sha256,
     Digest256,
+    Dummy,
 ]
 
 import Bool exposing [Eq]
@@ -17,6 +19,8 @@ import Str
 ## Represents the state of a SHA-256 cryptographic hashing function, after some (or no) data has been added to the hash.
 Sha256 := { location : U64 }
 
+Dummy := { block0 : U128, block1 : U128, block2 : U128, block3 : U128, block4 : U128, block5 : U128, block6 : U128, block7 : U128 } implements [Eq]
+
 ## Represents the digest of some data produced by the SHA-256 cryptographic hashing function as an opaque type.
 
 ## `Digest256` implements the `Eq` ability.
@@ -24,6 +28,13 @@ Digest256 := { firstHalf : U128, secondHalf : U128 } implements [Eq]
 
 ## Returns an empty SHA-256 hasher.
 emptySha256 : {} -> Sha256
+
+emptyDummy : {} -> Dummy
+
+expect
+    firstEmpty = emptyDummy {}
+    secondEmpty = emptyDummy {}
+    firstEmpty == secondEmpty
 
 ## Adds bytes of data to be hashed by a SHA-256 hasher..
 sha256AddBytes : Sha256, List U8 -> Sha256

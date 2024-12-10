@@ -14,6 +14,7 @@ const STR = "str";
 const crypto = @import("crypto.zig");
 comptime {
     exportCryptoFn(crypto.emptySha256, "emptySha256");
+    exportCryptoFn(crypto.emptyDummy, "emptyDummy");
     exportCryptoFn(crypto.sha256AddBytes, "sha256AddBytes");
     exportCryptoFn(crypto.sha256Digest, "sha256Digest");
 }
