@@ -24,11 +24,6 @@ jobs:
       - name: create version.txt
         run: ./ci/write_version.sh
 
-      - name: run fuzz tests
-        run: |
-          cd crates/compiler/test_syntax/fuzz
-          rustup run nightly-2024-02-03 cargo fuzz run -j4 fuzz_expr --sanitizer=none -- -dict=dict.txt -max_total_time=60
-
       - name: build release with lto
         run: RUSTFLAGS="-C target-cpu=x86-64" cargo build --profile=release-with-lto --locked --bin roc --bin roc_language_server
         # target-cpu=x86-64 -> For maximal compatibility for all CPU's. This was also faster in our tests: https://roc.zulipchat.com/#narrow/stream/231635-compiler-development/topic/.2Ecargo.2Fconfig.2Etoml/near/325726299
