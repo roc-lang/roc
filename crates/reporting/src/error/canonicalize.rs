@@ -1478,7 +1478,7 @@ pub fn can_problem<'b>(
             doc = alloc.stack([
                 alloc.reflow("This tuple type is empty:"),
                 alloc.region(lines.convert_region(region), severity),
-                alloc.reflow("Empty tuple types are not allowed in Roc."),
+                alloc.reflow("Empty tuples are not allowed in Roc."),
             ]);
 
             title = EMPTY_TUPLE_TYPE.to_string();
