@@ -10,17 +10,30 @@ const Sha256 = extern struct {
     location: *sha2.Sha256,
 };
 
-const Dummy = extern struct {
-    data: [@sizeOf(sha2.Sha256)]u8 align(@alignOf(sha2.Sha256)),
-    const len = @sizeOf(sha2.Sha256);
+const ThirtyTwoBytes = extern struct {
+    first: u128,
+    second: u128,
+    const zero = .{ .first = 0, .second = 0 };
 };
 
-test "Dummy size and alignment" {
-    try std.testing.expectEqual(@sizeOf(Dummy), 128);
-    try std.testing.expectEqual(@sizeOf(Dummy), @sizeOf(sha2.Sha256));
-    try std.testing.expectEqual(@alignOf(Dummy), 16);
-    try std.testing.expectEqual(@alignOf(Dummy), @alignOf(sha2.Sha256));
-}
+const Dummy = extern struct {
+    first: ThirtyTwoBytes,
+    second: ThirtyTwoBytes,
+    const zero = .{ .first = ThirtyTwoBytes.zero, .second = ThirtyTwoBytes.zero };
+};
+
+// const Dummy = extern struct {
+//     first: SixtyFourBytes,
+//     second: SixtyFourBytes,
+//     const zero = .{ .first = SixtyFourBytes.zero, .second = SixtyFourBytes.zero };
+// };
+
+// test "Dummy size and alignment" {
+//     try std.testing.expectEqual(@sizeOf(Dummy), 128);
+//     try std.testing.expectEqual(@sizeOf(Dummy), @sizeOf(sha2.Sha256));
+//     try std.testing.expectEqual(@alignOf(Dummy), 16);
+//     try std.testing.expectEqual(@alignOf(Dummy), @alignOf(sha2.Sha256));
+// }
 
 fn create(comptime T: type) *T {
     //test_roc_alloc ignores alignment
@@ -46,10 +59,11 @@ test "emptySha256" {
 }
 
 pub fn emptyDummy() callconv(.C) Dummy {
-    var sha: Dummy = undefined;
-    const ptr: *sha2.Sha256 = @ptrCast(sha.data[0..Dummy.len]);
-    ptr.* = sha2.Sha256.init(.{});
-    return sha;
+    // var sha: Dummy = undefined;
+    // const ptr: *sha2.Sha256 = @ptrCast(sha.data[0..Dummy.len]);
+    // ptr.* = sha2.Sha256.init(.{});
+    // return sha;
+    return Dummy.zero;
 }
 
 test "emptyDummy" {

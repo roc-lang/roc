@@ -1742,6 +1742,7 @@ define_builtins! {
         5 CRYPTO_HASH_SHA_256: "hashSha256"
         6 CRYPTO_DUMMY: "Dummy" exposed_type=true
         7 CRYPTO_EMPTY_DUMMY: "emptyDummy"
+        8 CRYPTO_THIRTY_TWO_BYTES: "ThirtyTwoBytes" exposed_type=true
     }
 
     num_modules: 17 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
