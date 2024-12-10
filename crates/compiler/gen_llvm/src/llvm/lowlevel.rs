@@ -1,7 +1,7 @@
 use inkwell::{
     attributes::{Attribute, AttributeLoc},
     module::Linkage,
-    types::{BasicType, IntType},
+    types::IntType,
     values::{
         BasicValue, BasicValueEnum, FloatValue, FunctionValue, InstructionOpcode, IntValue,
         StructValue,
@@ -237,12 +237,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                                 intrinsic,
                             );
 
-                            let roc_return_type = basic_type_from_layout(
-                                env,
-                                layout_interner,
-                                layout_interner.get_repr(layout),
-                            )
-                            .ptr_type(AddressSpace::default());
+                            let roc_return_type = env.context.ptr_type(AddressSpace::default());
 
                             let roc_return_alloca = env.builder.new_build_pointer_cast(
                                 zig_return_alloca,
@@ -331,12 +326,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                         intrinsic,
                     );
 
-                    let roc_return_type = basic_type_from_layout(
-                        env,
-                        layout_interner,
-                        layout_interner.get_repr(layout),
-                    )
-                    .ptr_type(AddressSpace::default());
+                    let roc_return_type = env.context.ptr_type(AddressSpace::default());
 
                     let roc_return_alloca = env.builder.new_build_pointer_cast(
                         zig_return_alloca,
@@ -1385,7 +1375,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
 
             let ptr = env.builder.new_build_pointer_cast(
                 data_ptr.into_pointer_value(),
-                env.context.i8_type().ptr_type(AddressSpace::default()),
+                env.context.ptr_type(AddressSpace::default()),
                 "cast_to_i8_ptr",
             );
 
@@ -2000,7 +1990,7 @@ fn dec_alloca<'ctx>(env: &Env<'_, 'ctx, '_>, value: IntValue<'ctx>) -> BasicValu
 
             let ptr = env.builder.new_build_pointer_cast(
                 alloca,
-                value.get_type().ptr_type(AddressSpace::default()),
+                env.context.ptr_type(AddressSpace::default()),
                 "cast_to_i128_ptr",
             );
 
@@ -2021,7 +2011,7 @@ fn dec_alloca<'ctx>(env: &Env<'_, 'ctx, '_>, value: IntValue<'ctx>) -> BasicValu
             instruction.set_alignment(16).unwrap();
             let ptr = env.builder.new_build_pointer_cast(
                 alloca,
-                value.get_type().ptr_type(AddressSpace::default()),
+                env.context.ptr_type(AddressSpace::default()),
                 "cast_to_i128_ptr",
             );
             env.builder.new_build_store(ptr, value);
@@ -2510,12 +2500,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                                     intrinsic,
                                 );
 
-                                let roc_return_type = basic_type_from_layout(
-                                    env,
-                                    layout_interner,
-                                    layout_interner.get_repr(return_layout),
-                                )
-                                .ptr_type(AddressSpace::default());
+                                let roc_return_type = env.context.ptr_type(AddressSpace::default());
 
                                 let roc_return_alloca = env.builder.new_build_pointer_cast(
                                     zig_return_alloca,
