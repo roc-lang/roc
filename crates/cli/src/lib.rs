@@ -871,11 +871,7 @@ pub fn build(
     // so we don't want to spend time freeing these values
     let arena = ManuallyDrop::new(Bump::new());
 
-    let opt_level = if let BuildConfig::BuildAndRunIfNoErrors = config {
-        OptLevel::Development
-    } else {
-        opt_level_from_flags(matches)
-    };
+    let opt_level = opt_level_from_flags(matches);
 
     // Note: This allows using `--dev` with `--optimize`.
     // This means frontend optimizations and dev backend.
