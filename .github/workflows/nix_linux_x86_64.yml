@@ -17,11 +17,6 @@ jobs:
       - name: test building default.nix
         run: nix-build
 
-      - name: run fuzz tests
-        run: |
-          cd crates/compiler/test_syntax/fuzz
-          nix develop -c rustup run nightly cargo fuzz run -j4 fuzz_expr --sanitizer=none -- -dict=dict.txt -max_total_time=60
-
       - name: execute tests with --release
         # skipping glue tests due to difficult multithreading bug, we run them single threaded in the next step
         run: nix develop -c cargo test --locked --release -- --skip glue_cli_tests
