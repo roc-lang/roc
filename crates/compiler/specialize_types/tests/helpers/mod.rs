@@ -132,7 +132,7 @@ fn dbg_mono_expr<'a>(
 ) -> &'a str {
     let mut buf = bumpalo::collections::String::new_in(arena);
 
-    dbg_mono_expr_help(arena, mono_exprs, interns, expr, &mut buf);
+    dbg_mono_expr_help(arena, mono_exprs, interns, expr, &mut buf).unwrap();
 
     buf.into_bump_str()
 }
@@ -143,60 +143,60 @@ fn dbg_mono_expr_help<'a>(
     interns: &Interns<'a>,
     expr: &MonoExpr,
     buf: &mut impl Write,
-) {
+) -> Result<(), core::fmt::Error> {
     match expr {
         MonoExpr::Str(interned_str_id) => {
-            write!(buf, "Str({:?})", interns.get_str(arena, *interned_str_id)).unwrap();
+            write!(buf, "Str({:?})", interns.get_str(arena, *interned_str_id))
         }
         MonoExpr::Number(number) => {
-            write!(buf, "Number({:?})", number).unwrap();
+            write!(buf, "Number({:?})", number)
         }
         MonoExpr::Struct(field_exprs) => {
-            write!(buf, "Struct([").unwrap();
+            write!(buf, "Struct([")?;
 
             for (index, expr) in mono_exprs.iter_slice(field_exprs.as_slice()).enumerate() {
                 if index > 0 {
-                    write!(buf, ", ").unwrap();
+                    write!(buf, ", ")?;
                 }
 
-                dbg_mono_expr_help(arena, mono_exprs, interns, expr, buf);
+                dbg_mono_expr_help(arena, mono_exprs, interns, expr, buf)?;
             }
 
-            write!(buf, "])").unwrap();
+            write!(buf, "])")
         }
         MonoExpr::Unit => {
-            write!(buf, "{{}}").unwrap();
+            write!(buf, "{{}}")
         }
         MonoExpr::If {
             branch_type: _,
             branches,
             final_else,
         } => {
-            write!(buf, "If(",).unwrap();
+            write!(buf, "If(",)?;
 
             for (index, (cond, branch)) in mono_exprs.iter_pair_slice(*branches).enumerate() {
                 if index > 0 {
-                    write!(buf, ", ").unwrap();
+                    write!(buf, ", ")?;
                 }
 
-                dbg_mono_expr_help(arena, mono_exprs, interns, cond, buf);
-                write!(buf, " -> ").unwrap();
-                dbg_mono_expr_help(arena, mono_exprs, interns, branch, buf);
-                write!(buf, ")").unwrap();
+                dbg_mono_expr_help(arena, mono_exprs, interns, cond, buf)?;
+                write!(buf, " -> ")?;
+                dbg_mono_expr_help(arena, mono_exprs, interns, branch, buf)?;
+                write!(buf, ")")?;
             }
 
-            write!(buf, ", ").unwrap();
+            write!(buf, ", ")?;
             dbg_mono_expr_help(
                 arena,
                 mono_exprs,
                 interns,
                 mono_exprs.get_expr(*final_else),
                 buf,
-            );
-            write!(buf, ")").unwrap();
+            )?;
+            write!(buf, ")")
         }
         MonoExpr::Lookup(ident, _mono_type_id) => {
-            write!(buf, "{:?}", ident).unwrap();
+            write!(buf, "{:?}", ident)
         }
         // MonoExpr::List { elem_type, elems } => todo!(),
         // MonoExpr::ParameterizedLookup {
@@ -273,7 +273,7 @@ fn dbg_mono_expr_help<'a>(
         //     name,
         // } => todo!(),
         MonoExpr::CompilerBug(problem) => {
-            write!(buf, "CompilerBug({:?})", problem).unwrap();
+            write!(buf, "CompilerBug({:?})", problem)
         }
         other => {
             todo!("Implement dbg_mono_expr for {:?}", other)
