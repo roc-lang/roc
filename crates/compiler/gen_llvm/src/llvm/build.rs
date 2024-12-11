@@ -685,7 +685,7 @@ macro_rules! debug_info_init {
 pub enum LlvmBackendMode {
     /// Assumes primitives (roc_alloc, roc_panic, etc) are provided by the host
     Binary,
-    BinaryDev,
+    BinaryWithExpect,
     /// Creates a test wrapper around the main roc function to catch and report panics.
     /// Provides a testing implementation of primitives (roc_alloc, roc_panic, etc)
     BinaryGlue,
@@ -698,7 +698,7 @@ impl LlvmBackendMode {
     pub(crate) fn has_host(self) -> bool {
         match self {
             LlvmBackendMode::Binary => true,
-            LlvmBackendMode::BinaryDev => true,
+            LlvmBackendMode::BinaryWithExpect => true,
             LlvmBackendMode::BinaryGlue => false,
             LlvmBackendMode::GenTest => false,
             LlvmBackendMode::WasmGenTest => true,
@@ -710,7 +710,7 @@ impl LlvmBackendMode {
     fn returns_roc_result(self) -> bool {
         match self {
             LlvmBackendMode::Binary => false,
-            LlvmBackendMode::BinaryDev => false,
+            LlvmBackendMode::BinaryWithExpect => false,
             LlvmBackendMode::BinaryGlue => true,
             LlvmBackendMode::GenTest => true,
             LlvmBackendMode::WasmGenTest => true,
@@ -721,7 +721,7 @@ impl LlvmBackendMode {
     pub(crate) fn runs_expects(self) -> bool {
         match self {
             LlvmBackendMode::Binary => false,
-            LlvmBackendMode::BinaryDev => true,
+            LlvmBackendMode::BinaryWithExpect => true,
             LlvmBackendMode::BinaryGlue => false,
             LlvmBackendMode::GenTest => false,
             LlvmBackendMode::WasmGenTest => false,
@@ -3618,7 +3618,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                             variables,
                         );
 
-                        if let LlvmBackendMode::BinaryDev = env.mode {
+                        if let LlvmBackendMode::BinaryWithExpect = env.mode {
                             crate::llvm::expect::notify_parent_expect(env, &shared_memory);
                         }
 
@@ -4901,7 +4901,9 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx>(
             )
         }
 
-        LlvmBackendMode::Binary | LlvmBackendMode::BinaryDev | LlvmBackendMode::BinaryGlue => {}
+        LlvmBackendMode::Binary
+        | LlvmBackendMode::BinaryWithExpect
+        | LlvmBackendMode::BinaryGlue => {}
     }
 
     // a generic version that writes the result into a passed *u8 pointer
@@ -4954,13 +4956,13 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx>(
             roc_call_result_type(env, roc_function.get_type().get_return_type().unwrap()).into()
         }
 
-        LlvmBackendMode::Binary | LlvmBackendMode::BinaryDev | LlvmBackendMode::BinaryGlue => {
-            basic_type_from_layout(
-                env,
-                layout_interner,
-                layout_interner.get_repr(return_layout),
-            )
-        }
+        LlvmBackendMode::Binary
+        | LlvmBackendMode::BinaryWithExpect
+        | LlvmBackendMode::BinaryGlue => basic_type_from_layout(
+            env,
+            layout_interner,
+            layout_interner.get_repr(return_layout),
+        ),
     };
 
     let size: BasicValueEnum = return_type.size_of().unwrap().into();
@@ -5757,7 +5759,7 @@ fn build_procedures_help<'a>(
     use LlvmBackendMode::*;
     match env.mode {
         GenTest | WasmGenTest | CliTest => { /* no host, or exposing types is not supported */ }
-        Binary | BinaryDev | BinaryGlue => {
+        Binary | BinaryWithExpect | BinaryGlue => {
             for (proc_name, alias_name, hels) in host_exposed_lambda_sets.iter() {
                 let ident_string = proc_name.name().as_unsuffixed_str(&env.interns);
                 let fn_name: String = format!("{}_{}", ident_string, hels.id.0);
