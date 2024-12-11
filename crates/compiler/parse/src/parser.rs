@@ -1084,7 +1084,6 @@ impl<'a> EPattern<'a> {
             | EPattern::Start(position)
             | EPattern::End(position)
             | EPattern::Space(_, position)
-            | EPattern::PInParens(_, position)
             | EPattern::NumLiteral(_, position)
             | EPattern::IndentStart(position)
             | EPattern::IndentEnd(position)
