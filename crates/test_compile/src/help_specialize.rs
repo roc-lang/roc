@@ -8,7 +8,7 @@ use roc_specialize_types::{
 
 #[derive(Debug)]
 pub struct SpecializedExprOut {
-    pub mono_expr_id: Option<MonoExprId>,
+    pub mono_expr_id: MonoExprId,
     pub region: Region,
     pub mono_types: MonoTypes,
     pub mono_exprs: MonoExprs,
@@ -47,8 +47,8 @@ impl SpecializedExpr {
                 &mut problems,
             );
 
-            env.to_mono_expr(&solved_out.expr)
-                .map(|mono_expr| mono_exprs.add(mono_expr, Region::zero()))
+            let mono_expr = env.to_mono_expr(&solved_out.expr);
+            mono_exprs.add(mono_expr, Region::zero())
         };
 
         SpecializedExprOut {

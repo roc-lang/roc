@@ -86,9 +86,8 @@ fn specialize_expr<'a>(
     assert_eq!(0, home_decls.expressions.len());
 
     let region = Region::zero();
-    let mono_expr_id = env
-        .to_mono_expr(&main_expr)
-        .map(|mono_expr| mono_exprs.add(mono_expr, region));
+    let mono_expr = env.to_mono_expr(&main_expr);
+    let mono_expr_id = mono_exprs.add(mono_expr, region);
 
     SpecializedExprOut {
         mono_expr_id,
@@ -100,13 +99,13 @@ fn specialize_expr<'a>(
 }
 
 #[track_caller]
-pub fn expect_no_expr(input: impl AsRef<str>) {
+pub fn expect_unit(input: impl AsRef<str>) {
     let arena = Bump::new();
     let mut interns = Interns::new();
     let out = specialize_expr(&arena, input.as_ref(), &mut interns);
-    let actual = out.mono_expr_id.map(|id| out.mono_exprs.get_expr(id));
+    let actual = out.mono_exprs.get_expr(out.mono_expr_id);
 
-    assert_eq!(None, actual, "This input expr should have specialized to being dicarded as zero-sized, but it didn't: {:?}", input.as_ref());
+    assert_eq!(MonoExpr::Unit, *actual, "This input expr should have specialized to being dicarded as zero-sized, but it didn't: {:?}", input.as_ref());
 }
 
 #[track_caller]
@@ -164,6 +163,9 @@ fn dbg_mono_expr_help<'a>(
             }
 
             write!(buf, "])").unwrap();
+        }
+        MonoExpr::Unit => {
+            write!(buf, "{{}}").unwrap();
         }
         // MonoExpr::List { elem_type, elems } => todo!(),
         // MonoExpr::Lookup(symbol, mono_type_id) => todo!(),
@@ -270,11 +272,8 @@ pub fn expect_mono_expr_custom<T: PartialEq + core::fmt::Debug>(
     let arena = Bump::new();
     let mut string_interns = Interns::new();
     let out = specialize_expr(&arena, input.as_ref(), &mut string_interns);
-    let mono_expr_id = out
-            .mono_expr_id
-            .expect("This input expr should not have been discarded as zero-sized, but it was discarded: {input:?}");
 
-    let actual_expr = out.mono_exprs.get_expr(mono_expr_id); // Must run first, to populate string interns!
+    let actual_expr = out.mono_exprs.get_expr(out.mono_expr_id); // Must run first, to populate string interns!
     let actual = to_actual(&arena, &out.mono_exprs, &string_interns, actual_expr);
     let expected = to_expected(&arena, &out.mono_exprs, &string_interns);
 
