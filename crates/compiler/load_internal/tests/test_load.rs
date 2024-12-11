@@ -247,7 +247,7 @@ fn load_fixture(
     );
     let mut loaded_module = match loaded {
         Ok(x) => x,
-        Err(roc_load_internal::file::LoadingProblem::FormattedReport(report,None)) => {
+        Err(roc_load_internal::file::LoadingProblem::FormattedReport(report, None)) => {
             println!("{report}");
             panic!("{}", report);
         }

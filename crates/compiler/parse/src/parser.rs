@@ -65,7 +65,6 @@ pub enum SyntaxError<'a> {
 }
 impl<'a> SyntaxError<'a> {
     pub fn get_region(&self) -> Option<Region> {
-        
         match self {
             SyntaxError::Unexpected(r) => Some(*r),
             SyntaxError::Eof(r) => Some(*r),
@@ -566,7 +565,7 @@ impl<'a> EExpr<'a> {
             EExpr::Ability(e_ability, _) => e_ability.get_region(),
             EExpr::When(e_when, _) => e_when.get_region(),
             EExpr::If(e_if, _) => e_if.get_region(),
-            EExpr::Expect(e_expect, _) => e_expect.get_region(), 
+            EExpr::Expect(e_expect, _) => e_expect.get_region(),
             EExpr::Dbg(e_expect, _) => e_expect.get_region(),
             EExpr::Import(e_import, _) => e_import.get_region(),
             EExpr::Return(e_return, _) => e_return.get_region(),
@@ -650,7 +649,7 @@ impl<'a> EString<'a> {
         match self {
             // Case with child node that has get_region()
             EString::Format(expr, _) => expr.get_region(),
-            
+
             // Cases with Position values
             EString::Open(p)
             | EString::CodePtOpen(p)
@@ -699,7 +698,7 @@ impl<'a> ERecord<'a> {
         match self {
             // Cases with child node that has get_region()
             ERecord::Expr(expr, _) => expr.get_region(),
-            
+
             // Cases with Position values
             ERecord::End(p)
             | ERecord::Open(p)
@@ -735,7 +734,7 @@ impl<'a> EInParens<'a> {
         match self {
             // Cases with child node that has get_region()
             EInParens::Expr(expr, _) => expr.get_region(),
-            
+
             // Cases with Position values
             EInParens::End(p)
             | EInParens::Open(p)
@@ -766,7 +765,7 @@ impl<'a> EClosure<'a> {
             // Cases with child nodes that have get_region()
             EClosure::Pattern(pattern, _) => pattern.get_region(),
             EClosure::Body(expr, _) => expr.get_region(),
-            
+
             // Cases with Position values
             EClosure::Space(_, p)
             | EClosure::Start(p)
@@ -794,7 +793,7 @@ impl<'a> EList<'a> {
         match self {
             // Case with child node that has get_region()
             EList::Expr(expr, _) => expr.get_region(),
-            
+
             // Cases with Position values
             EList::Open(p) | EList::End(p) | EList::Space(_, p) => Region::from_pos(*p),
         }
@@ -865,7 +864,7 @@ impl<'a> EAbility<'a> {
         match self {
             // Case with child node that has get_region()
             EAbility::Type(e_type, _) => e_type.get_region(),
-            
+
             // Cases with Position values
             EAbility::Space(_, p)
             | EAbility::DemandAlignment(_, p)
@@ -897,7 +896,9 @@ pub enum EIf<'a> {
 impl<'a> EIf<'a> {
     pub fn get_region(&self) -> Region {
         match self {
-            EIf::Condition(expr, _) | EIf::ThenBranch(expr, _) | EIf::ElseBranch(expr, _) => expr.get_region(),
+            EIf::Condition(expr, _) | EIf::ThenBranch(expr, _) | EIf::ElseBranch(expr, _) => {
+                expr.get_region()
+            }
             EIf::Space(_, p)
             | EIf::If(p)
             | EIf::Then(p)
@@ -945,9 +946,9 @@ impl<'a> EReturn<'a> {
     pub fn get_region(&self) -> Region {
         match self {
             EReturn::ReturnValue(expr, _) => expr.get_region(),
-            EReturn::Space(_, p)
-            | EReturn::Return(p)
-            | EReturn::IndentReturnValue(p) => Region::from_pos(*p),
+            EReturn::Space(_, p) | EReturn::Return(p) | EReturn::IndentReturnValue(p) => {
+                Region::from_pos(*p)
+            }
         }
     }
 }
@@ -988,10 +989,10 @@ impl<'a> EImport<'a> {
             // Cases with child nodes that have get_region()
             EImport::Params(params, _) => params.get_region(),
             EImport::Annotation(e_type, _) => e_type.get_region(),
-            
+
             // Case with direct Region value
             EImport::LowercaseAlias(r) => *r,
-            
+
             // Cases with Position values
             EImport::Import(p)
             | EImport::IndentStart(p)
@@ -1074,7 +1075,7 @@ impl<'a> EPattern<'a> {
             EPattern::Record(expr, _) => expr.get_region(),
             EPattern::List(expr, _) => expr.get_region(),
             EPattern::PInParens(expr, _) => expr.get_region(),
-            
+
             // Cases with Position values
             EPattern::AsKeyword(position)
             | EPattern::AsIdentifier(position)
@@ -1115,7 +1116,7 @@ impl<'a> PRecord<'a> {
             // Cases with child nodes that have get_region()
             PRecord::Pattern(pattern, _) => pattern.get_region(),
             PRecord::Expr(expr, _) => expr.get_region(),
-            
+
             // Cases with Position values
             PRecord::End(p)
             | PRecord::Open(p)
@@ -1143,12 +1144,11 @@ impl<'a> PList<'a> {
         match self {
             // Case with child node that has get_region()
             PList::Pattern(pattern, _) => pattern.get_region(),
-            
+
             // Cases with Position values
-            PList::End(p)
-            | PList::Open(p)
-            | PList::Rest(p)
-            | PList::Space(_, p) => Region::from_pos(*p),
+            PList::End(p) | PList::Open(p) | PList::Rest(p) | PList::Space(_, p) => {
+                Region::from_pos(*p)
+            }
         }
     }
 }
@@ -1168,7 +1168,7 @@ impl<'a> PInParens<'a> {
         match self {
             // Case with child node that has get_region()
             PInParens::Pattern(pattern, _) => pattern.get_region(),
-            
+
             // Cases with Position values
             PInParens::Empty(p)
             | PInParens::End(p)
@@ -1210,10 +1210,10 @@ impl<'a> EType<'a> {
             EType::TRecord(expr, _) => expr.get_region(),
             EType::TTagUnion(expr, _) => expr.get_region(),
             EType::TInParens(expr, _) => expr.get_region(),
-            EType::TApply(eapply,_, )=> eapply.get_region(),
+            EType::TApply(eapply, _) => eapply.get_region(),
             EType::TInlineAlias(einline, _) => einline.get_region(),
             EType::TAbilityImpl(eability, _) => eability.get_region(),
-            
+
             // Cases with Position values
             EType::Space(_, p)
             | EType::UnderscoreSpacing(p)
@@ -1255,7 +1255,7 @@ impl<'a> ETypeRecord<'a> {
         match self {
             // Case with child node that has get_region()
             ETypeRecord::Type(type_expr, _) => type_expr.get_region(),
-            
+
             // Cases with Position values
             ETypeRecord::End(p)
             | ETypeRecord::Open(p)
@@ -1286,11 +1286,11 @@ impl<'a> ETypeTagUnion<'a> {
         match self {
             // Case with child node that has get_region()
             ETypeTagUnion::Type(type_expr, _) => type_expr.get_region(),
-            
+
             // Cases with Position values
-            ETypeTagUnion::End(p)
-            | ETypeTagUnion::Open(p)
-            | ETypeTagUnion::Space(_, p) => Region::from_pos(*p),
+            ETypeTagUnion::End(p) | ETypeTagUnion::Open(p) | ETypeTagUnion::Space(_, p) => {
+                Region::from_pos(*p)
+            }
         }
     }
 }
@@ -1317,15 +1317,14 @@ impl<'a> ETypeInParens<'a> {
         match self {
             // Cases with child nodes that have get_region()
             ETypeInParens::Type(type_expr, _) => type_expr.get_region(),
-            
+
             // Cases with Position values
             ETypeInParens::Empty(p)
             | ETypeInParens::End(p)
             | ETypeInParens::Open(p)
             | ETypeInParens::Space(_, p)
             | ETypeInParens::IndentOpen(p)
-            | ETypeInParens::IndentEnd(p) =>    Region::from_pos(*p),
-        
+            | ETypeInParens::IndentEnd(p) => Region::from_pos(*p),
         }
     }
 }
@@ -1401,7 +1400,7 @@ impl<'a> ETypeAbilityImpl<'a> {
             // Case with child node that has get_region()
             ETypeAbilityImpl::Type(type_expr, _) => type_expr.get_region(),
             ETypeAbilityImpl::Expr(expr, _) => expr.get_region(),
-            // Cases with Position values     
+            // Cases with Position values
             ETypeAbilityImpl::End(p)
             | ETypeAbilityImpl::Open(p)
             | ETypeAbilityImpl::Field(p)
@@ -1409,12 +1408,10 @@ impl<'a> ETypeAbilityImpl<'a> {
             | ETypeAbilityImpl::Colon(p)
             | ETypeAbilityImpl::Arrow(p)
             | ETypeAbilityImpl::Optional(p)
-
             | ETypeAbilityImpl::Space(_, p)
             | ETypeAbilityImpl::Prefix(p)
             | ETypeAbilityImpl::QuestionMark(p)
             | ETypeAbilityImpl::Ampersand(p)
-
             | ETypeAbilityImpl::IndentBar(p)
             | ETypeAbilityImpl::IndentAmpersand(p) => Region::from_pos(*p),
         }

@@ -63,7 +63,8 @@ pub(crate) fn write_compiled_ir<'a>(
     let loaded = match loaded {
         Ok(x) => x,
         Err(LoadMonomorphizedError::LoadingProblem(roc_load::LoadingProblem::FormattedReport(
-            report,_
+            report,
+            _,
         ))) => {
             println!("{report}");
             panic!();
