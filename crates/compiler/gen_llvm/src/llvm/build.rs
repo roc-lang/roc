@@ -3559,12 +3559,10 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
             variable: _,
             remainder,
         } => {
-            if env.mode.runs_expects() {
-                let location = build_string_literal(env, source_location);
-                let source = build_string_literal(env, source);
-                let message = scope.load_symbol(symbol);
-                env.call_dbg(env, location, source, message);
-            }
+            let location = build_string_literal(env, source_location);
+            let source = build_string_literal(env, source);
+            let message = scope.load_symbol(symbol);
+            env.call_dbg(env, location, source, message);
 
             build_exp_stmt(
                 env,
