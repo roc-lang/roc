@@ -114,40 +114,38 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
                         // Plain decimal number literals like `4.2` can still have an unbound var.
                         MonoExpr::Number(Number::Dec(*val))
                     }
-                    _ => match mono_from_var(*var) {
-                        Some(mono_id) => match mono_types.get(mono_id) {
+                    _ => {
+                        let mono_type = mono_from_var(*var);
+                        match mono_types.get(mono_type) {
                             MonoType::Primitive(primitive) => to_frac(*primitive, *val, problems),
                             other => {
                                 compiler_bug!(Problem::NumSpecializedToWrongType(Some(*other)))
                             }
-                        },
-                        None => {
-                            compiler_bug!(Problem::NumSpecializedToWrongType(None))
                         }
-                    },
+                    }
                 }
             }
             Expr::Num(var, _, int_value, _) | Expr::Int(var, _, _, int_value, _) => {
+                let mono_type = mono_from_var(*var);
+
                 // Number literals and int literals both specify integer numbers, so to_num() can work on both.
-                match mono_from_var(*var) {
-                    Some(mono_id) => match mono_types.get(mono_id) {
-                        MonoType::Primitive(primitive) => to_num(*primitive, *int_value, problems),
-                        other => compiler_bug!(Problem::NumSpecializedToWrongType(Some(*other))),
-                    },
-                    None => compiler_bug!(Problem::NumSpecializedToWrongType(None)),
+                match mono_types.get(mono_type) {
+                    MonoType::Primitive(primitive) => to_num(*primitive, *int_value, problems),
+                    other => compiler_bug!(Problem::NumSpecializedToWrongType(Some(*other))),
                 }
             }
-            Expr::SingleQuote(var, _, char, _) => match mono_from_var(*var) {
+            Expr::SingleQuote(var, _, char, _) => {
+                let mono_type = mono_from_var(*var);
+
                 // Single-quote characters monomorphize to an integer.
-                // TODO if we store these using the same representation as other ints (e.g. Expr::Int,
+                // TODO [mono2] if we store these using the same representation as other ints (e.g. Expr::Int,
                 // or keeping a separate value but storing an IntValue instead of a char), then
                 // even though we verify them differently, we can combine this branch with Num and Int.
-                Some(mono_id) => match mono_types.get(mono_id) {
+                match mono_types.get(mono_type) {
                     MonoType::Primitive(primitive) => char_to_int(*primitive, *char, problems),
                     other => compiler_bug!(Problem::CharSpecializedToWrongType(Some(*other))),
-                },
-                None => compiler_bug!(Problem::CharSpecializedToWrongType(None)),
-            },
+                }
+            }
             Expr::Str(contents) => MonoExpr::Str(self.string_interns.get_id(
                 self.arena,
                 // TODO should be able to remove this alloc_str() once canonical Expr stores an arena-allocated string.

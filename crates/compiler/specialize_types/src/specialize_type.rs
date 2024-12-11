@@ -71,7 +71,7 @@ impl MonoTypeCache {
         problems: &mut impl Push<Problem>,
         debug_info: &mut Option<DebugInfo>,
         var: Variable,
-    ) -> Option<MonoTypeId> {
+    ) -> MonoTypeId {
         let mut env = Env {
             arena,
             cache: self,
@@ -135,7 +135,7 @@ impl<'a, 'c, 'd, 'e, 'f, 'm, 'p, P: Push<Problem>> Env<'a, 'c, 'd, 'e, 'f, 'm, '
         mono_args.extend(
             arg_vars
                 .into_iter()
-                .flat_map(|var_index| self.lower_var(subs, subs[var_index])),
+                .map(|var_index| self.lower_var(subs, subs[var_index])),
         );
 
         // TODO [mono2] populate debuginfo as appropriate
@@ -143,7 +143,7 @@ impl<'a, 'c, 'd, 'e, 'f, 'm, 'p, P: Push<Problem>> Env<'a, 'c, 'd, 'e, 'f, 'm, '
         self.mono_types.add_function(func, mono_args)
     }
 
-    fn lower_var(&mut self, subs: &Subs, var: Variable) -> Option<MonoTypeId> {
+    fn lower_var(&mut self, subs: &Subs, var: Variable) -> MonoTypeId {
         let root_var = subs.get_root_key_without_compacting(var);
 
         // TODO: we could replace this cache by having Subs store a Content::Monomorphic(MonoTypeId)
@@ -151,7 +151,7 @@ impl<'a, 'c, 'd, 'e, 'f, 'm, 'p, P: Push<Problem>> Env<'a, 'c, 'd, 'e, 'f, 'm, '
         // for sure, and the lookups should be faster because they're O(1) but don't require hashing.
         // Kinda creates a cyclic dep though.
         if let Some(mono_id) = self.cache.inner.get(&root_var) {
-            return Some(*mono_id);
+            return *mono_id;
         }
 
         // Convert the Content to a MonoType, often by passing an iterator. None of these iterators introduce allocations.
@@ -291,7 +291,7 @@ impl<'a, 'c, 'd, 'e, 'f, 'm, 'p, P: Push<Problem>> Env<'a, 'c, 'd, 'e, 'f, 'm, '
                     }
                     _ => {
                         // TODO [mono2] record in debuginfo the alias name for whatever we're lowering.
-                        self.lower_var(subs, real)?
+                        self.lower_var(subs, real)
                     }
                 }
             }
@@ -313,10 +313,7 @@ impl<'a, 'c, 'd, 'e, 'f, 'm, 'p, P: Push<Problem>> Env<'a, 'c, 'd, 'e, 'f, 'm, '
         };
 
         // This var is now known to be monomorphic, so we don't repeat this work again later.
-        // (We don't insert entries for Unit values.)
-        self.cache.inner.insert(root_var, mono_id);
-
-        Some(mono_id)
+        mono_id
     }
 }
 
