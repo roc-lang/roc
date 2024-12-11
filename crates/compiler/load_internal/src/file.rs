@@ -1010,26 +1010,26 @@ impl<'a> LoadingProblem<'a> {
         match self {
             LoadingProblem::ParsingFailed(err) => err.problem.problem.get_region(),
             LoadingProblem::MultiplePlatformPackages {
-                filename,
-                module_id,
-                source,
+                filename: _,
+                module_id: _,
+                source: _,
                 region,
             } => Some(*region),
             LoadingProblem::NoPlatformPackage {
-                filename,
-                module_id,
-                source,
+                filename: _,
+                module_id: _,
+                source: _,
                 region,
             } => Some(*region),
             LoadingProblem::UnrecognizedPackageShorthand {
-                filename,
-                module_id,
-                source,
+                filename: _,
+                module_id: _,
+                source: _,
                 region,
-                shorthand,
-                available,
+                shorthand: _,
+                available: _,
             } => Some(*region),
-            LoadingProblem::FileProblem { filename, error } => None,
+            LoadingProblem::FileProblem { filename: _, error: _ } => None,
             LoadingProblem::UnexpectedHeader(_) => None,
             LoadingProblem::ErrJoiningWorkerThreads => None,
             LoadingProblem::TriedToImportAppModule => None,
@@ -1876,7 +1876,7 @@ pub fn report_loading_problem(
                 render,
             ).0
         }
-        LoadingProblem::FormattedReport(report,region) => report,
+        LoadingProblem::FormattedReport(report,_region) => report,
         LoadingProblem::FileProblem { filename, error } => {
             to_file_problem_report_string(filename, error, true)
         }

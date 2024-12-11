@@ -65,7 +65,8 @@ pub enum SyntaxError<'a> {
 }
 impl<'a> SyntaxError<'a> {
     pub fn get_region(&self) -> Option<Region> {
-        let region = match self {
+        
+        match self {
             SyntaxError::Unexpected(r) => Some(*r),
             SyntaxError::Eof(r) => Some(*r),
             SyntaxError::ReservedKeyword(r) => Some(*r),
@@ -80,9 +81,8 @@ impl<'a> SyntaxError<'a> {
             SyntaxError::Todo => None,
             SyntaxError::InvalidPattern => None,
             SyntaxError::BadUtf8 => None,
-            SyntaxError::Space(bad_input) => None,
-        };
-        region
+            SyntaxError::Space(_bad_input) => None,
+        }
     }
 }
 pub trait SpaceProblem: std::fmt::Debug {
@@ -158,18 +158,18 @@ pub enum EHeader<'a> {
 impl<'a> EHeader<'a> {
     pub fn get_region(&self) -> Region {
         match self {
-            EHeader::Provides(provides, pos) => provides.get_region(),
-            EHeader::Params(params, pos) => params.get_region(),
+            EHeader::Provides(provides, _pos) => provides.get_region(),
+            EHeader::Params(params, _pos) => params.get_region(),
             EHeader::Exposes(_, pos) => Region::from_pos(*pos),
             EHeader::Imports(_, pos) => Region::from_pos(*pos),
-            EHeader::Requires(requires, pos) => requires.get_region(),
-            EHeader::Packages(packages, pos) => packages.get_region(),
+            EHeader::Requires(requires, _pos) => requires.get_region(),
+            EHeader::Packages(packages, _pos) => packages.get_region(),
             EHeader::Space(_, pos) => Region::from_pos(*pos),
             EHeader::Start(pos) => Region::from_pos(*pos),
             EHeader::ModuleName(pos) => Region::from_pos(*pos),
-            EHeader::AppName(app_name, pos) => app_name.get_region(),
-            EHeader::PackageName(package_name, pos) => package_name.get_region(),
-            EHeader::PlatformName(platform_name, pos) => platform_name.get_region(),
+            EHeader::AppName(app_name, _pos) => app_name.get_region(),
+            EHeader::PackageName(package_name, _pos) => package_name.get_region(),
+            EHeader::PlatformName(platform_name, _pos) => platform_name.get_region(),
             EHeader::IndentStart(pos) => Region::from_pos(*pos),
             EHeader::InconsistentModuleName(region) => *region,
         }
