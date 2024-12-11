@@ -780,7 +780,7 @@ impl RocRefcounted for SendSafeRocStr {
 
 impl Clone for SendSafeRocStr {
     fn clone(&self) -> Self {
-        if self.0.is_readonly() {
+        if self.0.is_readonly() || self.0.is_small_str() {
             SendSafeRocStr(self.0.clone())
         } else {
             // To keep self send safe, this must copy.
@@ -851,7 +851,7 @@ impl From<RocStr> for ReadOnlyRocStr {
         if s.is_unique() {
             unsafe { s.set_readonly() };
         }
-        if s.is_readonly() {
+        if s.is_readonly() || s.is_small_str() {
             ReadOnlyRocStr(s)
         } else {
             // This is not readonly or unique, do a deep copy.
