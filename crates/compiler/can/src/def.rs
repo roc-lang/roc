@@ -338,9 +338,9 @@ impl PendingTypeDef<'_> {
 #[derive(Clone, Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum Declaration {
-    Declare(Def),
-    DeclareRec(Vec<Def>, IllegalCycleMark),
-    Builtin(Def),
+    Declare(Def, Docs),
+    DeclareRec(Vec<(Def, Docs)>, IllegalCycleMark),
+    Builtin(Def, Docs),
     Expects(ExpectsOrDbgs),
     /// If we know a cycle is illegal during canonicalization.
     /// Otherwise we will try to detect this during solving; see [`IllegalCycleMark`].
@@ -2788,6 +2788,10 @@ pub fn report_unused_imports(
             env.problem(Problem::UnusedModuleImport(import.module_id, import.region));
         }
     }
+}
+
+pub struct Docs {
+    docs: String,
 }
 
 fn decl_to_let(decl: Declaration, loc_ret: Loc<Expr>) -> Loc<Expr> {
