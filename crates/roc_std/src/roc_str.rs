@@ -764,6 +764,20 @@ pub struct SendSafeRocStr(RocStr);
 
 unsafe impl Send for SendSafeRocStr {}
 
+impl RocRefcounted for SendSafeRocStr {
+    fn inc(&mut self) {
+        self.0.inc()
+    }
+
+    fn dec(&mut self) {
+        self.0.dec()
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
+}
+
 impl Clone for SendSafeRocStr {
     fn clone(&self) -> Self {
         if self.0.is_readonly() {

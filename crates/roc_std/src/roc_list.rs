@@ -860,6 +860,23 @@ where
 
 unsafe impl<T> Send for SendSafeRocList<T> where T: Send + RocRefcounted {}
 
+impl<T> RocRefcounted for SendSafeRocList<T>
+where
+    T: RocRefcounted,
+{
+    fn inc(&mut self) {
+        self.0.inc()
+    }
+
+    fn dec(&mut self) {
+        self.0.dec()
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
+}
+
 impl<T> Clone for SendSafeRocList<T>
 where
     T: Clone + RocRefcounted,
