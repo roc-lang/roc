@@ -258,7 +258,7 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
             //         })
             //     }
             // }
-            // Expr::Var(symbol, var) => Some(MonoExpr::Lookup(*symbol, mono_from_var(*var)?)),
+            Expr::Var(symbol, var) => MonoExpr::Lookup(*symbol, mono_from_var(*var)),
             // Expr::LetNonRec(def, loc) => {
             //     let expr = self.to_mono_expr(def.loc_expr.value, stmts)?;
             //     let todo = (); // TODO if this is an underscore pattern and we're doing a fn call, convert it to Stmt::CallVoid
@@ -276,7 +276,7 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
             //     todo!("split up the pattern into various Assign statements.");
             // }
             // Expr::LetRec(vec, loc, illegal_cycle_mark) => todo!(),
-            _ => todo!(),
+            _ => todo!("{:?}", can_expr),
             // Expr::List {
             //     elem_var,
             //     loc_elems,
@@ -405,7 +405,7 @@ fn to_num(primitive: Primitive, val: IntValue, problems: &mut impl Push<Problem>
         })),
         Primitive::U128 => MonoExpr::Number(Number::U128(val.as_u128())),
         Primitive::I128 => MonoExpr::Number(Number::I128(val.as_i128())),
-        Primitive::Str | Primitive::Crash => {
+        Primitive::Str | Primitive::Crash | Primitive::Bool => {
             let problem = Problem::NumSpecializedToWrongType(Some(MonoType::Primitive(primitive)));
             problems.push(problem);
             MonoExpr::CompilerBug(problem)
@@ -432,7 +432,8 @@ fn to_frac(primitive: Primitive, val: f64, problems: &mut impl Push<Problem>) ->
         | Primitive::U128
         | Primitive::I128
         | Primitive::Str
-        | Primitive::Crash => {
+        | Primitive::Crash
+        | Primitive::Bool => {
             let problem = Problem::NumSpecializedToWrongType(Some(MonoType::Primitive(primitive)));
             problems.push(problem);
             MonoExpr::CompilerBug(problem)
@@ -455,7 +456,12 @@ fn char_to_int(primitive: Primitive, ch: char, problems: &mut impl Push<Problem>
         Primitive::I128 => MonoExpr::Number(Number::I128(ch as i128)),
         Primitive::I16 => MonoExpr::Number(Number::I16(ch as i16)),
         Primitive::I8 => MonoExpr::Number(Number::I8(ch as i8)),
-        Primitive::Str | Primitive::Dec | Primitive::F32 | Primitive::F64 | Primitive::Crash => {
+        Primitive::Str
+        | Primitive::Dec
+        | Primitive::F32
+        | Primitive::F64
+        | Primitive::Crash
+        | Primitive::Bool => {
             let problem = Problem::CharSpecializedToWrongType(Some(MonoType::Primitive(primitive)));
             problems.push(problem);
             MonoExpr::CompilerBug(problem)

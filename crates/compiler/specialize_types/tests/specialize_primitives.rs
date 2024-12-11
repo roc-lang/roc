@@ -6,7 +6,8 @@ mod helpers;
 
 #[cfg(test)]
 mod specialize_primitives {
-    use roc_specialize_types::{MonoExpr, Number};
+    use roc_module::symbol::Symbol;
+    use roc_specialize_types::{MonoExpr, MonoType, MonoTypeId, Number, Primitive};
 
     use super::helpers::{expect_mono_expr, expect_mono_expr_with_interns};
 
@@ -168,6 +169,24 @@ mod specialize_primitives {
         expect_mono_expr(
             format!("{expected}"),
             MonoExpr::Number(Number::Dec(expected)),
+        );
+    }
+
+    #[test]
+    fn bool_true() {
+        let expected = "Bool.true";
+        expect_mono_expr(
+            expected,
+            MonoExpr::Lookup(Symbol::BOOL_TRUE, MonoTypeId::BOOL),
+        );
+    }
+
+    #[test]
+    fn bool_false() {
+        let expected = "Bool.false";
+        expect_mono_expr(
+            expected,
+            MonoExpr::Lookup(Symbol::BOOL_FALSE, MonoTypeId::BOOL),
         );
     }
 }

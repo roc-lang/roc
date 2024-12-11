@@ -114,6 +114,8 @@ impl<'a, 'c, 'd, 'e, 'f, 'm, 'p, P: Push<Problem>> Env<'a, 'c, 'd, 'e, 'f, 'm, '
             //     .flat_map(|var_index| self.lower_var( subs, subs[var_index]));
 
             // let arg = new_args.next();
+        } else if symbol == Symbol::BOOL_BOOL {
+            MonoTypeId::BOOL
         } else {
             todo!("implement lower_builtin for symbol {symbol:?} - or, if all the builtins are already in here, report a compiler bug instead of panicking like this.");
         }
