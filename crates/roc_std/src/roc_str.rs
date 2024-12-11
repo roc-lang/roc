@@ -831,11 +831,9 @@ unsafe impl Send for ReadOnlyRocStr {}
 unsafe impl Sync for ReadOnlyRocStr {}
 
 impl RocRefcounted for ReadOnlyRocStr {
-    fn inc(&mut self) {
-    }
+    fn inc(&mut self) {}
 
-    fn dec(&mut self) {
-    }
+    fn dec(&mut self) {}
 
     fn is_refcounted() -> bool {
         true
@@ -851,7 +849,7 @@ impl Clone for ReadOnlyRocStr {
 impl From<RocStr> for ReadOnlyRocStr {
     fn from(mut s: RocStr) -> Self {
         if s.is_unique() {
-            unsafe {s.set_readonly()};
+            unsafe { s.set_readonly() };
         }
         if s.is_readonly() {
             ReadOnlyRocStr(s)

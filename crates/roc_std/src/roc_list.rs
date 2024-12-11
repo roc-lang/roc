@@ -928,11 +928,9 @@ impl<T> RocRefcounted for ReadOnlyRocList<T>
 where
     T: RocRefcounted,
 {
-    fn inc(&mut self) {
-    }
+    fn inc(&mut self) {}
 
-    fn dec(&mut self) {
-    }
+    fn dec(&mut self) {}
 
     fn is_refcounted() -> bool {
         true
@@ -954,7 +952,7 @@ where
 {
     fn from(mut l: RocList<T>) -> Self {
         if l.is_unique() {
-            unsafe {l.set_readonly()};
+            unsafe { l.set_readonly() };
         }
         if l.is_readonly() {
             ReadOnlyRocList(l)
@@ -1083,7 +1081,7 @@ mod tests {
 
     #[test]
     fn readonly_list_is_sendsafe() {
-        let x = RocList::from_slice(&[1, 2, 3, 4, 5]);
+        let mut x = RocList::from_slice(&[1, 2, 3, 4, 5]);
         unsafe { x.set_readonly() };
         assert!(x.is_readonly());
 
