@@ -63,6 +63,28 @@ pub enum SyntaxError<'a> {
     Space(BadInputError),
     NotEndOfFile(Position),
 }
+impl<'a> SyntaxError<'a> {
+    pub fn get_region(&self) -> Option<Region> {
+        let region = match self {
+            SyntaxError::Unexpected(r) => Some(*r),
+            SyntaxError::Eof(r) => Some(*r),
+            SyntaxError::ReservedKeyword(r) => Some(*r),
+            SyntaxError::ArgumentsBeforeEquals(r) => Some(*r),
+            SyntaxError::Type(e_type) => Some(e_type.get_region()),
+            SyntaxError::Pattern(e_pattern) => Some(e_pattern.get_region()),
+            SyntaxError::NotEndOfFile(pos) => Some(Region::from_pos(*pos)),
+            SyntaxError::Expr(e_expr, pos) => Some(Region::from_pos(*pos)),
+            SyntaxError::Header(e_header) => Some(e_header.get_region()),
+            SyntaxError::NotYetImplemented(_) => None,
+            SyntaxError::OutdentedTooFar => None,
+            SyntaxError::Todo => None,
+            SyntaxError::InvalidPattern => None,
+            SyntaxError::BadUtf8 => None,
+            SyntaxError::Space(bad_input) => None,
+        };
+        region
+    }
+}
 pub trait SpaceProblem: std::fmt::Debug {
     fn space_problem(e: BadInputError, pos: Position) -> Self;
 }
@@ -131,6 +153,27 @@ pub enum EHeader<'a> {
     IndentStart(Position),
 
     InconsistentModuleName(Region),
+}
+
+impl<'a> EHeader<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            EHeader::Provides(_, pos)
+            | EHeader::Params(_, pos)
+            | EHeader::Exposes(_, pos)
+            | EHeader::Imports(_, pos)
+            | EHeader::Requires(_, pos)
+            | EHeader::Packages(_, pos)
+            | EHeader::Space(_, pos)
+            | EHeader::Start(pos)
+            | EHeader::ModuleName(pos)
+            | EHeader::AppName(_, pos)
+            | EHeader::PackageName(_, pos)
+            | EHeader::PlatformName(_, pos)
+            | EHeader::IndentStart(pos) => Region::from_pos(*pos),
+            EHeader::InconsistentModuleName(region) => *region,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -587,6 +630,30 @@ pub enum EPattern<'a> {
     RecordUpdaterFunction(Position),
 }
 
+impl<'a> EPattern<'a> {
+    pub fn get_region(&self) -> Region {
+        let pos = match self {
+            EPattern::Record(_, position)
+            | EPattern::List(_, position)
+            | EPattern::AsKeyword(position)
+            | EPattern::AsIdentifier(position)
+            | EPattern::Underscore(position)
+            | EPattern::NotAPattern(position)
+            | EPattern::Start(position)
+            | EPattern::End(position)
+            | EPattern::Space(_, position)
+            | EPattern::PInParens(_, position)
+            | EPattern::NumLiteral(_, position)
+            | EPattern::IndentStart(position)
+            | EPattern::IndentEnd(position)
+            | EPattern::AsIndentStart(position)
+            | EPattern::AccessorFunction(position)
+            | EPattern::RecordUpdaterFunction(position) => position,
+        };
+        Region::from_pos(*pos)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PRecord<'a> {
     End(Position),
@@ -647,6 +714,33 @@ pub enum EType<'a> {
     TIndentStart(Position),
     TIndentEnd(Position),
     TAsIndentStart(Position),
+}
+
+impl<'a> EType<'a> {
+    pub fn get_region(&self) -> Region {
+        let pos = match self {
+            EType::Space(_, position)
+            | EType::UnderscoreSpacing(position)
+            | EType::TRecord(_, position)
+            | EType::TTagUnion(_, position)
+            | EType::TInParens(_, position)
+            | EType::TApply(_, position)
+            | EType::TInlineAlias(_, position)
+            | EType::TBadTypeVariable(position)
+            | EType::TWildcard(position)
+            | EType::TInferred(position)
+            | EType::TStart(position)
+            | EType::TEnd(position)
+            | EType::TFunctionArgument(position)
+            | EType::TWhereBar(position)
+            | EType::TImplementsClause(position)
+            | EType::TAbilityImpl(_, position)
+            | EType::TIndentStart(position)
+            | EType::TIndentEnd(position)
+            | EType::TAsIndentStart(position) => position,
+        };
+        Region::from_pos(*pos)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

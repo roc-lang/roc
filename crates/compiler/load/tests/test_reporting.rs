@@ -187,7 +187,7 @@ mod test_reporting {
         let mut buf = String::new();
 
         match infer_expr_help_new(subdir, arena, src) {
-            Err(LoadingProblem::FormattedReport(fail)) => fail,
+            Err(LoadingProblem::FormattedReport(fail,_)) => fail,
             Ok((module_src, type_problems, can_problems, home, interns)) => {
                 let lines = LineInfo::new(&module_src);
                 let src_lines: Vec<&str> = module_src.split('\n').collect();
