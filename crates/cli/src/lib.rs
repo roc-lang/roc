@@ -875,16 +875,17 @@ pub fn build(
 
     // Note: This allows using `--dev` with `--optimize`.
     // This means frontend optimizations and dev backend.
-    let code_gen_backend = if matches.get_flag(FLAG_DEV) {
+    let code_gen_backend = if let OptLevel::Development = opt_level {
         if matches!(target.architecture(), Architecture::Wasm32) {
             CodeGenBackend::Wasm
         } else {
             CodeGenBackend::Assembly(AssemblyBackendMode::Binary)
         }
     } else {
-        let backend_mode = match opt_level {
-            OptLevel::Development => LlvmBackendMode::BinaryDev,
-            OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => LlvmBackendMode::Binary,
+        let backend_mode = if let BuildConfig::BuildAndRunIfNoErrors = config {
+            LlvmBackendMode::BinaryDev
+        } else {
+            LlvmBackendMode::Binary
         };
 
         CodeGenBackend::Llvm(backend_mode)
