@@ -194,6 +194,38 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
 
                 MonoExpr::Struct(slice)
             }
+            Expr::If {
+                cond_var: _,
+                branch_var,
+                branches,
+                final_else,
+            } => {
+                let branch_type = mono_from_var(*branch_var);
+
+                let mono_final_else = self.to_mono_expr(&final_else.value);
+                let final_else = self.mono_exprs.add(mono_final_else, final_else.region);
+
+                let mut branch_pairs: Vec<((MonoExpr, Region), (MonoExpr, Region))> =
+                    Vec::with_capacity_in(branches.len(), self.arena);
+
+                for (cond, body) in branches {
+                    let mono_cond = self.to_mono_expr(&cond.value);
+                    let mono_body = self.to_mono_expr(&body.value);
+
+                    branch_pairs.push(((mono_cond, cond.region), (mono_body, body.region)));
+                }
+
+                let branches = self.mono_exprs.extend_pairs(branch_pairs.into_iter());
+
+                MonoExpr::If {
+                    branch_type,
+                    branches,
+                    final_else,
+                }
+            }
+            Expr::Var(symbol, var) | Expr::ParamsVar { symbol, var, .. } => {
+                MonoExpr::Lookup(*symbol, mono_from_var(*var))
+            }
             // Expr::Call((fn_var, fn_expr, capture_var, ret_var), args, called_via) => {
             //     let opt_ret_type = mono_from_var(*var);
 
@@ -258,7 +290,6 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
             //         })
             //     }
             // }
-            Expr::Var(symbol, var) => MonoExpr::Lookup(*symbol, mono_from_var(*var)),
             // Expr::LetNonRec(def, loc) => {
             //     let expr = self.to_mono_expr(def.loc_expr.value, stmts)?;
             //     let todo = (); // TODO if this is an underscore pattern and we're doing a fn call, convert it to Stmt::CallVoid
@@ -297,12 +328,6 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
             //     branches,
             //     branches_cond_var,
             //     exhaustive,
-            // } => todo!(),
-            // Expr::If {
-            //     cond_var,
-            //     branch_var,
-            //     branches,
-            //     final_else,
             // } => todo!(),
             // Expr::Call(_, vec, called_via) => todo!(),
             // Expr::RunLowLevel { op, args, ret_var } => todo!(),

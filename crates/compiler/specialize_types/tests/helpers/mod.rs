@@ -167,8 +167,38 @@ fn dbg_mono_expr_help<'a>(
         MonoExpr::Unit => {
             write!(buf, "{{}}").unwrap();
         }
+        MonoExpr::If {
+            branch_type: _,
+            branches,
+            final_else,
+        } => {
+            write!(buf, "If(",).unwrap();
+
+            for (index, (cond, branch)) in mono_exprs.iter_pair_slice(*branches).enumerate() {
+                if index > 0 {
+                    write!(buf, ", ").unwrap();
+                }
+
+                dbg_mono_expr_help(arena, mono_exprs, interns, cond, buf);
+                write!(buf, " -> ").unwrap();
+                dbg_mono_expr_help(arena, mono_exprs, interns, branch, buf);
+                write!(buf, ")").unwrap();
+            }
+
+            write!(buf, ", ").unwrap();
+            dbg_mono_expr_help(
+                arena,
+                mono_exprs,
+                interns,
+                mono_exprs.get_expr(*final_else),
+                buf,
+            );
+            write!(buf, ")").unwrap();
+        }
+        MonoExpr::Lookup(ident, _mono_type_id) => {
+            write!(buf, "{:?}", ident).unwrap();
+        }
         // MonoExpr::List { elem_type, elems } => todo!(),
-        // MonoExpr::Lookup(symbol, mono_type_id) => todo!(),
         // MonoExpr::ParameterizedLookup {
         //     name,
         //     lookup_type,

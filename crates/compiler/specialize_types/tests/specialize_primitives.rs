@@ -7,7 +7,7 @@ mod helpers;
 #[cfg(test)]
 mod specialize_primitives {
     use roc_module::symbol::Symbol;
-    use roc_specialize_types::{MonoExpr, MonoType, MonoTypeId, Number, Primitive};
+    use roc_specialize_types::{MonoExpr, MonoTypeId, Number};
 
     use super::helpers::{expect_mono_expr, expect_mono_expr_with_interns};
 

@@ -6,7 +6,7 @@ use roc_can::expr::Recursive;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
-use soa::{Index, NonEmptySlice, Slice, Slice2, Slice3};
+use soa::{Index, NonEmptySlice, PairSlice, Slice, Slice2, Slice3};
 use std::iter;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -145,6 +145,50 @@ impl MonoExprs {
         let len = self.exprs.len() - start;
 
         Slice::new(start as u32, len as u16)
+    }
+
+    pub fn iter_pair_slice(
+        &self,
+        exprs: PairSlice<MonoExpr>,
+    ) -> impl Iterator<Item = (&MonoExpr, &MonoExpr)> {
+        exprs.indices_iter().map(|(index_a, index_b)| {
+            debug_assert!(
+                self.exprs.len() > index_a && self.exprs.len() > index_b,
+                "A Slice index was not found in MonoExprs. This should never happen!"
+            );
+
+            // Safety: we should only ever hand out MonoExprId slices that are valid indices into here.
+            unsafe {
+                (
+                    self.exprs.get_unchecked(index_a),
+                    self.exprs.get_unchecked(index_b),
+                )
+            }
+        })
+    }
+
+    pub fn extend_pairs(
+        &mut self,
+        exprs: impl Iterator<Item = ((MonoExpr, Region), (MonoExpr, Region))>,
+    ) -> PairSlice<MonoExpr> {
+        let start = self.exprs.len();
+
+        let additional = exprs.size_hint().0 * 2;
+        self.exprs.reserve(additional);
+        self.regions.reserve(additional);
+
+        let mut pairs = 0;
+
+        for ((expr_a, region_a), (expr_b, region_b)) in exprs {
+            self.exprs.push(expr_a);
+            self.exprs.push(expr_b);
+            self.regions.push(region_a);
+            self.regions.push(region_b);
+
+            pairs += 1;
+        }
+
+        PairSlice::new(start as u32, pairs)
     }
 }
 
@@ -327,6 +371,12 @@ pub enum MonoExpr {
     Block {
         stmts: Slice<MonoStmtId>,
         final_expr: MonoExprId,
+    },
+
+    If {
+        branch_type: MonoTypeId,
+        branches: PairSlice<MonoExpr>,
+        final_else: MonoExprId,
     },
 
     CompilerBug(Problem),
