@@ -1,7 +1,3 @@
-use std::any::Any;
-
-use roc_load::LoadingProblem;
-use roc_parse::parser::{EHeader, EPattern, EType, SourceError, SyntaxError};
 use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Region};
 use tower_lsp::lsp_types::{Position, Range};
 
@@ -73,7 +69,7 @@ impl ToRocPosition for tower_lsp::lsp_types::Position {
 }
 
 pub(crate) mod diag {
-    use std::{fmt::Debug, path::Path};
+    use std::path::Path;
 
     use log::debug;
     use roc_load::LoadingProblem;
@@ -82,7 +78,7 @@ pub(crate) mod diag {
 
     use roc_problem::Severity;
     use roc_reporting::report::RocDocAllocator;
-    use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
+    use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity};
 
     use super::ToRange;
 
@@ -110,7 +106,7 @@ pub(crate) mod diag {
         type Feed = LineInfo;
 
         fn into_lsp_diagnostic(self, line_info: &LineInfo) -> Option<Diagnostic> {
-            let mut range = self
+            let range = self
                 .get_region()
                 .unwrap_or(Region::new(
                     roc_region::all::Position::new(0),
@@ -156,8 +152,7 @@ pub(crate) mod diag {
                 LoadingProblem::TriedToImportAppModule => {
                     "Attempted to import app module".to_string()
                 }
-                LoadingProblem::FormattedReport(report, region) => 
-                    report.clone(),
+                LoadingProblem::FormattedReport(report, _region) => report.clone(),
                 LoadingProblem::ImportCycle(_, _) => {
                     "Circular dependency between modules".to_string()
                 }

@@ -1010,26 +1010,29 @@ impl<'a> LoadingProblem<'a> {
         match self {
             LoadingProblem::ParsingFailed(err) => err.problem.problem.get_region(),
             LoadingProblem::MultiplePlatformPackages {
-                filename,
-                module_id,
-                source,
+                filename: _,
+                module_id: _,
+                source: _,
                 region,
             } => Some(*region),
             LoadingProblem::NoPlatformPackage {
-                filename,
-                module_id,
-                source,
+                filename: _,
+                module_id: _,
+                source: _,
                 region,
             } => Some(*region),
             LoadingProblem::UnrecognizedPackageShorthand {
-                filename,
-                module_id,
-                source,
+                filename: _,
+                module_id: _,
+                source: _,
                 region,
-                shorthand,
-                available,
+                shorthand: _,
+                available: _,
             } => Some(*region),
-            LoadingProblem::FileProblem { filename, error } => None,
+            LoadingProblem::FileProblem {
+                filename: _,
+                error: _,
+            } => None,
             LoadingProblem::UnexpectedHeader(_) => None,
             LoadingProblem::ErrJoiningWorkerThreads => None,
             LoadingProblem::TriedToImportAppModule => None,
@@ -1215,7 +1218,7 @@ impl<'a> LoadStart<'a> {
                     })
                     .into_inner()
                     .into_module_ids();
-                let region=problem.get_region();
+                let region = problem.get_region();
                 let report = report_loading_problem(problem, module_ids, render, palette);
 
                 // TODO try to gracefully recover and continue
@@ -1645,7 +1648,6 @@ fn state_thread_step<'a>(
     msg_tx: &crossbeam::channel::Sender<Msg<'a>>,
     msg_rx: &crossbeam::channel::Receiver<Msg<'a>>,
 ) -> Result<ControlFlow<LoadResult<'a>, State<'a>>, LoadingProblem<'a>> {
-    
     match msg_rx.try_recv() {
         Ok(msg) => {
             match msg {
@@ -1709,11 +1711,11 @@ fn state_thread_step<'a>(
                 }
                 Msg::FailedToReadFile { filename, error } => {
                     let buf = to_file_problem_report_string(filename, error, true);
-                    Err(LoadingProblem::FormattedReport(buf,None))
+                    Err(LoadingProblem::FormattedReport(buf, None))
                 }
 
                 Msg::FailedToParse(problem) => {
-                    let region=problem.problem.problem.get_region();
+                    let region = problem.problem.problem.get_region();
                     let module_ids = (*state.arc_modules).lock().clone().into_module_ids();
                     let buf = to_parse_problem_report(
                         problem,
@@ -1722,7 +1724,7 @@ fn state_thread_step<'a>(
                         state.render,
                         state.palette,
                     );
-                    Err(LoadingProblem::FormattedReport(buf,region))
+                    Err(LoadingProblem::FormattedReport(buf, region))
                 }
                 Msg::IncorrectModuleName(FileError {
                     problem: SourceError { problem, bytes },
@@ -1737,7 +1739,7 @@ fn state_thread_step<'a>(
                         bytes,
                         state.render,
                     );
-                    Err(LoadingProblem::FormattedReport(buf,Some(region)))
+                    Err(LoadingProblem::FormattedReport(buf, Some(region)))
                 }
                 msg => {
                     // This is where most of the main thread's work gets done.
@@ -1754,7 +1756,7 @@ fn state_thread_step<'a>(
                     match res_state {
                         Ok(new_state) => Ok(ControlFlow::Continue(new_state)),
                         Err(LoadingProblem::ParsingFailed(problem)) => {
-                            let region=problem.problem.problem.get_region();
+                            let region = problem.problem.problem.get_region();
                             let module_ids = Arc::try_unwrap(arc_modules)
                                 .unwrap_or_else(|_| {
                                     panic!(
@@ -1786,7 +1788,7 @@ fn state_thread_step<'a>(
                                 filename,
                                 render,
                             );
-                            return Err(LoadingProblem::FormattedReport(buf,None));
+                            return Err(LoadingProblem::FormattedReport(buf, None));
                         }
                         Err(LoadingProblem::IncorrectModuleName(FileError {
                             problem: SourceError { problem, bytes },
@@ -1803,7 +1805,7 @@ fn state_thread_step<'a>(
                                 bytes,
                                 render,
                             );
-                            return Err(LoadingProblem::FormattedReport(buf,Some(region)));
+                            return Err(LoadingProblem::FormattedReport(buf, Some(region)));
                         }
                         Err(LoadingProblem::UnrecognizedPackageShorthand {
                             filename,
@@ -1827,7 +1829,7 @@ fn state_thread_step<'a>(
                                 available,
                                 render,
                             );
-                            return Err(LoadingProblem::FormattedReport(buf,Some(region)));
+                            return Err(LoadingProblem::FormattedReport(buf, Some(region)));
                         }
                         Err(e) => Err(e),
                     }
@@ -1874,9 +1876,10 @@ pub fn report_loading_problem(
                 filename,
                 bytes,
                 render,
-            ).0
+            )
+            .0
         }
-        LoadingProblem::FormattedReport(report,region) => report,
+        LoadingProblem::FormattedReport(report, _region) => report,
         LoadingProblem::FileProblem { filename, error } => {
             to_file_problem_report_string(filename, error, true)
         }
@@ -3085,7 +3088,7 @@ fn register_package_shorthands<'a>(
                             Problem::InvalidUrl(url_err),
                             module_path.to_path_buf(),
                         );
-                        return Err(LoadingProblem::FormattedReport(buf,None));
+                        return Err(LoadingProblem::FormattedReport(buf, None));
                     }
                 }
             }
@@ -3203,7 +3206,7 @@ fn finish_specialization<'a>(
                     Valid(To::NewPackage(p_or_p)) => PathBuf::from(p_or_p.as_str()),
                     other => {
                         let buf = report_cannot_run(state.root_id, state.root_path, other);
-                        return Err(LoadingProblem::FormattedReport(buf,None));
+                        return Err(LoadingProblem::FormattedReport(buf, None));
                     }
                 };
 
@@ -4168,7 +4171,9 @@ fn load_packages<'a>(
                     Err(problem) => {
                         let buf = to_https_problem_report_string(src, problem, filename);
 
-                        load_messages.push(Msg::FailedToLoad(LoadingProblem::FormattedReport(buf,None)));
+                        load_messages.push(Msg::FailedToLoad(LoadingProblem::FormattedReport(
+                            buf, None,
+                        )));
                         return;
                     }
                 }
@@ -6486,7 +6491,7 @@ fn to_incorrect_module_name_report<'a>(
     filename: PathBuf,
     src: &'a [u8],
     render: RenderTarget,
-) -> (String,Region) {
+) -> (String, Region) {
     use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
     use ven_pretty::DocAllocator;
 

@@ -80,7 +80,7 @@ pub fn compile_to_mono<'a, 'i, I: Iterator<Item = &'i str>>(
                 (m.can_problems, m.type_problems)
             );
         }
-        Err(LoadMonomorphizedError::LoadingProblem(LoadingProblem::FormattedReport(report,_))) => {
+        Err(LoadMonomorphizedError::LoadingProblem(LoadingProblem::FormattedReport(report, _))) => {
             return (
                 None,
                 Problems {
