@@ -72,130 +72,8 @@ impl ToRocPosition for tower_lsp::lsp_types::Position {
     }
 }
 
-fn get_etype_err_region(e_type: &EType) -> Region {
-    let pos = match e_type {
-        EType::Space(bad_input_error, position) => position,
-        EType::UnderscoreSpacing(position) => position,
-        EType::TRecord(etype_record, position) => position,
-        EType::TTagUnion(etype_tag_union, position) => position,
-        EType::TInParens(etype_in_parens, position) => position,
-        EType::TApply(etype_apply, position) => position,
-        EType::TInlineAlias(etype_inline_alias, position) => position,
-        EType::TBadTypeVariable(position) => position,
-        EType::TWildcard(position) => position,
-        EType::TInferred(position) => position,
-        EType::TStart(position) => position,
-        EType::TEnd(position) => position,
-        EType::TFunctionArgument(position) => position,
-        EType::TWhereBar(position) => position,
-        EType::TImplementsClause(position) => position,
-        EType::TAbilityImpl(etype_ability_impl, position) => position,
-        EType::TIndentStart(position) => position,
-        EType::TIndentEnd(position) => position,
-        EType::TAsIndentStart(position) => position,
-    };
-    Region::from_pos(*pos)
-}
-
-fn get_epattern_region(epattern: &EPattern) -> Region {
-    let pos = match epattern {
-        EPattern::Record(precord, position) => position,
-        EPattern::List(plist, position) => position,
-        EPattern::AsKeyword(position) => position,
-        EPattern::AsIdentifier(position) => position,
-        EPattern::Underscore(position) => position,
-        EPattern::NotAPattern(position) => position,
-        EPattern::Start(position) => position,
-        EPattern::End(position) => position,
-        EPattern::Space(bad_input_error, position) => position,
-        EPattern::PInParens(pin_parens, position) => position,
-        EPattern::NumLiteral(enumber, position) => position,
-        EPattern::IndentStart(position) => position,
-        EPattern::IndentEnd(position) => position,
-        EPattern::AsIndentStart(position) => position,
-        EPattern::AccessorFunction(position) => position,
-        EPattern::RecordUpdaterFunction(position) => position,
-    };
-    Region::from_pos(*pos)
-}
-fn get_eheader_region(eheader: &EHeader) -> Region {
-    let pos = match eheader {
-        EHeader::Provides(eprovides, position) => position,
-        EHeader::Params(eparams, position) => position,
-        EHeader::Exposes(eexposes, position) => position,
-        EHeader::Imports(eimports, position) => position,
-        EHeader::Requires(erequires, position) => position,
-        EHeader::Packages(epackages, position) => position,
-        EHeader::Space(bad_input_error, position) => position,
-        EHeader::Start(position) => position,
-        EHeader::ModuleName(position) => position,
-        EHeader::AppName(estring, position) => position,
-        EHeader::PackageName(epackage_name, position) => position,
-        EHeader::PlatformName(epackage_name, position) => position,
-        EHeader::IndentStart(position) => position,
-        EHeader::InconsistentModuleName(region) => return *region,
-    };
-    Region::from_pos(*pos)
-}
-
-fn get_source_err_region(problem: &SyntaxError) -> Option<Region> {
-    let region = match problem {
-        SyntaxError::Unexpected(r) => Some(*r),
-        SyntaxError::Eof(r) => Some(*r),
-        SyntaxError::ReservedKeyword(r) => Some(*r),
-        SyntaxError::ArgumentsBeforeEquals(r) => Some(*r),
-        SyntaxError::Type(e_type) => Some(get_etype_err_region(e_type)),
-        SyntaxError::Pattern(e_pattern) => Some(get_epattern_region(e_pattern)),
-        SyntaxError::NotEndOfFile(pos) => Some(Region::from_pos(*pos)),
-        SyntaxError::Expr(e_expr, pos) => Some(Region::from_pos(*pos)),
-        SyntaxError::Header(e_header) => Some(get_eheader_region(e_header)),
-        SyntaxError::NotYetImplemented(_) => None,
-        SyntaxError::OutdentedTooFar => None,
-        SyntaxError::Todo => None,
-        SyntaxError::InvalidPattern => None,
-        SyntaxError::BadUtf8 => None,
-        SyntaxError::Space(bad_input) => None,
-    };
-    region
-}
-
-pub(crate) fn get_loading_problem_region(problem: &LoadingProblem<'_>) -> Option<Region> {
-    match problem {
-        LoadingProblem::FileProblem { filename, error } => None,
-        LoadingProblem::ParsingFailed(err) => get_source_err_region(&err.problem.problem),
-        LoadingProblem::UnexpectedHeader(_) => None,
-        LoadingProblem::MultiplePlatformPackages {
-            filename,
-            module_id,
-            source,
-            region,
-        } => Some(*region),
-        LoadingProblem::NoPlatformPackage {
-            filename,
-            module_id,
-            source,
-            region,
-        } => Some(*region),
-        LoadingProblem::UnrecognizedPackageShorthand {
-            filename,
-            module_id,
-            source,
-            region,
-            shorthand,
-            available,
-        } => Some(*region),
-        LoadingProblem::ErrJoiningWorkerThreads => None,
-        LoadingProblem::TriedToImportAppModule => None,
-        LoadingProblem::FormattedReport(_) => None,
-        LoadingProblem::ImportCycle(_, _) => None,
-        LoadingProblem::IncorrectModuleName(_) => None,
-        LoadingProblem::CouldNotFindCacheDir => None,
-        LoadingProblem::ChannelProblem(_) => None,
-    }
-}
-
 pub(crate) mod diag {
-    use std::path::Path;
+    use std::{fmt::Debug, path::Path};
 
     use roc_load::LoadingProblem;
     use roc_region::all::{LineInfo, Region};
@@ -231,7 +109,8 @@ pub(crate) mod diag {
         type Feed = LineInfo;
 
         fn into_lsp_diagnostic(self, line_info: &LineInfo) -> Option<Diagnostic> {
-            let range = crate::convert::get_loading_problem_region(self)
+            let mut range = self
+                .get_region()
                 .unwrap_or(Region::new(
                     roc_region::all::Position::new(0),
                     roc_region::all::Position::new(10000000),
@@ -274,7 +153,10 @@ pub(crate) mod diag {
                 LoadingProblem::TriedToImportAppModule => {
                     "Attempted to import app module".to_string()
                 }
-                LoadingProblem::FormattedReport(report) => report.clone(),
+                LoadingProblem::FormattedReport(report, region) => {
+                    range = region.unwrap_or(Region::zero()).to_range(line_info);
+                    report.clone()
+                }
                 LoadingProblem::ImportCycle(_, _) => {
                     "Circular dependency between modules".to_string()
                 }
@@ -316,7 +198,10 @@ pub(crate) mod diag {
         fn into_lsp_diagnostic(self, fmt: &'a ProblemFmt<'a>) -> Option<Diagnostic> {
             let range = self
                 .region()
-                .unwrap_or_else(Region::zero)
+                .unwrap_or(Region::new(
+                    roc_region::all::Position::new(0),
+                    roc_region::all::Position::new(10000000),
+                ))
                 .to_range(fmt.line_info);
 
             let report = roc_reporting::report::can_problem(
@@ -350,7 +235,10 @@ pub(crate) mod diag {
         fn into_lsp_diagnostic(self, fmt: &'a ProblemFmt<'a>) -> Option<Diagnostic> {
             let range = self
                 .region()
-                .unwrap_or_else(Region::zero)
+                .unwrap_or(Region::new(
+                    roc_region::all::Position::new(0),
+                    roc_region::all::Position::new(10000000),
+                ))
                 .to_range(fmt.line_info);
 
             let report = roc_reporting::report::type_problem(

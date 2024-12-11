@@ -674,7 +674,7 @@ pub fn load_module_for_docs(filename: PathBuf) -> LoadedModule {
         load_config,
     ) {
         Ok(loaded) => loaded,
-        Err(LoadingProblem::FormattedReport(report)) => {
+        Err(LoadingProblem::FormattedReport(report,_)) => {
             eprintln!("{report}");
             std::process::exit(1);
         }
