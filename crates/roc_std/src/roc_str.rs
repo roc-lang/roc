@@ -824,6 +824,50 @@ impl RocRefcounted for RocStr {
     }
 }
 
+#[repr(transparent)]
+pub struct ReadOnlyRocStr(RocStr);
+
+unsafe impl Send for ReadOnlyRocStr {}
+unsafe impl Sync for ReadOnlyRocStr {}
+
+impl RocRefcounted for ReadOnlyRocStr {
+    fn inc(&mut self) {
+    }
+
+    fn dec(&mut self) {
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
+}
+
+impl Clone for ReadOnlyRocStr {
+    fn clone(&self) -> Self {
+        ReadOnlyRocStr(self.0.clone())
+    }
+}
+
+impl From<RocStr> for ReadOnlyRocStr {
+    fn from(mut s: RocStr) -> Self {
+        if s.is_unique() {
+            unsafe {s.set_readonly()};
+        }
+        if s.is_readonly() {
+            ReadOnlyRocStr(s)
+        } else {
+            // This is not readonly or unique, do a deep copy.
+            ReadOnlyRocStr::from(RocStr::from(s.as_str()))
+        }
+    }
+}
+
+impl From<ReadOnlyRocStr> for RocStr {
+    fn from(s: ReadOnlyRocStr) -> Self {
+        s.0
+    }
+}
+
 #[repr(C)]
 struct BigString {
     elements: NonNull<u8>,

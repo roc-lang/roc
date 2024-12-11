@@ -172,7 +172,7 @@ where
     /// There is no way to tell how many references it has and if it is safe to free.
     /// As such, only values that should have a static lifetime for the entire application run
     /// should be considered for marking read-only.
-    pub unsafe fn set_readonly(&self) {
+    pub unsafe fn set_readonly(&mut self) {
         if let Some((_, storage)) = self.elements_and_storage() {
             storage.set(Storage::Readonly);
         }
@@ -912,6 +912,64 @@ where
     T: RocRefcounted,
 {
     fn from(l: SendSafeRocList<T>) -> Self {
+        l.0
+    }
+}
+
+#[repr(transparent)]
+pub struct ReadOnlyRocList<T>(RocList<T>)
+where
+    T: RocRefcounted;
+
+unsafe impl<T> Send for ReadOnlyRocList<T> where T: Send + RocRefcounted {}
+unsafe impl<T> Sync for ReadOnlyRocList<T> where T: Sync + RocRefcounted {}
+
+impl<T> RocRefcounted for ReadOnlyRocList<T>
+where
+    T: RocRefcounted,
+{
+    fn inc(&mut self) {
+    }
+
+    fn dec(&mut self) {
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
+}
+
+impl<T> Clone for ReadOnlyRocList<T>
+where
+    T: Clone + RocRefcounted,
+{
+    fn clone(&self) -> Self {
+        ReadOnlyRocList(self.0.clone())
+    }
+}
+
+impl<T> From<RocList<T>> for ReadOnlyRocList<T>
+where
+    T: Clone + RocRefcounted,
+{
+    fn from(mut l: RocList<T>) -> Self {
+        if l.is_unique() {
+            unsafe {l.set_readonly()};
+        }
+        if l.is_readonly() {
+            ReadOnlyRocList(l)
+        } else {
+            // This is not unique, do a deep copy.
+            ReadOnlyRocList::from(RocList::from_slice(&l))
+        }
+    }
+}
+
+impl<T> From<ReadOnlyRocList<T>> for RocList<T>
+where
+    T: RocRefcounted,
+{
+    fn from(l: ReadOnlyRocList<T>) -> Self {
         l.0
     }
 }

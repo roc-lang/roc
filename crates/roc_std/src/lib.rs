@@ -18,8 +18,8 @@ mod roc_str;
 mod storage;
 
 pub use roc_box::RocBox;
-pub use roc_list::{RocList, SendSafeRocList};
-pub use roc_str::{InteriorNulError, RocStr, SendSafeRocStr};
+pub use roc_list::{RocList, SendSafeRocList, ReadOnlyRocList};
+pub use roc_str::{InteriorNulError, RocStr, SendSafeRocStr, ReadOnlyRocStr};
 pub use storage::Storage;
 
 // A list of C functions that are being imported
