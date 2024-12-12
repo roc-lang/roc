@@ -8,10 +8,7 @@ use roc_can::{
 use roc_constrain::expr::{constrain_expr, Env};
 use roc_module::symbol::ModuleId;
 use roc_region::all::Region;
-use roc_types::{
-    subs::{Subs, Variable},
-    types::Types,
-};
+use roc_types::{subs::Variable, types::Types};
 
 #[derive(Debug)]
 pub struct ConstrainedExprOut {
@@ -23,12 +20,9 @@ pub struct ConstrainedExprOut {
     pub region: Region,
 }
 
-#[allow(dead_code)]
 #[derive(Default)]
 pub struct ConstrainedExpr {
     can_expr: CanExpr,
-    subs: Subs,
-    constraints: Constraints,
 }
 
 impl ConstrainedExpr {

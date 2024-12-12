@@ -97,7 +97,7 @@ fn check_type_alias<'a>(
 
 fn parse_type_alias_after_as<'a>() -> impl Parser<'a, TypeHeader<'a>, EType<'a>> {
     then(
-        space0_before_e(term(false), EType::TAsIndentStart),
+        space0_before_e(term_or_apply_with_as(false), EType::TAsIndentStart),
         // TODO: introduce a better combinator for this.
         // `check_type_alias` doesn't need to modify the state or progress, but it needs to access `state.pos()`
         |arena, state, progress, output| {
@@ -111,23 +111,42 @@ fn parse_type_alias_after_as<'a>() -> impl Parser<'a, TypeHeader<'a>, EType<'a>>
     )
 }
 
+fn term_fragment<'a>(
+    stop_at_surface_has: bool,
+) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
+    one_of!(
+        loc_wildcard(),
+        loc_inferred(),
+        specialize_err(EType::TInParens, loc_type_in_parens(stop_at_surface_has)),
+        loc(specialize_err(
+            EType::TRecord,
+            record_type(stop_at_surface_has)
+        )),
+        loc(specialize_err(
+            EType::TTagUnion,
+            tag_union_type(stop_at_surface_has)
+        )),
+        loc(parse_type_variable(stop_at_surface_has)),
+    )
+}
+
 fn term<'a>(stop_at_surface_has: bool) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
+    one_of!(
+        term_fragment(stop_at_surface_has),
+        loc(specialize_err(EType::TApply, concrete_type())),
+        fail(EType::TStart),
+    )
+    .trace("type_annotation:term")
+}
+
+fn term_or_apply_with_as<'a>(
+    stop_at_surface_has: bool,
+) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
     map_with_arena(
         and(
             one_of!(
-                loc_wildcard(),
-                loc_inferred(),
-                specialize_err(EType::TInParens, loc_type_in_parens(stop_at_surface_has)),
-                loc(specialize_err(
-                    EType::TRecord,
-                    record_type(stop_at_surface_has)
-                )),
-                loc(specialize_err(
-                    EType::TTagUnion,
-                    tag_union_type(stop_at_surface_has)
-                )),
+                term_fragment(stop_at_surface_has),
                 loc(applied_type(stop_at_surface_has)),
-                loc(parse_type_variable(stop_at_surface_has)),
                 fail(EType::TStart),
             ),
             // Inline alias notation, e.g. [Nil, Cons a (List a)] as List a
@@ -161,7 +180,7 @@ fn term<'a>(stop_at_surface_has: bool) -> impl Parser<'a, Loc<TypeAnnotation<'a>
             }
         },
     )
-    .trace("type_annotation:term")
+    .trace("type_annotation:term_or_apply_with_as")
 }
 
 /// The `*` type variable, e.g. in (List *) Wildcard,
@@ -579,8 +598,11 @@ fn expression<'a>(
     stop_at_surface_has: bool,
 ) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
     (move |arena, state: State<'a>, min_indent: u32| {
-        let (p1, first, state) = space0_before_e(term(stop_at_surface_has), EType::TIndentStart)
-            .parse(arena, state, min_indent)?;
+        let (p1, first, state) = space0_before_e(
+            term_or_apply_with_as(stop_at_surface_has),
+            EType::TIndentStart,
+        )
+        .parse(arena, state, min_indent)?;
 
         let (p2, rest, rest_state) = zero_or_more(skip_first(
             backtrackable(byte(b',', EType::TFunctionArgument)),
@@ -588,7 +610,10 @@ fn expression<'a>(
                 map_with_arena(
                     and(
                         backtrackable(space0_e(EType::TIndentStart)),
-                        and(term(stop_at_surface_has), space0_e(EType::TIndentEnd)),
+                        and(
+                            term_or_apply_with_as(stop_at_surface_has),
+                            space0_e(EType::TIndentEnd)
+                        ),
                     ),
                     comma_args_help,
                 ),
@@ -614,9 +639,11 @@ fn expression<'a>(
 
         let (progress, annot, state) = match result {
             Ok((p3, (space_before_arrow, arrow), state)) => {
-                let (p4, return_type, state) =
-                    space0_before_e(term(stop_at_surface_has), EType::TIndentStart)
-                        .parse(arena, state, min_indent)?;
+                let (p4, return_type, state) = space0_before_e(
+                    term_or_apply_with_as(stop_at_surface_has),
+                    EType::TIndentStart,
+                )
+                .parse(arena, state, min_indent)?;
 
                 let region = Region::span_across(&first.region, &return_type.region);
 

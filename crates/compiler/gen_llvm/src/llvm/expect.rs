@@ -29,7 +29,7 @@ pub(crate) struct SharedMemoryPointer<'ctx>(PointerValue<'ctx>);
 
 impl<'ctx> SharedMemoryPointer<'ctx> {
     pub(crate) fn get<'a, 'env>(env: &Env<'a, 'ctx, 'env>) -> Self {
-        let start_function = if let LlvmBackendMode::BinaryDev = env.mode {
+        let start_function = if let LlvmBackendMode::BinaryWithExpect = env.mode {
             bitcode::UTILS_EXPECT_FAILED_START_SHARED_FILE
         } else {
             bitcode::UTILS_EXPECT_FAILED_START_SHARED_BUFFER

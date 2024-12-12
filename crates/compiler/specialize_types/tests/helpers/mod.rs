@@ -86,9 +86,8 @@ fn specialize_expr<'a>(
     assert_eq!(0, home_decls.expressions.len());
 
     let region = Region::zero();
-    let mono_expr_id = env
-        .to_mono_expr(&main_expr)
-        .map(|mono_expr| mono_exprs.add(mono_expr, region));
+    let mono_expr = env.to_mono_expr(&main_expr);
+    let mono_expr_id = mono_exprs.add(mono_expr, region);
 
     SpecializedExprOut {
         mono_expr_id,
@@ -100,13 +99,13 @@ fn specialize_expr<'a>(
 }
 
 #[track_caller]
-pub fn expect_no_expr(input: impl AsRef<str>) {
+pub fn expect_unit(input: impl AsRef<str>) {
     let arena = Bump::new();
     let mut interns = Interns::new();
     let out = specialize_expr(&arena, input.as_ref(), &mut interns);
-    let actual = out.mono_expr_id.map(|id| out.mono_exprs.get_expr(id));
+    let actual = out.mono_exprs.get_expr(out.mono_expr_id);
 
-    assert_eq!(None, actual, "This input expr should have specialized to being dicarded as zero-sized, but it didn't: {:?}", input.as_ref());
+    assert_eq!(MonoExpr::Unit, *actual, "This input expr should have specialized to being dicarded as zero-sized, but it didn't: {:?}", input.as_ref());
 }
 
 #[track_caller]
@@ -133,7 +132,7 @@ fn dbg_mono_expr<'a>(
 ) -> &'a str {
     let mut buf = bumpalo::collections::String::new_in(arena);
 
-    dbg_mono_expr_help(arena, mono_exprs, interns, expr, &mut buf);
+    dbg_mono_expr_help(arena, mono_exprs, interns, expr, &mut buf).unwrap();
 
     buf.into_bump_str()
 }
@@ -144,29 +143,62 @@ fn dbg_mono_expr_help<'a>(
     interns: &Interns<'a>,
     expr: &MonoExpr,
     buf: &mut impl Write,
-) {
+) -> Result<(), core::fmt::Error> {
     match expr {
         MonoExpr::Str(interned_str_id) => {
-            write!(buf, "Str({:?})", interns.get_str(arena, *interned_str_id)).unwrap();
+            write!(buf, "Str({:?})", interns.get_str(arena, *interned_str_id))
         }
         MonoExpr::Number(number) => {
-            write!(buf, "Number({:?})", number).unwrap();
+            write!(buf, "Number({:?})", number)
         }
         MonoExpr::Struct(field_exprs) => {
-            write!(buf, "Struct([").unwrap();
+            write!(buf, "Struct([")?;
 
             for (index, expr) in mono_exprs.iter_slice(field_exprs.as_slice()).enumerate() {
                 if index > 0 {
-                    write!(buf, ", ").unwrap();
+                    write!(buf, ", ")?;
                 }
 
-                dbg_mono_expr_help(arena, mono_exprs, interns, expr, buf);
+                dbg_mono_expr_help(arena, mono_exprs, interns, expr, buf)?;
             }
 
-            write!(buf, "])").unwrap();
+            write!(buf, "])")
+        }
+        MonoExpr::Unit => {
+            write!(buf, "{{}}")
+        }
+        MonoExpr::If {
+            branch_type: _,
+            branches,
+            final_else,
+        } => {
+            write!(buf, "If(",)?;
+
+            for (index, (cond, branch)) in mono_exprs.iter_pair_slice(*branches).enumerate() {
+                if index > 0 {
+                    write!(buf, ", ")?;
+                }
+
+                dbg_mono_expr_help(arena, mono_exprs, interns, cond, buf)?;
+                write!(buf, " -> ")?;
+                dbg_mono_expr_help(arena, mono_exprs, interns, branch, buf)?;
+                write!(buf, ")")?;
+            }
+
+            write!(buf, ", ")?;
+            dbg_mono_expr_help(
+                arena,
+                mono_exprs,
+                interns,
+                mono_exprs.get_expr(*final_else),
+                buf,
+            )?;
+            write!(buf, ")")
+        }
+        MonoExpr::Lookup(ident, _mono_type_id) => {
+            write!(buf, "{:?}", ident)
         }
         // MonoExpr::List { elem_type, elems } => todo!(),
-        // MonoExpr::Lookup(symbol, mono_type_id) => todo!(),
         // MonoExpr::ParameterizedLookup {
         //     name,
         //     lookup_type,
@@ -241,7 +273,7 @@ fn dbg_mono_expr_help<'a>(
         //     name,
         // } => todo!(),
         MonoExpr::CompilerBug(problem) => {
-            write!(buf, "CompilerBug({:?})", problem).unwrap();
+            write!(buf, "CompilerBug({:?})", problem)
         }
         other => {
             todo!("Implement dbg_mono_expr for {:?}", other)
@@ -270,11 +302,8 @@ pub fn expect_mono_expr_custom<T: PartialEq + core::fmt::Debug>(
     let arena = Bump::new();
     let mut string_interns = Interns::new();
     let out = specialize_expr(&arena, input.as_ref(), &mut string_interns);
-    let mono_expr_id = out
-            .mono_expr_id
-            .expect("This input expr should not have been discarded as zero-sized, but it was discarded: {input:?}");
 
-    let actual_expr = out.mono_exprs.get_expr(mono_expr_id); // Must run first, to populate string interns!
+    let actual_expr = out.mono_exprs.get_expr(out.mono_expr_id); // Must run first, to populate string interns!
     let actual = to_actual(&arena, &out.mono_exprs, &string_interns, actual_expr);
     let expected = to_expected(&arena, &out.mono_exprs, &string_interns);
 

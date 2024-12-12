@@ -1,0 +1,43 @@
+@0-19 SpaceAfter(
+    If {
+        if_thens: [
+            (
+                @3-4 SpaceBefore(
+                    SpaceAfter(
+                        Var {
+                            module_name: "",
+                            ident: "h",
+                        },
+                        [
+                            Newline,
+                        ],
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+                @9-11 SpaceAfter(
+                    UnaryOp(
+                        @10-11 Var {
+                            module_name: "",
+                            ident: "f",
+                        },
+                        @9-10 Not,
+                    ),
+                    [
+                        LineComment(
+                            "",
+                        ),
+                    ],
+                ),
+            ),
+        ],
+        final_else: @17-19 RecordUpdater(
+            "m",
+        ),
+        indented_else: false,
+    },
+    [
+        Newline,
+    ],
+)

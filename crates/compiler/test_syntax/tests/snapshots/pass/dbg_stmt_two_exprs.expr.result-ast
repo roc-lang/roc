@@ -1,4 +1,4 @@
-SpaceAfter(
+@0-15 SpaceAfter(
     DbgStmt {
         first: @6-14 SpaceBefore(
             ParensAround(

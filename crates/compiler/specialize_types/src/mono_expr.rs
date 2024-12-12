@@ -84,7 +84,7 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
         }
     }
 
-    pub fn to_mono_expr(&mut self, can_expr: &Expr) -> Option<MonoExpr> {
+    pub fn to_mono_expr(&mut self, can_expr: &Expr) -> MonoExpr {
         let problems = &mut self.problems;
         let mono_types = &mut self.mono_types;
         let mut mono_from_var = |var| {
@@ -103,7 +103,7 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
         macro_rules! compiler_bug {
             ($problem:expr) => {{
                 problems.push($problem);
-                Some(MonoExpr::CompilerBug($problem))
+                MonoExpr::CompilerBug($problem)
             }};
         }
 
@@ -112,56 +112,48 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
                 match self.subs.get_content_without_compacting(*var) {
                     Content::FlexVar(_) => {
                         // Plain decimal number literals like `4.2` can still have an unbound var.
-                        Some(MonoExpr::Number(Number::Dec(*val)))
+                        MonoExpr::Number(Number::Dec(*val))
                     }
-                    _ => match mono_from_var(*var) {
-                        Some(mono_id) => match mono_types.get(mono_id) {
-                            MonoType::Primitive(primitive) => {
-                                Some(to_frac(*primitive, *val, problems))
-                            }
+                    _ => {
+                        let mono_type = mono_from_var(*var);
+                        match mono_types.get(mono_type) {
+                            MonoType::Primitive(primitive) => to_frac(*primitive, *val, problems),
                             other => {
                                 compiler_bug!(Problem::NumSpecializedToWrongType(Some(*other)))
                             }
-                        },
-                        None => {
-                            compiler_bug!(Problem::NumSpecializedToWrongType(None))
                         }
-                    },
+                    }
                 }
             }
             Expr::Num(var, _, int_value, _) | Expr::Int(var, _, _, int_value, _) => {
+                let mono_type = mono_from_var(*var);
+
                 // Number literals and int literals both specify integer numbers, so to_num() can work on both.
-                match mono_from_var(*var) {
-                    Some(mono_id) => match mono_types.get(mono_id) {
-                        MonoType::Primitive(primitive) => {
-                            Some(to_num(*primitive, *int_value, problems))
-                        }
-                        other => compiler_bug!(Problem::NumSpecializedToWrongType(Some(*other))),
-                    },
-                    None => compiler_bug!(Problem::NumSpecializedToWrongType(None)),
+                match mono_types.get(mono_type) {
+                    MonoType::Primitive(primitive) => to_num(*primitive, *int_value, problems),
+                    other => compiler_bug!(Problem::NumSpecializedToWrongType(Some(*other))),
                 }
             }
-            Expr::SingleQuote(var, _, char, _) => match mono_from_var(*var) {
+            Expr::SingleQuote(var, _, char, _) => {
+                let mono_type = mono_from_var(*var);
+
                 // Single-quote characters monomorphize to an integer.
-                // TODO if we store these using the same representation as other ints (e.g. Expr::Int,
+                // TODO [mono2] if we store these using the same representation as other ints (e.g. Expr::Int,
                 // or keeping a separate value but storing an IntValue instead of a char), then
                 // even though we verify them differently, we can combine this branch with Num and Int.
-                Some(mono_id) => match mono_types.get(mono_id) {
-                    MonoType::Primitive(primitive) => {
-                        Some(char_to_int(*primitive, *char, problems))
-                    }
+                match mono_types.get(mono_type) {
+                    MonoType::Primitive(primitive) => char_to_int(*primitive, *char, problems),
                     other => compiler_bug!(Problem::CharSpecializedToWrongType(Some(*other))),
-                },
-                None => compiler_bug!(Problem::CharSpecializedToWrongType(None)),
-            },
-            Expr::Str(contents) => Some(MonoExpr::Str(self.string_interns.get_id(
+                }
+            }
+            Expr::Str(contents) => MonoExpr::Str(self.string_interns.get_id(
                 self.arena,
                 // TODO should be able to remove this alloc_str() once canonical Expr stores an arena-allocated string.
                 self.arena.alloc_str(contents),
-            ))),
+            )),
             Expr::EmptyRecord => {
                 // Empty records are zero-sized and should be discarded.
-                None
+                MonoExpr::Unit
             }
             Expr::Record {
                 record_var: _,
@@ -172,10 +164,10 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
                 // Check for records with 0-1 fields before sorting or reserving a slice of IDs (which might be unnecessary).
                 // We'll check again after discarding zero-sized fields, because we might end up with 0 or 1 fields remaining.
                 if fields.len() <= 1 {
-                    return fields
-                        .into_iter()
-                        .next()
-                        .and_then(|(_, field)| self.to_mono_expr(&field.loc_expr.value));
+                    return match fields.into_iter().next() {
+                        Some((_, field)) => self.to_mono_expr(&field.loc_expr.value),
+                        None => MonoExpr::Unit,
+                    };
                 }
 
                 // Sort the fields alphabetically by name.
@@ -189,21 +181,50 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
                 let mut buf: Vec<(MonoExpr, Region)> =
                     Vec::with_capacity_in(fields.len(), self.arena);
 
-                buf.extend(
-                    // flat_map these so we discard all the fields that monomorphized to None
-                    fields.into_iter().flat_map(|(_name, field)| {
-                        self.to_mono_expr(&field.loc_expr.value)
-                            .map(|mono_expr| (mono_expr, field.loc_expr.region))
-                    }),
-                );
+                buf.extend(fields.into_iter().map(|(_name, field)| {
+                    (
+                        self.to_mono_expr(&field.loc_expr.value),
+                        field.loc_expr.region,
+                    )
+                }));
 
-                // If we ended up with exactly 1 field, return it unwrapped.
-                if buf.len() == 1 {
-                    return buf.pop().map(|(expr, _region)| expr);
+                let slice = unsafe {
+                    NonEmptySlice::from_slice_unchecked(self.mono_exprs.extend(buf.into_iter()))
+                };
+
+                MonoExpr::Struct(slice)
+            }
+            Expr::If {
+                cond_var: _,
+                branch_var,
+                branches,
+                final_else,
+            } => {
+                let branch_type = mono_from_var(*branch_var);
+
+                let mono_final_else = self.to_mono_expr(&final_else.value);
+                let final_else = self.mono_exprs.add(mono_final_else, final_else.region);
+
+                let mut branch_pairs: Vec<((MonoExpr, Region), (MonoExpr, Region))> =
+                    Vec::with_capacity_in(branches.len(), self.arena);
+
+                for (cond, body) in branches {
+                    let mono_cond = self.to_mono_expr(&cond.value);
+                    let mono_body = self.to_mono_expr(&body.value);
+
+                    branch_pairs.push(((mono_cond, cond.region), (mono_body, body.region)));
                 }
 
-                NonEmptySlice::from_slice(self.mono_exprs.extend(buf.iter().copied()))
-                    .map(MonoExpr::Struct)
+                let branches = self.mono_exprs.extend_pairs(branch_pairs.into_iter());
+
+                MonoExpr::If {
+                    branch_type,
+                    branches,
+                    final_else,
+                }
+            }
+            Expr::Var(symbol, var) | Expr::ParamsVar { symbol, var, .. } => {
+                MonoExpr::Lookup(*symbol, mono_from_var(*var))
             }
             // Expr::Call((fn_var, fn_expr, capture_var, ret_var), args, called_via) => {
             //     let opt_ret_type = mono_from_var(*var);
@@ -269,7 +290,6 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
             //         })
             //     }
             // }
-            // Expr::Var(symbol, var) => Some(MonoExpr::Lookup(*symbol, mono_from_var(*var)?)),
             // Expr::LetNonRec(def, loc) => {
             //     let expr = self.to_mono_expr(def.loc_expr.value, stmts)?;
             //     let todo = (); // TODO if this is an underscore pattern and we're doing a fn call, convert it to Stmt::CallVoid
@@ -287,7 +307,7 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
             //     todo!("split up the pattern into various Assign statements.");
             // }
             // Expr::LetRec(vec, loc, illegal_cycle_mark) => todo!(),
-            _ => todo!(),
+            _ => todo!("{:?}", can_expr),
             // Expr::List {
             //     elem_var,
             //     loc_elems,
@@ -308,12 +328,6 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
             //     branches,
             //     branches_cond_var,
             //     exhaustive,
-            // } => todo!(),
-            // Expr::If {
-            //     cond_var,
-            //     branch_var,
-            //     branches,
-            //     final_else,
             // } => todo!(),
             // Expr::Call(_, vec, called_via) => todo!(),
             // Expr::RunLowLevel { op, args, ret_var } => todo!(),
@@ -416,7 +430,7 @@ fn to_num(primitive: Primitive, val: IntValue, problems: &mut impl Push<Problem>
         })),
         Primitive::U128 => MonoExpr::Number(Number::U128(val.as_u128())),
         Primitive::I128 => MonoExpr::Number(Number::I128(val.as_i128())),
-        Primitive::Str | Primitive::Crash => {
+        Primitive::Str | Primitive::Crash | Primitive::Bool => {
             let problem = Problem::NumSpecializedToWrongType(Some(MonoType::Primitive(primitive)));
             problems.push(problem);
             MonoExpr::CompilerBug(problem)
@@ -443,7 +457,8 @@ fn to_frac(primitive: Primitive, val: f64, problems: &mut impl Push<Problem>) ->
         | Primitive::U128
         | Primitive::I128
         | Primitive::Str
-        | Primitive::Crash => {
+        | Primitive::Crash
+        | Primitive::Bool => {
             let problem = Problem::NumSpecializedToWrongType(Some(MonoType::Primitive(primitive)));
             problems.push(problem);
             MonoExpr::CompilerBug(problem)
@@ -466,7 +481,12 @@ fn char_to_int(primitive: Primitive, ch: char, problems: &mut impl Push<Problem>
         Primitive::I128 => MonoExpr::Number(Number::I128(ch as i128)),
         Primitive::I16 => MonoExpr::Number(Number::I16(ch as i16)),
         Primitive::I8 => MonoExpr::Number(Number::I8(ch as i8)),
-        Primitive::Str | Primitive::Dec | Primitive::F32 | Primitive::F64 | Primitive::Crash => {
+        Primitive::Str
+        | Primitive::Dec
+        | Primitive::F32
+        | Primitive::F64
+        | Primitive::Crash
+        | Primitive::Bool => {
             let problem = Problem::CharSpecializedToWrongType(Some(MonoType::Primitive(primitive)));
             problems.push(problem);
             MonoExpr::CompilerBug(problem)
