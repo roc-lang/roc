@@ -677,6 +677,7 @@ mod test_snapshots {
         pass/when_in_binops.expr,
         pass/when_in_function.expr,
         pass/when_in_function_python_style_indent.expr,
+        pass/when_in_list.expr,
         pass/when_in_parens.expr,
         pass/when_in_parens_indented.expr,
         pass/when_newline_after_condition.expr,
