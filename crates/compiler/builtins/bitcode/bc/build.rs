@@ -69,6 +69,10 @@ fn generate_bc_file(bitcode_path: &Path, zig_object: &str, file_name: &str) {
     let dest_bc_64bit = bc_path.to_str().expect("Invalid dest bc path");
     println!("Compiling 64-bit bitcode to: {dest_bc_64bit}");
 
+    // workaround for github.com/ziglang/zig/issues/9711
+    #[cfg(target_os = "macos")]
+    let _ = fs::remove_dir_all("./.zig-cache");
+
     let mut zig_cmd = zig();
 
     zig_cmd
