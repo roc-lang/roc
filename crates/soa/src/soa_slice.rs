@@ -292,6 +292,10 @@ impl<T> PairSlice<T> {
         self.0.len() / 2
     }
 
+    pub const fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     pub fn indices_iter(&self) -> impl Iterator<Item = (usize, usize)> {
         (self.0.start as usize..(self.0.start as usize + self.0.length as usize))
             .step_by(2)
