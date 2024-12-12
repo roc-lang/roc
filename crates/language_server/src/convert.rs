@@ -71,7 +71,6 @@ impl ToRocPosition for tower_lsp::lsp_types::Position {
 pub(crate) mod diag {
     use std::path::Path;
 
-    use log::debug;
     use roc_load::LoadingProblem;
     use roc_region::all::{LineInfo, Region};
     use roc_solve_problem::TypeError;
@@ -110,11 +109,9 @@ pub(crate) mod diag {
                 .get_region()
                 .unwrap_or(Region::new(
                     roc_region::all::Position::new(0),
-                    roc_region::all::Position::new(10000000),
+                    roc_region::all::Position::new(10_000_000),
                 ))
                 .to_range(line_info);
-
-            debug!("range is {:?}", range);
 
             let msg = match self {
                 LoadingProblem::FileProblem { filename, error } => {
@@ -200,7 +197,6 @@ pub(crate) mod diag {
                 ))
                 .to_range(fmt.line_info);
 
-            debug!("range is {:?}", range);
             let report = roc_reporting::report::can_problem(
                 fmt.alloc,
                 fmt.line_info,
