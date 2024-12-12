@@ -16,7 +16,7 @@ mkdir -p bench-folder/crates/compiler/builtins/bitcode/src
 mkdir -p bench-folder/target/release/deps
 cp "crates/cli/tests/benchmarks/"*".roc" bench-folder/crates/cli/tests/benchmarks/
 cp -r crates/cli/tests/benchmarks/platform bench-folder/crates/cli/tests/benchmarks/
-cp crates/compiler/builtins/bitcode/src/str.zig bench-folder/crates/compiler/builtins/bitcode/src
+cp crates/compiler/builtins/bitcode/src/*.zig bench-folder/crates/compiler/builtins/bitcode/src
 cp target/release/roc bench-folder/target/release
 
 # copy the most recent time bench to bench-folder
