@@ -19,7 +19,7 @@ fn main() {
     // dunce can be removed once ziglang/zig#5109 is fixed
     let bitcode_path = dunce::canonicalize(Path::new(".")).unwrap().join("..");
 
-    // workaround for github.com/ziglang/zig/issues/9711
+    // workaround for github.com/ziglang/zig/issues/20501
     #[cfg(target_os = "macos")]
     let zig_cache_dir = tempdir().expect("Failed to create temp directory for zig cache");
     #[cfg(target_os = "macos")]
@@ -69,7 +69,7 @@ fn generate_bc_file(bitcode_path: &Path, zig_object: &str, file_name: &str) {
     let dest_bc_64bit = bc_path.to_str().expect("Invalid dest bc path");
     println!("Compiling 64-bit bitcode to: {dest_bc_64bit}");
 
-    // workaround for github.com/ziglang/zig/issues/9711
+    // workaround for github.com/ziglang/zig/issues/20501
     #[cfg(target_os = "macos")]
     let _ = fs::remove_dir_all("./.zig-cache");
 

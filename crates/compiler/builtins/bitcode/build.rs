@@ -19,7 +19,7 @@ fn main() {
     // dunce can be removed once ziglang/zig#5109 is fixed
     let bitcode_path = dunce::canonicalize(Path::new(".")).unwrap();
 
-    // workaround for github.com/ziglang/zig/issues/9711
+    // workaround for github.com/ziglang/zig/issues/20501
     #[cfg(target_os = "macos")]
     let zig_cache_dir = tempdir().expect("Failed to create temp directory for zig cache");
     #[cfg(target_os = "macos")]
@@ -69,6 +69,10 @@ fn generate_object_file(bitcode_path: &Path, zig_object: &str, object_file_name:
     let src_obj = src_obj_path.to_str().expect("Invalid src object path");
 
     println!("Compiling zig object `{zig_object}` to: {src_obj}");
+
+    // workaround for github.com/ziglang/zig/issues/20501
+    #[cfg(target_os = "macos")]
+    let _ = fs::remove_dir_all("./.zig-cache");
 
     let mut zig_cmd = zig();
 

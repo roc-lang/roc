@@ -1351,7 +1351,7 @@ fn run_build_command(mut command: Command, file_to_build: &str, flaky_fail_count
     if !cmd_output.status.success() {
         match std::str::from_utf8(&cmd_output.stderr) {
             Ok(stderr) => {
-                // flaky error seen on macos 12 apple silicon, related to https://github.com/ziglang/zig/issues/9711
+                // flaky error seen on macos 12 apple silicon, related to https://github.com/ziglang/zig/issues/20501
                 if stderr.contains("unable to save cached ZIR code") {
                     if flaky_fail_counter < max_flaky_fail_count {
                         run_build_command(command, file_to_build, flaky_fail_counter + 1)
