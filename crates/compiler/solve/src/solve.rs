@@ -16,6 +16,7 @@ use roc_can::abilities::{AbilitiesStore, MemberSpecializationInfo};
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::{
     Cycle, FxCallConstraint, FxSuffixConstraint, FxSuffixKind, LetConstraint, OpportunisticResolve,
+    TryTargetConstraint,
 };
 use roc_can::expected::{Expected, PExpected};
 use roc_can::module::ModuleParams;
@@ -905,6 +906,96 @@ fn solve(
                     | Content::Alias(_, _, _, _)
                     | Content::RangedNumber(_) => {
                         internal_error!("FlexToPure: unexpected content: {:?}", content)
+                    }
+                }
+            }
+            TryTarget(index) => {
+                let try_target_constraint = &env.constraints.try_target_constraints[index.index()];
+
+                let TryTargetConstraint {
+                    target_type_index,
+                    ok_payload_var,
+                    err_payload_var,
+                    region,
+                    kind,
+                } = try_target_constraint;
+
+                let target_actual = either_type_index_to_var(
+                    env,
+                    rank,
+                    problems,
+                    abilities_store,
+                    obligation_cache,
+                    &mut can_types,
+                    aliases,
+                    *target_type_index,
+                );
+
+                let wanted_result_ty = can_types.from_old_type(&Type::TagUnion(
+                    vec![
+                        ("Ok".into(), vec![Type::Variable(*ok_payload_var)]),
+                        ("Err".into(), vec![Type::Variable(*err_payload_var)]),
+                    ],
+                    TypeExtension::Closed,
+                ));
+                let wanted_result_var = type_to_var(
+                    env,
+                    rank,
+                    problems,
+                    abilities_store,
+                    obligation_cache,
+                    &mut can_types,
+                    aliases,
+                    wanted_result_ty,
+                );
+
+                match unify(
+                    &mut env.uenv(),
+                    target_actual,
+                    wanted_result_var,
+                    UnificationMode::EQ,
+                    Polarity::OF_VALUE,
+                ) {
+                    Success {
+                        vars,
+                        must_implement_ability,
+                        lambda_sets_to_specialize,
+                        extra_metadata: _,
+                    } => {
+                        env.introduce(rank, &vars);
+
+                        if !must_implement_ability.is_empty() {
+                            let new_problems = obligation_cache.check_obligations(
+                                env.subs,
+                                abilities_store,
+                                must_implement_ability,
+                                AbilityImplError::BadExpr(
+                                    *region,
+                                    Category::TryTarget,
+                                    target_actual,
+                                ),
+                            );
+                            problems.extend(new_problems);
+                        }
+                        compact_lambdas_and_check_obligations(
+                            env,
+                            problems,
+                            abilities_store,
+                            obligation_cache,
+                            awaiting_specializations,
+                            lambda_sets_to_specialize,
+                        );
+
+                        state
+                    }
+                    Failure(vars, actual_type, _expected_type, _bad_impls) => {
+                        env.introduce(rank, &vars);
+
+                        let problem = TypeError::InvalidTryTarget(*region, actual_type, *kind);
+
+                        problems.push(problem);
+
+                        state
                     }
                 }
             }

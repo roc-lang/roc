@@ -129,14 +129,18 @@ impl MonoExprs {
         })
     }
 
-    pub fn extend(
-        &mut self,
-        exprs: impl Iterator<Item = (MonoExpr, Region)> + Clone,
-    ) -> Slice<MonoExpr> {
+    pub fn extend(&mut self, exprs: impl Iterator<Item = (MonoExpr, Region)>) -> Slice<MonoExpr> {
         let start = self.exprs.len();
 
-        self.exprs.extend(exprs.clone().map(|(expr, _region)| expr));
-        self.regions.extend(exprs.map(|(_expr, region)| region));
+        let (size_hint, _) = exprs.size_hint();
+
+        self.exprs.reserve(size_hint);
+        self.regions.reserve(size_hint);
+
+        for (expr, region) in exprs {
+            self.exprs.push(expr);
+            self.regions.push(region);
+        }
 
         let len = self.exprs.len() - start;
 
@@ -278,6 +282,8 @@ pub enum MonoExpr {
         captured_symbols: Slice<(IdentId, MonoTypeId)>,
         recursive: Recursive,
     },
+
+    Unit,
 
     /// A record literal or a tuple literal.
     /// These have already been sorted alphabetically.

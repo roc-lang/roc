@@ -1,0 +1,24 @@
+@0-9 SpaceAfter(
+    Tuple(
+        [
+            @1-6 ParensAround(
+                SpaceAfter(
+                    Num(
+                        "0",
+                    ),
+                    [
+                        LineComment(
+                            "",
+                        ),
+                    ],
+                ),
+            ),
+            @7-8 Tag(
+                "L",
+            ),
+        ],
+    ),
+    [
+        Newline,
+    ],
+)

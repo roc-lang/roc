@@ -46,8 +46,6 @@ macro_rules! instruction_memargs {
 
 #[derive(Debug)]
 pub struct CodeBuilder<'a> {
-    pub arena: &'a Bump,
-
     /// The main container for the instructions
     code: Vec<'a, u8>,
 
@@ -81,7 +79,6 @@ pub struct CodeBuilder<'a> {
 impl<'a> CodeBuilder<'a> {
     pub fn new(arena: &'a Bump) -> Self {
         CodeBuilder {
-            arena,
             code: Vec::with_capacity_in(1024, arena),
             insertions: Vec::with_capacity_in(32, arena),
             insert_bytes: Vec::with_capacity_in(64, arena),

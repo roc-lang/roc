@@ -1,14 +1,33 @@
+use std::path::Path;
+
 use bumpalo::Bump;
-use roc_fmt::{annotation::Formattable, header::fmt_header};
+use roc_can::desugar;
+use roc_can::env::Env;
+use roc_can::expr::canonicalize_expr;
+use roc_can::scope::Scope;
+use roc_error_macros::set_panic_not_exit;
+use roc_fmt::{annotation::Formattable, header::fmt_header, MigrationFlags};
+use roc_module::ident::QualifiedModuleName;
+use roc_module::symbol::{IdentIds, Interns, ModuleIds, PackageModuleIds, Symbol};
+use roc_parse::ast::RecursiveValueDefIter;
+use roc_parse::ast::ValueDef;
+use roc_parse::header::parse_module_defs;
+use roc_parse::parser::Parser;
+use roc_parse::parser::SyntaxError;
+use roc_parse::state::State;
+use roc_parse::test_helpers::parse_loc_with;
+use roc_parse::{ast::Malformed, normalize::Normalize};
 use roc_parse::{
-    ast::{Defs, Expr, FullAst, Header, Malformed, SpacesBefore},
-    header::parse_module_defs,
-    normalize::Normalize,
-    parser::{Parser, SyntaxError},
-    state::State,
-    test_helpers::{parse_defs_with, parse_expr_with, parse_header_with},
+    ast::{Defs, Expr, FullAst, Header, SpacesBefore},
+    test_helpers::{parse_defs_with, parse_header_with},
 };
+use roc_region::all::Loc;
+use roc_region::all::Region;
 use roc_test_utils::assert_multiline_str_eq;
+use roc_types::{
+    subs::{VarStore, Variable},
+    types::{AliasVar, Type},
+};
 
 use roc_fmt::Buf;
 
@@ -74,7 +93,7 @@ pub enum Output<'a> {
 
     ModuleDefs(Defs<'a>),
 
-    Expr(Expr<'a>),
+    Expr(Loc<Expr<'a>>),
 
     Full(FullAst<'a>),
 }
@@ -82,7 +101,8 @@ pub enum Output<'a> {
 impl<'a> Output<'a> {
     pub fn format(&self) -> InputOwned {
         let arena = Bump::new();
-        let mut buf = Buf::new_in(&arena);
+        let flags = MigrationFlags::new(false);
+        let mut buf = Buf::new_in(&arena, flags);
         match self {
             Output::Header(header) => {
                 fmt_header(&mut buf, header);
@@ -113,6 +133,107 @@ impl<'a> Output<'a> {
             Output::ModuleDefs(defs) => format!("{defs:#?}\n"),
             Output::Expr(expr) => format!("{expr:#?}\n"),
             Output::Full { .. } => format!("{self:#?}\n"),
+        }
+    }
+
+    pub fn canonicalize(&self, arena: &Bump, src: &str) {
+        set_panic_not_exit(true); // can has a bunch of internal_error! calls
+
+        match self {
+            Output::Header(_) => {}
+            Output::ModuleDefs(_) => {
+                // TODO: canonicalize module defs
+            }
+            Output::Full(_) => {
+                // TODO: canonicalize full ast
+            }
+            Output::Expr(loc_expr) => {
+                let mut var_store = VarStore::default();
+                let mut imported: Vec<(QualifiedModuleName, Region)> = vec![];
+
+                let empty_defs = Defs::default();
+                let mut it = RecursiveValueDefIter::new(&empty_defs);
+                it.push_pending_from_expr(&loc_expr.value);
+                for (def, region) in it {
+                    if let ValueDef::ModuleImport(import) = def {
+                        imported.push((import.name.value.into(), *region));
+                    }
+                }
+
+                let mut module_ids = ModuleIds::default();
+                let mut qualified_module_ids = PackageModuleIds::default();
+                let mut dep_idents = IdentIds::exposed_builtins(0);
+
+                // Make sure the module_ids has ModuleIds for all our deps,
+                // then record those ModuleIds in can_module_ids for later.
+                // For each of our imports, add an entry to deps_by_name
+                //
+                // e.g. for `import pf.Foo exposing [bar]`, add `Foo` to deps_by_name
+                //
+                // Also build a list of imported_values_to_expose (like `bar` above.)
+                for (qualified_module_name, _region) in imported.into_iter() {
+                    let pq_module_name = qualified_module_name.into_pq_module_name(None);
+                    let module_id = qualified_module_ids.get_or_insert(&pq_module_name);
+                    dep_idents.get_or_insert(module_id);
+                }
+
+                let home = module_ids.get_or_insert(&"Test".into());
+
+                let mut scope = Scope::new(
+                    home,
+                    "TestPath".into(),
+                    IdentIds::default(),
+                    Default::default(),
+                );
+
+                let mut env = Env::new(
+                    arena,
+                    src,
+                    home,
+                    Path::new("Test.roc"),
+                    &dep_idents,
+                    &qualified_module_ids,
+                    None,
+                    roc_can::env::FxMode::PurityInference,
+                );
+
+                // Desugar operators (convert them to Apply calls, taking into account
+                // operator precedence and associativity rules), before doing other canonicalization.
+                //
+                // If we did this *during* canonicalization, then each time we
+                // visited a BinOp node we'd recursively try to apply this to each of its nested
+                // operators, and then again on *their* nested operators, ultimately applying the
+                // rules multiple times unnecessarily.
+                let loc_expr = desugar::desugar_expr(&mut env, &mut scope, loc_expr);
+
+                scope.add_alias(
+                    Symbol::NUM_INT,
+                    Region::zero(),
+                    vec![Loc::at_zero(AliasVar::unbound(
+                        "a".into(),
+                        Variable::EMPTY_RECORD,
+                    ))],
+                    vec![],
+                    Type::EmptyRec,
+                    roc_types::types::AliasKind::Structural,
+                );
+
+                let (_loc_expr, _output) = canonicalize_expr(
+                    &mut env,
+                    &mut var_store,
+                    &mut scope,
+                    Region::zero(),
+                    &loc_expr.value,
+                );
+
+                let mut all_ident_ids = IdentIds::exposed_builtins(1);
+                all_ident_ids.insert(home, scope.locals.ident_ids);
+
+                let _interns = Interns {
+                    module_ids: env.qualified_module_ids.clone().into_module_ids(),
+                    all_ident_ids,
+                };
+            }
         }
     }
 }
@@ -162,7 +283,7 @@ impl<'a> Input<'a> {
             }
 
             Input::Expr(input) => {
-                let expr = parse_expr_with(arena, input)?;
+                let expr = parse_loc_with(arena, input).map_err(|e| e.problem)?;
                 Ok(Output::Expr(expr))
             }
 
@@ -196,6 +317,7 @@ impl<'a> Input<'a> {
         &self,
         handle_formatted_output: impl Fn(Input),
         check_idempotency: bool,
+        canonicalize_mode: Option<bool>,
     ) {
         let arena = Bump::new();
 
@@ -239,7 +361,7 @@ impl<'a> Input<'a> {
                 self.as_str(),
                 output.as_ref().as_str(),
                 actual,
-                reparsed_ast_normalized
+                reparsed_ast
             );
         }
 
@@ -256,6 +378,28 @@ impl<'a> Input<'a> {
                 eprintln!("Reformatting the formatted code changed it again, as follows:\n\n");
 
                 assert_multiline_str_eq!(output.as_ref().as_str(), reformatted.as_ref().as_str());
+            }
+        }
+
+        if let Some(expect_panic) = canonicalize_mode {
+            if expect_panic {
+                let text = self.as_str();
+                let res = std::panic::catch_unwind(|| {
+                    let new_arena = Bump::new();
+                    actual.canonicalize(&new_arena, text);
+                });
+
+                assert!(
+                    res.is_err(),
+                    "Canonicalize was expected to panic, but it did not. \
+                    If you're running test_snapshots, you may need to remove this test from \
+                    the list of tests that are expected to panic (great!), \
+                    in `fn expect_canonicalize_panics`"
+                );
+            } else {
+                // TODO grab the output here and assert things about it.
+                // For now we just make sure that it doesn't crash on this input
+                actual.canonicalize(&arena, self.as_str());
             }
         }
     }

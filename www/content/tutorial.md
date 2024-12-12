@@ -96,14 +96,14 @@ Roc will respect [order of operations](https://en.wikipedia.org/wiki/Order_of_op
 
 Let's try calling a function:
 
-<pre><samp><span class="repl-prompt">Str.concat "Hi " "there!"</span>
+<pre><samp><span class="repl-prompt">Str.concat "Hi " "there."</span>
 
-<span class="literal">"Hi there!"</span> <span class="colon">:</span> Str
+<span class="literal">"Hi there."</span> <span class="colon">:</span> Str
 </samp></pre>
 
-Here we're calling the `Str.concat` function and passing two arguments: the string `"Hi "` and the string `"there!"`. This _concatenates_ the two strings together (that is, it puts one after the other) and returns the resulting combined string of `"Hi there!"`.
+Here we're calling the `Str.concat` function and passing two arguments: the string `"Hi "` and the string `"there."`. This _concatenates_ the two strings together (that is, it puts one after the other) and returns the resulting combined string of `"Hi there."`.
 
-Note that in Roc, we don't need parentheses or commas to call functions. We don't write `Str.concat("Hi ", "there!")` but rather `Str.concat "Hi " "there!"`.
+Note that in Roc, we don't need parentheses or commas to call functions. We don't write `Str.concat("Hi ", "there.")` but rather `Str.concat "Hi " "there."`.
 
 That said, just like in the arithmetic example above, we can use parentheses to specify how nested function calls should work. For example, we could write this:
 
@@ -137,12 +137,12 @@ We'll get into more depth about modules later, but for now you can think of a mo
 
 An alternative syntax for `Str.concat` is _string interpolation_, which looks like this:
 
-<pre><samp class="repl-prompt"><span class="literal">"<span class="str-esc">$(</span><span class="str-interp">greeting</span><span class="str-esc">)</span> there, <span class="str-esc">$(</span><span class="str-interp">audience</span><span class="str-esc">)</span>!"</span></samp></pre>
+<pre><samp class="repl-prompt"><span class="literal">"<span class="str-esc">$(</span><span class="str-interp">greeting</span><span class="str-esc">)</span> there, <span class="str-esc">$(</span><span class="str-interp">audience</span><span class="str-esc">)</span>."</span></samp></pre>
 
 This is syntax sugar for calling `Str.concat` several times, like so:
 
 ```roc
-Str.concat greeting (Str.concat " there, " (Str.concat audience "!"))
+Str.concat greeting (Str.concat " there, " (Str.concat audience "."))
 ```
 
 You can put entire single-line expressions inside the parentheses in string interpolation. For example:
@@ -163,7 +163,7 @@ app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/downlo
 import pf.Stdout
 
 main =
-    Stdout.line! "I'm a Roc application!"
+    Stdout.line! "Hi there, from inside a Roc app. 🎉"
 ```
 
 Try running this with:
@@ -172,7 +172,7 @@ Try running this with:
 
 You should see a message about a file being downloaded, followed by this:
 
-<samp>I'm a Roc application!</samp>
+<samp>Hi there, from inside a Roc app. 🎉</samp>
 
 Congratulations, you've written your first Roc application! We'll go over what the parts above `main` do later, but let's play around a bit first.
 
@@ -205,7 +205,7 @@ A definition names an expression.
 - The next def assigns the name `total` to the expression `Num.toStr (birds + iguanas)`.
 - The last def assigns the name `main` to an expression which returns a `Task`. We'll [discuss tasks later](#tasks).
 
-Once we have a def, we can use its name in other expressions. For example, the `total` expression refers to `birds` and `iguanas`, and `Stdout.line "There are $(total) animals."` refers to `total`.
+Once we have a def, we can use its name in other expressions. For example, the `total` expression refers to `birds` and `iguanas`, and `Stdout.line! "There are $(total) animals."` refers to `total`.
 
 You can name a def using any combination of letters and numbers, but they have to start with a lowercase letter.
 
@@ -816,6 +816,7 @@ when List.get ["a", "b", "c"] index is
 There's also `List.first`, which always gets the first element, and `List.last` which always gets the last. They return `Err ListWasEmpty` instead of `Err OutOfBounds`, because the only way they can fail is if you pass them an empty list!
 
 ### [Error Handling](#error-handling) {#error-handling}
+
 The `List` functions such as `List.get`, `List.first`, and `List.last` demonstrate a common pattern in Roc: operations that can fail returning either an `Ok` tag with the answer (if successful), or an `Err` tag with another tag describing what went wrong (if unsuccessful). In fact, it's such a common pattern that there's a whole module called `Result` which deals with these two tags. Here are some examples of `Result` functions:
 
 ```roc
@@ -848,25 +849,7 @@ listGet = \index ->
 
 `Result.try` is often used to chain two functions that return `Result` (as in the example above). This prevents you from needing to add error handling code at every intermediate step.
 
-Roc also has a special "try" operator `?`, which is convenient syntax sugar for `Result.try`. For example, consider the following `getLetter` function:
-
-```roc
-getLetter : Str -> Result Str [OutOfBounds, InvalidNumStr]
-getLetter = \indexStr ->
-    index = Str.toU64? indexStr
-    List.get ["a", "b", "c", "d"] index
-```
-
-Notice that we appended `?` to the function name `Str.toU64`. Here's what this does:
-* If the `Str.toU64` function returns an `Ok` value, then its payload is unwrapped.
-    - For example, if we call `getLetter "2"`, then `Str.toU64` returns `Ok 2`, and the `?` operator unwraps the integer 2, so `index` is set to 2 (not `Ok 2`). Then the `List.get` function is called and returns `Ok "c"`.
-* If the `Str.toU64` function returns an `Err` value, then the `?` operator immediately interrupts the `getLetter` function and makes it return this error.
-    - For example, if we call `getLetter "abc"`, then the call to `Str.toU64` returns `Err InvalidNumStr`, and the `?` operator ensures that the `getLetter` function returns this error immediately, without executing the rest of the function.
-
-Thanks to the `?` operator, your code can focus on the "happy path" (where nothing fails) and simply bubble up to the caller any error that might occur. Your error handling code can be neatly separated, and you can rest assured that you won't forget to handle any errors, since the compiler will let you know. See this [code example](https://github.com/roc-lang/examples/blob/main/examples/Results/main.roc) for more details on error handling.
-
 Now let's get back to lists!
-
 
 ### [Walking the elements in a list](#walking-the-elements-in-a-list) {#walking-the-elements-in-a-list}
 
@@ -1454,7 +1437,7 @@ Let's clear up any confusion with an example:
 main =
     expect 1 == 2
 
-    Stdout.line "Hello, World!"
+    Stdout.line! "Hi there."
 
 double = \num ->
     expect num > -1
@@ -1464,8 +1447,8 @@ double = \num ->
 expect double 0 == 0
 ```
 
-- `roc build` wil run `main`, ignore `expect 1 == 2` and just print `Hello, World!`.
-- `roc dev` will run `main`, tell you `expect 1 == 2` failed but will still print `Hello, World!`.
+- `roc build` wil run `main`, ignore `expect 1 == 2` and just print `Hi there.`.
+- `roc dev` will run `main`, tell you `expect 1 == 2` failed but will still print `Hi there`.
 - `roc test` will run `expect double 0 == 0` followed by `expect num > -1` and will print how many top level expects passed: `0 failed and 1 passed in 100 ms.`.
 
 ## [Modules](#modules) {#modules}
@@ -1532,7 +1515,7 @@ The `import pf.Stdout` line says that we want to import the `Stdout` module from
 This import has a direct interaction with our definition of `main`. Let's look at that again:
 
 ```roc
-main = Stdout.line! "I'm a Roc application!"
+main = Stdout.line! "Hi there, from inside a Roc app. 🎉"
 ```
 
 Here, `main` is calling a function called `Stdout.line`. More specifically, it's calling a function named `line` which is exposed by a module named `Stdout`.
@@ -1561,7 +1544,7 @@ import uuid.Generate as Uuid
 import pf.Stdout exposing [line]
 
 main =
-    line! "Hello, World!"
+    line! "Hi there, from inside a Roc app. 🎉"
 ```
 
 ### [Package Modules](#package-modules) {#package-modules}
@@ -1615,6 +1598,8 @@ See the [Ingest Files Example](https://www.roc-lang.org/examples/IngestFiles/REA
 
 ## [Tasks](#tasks) {#tasks}
 
+Note: [Tasks will soon dissolve entirely for app developers](#purity-inference), but today they're still critical.
+
 Tasks are provided in a builtin `Task` module like the `List`, `Str` modules. They're an important part of building Roc applications, so let's continue using the [basic-cli](https://github.com/roc-lang/basic-cli) platform we've been using up to this point as an example!
 
 In the `basic-cli` platform, here are four operations we can do:
@@ -1626,7 +1611,7 @@ In the `basic-cli` platform, here are four operations we can do:
 
 We'll use these four operations to learn about tasks.
 
-Let's start with a basic "Hello World" program.
+Let's revisit that first application.
 
 ```roc
 app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.17.0/lZFLstMUCUvd5bjnnpYromZJXkQUrdhbva4xdBInicE.tar.br" }
@@ -1634,10 +1619,10 @@ app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/downlo
 import pf.Stdout
 
 main =
-    Stdout.line! "Hello, World!"
+    Stdout.line! "Hi there, from inside a Roc app. 🎉"
 ```
 
-This code prints "Hello, World!" to the [standard output](<https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)>). `Stdout.line` has this type:
+This code prints "Hi there, from inside a Roc app. 🎉" to the [standard output](<https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)>). `Stdout.line` has this type:
 
 ```roc
 Stdout.line : Str -> Task {} *
@@ -1645,9 +1630,9 @@ Stdout.line : Str -> Task {} *
 
 A `Task` represents an _effect_; an interaction with state outside your Roc program, such as the terminal's standard output, or a file.
 
- Did you notice the `!` suffix after `Stdout.line`? This operator is similar to the [`?` try operator](https://www.roc-lang.org/tutorial#error-handling), but it is used on functions that return a `Task` instead of a `Result` (we'll discuss [the `!` operator in more depth](https://www.roc-lang.org/tutorial#the-!-suffix) later in this tutorial).
+The `!` after `Stdout.line` is an operator, similar to the [`?` "try" operator](https://www.roc-lang.org/tutorial#error-handling), but it is used on functions that return a `Task` instead of a `Result` (we'll discuss [the `!` operator in more depth](https://www.roc-lang.org/tutorial#the-!-"await"-operator) later in this tutorial).
 
-When we set `main` to be a `Task`, the task will get run when we run our program. Here, we've set `main` to be a task that writes `"Hello, World!"` to `stdout` when it gets run, so that's what our program does!
+When we set `main` to be a `Task`, the task will get run when we run our program. Here, we've set `main` to be a task that writes `"Hi there, from inside a Roc app. 🎉"` to `stdout` when it gets run, so that's what our program does!
 
 `Task` has two type parameters: the type of value it produces when it finishes running, and any errors that might happen when running it. `Stdout.line` has the type `Task {} *` because it doesn't produce any values when it finishes (hence the `{}`) and there aren't any errors that can happen when it runs (hence the `*`).
 
@@ -1811,9 +1796,9 @@ This is a useful technique to use when we don't want to write out a bunch of err
 - If we're using an editor that supports it, hovering over the `_` might display the inferred type that goes there.
 - We can put an obviously wrong type in there (e.g. replace the `{}` with `Str`, which is totally wrong) and look at the compiler error to see what it inferred as the correct type.
 
-### [The ! suffix](#the-!-suffix) {#the-!-suffix}
+### [The `!` postfix "await" operator](#the-postfix-await-operator) {#the-postfix-await-operator}
 
-The `!` suffix operator is syntax sugar for the `Task.await` function, which has this type:
+The `!` postfix operator is syntax sugar for the `Task.await` function, which has this type:
 
 ```roc
 Task.await : Task a err, (a -> Task b err) -> Task b err
@@ -1827,7 +1812,7 @@ More specifically, `Task.await` returns a `Task` which:
 2. If it fails with some error, returns a `Task` which fails with that same error. (So if the given `Task a err` fails, the `a -> Task b err` function never gets called.)
 3. If it succeeds (meaning it produces a success value which has the type `a`), pass the value it succeeded with to the `a -> Task b err` function. Whatever `Task b err` that function returns will be the `Task b err` the entire `Task.await` call returns.
 
-The `!` suffix is syntax sugar for connecting tasks using `Task.await`. Let's revisit our earlier example here:
+The `!` postfix operator is syntax sugar for connecting tasks using `Task.await`. Let's revisit our earlier example here:
 
 ```roc
 Stdout.line! "Type in something and press Enter:"
@@ -1845,7 +1830,49 @@ Task.await (Stdout.line "Type in something and press Enter:") \_ ->
 
 Each of the `!` operators desugars to a `Task.await` call, except for the last one (which desugars to nothing because there's no task after it to connect to; if we wanted to, we could have left out that `!` without changing what the program does, but it looks more consistent to have both `Stdout.line!` calls end in a `!`).
 
-If you like, you can always call `Task.await` directly instead of using `!` (since `!` is nothing more than syntax sugar for `Task.await`), but it's a stylistic convention in the Roc ecosystem to use `!` instead.
+If you prefer, you can always...
+
+- call `Task.await` directly instead of using `!`
+- leave out the last/only `!` in a block of expressions
+
+...without changing what the program does, but it's a stylistic convention in the Roc ecosystem to use `!` wherever possible.
+
+### [Ignoring informationless return values](#ignoring-informationless-return-values) {#ignoring-informationless-return-values}
+
+The compiler warns us about any unused variable, but as we saw before, if we don't intend to use a variable then we can name it `_` to clarify intent and silence the warning.
+
+Furthermore, if a variable can't possibly contain any useful information, then we can ignore it entirely.
+
+Let's revisit our earlier example again:
+
+```roc
+run =
+    Stdout.line! "Type in something and press Enter:"
+    input = Stdin.line!
+    Stdout.line! "Your input was: $(input)"
+```
+
+It looks like this block goes "expression, assignment, expression", but expressions are only allowed on the last line of a block. What's happening here?
+
+Since `Stdout.line : Str -> Task {} *`, the above is equivalent to:
+
+```roc
+run =
+    alwaysAnEmptyRecord = Stdout.line! "Type in something and press Enter:"
+    input = Stdin.line!
+    Stdout.line! "Your input was: $(input)"
+```
+
+We don't intend to use `alwaysAnEmptyRecord`, so we can rename it to `_`.
+
+```roc
+run =
+    _ = Stdout.line! "Type in something and press Enter:"
+    input = Stdin.line!
+    Stdout.line! "Your input was: $(input)"
+```
+
+Furthermore, since the type of `_` is `{}` (the only informationless type in Roc), the compiler allows us to delete the `_ =` entirely. `{}` is the only type for which Roc allows this ignoring/deletion.
 
 ### [Tagging errors](#tagging-errors) {#tagging-errors}
 
@@ -1928,14 +1955,93 @@ when err is
     StdinErr e -> Exit 2 "Error writing to stdin: $(Inspect.toStr e)"
 ```
 
+### [The early `return` keyword](#the-early-return-keyword) {#the-early-return-keyword}
+
+The `return` keyword can interrupt a function and return any value we want.
+
+This is rarely necessary, due to Roc's powerful syntax for expressions and pattern matching, but it's included as a comfort to developers familiar with its frequent use in primarily-imperative programing languages.
+
+For example:
+
+```roc
+stoplightStr : Str
+stoplightStr =
+    stoplightColor =
+        if thisIsABadTime then
+            return "Hey, listen, I just don't want to do this."
+        else
+            previousStopLightColor
+    when stoplightColor is
+        Red -> "red"
+        Green | Yellow if contrast > 75 -> "not red, but very high contrast"
+        Green | Yellow if contrast > 50 -> "not red, but high contrast"
+        Green | Yellow -> "not red"
+```
+
 ## [Examples](#examples) {#examples}
 
 Well done on making it this far!
 
 We've covered all of the basic syntax and features of Roc in this Tutorial. You should now have a good foundation and be ready to start writing your own applications.
 
-You can continue reading through more advanced topics below, or perhaps checkout some of the [Examples](/examples) for more a detailed exploration of ways to do various things.
+You can continue reading through more-advanced topics below, or perhaps checkout some of the [Examples](/examples) for more a detailed exploration of ways to do various things.
 
+## [Under Construction](#under-construction) {#under-construction}
+
+Here are some features that are either coming soon or leaving soon. You may see these used in others' code, but for now you can choose to ignore them all!
+
+### [Purity inference (PI)](#purity-inference) {#purity-inference}
+
+STATUS: Almost ready! For now, this may only work on supporting platforms and supported OSes.
+
+Soon, the `!` postfix "await" operator will evolve into a suffix character inside function names themselves, marking them as effectful. For example, a platform supporting PI may evolve from requiring `main` to requiring `main!`.
+
+Effectful functions are also identifiable from their type signature alone, using `a => b` instead of `a -> b`.
+
+Additionally, app developers will no longer learn or interact with `Task`s as a concept, as they shift to be a lower-level platform implementation detail.
+
+For more information, see [this recent talk](https://www.youtube.com/watch?v=42TUAKhzlRI) and [relevant Zulip threads](https://roc.zulipchat.com/#narrow/search/purity.20inference).
+
+### [The `try` keyword](#the-try-keyword) {#the-try-keyword}
+
+STATUS: Almost ready! For now, this may only work within PI contexts.
+
+Note: Right now, this can lead to confusing and unhelpful error messages.
+
+Roc has a `try` keyword, which is convenient syntax sugar for `Result.try`. For example, consider the following `getLetter` function:
+
+```roc
+getLetter : Str -> Result Str [OutOfBounds, InvalidNumStr]
+getLetter = \indexStr ->
+    index = try Str.toU64 indexStr
+    List.get ["a", "b", "c", "d"] index
+```
+
+Here's what this does:
+
+- If the `Str.toU64` function returns an `Ok` value, then `try` will return what's inside the `Ok`. For example:
+  - If we call `getLetter "2"`, then `Str.toU64` returns `Ok 2`, and the `try` unwraps to the integer 2, so `index` is set to 2 (not `Ok 2`). Then the `List.get` function is called and returns `Ok "c"`.
+- If the `Str.toU64` function returns an `Err` value, then the `try` keyword immediately interrupts the `getLetter` function and makes it return this error.
+  - For example, if we call `getLetter "abc"`, then the call to `Str.toU64` returns `Err InvalidNumStr`, and the `try` keyword ensures that the `getLetter` function returns this error immediately, without executing the rest of the function.
+
+Thanks to the `try` keyword, your code can focus on the "happy path" (where nothing fails) and simply bubble up to the caller any error that might occur. Your error handling code can be neatly separated, and you can rest assured that you won't forget to handle any errors, since the compiler will let you know. See this [code example](https://github.com/roc-lang/examples/blob/main/examples/Results/main.roc) for more details on error handling.
+
+### [The `?` postfix "try" operator](#the-postfix-try-operator) {#the-postfix-try-operator}
+
+STATUS: Deprecated! For now, this may only work within non-PI contexts.
+
+Note: Right now, this can lead to confusing and unhelpful error messages.
+
+Roc also has a `?` postfix operator, which behaves similar to the `try` keyword. An example:
+
+```roc
+getLetter : Str -> Result Str [OutOfBounds, InvalidNumStr]
+getLetter = \indexStr ->
+    index = Str.toU64? indexStr
+    List.get ["a", "b", "c", "d"] index
+```
+
+If you're working with [purity inference](#purity-inference) you'll want to use `try` and if your code is using `Task` you'll want to use `?.`
 ## [Advanced Concepts](#advanced-concepts) {#advanced-concepts}
 
 Here are some concepts you likely won't need as a beginner, but may want to know about eventually. This is listed as an appendix rather than the main tutorial, to emphasize that it's totally fine to stop reading here and go build things!
@@ -2303,7 +2409,7 @@ If you want to see other examples of using record builders, look at the [Record 
 
 These are reserved keywords in Roc. You can't choose any of them as names, except as record field names.
 
-`as`, `crash`, `dbg`, `else`, `expect`, `expect-fx`, `if`, `import`, `is`, `then`, `when`
+`as`, `crash`, `dbg`, `else`, `expect`, `expect-fx`, `if`, `import`, `is`, `return`, `then`, `try`, `when`
 
 Other keywords are used only in specific places, so they are not reserved. This includes:
 
@@ -2313,31 +2419,31 @@ Other keywords are used only in specific places, so they are not reserved. This 
 
 Here are various Roc expressions involving operators, and what they desugar to.
 
-| Expression                   | Desugars To        |
-| ---------------------------- | ------------------ |
-| `a + b`                      | `Num.add a b`      |
-| `a - b`                      | `Num.sub a b`      |
-| `a * b`                      | `Num.mul a b`      |
-| `a / b`                      | `Num.div a b`      |
-| `a // b`                     | `Num.divTrunc a b` |
-| `a ^ b`                      | `Num.pow a b`      |
-| `a % b`                      | `Num.rem a b`      |
-| `-a`                         | `Num.neg a`        |
-| `a == b`                     | `Bool.isEq a b`    |
-| `a != b`                     | `Bool.isNotEq a b` |
-| `a && b`                     | `Bool.and a b`     |
-| <code>a \|\| b</code>        | `Bool.or a b`      |
-| `!a`                         | `Bool.not a`       |
-| <code>a \|> f</code>         | `f a`              |
-| <code>f a b \|> g x y</code> | `g (f a b) x y`    |
-| `f!`                         | [see example](https://www.roc-lang.org/examples/DesugaringAwait/README.html)     |
-| `f?`                         | [see example](https://www.roc-lang.org/examples/DesugaringTry/README.html)     |
+| Expression                   | Desugars To                                                                  |
+| ---------------------------- | ---------------------------------------------------------------------------- |
+| `a + b`                      | `Num.add a b`                                                                |
+| `a - b`                      | `Num.sub a b`                                                                |
+| `a * b`                      | `Num.mul a b`                                                                |
+| `a / b`                      | `Num.div a b`                                                                |
+| `a // b`                     | `Num.divTrunc a b`                                                           |
+| `a ^ b`                      | `Num.pow a b`                                                                |
+| `a % b`                      | `Num.rem a b`                                                                |
+| `-a`                         | `Num.neg a`                                                                  |
+| `a == b`                     | `Bool.isEq a b`                                                              |
+| `a != b`                     | `Bool.isNotEq a b`                                                           |
+| `a && b`                     | `Bool.and a b`                                                               |
+| <code>a \|\| b</code>        | `Bool.or a b`                                                                |
+| `!a`                         | `Bool.not a`                                                                 |
+| <code>a \|> f</code>         | `f a`                                                                        |
+| <code>f a b \|> g x y</code> | `g (f a b) x y`                                                              |
+| `f!`                         | [see example](https://www.roc-lang.org/examples/DesugaringAwait/README.html) |
+| `f?`                         | [see example](https://www.roc-lang.org/examples/DesugaringTry/README.html)   |
 
-</section>
-<script type="text/javascript" src="/builtins/search.js" defer></script>
-
-### [Additional Resources]
+### [Additional Resources](#additional-resources) {#additional-resources}
 
 You've completed the tutorial, well done!
 
 If you are looking for more resources to learn Roc, check out [these links](/install#additional-learning-resources).
+
+</section>
+<script type="text/javascript" src="/builtins/search.js" defer></script>

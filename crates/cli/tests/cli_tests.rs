@@ -346,7 +346,7 @@ mod cli_tests {
             );
 
             let expected_out =
-                "0 error and 0 warning found in <ignored for test> ms\n0 error and 0 warning found in <ignored for test> ms\n";
+                "0 errors and 0 warnings found in <ignored for test> ms.\n\n0 errors and 0 warnings found in <ignored for test> ms.\n\n";
 
             cli_build.run().assert_clean_stdout(expected_out);
         }
@@ -1453,6 +1453,20 @@ mod cli_tests {
         )
         .run()
         .assert_clean_success();
+    }
+
+    #[test]
+    fn module_params_effectful_param() {
+        let cli_check = ExecCli::new(
+            CMD_CHECK,
+            file_from_root(
+                "crates/cli/tests/test-projects/module_params",
+                "effect_module.roc",
+            ),
+        );
+
+        let cli_check_out = cli_check.run();
+        cli_check_out.assert_clean_success();
     }
 }
 

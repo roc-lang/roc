@@ -5,7 +5,7 @@ use roc_module::symbol::{IdentId, IdentIds, ModuleId, ModuleIds, Symbol};
 use roc_problem::can::{RuntimeError, ScopeModuleSource};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
-use roc_types::types::{Alias, AliasKind, AliasVar, Type};
+use roc_types::types::{Alias, AliasKind, AliasVar, EarlyReturnKind, Type};
 
 use crate::abilities::PendingAbilitiesStore;
 
@@ -49,7 +49,7 @@ pub struct Scope {
     /// We won't intern them because they're only used during canonicalization for error reporting.
     ignored_locals: VecMap<String, Region>,
 
-    pub early_returns: Vec<(Variable, Region)>,
+    pub early_returns: Vec<(Variable, Region, EarlyReturnKind)>,
 }
 
 impl Scope {

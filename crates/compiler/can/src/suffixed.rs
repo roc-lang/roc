@@ -164,7 +164,7 @@ pub fn unwrap_suffixed_expression<'a>(
     // USEFUL TO SEE THE UNWRAPPING
     // OF AST NODES AS THEY DESCEND
     // if is_expr_suffixed(&loc_expr.value) {
-    //     dbg!(&maybe_def_pat, &loc_expr, &unwrapped_expression);
+    //     eprintln!("{:?}, {:?}, {:?}", &maybe_def_pat, &loc_expr, &unwrapped_expression);
     // }
 
     unwrapped_expression

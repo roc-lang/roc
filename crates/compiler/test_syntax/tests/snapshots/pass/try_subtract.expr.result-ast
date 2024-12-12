@@ -1,0 +1,12 @@
+@0-5 BinOps(
+    [
+        (
+            @0-3 Try,
+            @3-4 Minus,
+        ),
+    ],
+    @4-5 Var {
+        module_name: "",
+        ident: "w",
+    },
+)

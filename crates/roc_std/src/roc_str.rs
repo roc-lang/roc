@@ -764,9 +764,23 @@ pub struct SendSafeRocStr(RocStr);
 
 unsafe impl Send for SendSafeRocStr {}
 
+impl RocRefcounted for SendSafeRocStr {
+    fn inc(&mut self) {
+        self.0.inc()
+    }
+
+    fn dec(&mut self) {
+        self.0.dec()
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
+}
+
 impl Clone for SendSafeRocStr {
     fn clone(&self) -> Self {
-        if self.0.is_readonly() {
+        if self.0.is_readonly() || self.0.is_small_str() {
             SendSafeRocStr(self.0.clone())
         } else {
             // To keep self send safe, this must copy.
@@ -807,6 +821,48 @@ impl RocRefcounted for RocStr {
 
     fn is_refcounted() -> bool {
         true
+    }
+}
+
+#[repr(transparent)]
+pub struct ReadOnlyRocStr(RocStr);
+
+unsafe impl Send for ReadOnlyRocStr {}
+unsafe impl Sync for ReadOnlyRocStr {}
+
+impl RocRefcounted for ReadOnlyRocStr {
+    fn inc(&mut self) {}
+
+    fn dec(&mut self) {}
+
+    fn is_refcounted() -> bool {
+        true
+    }
+}
+
+impl Clone for ReadOnlyRocStr {
+    fn clone(&self) -> Self {
+        ReadOnlyRocStr(self.0.clone())
+    }
+}
+
+impl From<RocStr> for ReadOnlyRocStr {
+    fn from(mut s: RocStr) -> Self {
+        if s.is_unique() {
+            unsafe { s.set_readonly() };
+        }
+        if s.is_readonly() || s.is_small_str() {
+            ReadOnlyRocStr(s)
+        } else {
+            // This is not readonly or unique, do a deep copy.
+            ReadOnlyRocStr::from(RocStr::from(s.as_str()))
+        }
+    }
+}
+
+impl From<ReadOnlyRocStr> for RocStr {
+    fn from(s: ReadOnlyRocStr) -> Self {
+        s.0
     }
 }
 

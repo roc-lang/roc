@@ -1,0 +1,58 @@
+@0-12 Defs(
+    Defs {
+        tags: [
+            EitherIndex(2147483648),
+        ],
+        regions: [
+            @0-9,
+        ],
+        space_before: [
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        ],
+        space_after: [
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        ],
+        spaces: [],
+        type_defs: [],
+        value_defs: [
+            Annotation(
+                @0-1 Identifier {
+                    ident: "k",
+                },
+                @3-9 SpaceBefore(
+                    TagUnion {
+                        ext: Some(
+                            @8-9 BoundVariable(
+                                "m",
+                            ),
+                        ),
+                        tags: Collection {
+                            items: [
+                                @4-5 Apply {
+                                    name: @4-5 "T",
+                                    args: [],
+                                },
+                            ],
+                            final_comments: [
+                                Newline,
+                            ],
+                        },
+                    },
+                    [
+                        Newline,
+                    ],
+                ),
+            ),
+        ],
+    },
+    @11-12 SpaceBefore(
+        Tag(
+            "D",
+        ),
+        [
+            LineComment(
+                "",
+            ),
+        ],
+    ),
+)

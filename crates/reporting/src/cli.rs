@@ -33,7 +33,7 @@ impl Problems {
         const YELLOW: &str = ANSI_STYLE_CODES.yellow;
         const RESET: &str = ANSI_STYLE_CODES.reset;
 
-        println!(
+        print!(
             "{}{}{} {} and {}{}{} {} found in {} ms",
             match self.errors {
                 0 => GREEN,

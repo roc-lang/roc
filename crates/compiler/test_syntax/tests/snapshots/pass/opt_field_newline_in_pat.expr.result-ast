@@ -1,0 +1,54 @@
+@0-11 Defs(
+    Defs {
+        tags: [
+            EitherIndex(2147483648),
+        ],
+        regions: [
+            @0-9,
+        ],
+        space_before: [
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        ],
+        space_after: [
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        ],
+        spaces: [],
+        type_defs: [],
+        value_defs: [
+            Body(
+                @0-7 RecordDestructure(
+                    [
+                        @1-6 SpaceAfter(
+                            OptionalField(
+                                "i",
+                                @5-6 SpaceBefore(
+                                    Tag(
+                                        "Y",
+                                    ),
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                            ),
+                            [
+                                Newline,
+                            ],
+                        ),
+                    ],
+                ),
+                @8-9 Var {
+                    module_name: "",
+                    ident: "p",
+                },
+            ),
+        ],
+    },
+    @10-11 SpaceBefore(
+        Tag(
+            "Q",
+        ),
+        [
+            Newline,
+        ],
+    ),
+)

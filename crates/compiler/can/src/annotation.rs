@@ -144,7 +144,6 @@ pub struct IntroducedVariables {
     pub able: VecSet<AbleVariable>,
     /// Extension variables which should be inferred in output position.
     pub infer_ext_in_output: Vec<Variable>,
-    pub host_exposed_aliases: VecMap<Symbol, Variable>,
 }
 
 impl IntroducedVariables {
@@ -156,7 +155,6 @@ impl IntroducedVariables {
             .chain(self.named.iter().map(|nv| &nv.variable))
             .chain(self.able.iter().map(|av| &av.variable))
             .chain(self.infer_ext_in_output.iter())
-            .chain(self.host_exposed_aliases.values())
             .all(|&v| v != var));
     }
 
@@ -205,17 +203,10 @@ impl IntroducedVariables {
         self.lambda_sets.push(var);
     }
 
-    pub fn insert_host_exposed_alias(&mut self, symbol: Symbol, var: Variable) {
-        self.debug_assert_not_already_present(var);
-        self.host_exposed_aliases.insert(symbol, var);
-    }
-
     pub fn union(&mut self, other: &Self) {
         self.wildcards.extend(other.wildcards.iter().copied());
         self.lambda_sets.extend(other.lambda_sets.iter().copied());
         self.inferred.extend(other.inferred.iter().copied());
-        self.host_exposed_aliases
-            .extend(other.host_exposed_aliases.iter().map(|(k, v)| (*k, *v)));
 
         self.named.extend(other.named.iter().cloned());
         self.able.extend(other.able.iter().cloned());
@@ -227,7 +218,6 @@ impl IntroducedVariables {
         self.wildcards.extend(other.wildcards);
         self.lambda_sets.extend(other.lambda_sets);
         self.inferred.extend(other.inferred);
-        self.host_exposed_aliases.extend(other.host_exposed_aliases);
 
         self.named.extend(other.named);
         self.able.extend(other.able);
@@ -897,7 +887,9 @@ fn can_annotation_help(
                 "tuples should never be implicitly inferred open"
             );
 
-            debug_assert!(!elems.is_empty()); // We don't allow empty tuples
+            if elems.is_empty() {
+                env.problem(roc_problem::can::Problem::EmptyTupleType(region));
+            }
 
             let elem_types = can_assigned_tuple_elems(
                 env,

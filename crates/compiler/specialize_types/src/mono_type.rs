@@ -129,36 +129,20 @@ impl MonoTypes {
 
     pub(crate) fn add_function(
         &mut self,
-        ret: Option<MonoTypeId>,
+        ret: MonoTypeId,
         args: impl IntoIterator<Item = MonoTypeId>,
     ) -> MonoTypeId {
-        let mono_type = match ret {
-            Some(ret) => {
-                let ret_then_args = {
-                    let start = self.ids.len();
-                    self.ids.push(ret);
-                    self.ids.extend(args);
-                    // Safety: we definitely have at least 2 elements in here, even if the iterator is empty.
-                    let length =
-                        unsafe { NonZeroU16::new_unchecked((self.ids.len() - start) as u16) };
+        let ret_then_args = {
+            let start = self.ids.len();
+            self.ids.push(ret);
+            self.ids.extend(args);
+            // Safety: we definitely have at least 2 elements in here, even if the iterator is empty.
+            let length = unsafe { NonZeroU16::new_unchecked((self.ids.len() - start) as u16) };
 
-                    NonEmptySlice::new(start as u32, length)
-                };
-
-                MonoType::Func { ret_then_args }
-            }
-            None => {
-                let args = {
-                    let start = self.ids.len();
-                    self.ids.extend(args);
-                    let length = (self.ids.len() - start) as u16;
-
-                    Slice::new(start as u32, length)
-                };
-
-                MonoType::VoidFunc { args }
-            }
+            NonEmptySlice::new(start as u32, length)
         };
+
+        let mono_type = MonoType::Func { ret_then_args };
 
         let index = self.entries.len();
         self.entries.push(mono_type);
@@ -274,16 +258,6 @@ pub enum MonoType {
     /// and then the arguments after it.
     Func {
         ret_then_args: NonEmptySlice<MonoTypeId>,
-    },
-
-    /// A function that does not have a return value (e.g. the return value was {}, which
-    /// got eliminated), and which has 0 or more arguments.
-    /// This has to be its own variant because the other function variant uses one slice to
-    /// store the return value followed by the arguments. Without this separate variant,
-    /// the other one couldn't distinguish between a function with a return value and 0 arguments,
-    /// and a function with 1 argument but no return value.
-    VoidFunc {
-        args: Slice<MonoTypeId>,
     },
     // This last slot is tentatively reserved for Dict, because in the past we've discussed wanting to
     // implement Dict in Zig (for performance) instead of on top of List, like it is as of this writing.

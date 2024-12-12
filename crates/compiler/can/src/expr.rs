@@ -1,7 +1,6 @@
 use crate::abilities::SpecializationId;
 use crate::annotation::{freshen_opaque_def, IntroducedVariables};
-use crate::builtins::builtin_defs_map;
-use crate::def::{can_defs_with_return, Annotation, Def, DefKind};
+use crate::def::{can_defs_with_return, Annotation, Def};
 use crate::env::Env;
 use crate::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_num, float_expr_from_result,
@@ -19,14 +18,16 @@ use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentId, ModuleId, Symbol};
-use roc_parse::ast::{self, Defs, PrecedenceConflict, StrLiteral};
+use roc_parse::ast::{self, Defs, PrecedenceConflict, ResultTryKind, StrLiteral};
 use roc_parse::ident::Accessor;
 use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::num::SingleQuoteBound;
 use roc_types::subs::{ExhaustiveMark, IllegalCycleMark, RedundantMark, VarStore, Variable};
-use roc_types::types::{Alias, Category, IndexOrField, LambdaSet, OptAbleVar, Type};
+use roc_types::types::{
+    Alias, Category, EarlyReturnKind, IndexOrField, LambdaSet, OptAbleVar, Type,
+};
 use soa::Index;
 use std::fmt::{Debug, Display};
 use std::path::PathBuf;
@@ -328,6 +329,16 @@ pub enum Expr {
         symbol: Symbol,
     },
 
+    Try {
+        result_expr: Box<Loc<Expr>>,
+        result_var: Variable,
+        return_var: Variable,
+        ok_payload_var: Variable,
+        err_payload_var: Variable,
+        err_ext_var: Variable,
+        kind: TryKind,
+    },
+
     Return {
         return_value: Box<Loc<Expr>>,
         return_var: Variable,
@@ -338,17 +349,15 @@ pub enum Expr {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TryKind {
+    KeywordPrefix,
+    OperatorSuffix,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ExpectLookup {
     pub symbol: Symbol,
     pub var: Variable,
-    pub ability_info: Option<SpecializationId>,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct DbgLookup {
-    pub symbol: Symbol,
-    pub var: Variable,
-    pub region: Region,
     pub ability_info: Option<SpecializationId>,
 }
 
@@ -403,12 +412,113 @@ impl Expr {
             }
             Self::Expect { .. } => Category::Expect,
             Self::Crash { .. } => Category::Crash,
-            Self::Return { .. } => Category::Return,
+            Self::Return { .. } => Category::Return(EarlyReturnKind::Return),
 
             Self::Dbg { .. } => Category::Expect,
+            Self::Try { .. } => Category::TrySuccess,
 
             // these nodes place no constraints on the expression's type
             Self::RuntimeError(..) => Category::Unknown,
+        }
+    }
+
+    pub fn contains_any_early_returns(&self) -> bool {
+        match self {
+            Self::Num { .. }
+            | Self::Int { .. }
+            | Self::Float { .. }
+            | Self::Str { .. }
+            | Self::IngestedFile { .. }
+            | Self::SingleQuote { .. }
+            | Self::Var { .. }
+            | Self::AbilityMember { .. }
+            | Self::ParamsVar { .. }
+            | Self::Closure(..)
+            | Self::EmptyRecord
+            | Self::RecordAccessor(_)
+            | Self::ZeroArgumentTag { .. }
+            | Self::OpaqueWrapFunction(_)
+            | Self::RuntimeError(..) => false,
+            Self::Return { .. } | Self::Try { .. } => true,
+            Self::List { loc_elems, .. } => loc_elems
+                .iter()
+                .any(|elem| elem.value.contains_any_early_returns()),
+            Self::When {
+                loc_cond, branches, ..
+            } => {
+                loc_cond.value.contains_any_early_returns()
+                    || branches.iter().any(|branch| {
+                        branch
+                            .guard
+                            .as_ref()
+                            .is_some_and(|guard| guard.value.contains_any_early_returns())
+                            || branch.value.value.contains_any_early_returns()
+                    })
+            }
+            Self::If {
+                branches,
+                final_else,
+                ..
+            } => {
+                final_else.value.contains_any_early_returns()
+                    || branches.iter().any(|(cond, then)| {
+                        cond.value.contains_any_early_returns()
+                            || then.value.contains_any_early_returns()
+                    })
+            }
+            Self::LetRec(defs, expr, _cycle_mark) => {
+                expr.value.contains_any_early_returns()
+                    || defs
+                        .iter()
+                        .any(|def| def.loc_expr.value.contains_any_early_returns())
+            }
+            Self::LetNonRec(def, expr) => {
+                def.loc_expr.value.contains_any_early_returns()
+                    || expr.value.contains_any_early_returns()
+            }
+            Self::Call(_func, args, _called_via) => args
+                .iter()
+                .any(|(_var, arg_expr)| arg_expr.value.contains_any_early_returns()),
+            Self::RunLowLevel { args, .. } | Self::ForeignCall { args, .. } => args
+                .iter()
+                .any(|(_var, arg_expr)| arg_expr.contains_any_early_returns()),
+            Self::Tuple { elems, .. } => elems
+                .iter()
+                .any(|(_var, loc_elem)| loc_elem.value.contains_any_early_returns()),
+            Self::Record { fields, .. } => fields
+                .iter()
+                .any(|(_field_name, field)| field.loc_expr.value.contains_any_early_returns()),
+            Self::RecordAccess { loc_expr, .. } => loc_expr.value.contains_any_early_returns(),
+            Self::TupleAccess { loc_expr, .. } => loc_expr.value.contains_any_early_returns(),
+            Self::RecordUpdate { updates, .. } => {
+                updates.iter().any(|(_field_name, field_update)| {
+                    field_update.loc_expr.value.contains_any_early_returns()
+                })
+            }
+            Self::ImportParams(_module_id, _region, params) => params
+                .as_ref()
+                .is_some_and(|(_var, p)| p.contains_any_early_returns()),
+            Self::Tag { arguments, .. } => arguments
+                .iter()
+                .any(|(_var, arg)| arg.value.contains_any_early_returns()),
+            Self::OpaqueRef { argument, .. } => argument.1.value.contains_any_early_returns(),
+            Self::Crash { msg, .. } => msg.value.contains_any_early_returns(),
+            Self::Dbg {
+                loc_message,
+                loc_continuation,
+                ..
+            } => {
+                loc_message.value.contains_any_early_returns()
+                    || loc_continuation.value.contains_any_early_returns()
+            }
+            Self::Expect {
+                loc_condition,
+                loc_continuation,
+                ..
+            } => {
+                loc_condition.value.contains_any_early_returns()
+                    || loc_continuation.value.contains_any_early_returns()
+            }
         }
     }
 }
@@ -445,7 +555,7 @@ pub struct ClosureData {
     pub closure_type: Variable,
     pub return_type: Variable,
     pub fx_type: Variable,
-    pub early_returns: Vec<(Variable, Region)>,
+    pub early_returns: Vec<(Variable, Region, EarlyReturnKind)>,
     pub name: Symbol,
     pub captured_symbols: Vec<(Symbol, Variable)>,
     pub recursive: Recursive,
@@ -648,36 +758,6 @@ pub struct WhenBranch {
     pub guard: Option<Loc<Expr>>,
     /// Whether this branch is redundant in the `when` it appears in
     pub redundant: RedundantMark,
-}
-
-impl WhenBranch {
-    pub fn pattern_region(&self) -> Region {
-        Region::span_across(
-            &self
-                .patterns
-                .first()
-                .expect("when branch has no pattern?")
-                .pattern
-                .region,
-            &self
-                .patterns
-                .last()
-                .expect("when branch has no pattern?")
-                .pattern
-                .region,
-        )
-    }
-}
-
-impl WhenBranch {
-    pub fn region(&self) -> Region {
-        Region::across_all(
-            self.patterns
-                .iter()
-                .map(|p| &p.pattern.region)
-                .chain([self.value.region].iter()),
-        )
-    }
 }
 
 pub fn canonicalize_expr<'a>(
@@ -1245,7 +1325,7 @@ pub fn canonicalize_expr<'a>(
 
             (loc_expr.value, output)
         }
-        ast::Expr::DbgStmt(_, _) => {
+        ast::Expr::DbgStmt { .. } => {
             internal_error!("DbgStmt should have been desugared by now")
         }
         ast::Expr::LowLevelDbg((source_location, source), message, continuation) => {
@@ -1285,6 +1365,32 @@ pub fn canonicalize_expr<'a>(
                 output,
             )
         }
+        ast::Expr::LowLevelTry(loc_expr, kind) => {
+            let (loc_result_expr, output) =
+                canonicalize_expr(env, var_store, scope, loc_expr.region, &loc_expr.value);
+
+            let return_var = var_store.fresh();
+
+            scope
+                .early_returns
+                .push((return_var, loc_expr.region, EarlyReturnKind::Try));
+
+            (
+                Try {
+                    result_expr: Box::new(loc_result_expr),
+                    result_var: var_store.fresh(),
+                    return_var,
+                    ok_payload_var: var_store.fresh(),
+                    err_payload_var: var_store.fresh(),
+                    err_ext_var: var_store.fresh(),
+                    kind: match kind {
+                        ResultTryKind::KeywordPrefix => TryKind::KeywordPrefix,
+                        ResultTryKind::OperatorSuffix => TryKind::OperatorSuffix,
+                    },
+                },
+                output,
+            )
+        }
         ast::Expr::Return(return_expr, after_return) => {
             let mut output = Output::default();
 
@@ -1309,7 +1415,9 @@ pub fn canonicalize_expr<'a>(
 
             let return_var = var_store.fresh();
 
-            scope.early_returns.push((return_var, return_expr.region));
+            scope
+                .early_returns
+                .push((return_var, return_expr.region, EarlyReturnKind::Return));
 
             (
                 Return {
@@ -2071,446 +2179,6 @@ fn lookup_to_expr(
     }
 }
 
-/// Currently uses the heuristic of "only inline if it's a builtin"
-pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
-    use Expr::*;
-
-    match expr {
-        // Num stores the `a` variable in `Num a`. Not the same as the variable
-        // stored in Int and Float below, which is strictly for better error messages
-        other @ Num(..)
-        | other @ Int(..)
-        | other @ Float(..)
-        | other @ Str { .. }
-        | other @ IngestedFile(..)
-        | other @ SingleQuote(..)
-        | other @ RuntimeError(_)
-        | other @ EmptyRecord
-        | other @ RecordAccessor { .. }
-        | other @ RecordUpdate { .. }
-        | other @ Var(..)
-        | other @ ParamsVar { .. }
-        | other @ AbilityMember(..)
-        | other @ RunLowLevel { .. }
-        | other @ ForeignCall { .. }
-        | other @ OpaqueWrapFunction(_)
-        | other @ Crash { .. }
-        | other @ Return { .. } => other,
-
-        List {
-            elem_var,
-            loc_elems,
-        } => {
-            let mut new_elems = Vec::with_capacity(loc_elems.len());
-
-            for loc_elem in loc_elems {
-                let value = inline_calls(var_store, loc_elem.value);
-
-                new_elems.push(Loc {
-                    value,
-                    region: loc_elem.region,
-                });
-            }
-
-            List {
-                elem_var,
-                loc_elems: new_elems,
-            }
-        }
-        // Branching
-        When {
-            cond_var,
-            expr_var,
-            region,
-            loc_cond,
-            branches,
-            branches_cond_var,
-            exhaustive,
-        } => {
-            let loc_cond = Box::new(Loc {
-                region: loc_cond.region,
-                value: inline_calls(var_store, loc_cond.value),
-            });
-
-            let mut new_branches = Vec::with_capacity(branches.len());
-
-            for branch in branches {
-                let value = Loc {
-                    value: inline_calls(var_store, branch.value.value),
-                    region: branch.value.region,
-                };
-                let guard = match branch.guard {
-                    Some(loc_expr) => Some(Loc {
-                        region: loc_expr.region,
-                        value: inline_calls(var_store, loc_expr.value),
-                    }),
-                    None => None,
-                };
-                let new_branch = WhenBranch {
-                    patterns: branch.patterns,
-                    value,
-                    guard,
-                    redundant: RedundantMark::new(var_store),
-                };
-
-                new_branches.push(new_branch);
-            }
-
-            When {
-                cond_var,
-                expr_var,
-                region,
-                loc_cond,
-                branches: new_branches,
-                branches_cond_var,
-                exhaustive,
-            }
-        }
-        If {
-            cond_var,
-            branch_var,
-            branches,
-            final_else,
-        } => {
-            let mut new_branches = Vec::with_capacity(branches.len());
-
-            for (loc_cond, loc_expr) in branches {
-                let loc_cond = Loc {
-                    value: inline_calls(var_store, loc_cond.value),
-                    region: loc_cond.region,
-                };
-
-                let loc_expr = Loc {
-                    value: inline_calls(var_store, loc_expr.value),
-                    region: loc_expr.region,
-                };
-
-                new_branches.push((loc_cond, loc_expr));
-            }
-
-            let final_else = Box::new(Loc {
-                region: final_else.region,
-                value: inline_calls(var_store, final_else.value),
-            });
-
-            If {
-                cond_var,
-                branch_var,
-                branches: new_branches,
-                final_else,
-            }
-        }
-
-        Expect {
-            loc_condition,
-            loc_continuation,
-            lookups_in_cond,
-        } => {
-            let loc_condition = Loc {
-                region: loc_condition.region,
-                value: inline_calls(var_store, loc_condition.value),
-            };
-
-            let loc_continuation = Loc {
-                region: loc_continuation.region,
-                value: inline_calls(var_store, loc_continuation.value),
-            };
-
-            Expect {
-                loc_condition: Box::new(loc_condition),
-                loc_continuation: Box::new(loc_continuation),
-                lookups_in_cond,
-            }
-        }
-
-        Dbg {
-            source_location,
-            source,
-            loc_message,
-            loc_continuation,
-            variable,
-            symbol,
-        } => {
-            let loc_message = Loc {
-                region: loc_message.region,
-                value: inline_calls(var_store, loc_message.value),
-            };
-
-            let loc_continuation = Loc {
-                region: loc_continuation.region,
-                value: inline_calls(var_store, loc_continuation.value),
-            };
-
-            Dbg {
-                source_location,
-                source,
-                loc_message: Box::new(loc_message),
-                loc_continuation: Box::new(loc_continuation),
-                variable,
-                symbol,
-            }
-        }
-
-        LetRec(defs, loc_expr, mark) => {
-            let mut new_defs = Vec::with_capacity(defs.len());
-
-            for def in defs {
-                new_defs.push(Def {
-                    loc_pattern: def.loc_pattern,
-                    loc_expr: Loc {
-                        region: def.loc_expr.region,
-                        value: inline_calls(var_store, def.loc_expr.value),
-                    },
-                    expr_var: def.expr_var,
-                    pattern_vars: def.pattern_vars,
-                    annotation: def.annotation,
-                    kind: def.kind,
-                });
-            }
-
-            let loc_expr = Loc {
-                region: loc_expr.region,
-                value: inline_calls(var_store, loc_expr.value),
-            };
-
-            LetRec(new_defs, Box::new(loc_expr), mark)
-        }
-
-        LetNonRec(def, loc_expr) => {
-            let def = Def {
-                loc_pattern: def.loc_pattern,
-                loc_expr: Loc {
-                    region: def.loc_expr.region,
-                    value: inline_calls(var_store, def.loc_expr.value),
-                },
-                expr_var: def.expr_var,
-                pattern_vars: def.pattern_vars,
-                annotation: def.annotation,
-                kind: def.kind,
-            };
-
-            let loc_expr = Loc {
-                region: loc_expr.region,
-                value: inline_calls(var_store, loc_expr.value),
-            };
-
-            LetNonRec(Box::new(def), Box::new(loc_expr))
-        }
-
-        Closure(ClosureData {
-            function_type,
-            closure_type,
-            return_type,
-            fx_type,
-            early_returns,
-            recursive,
-            name,
-            captured_symbols,
-            arguments,
-            loc_body,
-        }) => {
-            let loc_expr = *loc_body;
-            let loc_expr = Loc {
-                value: inline_calls(var_store, loc_expr.value),
-                region: loc_expr.region,
-            };
-
-            Closure(ClosureData {
-                function_type,
-                closure_type,
-                return_type,
-                fx_type,
-                early_returns,
-                recursive,
-                name,
-                captured_symbols,
-                arguments,
-                loc_body: Box::new(loc_expr),
-            })
-        }
-
-        Record { record_var, fields } => {
-            todo!(
-                "Inlining for Record with record_var {:?} and fields {:?}",
-                record_var,
-                fields
-            );
-        }
-
-        ImportParams(module_id, region, Some((var, expr))) => ImportParams(
-            module_id,
-            region,
-            Some((var, Box::new(inline_calls(var_store, *expr)))),
-        ),
-
-        ImportParams(module_id, region, None) => ImportParams(module_id, region, None),
-
-        RecordAccess {
-            record_var,
-            ext_var,
-            field_var,
-            loc_expr,
-            field,
-        } => {
-            todo!("Inlining for RecordAccess with record_var {:?}, ext_var {:?}, field_var {:?}, loc_expr {:?}, field {:?}", record_var, ext_var, field_var, loc_expr, field);
-        }
-
-        Tuple { tuple_var, elems } => {
-            todo!(
-                "Inlining for Tuple with tuple_var {:?} and elems {:?}",
-                tuple_var,
-                elems
-            );
-        }
-
-        TupleAccess {
-            tuple_var,
-            ext_var,
-            elem_var,
-            loc_expr,
-            index,
-        } => {
-            todo!("Inlining for TupleAccess with tuple_var {:?}, ext_var {:?}, elem_var {:?}, loc_expr {:?}, index {:?}", tuple_var, ext_var, elem_var, loc_expr, index);
-        }
-
-        Tag {
-            tag_union_var: variant_var,
-            ext_var,
-            name,
-            arguments,
-        } => {
-            todo!(
-                "Inlining for Tag with variant_var {:?}, ext_var {:?}, name {:?}, arguments {:?}",
-                variant_var,
-                ext_var,
-                name,
-                arguments
-            );
-        }
-
-        OpaqueRef {
-            opaque_var,
-            name,
-            argument,
-            specialized_def_type,
-            type_arguments,
-            lambda_set_variables,
-        } => {
-            let (var, loc_expr) = *argument;
-            let argument = Box::new((
-                var,
-                loc_expr.map_owned(|expr| inline_calls(var_store, expr)),
-            ));
-
-            OpaqueRef {
-                opaque_var,
-                name,
-                argument,
-                specialized_def_type,
-                type_arguments,
-                lambda_set_variables,
-            }
-        }
-
-        ZeroArgumentTag {
-            closure_name,
-            variant_var,
-            ext_var,
-            name,
-        } => {
-            todo!(
-                "Inlining for ZeroArgumentTag with closure_name {:?}, variant_var {:?}, ext_var {:?}, name {:?}",
-                closure_name,
-                variant_var,
-                ext_var,
-                name,
-            );
-        }
-
-        Call(boxed_tuple, args, called_via) => {
-            let (fn_var, loc_expr, closure_var, expr_var, fx_var) = *boxed_tuple;
-
-            match loc_expr.value {
-                Var(symbol, _) if symbol.is_builtin() => {
-                    // NOTE: This assumes builtins are not effectful!
-                    match builtin_defs_map(symbol, var_store) {
-                        Some(Def {
-                            loc_expr:
-                                Loc {
-                                    value:
-                                        Closure(ClosureData {
-                                            recursive,
-                                            arguments: params,
-                                            loc_body: boxed_body,
-                                            ..
-                                        }),
-                                    ..
-                                },
-                            ..
-                        }) => {
-                            debug_assert_eq!(recursive, Recursive::NotRecursive);
-
-                            // Since this is a canonicalized Expr, we should have
-                            // already detected any arity mismatches and replaced this
-                            // with a RuntimeError if there was a mismatch.
-                            debug_assert_eq!(params.len(), args.len());
-
-                            // Start with the function's body as the answer.
-                            let mut loc_answer = *boxed_body;
-
-                            // Wrap the body in one LetNonRec for each argument,
-                            // such that at the end we have all the arguments in
-                            // scope with the values the caller provided.
-                            for (
-                                (_param_var, _exhaustive_mark, loc_pattern),
-                                (expr_var, loc_expr),
-                            ) in params.iter().cloned().zip(args.into_iter()).rev()
-                            {
-                                // TODO get the correct vars into here.
-                                // Not sure if param_var should be involved.
-                                let pattern_vars = SendMap::default();
-
-                                let def = Def {
-                                    loc_pattern,
-                                    loc_expr,
-                                    expr_var,
-                                    pattern_vars,
-                                    annotation: None,
-                                    kind: DefKind::Let,
-                                };
-
-                                loc_answer = Loc {
-                                    region: Region::zero(),
-                                    value: LetNonRec(Box::new(def), Box::new(loc_answer)),
-                                };
-                            }
-
-                            loc_answer.value
-                        }
-                        Some(_) => {
-                            internal_error!("Tried to inline a non-function");
-                        }
-                        None => {
-                            internal_error!(
-                                "Tried to inline a builtin that wasn't registered: {:?}",
-                                symbol
-                            );
-                        }
-                    }
-                }
-                _ => {
-                    // For now, we only inline calls to builtins. Leave this alone!
-                    Call(
-                        Box::new((fn_var, loc_expr, closure_var, expr_var, fx_var)),
-                        args,
-                        called_via,
-                    )
-                }
-            }
-        }
-    }
-}
-
 fn flatten_str_literal<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
@@ -2545,8 +2213,9 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         | ast::Expr::MalformedIdent(_, _)
         | ast::Expr::Tag(_)
         | ast::Expr::OpaqueRef(_) => true,
+        ast::Expr::LowLevelTry(loc_expr, _) => is_valid_interpolation(&loc_expr.value),
         // Newlines are disallowed inside interpolation, and these all require newlines
-        ast::Expr::DbgStmt(_, _)
+        ast::Expr::DbgStmt { .. }
         | ast::Expr::LowLevelDbg(_, _, _)
         | ast::Expr::Return(_, _)
         | ast::Expr::When(_, _)
@@ -3230,7 +2899,7 @@ impl Declarations {
     pub fn expects(&self) -> ExpectCollector {
         let mut collector = ExpectCollector {
             expects: VecMap::default(),
-            dbgs: VecMap::default(),
+            has_dbgs: false,
         };
 
         let var = Variable::EMPTY_RECORD;
@@ -3301,7 +2970,7 @@ pub struct FunctionDef {
     pub closure_type: Variable,
     pub return_type: Variable,
     pub fx_type: Variable,
-    pub early_returns: Vec<(Variable, Region)>,
+    pub early_returns: Vec<(Variable, Region, EarlyReturnKind)>,
     pub captured_symbols: Vec<(Symbol, Variable)>,
     pub arguments: Vec<(Variable, AnnotatedMark, Loc<Pattern>)>,
 }
@@ -3443,6 +3112,9 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
                 // Intentionally ignore the lookups in the nested `expect` condition itself,
                 // because they couldn't possibly influence the outcome of this `expect`!
             }
+            Expr::Try { result_expr, .. } => {
+                stack.push(&result_expr.value);
+            }
             Expr::Return { return_value, .. } => {
                 stack.push(&return_value.value);
             }
@@ -3552,7 +3224,7 @@ pub fn toplevel_expect_to_inline_expect_pure(mut loc_expr: Loc<Expr>) -> Loc<Exp
 
 pub struct ExpectCollector {
     pub expects: VecMap<Region, Vec<ExpectLookup>>,
-    pub dbgs: VecMap<Symbol, DbgLookup>,
+    pub has_dbgs: bool,
 }
 
 impl crate::traverse::Visitor for ExpectCollector {
@@ -3566,20 +3238,8 @@ impl crate::traverse::Visitor for ExpectCollector {
                 self.expects
                     .insert(loc_condition.region, lookups_in_cond.to_vec());
             }
-            Expr::Dbg {
-                loc_message,
-                variable,
-                symbol,
-                ..
-            } => {
-                let lookup = DbgLookup {
-                    symbol: *symbol,
-                    var: *variable,
-                    region: loc_message.region,
-                    ability_info: None,
-                };
-
-                self.dbgs.insert(*symbol, lookup);
+            Expr::Dbg { .. } => {
+                self.has_dbgs = true;
             }
             _ => (),
         }

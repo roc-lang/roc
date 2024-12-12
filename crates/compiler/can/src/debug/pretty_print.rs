@@ -19,14 +19,6 @@ pub struct Ctx<'a> {
     pub print_lambda_names: bool,
 }
 
-pub fn pretty_print_declarations(c: &Ctx, declarations: &Declarations) -> String {
-    let f = Arena::new();
-    print_declarations_help(c, &f, declarations)
-        .1
-        .pretty(80)
-        .to_string()
-}
-
 pub fn pretty_write_declarations(
     writer: &mut impl std::io::Write,
     c: &Ctx,
@@ -452,6 +444,7 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
         ),
         Dbg { .. } => todo!(),
         Expect { .. } => todo!(),
+        Try { .. } => todo!(),
         Return { .. } => todo!(),
         RuntimeError(_) => todo!(),
     }

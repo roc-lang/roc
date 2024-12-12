@@ -9,7 +9,7 @@ use crate::scope::{PendingAbilitiesInScope, Scope};
 use roc_exhaustive::ListArity;
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
-use roc_parse::ast::{self, StrLiteral, StrSegment};
+use roc_parse::ast::{self, ExtractSpaces, StrLiteral, StrSegment};
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{MalformedPatternProblem, Problem, RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
@@ -273,6 +273,14 @@ pub fn canonicalize_def_header_pattern<'a>(
                 region,
             ) {
                 Ok((symbol, shadowing_ability_member)) => {
+                    if name.contains("__") {
+                        env.problem(Problem::RuntimeError(RuntimeError::MalformedPattern(
+                            MalformedPatternProblem::BadIdent(
+                                roc_parse::ident::BadIdent::TooManyUnderscores(region.start()),
+                            ),
+                            region,
+                        )));
+                    }
                     let can_pattern = match shadowing_ability_member {
                         // A fresh identifier.
                         None => {
@@ -468,7 +476,14 @@ pub fn canonicalize_pattern<'a>(
                         Pattern::OpaqueNotInScope(Loc::at(tag.region, name.into()))
                     }
                 },
-                _ => unreachable!("Other patterns cannot be applied"),
+                _ => {
+                    env.problem(Problem::RuntimeError(RuntimeError::MalformedPattern(
+                        MalformedPatternProblem::CantApplyPattern,
+                        tag.region,
+                    )));
+
+                    Pattern::UnsupportedPattern(region)
+                }
             }
         }
 
@@ -809,7 +824,7 @@ pub fn canonicalize_record_destructs<'a>(
     let mut opt_erroneous = None;
 
     for loc_pattern in patterns.iter() {
-        match loc_pattern.value {
+        match loc_pattern.value.extract_spaces().item {
             Identifier { ident: label } => {
                 match scope.introduce(label.into(), region) {
                     Ok(symbol) => {
