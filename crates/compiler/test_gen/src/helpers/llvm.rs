@@ -91,6 +91,7 @@ fn create_llvm_module<'a>(
         Ok(x) => x,
         Err(LoadMonomorphizedError::LoadingProblem(roc_load::LoadingProblem::FormattedReport(
             report,
+            _,
         ))) => {
             println!("{report}");
             panic!();
