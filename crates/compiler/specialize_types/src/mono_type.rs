@@ -66,6 +66,10 @@ impl MonoTypeId {
         inner: Index::new(14),
     };
 
+    pub const BOOL: Self = Self {
+        inner: Index::new(15),
+    };
+
     pub const DEFAULT_INT: Self = Self::I64; // TODO change this to I128
     pub const DEFAULT_FRAC: Self = Self::DEC;
 
@@ -100,6 +104,7 @@ impl MonoTypes {
                 MonoType::Primitive(Primitive::F32),
                 MonoType::Primitive(Primitive::F64),
                 MonoType::Primitive(Primitive::Dec),
+                MonoType::Primitive(Primitive::Bool),
             ],
             ids: Vec::new(),
             slices: Vec::new(),
@@ -232,6 +237,7 @@ pub enum Primitive {
     F32,
     F64,
     Dec,
+    Bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
