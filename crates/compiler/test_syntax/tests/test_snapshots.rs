@@ -514,6 +514,7 @@ mod test_snapshots {
         pass/not_multiline_string.expr,
         pass/not_record_updater.expr,
         pass/not_tag.expr,
+        pass/num_bang_amp_z_dot_t.expr,
         pass/number_literal_suffixes.expr,
         pass/old_app_header.full,
         pass/old_interface_header.header,
@@ -564,6 +565,7 @@ mod test_snapshots {
         pass/pattern_as_spaces.expr,
         pass/pattern_comma_newlines.expr,
         pass/pattern_record_apply_comment.expr,
+        pass/pattern_with_as_parens.expr,
         pass/pattern_with_space_in_parens.expr, // https://github.com/roc-lang/roc/issues/929
         pass/pizza_dbg.expr,
         pass/pizza_question.moduledefs,
@@ -704,27 +706,8 @@ mod test_snapshots {
             // This is the current list as of writing.
             // We should be driving these down to zero over time.
             // Adding this protection in now to avoid accidentally adding more.
-            "all_the_bangs"
-            | "ann_record_pat_with_comment"
-            | "comment_indent_in_parens"
-            | "crazy_annotation_left"
-            | "crazy_annotation_left2"
-            | "crazy_pat_ann"
-            | "import_in_closure_with_curlies_after"
-            | "inline_import"
-            | "mega_parens_pat"
-            | "multiline_str_in_pat"
-            | "newline_before_import_curlies"
-            | "pattern_comma_newlines"
-            | "pattern_record_apply_comment"
-            | "triple_paren_pat_ann" => true,
+            "all_the_bangs" => true,
 
-            "annotation_tuple_comment"
-            | "annotation_tuple_parens_newlines"
-            | "comment_in_tuple_ext" => {
-                // These tests all hit `debug_assert!(!elems.is_empty());`
-                cfg!(debug_assertions)
-            }
             // When adding new snapshot tests, strongly prefer fixing any canonicalization panics
             // they may run into rather than adding them to this list.
             _ => false,
