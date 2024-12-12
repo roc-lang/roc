@@ -81,13 +81,13 @@ pub fn get_relative_path(sub_path: &Path) -> Option<PathBuf> {
 }
 
 fn find_zig_glue_path() -> PathBuf {
-    // First try using the repo path relative to the executable location.
-    let path = get_relative_path(Path::new("crates/compiler/builtins/bitcode/src/glue.zig"));
+    // First try using a lib path relative to the executable.
+    let path = get_relative_path(Path::new("lib/glue.zig"));
     if let Some(path) = path {
         return path;
     }
-    // Fallback on a lib path relative to the executable location.
-    let path = get_relative_path(Path::new("lib/glue.zig"));
+    // Fallback on the repo path relative to the executable location.
+    let path = get_relative_path(Path::new("crates/compiler/builtins/bitcode/src/glue.zig"));
     if let Some(path) = path {
         return path;
     }
