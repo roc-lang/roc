@@ -16,7 +16,7 @@ mod specialize_structs {
 
         expect_mono_expr_str(
             format!("if {cond} then {then} else {else_}"),
-            format!("If(`Bool.true` -> Number(I8(42))), Number(I8(0)))"),
+            format!("If(`{cond}` -> Number(I8({then}))), Number(I8({else_})))"),
         );
     }
 
@@ -30,7 +30,7 @@ mod specialize_structs {
 
         expect_mono_expr_str(
             format!("if {cond1} then {then1} else if {cond2} then {then2} else {then_else}"),
-            format!("If(`Bool.false` -> Number(I16(256))), `Bool.true` -> Number(I16(24))), Number(I16(0)))"),
+            format!("If(`{cond1}` -> Number(I16({then1}))), `{cond2}` -> Number(I16({then2}))), Number(I16({then_else})))"),
         );
     }
 }
