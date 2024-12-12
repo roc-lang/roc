@@ -389,16 +389,7 @@ pub fn expr_is_multiline(me: &Expr<'_>, comments_only: bool) -> bool {
                     .any(|loc_arg| expr_is_multiline(&loc_arg.value, comments_only))
         }
 
-        Expr::DbgStmt {
-            first: condition,
-            extra_args,
-            ..
-        } => {
-            expr_is_multiline(&condition.value, comments_only)
-                || extra_args
-                    .iter()
-                    .any(|loc_arg| expr_is_multiline(&loc_arg.value, comments_only))
-        }
+        Expr::DbgStmt { .. } => true,
         Expr::LowLevelDbg(_, _, _) => {
             unreachable!("LowLevelDbg should only exist after desugaring, not during formatting")
         }
@@ -646,9 +637,10 @@ fn is_outdentable_collection(expr: &Expr<'_>) -> bool {
 
 fn fmt_parens(sub_expr: &Expr<'_>, buf: &mut Buf<'_>, indent: u16) {
     let should_add_newlines = match sub_expr {
-        Expr::Closure(..) | Expr::SpaceBefore(..) | Expr::SpaceAfter(Expr::Closure(..), ..) => {
-            false
-        }
+        Expr::Closure(..)
+        | Expr::SpaceBefore(..)
+        | Expr::SpaceAfter(Expr::Closure(..), ..)
+        | Expr::DbgStmt { .. } => false,
         _ => sub_expr.is_multiline(),
     };
 
@@ -670,7 +662,7 @@ fn fmt_parens(sub_expr: &Expr<'_>, buf: &mut Buf<'_>, indent: u16) {
     sub_expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, next_indent);
 
     if !matches!(sub_expr, Expr::SpaceAfter(..)) && should_add_newlines {
-        buf.newline();
+        buf.ensure_ends_with_newline();
     }
     buf.indent(indent);
     buf.push(')');
@@ -740,6 +732,7 @@ fn starts_with_newline(expr: &Expr) -> bool {
         SpaceBefore(_, comment_or_newline) => {
             matches!(comment_or_newline.first(), Some(CommentOrNewline::Newline))
         }
+        DbgStmt { .. } => true,
         _ => false,
     }
 }
@@ -1516,9 +1509,9 @@ fn fmt_dbg_stmt<'a>(
     extra_args: &'a [&'a Loc<Expr<'a>>],
     continuation: &'a Loc<Expr<'a>>,
     parens: Parens,
-
     indent: u16,
 ) {
+    buf.ensure_ends_with_newline();
     let mut args = Vec::with_capacity_in(extra_args.len() + 1, buf.text.bump());
     args.push(condition);
     args.extend_from_slice(extra_args);

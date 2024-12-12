@@ -197,7 +197,7 @@ fn fmt_pattern_only(
                 }
             }
 
-            let mut add_newlines = false;
+            let mut add_newlines = is_multiline;
 
             for loc_arg in loc_arg_patterns.iter() {
                 buf.spaces(1);
