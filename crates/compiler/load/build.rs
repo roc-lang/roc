@@ -88,7 +88,7 @@ fn write_types_for_module_real(module_id: ModuleId, filename: &str, output_path:
 
     let mut module = match res_module {
         Ok(v) => v,
-        Err(LoadingProblem::FormattedReport(report)) => {
+        Err(LoadingProblem::FormattedReport(report, _)) => {
             internal_error!("{}", report);
         }
         Err(other) => {

@@ -173,6 +173,7 @@ fn compiles_to_ir(test_name: &str, src: &str, mode: &str, allow_type_errors: boo
         Ok(x) => x,
         Err(LoadMonomorphizedError::LoadingProblem(roc_load::LoadingProblem::FormattedReport(
             report,
+            _,
         ))) => {
             println!("{report}");
             panic!();

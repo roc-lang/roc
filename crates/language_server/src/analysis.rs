@@ -122,7 +122,7 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
         Ok(module) => module,
         Err(problem) => {
             let all_problems = problem
-                .into_lsp_diagnostic(&())
+                .into_lsp_diagnostic(&doc_info.line_info)
                 .into_iter()
                 .collect::<Vec<_>>();
 

@@ -437,7 +437,7 @@ pub fn load_types(
         },
     )
     .unwrap_or_else(|problem| match problem {
-        LoadingProblem::FormattedReport(report) => {
+        LoadingProblem::FormattedReport(report, _) => {
             eprintln!("{report}");
 
             process::exit(1);

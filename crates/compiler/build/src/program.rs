@@ -702,7 +702,7 @@ pub fn handle_error_module(
 
 pub fn handle_loading_problem(problem: LoadingProblem) -> std::io::Result<i32> {
     match problem {
-        LoadingProblem::FormattedReport(report) => {
+        LoadingProblem::FormattedReport(report, _) => {
             print!("{report}");
             Ok(1)
         }
