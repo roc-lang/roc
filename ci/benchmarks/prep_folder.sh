@@ -11,14 +11,12 @@ BENCH_SUFFIX=$1
 
 cargo criterion -V
 cd crates/cli && cargo criterion --no-run && cd ../..
-mkdir -p bench-folder/crates/cli/tests/benchmarks/lib
-mkdir -p bench-folder/crates/compiler/builtins/bitcode/src
+mkdir -p bench-folder/crates/cli/tests/benchmarks/
 mkdir -p bench-folder/target/release/deps
+mkdir -p bench-folder/target/release/lib
 cp "crates/cli/tests/benchmarks/"*".roc" bench-folder/crates/cli/tests/benchmarks/
 cp -r crates/cli/tests/benchmarks/platform bench-folder/crates/cli/tests/benchmarks/
-# Once zig 13 is merged this should no longer be needed.
-cp crates/compiler/builtins/bitcode/src/*.zig bench-folder/crates/cli/tests/benchmarks/lib/
-cp crates/compiler/builtins/bitcode/src/str.zig bench-folder/crates/compiler/builtins/bitcode/src
+cp crates/compiler/builtins/bitcode/src/*.zig bench-folder/target/release/lib/
 cp target/release/roc bench-folder/target/release
 
 # copy the most recent time bench to bench-folder
