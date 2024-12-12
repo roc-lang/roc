@@ -596,6 +596,7 @@ mod test_snapshots {
         pass/record_updater_var_apply.expr,
         pass/record_with_if.expr,
         pass/record_with_lots_of_newlines.expr,
+        pass/repr_7346.expr,
         pass/requires_type.header,
         pass/return_apply_newline.expr,
         pass/return_field_access_in_parens.expr,

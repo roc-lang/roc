@@ -558,6 +558,7 @@ impl<'a> Formattable for TypeHeader<'a> {
             let need_parens = matches!(var.item, Pattern::Apply(..));
 
             if need_parens {
+                buf.indent(vars_indent);
                 buf.push_str("(");
             }
 
