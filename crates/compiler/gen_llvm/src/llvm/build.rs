@@ -1065,6 +1065,7 @@ pub fn module_from_builtins<'ctx>(
         "__modti3",
         "__muloti4",
         "__udivti3",
+        "__umodti3",
         // Roc special functions
         "__roc_force_longjmp",
         "__roc_force_setjmp",
