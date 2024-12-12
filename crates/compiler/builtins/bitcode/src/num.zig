@@ -376,12 +376,12 @@ pub fn exportAddSaturatedInt(comptime T: type, comptime name: []const u8) void {
 }
 
 pub fn exportAddWrappedInt(comptime T: type, comptime name: []const u8) void {
-    comptime var f = struct {
+    const f = struct {
         fn func(self: T, other: T) callconv(.C) T {
             return self +% other;
         }
     }.func;
-    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
 pub fn exportAddOrPanic(comptime T: type, comptime name: []const u8) void {
@@ -442,12 +442,12 @@ pub fn exportSubSaturatedInt(comptime T: type, comptime name: []const u8) void {
 }
 
 pub fn exportSubWrappedInt(comptime T: type, comptime name: []const u8) void {
-    comptime var f = struct {
+    const f = struct {
         fn func(self: T, other: T) callconv(.C) T {
             return self -% other;
         }
     }.func;
-    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
 pub fn exportSubOrPanic(comptime T: type, comptime name: []const u8) void {
