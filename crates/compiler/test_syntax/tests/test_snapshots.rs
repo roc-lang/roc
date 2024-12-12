@@ -514,6 +514,7 @@ mod test_snapshots {
         pass/not_multiline_string.expr,
         pass/not_record_updater.expr,
         pass/not_tag.expr,
+        pass/num_bang_amp_z_dot_t.expr,
         pass/number_literal_suffixes.expr,
         pass/old_app_header.full,
         pass/old_interface_header.header,

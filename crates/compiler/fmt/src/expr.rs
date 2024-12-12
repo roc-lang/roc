@@ -513,6 +513,7 @@ fn requires_space_after_unary(item: &Expr<'_>) -> bool {
             is_negative,
         } => *is_negative,
         Expr::RecordUpdater(..) => true,
+        Expr::RecordAccess(inner, _field) => requires_space_after_unary(inner),
         Expr::Apply(inner, _, _) => requires_space_after_unary(&inner.value),
         Expr::TrySuffix { target: _, expr } => requires_space_after_unary(expr),
         Expr::SpaceAfter(inner, _) | Expr::SpaceBefore(inner, _) => {
