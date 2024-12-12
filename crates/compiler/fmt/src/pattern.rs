@@ -102,7 +102,6 @@ fn fmt_pattern_inner(
     pat: &Pattern<'_>,
     buf: &mut Buf,
     parens: Parens,
-
     indent: u16,
     outer_is_multiline: bool,
     force_newline_at_start: bool,
@@ -336,15 +335,17 @@ fn fmt_pattern_only(
             buf.indent(indent);
             buf.push_str("(");
 
+            let mut add_newlines = false;
+
             let mut it = loc_patterns.iter().peekable();
             while let Some(loc_pattern) = it.next() {
-                fmt_pattern_inner(
+                add_newlines |= fmt_pattern_inner(
                     &loc_pattern.value,
                     buf,
                     Parens::NotNeeded,
                     indent,
                     is_multiline,
-                    false,
+                    add_newlines,
                 );
 
                 if it.peek().is_some() {
@@ -361,15 +362,17 @@ fn fmt_pattern_only(
             buf.indent(indent);
             buf.push_str("[");
 
+            let mut add_newlines = false;
+
             let mut it = loc_patterns.iter().peekable();
             while let Some(loc_pattern) = it.next() {
-                fmt_pattern_inner(
+                add_newlines |= fmt_pattern_inner(
                     &loc_pattern.value,
                     buf,
                     Parens::NotNeeded,
                     indent,
                     is_multiline,
-                    false,
+                    add_newlines,
                 );
 
                 if it.peek().is_some() {

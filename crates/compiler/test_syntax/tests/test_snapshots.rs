@@ -376,6 +376,7 @@ mod test_snapshots {
         pass/defs_suffixed_middle_extra_indents.moduledefs,
         pass/destructure_tag_assignment.expr,
         pass/docs.expr,
+        pass/double_parens_comment_tuple_pat.expr,
         pass/double_space_before.expr,
         pass/effectful_closure_statements.expr,
         pass/empty_app_header.header,
