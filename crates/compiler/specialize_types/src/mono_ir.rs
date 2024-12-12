@@ -298,7 +298,28 @@ pub enum MonoExpr {
         final_else: MonoExprId,
     },
 
+    When {
+        /// The value being matched on
+        value: MonoExprId,
+        /// The type of the value being matched on
+        value_type: MonoTypeId,
+        /// The return type of all branches and thus the whole when expression
+        branch_type: MonoTypeId,
+        /// The branches of the when expression
+        branches: Slice<WhenBranch>,
+    },
+
     CompilerBug(Problem),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WhenBranch {
+    /// The pattern to match the value against
+    pub pattern: MonoPatternId,
+    /// A boolean expression that must be true for this branch to be taken
+    pub guard: Option<MonoExprId>,
+    /// The expression to produce if the pattern matches
+    pub expr: MonoExprId,
 }
 
 #[derive(Clone, Copy, Debug)]
