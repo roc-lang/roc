@@ -166,7 +166,7 @@ fn valgrind_test_linux(source: &str) {
             run_with_valgrind(&binary_path);
         }
         Err(roc_build::program::BuildFileError::LoadingProblem(
-            roc_load::LoadingProblem::FormattedReport(report),
+            roc_load::LoadingProblem::FormattedReport(report, _),
         )) => {
             eprintln!("{report}");
             panic!("");

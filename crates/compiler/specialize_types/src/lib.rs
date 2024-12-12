@@ -20,5 +20,5 @@ pub use mono_ir::{MonoExpr, MonoExprId, MonoExprs};
 pub use mono_module::{InternedStrId, Interns};
 pub use mono_num::Number;
 pub use mono_struct::MonoFieldId;
-pub use mono_type::{MonoType, MonoTypeId, MonoTypes};
+pub use mono_type::{MonoType, MonoTypeId, MonoTypes, Primitive};
 pub use specialize_type::{MonoTypeCache, Problem, RecordFieldIds, TupleElemIds};

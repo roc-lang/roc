@@ -17,13 +17,14 @@ fn roc_repl_session() -> Result<PtyReplSession, Error> {
 
 fn main() -> Result<(), Error> {
     let mut repl = roc_repl_session()?;
-    
+
     repl.exp_regex(".*roc repl.*")?;
     repl.send_line("1+1")?;
-    
+
     thread::sleep(Duration::from_secs(1));
 
-    match repl.exp_regex(r".*2\u{1b}\[1;32m : \u{1b}\[0mNum *.*") { // 2 : Num
+    match repl.exp_regex(r".*2\u{1b}\[1;32m : \u{1b}\[0mNum *.*") {
+        // 2 : Num
         Ok(_) => {
             println!("Expected output received.");
             return Ok(());

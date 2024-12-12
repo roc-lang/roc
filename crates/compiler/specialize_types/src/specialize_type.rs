@@ -114,6 +114,8 @@ impl<'a, 'c, 'd, 'e, 'f, 'm, 'p, P: Push<Problem>> Env<'a, 'c, 'd, 'e, 'f, 'm, '
             //     .flat_map(|var_index| self.lower_var( subs, subs[var_index]));
 
             // let arg = new_args.next();
+        } else if symbol == Symbol::BOOL_BOOL {
+            MonoTypeId::BOOL
         } else {
             todo!("implement lower_builtin for symbol {symbol:?} - or, if all the builtins are already in here, report a compiler bug instead of panicking like this.");
         }
@@ -476,7 +478,24 @@ fn number_args_to_mono_id(
                             }
                         }
                     }
-                    Content::RangedNumber(_numeric_range) => todo!(),
+                    Content::RangedNumber(range) => {
+                        use roc_types::num::NumericRange::*;
+
+                        return match *range {
+                            IntAtLeastSigned(int_lit_width) => {
+                                int_lit_width_to_mono_type_id(int_lit_width)
+                            }
+                            IntAtLeastEitherSign(int_lit_width) => {
+                                int_lit_width_to_mono_type_id(int_lit_width)
+                            }
+                            NumAtLeastSigned(int_lit_width) => {
+                                int_lit_width_to_mono_type_id(int_lit_width)
+                            }
+                            NumAtLeastEitherSign(int_lit_width) => {
+                                int_lit_width_to_mono_type_id(int_lit_width)
+                            }
+                        };
+                    }
                     _ => {
                         // This is an invalid number type, so break out of
                         // the alias-unrolling loop in order to return an error.

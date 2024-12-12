@@ -14,9 +14,9 @@ cd crates/cli && cargo criterion --no-run && cd ../..
 mkdir -p bench-folder/crates/cli/tests/benchmarks/
 mkdir -p bench-folder/target/release/deps
 mkdir -p bench-folder/target/release/lib
-cp "crates/cli/tests/benchmarks/"*".roc" bench-folder/crates/cli/tests/benchmarks/
+cp crates/cli/tests/benchmarks/*.roc bench-folder/crates/cli/tests/benchmarks/
 cp -r crates/cli/tests/benchmarks/platform bench-folder/crates/cli/tests/benchmarks/
-cp "crates/compiler/builtins/bitcode/src/*.zig" bench-folder/target/release/lib/
+cp crates/compiler/builtins/bitcode/src/*.zig bench-folder/target/release/lib/
 cp target/release/roc bench-folder/target/release
 
 # copy the most recent time bench to bench-folder
