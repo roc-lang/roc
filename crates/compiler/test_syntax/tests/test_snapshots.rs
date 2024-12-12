@@ -514,6 +514,7 @@ mod test_snapshots {
         pass/not_multiline_string.expr,
         pass/not_record_updater.expr,
         pass/not_tag.expr,
+        pass/num_bang_amp_z_dot_t.expr,
         pass/number_literal_suffixes.expr,
         pass/old_app_header.full,
         pass/old_interface_header.header,
@@ -564,6 +565,7 @@ mod test_snapshots {
         pass/pattern_as_spaces.expr,
         pass/pattern_comma_newlines.expr,
         pass/pattern_record_apply_comment.expr,
+        pass/pattern_with_as_parens.expr,
         pass/pattern_with_space_in_parens.expr, // https://github.com/roc-lang/roc/issues/929
         pass/pizza_dbg.expr,
         pass/pizza_question.moduledefs,
