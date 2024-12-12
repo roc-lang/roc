@@ -1179,6 +1179,135 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             let Ok(value) = result else { todo!() };
             value.into()
         }
+        NumToDecCast | NumToDecChecked => {
+            let checked = matches!(op, NumToDecChecked);
+            const DEC_RIGHT_DIGITS: u64 = 10u64.pow(18);
+            const MAX_DEC_F: f64 = 170_141_183_460_469_231_731.687_303_715_884_105_727;
+            const MAX_DEC_IH: u64 = 9;
+            const MAX_DEC_IL: u64 = 4120486797000000000;
+            let to = env.context.i128_type();
+            let float_type = env.context.f64_type();
+            let llvm_digits = to.const_int(DEC_RIGHT_DIGITS, false);
+            let llvm_max_dec_f = float_type.const_float(MAX_DEC_F);
+            let llvm_max_dec_i = to.const_int_arbitrary_precision(&[MAX_DEC_IL, MAX_DEC_IH]);
+            let llvm_min_dec_i = to
+                .const_int_arbitrary_precision(&[MAX_DEC_IL, MAX_DEC_IH])
+                .const_not();
+            let llvm_divisor = float_type.const_float(DEC_RIGHT_DIGITS as f64);
+
+            arguments_with_layouts!((arg, arg_layout));
+            //Get the actual value that we are converting to
+            let result = match layout_interner.get_repr(arg_layout) {
+                //If integer
+                LayoutRepr::Builtin(Builtin::Int(width)) => {
+                    //Extend to I128
+                    let Ok(converted_value) = (if width.is_signed() {
+                        env.builder
+                            .build_int_s_extend(arg.into_int_value(), to, "inc_cast")
+                    } else {
+                        env.builder
+                            .build_int_z_extend(arg.into_int_value(), to, "inc_cast")
+                    }) else {
+                        todo!()
+                    };
+                    //Add decimal places
+                    let Ok(result) =
+                        env.builder
+                            .build_int_mul(converted_value, llvm_digits, "deci_cast")
+                    else {
+                        todo!()
+                    };
+                    result.as_basic_value_enum()
+                }
+                LayoutRepr::Builtin(Builtin::Float(_)) => {
+                    let Ok(float_result) = env.builder.build_float_mul(
+                        arg.into_float_value(),
+                        llvm_divisor,
+                        "decf_cast",
+                    ) else {
+                        todo!()
+                    };
+                    let Ok(int_result) =
+                        env.builder
+                            .build_float_to_signed_int(float_result, to, "dec_place")
+                    else {
+                        todo!()
+                    };
+                    int_result.as_basic_value_enum()
+                }
+                LayoutRepr::Builtin(Builtin::Decimal) => arg,
+                _ => {
+                    todo!()
+                }
+            };
+            //Look and see if the conversion is checked or not
+            if checked {
+                let bool_false = env.context.bool_type().const_zero();
+                let with_overflow = match layout_interner.get_repr(arg_layout) {
+                    //If the value being is converted into a integer
+                    LayoutRepr::Builtin(Builtin::Int(width)) => {
+                        //`Dec` can always fit `I64`s and `U64`s and smaller, no need to check at runtime
+                        if width.stack_size() <= 4 {
+                            bool_false
+                        } else if width.is_signed() {
+                            let compare_arg = env
+                                .builder
+                                .build_int_z_extend_or_bit_cast(
+                                    arg.into_int_value(),
+                                    to,
+                                    "int_cast",
+                                )
+                                .unwrap();
+                            //If VA > +Dec
+                            let pos_res = env.builder.new_build_int_compare(
+                                inkwell::IntPredicate::SGT,
+                                compare_arg,
+                                llvm_max_dec_i,
+                                "int_compare",
+                            );
+                            //If VA < -Dec
+                            let neg_res = env.builder.new_build_int_compare(
+                                inkwell::IntPredicate::SGT,
+                                llvm_min_dec_i,
+                                compare_arg,
+                                "int_compare",
+                            );
+                            env.builder.new_build_or(pos_res, neg_res, "or_ops")
+                        } else {
+                            env.builder.new_build_int_compare(
+                                inkwell::IntPredicate::SGT,
+                                arg.into_int_value(),
+                                llvm_max_dec_i,
+                                "int_compare",
+                            )
+                        }
+                    }
+                    LayoutRepr::Builtin(Builtin::Float(_)) => env.builder.new_build_float_compare(
+                        inkwell::FloatPredicate::OGT,
+                        arg.into_float_value(),
+                        llvm_max_dec_f,
+                        "float_compare",
+                    ),
+                    //A decimal can obviously fit itself
+                    LayoutRepr::Builtin(Builtin::Decimal) => bool_false,
+                    _ => {
+                        unreachable!()
+                    }
+                };
+
+                let return_int_type: BasicTypeEnum = env.context.i128_type().into();
+                result_with(
+                    env,
+                    return_int_type,
+                    result,
+                    env.context.bool_type().into(),
+                    with_overflow,
+                )
+                .into()
+            } else {
+                result
+            }
+        }
         NumToFloatCast => {
             arguments_with_layouts!((arg, arg_layout));
 
@@ -2890,4 +3019,26 @@ fn load_symbol_and_lambda_set<'a, 'ctx>(
         LayoutRepr::LambdaSet(lambda_set) => (ptr, lambda_set),
         other => panic!("Not a lambda set: {other:?}, {ptr:?}"),
     }
+}
+use inkwell::types::BasicTypeEnum;
+///Change from a basic LLVM value to a Roc `Result`
+fn result_with<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
+    good_type: BasicTypeEnum,
+    good_value: impl BasicValue<'ctx>,
+    bad_type: BasicTypeEnum,
+    bad_value: impl BasicValue<'ctx>,
+) -> StructValue<'ctx> {
+    let struct_type = env.context.struct_type(&[good_type, bad_type], false);
+    let return_value = struct_type.const_zero();
+    let return_value = env
+        .builder
+        .build_insert_value(return_value, good_value, 0, "good_value")
+        .unwrap();
+    let return_value = env
+        .builder
+        .build_insert_value(return_value, bad_value, 1, "is_bad")
+        .unwrap();
+
+    return_value.into_struct_value()
 }

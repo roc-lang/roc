@@ -121,6 +121,8 @@ module [
     maxI128,
     minU128,
     maxU128,
+    minDec,
+    maxDec,
     minF32,
     maxF32,
     minF64,
@@ -145,6 +147,8 @@ module [
     toU64Checked,
     toU128,
     toU128Checked,
+    toDec,
+    toDecChecked,
     toF32,
     toF32Checked,
     toF64,
@@ -1386,6 +1390,12 @@ minU128 = 0
 maxU128 : U128
 maxU128 = 340282366920938463463374607431768211455
 
+minDec : Dec
+minDec = -170141183460469231731.687303715884105728
+
+maxDec : Dec
+maxDec = 170141183460469231731.687303715884105727
+
 minF32 : F32
 minF32 = -3.40282347e38
 
@@ -1411,6 +1421,7 @@ toU32 : Int * -> U32
 toU64 : Int * -> U64
 toU128 : Int * -> U128
 
+toDec : Num * -> Dec
 ## Converts a [Num] to an [F32]. If the given number can't be precisely represented in an [F32],
 ## the returned number may be different from the given number.
 toF32 : Num * -> F32
@@ -1432,6 +1443,7 @@ toU16Checked : Int * -> Result U16 [OutOfBounds]
 toU32Checked : Int * -> Result U32 [OutOfBounds]
 toU64Checked : Int * -> Result U64 [OutOfBounds]
 toU128Checked : Int * -> Result U128 [OutOfBounds]
+toDecChecked : Num * -> Result Dec [OutOfBounds]
 toF32Checked : Num * -> Result F32 [OutOfBounds]
 toF64Checked : Num * -> Result F64 [OutOfBounds]
 

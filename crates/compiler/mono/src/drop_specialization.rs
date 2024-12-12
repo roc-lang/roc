@@ -1591,6 +1591,8 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         | NumToIntChecked
         | NumToFloatCast
         | NumToFloatChecked
+        | NumToDecCast
+        | NumToDecChecked
         | NumCountLeadingZeroBits
         | NumCountTrailingZeroBits
         | NumCountOneBits
