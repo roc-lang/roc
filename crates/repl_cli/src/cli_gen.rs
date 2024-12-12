@@ -3,7 +3,7 @@ use inkwell::context::Context;
 use libloading::Library;
 use roc_build::link::llvm_module_to_dylib;
 use roc_collections::all::MutSet;
-use roc_error_macros::internal_error;
+
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
