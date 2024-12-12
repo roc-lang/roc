@@ -241,7 +241,7 @@ fn mono_module_to_dylib_llvm<'a>(
         }
     };
 
-    let (main_fn_name, main_fn) = roc_gen_llvm::llvm::build::build_procedures_return_main(
+    let (main_fn_name, _main_fn) = roc_gen_llvm::llvm::build::build_procedures_return_main(
         &env,
         &layout_interner,
         opt_level,
@@ -250,39 +250,15 @@ fn mono_module_to_dylib_llvm<'a>(
         entry_point,
     );
 
-    env.dibuilder.finalize();
-
-    // Uncomment this to see the module's un-optimized LLVM instruction output:
-    // env.module.print_to_stderr();
-
-    if !main_fn.verify(true) {
-        internal_error!("Main function {main_fn_name} failed LLVM verification in build. Uncomment things nearby to see more details.", );
-    }
-
-    let inkwell_opt_level = roc_build::target::convert_opt_level(opt_level);
-    let inkwell_llvm_passes = roc_build::llvm_passes::get_llvm_passes_str(opt_level);
-    let inkwell_target_machine = roc_build::target::target_machine(
+    let emit_debug_info = true;
+    let ll_file_path = std::env::temp_dir().join("repl.ll");
+    roc_build::llvm_passes::optimize_llvm_ir(
+        &env,
         target,
-        inkwell_opt_level,
-        inkwell::targets::RelocMode::PIC,
-    )
-    .expect("should be a valid target machine");
-
-    module
-        .run_passes(
-            inkwell_llvm_passes,
-            &inkwell_target_machine,
-            inkwell::passes::PassBuilderOptions::create(),
-        )
-        .expect("valid llvm optimization passes");
-
-    // Uncomment this to see the module's optimized LLVM instruction output:
-    // env.module.print_to_stderr();
-
-    // Verify the module
-    if let Err(errors) = env.module.verify() {
-        internal_error!("Errors defining module:\n{}", errors.to_string());
-    }
+        opt_level,
+        emit_debug_info,
+        &ll_file_path,
+    );
 
     llvm_module_to_dylib(env.module, target, opt_level)
         .map(|lib| (lib, main_fn_name, subs, layout_interner))

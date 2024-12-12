@@ -253,7 +253,7 @@ fn create_llvm_module<'a>(
             unreachable!()
         }
     };
-    let (main_fn_name, main_fn) = match config.mode {
+    let (main_fn_name, _main_fn) = match config.mode {
         LlvmBackendMode::Binary => unreachable!(),
         LlvmBackendMode::BinaryWithExpect => unreachable!(),
         LlvmBackendMode::BinaryGlue => unreachable!(),
@@ -277,50 +277,20 @@ fn create_llvm_module<'a>(
 
     env.dibuilder.finalize();
 
-    // Uncomment this to see the module's un-optimized LLVM instruction output:
-    // env.module.print_to_stderr();
-
-    let panic_bad_llvm = |errors| {
-        let path = std::env::temp_dir().join("test.ll");
-        env.module.print_to_file(&path).unwrap();
-        panic!(
-            "Errors defining module:\n\n{errors}\n\nI have written the full module to `{path:?}`"
-        );
-    };
-
-    if !main_fn.verify(true) {
-        panic_bad_llvm(main_fn_name);
-    }
-
-    let test_opt_level = OptLevel::Development;
-    let inkwell_opt_level = roc_build::target::convert_opt_level(test_opt_level);
-    let inkwell_llvm_passes = roc_build::llvm_passes::get_llvm_passes_str(test_opt_level);
-    let inkwell_target_machine = roc_build::target::target_machine(
+    let ll_file_path = std::env::temp_dir().join("test.ll");
+    let opt_level = OptLevel::Development;
+    let emit_debug_info = true;
+    roc_build::llvm_passes::optimize_llvm_ir(
+        &env,
         target,
-        inkwell_opt_level,
-        inkwell::targets::RelocMode::PIC,
-    )
-    .expect("should be a valid target machine");
-
-    module
-        .run_passes(
-            inkwell_llvm_passes,
-            &inkwell_target_machine,
-            inkwell::passes::PassBuilderOptions::create(),
-        )
-        .expect("valid llvm optimization passes");
-
-    // Verify the module
-    if let Err(errors) = env.module.verify() {
-        panic_bad_llvm(&errors.to_string());
-    }
+        opt_level,
+        emit_debug_info,
+        &ll_file_path,
+    );
 
     if let Ok(path) = std::env::var("ROC_DEBUG_LLVM") {
         env.module.print_to_file(path).unwrap();
     }
-
-    // Uncomment this to see the module's optimized LLVM instruction output:
-    // env.module.print_to_stderr();
 
     let delayed_errors = if config.ignore_problems {
         String::new()

@@ -542,40 +542,15 @@ pub fn expect_mono_module_to_dylib<'a>(
         modules_expects.insert(module_id, expect_funs);
     }
 
-    env.dibuilder.finalize();
-
-    // Uncomment this to see the module's un-optimized LLVM instruction output:
-    // env.module.print_to_stderr();
-
-    let inkwell_opt_level = roc_build::target::convert_opt_level(opt_level);
-    let inkwell_llvm_passes = roc_build::llvm_passes::get_llvm_passes_str(opt_level);
-    let inkwell_target_machine = roc_build::target::target_machine(
+    let emit_debug_info = true;
+    let ll_file_path = std::env::temp_dir().join("test.ll");
+    roc_build::llvm_passes::optimize_llvm_ir(
+        &env,
         target,
-        inkwell_opt_level,
-        inkwell::targets::RelocMode::PIC,
-    )
-    .expect("should be a valid target machine");
-
-    module
-        .run_passes(
-            inkwell_llvm_passes,
-            &inkwell_target_machine,
-            inkwell::passes::PassBuilderOptions::create(),
-        )
-        .expect("valid llvm optimization passes");
-
-    // Uncomment this to see the module's optimized LLVM instruction output:
-    // env.module.print_to_stderr();
-
-    // Verify the module
-    if let Err(errors) = env.module.verify() {
-        let path = std::env::temp_dir().join("test.ll");
-        env.module.print_to_file(&path).unwrap();
-        internal_error!(
-            "Errors defining module:\n{}\n\nUncomment things nearby to see more details. IR written to `{:?}`",
-            errors.to_string(), path,
-        );
-    }
+        opt_level,
+        emit_debug_info,
+        &ll_file_path,
+    );
 
     if let Ok(path) = std::env::var("ROC_DEBUG_LLVM") {
         env.module.print_to_file(path).unwrap();
