@@ -528,6 +528,7 @@ mod test_snapshots {
         pass/opaque_comment_after_head.expr,
         pass/opaque_destructure_first_item_in_body.expr,
         pass/opaque_has_abilities.expr,
+        pass/opaque_in_ann_apply_arg.expr,
         pass/opaque_reference_expr.expr,
         pass/opaque_reference_expr_with_arguments.expr,
         pass/opaque_reference_pattern.expr,

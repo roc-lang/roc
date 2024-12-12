@@ -3201,11 +3201,7 @@ fn stmts_to_defs<'a>(
                 ) = (td, stmts.get(i + 1).map(|s| (s.before, s.item.value)))
                 {
                     if (spaces_middle.len() <= 1 && !ends_with_spaces_conservative(&ann_type.value))
-                        || header
-                            .vars
-                            .first()
-                            .map(|var| var.value.equivalent(&loc_pattern.value))
-                            .unwrap_or(false)
+                        || header_to_pat(arena, header).equivalent(&loc_pattern.value)
                     {
                         // This is a case like
                         //   UserId x : [UserId Int]
@@ -3320,6 +3316,17 @@ fn stmts_to_defs<'a>(
         i += 1;
     }
     Ok((defs, last_expr))
+}
+
+fn header_to_pat<'a>(arena: &'a Bump, header: TypeHeader<'a>) -> Pattern<'a> {
+    if header.vars.is_empty() {
+        Pattern::Tag(header.name.value)
+    } else {
+        Pattern::Apply(
+            arena.alloc(Loc::at(header.name.region, Pattern::Tag(header.name.value))),
+            header.vars,
+        )
+    }
 }
 
 fn ends_with_spaces_conservative(ty: &TypeAnnotation<'_>) -> bool {
