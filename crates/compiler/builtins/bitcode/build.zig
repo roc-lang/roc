@@ -73,7 +73,7 @@ fn generateLlvmIrFile(
     step_name: []const u8,
     object_name: []const u8,
 ) void {
-    const obj = b.addObject(.{ .strip = true, .name = object_name, .root_source_file = main_path, .optimize = mode, .target = target, .use_llvm = true });
+    const obj = b.addObject(.{ .strip = true, .pic = true, .name = object_name, .root_source_file = main_path, .optimize = mode, .target = target, .use_llvm = true });
 
     obj.root_module.stack_check = false;
 
