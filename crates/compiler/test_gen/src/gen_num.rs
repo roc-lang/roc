@@ -3194,13 +3194,19 @@ fn num_to_str_f32() {
     assert_evals_to!(r"Num.toStr 1.75f32", RocStr::from("1.75"), RocStr);
     assert_evals_to!(r"Num.toStr 10.75f32", RocStr::from("10.75"), RocStr);
 
-    assert_evals_to!(r"Num.toStr Num.maxF32", f32::MAX, RocStr, |roc_str| {
-        roc_str.as_str().parse::<f32>().unwrap()
-    });
+    assert_evals_to!(
+        r"Num.toStr Num.maxF32",
+        f32::MAX,
+        RocStr,
+        |roc_str: RocStr| { roc_str.as_str().parse::<f32>().unwrap() }
+    );
 
-    assert_evals_to!(r"Num.toStr Num.minF32", f32::MIN, RocStr, |roc_str| {
-        roc_str.as_str().parse::<f32>().unwrap()
-    });
+    assert_evals_to!(
+        r"Num.toStr Num.minF32",
+        f32::MIN,
+        RocStr,
+        |roc_str: RocStr| { roc_str.as_str().parse::<f32>().unwrap() }
+    );
 }
 
 #[test]

@@ -44,6 +44,8 @@ pub export fn main() u8 {
 
     if (@import("builtin").target.cpu.arch != .wasm32) {
         const stdout = @import("std").io.getStdOut().writer();
-        try stdout.print("{}\n", .{host_result});
+        stdout.print("{}\n", .{host_result}) catch return 1;
     }
+
+    return 0;
 }
