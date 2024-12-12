@@ -873,18 +873,24 @@ pub fn build(
 
     let opt_level = opt_level_from_flags(matches);
 
-    // Note: This allows using `--dev` with `--optimize`.
-    // This means frontend optimizations and dev backend.
-    let code_gen_backend = if matches.get_flag(FLAG_DEV) {
+    let should_run_expects = matches!(opt_level, OptLevel::Development | OptLevel::Normal) &&
+        // TODO: once expect is decoupled from roc launching the executable, remove this part of the conditional.
+        matches!(
+            config,
+            BuildConfig::BuildAndRun | BuildConfig::BuildAndRunIfNoErrors
+        );
+
+    let code_gen_backend = if matches!(opt_level, OptLevel::Development) {
         if matches!(target.architecture(), Architecture::Wasm32) {
             CodeGenBackend::Wasm
         } else {
             CodeGenBackend::Assembly(AssemblyBackendMode::Binary)
         }
     } else {
-        let backend_mode = match opt_level {
-            OptLevel::Development => LlvmBackendMode::BinaryDev,
-            OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => LlvmBackendMode::Binary,
+        let backend_mode = if should_run_expects {
+            LlvmBackendMode::BinaryWithExpect
+        } else {
+            LlvmBackendMode::Binary
         };
 
         CodeGenBackend::Llvm(backend_mode)
@@ -1022,7 +1028,7 @@ pub fn build(
                     roc_run(
                         &arena,
                         path,
-                        opt_level,
+                        should_run_expects,
                         target,
                         args,
                         bytes,
@@ -1065,7 +1071,7 @@ pub fn build(
                     roc_run(
                         &arena,
                         path,
-                        opt_level,
+                        should_run_expects,
                         target,
                         args,
                         bytes,
@@ -1084,7 +1090,7 @@ pub fn build(
 fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
     arena: &Bump,
     script_path: &Path,
-    opt_level: OptLevel,
+    should_run_expects: bool,
     target: Target,
     args: I,
     binary_bytes: &[u8],
@@ -1126,7 +1132,7 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
         _ => roc_run_native(
             arena,
             script_path,
-            opt_level,
+            should_run_expects,
             args,
             binary_bytes,
             expect_metadata,
@@ -1194,7 +1200,7 @@ fn make_argv_envp<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
 fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     arena: &Bump,
     script_path: &Path,
-    opt_level: OptLevel,
+    should_run_expects: bool,
     args: I,
     binary_bytes: &[u8],
     expect_metadata: ExpectMetadata,
@@ -1216,11 +1222,10 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
         .chain([std::ptr::null()])
         .collect_in(arena);
 
-    match opt_level {
-        OptLevel::Development => roc_dev_native(arena, executable, argv, envp, expect_metadata),
-        OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => unsafe {
-            roc_run_native_fast(executable, &argv, &envp);
-        },
+    if should_run_expects {
+        roc_dev_native(arena, executable, argv, envp, expect_metadata);
+    } else {
+        unsafe { roc_run_native_fast(executable, &argv, &envp) };
     }
 
     Ok(1)
@@ -1458,7 +1463,7 @@ fn roc_run_executable_file_path(binary_bytes: &[u8]) -> std::io::Result<Executab
 fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     arena: &Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
     script_path: &Path,
-    opt_level: OptLevel,
+    should_run_expects: bool,
     args: I,
     binary_bytes: &[u8],
     _expect_metadata: ExpectMetadata,
@@ -1483,14 +1488,11 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
             .chain([std::ptr::null()])
             .collect_in(arena);
 
-        match opt_level {
-            OptLevel::Development => {
-                // roc_run_native_debug(executable, &argv, &envp, expectations, interns)
-                internal_error!("running `expect`s does not currently work on windows")
-            }
-            OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => {
-                roc_run_native_fast(executable, &argv, &envp);
-            }
+        if should_run_expects {
+            // roc_run_native_debug(executable, &argv, &envp, expectations, interns)
+            internal_error!("running `expect`s does not currently work on windows");
+        } else {
+            roc_run_native_fast(executable, &argv, &envp);
         }
     }
 
