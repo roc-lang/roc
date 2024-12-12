@@ -2,7 +2,7 @@ use crate::llvm::bitcode::build_dec_wrapper;
 use crate::llvm::build::{allocate_with_refcount_help, cast_basic_basic, Env, RocFunctionCall};
 use crate::llvm::convert::basic_type_from_layout;
 use inkwell::builder::Builder;
-use inkwell::types::{BasicType, PointerType};
+use inkwell::types::PointerType;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
 use morphic_lib::UpdateMode;
@@ -73,7 +73,7 @@ fn pass_element_as_opaque<'a, 'ctx>(
     env.builder
         .new_build_pointer_cast(
             element_ptr,
-            env.context.i8_type().ptr_type(AddressSpace::default()),
+            env.context.ptr_type(AddressSpace::default()),
             "pass_element_as_opaque",
         )
         .into()
@@ -110,7 +110,7 @@ pub(crate) fn pass_as_opaque<'ctx>(
     env.builder
         .new_build_pointer_cast(
             ptr,
-            env.context.i8_type().ptr_type(AddressSpace::default()),
+            env.context.ptr_type(AddressSpace::default()),
             "pass_as_opaque",
         )
         .into()
@@ -155,7 +155,7 @@ pub(crate) fn list_get_unsafe<'a, 'ctx>(
     );
     // listGetUnsafe takes a U64, but we need to convert that to usize for index calculation.
     let elem_index = builder.new_build_int_cast(elem_index, env.ptr_int(), "u64_to_usize");
-    let ptr_type = elem_type.ptr_type(AddressSpace::default());
+    let ptr_type = env.context.ptr_type(AddressSpace::default());
     // Load the pointer to the array data
     let array_data_ptr = load_list_ptr(env, wrapper_struct, ptr_type);
 
@@ -728,18 +728,9 @@ pub(crate) fn allocate_list<'a, 'ctx>(
     let bytes_per_element = len_type.const_int(elem_bytes, false);
     let number_of_data_bytes =
         builder.new_build_int_mul(bytes_per_element, number_of_elements, "data_length");
-
-    let basic_type =
-        basic_type_from_layout(env, layout_interner, layout_interner.get_repr(elem_layout));
     let alignment_bytes = layout_interner.alignment_bytes(elem_layout);
     let elem_refcounted = layout_refcounted(env, layout_interner, elem_layout);
-    allocate_with_refcount_help(
-        env,
-        basic_type,
-        alignment_bytes,
-        number_of_data_bytes,
-        elem_refcounted,
-    )
+    allocate_with_refcount_help(env, alignment_bytes, number_of_data_bytes, elem_refcounted)
 }
 
 pub(crate) fn store_list<'ctx>(

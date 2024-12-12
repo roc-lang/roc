@@ -480,8 +480,6 @@ pub fn expect_mono_module_to_dylib<'a>(
     ));
 
     let module = arena.alloc(module);
-    let (module_pass, _function_pass) =
-        roc_gen_llvm::llvm::build::construct_optimization_passes(module, opt_level);
 
     let (dibuilder, compile_unit) = roc_gen_llvm::llvm::build::Env::new_debug_info(module);
 
@@ -544,25 +542,15 @@ pub fn expect_mono_module_to_dylib<'a>(
         modules_expects.insert(module_id, expect_funs);
     }
 
-    env.dibuilder.finalize();
-
-    // Uncomment this to see the module's un-optimized LLVM instruction output:
-    // env.module.print_to_stderr();
-
-    module_pass.run_on(env.module);
-
-    // Uncomment this to see the module's optimized LLVM instruction output:
-    // env.module.print_to_stderr();
-
-    // Verify the module
-    if let Err(errors) = env.module.verify() {
-        let path = std::env::temp_dir().join("test.ll");
-        env.module.print_to_file(&path).unwrap();
-        internal_error!(
-            "Errors defining module:\n{}\n\nUncomment things nearby to see more details. IR written to `{:?}`",
-            errors.to_string(), path,
-        );
-    }
+    let emit_debug_info = true;
+    let ll_file_path = std::env::temp_dir().join("test.ll");
+    roc_build::llvm_passes::optimize_llvm_ir(
+        &env,
+        target,
+        opt_level,
+        emit_debug_info,
+        &ll_file_path,
+    );
 
     if let Ok(path) = std::env::var("ROC_DEBUG_LLVM") {
         env.module.print_to_file(path).unwrap();
