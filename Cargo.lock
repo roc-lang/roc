@@ -133,6 +133,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "anyhow"
+version = "1.0.86"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3d1d046238990b9cf5bcde22a3fb3584ee5cf65fb2765f454ed428c7a0063da"
+
+[[package]]
 name = "arrayref"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -547,6 +553,13 @@ name = "constant_time_eq"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f7144d30dcf0fafbce74250a3963025d8d52177934239851c917d29f1df280c2"
+
+[[package]]
+name = "copy_zig_glue"
+version = "0.0.1"
+dependencies = [
+ "roc_test_utils_dir",
+]
 
 [[package]]
 name = "core-foundation"
@@ -1300,8 +1313,8 @@ checksum = "bfa799dd5ed20a7e349f3b4639aa80d74549c81716d9ec4f994c9b5815598306"
 
 [[package]]
 name = "inkwell"
-version = "0.2.0"
-source = "git+https://github.com/roc-lang/inkwell?branch=inkwell-llvm-16#d1a596391894933aa1f0f91ec87187e47917cf86"
+version = "0.4.0"
+source = "git+https://github.com/TheDan64/inkwell?rev=89e06af#89e06af9dd70dc5d6bc5ae42a2a03f680a367d37"
 dependencies = [
  "either",
  "inkwell_internals",
@@ -1313,8 +1326,8 @@ dependencies = [
 
 [[package]]
 name = "inkwell_internals"
-version = "0.8.0"
-source = "git+https://github.com/roc-lang/inkwell?branch=inkwell-llvm-16#d1a596391894933aa1f0f91ec87187e47917cf86"
+version = "0.9.0"
+source = "git+https://github.com/TheDan64/inkwell?rev=89e06af#89e06af9dd70dc5d6bc5ae42a2a03f680a367d37"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1463,14 +1476,15 @@ checksum = "da2479e8c062e40bf0066ffa0bc823de0a9368974af99c9f6df941d2c231e03f"
 
 [[package]]
 name = "llvm-sys"
-version = "160.1.3"
+version = "180.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0bf51981ac0622b10fe4790763e3de1f3d68a0ee4222e03accaaab6731bd508d"
+checksum = "778fa5fa02e32728e718f11eec147e6f134137399ab02fd2c13d32476337affa"
 dependencies = [
+ "anyhow",
  "cc",
  "lazy_static",
  "libc",
- "regex",
+ "regex-lite",
  "semver",
 ]
 
@@ -2118,6 +2132,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "regex-lite"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53a49587ad06b26609c52e423de037e7f57f20d53535d66e08c695f347df952a"
+
+[[package]]
 name = "regex-syntax"
 version = "0.6.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2395,6 +2415,7 @@ dependencies = [
  "clap 4.4.6",
  "cli_test_utils",
  "const_format",
+ "copy_zig_glue",
  "criterion",
  "distance",
  "errno",
@@ -4416,6 +4437,7 @@ version = "0.0.1"
 dependencies = [
  "bumpalo",
  "cli_test_utils",
+ "copy_zig_glue",
  "indoc",
  "roc_build",
  "roc_command_utils",

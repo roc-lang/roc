@@ -9,6 +9,10 @@ set -euxo pipefail
 RUSTFLAGS="-C link-arg=-fuse-ld=lld -C target-cpu=native"
 BENCH_SUFFIX=$1
 
+# copy the builtin *.zig files into crates/cli/tests/benchmarks/platform
+# TODO replace this with a zig package once we have zig 0.13.0
+cargo run --bin copy_zig_glue
+
 cargo criterion -V
 cd crates/cli && cargo criterion --no-run && cd ../..
 mkdir -p bench-folder/crates/cli/tests/benchmarks/

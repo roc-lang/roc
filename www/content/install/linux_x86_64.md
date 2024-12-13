@@ -53,14 +53,14 @@ you'll need to install one or more of these platform languages too.
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
     ```
 
-1. For Zig-based platforms: [download zig 0.11.0](https://ziglang.org/download/0.11.0/zig-linux-x86_64-0.11.0.tar.xz), extract the archive and add export PATH=$PATH:~/path/to/zig to your shell startup script (.profile, .zshrc, …).
+1. For Zig-based platforms: [download zig 0.13.0](https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz), extract the archive and add export PATH=$PATH:~/path/to/zig to your shell startup script (.profile, .zshrc, …).
 
 1. Install a C compiler, for apps with C-based platforms:
 
     ```sh
     # On a Debian-based distro like Ubuntu
     sudo apt update && sudo apt install build-essential clang
-    
+
     # On an RPM-based distro like Fedora
     sudo dnf check-update && sudo dnf install clang
     ```
