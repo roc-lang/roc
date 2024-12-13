@@ -3196,14 +3196,16 @@ fn num_to_str_f32() {
 
     assert_evals_to!(
         r"Num.toStr Num.maxF32",
-        RocStr::from("340282346638528860000000000000000000000"),
-        RocStr
+        f32::MAX,
+        RocStr,
+        |roc_str: RocStr| { roc_str.as_str().parse::<f32>().unwrap() }
     );
 
     assert_evals_to!(
         r"Num.toStr Num.minF32",
-        RocStr::from("-340282346638528860000000000000000000000"),
-        RocStr
+        f32::MIN,
+        RocStr,
+        |roc_str: RocStr| { roc_str.as_str().parse::<f32>().unwrap() }
     );
 }
 

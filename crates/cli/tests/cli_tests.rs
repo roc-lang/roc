@@ -76,6 +76,8 @@ mod cli_tests {
     #[test]
     #[cfg_attr(windows, ignore)]
     fn platform_switching_zig() {
+        copy_zig_glue::initialize_zig_test_platforms();
+
         let cli_build = ExecCli::new(
             CMD_BUILD,
             file_from_root("examples/platform-switching", "rocLovesZig.roc"),
@@ -96,6 +98,8 @@ mod cli_tests {
 
     #[test]
     fn platform_switching_wasm() {
+        copy_zig_glue::initialize_zig_test_platforms();
+
         // this is a web assembly example, but we don't test with JS at the moment
         // so let's just check it for now
         let cli_check = ExecCli::new(
@@ -113,6 +117,8 @@ mod cli_tests {
         ignore = "Flaky failure: Roc command failed with status ExitStatus(ExitStatus(3221225477))"
     )]
     fn fibonacci() {
+        copy_zig_glue::initialize_zig_test_platforms();
+
         let cli_build = ExecCli::new(
             CMD_BUILD,
             file_from_root("crates/cli/tests/test-projects/algorithms", "fibonacci.roc"),
@@ -134,6 +140,8 @@ mod cli_tests {
     #[test]
     #[cfg_attr(windows, ignore)]
     fn quicksort() {
+        copy_zig_glue::initialize_zig_test_platforms();
+
         let cli_build = ExecCli::new(
             CMD_BUILD,
             file_from_root("crates/cli/tests/test-projects/algorithms", "quicksort.roc"),
@@ -184,6 +192,8 @@ mod cli_tests {
     #[cfg_attr(windows, ignore)]
     // tea = The Elm Architecture
     fn terminal_ui_tea() {
+        copy_zig_glue::initialize_zig_test_platforms();
+
         let cli_build = ExecCli::new(
             CMD_BUILD,
             file_from_root("crates/cli/tests/test-projects/tui", "main.roc"),
@@ -266,6 +276,8 @@ mod cli_tests {
     #[test]
     #[cfg_attr(windows, ignore)]
     fn multiple_exposed() {
+        copy_zig_glue::initialize_zig_test_platforms();
+
         let cli_build = ExecCli::new(
             CMD_BUILD,
             file_from_root(
@@ -461,6 +473,8 @@ mod cli_tests {
         /// Build the platform host once for all tests in this module
         fn build_platform_host() {
             BUILD_PLATFORM_HOST.call_once(|| {
+                copy_zig_glue::initialize_zig_test_platforms();
+
                 let cli_build = ExecCli::new(
                     CMD_BUILD,
                     file_from_root(
@@ -800,6 +814,8 @@ mod cli_tests {
         /// Build the platform host once for all tests in this module
         fn build_platform_host() {
             BUILD_PLATFORM_HOST.call_once(|| {
+                copy_zig_glue::initialize_zig_test_platforms();
+
                 let cli_build = ExecCli::new(
                     CMD_BUILD,
                     file_from_root(
@@ -1031,6 +1047,8 @@ mod cli_tests {
         /// Build the platform host once for all tests in this module
         fn build_platform_host() {
             BUILD_PLATFORM_HOST.call_once(|| {
+                copy_zig_glue::initialize_zig_test_platforms();
+
                 let cli_build = ExecCli::new(
                     CMD_BUILD,
                     file_from_root("crates/cli/tests/benchmarks/platform", "app.roc"),
@@ -1318,6 +1336,8 @@ mod cli_tests {
     #[cfg_attr(windows, ignore)]
     /// this tests that a platform can correctly import a package
     fn platform_requires_pkg() {
+        copy_zig_glue::initialize_zig_test_platforms();
+
         let cli_build = ExecCli::new(
             CMD_BUILD,
             file_from_root(
