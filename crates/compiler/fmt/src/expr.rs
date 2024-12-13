@@ -1683,14 +1683,16 @@ fn fmt_return<'a>(
     after_return: &Option<&'a Loc<Expr<'a>>>,
     parens: Parens,
     newlines: Newlines,
-
     indent: u16,
 ) {
     buf.ensure_ends_with_newline();
     buf.indent(indent);
     buf.push_str(keyword::RETURN);
 
-    if matches!(return_value.value.extract_spaces().item, Expr::Defs(..)) {
+    if matches!(
+        return_value.value.extract_spaces().item,
+        Expr::Defs(..) | Expr::Backpassing(..)
+    ) {
         buf.ensure_ends_with_newline();
     } else {
         buf.spaces(1);
