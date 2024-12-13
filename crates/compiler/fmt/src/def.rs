@@ -1032,6 +1032,7 @@ pub fn fmt_body<'a>(
             && pattern_extracted.before.iter().all(|s| s.is_newline())
             && pattern_extracted.after.iter().all(|s| s.is_newline())
             && !matches!(body.extract_spaces().item, Expr::Defs(..))
+            && !matches!(body.extract_spaces().item, Expr::Return(..))
     } else {
         false
     };
