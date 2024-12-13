@@ -2125,7 +2125,6 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
     let mut expr = expr.extract_spaces();
 
     while let Expr::ParensAround(loc_expr) = &expr.item {
-        dbg!(&loc_expr);
         let expr_inner = loc_expr.extract_spaces();
 
         expr.before = merge_spaces(arena, expr.before, expr_inner.before);

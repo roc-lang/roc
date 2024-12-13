@@ -202,7 +202,6 @@ fn fmt_pattern_only(
                 let mut was_multiline = arg.item.is_multiline();
 
                 let before = merge_spaces(buf.text.bump(), last_after, arg.before);
-                dbg!(before, arg.item);
 
                 if !before.is_empty() {
                     if !is_multiline {
