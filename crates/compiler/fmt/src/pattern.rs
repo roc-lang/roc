@@ -126,7 +126,7 @@ fn fmt_pattern_inner(
 
     let is_multiline = me.item.is_multiline();
 
-    fmt_pattern_only(me, buf, indent, parens, is_multiline);
+    fmt_pattern_only(&me.item, buf, parens, indent, is_multiline);
 
     if !me.after.is_empty() {
         if starts_with_inline_comment(me.after.iter()) {
@@ -146,13 +146,13 @@ fn fmt_pattern_inner(
 }
 
 fn fmt_pattern_only(
-    me: Spaces<'_, Pattern<'_>>,
+    me: &Pattern<'_>,
     buf: &mut Buf<'_>,
-    indent: u16,
     parens: Parens,
+    indent: u16,
     is_multiline: bool,
 ) {
-    match me.item {
+    match me {
         Pattern::Identifier { ident: string } => {
             buf.indent(indent);
             snakify_camel_ident(buf, string);
@@ -187,29 +187,50 @@ fn fmt_pattern_only(
                 }
             }
 
-            fmt_pattern_inner(&pat.item, buf, Parens::InApply, indent, is_multiline, false);
+            fmt_pattern_only(&pat.item, buf, Parens::InApply, indent, is_multiline);
 
-            if !pat.after.is_empty() {
-                if !is_multiline {
-                    fmt_comments_only(buf, pat.after.iter(), NewlineAt::Bottom, indent_more)
-                } else {
-                    fmt_spaces(buf, pat.after.iter(), indent_more);
-                }
-            }
+            let mut last_after = pat.after;
 
             let mut add_newlines = is_multiline;
 
             for loc_arg in loc_arg_patterns.iter() {
                 buf.spaces(1);
-                let was_multiline = fmt_pattern_inner(
-                    &loc_arg.value,
-                    buf,
-                    Parens::InApply,
-                    indent_more,
-                    is_multiline,
-                    add_newlines,
-                );
+
+                let parens = Parens::InApply;
+                let arg = pattern_lift_spaces(buf.text.bump(), &loc_arg.value);
+
+                let mut was_multiline = arg.item.is_multiline();
+
+                let before = merge_spaces(buf.text.bump(), last_after, arg.before);
+                dbg!(before, arg.item);
+
+                if !before.is_empty() {
+                    if !is_multiline {
+                        was_multiline |= before.iter().any(|s| s.is_comment());
+                        fmt_comments_only(buf, before.iter(), NewlineAt::Bottom, indent_more)
+                    } else {
+                        was_multiline |= true;
+                        fmt_spaces(buf, before.iter(), indent_more);
+                    }
+                }
+
+                if add_newlines {
+                    buf.ensure_ends_with_newline();
+                }
+
+                fmt_pattern_only(&arg.item, buf, parens, indent_more, arg.item.is_multiline());
+
+                last_after = arg.after;
+
                 add_newlines |= was_multiline;
+            }
+
+            if !last_after.is_empty() {
+                if !is_multiline {
+                    fmt_comments_only(buf, last_after.iter(), NewlineAt::Bottom, indent_more)
+                } else {
+                    fmt_spaces(buf, last_after.iter(), indent_more);
+                }
             }
 
             if parens {
@@ -304,7 +325,7 @@ fn fmt_pattern_only(
             is_negative,
         } => {
             buf.indent(indent);
-            if is_negative {
+            if *is_negative {
                 buf.push('-');
             }
 
@@ -321,7 +342,7 @@ fn fmt_pattern_only(
             buf.indent(indent);
             buf.push_str(string);
         }
-        Pattern::StrLiteral(literal) => fmt_str_literal(buf, literal, indent),
+        Pattern::StrLiteral(literal) => fmt_str_literal(buf, *literal, indent),
         Pattern::SingleQuote(string) => {
             buf.indent(indent);
             format_sq_literal(buf, string);
