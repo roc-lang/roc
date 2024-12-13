@@ -106,12 +106,13 @@ fn generateObjectFile(
     step_name: []const u8,
     object_name: []const u8,
 ) void {
-    const obj = b.addObject(.{ .strip = true, .pic = true, .name = object_name, .root_source_file = main_path, .optimize = mode, .target = target, .use_llvm = true });
+    const is_wasm = target.result.cpu.arch == .wasm32 or target.result.cpu.arch == .wasm64;
+    const obj = b.addObject(.{ .strip = true, .pic = !is_wasm, .name = object_name, .root_source_file = main_path, .optimize = mode, .target = target, .use_llvm = true });
 
     obj.link_function_sections = true;
     obj.root_module.stack_check = false;
 
-    if (target.result.cpu.arch != std.Target.Cpu.Arch.wasm32)
+    if (!is_wasm)
         obj.bundle_compiler_rt = true;
 
     const obj_file = obj.getEmittedBin();
