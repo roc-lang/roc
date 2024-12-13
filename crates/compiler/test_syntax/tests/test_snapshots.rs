@@ -577,6 +577,7 @@ mod test_snapshots {
         pass/pattern_as_list_rest.expr,
         pass/pattern_as_spaces.expr,
         pass/pattern_comma_newlines.expr,
+        pass/pattern_opt_field_bonanza.expr,
         pass/pattern_record_apply_comment.expr,
         pass/pattern_with_as_parens.expr,
         pass/pattern_with_space_in_parens.expr, // https://github.com/roc-lang/roc/issues/929

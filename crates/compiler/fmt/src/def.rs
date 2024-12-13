@@ -549,7 +549,11 @@ impl<'a> Formattable for TypeHeader<'a> {
                 }
             }
 
-            buf.ensure_ends_with_whitespace();
+            if last_multiline {
+                buf.ensure_ends_with_newline();
+            } else {
+                buf.ensure_ends_with_whitespace();
+            }
 
             last_after = var.after;
             last_multiline = var.item.is_multiline();
