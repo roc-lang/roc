@@ -240,6 +240,7 @@ mod test_snapshots {
         fail/record_type_open_indent.expr,
         fail/record_type_tab.expr,
         fail/return_as_single_line_expr.expr,
+        fail/return_in_pat.expr,
         fail/single_no_end.expr,
         fail/tab_crash.header,
         fail/tag_union_end.expr,
