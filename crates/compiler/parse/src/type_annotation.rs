@@ -606,7 +606,7 @@ fn expression<'a>(
 
         let (p2, rest, rest_state) = zero_or_more(skip_first(
             backtrackable(
-                and( 
+                skip_first( 
                     backtrackable(space0_e(EType::TIndentStart)),
                     byte(b',', EType::TFunctionArgument)
                 )
