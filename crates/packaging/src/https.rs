@@ -44,7 +44,30 @@ const MISLEADING_CHARACTERS_IN_URL: [char; 5] = [
     '\u{FF0F}', // U+2215 == ／ Fullwidth Solidus
     '\u{29F8}', // U+29F8 == ⧸ Big Solidus
 ];
-
+const ALLOWED_URL_CHARACTERS: [char; 22] = [
+    '-',
+    '.',
+    '_',
+    '~',
+    ':',
+    '/',
+    '?',
+    '#',
+    '[',
+    ']',
+    '@',
+    '!',
+    '$',
+    '&',
+    '\'',
+    '(',
+    ')',
+    '*',
+    '+',
+    ',',
+    ';',
+    '='
+];
 #[derive(Debug, PartialEq, Eq)]
 pub enum UrlProblem {
     InvalidExtensionSuffix(String),
@@ -53,6 +76,7 @@ pub enum UrlProblem {
     MissingHash,
     MissingHttps,
     MisleadingCharacter,
+    InsecureCharacter((String, usize))
 }
 
 impl<'a> TryFrom<&'a str> for PackageMetadata<'a> {
@@ -74,11 +98,12 @@ impl<'a> PackageMetadata<'a> {
         };
 
         // Next, check if there are misleading characters in the URL
-        if url
-            .chars()
-            .any(|ch| MISLEADING_CHARACTERS_IN_URL.contains(&ch))
-        {
-            return Err(UrlProblem::MisleadingCharacter);
+        for (i, ch) in url.chars().enumerate() {
+            if MISLEADING_CHARACTERS_IN_URL.contains(&ch) {
+                return Err(UrlProblem::MisleadingCharacter);
+            } else if !ch.is_alphanumeric() && !ALLOWED_URL_CHARACTERS.contains(&ch) {
+                return Err(UrlProblem::InsecureCharacter((ch.to_string(), i)));
+            }
         }
 
         // Next, get the (optional) URL fragment, which must be a .roc filename
@@ -150,6 +175,20 @@ fn url_problem_misleading_characters() {
     ] {
         assert_eq!(
             PackageMetadata::try_from(misleading_character_example),
+            expected
+        );
+    }
+}
+
+#[test]
+fn url_problem_insecure_characters() {
+    let expected = Err(UrlProblem::InsecureCharacter(("<".to_string(), 24)));
+
+    for insecure_character_example in [
+        "https://github.com/roc-l<ang/",
+    ] {
+        assert_eq!(
+            PackageMetadata::try_from(insecure_character_example),
             expected
         );
     }

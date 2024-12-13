@@ -1658,6 +1658,39 @@ pub fn to_https_problem_report<'b>(
                 severity: Severity::Fatal,
             }
         }
+        Problem::InvalidUrl(roc_packaging::https::UrlProblem::InsecureCharacter(insecure)) => {
+            let (insecure_char, char_index) = insecure;
+            let doc = alloc.stack([
+                alloc.reflow(r"I tried to download from this URL:"),
+                alloc
+                    .string((&url).to_string())
+                    .annotate(Annotation::Url)
+                    .indent(4),
+                alloc.concat([
+                    alloc.reflow(r"I have found one or more insecure "),
+                    alloc.reflow(r"characters in this URL, the first of which are "),
+                    alloc.string(format!("{} at character {}. ", insecure_char.escape_unicode(), char_index)),
+                ]),
+                alloc.concat([
+                    alloc.reflow(r"If you have a use-case for any of these characters we "),
+                    alloc.reflow(r"would like to hear about it. Reach out on "),
+                    alloc
+                        .string(r"https://github.com/roc-lang/roc/issues/6962".to_string())
+                        .annotate(Annotation::Url),
+                ]),
+                alloc.concat([
+                    alloc.tip(),
+                    alloc.reflow(r"Check that you have the correct URL for this package/platform."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "INSECURE URL CHARACTERS".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
         Problem::DownloadTooBig(content_len) => {
             let nice_bytes = Byte::from_bytes(content_len.into())
                 .get_appropriate_unit(false)
