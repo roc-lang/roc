@@ -8,7 +8,7 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
 use soa::{Index, NonEmptySlice, PairSlice, Slice, Slice2};
-use std::iter;
+use std::{iter, mem::MaybeUninit};
 
 pub type IdentId = Symbol; // TODO make this an Index into an array local to this module
 
@@ -319,7 +319,7 @@ pub struct WhenBranch {
 }
 
 pub struct WhenBranches {
-    branches: Vec<WhenBranch>,
+    branches: Vec<MaybeUninit<WhenBranch>>,
 }
 
 impl WhenBranches {
@@ -350,7 +350,7 @@ impl WhenBranches {
 
         // Safety: we should only ever hand out WhenBranch indices that are valid indices into here.
         unsafe {
-            *self.branches.get_unchecked_mut(id.index()) = branch;
+            self.branches.get_unchecked_mut(id.index()).write(branch);
         }
     }
 }
