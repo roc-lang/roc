@@ -70,6 +70,10 @@ fn generate_object_file(bitcode_path: &Path, zig_object: &str, object_file_name:
 
     println!("Compiling zig object `{zig_object}` to: {src_obj}");
 
+    // workaround for github.com/ziglang/zig/issues/20501
+    #[cfg(target_os = "macos")]
+    let _ = fs::remove_dir_all("./.zig-cache");
+
     let mut zig_cmd = zig();
 
     zig_cmd
