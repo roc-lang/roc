@@ -610,6 +610,7 @@ mod test_snapshots {
         pass/return_minus_one.expr,
         pass/return_multiline.expr,
         pass/return_only_statement.expr,
+        pass/return_then_nested_parens.expr,
         pass/return_with_after.expr,
         pass/separate_defs.moduledefs,
         pass/single_arg_closure.expr,

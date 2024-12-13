@@ -1116,7 +1116,7 @@ pub fn expr_lift_spaces<'a, 'b: 'a>(
                 after: body_lifted.after,
             }
         }
-        Expr::If { .. } | Expr::When(_, _) | Expr::Return(_, _) => {
+        Expr::If { .. } | Expr::When(_, _) => {
             if parens == Parens::InApply || parens == Parens::InApplyLastArg {
                 Spaces {
                     before: &[],
@@ -1128,6 +1128,34 @@ pub fn expr_lift_spaces<'a, 'b: 'a>(
                     before: &[],
                     item: *expr,
                     after: &[],
+                }
+            }
+        }
+        Expr::Return(val, opt_after) => {
+            if parens == Parens::InApply || parens == Parens::InApplyLastArg {
+                Spaces {
+                    before: &[],
+                    item: Expr::ParensAround(arena.alloc(*expr)),
+                    after: &[],
+                }
+            } else if let Some(after) = opt_after {
+                let after_lifted = expr_lift_spaces_after(Parens::NotNeeded, arena, &after.value);
+
+                Spaces {
+                    before: &[],
+                    item: Expr::Return(
+                        val,
+                        Some(arena.alloc(Loc::at(after.region, after_lifted.item))),
+                    ),
+                    after: after_lifted.after,
+                }
+            } else {
+                let val_lifted = expr_lift_spaces_after(Parens::NotNeeded, arena, &val.value);
+
+                Spaces {
+                    before: &[],
+                    item: Expr::Return(arena.alloc(Loc::at(val.region, val_lifted.item)), None),
+                    after: val_lifted.after,
                 }
             }
         }
