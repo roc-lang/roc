@@ -316,6 +316,7 @@ mod test_snapshots {
         pass/backpassing_bananza.expr,
         pass/backpassing_in_parens_in_tuple.expr,
         pass/bang_newline_double_accessor.expr,
+        pass/bangs_and_tuple_accessors.expr,
         pass/basic_apply.expr,
         pass/basic_docs.expr,
         pass/basic_field.expr,
@@ -715,7 +716,11 @@ mod test_snapshots {
             // This is the current list as of writing.
             // We should be driving these down to zero over time.
             // Adding this protection in now to avoid accidentally adding more.
-            "all_the_bangs" => true,
+            "all_the_bangs" | "bangs_and_tuple_accessors" => {
+                // both of these result in:
+                // "a Expr::TrySuffix expression was not completely removed in desugar_value_def_suffixed"
+                true
+            }
 
             // When adding new snapshot tests, strongly prefer fixing any canonicalization panics
             // they may run into rather than adding them to this list.
