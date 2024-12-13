@@ -473,6 +473,7 @@ pub fn pattern_lift_spaces<'a, 'b: 'a>(
     match pat {
         Pattern::Apply(func, args) => {
             let func_lifted = pattern_lift_spaces(arena, &func.value);
+
             let args = arena.alloc_slice_copy(args);
             let (before, func, after) = if let Some(last) = args.last_mut() {
                 let last_lifted = pattern_lift_spaces(arena, &last.value);
@@ -528,6 +529,19 @@ pub fn pattern_lift_spaces<'a, 'b: 'a>(
         Pattern::SpaceBefore(expr, spaces) => {
             let mut inner = pattern_lift_spaces(arena, expr);
             inner.before = merge_spaces(arena, spaces, inner.before);
+
+            if starts_with_block_str(&inner.item)
+                && matches!(inner.before.last(), Some(CommentOrNewline::Newline))
+            {
+                // Ick!
+                // The block string will keep "generating" newlines when formatted (it wants to start on its own line),
+                // so we strip one out here.
+                //
+                // Note that this doesn't affect Expr's because those have explicit parens, and we can control
+                // whether spaces cross that boundary.
+                inner.before = &inner.before[..inner.before.len() - 1];
+            }
+
             inner
         }
         Pattern::SpaceAfter(expr, spaces) => {
@@ -540,6 +554,17 @@ pub fn pattern_lift_spaces<'a, 'b: 'a>(
             item: *pat,
             after: &[],
         },
+    }
+}
+
+fn starts_with_block_str(item: &Pattern<'_>) -> bool {
+    match item {
+        Pattern::As(inner, _) | Pattern::Apply(inner, _) => starts_with_block_str(&inner.value),
+        Pattern::SpaceBefore(inner, _) | Pattern::SpaceAfter(inner, _) => {
+            starts_with_block_str(inner)
+        }
+        Pattern::StrLiteral(str_literal) => is_str_multiline(str_literal),
+        _ => false,
     }
 }
 
