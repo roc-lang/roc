@@ -2,7 +2,7 @@
   description = "Roc flake";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs?rev=fd281bd6b7d3e32ddfa399853946f782553163b5";
+    nixpkgs.url = "github:nixos/nixpkgs?rev=184957277e885c06a505db112b35dfbec7c60494";
 
     # rust from nixpkgs has some libc problems, this is patched in the rust-overlay
     rust-overlay = {
@@ -34,6 +34,7 @@
     { inherit templates; } //
     flake-utils.lib.eachSystem supportedSystems (system:
       let
+
         overlays = [ (import rust-overlay) ]
         ++ (if system == "x86_64-linux" then [ nixgl.overlay ] else [ ]);
         pkgs = import nixpkgs { inherit system overlays; };
@@ -72,17 +73,23 @@
         sharedInputs = (with pkgs; [
           # build libraries
           cmake
-          llvmPkgs.llvm.dev
-          llvmPkgs.clang
+          # provides llvm
+          llvmPkgs.dev
+          # faster builds - see https://github.com/roc-lang/roc/blob/main/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
+          # provides lld
+          pkgs.lld_18
+          # provides clang
+          pkgs.clang_18
+
           pkg-config
+
           zigPkg # roc builtins are implemented in zig, see compiler/builtins/bitcode/
+
           # lib deps
           libffi
           libxml2
           ncurses
           zlib
-          # faster builds - see https://github.com/roc-lang/roc/blob/main/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
-          llvmPkgs.lld
           rocBuild.rust-shell
           perl # ./ci/update_basic_cli_url.sh
         ]);
@@ -133,7 +140,7 @@
             1; # to run the GUI examples with NVIDIA's closed source drivers
 
           shellHook = ''
-            export LLVM_SYS_${llvmMajorMinorStr}_PREFIX="${llvmPkgs.llvm.dev}"
+            export LLVM_SYS_180_PREFIX="${llvmPkgs.dev}"
             ${aliases}
           '';
         };
