@@ -391,6 +391,7 @@ mod test_snapshots {
         pass/empty_package_header.header,
         pass/empty_platform_header.header,
         pass/empty_record.expr,
+        pass/empty_record_assign_expect_bang.expr,
         pass/empty_record_assign_return.expr,
         pass/empty_record_assign_tag.expr,
         pass/empty_record_assignment.expr,

@@ -1034,6 +1034,7 @@ pub fn fmt_body<'a>(
             && pattern_extracted.after.iter().all(|s| s.is_newline())
             && !matches!(body.extract_spaces().item, Expr::Defs(..))
             && !matches!(body.extract_spaces().item, Expr::Return(..))
+            && !starts_with_expect_ident(body)
     } else {
         false
     };
@@ -1141,6 +1142,19 @@ pub fn fmt_body<'a>(
     } else {
         buf.spaces(1);
         body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
+    }
+}
+
+fn starts_with_expect_ident(expr: &Expr<'_>) -> bool {
+    // We need to be persnickety about not formatting `{}=expect foo` into `expect foo`,
+    // because `expect` is treated as a keyword at the statement level but not at the expr level.
+    // If we removed the `{}=` in this case, that would change the meaning
+    match expr {
+        Expr::Apply(inner, _, _) => starts_with_expect_ident(&inner.value),
+        Expr::Var { module_name, ident } => {
+            module_name.is_empty() && (*ident == "expect" || *ident == "expect!")
+        }
+        _ => false,
     }
 }
 
