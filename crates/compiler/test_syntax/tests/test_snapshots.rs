@@ -472,6 +472,7 @@ mod test_snapshots {
         pass/multiline_binop_when_with_comments.expr,
         pass/multiline_str_crazyness.expr,
         pass/multiline_str_in_pat.expr,
+        pass/multiline_str_opt_field.expr,
         pass/multiline_string.expr,
         pass/multiline_string_in_apply.expr,
         pass/multiline_tuple_with_comments.expr,

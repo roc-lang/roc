@@ -395,39 +395,36 @@ fn assigned_field_lift_spaces<'a, 'b: 'a>(
 ) -> Spaces<'a, AssignedField<'a, Expr<'a>>> {
     match value {
         AssignedField::RequiredValue(name, sp, value) => {
-            let new_value = expr_lift_spaces(Parens::NotNeeded, arena, &value.value);
-            let new_sp = merge_spaces_conservative(arena, sp, new_value.before);
+            let new_value = expr_lift_spaces_after(Parens::NotNeeded, arena, &value.value);
             Spaces {
                 before: &[],
                 item: AssignedField::RequiredValue(
                     name,
-                    new_sp,
+                    sp,
                     arena.alloc(Loc::at(value.region, new_value.item)),
                 ),
                 after: new_value.after,
             }
         }
         AssignedField::OptionalValue(name, sp, value) => {
-            let new_value = expr_lift_spaces(Parens::NotNeeded, arena, &value.value);
-            let new_sp = merge_spaces_conservative(arena, sp, new_value.before);
+            let new_value = expr_lift_spaces_after(Parens::NotNeeded, arena, &value.value);
             Spaces {
                 before: &[],
                 item: AssignedField::OptionalValue(
                     name,
-                    new_sp,
+                    sp,
                     arena.alloc(Loc::at(value.region, new_value.item)),
                 ),
                 after: new_value.after,
             }
         }
         AssignedField::IgnoredValue(name, sp, value) => {
-            let new_value = expr_lift_spaces(Parens::NotNeeded, arena, &value.value);
-            let new_sp = merge_spaces_conservative(arena, sp, new_value.before);
+            let new_value = expr_lift_spaces_after(Parens::NotNeeded, arena, &value.value);
             Spaces {
                 before: &[],
                 item: AssignedField::IgnoredValue(
                     name,
-                    new_sp,
+                    sp,
                     arena.alloc(Loc::at(value.region, new_value.item)),
                 ),
                 after: new_value.after,
