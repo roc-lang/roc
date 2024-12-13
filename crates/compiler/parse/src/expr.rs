@@ -3107,13 +3107,23 @@ fn stmts_to_defs<'a>(
         match sp_stmt.item.value {
             Stmt::Expr(Expr::Return(return_value, _after_return)) => {
                 if i == stmts.len() - 1 {
-                    last_expr = Some(Loc::at_zero(Expr::Return(return_value, None)));
+                    let region = sp_stmt.item.region;
+                    last_expr = Some(
+                        arena
+                            .alloc(Expr::Return(return_value, None))
+                            .with_spaces_before(sp_stmt.before, region),
+                    );
                 } else {
+                    let region = Region::span_across(
+                        &sp_stmt.item.region,
+                        &stmts[stmts.len() - 1].item.region,
+                    );
                     let rest = stmts_to_expr(&stmts[i + 1..], arena)?;
-                    last_expr = Some(Loc::at_zero(Expr::Return(
-                        return_value,
-                        Some(arena.alloc(rest)),
-                    )));
+                    last_expr = Some(
+                        arena
+                            .alloc(Expr::Return(return_value, Some(arena.alloc(rest))))
+                            .with_spaces_before(sp_stmt.before, region),
+                    );
                 }
 
                 // don't re-process the rest of the statements, they got consumed by the early return

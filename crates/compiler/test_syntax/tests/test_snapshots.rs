@@ -547,6 +547,7 @@ mod test_snapshots {
         pass/outdented_record.expr,
         pass/p_return_f_minus_f.expr,
         pass/packed_singleton_list.expr,
+        pass/paren_newline_before_return.expr,
         pass/parens_apply_newline.expr,
         pass/parens_apply_not_parens.expr,
         pass/parens_comment_in_ty_annotation.expr,

@@ -1,35 +1,38 @@
-SpaceAfter(
-    Return(
-        @0-8 Var {
-            module_name: "",
-            ident: "n",
-        },
-        Some(
-            @9-17 SpaceBefore(
-                ParensAround(
-                    SpaceAfter(
-                        ParensAround(
-                            SpaceAfter(
-                                Num(
-                                    "0",
+@0-17 SpaceAfter(
+    SpaceBefore(
+        Return(
+            @0-8 Var {
+                module_name: "",
+                ident: "n",
+            },
+            Some(
+                @9-17 SpaceBefore(
+                    ParensAround(
+                        SpaceAfter(
+                            ParensAround(
+                                SpaceAfter(
+                                    Num(
+                                        "0",
+                                    ),
+                                    [
+                                        Newline,
+                                    ],
                                 ),
-                                [
-                                    Newline,
-                                ],
                             ),
+                            [
+                                LineComment(
+                                    "",
+                                ),
+                            ],
                         ),
-                        [
-                            LineComment(
-                                "",
-                            ),
-                        ],
                     ),
+                    [
+                        Newline,
+                    ],
                 ),
-                [
-                    Newline,
-                ],
             ),
         ),
+        [],
     ),
     [
         Newline,

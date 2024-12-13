@@ -37,7 +37,6 @@ impl<'a> Formattable for Defs<'a> {
         buf: &mut Buf,
         _parens: Parens,
         _newlines: Newlines,
-
         indent: u16,
     ) {
         let mut prev_spaces = true;
