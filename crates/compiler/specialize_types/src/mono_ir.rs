@@ -1,18 +1,14 @@
 use crate::{
     foreign_symbol::ForeignSymbolId, mono_module::InternedStrId, mono_num::Number,
-    mono_struct::MonoFieldId, mono_type::MonoTypeId, specialize_type::Problem,
+    mono_struct::MonoFieldId, mono_type::MonoTypeId, specialize_type::Problem, MonoPattern,
+    MonoPatternId,
 };
 use roc_can::expr::Recursive;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
-use soa::{Index, NonEmptySlice, PairSlice, Slice, Slice2, Slice3};
+use soa::{Index, NonEmptySlice, PairSlice, Slice, Slice2};
 use std::iter;
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct MonoPatternId {
-    inner: u32,
-}
 
 pub type IdentId = Symbol; // TODO make this an Index into an array local to this module
 
@@ -306,7 +302,7 @@ pub enum MonoExpr {
         /// The return type of all branches and thus the whole when expression
         branch_type: MonoTypeId,
         /// The branches of the when expression
-        branches: Slice<WhenBranch>,
+        branches: NonEmptySlice<WhenBranch>,
     },
 
     CompilerBug(Problem),
@@ -314,48 +310,47 @@ pub enum MonoExpr {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WhenBranch {
-    /// The pattern to match the value against
-    pub pattern: MonoPatternId,
+    /// The pattern(s) to match the value against
+    pub patterns: NonEmptySlice<MonoPattern>,
     /// A boolean expression that must be true for this branch to be taken
     pub guard: Option<MonoExprId>,
     /// The expression to produce if the pattern matches
-    pub expr: MonoExprId,
+    pub value: MonoExprId,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum MonoPattern {
-    Identifier(IdentId),
-    As(MonoPatternId, IdentId),
-    StrLiteral(InternedStrId),
-    NumberLiteral(Number),
-    AppliedTag {
-        tag_union_type: MonoTypeId,
-        tag_name: IdentId,
-        args: Slice<MonoPatternId>,
-    },
-    StructDestructure {
-        struct_type: MonoTypeId,
-        destructs: Slice3<IdentId, MonoFieldId, DestructType>,
-    },
-    List {
-        elem_type: MonoTypeId,
-        patterns: Slice<MonoPatternId>,
-
-        /// Where a rest pattern splits patterns before and after it, if it does at all.
-        /// If present, patterns at index >= the rest index appear after the rest pattern.
-        /// For example:
-        ///   [ .., A, B ] -> patterns = [A, B], rest = 0
-        ///   [ A, .., B ] -> patterns = [A, B], rest = 1
-        ///   [ A, B, .. ] -> patterns = [A, B], rest = 2
-        /// Optionally, the rest pattern can be named - e.g. `[ A, B, ..others ]`
-        opt_rest: Option<(u16, Option<IdentId>)>,
-    },
-    Underscore,
+pub struct WhenBranches {
+    branches: Vec<WhenBranch>,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum DestructType {
-    Required,
-    Optional(MonoTypeId, MonoExprId),
-    Guard(MonoTypeId, MonoPatternId),
+impl WhenBranches {
+    pub fn new() -> Self {
+        Self {
+            branches: Vec::new(),
+        }
+    }
+
+    pub fn reserve(&mut self, count: usize) -> Slice<WhenBranch> {
+        let start = self.branches.len();
+
+        let new_size = start + count;
+        self.branches.reserve(count);
+
+        unsafe {
+            self.branches.set_len(new_size);
+        }
+
+        Slice::new(start as u32, count as u16)
+    }
+
+    pub fn insert(&mut self, id: Index<WhenBranch>, branch: WhenBranch) {
+        debug_assert!(
+            self.branches.get(id.index()).is_some(),
+            "A WhenBranch index was not found in WhenBranches. This should never happen!"
+        );
+
+        // Safety: we should only ever hand out WhenBranch indices that are valid indices into here.
+        unsafe {
+            *self.branches.get_unchecked_mut(id.index()) = branch;
+        }
+    }
 }

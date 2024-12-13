@@ -7,8 +7,8 @@ use roc_load::LoadedModule;
 use roc_region::all::Region;
 use roc_solve::FunctionKind;
 use roc_specialize_types::{
-    DebugInfo, Env, Interns, MonoExpr, MonoExprs, MonoTypeCache, MonoTypes, RecordFieldIds,
-    TupleElemIds,
+    DebugInfo, Env, Interns, MonoExpr, MonoExprs, MonoPatterns, MonoTypeCache, MonoTypes,
+    RecordFieldIds, TupleElemIds, WhenBranches,
 };
 use test_compile::{trim_and_deindent, SpecializedExprOut};
 use test_solve_helpers::{format_problems, run_load_and_infer};
@@ -65,6 +65,8 @@ fn specialize_expr<'a>(
     let mut types_cache = MonoTypeCache::from_solved_subs(&solved);
     let mut mono_types = MonoTypes::new();
     let mut mono_exprs = MonoExprs::new();
+    let mut mono_patterns = MonoPatterns::new();
+    let mut when_branches = WhenBranches::new();
 
     let mut env = Env::new(
         arena,
@@ -72,6 +74,8 @@ fn specialize_expr<'a>(
         &mut types_cache,
         &mut mono_types,
         &mut mono_exprs,
+        &mut mono_patterns,
+        &mut when_branches,
         RecordFieldIds::default(),
         TupleElemIds::default(),
         string_interns,

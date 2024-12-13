@@ -1,13 +1,16 @@
 use crate::{
-    mono_ir::{MonoExpr, MonoExprId, MonoExprs},
+    mono_ir::{MonoExpr, MonoExprId, MonoExprs, WhenBranch, WhenBranches},
     mono_module::Interns,
     mono_num::Number,
     mono_type::{MonoType, MonoTypes, Primitive},
     specialize_type::{MonoTypeCache, Problem, RecordFieldIds, TupleElemIds},
-    DebugInfo, MonoTypeId,
+    DebugInfo, MonoPattern, MonoPatterns, MonoTypeId,
 };
 use bumpalo::{collections::Vec, Bump};
-use roc_can::expr::{Expr, IntValue};
+use roc_can::{
+    expr::{Expr, IntValue},
+    pattern::Pattern,
+};
 use roc_collections::{Push, VecMap};
 use roc_module::symbol::ModuleId;
 use roc_region::all::Region;
@@ -44,12 +47,14 @@ impl MonoFnCache {
     }
 }
 
-pub struct Env<'a, 'c, 'd, 'i, 's, 't, P> {
+pub struct Env<'a, 'c, 'd, 'i, 's, 't, 'w, P> {
     arena: &'a Bump,
     subs: &'s mut Subs,
     types_cache: &'c mut MonoTypeCache,
     mono_types: &'t mut MonoTypes,
     mono_exprs: &'t mut MonoExprs,
+    mono_patterns: &'t mut MonoPatterns,
+    when_branches: &'w mut WhenBranches,
     record_field_ids: RecordFieldIds,
     tuple_elem_ids: TupleElemIds,
     debug_info: &'d mut Option<DebugInfo>,
@@ -57,13 +62,15 @@ pub struct Env<'a, 'c, 'd, 'i, 's, 't, P> {
     problems: P,
 }
 
-impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
+impl<'a, 'c, 'd, 'i, 's, 't, 'w, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, 'w, P> {
     pub fn new(
         arena: &'a Bump,
         subs: &'s mut Solved<Subs>,
         types_cache: &'c mut MonoTypeCache,
         mono_types: &'t mut MonoTypes,
         mono_exprs: &'t mut MonoExprs,
+        mono_patterns: &'t mut MonoPatterns,
+        when_branches: &'w mut WhenBranches,
         record_field_ids: RecordFieldIds,
         tuple_elem_ids: TupleElemIds,
         string_interns: &'i mut Interns<'a>,
@@ -76,6 +83,8 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
             types_cache,
             mono_types,
             mono_exprs,
+            mono_patterns,
+            when_branches,
             record_field_ids,
             tuple_elem_ids,
             string_interns,
@@ -85,7 +94,6 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
     }
 
     pub fn to_mono_expr(&mut self, can_expr: &Expr) -> MonoExpr {
-        let problems = &mut self.problems;
         let mono_types = &mut self.mono_types;
         let mut mono_from_var = |var| {
             self.types_cache.monomorphize_var(
@@ -94,7 +102,7 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
                 mono_types,
                 &mut self.record_field_ids,
                 &mut self.tuple_elem_ids,
-                problems,
+                &mut self.problems,
                 self.debug_info,
                 var,
             )
@@ -102,7 +110,7 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
 
         macro_rules! compiler_bug {
             ($problem:expr) => {{
-                problems.push($problem);
+                self.problems.push($problem);
                 MonoExpr::CompilerBug($problem)
             }};
         }
@@ -117,7 +125,9 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
                     _ => {
                         let mono_type = mono_from_var(*var);
                         match mono_types.get(mono_type) {
-                            MonoType::Primitive(primitive) => to_frac(*primitive, *val, problems),
+                            MonoType::Primitive(primitive) => {
+                                to_frac(*primitive, *val, &mut self.problems)
+                            }
                             other => {
                                 compiler_bug!(Problem::NumSpecializedToWrongType(Some(*other)))
                             }
@@ -130,7 +140,9 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
 
                 // Number literals and int literals both specify integer numbers, so to_num() can work on both.
                 match mono_types.get(mono_type) {
-                    MonoType::Primitive(primitive) => to_num(*primitive, *int_value, problems),
+                    MonoType::Primitive(primitive) => {
+                        to_num(*primitive, *int_value, &mut self.problems)
+                    }
                     other => compiler_bug!(Problem::NumSpecializedToWrongType(Some(*other))),
                 }
             }
@@ -142,7 +154,9 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
                 // or keeping a separate value but storing an IntValue instead of a char), then
                 // even though we verify them differently, we can combine this branch with Num and Int.
                 match mono_types.get(mono_type) {
-                    MonoType::Primitive(primitive) => char_to_int(*primitive, *char, problems),
+                    MonoType::Primitive(primitive) => {
+                        char_to_int(*primitive, *char, &mut self.problems)
+                    }
                     other => compiler_bug!(Problem::CharSpecializedToWrongType(Some(*other))),
                 }
             }
@@ -225,6 +239,59 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
             }
             Expr::Var(symbol, var) | Expr::ParamsVar { symbol, var, .. } => {
                 MonoExpr::Lookup(*symbol, mono_from_var(*var))
+            }
+            Expr::When {
+                loc_cond,
+                cond_var,
+                expr_var,
+                region: _,
+                branches,
+                branches_cond_var: _,
+                exhaustive: _,
+            } => {
+                let value_type = mono_from_var(*cond_var);
+                let branch_type = mono_from_var(*expr_var);
+                let value = self.to_mono_expr(&loc_cond.value);
+                let value_id = self.mono_exprs.add(value, loc_cond.region);
+
+                let branches_slice = self.when_branches.reserve(branches.len());
+
+                for (branch_index, branch) in branches_slice.into_iter().zip(branches.iter()) {
+                    let patterns_slice = self.mono_patterns.reserve(branch.patterns.len());
+
+                    for (pattern_id, pattern) in
+                        patterns_slice.into_iter().zip(branch.patterns.iter())
+                    {
+                        let mono_pattern = self.to_mono_pattern(&pattern.pattern.value);
+                        self.mono_patterns
+                            .insert(pattern_id, mono_pattern, pattern.pattern.region);
+                    }
+
+                    let value = self.to_mono_expr(&branch.value.value);
+
+                    let Some(patterns_slice) = NonEmptySlice::from_slice(patterns_slice) else {
+                        return compiler_bug!(Problem::WhenBranchHasNoPatterns);
+                    };
+
+                    let mono_branch = WhenBranch {
+                        patterns: patterns_slice,
+                        guard: None,
+                        value: self.mono_exprs.add(value, branch.value.region),
+                    };
+
+                    self.when_branches.insert(branch_index, mono_branch);
+                }
+
+                let Some(branches_slice) = NonEmptySlice::from_slice(branches_slice) else {
+                    return compiler_bug!(Problem::WhenHasNoBranches);
+                };
+
+                MonoExpr::When {
+                    value: value_id,
+                    value_type,
+                    branch_type,
+                    branches: branches_slice,
+                }
             }
             // Expr::Call((fn_var, fn_expr, capture_var, ret_var), args, called_via) => {
             //     let opt_ret_type = mono_from_var(*var);
@@ -320,15 +387,6 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
             //     params_var,
             // } => todo!(),
             // Expr::AbilityMember(symbol, specialization_id, variable) => todo!(),
-            // Expr::When {
-            //     loc_cond,
-            //     cond_var,
-            //     expr_var,
-            //     region,
-            //     branches,
-            //     branches_cond_var,
-            //     exhaustive,
-            // } => todo!(),
             // Expr::Call(_, vec, called_via) => todo!(),
             // Expr::RunLowLevel { op, args, ret_var } => todo!(),
             // Expr::ForeignCall {
@@ -403,6 +461,29 @@ impl<'a, 'c, 'd, 'i, 's, 't, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, P> {
             // Expr::RuntimeError(_runtime_error) => {
             //     todo!("generate a MonoExpr::Crash based on the runtime error");
             // }
+        }
+    }
+
+    fn to_mono_pattern(&mut self, can_pattern: &Pattern) -> MonoPattern {
+        match can_pattern {
+            Pattern::Identifier(ident) => MonoPattern::Identifier(*ident),
+            Pattern::As(_, _) => todo!(),
+            Pattern::AppliedTag { .. } => todo!(),
+            Pattern::UnwrappedOpaque { .. } => todo!(),
+            Pattern::RecordDestructure { .. } => todo!(),
+            Pattern::TupleDestructure { .. } => todo!(),
+            Pattern::List { .. } => todo!(),
+            Pattern::NumLiteral(_, _, _, _) => todo!(),
+            Pattern::IntLiteral(_, _, _, _, _) => todo!(),
+            Pattern::FloatLiteral(_, _, _, _, _) => todo!(),
+            Pattern::StrLiteral(_) => todo!(),
+            Pattern::SingleQuote(_, _, _, _) => todo!(),
+            Pattern::Underscore => todo!(),
+            Pattern::AbilityMemberSpecialization { .. } => todo!(),
+            Pattern::Shadowed(_, _, _) => todo!(),
+            Pattern::OpaqueNotInScope(_) => todo!(),
+            Pattern::UnsupportedPattern(_) => todo!(),
+            Pattern::MalformedPattern(_, _) => todo!(),
         }
     }
 }
