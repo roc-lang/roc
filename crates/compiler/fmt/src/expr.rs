@@ -1514,7 +1514,6 @@ fn fmt_when<'a>(
     buf: &mut Buf,
     loc_condition: &'a Loc<Expr<'a>>,
     branches: &[&'a WhenBranch<'a>],
-
     indent: u16,
 ) {
     buf.ensure_ends_with_newline();
@@ -1604,11 +1603,14 @@ fn fmt_when<'a>(
         }
 
         buf.indent(indent + INDENT);
+        let line_indent = buf.cur_line_indent();
         buf.push_str(" ->");
+
+        let inner_indent = line_indent + INDENT;
 
         match expr.value {
             Expr::SpaceBefore(nested, spaces) => {
-                fmt_spaces_no_blank_lines(buf, spaces.iter(), indent + (INDENT * 2));
+                fmt_spaces_no_blank_lines(buf, spaces.iter(), inner_indent);
 
                 if is_multiline_expr {
                     buf.ensure_ends_with_newline();
@@ -1616,12 +1618,7 @@ fn fmt_when<'a>(
                     buf.spaces(1);
                 }
 
-                nested.format_with_options(
-                    buf,
-                    Parens::NotNeeded,
-                    Newlines::Yes,
-                    indent + 2 * INDENT,
-                );
+                nested.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, inner_indent);
             }
             _ => {
                 if is_multiline_expr {
@@ -1630,12 +1627,7 @@ fn fmt_when<'a>(
                     buf.spaces(1);
                 }
 
-                expr.format_with_options(
-                    buf,
-                    Parens::NotNeeded,
-                    Newlines::Yes,
-                    indent + 2 * INDENT,
-                );
+                expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, inner_indent);
             }
         }
 
