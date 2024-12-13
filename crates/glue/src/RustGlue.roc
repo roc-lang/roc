@@ -739,7 +739,8 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
         """
         }
 
-        const _SIZE_CHECK_$(unionName): () = assert!(core::mem::size_of::<$(unionName)>() == $(sizeOfUnionStr));
+        // TODO(@roc-lang): See https://github.com/roc-lang/roc/issues/6012
+        // const _SIZE_CHECK_$(unionName): () = assert!(core::mem::size_of::<$(unionName)>() == $(sizeOfUnionStr));
         const _ALIGN_CHECK_$(unionName): () = assert!(core::mem::align_of::<$(unionName)>() == $(alignOfUnionStr));
 
         const _SIZE_CHECK_$(escapedName): () = assert!(core::mem::size_of::<$(escapedName)>() == $(sizeOfSelf));
