@@ -305,6 +305,7 @@ mod test_snapshots {
         pass/apply_closure_pizza.expr,
         pass/apply_parenthetical_tag_args.expr,
         pass/apply_record_ann.expr,
+        pass/apply_record_parens_newline_field.expr,
         pass/apply_tag.expr,
         pass/apply_three_args.expr,
         pass/apply_tuple_ext_parens_ty.expr,

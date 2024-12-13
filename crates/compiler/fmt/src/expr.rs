@@ -133,13 +133,19 @@ fn format_expr_only(
             buf.push_str(string);
         }
         Expr::Record(fields) => {
-            fmt_record_like(buf, None, *fields, indent, assigned_field_to_spaces);
+            fmt_record_like(
+                buf,
+                None,
+                prepare_expr_field_collection(buf.text.bump(), *fields),
+                indent,
+                assigned_field_to_spaces,
+            );
         }
         Expr::RecordUpdate { update, fields } => {
             fmt_record_like(
                 buf,
                 Some(RecordPrefix::Update(update)),
-                *fields,
+                prepare_expr_field_collection(buf.text.bump(), *fields),
                 indent,
                 assigned_field_to_spaces,
             );
@@ -148,7 +154,7 @@ fn format_expr_only(
             fmt_record_like(
                 buf,
                 Some(RecordPrefix::Mapper(mapper)),
-                *fields,
+                prepare_expr_field_collection(buf.text.bump(), *fields),
                 indent,
                 assigned_field_to_spaces,
             );
@@ -335,6 +341,113 @@ fn format_expr_only(
         Expr::EmptyRecordBuilder { .. } => {}
         Expr::SingleFieldRecordBuilder { .. } => {}
         Expr::OptionalFieldInRecordBuilder(_, _) => {}
+    }
+}
+
+fn prepare_expr_field_collection<'a>(
+    arena: &'a Bump,
+    items: Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>,
+) -> Collection<'a, Loc<AssignedField<'a, Expr<'a>>>> {
+    let mut new_items: Vec<'_, Loc<AssignedField<'a, Expr<'a>>>> =
+        Vec::with_capacity_in(items.len(), arena);
+
+    let mut last_after: &[CommentOrNewline<'_>] = &[];
+
+    for (i, item) in items.items.iter().enumerate() {
+        let mut lifted = assigned_field_lift_spaces(arena, item.value);
+        if i == items.items.len() - 1 {
+            last_after = lifted.after;
+            lifted.after = &[];
+        }
+        new_items.push(Loc::at(item.region, lower_assigned_field(arena, lifted)));
+    }
+
+    let final_comments = merge_spaces_conservative(arena, last_after, items.final_comments());
+
+    Collection::with_items_and_comments(arena, new_items.into_bump_slice(), final_comments)
+}
+
+fn lower_assigned_field<'a>(
+    arena: &'a Bump,
+    lifted: Spaces<'a, AssignedField<'a, Expr<'a>>>,
+) -> AssignedField<'a, Expr<'a>> {
+    if lifted.before.is_empty() && lifted.after.is_empty() {
+        return lifted.item;
+    }
+    if lifted.before.is_empty() {
+        return AssignedField::SpaceAfter(arena.alloc(lifted.item), lifted.after);
+    }
+    if lifted.after.is_empty() {
+        return AssignedField::SpaceBefore(arena.alloc(lifted.item), lifted.before);
+    }
+    AssignedField::SpaceBefore(
+        arena.alloc(AssignedField::SpaceAfter(
+            arena.alloc(lifted.item),
+            lifted.after,
+        )),
+        lifted.before,
+    )
+}
+
+fn assigned_field_lift_spaces<'a, 'b: 'a>(
+    arena: &'a Bump,
+    value: AssignedField<'b, Expr<'b>>,
+) -> Spaces<'a, AssignedField<'a, Expr<'a>>> {
+    match value {
+        AssignedField::RequiredValue(name, sp, value) => {
+            let new_value = expr_lift_spaces(Parens::NotNeeded, arena, &value.value);
+            let new_sp = merge_spaces_conservative(arena, sp, new_value.before);
+            Spaces {
+                before: &[],
+                item: AssignedField::RequiredValue(
+                    name,
+                    new_sp,
+                    arena.alloc(Loc::at(value.region, new_value.item)),
+                ),
+                after: new_value.after,
+            }
+        }
+        AssignedField::OptionalValue(name, sp, value) => {
+            let new_value = expr_lift_spaces(Parens::NotNeeded, arena, &value.value);
+            let new_sp = merge_spaces_conservative(arena, sp, new_value.before);
+            Spaces {
+                before: &[],
+                item: AssignedField::OptionalValue(
+                    name,
+                    new_sp,
+                    arena.alloc(Loc::at(value.region, new_value.item)),
+                ),
+                after: new_value.after,
+            }
+        }
+        AssignedField::IgnoredValue(name, sp, value) => {
+            let new_value = expr_lift_spaces(Parens::NotNeeded, arena, &value.value);
+            let new_sp = merge_spaces_conservative(arena, sp, new_value.before);
+            Spaces {
+                before: &[],
+                item: AssignedField::IgnoredValue(
+                    name,
+                    new_sp,
+                    arena.alloc(Loc::at(value.region, new_value.item)),
+                ),
+                after: new_value.after,
+            }
+        }
+        AssignedField::LabelOnly(name) => Spaces {
+            before: &[],
+            item: AssignedField::LabelOnly(name),
+            after: &[],
+        },
+        AssignedField::SpaceBefore(inner, sp) => {
+            let mut inner = assigned_field_lift_spaces(arena, *inner);
+            inner.before = merge_spaces_conservative(arena, sp, inner.before);
+            inner
+        }
+        AssignedField::SpaceAfter(inner, sp) => {
+            let mut inner = assigned_field_lift_spaces(arena, *inner);
+            inner.after = merge_spaces_conservative(arena, inner.after, sp);
+            inner
+        }
     }
 }
 
@@ -1888,7 +2001,7 @@ fn fmt_record_like<'a, 'b: 'a, Field, ToSpacesAround>(
     indent: u16,
     to_space_around: ToSpacesAround,
 ) where
-    Field: Formattable,
+    Field: Formattable + std::fmt::Debug,
     ToSpacesAround: Fn(&'a Bump, &'b Field) -> Spaces<'a, Field>,
 {
     let loc_fields = fields.items;
@@ -1960,6 +2073,7 @@ fn fmt_record_like<'a, 'b: 'a, Field, ToSpacesAround>(
                     Newlines::No,
                     field_indent,
                 );
+                buf.indent(field_indent);
                 buf.push_str(",");
                 last_after = field_lifted.after;
             }
