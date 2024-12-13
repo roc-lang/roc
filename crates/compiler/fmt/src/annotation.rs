@@ -427,7 +427,6 @@ fn lower<'a, 'b: 'a>(
 
 fn fmt_ty_collection(
     buf: &mut Buf<'_>,
-
     indent: u16,
     braces: Braces,
     items: Collection<'_, Loc<TypeAnnotation<'_>>>,
@@ -1215,11 +1214,14 @@ fn ann_lift_to_node<'a, 'b: 'a>(
                 inner
             }
         }
-        _ => Spaces {
-            before: &[],
-            item: Node::TypeAnnotation(*ann),
-            after: &[],
-        },
+        _ => {
+            let lifted = ann_lift_spaces(arena, ann);
+            Spaces {
+                before: lifted.before,
+                item: Node::TypeAnnotation(lifted.item),
+                after: lifted.after,
+            }
+        }
     }
 }
 

@@ -301,6 +301,7 @@ mod test_snapshots {
         pass/annotation_tuple_comment.expr,
         pass/annotation_tuple_newline.expr,
         pass/annotation_tuple_parens_newlines.expr,
+        pass/annotation_tuples_ext_galore.expr,
         pass/applies_in_binop.expr,
         pass/apply_binop_switch.expr,
         pass/apply_closure_pizza.expr,
