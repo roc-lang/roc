@@ -803,6 +803,7 @@ impl<'a> Formattable for IngestedFileAnnotation<'a> {
         } = self;
 
         fmt_default_spaces(buf, before_colon, indent);
+        buf.indent(indent);
         buf.push_str(":");
         buf.spaces(1);
         annotation.format(buf, indent);
