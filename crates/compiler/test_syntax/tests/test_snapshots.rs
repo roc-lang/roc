@@ -478,6 +478,7 @@ mod test_snapshots {
         pass/multiline_binop_when_with_comments.expr,
         pass/multiline_str_apply_in_parens_pat.expr,
         pass/multiline_str_crazyness.expr,
+        pass/multiline_str_in_backpassing_pats.expr,
         pass/multiline_str_in_pat.expr,
         pass/multiline_str_opt_field.expr,
         pass/multiline_string.expr,

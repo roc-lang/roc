@@ -529,16 +529,20 @@ pub fn pattern_lift_spaces<'a, 'b: 'a>(
             let mut inner = pattern_lift_spaces(arena, expr);
             inner.before = merge_spaces(arena, spaces, inner.before);
 
-            if starts_with_block_str(&inner.item)
-                && matches!(inner.before.last(), Some(CommentOrNewline::Newline))
-            {
+            if starts_with_block_str(&inner.item) {
                 // Ick!
                 // The block string will keep "generating" newlines when formatted (it wants to start on its own line),
                 // so we strip one out here.
                 //
                 // Note that this doesn't affect Expr's because those have explicit parens, and we can control
                 // whether spaces cross that boundary.
-                inner.before = &inner.before[..inner.before.len() - 1];
+                let chop_off = inner
+                    .before
+                    .iter()
+                    .rev()
+                    .take_while(|&&s| matches!(s, CommentOrNewline::Newline))
+                    .count();
+                inner.before = &inner.before[..inner.before.len() - chop_off];
             }
 
             inner
