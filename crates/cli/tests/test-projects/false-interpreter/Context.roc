@@ -1,4 +1,4 @@
-module [Context, Data, with, getChar, Option, pushStack, popStack, toStr, inWhileScope]
+module [Context, Data, with!, getChar!, Option, pushStack, popStack, toStr, inWhileScope]
 
 import pf.File
 import Variable exposing [Variable]
@@ -20,13 +20,13 @@ pushStack = \ctx, data ->
 # I think an open tag union should just work here.
 # Instead at a call sites, I need to match on the error and then return the same error.
 # Otherwise it hits unreachable code in ir.rs
-popStack : Context -> Result [T Context Data] [EmptyStack]
+popStack : Context -> Result (Context, Data) [EmptyStack]
 popStack = \ctx ->
     when List.last ctx.stack is
         Ok val ->
             poppedCtx = { ctx & stack: List.dropAt ctx.stack (List.len ctx.stack - 1) }
 
-            Ok (T poppedCtx val)
+            Ok (poppedCtx, val)
 
         Err ListWasEmpty ->
             Err EmptyStack
@@ -58,30 +58,30 @@ toStr = \{ scopes, stack, state, vars } ->
 
     "\n============\nDepth: $(depth)\nState: $(stateStr)\nStack: [$(stackStr)]\nVars: [$(varsStr)]\n============\n"
 
-with : Str, (Context -> Task {} a) -> Task {} a
-with = \path, callback ->
-    File.withOpen path \handle ->
+with! : Str, (Context => a) => a
+with! = \path, callback! ->
+    File.withOpen! path \handle ->
         # I cant define scope here and put it in the list in callback. It breaks alias anaysis.
         # Instead I have to inline this.
         # root_scope = { data: Some handle, index: 0, buf: [], whileInfo: None }
-        callback { scopes: [{ data: Some handle, index: 0, buf: [], whileInfo: None }], state: Executing, stack: [], vars: List.repeat (Number 0) Variable.totalCount }
+        callback! { scopes: [{ data: Some handle, index: 0, buf: [], whileInfo: None }], state: Executing, stack: [], vars: List.repeat (Number 0) Variable.totalCount }
 
 # I am pretty sure there is a syntax to destructure and keep a reference to the whole, but Im not sure what it is.
-getChar : Context -> Task [T U8 Context] [EndOfData, NoScope]
-getChar = \ctx ->
+getChar! : Context => Result (U8, Context) [EndOfData, NoScope]
+getChar! = \ctx ->
     when List.last ctx.scopes is
         Ok scope ->
-            (T val newScope) = getCharScope! scope
-            Task.ok (T val { ctx & scopes: List.set ctx.scopes (List.len ctx.scopes - 1) newScope })
+            (val, newScope) = getCharScope!? scope
+            Ok (val, { ctx & scopes: List.set ctx.scopes (List.len ctx.scopes - 1) newScope })
 
         Err ListWasEmpty ->
-            Task.err NoScope
+            Err NoScope
 
-getCharScope : Scope -> Task [T U8 Scope] [EndOfData, NoScope]
-getCharScope = \scope ->
+getCharScope! : Scope => Result (U8, Scope) [EndOfData, NoScope]
+getCharScope! = \scope ->
     when List.get scope.buf scope.index is
         Ok val ->
-            Task.ok (T val { scope & index: scope.index + 1 })
+            Ok (val, { scope & index: scope.index + 1 })
 
         Err OutOfBounds ->
             when scope.data is
@@ -90,13 +90,13 @@ getCharScope = \scope ->
                     when List.first bytes is
                         Ok val ->
                             # This starts at 1 because the first character is already being returned.
-                            Task.ok (T val { scope & buf: bytes, index: 1 })
+                            Ok (val, { scope & buf: bytes, index: 1 })
 
                         Err ListWasEmpty ->
-                            Task.err EndOfData
+                            Err EndOfData
 
                 None ->
-                    Task.err EndOfData
+                    Err EndOfData
 
 inWhileScope : Context -> Bool
 inWhileScope = \ctx ->
