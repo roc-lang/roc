@@ -24,7 +24,11 @@
 # Ignore the following directories and file extensions
 target
 generated-docs
+
+# todo remove after upgrade to zig 0.13.0
 zig-cache
+
+zig-out
 .zig-cache
 .direnv
 .envrc
@@ -123,3 +127,5 @@ crates/glue/tests/fixtures/*/test_glue/
 
 # ignore the zig glue files copied into test platforms
 **/*platform/glue/*
+crates/cli/tests/test-projects/test-platform-effects-zig/glue
+crates/cli/tests/test-projects/test-platform-simple-zig/glue

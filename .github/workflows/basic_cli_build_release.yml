@@ -1,5 +1,5 @@
 on:
-#  pull_request:
+  #  pull_request:
   workflow_dispatch:
 
 # this cancels workflows currently in progress if you start a new one
@@ -46,7 +46,7 @@ jobs:
       - name: Save roc_nightly archives
         uses: actions/upload-artifact@v4
         with:
-          path:  roc_nightly-*
+          path: roc_nightly-*
 
   build-linux-x86_64-files:
     runs-on: [ubuntu-20.04]
@@ -71,7 +71,6 @@ jobs:
             basic-cli/platform/linux-x64.rh
             basic-cli/platform/linux-x64.a
 
-
   build-linux-arm64-files:
     runs-on: [self-hosted, Linux, ARM64]
     needs: [prepare]
@@ -84,8 +83,8 @@ jobs:
       - name: build basic-cli
         env:
           CARGO_BUILD_TARGET: aarch64-unknown-linux-musl
-          CC_aarch64_unknown_linux_musl: clang-16
-          AR_aarch64_unknown_linux_musl: llvm-ar-16
+          CC_aarch64_unknown_linux_musl: clang-18
+          AR_aarch64_unknown_linux_musl: llvm-ar-18
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: "-Clink-self-contained=yes -Clinker=rust-lld"
         run: ./ci/build_basic_cli.sh linux_arm64
 
@@ -134,7 +133,13 @@ jobs:
             basic-cli/platform/macos-arm64.a
 
   create-release-archive:
-    needs: [build-linux-x86_64-files, build-linux-arm64-files, build-macos-x86_64-files, build-macos-apple-silicon-files]
+    needs:
+      [
+        build-linux-x86_64-files,
+        build-linux-arm64-files,
+        build-macos-x86_64-files,
+        build-macos-apple-silicon-files,
+      ]
     name: create release archive
     runs-on: [ubuntu-20.04]
     steps:
@@ -202,7 +207,6 @@ jobs:
     needs: [create-release-archive]
     runs-on: [ubuntu-20.04]
     steps:
-
       - name: Download the previously uploaded files
         uses: actions/download-artifact@v4
 

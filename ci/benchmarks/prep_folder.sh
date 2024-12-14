@@ -9,14 +9,18 @@ set -euxo pipefail
 RUSTFLAGS="-C link-arg=-fuse-ld=lld -C target-cpu=native"
 BENCH_SUFFIX=$1
 
+# copy the builtin *.zig files into crates/cli/tests/benchmarks/platform
+# TODO replace this with a zig package once we have zig 0.13.0
+cargo run --bin copy_zig_glue
+
 cargo criterion -V
 cd crates/cli && cargo criterion --no-run && cd ../..
-mkdir -p bench-folder/crates/cli/tests/benchmarks
-mkdir -p bench-folder/crates/compiler/builtins/bitcode/src
+mkdir -p bench-folder/crates/cli/tests/benchmarks/
 mkdir -p bench-folder/target/release/deps
-cp "crates/cli/tests/benchmarks/"*".roc" bench-folder/crates/cli/tests/benchmarks/
+mkdir -p bench-folder/target/release/lib
+cp crates/cli/tests/benchmarks/*.roc bench-folder/crates/cli/tests/benchmarks/
 cp -r crates/cli/tests/benchmarks/platform bench-folder/crates/cli/tests/benchmarks/
-cp crates/compiler/builtins/bitcode/src/str.zig bench-folder/crates/compiler/builtins/bitcode/src
+cp crates/compiler/builtins/bitcode/src/*.zig bench-folder/target/release/lib/
 cp target/release/roc bench-folder/target/release
 
 # copy the most recent time bench to bench-folder
