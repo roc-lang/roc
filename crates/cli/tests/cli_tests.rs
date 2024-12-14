@@ -212,31 +212,34 @@ mod cli_tests {
         );
     }
 
-    // TODO check this out, there's more that's going wrong than a segfault
-    //#[test]
-    /*#[cfg_attr(
-        any(target_os = "windows", target_os = "linux", target_os = "macos"),
-        ignore = "Segfault, likely broken because of alias analysis: https://github.com/roc-lang/roc/issues/6544"
-    )]*/
-    /*
+    #[test]
+    #[cfg_attr(windows, ignore)]
     fn false_interpreter() {
         let cli_build = ExecCli::new(
-                                CMD_BUILD,
-                                file_from_root("crates/cli/tests/test-projects/false-interpreter", "main.roc")
-            )
-            .arg(BUILD_HOST_FLAG)
-            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
+            CMD_BUILD,
+            file_from_root(
+                "crates/cli/tests/test-projects/false-interpreter",
+                "main.roc",
+            ),
+        )
+        .arg(BUILD_HOST_FLAG)
+        .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
 
-        let sqrt_false_path_buf = file_from_root("crates/cli/tests/test-projects/false-interpreter/examples", "sqrt.false");
+        let sqrt_false_path_buf = file_from_root(
+            "crates/cli/tests/test-projects/false-interpreter/examples",
+            "sqrt.false",
+        );
 
-        let app_args = ["--",
-                        sqrt_false_path_buf
-                            .as_path()
-                            .to_str()
-                            .unwrap()];
+        let app_args = [sqrt_false_path_buf.as_path().to_str().unwrap()];
 
-        cli_build.full_check_build_and_run("1414", TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, Some(&app_args));
-    }*/
+        cli_build.full_check_build_and_run(
+            "1414",
+            TEST_LEGACY_LINKER,
+            ALLOW_VALGRIND,
+            None,
+            Some(&app_args),
+        );
+    }
 
     #[test]
     #[cfg_attr(windows, ignore)]

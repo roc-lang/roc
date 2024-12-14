@@ -1,9 +1,8 @@
 #![allow(non_snake_case)]
 
 use core::ffi::c_void;
-use core::mem::MaybeUninit;
 use libc;
-use roc_std::{RocList, RocResult, RocStr};
+use roc_std::{RocList, RocStr};
 use std::collections::HashMap;
 use std::env;
 use std::fs::File;
@@ -104,7 +103,7 @@ pub extern "C" fn rust_main() -> i32 {
         .expect("Please pass a .false file as a command-line argument to the false interpreter!");
     let arg = RocStr::from(arg.as_str());
 
-    roc_main(&arg);
+    unsafe { roc_main(&arg) };
 
     // Exit code
     0
