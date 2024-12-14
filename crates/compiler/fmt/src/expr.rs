@@ -1913,8 +1913,6 @@ fn fmt_backpassing<'a>(
     loc_ret: &'a Loc<Expr<'a>>,
     outer_indent: u16,
 ) {
-    use self::Expr::*;
-
     let arguments_are_multiline = loc_patterns
         .iter()
         .any(|loc_pattern| loc_pattern.is_multiline());
@@ -1981,22 +1979,39 @@ fn fmt_backpassing<'a>(
         arg_indent
     };
 
-    // the body of the Backpass can be on the same line, or
-    // on a new line. If it's on the same line, insert a space.
+    buf.spaces(1);
+    let body_lifted = expr_lift_spaces(Parens::NotNeeded, buf.text.bump(), &loc_body.value);
+    let ret_lifted = expr_lift_spaces(Parens::NotNeeded, buf.text.bump(), &loc_ret.value);
 
-    match &loc_body.value {
-        SpaceBefore(_, _) => {
-            // the body starts with (first comment and then) a newline
-            // do nothing
-        }
-        _ => {
-            // add a space after the `<-`
-            buf.spaces(1);
-        }
-    };
+    if !body_lifted.before.is_empty() {
+        format_spaces(buf, body_lifted.before, Newlines::Yes, body_indent);
+    }
 
-    loc_body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, body_indent);
-    loc_ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, outer_indent);
+    format_expr_only(
+        &body_lifted.item,
+        buf,
+        Parens::NotNeeded,
+        Newlines::Yes,
+        body_indent,
+    );
+
+    let between = merge_spaces(buf.text.bump(), body_lifted.after, ret_lifted.before);
+
+    if !between.is_empty() {
+        format_spaces(buf, between, Newlines::Yes, outer_indent);
+    }
+
+    format_expr_only(
+        &ret_lifted.item,
+        buf,
+        Parens::NotNeeded,
+        Newlines::Yes,
+        outer_indent,
+    );
+
+    if !ret_lifted.after.is_empty() {
+        format_spaces(buf, ret_lifted.after, Newlines::Yes, outer_indent);
+    }
 }
 
 fn pattern_needs_parens_when_backpassing(pat: &Pattern) -> bool {
