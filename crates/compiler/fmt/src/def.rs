@@ -1049,6 +1049,7 @@ pub fn fmt_body<'a>(
             && !matches!(body.extract_spaces().item, Expr::Defs(..))
             && !matches!(body.extract_spaces().item, Expr::Return(..))
             && !starts_with_expect_ident(body)
+            && !might_be_confused_with_implements(body)
     } else {
         false
     };
@@ -1167,6 +1168,34 @@ fn starts_with_expect_ident(expr: &Expr<'_>) -> bool {
         Expr::Apply(inner, _, _) => starts_with_expect_ident(&inner.value),
         Expr::Var { module_name, ident } => {
             module_name.is_empty() && (*ident == "expect" || *ident == "expect!")
+        }
+        _ => false,
+    }
+}
+
+fn might_be_confused_with_implements(body: &Expr<'_>) -> bool {
+    // As with `expect`, we need to be careful about things that might "become" `implements` clauses
+    // if parsed at a statement level.
+    match body {
+        Expr::Apply(func, args, _) => {
+            if !matches!(func.extract_spaces().item, Expr::Tag(..)) {
+                return false;
+            }
+
+            for expr in *args {
+                match expr.extract_spaces().item {
+                    Expr::Var { module_name, ident } => {
+                        if module_name.is_empty()
+                            && (ident == "implements" || ident == "implements!")
+                        {
+                            return true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            false
         }
         _ => false,
     }
