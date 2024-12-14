@@ -1,6 +1,7 @@
 use crate::{
     collection::{fmt_collection, Braces},
     expr::merge_spaces_conservative,
+    node::{Node, Nodify, Sp},
     pattern::pattern_lift_spaces_after,
     spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT},
     Buf,
@@ -415,7 +416,7 @@ fn fmt_tag_collection<'a>(
     let mut last_after: &[CommentOrNewline<'_>] = &[];
 
     for item in tags.items.iter() {
-        let lifted = tag_lift_to_node(arena, item.value);
+        let lifted = item.value.to_node(arena, Parens::NotNeeded);
         let before = merge_spaces_conservative(arena, last_after, lifted.before);
         last_after = lifted.after;
         new_items.push(NodeSpaces {
@@ -433,44 +434,49 @@ fn fmt_tag_collection<'a>(
     fmt_collection(buf, indent, Braces::Square, new_items, newlines);
 }
 
-fn tag_lift_to_node<'a, 'b: 'a>(arena: &'a Bump, value: Tag<'b>) -> Spaces<'a, Node<'a>> {
-    match value {
-        Tag::Apply { name, args } => {
-            if args.is_empty() {
-                Spaces {
-                    before: &[],
-                    item: Node::Literal(name.value),
-                    after: &[],
-                }
-            } else {
-                let first = Node::Literal(name.value);
-                let mut new_args: Vec<'a, (Sp<'a>, Node<'a>)> =
-                    Vec::with_capacity_in(args.len(), arena);
-                let mut last_after: &[CommentOrNewline<'_>] = &[];
+impl<'a> Nodify<'a> for Tag<'a> {
+    fn to_node<'b>(&'a self, arena: &'b Bump, parens: Parens) -> Spaces<'b, Node<'b>>
+    where
+        'a: 'b,
+    {
+        match self {
+            Tag::Apply { name, args } => {
+                if args.is_empty() {
+                    Spaces {
+                        before: &[],
+                        item: Node::Literal(name.value),
+                        after: &[],
+                    }
+                } else {
+                    let first = Node::Literal(name.value);
+                    let mut new_args: Vec<'b, (Sp<'b>, Node<'b>)> =
+                        Vec::with_capacity_in(args.len(), arena);
+                    let mut last_after: &[CommentOrNewline<'_>] = &[];
 
-                for arg in args.iter() {
-                    let lifted = ann_lift_to_node(Parens::InApply, arena, &arg.value);
-                    let before = merge_spaces_conservative(arena, last_after, lifted.before);
-                    last_after = lifted.after;
-                    new_args.push((before, lifted.item));
-                }
+                    for arg in args.iter() {
+                        let lifted = arg.value.to_node(arena, Parens::InApply);
+                        let before = merge_spaces_conservative(arena, last_after, lifted.before);
+                        last_after = lifted.after;
+                        new_args.push((before, lifted.item));
+                    }
 
-                Spaces {
-                    before: &[],
-                    item: Node::Sequence(arena.alloc(first), new_args.into_bump_slice()),
-                    after: last_after,
+                    Spaces {
+                        before: &[],
+                        item: Node::Sequence(arena.alloc(first), new_args.into_bump_slice()),
+                        after: last_after,
+                    }
                 }
             }
-        }
-        Tag::SpaceBefore(inner, sp) => {
-            let mut inner = tag_lift_to_node(arena, *inner);
-            inner.before = merge_spaces_conservative(arena, sp, inner.before);
-            inner
-        }
-        Tag::SpaceAfter(inner, sp) => {
-            let mut inner = tag_lift_to_node(arena, *inner);
-            inner.after = merge_spaces_conservative(arena, inner.after, sp);
-            inner
+            Tag::SpaceBefore(inner, sp) => {
+                let mut inner = inner.to_node(arena, parens);
+                inner.before = merge_spaces_conservative(arena, sp, inner.before);
+                inner
+            }
+            Tag::SpaceAfter(inner, sp) => {
+                let mut inner = inner.to_node(arena, parens);
+                inner.after = merge_spaces_conservative(arena, inner.after, sp);
+                inner
+            }
         }
     }
 }
@@ -511,16 +517,12 @@ fn fmt_ty_collection(
     let mut last_after: &[CommentOrNewline<'_>] = &[];
 
     for (i, item) in items.items.iter().enumerate() {
-        let func_ty_risky = i > 0;
-        let lifted = ann_lift_to_node(
-            if func_ty_risky {
-                Parens::InCollection
-            } else {
-                Parens::NotNeeded
-            },
-            arena,
-            &item.value,
-        );
+        let parens = if i > 0 {
+            Parens::InCollection
+        } else {
+            Parens::NotNeeded
+        };
+        let lifted = item.value.to_node(arena, parens);
         let before = merge_spaces_conservative(arena, last_after, lifted.before);
         last_after = lifted.after;
         new_items.push(NodeSpaces {
@@ -1138,184 +1140,110 @@ pub fn type_head_lift_spaces_after<'a, 'b: 'a>(
     }
 }
 
-type Sp<'a> = &'a [CommentOrNewline<'a>];
-
-#[derive(Copy, Clone, Debug)]
-enum Node<'a> {
-    Literal(&'a str),
-    Sequence(&'a Node<'a>, &'a [(Sp<'a>, Node<'a>)]),
-    DelimitedSequence(Braces, &'a [(Sp<'a>, Node<'a>)], Sp<'a>),
-    TypeAnnotation(TypeAnnotation<'a>),
-}
-
-impl<'a> Formattable for Node<'a> {
-    fn is_multiline(&self) -> bool {
+impl<'a> Nodify<'a> for TypeAnnotation<'a> {
+    fn to_node<'b>(&'a self, arena: &'b Bump, parens: Parens) -> Spaces<'b, Node<'b>>
+    where
+        'a: 'b,
+    {
         match self {
-            Node::DelimitedSequence(_braces, lefts, right) => {
-                right.is_empty()
-                    && lefts
-                        .iter()
-                        .any(|(sp, l)| l.is_multiline() || !sp.is_empty())
-            }
-            Node::Sequence(first, rest) => {
-                first.is_multiline()
-                    || rest
-                        .iter()
-                        .any(|(sp, l)| l.is_multiline() || !sp.is_empty())
-            }
-            Node::TypeAnnotation(type_annotation) => type_annotation.is_multiline(),
-            Node::Literal(_) => false,
-        }
-    }
+            TypeAnnotation::Apply(module, func, args) => {
+                if args.is_empty() {
+                    return Spaces {
+                        item: Node::TypeAnnotation(*self),
+                        before: &[],
+                        after: &[],
+                    };
+                }
+                let mut new_args = Vec::with_capacity_in(args.len(), arena);
 
-    fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
-        match self {
-            Node::DelimitedSequence(braces, lefts, right) => {
-                buf.indent(indent);
-                buf.push(braces.start());
-
-                for (sp, l) in *lefts {
-                    if !sp.is_empty() {
-                        fmt_spaces(buf, sp.iter(), indent);
+                if !args.is_empty() {
+                    for arg in args.iter().take(args.len() - 1) {
+                        let lifted = ann_lift_spaces(arena, &arg.value);
+                        new_args.push(Loc::at(arg.region, lower(arena, lifted)));
                     }
-
-                    l.format_with_options(buf, parens, newlines, indent);
                 }
 
-                if !right.is_empty() {
-                    fmt_spaces(buf, right.iter(), indent);
-                }
-
-                buf.indent(indent);
-                buf.push(braces.end());
-            }
-            Node::Sequence(first, rest) => {
-                first.format_with_options(buf, parens, newlines, indent);
-
-                for (sp, l) in *rest {
-                    if !sp.is_empty() {
-                        fmt_spaces(buf, sp.iter(), indent);
+                let after = if let Some(last) = args.last() {
+                    let lifted = ann_lift_spaces(arena, &last.value);
+                    if lifted.before.is_empty() {
+                        new_args.push(Loc::at(last.region, lifted.item));
                     } else {
-                        buf.spaces(1);
+                        new_args.push(Loc::at(
+                            last.region,
+                            TypeAnnotation::SpaceBefore(arena.alloc(lifted.item), lifted.before),
+                        ));
                     }
-
-                    l.format_with_options(buf, parens, newlines, indent);
-                }
-            }
-            Node::TypeAnnotation(type_annotation) => {
-                type_annotation.format_with_options(buf, parens, newlines, indent);
-            }
-            Node::Literal(text) => {
-                buf.indent(indent);
-                buf.push_str(text);
-            }
-        }
-    }
-}
-
-fn ann_lift_to_node<'a, 'b: 'a>(
-    parens: Parens,
-    arena: &'a Bump,
-    ann: &TypeAnnotation<'b>,
-) -> Spaces<'a, Node<'a>> {
-    match ann {
-        TypeAnnotation::Apply(module, func, args) => {
-            if args.is_empty() {
-                return Spaces {
-                    item: Node::TypeAnnotation(*ann),
-                    before: &[],
-                    after: &[],
-                };
-            }
-            let mut new_args = Vec::with_capacity_in(args.len(), arena);
-
-            if !args.is_empty() {
-                for arg in args.iter().take(args.len() - 1) {
-                    let lifted = ann_lift_spaces(arena, &arg.value);
-                    new_args.push(Loc::at(arg.region, lower(arena, lifted)));
-                }
-            }
-
-            let after = if let Some(last) = args.last() {
-                let lifted = ann_lift_spaces(arena, &last.value);
-                if lifted.before.is_empty() {
-                    new_args.push(Loc::at(last.region, lifted.item));
+                    lifted.after
                 } else {
-                    new_args.push(Loc::at(
-                        last.region,
-                        TypeAnnotation::SpaceBefore(arena.alloc(lifted.item), lifted.before),
-                    ));
-                }
-                lifted.after
-            } else {
-                &[]
-            };
+                    &[]
+                };
 
-            let item = Node::TypeAnnotation(TypeAnnotation::Apply(
-                module,
-                func,
-                new_args.into_bump_slice(),
-            ));
+                let item = Node::TypeAnnotation(TypeAnnotation::Apply(
+                    module,
+                    func,
+                    new_args.into_bump_slice(),
+                ));
 
-            if parens == Parens::InApply {
-                parens_around_node(
-                    arena,
+                if parens == Parens::InApply {
+                    parens_around_node(
+                        arena,
+                        Spaces {
+                            before: &[],
+                            item,
+                            after,
+                        },
+                    )
+                } else {
                     Spaces {
                         before: &[],
                         item,
                         after,
-                    },
-                )
-            } else {
-                Spaces {
-                    before: &[],
-                    item,
-                    after,
+                    }
                 }
             }
-        }
-        TypeAnnotation::SpaceBefore(expr, spaces) => {
-            let mut inner = ann_lift_to_node(parens, arena, expr);
-            inner.before = merge_spaces_conservative(arena, spaces, inner.before);
-            inner
-        }
-        TypeAnnotation::SpaceAfter(expr, spaces) => {
-            let mut inner = ann_lift_to_node(parens, arena, expr);
-            inner.after = merge_spaces_conservative(arena, inner.after, spaces);
-            inner
-        }
-        TypeAnnotation::Function(args, purity, res) => {
-            let new_args = arena.alloc_slice_copy(args);
-            let before = if let Some(first) = new_args.first_mut() {
-                let lifted = ann_lift_spaces_before(arena, &first.value);
-                first.value = lifted.item;
-                lifted.before
-            } else {
-                &[]
-            };
-            let new_res = ann_lift_spaces_after(arena, &res.value);
-            let new_ann = TypeAnnotation::Function(
-                new_args,
-                *purity,
-                arena.alloc(Loc::at_zero(new_res.item)),
-            );
-            let inner = Spaces {
-                before,
-                item: Node::TypeAnnotation(new_ann),
-                after: new_res.after,
-            };
-            if parens == Parens::InCollection || parens == Parens::InApply {
-                parens_around_node(arena, inner)
-            } else {
+            TypeAnnotation::SpaceBefore(expr, spaces) => {
+                let mut inner = expr.to_node(arena, parens);
+                inner.before = merge_spaces_conservative(arena, spaces, inner.before);
                 inner
             }
-        }
-        _ => {
-            let lifted = ann_lift_spaces(arena, ann);
-            Spaces {
-                before: lifted.before,
-                item: Node::TypeAnnotation(lifted.item),
-                after: lifted.after,
+            TypeAnnotation::SpaceAfter(expr, spaces) => {
+                let mut inner = expr.to_node(arena, parens);
+                inner.after = merge_spaces_conservative(arena, inner.after, spaces);
+                inner
+            }
+            TypeAnnotation::Function(args, purity, res) => {
+                let new_args = arena.alloc_slice_copy(args);
+                let before = if let Some(first) = new_args.first_mut() {
+                    let lifted = ann_lift_spaces_before(arena, &first.value);
+                    first.value = lifted.item;
+                    lifted.before
+                } else {
+                    &[]
+                };
+                let new_res = ann_lift_spaces_after(arena, &res.value);
+                let new_ann = TypeAnnotation::Function(
+                    new_args,
+                    *purity,
+                    arena.alloc(Loc::at_zero(new_res.item)),
+                );
+                let inner = Spaces {
+                    before,
+                    item: Node::TypeAnnotation(new_ann),
+                    after: new_res.after,
+                };
+                if parens == Parens::InCollection || parens == Parens::InApply {
+                    parens_around_node(arena, inner)
+                } else {
+                    inner
+                }
+            }
+            _ => {
+                let lifted = ann_lift_spaces(arena, self);
+                Spaces {
+                    before: lifted.before,
+                    item: Node::TypeAnnotation(lifted.item),
+                    after: lifted.after,
+                }
             }
         }
     }
