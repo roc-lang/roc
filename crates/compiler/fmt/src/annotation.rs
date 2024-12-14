@@ -1,6 +1,6 @@
 use crate::{
     collection::{fmt_collection, Braces},
-    expr::merge_spaces_conservative,
+    expr::{format_spaces, merge_spaces_conservative},
     node::{Node, Nodify, Sp},
     pattern::pattern_lift_spaces_after,
     spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT},
@@ -358,11 +358,12 @@ fn fmt_ty_ann(
             fmt_ext(ext, buf, indent);
         }
 
-        TypeAnnotation::As(lhs, _spaces, TypeHeader { name, vars }) => {
-            // TODO use _spaces?
+        TypeAnnotation::As(lhs, spaces, TypeHeader { name, vars }) => {
             lhs.value
                 .format_with_options(buf, Parens::InFunctionType, Newlines::No, indent);
             buf.spaces(1);
+            format_spaces(buf, spaces, newlines, indent);
+            buf.indent(indent);
             buf.push_str("as");
             buf.spaces(1);
             buf.push_str(name.value);

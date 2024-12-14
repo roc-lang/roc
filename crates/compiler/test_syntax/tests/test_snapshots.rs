@@ -575,6 +575,7 @@ mod test_snapshots {
         pass/parens_func_apply_type.expr,
         pass/parens_in_type_def_apply.expr,
         pass/parens_newline_in_func_type.expr,
+        pass/parens_newlines_before_as.expr,
         pass/parens_record_updater.expr,
         pass/parenthesized_type_def.expr,
         pass/parenthesized_type_def_space_before.expr,
@@ -741,6 +742,13 @@ mod test_snapshots {
             "all_the_bangs" | "bangs_and_tuple_accessors" => {
                 // both of these result in:
                 // "a Expr::TrySuffix expression was not completely removed in desugar_value_def_suffixed"
+                true
+            }
+
+            "parens_newlines_before_as" => {
+                // Found unbound type variables {66}
+                //  in type alias `Test.IdentId(0)` [] [] : <66>
+                // Location: crates/compiler/can/src/scope.rs:541:13
                 true
             }
 
