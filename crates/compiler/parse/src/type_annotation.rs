@@ -605,12 +605,10 @@ fn expression<'a>(
         .parse(arena, state, min_indent)?;
 
         let (p2, rest, rest_state) = zero_or_more(skip_first(
-            backtrackable(
-                skip_first( 
-                    backtrackable(space0_e(EType::TIndentStart)),
-                    byte(b',', EType::TFunctionArgument)
-                )
-            ),
+            backtrackable(skip_first(
+                backtrackable(space0_e(EType::TIndentStart)),
+                byte(b',', EType::TFunctionArgument),
+            )),
             one_of![
                 map_with_arena(
                     and(
