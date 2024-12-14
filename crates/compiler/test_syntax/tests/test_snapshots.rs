@@ -484,6 +484,7 @@ mod test_snapshots {
         pass/multiline_str_crazyness.expr,
         pass/multiline_str_in_backpassing_pats.expr,
         pass/multiline_str_in_pat.expr,
+        pass/multiline_str_interpolation_records.expr,
         pass/multiline_str_opt_field.expr,
         pass/multiline_string.expr,
         pass/multiline_string_in_apply.expr,

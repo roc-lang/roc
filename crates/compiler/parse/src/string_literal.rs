@@ -324,8 +324,10 @@ pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EStri
                         let without_newline = &state.bytes()[0..(segment_parsed_bytes - 1)];
                         let with_newline = &state.bytes()[0..segment_parsed_bytes];
 
-                        state.advance_mut(segment_parsed_bytes);
+                        state.advance_mut(segment_parsed_bytes - 1);
+                        state = state.advance_newline();
                         state = consume_indent(state, indent)?;
+                        state = state.mark_current_indent();
                         bytes = state.bytes().iter();
 
                         if state.bytes().starts_with(b"\"\"\"") {
