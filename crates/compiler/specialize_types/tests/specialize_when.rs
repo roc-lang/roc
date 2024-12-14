@@ -5,7 +5,7 @@ extern crate pretty_assertions;
 mod helpers;
 
 #[cfg(test)]
-mod specialize_structs {
+mod specialize_when {
     use crate::helpers::expect_mono_expr_str;
 
     #[test]
@@ -16,6 +16,18 @@ mod specialize_structs {
                     num -> num
             ",
             "When(Number(I8(123)), Identifier(`#UserApp.IdentId(1)`) -> `#UserApp.IdentId(1)`)",
+        );
+    }
+
+    #[test]
+    fn number_pattern() {
+        expect_mono_expr_str(
+            r"
+                when 123 is
+                    123 -> 321
+                    num -> num
+            ",
+            "When(Number(I16(123)), Number(I16(123)) -> Number(I16(321)), Identifier(`#UserApp.IdentId(1)`) -> `#UserApp.IdentId(1)`)",
         );
     }
 }

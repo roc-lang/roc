@@ -1,7 +1,9 @@
 use roc_region::all::Region;
 use soa::{Index, Slice, Slice3};
 
-use crate::{mono_ir::IdentId, InternedStrId, MonoExprId, MonoFieldId, MonoTypeId, Number};
+use crate::{
+    mono_ir::IdentId, InternedStrId, MonoExprId, MonoFieldId, MonoTypeId, Number, Problem,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MonoPatternId {
@@ -32,8 +34,10 @@ impl MonoPatterns {
         let start = self.patterns.len();
 
         self.patterns.extend(
-            std::iter::repeat(MonoPattern::CompilerBug(MonoPatternProblem::Uninitialized))
-                .take(count),
+            std::iter::repeat(MonoPattern::CompilerBug(
+                Problem::UninitializedReservedPattern,
+            ))
+            .take(count),
         );
         self.regions
             .extend(std::iter::repeat(Region::zero()).take(count));
@@ -95,7 +99,7 @@ pub enum MonoPattern {
         opt_rest: Option<(u16, Option<IdentId>)>,
     },
     Underscore,
-    CompilerBug(MonoPatternProblem),
+    CompilerBug(Problem),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -103,9 +107,4 @@ pub enum DestructType {
     Required,
     Optional(MonoTypeId, MonoExprId),
     Guard(MonoTypeId, MonoPatternId),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum MonoPatternProblem {
-    Uninitialized,
 }

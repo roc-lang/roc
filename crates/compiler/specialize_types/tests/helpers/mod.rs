@@ -418,8 +418,8 @@ fn dbg_mono_pattern_help<'a>(
         MonoPattern::StrLiteral(_) => {
             todo!()
         }
-        MonoPattern::NumberLiteral(_) => {
-            todo!()
+        MonoPattern::NumberLiteral(number) => {
+            write!(buf, "Number({:?})", number)
         }
         MonoPattern::AppliedTag { .. } => {
             todo!()
