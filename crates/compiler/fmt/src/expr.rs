@@ -715,20 +715,16 @@ fn fmt_apply(
         }
 
         last_after = arg.after;
-
-        if should_reflow_outdentable {
-            buf.spaces(1);
-
-            // Ignore any comments+newlines before/after.
-            // We checked above that there's only a single newline before the last arg,
-            // which we're intentionally ignoring.
-
-            format_expr_only(&arg.item, buf, Parens::InApply, Newlines::Yes, arg_indent);
-        } else if needs_indent {
+        if needs_indent {
             buf.ensure_ends_with_newline();
-            format_expr_only(&arg.item, buf, Parens::InApply, Newlines::Yes, arg_indent);
         } else {
             buf.spaces(1);
+        }
+
+        if matches!(arg.item, Expr::Var { module_name, ident } if module_name.is_empty() && ident == "implements")
+        {
+            fmt_parens(&arg.item, buf, arg_indent);
+        } else {
             format_expr_only(&arg.item, buf, Parens::InApply, Newlines::Yes, arg_indent);
         }
     }

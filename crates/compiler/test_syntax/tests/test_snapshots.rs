@@ -430,6 +430,7 @@ mod test_snapshots {
         pass/if_newline_then_negate_else_recordupdater.expr,
         pass/implements_newline_in_fn_ty.expr,
         pass/implements_newlines_comments.expr,
+        pass/implements_not_keyword.expr,
         pass/import.moduledefs,
         pass/import_from_package.moduledefs,
         pass/import_in_closure_with_curlies_after.expr,
