@@ -3212,7 +3212,9 @@ fn stmts_to_defs<'a>(
                     )),
                 ) = (td, stmts.get(i + 1).map(|s| (s.before, s.item.value)))
                 {
-                    if (spaces_middle.len() <= 1 && !ends_with_spaces_conservative(&ann_type.value))
+                    if (spaces_middle.len() <= 1
+                        && !ends_with_spaces_conservative(&ann_type.value)
+                        && !starts_with_spaces_conservative(&loc_pattern.value))
                         || header_to_pat(arena, header).equivalent(&loc_pattern.value)
                     {
                         // This is a case like
@@ -3296,7 +3298,9 @@ fn stmts_to_defs<'a>(
                     )),
                 ) = (vd, stmts.get(i + 1).map(|s| (s.before, s.item.value)))
                 {
-                    if (spaces_middle.len() <= 1 && !ends_with_spaces_conservative(&ann_type.value))
+                    if (spaces_middle.len() <= 1
+                        && !ends_with_spaces_conservative(&ann_type.value)
+                        && !starts_with_spaces_conservative(&loc_pattern.value))
                         || ann_pattern.value.equivalent(&loc_pattern.value)
                     {
                         let region = Region::span_across(&loc_pattern.region, &loc_def_expr.region);
@@ -3328,6 +3332,31 @@ fn stmts_to_defs<'a>(
         i += 1;
     }
     Ok((defs, last_expr))
+}
+
+fn starts_with_spaces_conservative(value: &Pattern<'_>) -> bool {
+    match value {
+        Pattern::Identifier { .. }
+        | Pattern::QualifiedIdentifier { .. }
+        | Pattern::Tag(_)
+        | Pattern::NumLiteral(_)
+        | Pattern::FloatLiteral(_)
+        | Pattern::StrLiteral(_)
+        | Pattern::Underscore(_)
+        | Pattern::SingleQuote(_)
+        | Pattern::Tuple(_)
+        | Pattern::List(_)
+        | Pattern::NonBase10Literal { .. }
+        | Pattern::ListRest(_)
+        | Pattern::OpaqueRef(_) => false,
+        Pattern::As(left, _) => starts_with_spaces_conservative(&left.value),
+        Pattern::Apply(left, _) => starts_with_spaces_conservative(&left.value),
+        Pattern::RecordDestructure(_) => false,
+        Pattern::RequiredField(_, _) | Pattern::OptionalField(_, _) => false,
+        Pattern::SpaceBefore(_, _) => true,
+        Pattern::SpaceAfter(inner, _) => starts_with_spaces_conservative(inner),
+        Pattern::Malformed(_) | Pattern::MalformedIdent(_, _) => true,
+    }
 }
 
 fn header_to_pat<'a>(arena: &'a Bump, header: TypeHeader<'a>) -> Pattern<'a> {
@@ -3367,7 +3396,7 @@ fn ends_with_spaces_conservative(ty: &TypeAnnotation<'_>) -> bool {
         }),
         TypeAnnotation::SpaceBefore(inner, _) => ends_with_spaces_conservative(inner),
         TypeAnnotation::SpaceAfter(_, _) => true,
-        TypeAnnotation::Malformed(_) => false,
+        TypeAnnotation::Malformed(_) => true,
     }
 }
 
