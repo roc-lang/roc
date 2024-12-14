@@ -102,9 +102,12 @@ pub extern "C" fn rust_main() -> i32 {
     let arg = env::args()
         .nth(1)
         .expect("Please pass a .false file as a command-line argument to the false interpreter!");
-    let arg = RocStr::from(arg.as_str());
+    let arg = ManuallyDrop::new(RocStr::from(arg.as_str()));
 
-    unsafe { roc_main(ManuallyDrop::new(arg)) };
+    unsafe { roc_main(arg) };
+
+    // This really shouldn't need to be freed, but valgrid is picky about possibly lost.
+    *file_handles().lock().unwrap() = HashMap::default();
 
     // Exit code
     0
