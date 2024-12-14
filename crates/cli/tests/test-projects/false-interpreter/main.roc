@@ -11,6 +11,9 @@ import Variable exposing [Variable]
 # It has some extra constraints:
 # 1) The input files are considered too large to just read in at once. Instead it is read via buffer or line.
 # 2) The output is also considered too large to generate in memory. It must be printed as we go via buffer or line.
+
+# All of the notes below this line are hopefully outdated with purity inference.
+# ----------
 # I think one of the biggest issues with this implementation is that it doesn't return to the platform frequently enough.
 # What I mean by that is we build a chain of all Tasks period and return that to the host.
 # In something like the elm architecture you return a single step with one Task.
@@ -18,6 +21,7 @@ import Variable exposing [Variable]
 # In an imperative language, a few of these pieces would be in while loops and it would basically never overflow.
 # This implementation is easy to overflow, either make the input long enough or make a false while loop run long enough.
 # I assume all of the Task.awaits are the cause of this, but I am not 100% sure.
+
 InterpreterErrors : [BadUtf8, DivByZero, EmptyStack, InvalidBooleanValue, InvalidChar Str, MaxInputNumber, NoLambdaOnStack, NoNumberOnStack, NoVariableOnStack, NoScope, OutOfBounds, UnexpectedEndOfData]
 
 main! : Str => {}
@@ -73,24 +77,6 @@ interpretFile! = \filename ->
             Err UnexpectedEndOfData ->
                 Err (StringErr "Hit end of data while still parsing something")
 
-isDigit : U8 -> Bool
-isDigit = \char ->
-    char
-    >= 0x30 # `0`
-    && char
-    <= 0x39 # `0`
-
-isWhitespace : U8 -> Bool
-isWhitespace = \char ->
-    char
-    == 0xA # new line
-    || char
-    == 0xD # carriage return
-    || char
-    == 0x20 # space
-    || char
-    == 0x9 # tab
-
 interpretCtx! : Context => Result Context InterpreterErrors
 interpretCtx! = \ctx ->
     when interpretCtxLoop! ctx is
@@ -110,35 +96,27 @@ interpretCtxLoop! = \ctx ->
             # Deal with the current while loop potentially looping.
             last = (List.len ctx.scopes - 1)
 
-            when List.get ctx.scopes last is
-                Ok scope ->
-                    when scope.whileInfo is
-                        Some { state: InCond, body, cond } ->
-                            # Just ran condition. Check the top of stack to see if body should run.
-                            when popNumber ctx is
-                                Ok (popCtx, n) ->
-                                    if n == 0 then
-                                        newScope = { scope & whileInfo: None }
+            scope = List.get ctx.scopes last |> Result.mapErr? \_ -> NoScope
+            when scope.whileInfo is
+                Some { state: InCond, body, cond } ->
+                    # Just ran condition. Check the top of stack to see if body should run.
+                    (popCtx, n) = popNumber? ctx
+                    if n == 0 then
+                        newScope = { scope & whileInfo: None }
 
-                                        Ok (Step { popCtx & scopes: List.set ctx.scopes last newScope })
-                                    else
-                                        newScope = { scope & whileInfo: Some { state: InBody, body, cond } }
+                        Ok (Step { popCtx & scopes: List.set ctx.scopes last newScope })
+                    else
+                        newScope = { scope & whileInfo: Some { state: InBody, body, cond } }
 
-                                        Ok (Step { popCtx & scopes: List.append (List.set ctx.scopes last newScope) { data: None, buf: body, index: 0, whileInfo: None } })
+                        Ok (Step { popCtx & scopes: List.append (List.set ctx.scopes last newScope) { data: None, buf: body, index: 0, whileInfo: None } })
 
-                                Err e ->
-                                    Err e
+                Some { state: InBody, body, cond } ->
+                    # Just rand the body. Run the condition again.
+                    newScope = { scope & whileInfo: Some { state: InCond, body, cond } }
 
-                        Some { state: InBody, body, cond } ->
-                            # Just rand the body. Run the condition again.
-                            newScope = { scope & whileInfo: Some { state: InCond, body, cond } }
+                    Ok (Step { ctx & scopes: List.append (List.set ctx.scopes last newScope) { data: None, buf: cond, index: 0, whileInfo: None } })
 
-                            Ok (Step { ctx & scopes: List.append (List.set ctx.scopes last newScope) { data: None, buf: cond, index: 0, whileInfo: None } })
-
-                        None ->
-                            Err NoScope
-
-                Err OutOfBounds ->
+                None ->
                     Err NoScope
 
         Executing ->
@@ -164,138 +142,87 @@ interpretCtxLoop! = \ctx ->
                         Ok (Step dropCtx)
 
         InComment ->
-            result = Context.getChar! ctx
-            when result is
-                Ok (val, newCtx) ->
-                    if val == 0x7D then
-                        # `}` end of comment
-                        Ok (Step { newCtx & state: Executing })
-                    else
-                        Ok (Step { newCtx & state: InComment })
-
-                Err NoScope ->
-                    Err NoScope
-
-                Err EndOfData ->
-                    Err UnexpectedEndOfData
+            (val, newCtx) = Context.getChar! ctx |> Result.mapErr? endUnexpected
+            if val == 0x7D then
+                # `}` end of comment
+                Ok (Step { newCtx & state: Executing })
+            else
+                Ok (Step { newCtx & state: InComment })
 
         InNumber accum ->
-            result = Context.getChar! ctx
-            when result is
-                Ok (val, newCtx) ->
-                    if isDigit val then
-                        # still in the number
-                        # i32 multiplication is kinda broken because it implicitly seems to want to upcast to i64.
-                        # so like should be (i32, i32) -> i32, but seems to be (i32, i32) -> i64
-                        # so this is make i64 mul by 10 then convert back to i32.
-                        nextAccum = (10 * Num.intCast accum) + Num.intCast (val - 0x30)
+            (val, newCtx) = Context.getChar! ctx |> Result.mapErr? endUnexpected
+            if isDigit val then
+                # still in the number
+                # i32 multiplication is kinda broken because it implicitly seems to want to upcast to i64.
+                # so like should be (i32, i32) -> i32, but seems to be (i32, i32) -> i64
+                # so this is make i64 mul by 10 then convert back to i32.
+                nextAccum = (10 * Num.intCast accum) + Num.intCast (val - 0x30)
 
-                        Ok (Step { newCtx & state: InNumber (Num.intCast nextAccum) })
-                    else
-                        # outside of number now, this needs to be executed.
-                        pushCtx = Context.pushStack newCtx (Number accum)
+                Ok (Step { newCtx & state: InNumber (Num.intCast nextAccum) })
+            else
+                # outside of number now, this needs to be executed.
+                pushCtx = Context.pushStack newCtx (Number accum)
 
-                        execCtx = stepExecCtx!? { pushCtx & state: Executing } val
-                        Ok (Step execCtx)
-
-                Err NoScope ->
-                    Err NoScope
-
-                Err EndOfData ->
-                    Err UnexpectedEndOfData
+                execCtx = stepExecCtx!? { pushCtx & state: Executing } val
+                Ok (Step execCtx)
 
         InString bytes ->
-            result = Context.getChar! ctx
-            when result is
-                Ok (val, newCtx) ->
-                    if val == 0x22 then
-                        # `"` end of string
-                        when Str.fromUtf8 bytes is
-                            Ok str ->
-                                Stdout.raw! str
-                                Ok (Step { newCtx & state: Executing })
+            (val, newCtx) = Context.getChar! ctx |> Result.mapErr? endUnexpected
+            if val == 0x22 then
+                # `"` end of string
+                when Str.fromUtf8 bytes is
+                    Ok str ->
+                        Stdout.raw! str
+                        Ok (Step { newCtx & state: Executing })
 
-                            Err _ ->
-                                Err BadUtf8
-                    else
-                        Ok (Step { newCtx & state: InString (List.append bytes val) })
-
-                Err NoScope ->
-                    Err NoScope
-
-                Err EndOfData ->
-                    Err UnexpectedEndOfData
+                    Err _ ->
+                        Err BadUtf8
+            else
+                Ok (Step { newCtx & state: InString (List.append bytes val) })
 
         InLambda depth bytes ->
-            result = Context.getChar! ctx
-            when result is
-                Ok (val, newCtx) ->
-                    if val == 0x5B then
-                        # start of a nested lambda `[`
-                        Ok (Step { newCtx & state: InLambda (depth + 1) (List.append bytes val) })
-                    else if val == 0x5D then
-                        # `]` end of current lambda
-                        if depth == 0 then
-                            # end of all lambdas
-                            Ok (Step (Context.pushStack { newCtx & state: Executing } (Lambda bytes)))
-                        else
-                            # end of nested lambda
-                            Ok (Step { newCtx & state: InLambda (depth - 1) (List.append bytes val) })
-                    else
-                        Ok (Step { newCtx & state: InLambda depth (List.append bytes val) })
-
-                Err NoScope ->
-                    Err NoScope
-
-                Err EndOfData ->
-                    Err UnexpectedEndOfData
+            (val, newCtx) = Context.getChar! ctx |> Result.mapErr? endUnexpected
+            if val == 0x5B then
+                # start of a nested lambda `[`
+                Ok (Step { newCtx & state: InLambda (depth + 1) (List.append bytes val) })
+            else if val == 0x5D then
+                # `]` end of current lambda
+                if depth == 0 then
+                    # end of all lambdas
+                    Ok (Step (Context.pushStack { newCtx & state: Executing } (Lambda bytes)))
+                else
+                    # end of nested lambda
+                    Ok (Step { newCtx & state: InLambda (depth - 1) (List.append bytes val) })
+            else
+                Ok (Step { newCtx & state: InLambda depth (List.append bytes val) })
 
         InSpecialChar ->
-            result = Context.getChar! { ctx & state: Executing }
-            when result is
-                Ok (0xB8, newCtx) ->
-                    result2 =
-                        (popCtx, index) = popNumber? newCtx
-                        # I think Num.abs is too restrictive, it should be able to produce a natural number, but it seem to be restricted to signed numbers.
-                        size = List.len popCtx.stack - 1
-                        offset = Num.intCast size - index
+            val = Context.getChar! { ctx & state: Executing } |> Result.mapErr? endUnexpected
+            when val is
+                (0xB8, newCtx) ->
+                    (popCtx, index) = popNumber? newCtx
+                    # I think Num.abs is too restrictive, it should be able to produce a natural number, but it seem to be restricted to signed numbers.
+                    size = List.len popCtx.stack - 1
+                    offset = Num.intCast size - index
 
-                        if offset >= 0 then
-                            stackVal = List.get? popCtx.stack (Num.intCast offset)
-                            Ok (Context.pushStack popCtx stackVal)
-                        else
-                            Err OutOfBounds
+                    if offset >= 0 then
+                        stackVal = List.get? popCtx.stack (Num.intCast offset)
+                        Ok (Step (Context.pushStack popCtx stackVal))
+                    else
+                        Err OutOfBounds
 
-                    when result2 is
-                        Ok a -> Ok (Step a)
-                        Err e -> Err e
-
-                Ok (0x9F, newCtx) ->
+                (0x9F, newCtx) ->
                     # This is supposed to flush io buffers. We don't buffer, so it does nothing
                     Ok (Step newCtx)
 
-                Ok (x, _) ->
+                (x, _) ->
                     data = Num.toStr (Num.intCast x)
 
                     Err (InvalidChar data)
 
-                Err NoScope ->
-                    Err NoScope
-
-                Err EndOfData ->
-                    Err UnexpectedEndOfData
-
         LoadChar ->
-            result = Context.getChar! { ctx & state: Executing }
-            when result is
-                Ok (x, newCtx) ->
-                    Ok (Step (Context.pushStack newCtx (Number (Num.intCast x))))
-
-                Err NoScope ->
-                    Err NoScope
-
-                Err EndOfData ->
-                    Err UnexpectedEndOfData
+            (x, newCtx) = Context.getChar! { ctx & state: Executing } |> Result.mapErr? endUnexpected
+            Ok (Step (Context.pushStack newCtx (Number (Num.intCast x))))
 
 # If it weren't for reading stdin or writing to stdout, this could return a result.
 stepExecCtx! : Context, U8 => Result Context InterpreterErrors
@@ -321,16 +248,12 @@ stepExecCtx! = \ctx, char ->
             (popCtx2, cond) = popLambda? popCtx1
             last = (List.len popCtx2.scopes - 1)
 
-            when List.get popCtx2.scopes last is
-                Ok scope ->
-                    # set the current scope to be in a while loop.
-                    scopes = List.set popCtx2.scopes last { scope & whileInfo: Some { cond: cond, body: body, state: InCond } }
+            scope = List.get popCtx2.scopes last |> Result.mapErr? \_ -> NoScope
+            # set the current scope to be in a while loop.
+            scopes = List.set popCtx2.scopes last { scope & whileInfo: Some { cond: cond, body: body, state: InCond } }
 
-                    # push a scope to execute the condition.
-                    Ok { popCtx2 & scopes: List.append scopes { data: None, buf: cond, index: 0, whileInfo: None } }
-
-                Err OutOfBounds ->
-                    Err NoScope
+            # push a scope to execute the condition.
+            Ok { popCtx2 & scopes: List.append scopes { data: None, buf: cond, index: 0, whileInfo: None } }
 
         0x24 ->
             # `$` dup
@@ -349,18 +272,9 @@ stepExecCtx! = \ctx, char ->
 
         0x5C ->
             # `\` swap
-            result2 =
-                (popCtx1, n1) = Context.popStack? ctx
-                (popCtx2, n2) = Context.popStack? popCtx1
-                Ok (Context.pushStack (Context.pushStack popCtx2 n1) n2)
-
-            when result2 is
-                Ok a ->
-                    Ok a
-
-                # Being explicit with error type is required to stop the need to propogate the error parameters to Context.popStack
-                Err EmptyStack ->
-                    Err EmptyStack
+            (popCtx1, n1) = Context.popStack? ctx
+            (popCtx2, n2) = Context.popStack? popCtx1
+            Ok (Context.pushStack (Context.pushStack popCtx2 n1) n2)
 
         0x40 ->
             # `@` rot
@@ -460,28 +374,16 @@ stepExecCtx! = \ctx, char ->
 
         0x2C ->
             # `,` write char
-            when popNumber ctx is
-                Ok (popCtx, num) ->
-                    when Str.fromUtf8 [Num.intCast num] is
-                        Ok str ->
-                            Stdout.raw! str
-                            Ok popCtx
-
-                        Err _ ->
-                            Err BadUtf8
-
-                Err e ->
-                    Err e
+            (popCtx, num) = popNumber? ctx
+            str = Str.fromUtf8 [Num.intCast num] |> Result.mapErr? \_ -> BadUtf8
+            Stdout.raw! str
+            Ok popCtx
 
         0x2E ->
             # `.` write int
-            when popNumber ctx is
-                Ok (popCtx, num) ->
-                    Stdout.raw! (Num.toStr (Num.intCast num))
-                    Ok popCtx
-
-                Err e ->
-                    Err e
+            (popCtx, num) = popNumber? ctx
+            Stdout.raw! (Num.toStr (Num.intCast num))
+            Ok popCtx
 
         0x5E ->
             # `^` read char as int
@@ -495,8 +397,7 @@ stepExecCtx! = \ctx, char ->
         0x3A ->
             # `:` store to variable
             (popCtx1, var) = popVariable? ctx
-            # The Result.mapErr on the next line maps from EmptyStack in Context.roc to the full InterpreterErrors union here.
-            (popCtx2, n1) = Result.mapErr? (Context.popStack popCtx1) (\EmptyStack -> EmptyStack)
+            (popCtx2, n1) = Context.popStack? popCtx1
             Ok { popCtx2 & vars: List.set popCtx2.vars (Variable.toIndex var) n1 }
 
         0x3B ->
@@ -548,21 +449,45 @@ binaryOp = \ctx, op ->
 
 popNumber : Context -> Result (Context, I32) InterpreterErrors
 popNumber = \ctx ->
-    when Context.popStack ctx is
-        Ok (popCtx, Number num) -> Ok (popCtx, num)
-        Ok _ -> Err (NoNumberOnStack)
-        Err EmptyStack -> Err EmptyStack
+    when Context.popStack? ctx is
+        (popCtx, Number num) -> Ok (popCtx, num)
+        _ -> Err NoNumberOnStack
 
 popLambda : Context -> Result (Context, List U8) InterpreterErrors
 popLambda = \ctx ->
-    when Context.popStack ctx is
-        Ok (popCtx, Lambda bytes) -> Ok (popCtx, bytes)
-        Ok _ -> Err NoLambdaOnStack
-        Err EmptyStack -> Err EmptyStack
+    when Context.popStack? ctx is
+        (popCtx, Lambda bytes) -> Ok (popCtx, bytes)
+        _ -> Err NoLambdaOnStack
 
 popVariable : Context -> Result (Context, Variable) InterpreterErrors
 popVariable = \ctx ->
-    when Context.popStack ctx is
-        Ok (popCtx, Var var) -> Ok (popCtx, var)
-        Ok _ -> Err NoVariableOnStack
-        Err EmptyStack -> Err EmptyStack
+    when Context.popStack? ctx is
+        (popCtx, Var var) -> Ok (popCtx, var)
+        _ -> Err NoVariableOnStack
+
+isDigit : U8 -> Bool
+isDigit = \char ->
+    char
+    >= 0x30 # `0`
+    && char
+    <= 0x39 # `0`
+
+isWhitespace : U8 -> Bool
+isWhitespace = \char ->
+    char
+    == 0xA # new line
+    || char
+    == 0xD # carriage return
+    || char
+    == 0x20 # space
+    || char
+    == 0x9 # tab
+
+endUnexpected = \err ->
+    when err is
+        NoScope ->
+            NoScope
+
+        EndOfData ->
+            UnexpectedEndOfData
+
