@@ -431,7 +431,7 @@ fn dbg_mono_pattern_help<'a>(
             todo!()
         }
         MonoPattern::Underscore => {
-            todo!()
+            write!(buf, "Underscore")
         }
         MonoPattern::CompilerBug(_) => {
             todo!()

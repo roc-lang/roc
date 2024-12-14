@@ -490,7 +490,7 @@ impl<'a, 'c, 'd, 'i, 's, 't, 'w, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, '
             Pattern::FloatLiteral(_, _, _, _, _) => todo!(),
             Pattern::StrLiteral(_) => todo!(),
             Pattern::SingleQuote(_, _, _, _) => todo!(),
-            Pattern::Underscore => todo!(),
+            Pattern::Underscore => MonoPattern::Underscore,
             Pattern::AbilityMemberSpecialization { .. } => todo!(),
             Pattern::Shadowed(_, _, _) => todo!(),
             Pattern::OpaqueNotInScope(_) => todo!(),
