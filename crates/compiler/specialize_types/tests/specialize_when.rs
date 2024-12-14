@@ -42,4 +42,16 @@ mod specialize_when {
             "When(Number(I8(123)), Number(I8(123)) -> Number(I16(321)), Underscore -> Number(I16(0)))"
         );
     }
+
+    #[test]
+    fn guard() {
+        expect_mono_expr_str(
+            r"
+                when 123 is
+                    123 if Bool.true -> 321
+                    _ -> 0
+            ",
+            "When(Number(I8(123)), Number(I8(123)) if `Bool.true` -> Number(I16(321)), Underscore -> Number(I16(0)))"
+        );
+    }
 }

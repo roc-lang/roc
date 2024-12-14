@@ -273,9 +273,14 @@ impl<'a, 'c, 'd, 'i, 's, 't, 'w, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, '
                         return compiler_bug!(Problem::WhenBranchHasNoPatterns);
                     };
 
+                    let guard = branch.guard.as_ref().map(|guard| {
+                        let mono_guard = self.to_mono_expr(&guard.value);
+                        self.mono_exprs.add(mono_guard, guard.region)
+                    });
+
                     let mono_branch = WhenBranch {
                         patterns: patterns_slice,
-                        guard: None,
+                        guard,
                         value: self.mono_exprs.add(value, branch.value.region),
                     };
 
