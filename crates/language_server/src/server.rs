@@ -103,6 +103,7 @@ impl RocServer {
                 work_done_progress: None,
             },
         };
+        let code_action_provider = CodeActionProviderCapability::Simple(true);
         ServerCapabilities {
             text_document_sync: Some(text_document_sync),
             hover_provider: Some(hover_provider),
@@ -110,6 +111,7 @@ impl RocServer {
             document_formatting_provider: Some(OneOf::Right(document_formatting_provider)),
             semantic_tokens_provider: Some(semantic_tokens_provider),
             completion_provider: Some(completion_provider),
+            code_action_provider: Some(code_action_provider),
             ..ServerCapabilities::default()
         }
     }
@@ -337,6 +339,18 @@ impl LanguageServer for RocServer {
                 .completion_items(&doc.text_document.uri, doc.position),
         )
         .await
+    }
+
+    async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+        let CodeActionParams {
+            text_document,
+            range,
+            context: _,
+            partial_result_params: _,
+            work_done_progress_params: _,
+        } = params;
+
+        unwind_async(self.state.registry.code_actions(&text_document.uri, range)).await
     }
 }
 
@@ -619,5 +633,148 @@ mod tests {
             )
         "#]]
         .assert_debug_eq(&actual);
+    }
+
+    async fn code_action_edits(doc: String, position: Position, name: &str) -> Vec<TextEdit> {
+        let (inner, url) = test_setup(doc.clone()).await;
+        let registry = &inner.registry;
+
+        let actions = registry
+            .code_actions(&url, Range::new(position, position))
+            .await
+            .unwrap();
+
+        actions
+            .into_iter()
+            .find_map(|either| match either {
+                CodeActionOrCommand::CodeAction(action) if name == action.title => Some(action),
+                _ => None,
+            })
+            .expect("Code action not present")
+            .edit
+            .expect("Code action does not have an associated edit")
+            .changes
+            .expect("Edit does not have any changes")
+            .get(&url)
+            .expect("Edit does not have changes for this file")
+            .clone()
+    }
+
+    #[tokio::test]
+    async fn test_annotate_single() {
+        let edit = code_action_edits(
+            DOC_LIT.to_string() + "main = Task.ok {}",
+            Position::new(3, 2),
+            "Add signature",
+        )
+        .await;
+
+        expect![[r#"
+            [
+                TextEdit {
+                    range: Range {
+                        start: Position {
+                            line: 3,
+                            character: 0,
+                        },
+                        end: Position {
+                            line: 3,
+                            character: 0,
+                        },
+                    },
+                    new_text: "main : Task {} *\n",
+                },
+            ]
+        "#]]
+        .assert_debug_eq(&edit);
+    }
+
+    #[tokio::test]
+    async fn test_annotate_top_level() {
+        let edit = code_action_edits(
+            DOC_LIT.to_string()
+                + indoc! {r#"
+                other = \_ ->
+                    Task.ok {}
+
+                main =
+                    other {}
+            "#},
+            Position::new(5, 0),
+            "Add top-level signatures",
+        )
+        .await;
+
+        expect![[r#"
+            [
+                TextEdit {
+                    range: Range {
+                        start: Position {
+                            line: 3,
+                            character: 0,
+                        },
+                        end: Position {
+                            line: 3,
+                            character: 0,
+                        },
+                    },
+                    new_text: "other : * -> Task {} *\n",
+                },
+                TextEdit {
+                    range: Range {
+                        start: Position {
+                            line: 6,
+                            character: 0,
+                        },
+                        end: Position {
+                            line: 6,
+                            character: 0,
+                        },
+                    },
+                    new_text: "main : Task {} *\n",
+                },
+            ]
+        "#]]
+        .assert_debug_eq(&edit);
+    }
+
+    #[tokio::test]
+    async fn test_annotate_inner() {
+        let edit = code_action_edits(
+            DOC_LIT.to_string()
+                + indoc! {r#"
+                main =
+                    start = 10
+                    fib start 0 1
+
+                fib = \n, a, b ->
+                    if n == 0 then
+                        a
+                    else
+                        fib (n - 1) b (a + b)
+            "#},
+            Position::new(4, 8),
+            "Add signature",
+        )
+        .await;
+
+        expect![[r#"
+            [
+                TextEdit {
+                    range: Range {
+                        start: Position {
+                            line: 4,
+                            character: 0,
+                        },
+                        end: Position {
+                            line: 4,
+                            character: 0,
+                        },
+                    },
+                    new_text: "    start : Num *\n",
+                },
+            ]
+        "#]]
+        .assert_debug_eq(&edit);
     }
 }
