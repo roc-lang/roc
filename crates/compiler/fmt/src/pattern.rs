@@ -201,9 +201,24 @@ fn fmt_pattern_only(
 
                 let mut was_multiline = arg.item.is_multiline();
 
-                let before = merge_spaces(buf.text.bump(), last_after, arg.before);
+                let mut before = merge_spaces(buf.text.bump(), last_after, arg.before);
 
                 if !before.is_empty() {
+                    if starts_with_block_str(&arg.item) {
+                        // Ick!
+                        // The block string will keep "generating" newlines when formatted (it wants to start on its own line),
+                        // so we strip one out here.
+                        //
+                        // Note that this doesn't affect Expr's because those have explicit parens, and we can control
+                        // whether spaces cross that boundary.
+                        let chop_off = before
+                            .iter()
+                            .rev()
+                            .take_while(|&&s| matches!(s, CommentOrNewline::Newline))
+                            .count();
+                        before = &before[..before.len() - chop_off];
+                    }
+
                     if !is_multiline {
                         was_multiline |= before.iter().any(|s| s.is_comment());
                         fmt_comments_only(buf, before.iter(), NewlineAt::Bottom, indent_more)
@@ -528,23 +543,6 @@ pub fn pattern_lift_spaces<'a, 'b: 'a>(
         Pattern::SpaceBefore(expr, spaces) => {
             let mut inner = pattern_lift_spaces(arena, expr);
             inner.before = merge_spaces(arena, spaces, inner.before);
-
-            if starts_with_block_str(&inner.item) {
-                // Ick!
-                // The block string will keep "generating" newlines when formatted (it wants to start on its own line),
-                // so we strip one out here.
-                //
-                // Note that this doesn't affect Expr's because those have explicit parens, and we can control
-                // whether spaces cross that boundary.
-                let chop_off = inner
-                    .before
-                    .iter()
-                    .rev()
-                    .take_while(|&&s| matches!(s, CommentOrNewline::Newline))
-                    .count();
-                inner.before = &inner.before[..inner.before.len() - chop_off];
-            }
-
             inner
         }
         Pattern::SpaceAfter(expr, spaces) => {
