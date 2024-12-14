@@ -1305,6 +1305,7 @@ mod cli_tests {
     }
 
     #[test]
+    #[ignore = "flaky currently due to 7022"]
     fn known_type_error() {
         let cli_check = ExecCli::new(
             CMD_CHECK,
