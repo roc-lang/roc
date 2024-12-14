@@ -23,14 +23,9 @@ pub fn print_minimizations(text: &str, kind: InputKind) {
     loop {
         let mut found = false;
         for update in candidate_minimizations(s.clone()) {
-            let mut new_s = String::with_capacity(s.len());
-            let mut offset = 0;
-            for (start, end, replacement) in update.replacements.clone() {
-                new_s.push_str(&s[offset..start]);
-                new_s.push_str(&replacement);
-                offset = end;
-            }
-            new_s.push_str(&s[offset..]);
+            let Some(new_s) = make_replacements(&s, &update) else {
+                continue;
+            };
 
             assert!(
                 new_s.len() < s.len(),
@@ -56,6 +51,23 @@ pub fn print_minimizations(text: &str, kind: InputKind) {
 
     eprintln!("Final result:");
     println!("{}", s);
+}
+
+fn make_replacements(s: &str, update: &Update) -> Option<String> {
+    let mut new_s = String::with_capacity(s.len());
+    let mut offset = 0;
+    for (start, end, replacement) in update.replacements.clone() {
+        // check that start and end are not in the middle of a utf-8 character
+        if !s.is_char_boundary(start) || !s.is_char_boundary(end) {
+            return None;
+        }
+        new_s.push_str(&s[offset..start]);
+        new_s.push_str(&replacement);
+        offset = end;
+    }
+    new_s.push_str(&s[offset..]);
+
+    Some(new_s)
 }
 
 fn round_trip_once_and_extract_error(text: &str, kind: InputKind) -> Option<String> {
