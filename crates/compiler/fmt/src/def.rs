@@ -37,7 +37,6 @@ impl<'a> Formattable for Defs<'a> {
         buf: &mut Buf,
         _parens: Parens,
         _newlines: Newlines,
-
         indent: u16,
     ) {
         let mut prev_spaces = true;
@@ -558,6 +557,7 @@ impl<'a> Formattable for TypeHeader<'a> {
             let need_parens = matches!(var.item, Pattern::Apply(..));
 
             if need_parens {
+                buf.indent(vars_indent);
                 buf.push_str("(");
             }
 
@@ -803,6 +803,7 @@ impl<'a> Formattable for IngestedFileAnnotation<'a> {
         } = self;
 
         fmt_default_spaces(buf, before_colon, indent);
+        buf.indent(indent);
         buf.push_str(":");
         buf.spaces(1);
         annotation.format(buf, indent);
@@ -1032,6 +1033,7 @@ pub fn fmt_body<'a>(
             && pattern_extracted.before.iter().all(|s| s.is_newline())
             && pattern_extracted.after.iter().all(|s| s.is_newline())
             && !matches!(body.extract_spaces().item, Expr::Defs(..))
+            && !matches!(body.extract_spaces().item, Expr::Return(..))
     } else {
         false
     };

@@ -88,12 +88,17 @@
                                                                             ),
                                                                         ],
                                                                     },
-                                                                    Return(
-                                                                        @86-97 Var {
-                                                                            module_name: "",
-                                                                            ident: "x",
-                                                                        },
-                                                                        None,
+                                                                    @86-97 SpaceBefore(
+                                                                        Return(
+                                                                            @86-97 Var {
+                                                                                module_name: "",
+                                                                                ident: "x",
+                                                                            },
+                                                                            None,
+                                                                        ),
+                                                                        [
+                                                                            Newline,
+                                                                        ],
                                                                     ),
                                                                 ),
                                                                 [

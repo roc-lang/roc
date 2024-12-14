@@ -69,6 +69,7 @@ impl<'a> Buf<'a> {
         self.beginning_of_line = false;
     }
 
+    #[track_caller]
     pub fn cur_line_indent(&self) -> u16 {
         debug_assert!(!self.beginning_of_line, "cur_line_indent before indent");
         self.line_indent

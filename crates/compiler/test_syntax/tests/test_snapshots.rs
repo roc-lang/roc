@@ -240,6 +240,7 @@ mod test_snapshots {
         fail/record_type_open_indent.expr,
         fail/record_type_tab.expr,
         fail/return_as_single_line_expr.expr,
+        fail/return_in_pat.expr,
         fail/single_no_end.expr,
         fail/tab_crash.header,
         fail/tag_union_end.expr,
@@ -297,14 +298,17 @@ mod test_snapshots {
         pass/annotated_tuple_destructure.expr,
         pass/annotation_apply_newlines.expr,
         pass/annotation_comment_before_colon.expr,
+        pass/annotation_tag_parens_comment.expr,
         pass/annotation_tuple_comment.expr,
         pass/annotation_tuple_newline.expr,
         pass/annotation_tuple_parens_newlines.expr,
+        pass/annotation_tuples_ext_galore.expr,
         pass/applies_in_binop.expr,
         pass/apply_binop_switch.expr,
         pass/apply_closure_pizza.expr,
         pass/apply_parenthetical_tag_args.expr,
         pass/apply_record_ann.expr,
+        pass/apply_record_parens_newline_field.expr,
         pass/apply_tag.expr,
         pass/apply_three_args.expr,
         pass/apply_tuple_ext_parens_ty.expr,
@@ -315,6 +319,7 @@ mod test_snapshots {
         pass/backpassing_bananza.expr,
         pass/backpassing_in_parens_in_tuple.expr,
         pass/bang_newline_double_accessor.expr,
+        pass/bangs_and_tuple_accessors.expr,
         pass/basic_apply.expr,
         pass/basic_docs.expr,
         pass/basic_field.expr,
@@ -376,6 +381,7 @@ mod test_snapshots {
         pass/defs_suffixed_middle_extra_indents.moduledefs,
         pass/destructure_tag_assignment.expr,
         pass/docs.expr,
+        pass/double_parens_comment_tuple_pat.expr,
         pass/double_space_before.expr,
         pass/effectful_closure_statements.expr,
         pass/empty_app_header.header,
@@ -385,6 +391,7 @@ mod test_snapshots {
         pass/empty_package_header.header,
         pass/empty_platform_header.header,
         pass/empty_record.expr,
+        pass/empty_record_assign_return.expr,
         pass/empty_record_assign_tag.expr,
         pass/empty_record_assignment.expr,
         pass/empty_record_assignment_d_when_bang.expr,
@@ -468,8 +475,10 @@ mod test_snapshots {
         pass/multiline_apply_equals_multiline_apply.expr,
         pass/multiline_backpassing.expr,
         pass/multiline_binop_when_with_comments.expr,
+        pass/multiline_str_apply_in_parens_pat.expr,
         pass/multiline_str_crazyness.expr,
         pass/multiline_str_in_pat.expr,
+        pass/multiline_str_opt_field.expr,
         pass/multiline_string.expr,
         pass/multiline_string_in_apply.expr,
         pass/multiline_tuple_with_comments.expr,
@@ -492,6 +501,7 @@ mod test_snapshots {
         pass/nested_if.expr,
         pass/nested_list_comment_in_closure_arg.expr,
         pass/nested_parens_in_pattern.expr,
+        pass/nested_when_comment_in_pat.expr,
         pass/newline_after_equals.expr, // Regression test for https://github.com/roc-lang/roc/issues/51
         pass/newline_after_mul.expr,
         pass/newline_after_opt_field.expr,
@@ -527,6 +537,7 @@ mod test_snapshots {
         pass/opaque_comment_after_head.expr,
         pass/opaque_destructure_first_item_in_body.expr,
         pass/opaque_has_abilities.expr,
+        pass/opaque_in_ann_apply_arg.expr,
         pass/opaque_reference_expr.expr,
         pass/opaque_reference_expr_with_arguments.expr,
         pass/opaque_reference_pattern.expr,
@@ -542,6 +553,7 @@ mod test_snapshots {
         pass/outdented_record.expr,
         pass/p_return_f_minus_f.expr,
         pass/packed_singleton_list.expr,
+        pass/paren_newline_before_return.expr,
         pass/parens_apply_newline.expr,
         pass/parens_apply_not_parens.expr,
         pass/parens_comment_in_ty_annotation.expr,
@@ -594,8 +606,12 @@ mod test_snapshots {
         pass/record_updater_var_apply.expr,
         pass/record_with_if.expr,
         pass/record_with_lots_of_newlines.expr,
+        pass/repr_7342.expr,
+        pass/repr_7343.expr,
+        pass/repr_7346.expr,
         pass/requires_type.header,
         pass/return_apply_newline.expr,
+        pass/return_backpassing.expr,
         pass/return_field_access_in_parens.expr,
         pass/return_in_apply_func.expr,
         pass/return_in_if.expr,
@@ -604,6 +620,7 @@ mod test_snapshots {
         pass/return_minus_one.expr,
         pass/return_multiline.expr,
         pass/return_only_statement.expr,
+        pass/return_then_nested_parens.expr,
         pass/return_with_after.expr,
         pass/separate_defs.moduledefs,
         pass/single_arg_closure.expr,
@@ -677,6 +694,7 @@ mod test_snapshots {
         pass/when_in_binops.expr,
         pass/when_in_function.expr,
         pass/when_in_function_python_style_indent.expr,
+        pass/when_in_list.expr,
         pass/when_in_parens.expr,
         pass/when_in_parens_indented.expr,
         pass/when_newline_after_condition.expr,
@@ -706,7 +724,11 @@ mod test_snapshots {
             // This is the current list as of writing.
             // We should be driving these down to zero over time.
             // Adding this protection in now to avoid accidentally adding more.
-            "all_the_bangs" => true,
+            "all_the_bangs" | "bangs_and_tuple_accessors" => {
+                // both of these result in:
+                // "a Expr::TrySuffix expression was not completely removed in desugar_value_def_suffixed"
+                true
+            }
 
             // When adding new snapshot tests, strongly prefer fixing any canonicalization panics
             // they may run into rather than adding them to this list.

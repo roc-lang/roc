@@ -133,13 +133,19 @@ fn format_expr_only(
             buf.push_str(string);
         }
         Expr::Record(fields) => {
-            fmt_record_like(buf, None, *fields, indent, assigned_field_to_spaces);
+            fmt_record_like(
+                buf,
+                None,
+                prepare_expr_field_collection(buf.text.bump(), *fields),
+                indent,
+                assigned_field_to_spaces,
+            );
         }
         Expr::RecordUpdate { update, fields } => {
             fmt_record_like(
                 buf,
                 Some(RecordPrefix::Update(update)),
-                *fields,
+                prepare_expr_field_collection(buf.text.bump(), *fields),
                 indent,
                 assigned_field_to_spaces,
             );
@@ -148,7 +154,7 @@ fn format_expr_only(
             fmt_record_like(
                 buf,
                 Some(RecordPrefix::Mapper(mapper)),
-                *fields,
+                prepare_expr_field_collection(buf.text.bump(), *fields),
                 indent,
                 assigned_field_to_spaces,
             );
@@ -338,6 +344,110 @@ fn format_expr_only(
     }
 }
 
+fn prepare_expr_field_collection<'a>(
+    arena: &'a Bump,
+    items: Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>,
+) -> Collection<'a, Loc<AssignedField<'a, Expr<'a>>>> {
+    let mut new_items: Vec<'_, Loc<AssignedField<'a, Expr<'a>>>> =
+        Vec::with_capacity_in(items.len(), arena);
+
+    let mut last_after: &[CommentOrNewline<'_>] = &[];
+
+    for (i, item) in items.items.iter().enumerate() {
+        let mut lifted = assigned_field_lift_spaces(arena, item.value);
+        if i == items.items.len() - 1 {
+            last_after = lifted.after;
+            lifted.after = &[];
+        }
+        new_items.push(Loc::at(item.region, lower_assigned_field(arena, lifted)));
+    }
+
+    let final_comments = merge_spaces_conservative(arena, last_after, items.final_comments());
+
+    Collection::with_items_and_comments(arena, new_items.into_bump_slice(), final_comments)
+}
+
+fn lower_assigned_field<'a>(
+    arena: &'a Bump,
+    lifted: Spaces<'a, AssignedField<'a, Expr<'a>>>,
+) -> AssignedField<'a, Expr<'a>> {
+    if lifted.before.is_empty() && lifted.after.is_empty() {
+        return lifted.item;
+    }
+    if lifted.before.is_empty() {
+        return AssignedField::SpaceAfter(arena.alloc(lifted.item), lifted.after);
+    }
+    if lifted.after.is_empty() {
+        return AssignedField::SpaceBefore(arena.alloc(lifted.item), lifted.before);
+    }
+    AssignedField::SpaceBefore(
+        arena.alloc(AssignedField::SpaceAfter(
+            arena.alloc(lifted.item),
+            lifted.after,
+        )),
+        lifted.before,
+    )
+}
+
+fn assigned_field_lift_spaces<'a, 'b: 'a>(
+    arena: &'a Bump,
+    value: AssignedField<'b, Expr<'b>>,
+) -> Spaces<'a, AssignedField<'a, Expr<'a>>> {
+    match value {
+        AssignedField::RequiredValue(name, sp, value) => {
+            let new_value = expr_lift_spaces_after(Parens::NotNeeded, arena, &value.value);
+            Spaces {
+                before: &[],
+                item: AssignedField::RequiredValue(
+                    name,
+                    sp,
+                    arena.alloc(Loc::at(value.region, new_value.item)),
+                ),
+                after: new_value.after,
+            }
+        }
+        AssignedField::OptionalValue(name, sp, value) => {
+            let new_value = expr_lift_spaces_after(Parens::NotNeeded, arena, &value.value);
+            Spaces {
+                before: &[],
+                item: AssignedField::OptionalValue(
+                    name,
+                    sp,
+                    arena.alloc(Loc::at(value.region, new_value.item)),
+                ),
+                after: new_value.after,
+            }
+        }
+        AssignedField::IgnoredValue(name, sp, value) => {
+            let new_value = expr_lift_spaces_after(Parens::NotNeeded, arena, &value.value);
+            Spaces {
+                before: &[],
+                item: AssignedField::IgnoredValue(
+                    name,
+                    sp,
+                    arena.alloc(Loc::at(value.region, new_value.item)),
+                ),
+                after: new_value.after,
+            }
+        }
+        AssignedField::LabelOnly(name) => Spaces {
+            before: &[],
+            item: AssignedField::LabelOnly(name),
+            after: &[],
+        },
+        AssignedField::SpaceBefore(inner, sp) => {
+            let mut inner = assigned_field_lift_spaces(arena, *inner);
+            inner.before = merge_spaces_conservative(arena, sp, inner.before);
+            inner
+        }
+        AssignedField::SpaceAfter(inner, sp) => {
+            let mut inner = assigned_field_lift_spaces(arena, *inner);
+            inner.after = merge_spaces_conservative(arena, inner.after, sp);
+            inner
+        }
+    }
+}
+
 pub fn expr_is_multiline(me: &Expr<'_>, comments_only: bool) -> bool {
     match me {
         // Return whether these spaces contain any Newlines
@@ -389,16 +499,7 @@ pub fn expr_is_multiline(me: &Expr<'_>, comments_only: bool) -> bool {
                     .any(|loc_arg| expr_is_multiline(&loc_arg.value, comments_only))
         }
 
-        Expr::DbgStmt {
-            first: condition,
-            extra_args,
-            ..
-        } => {
-            expr_is_multiline(&condition.value, comments_only)
-                || extra_args
-                    .iter()
-                    .any(|loc_arg| expr_is_multiline(&loc_arg.value, comments_only))
-        }
+        Expr::DbgStmt { .. } => true,
         Expr::LowLevelDbg(_, _, _) => {
             unreachable!("LowLevelDbg should only exist after desugaring, not during formatting")
         }
@@ -513,7 +614,9 @@ fn requires_space_after_unary(item: &Expr<'_>) -> bool {
             is_negative,
         } => *is_negative,
         Expr::RecordUpdater(..) => true,
-        Expr::RecordAccess(inner, _field) => requires_space_after_unary(inner),
+        Expr::RecordAccess(inner, _field) | Expr::TupleAccess(inner, _field) => {
+            requires_space_after_unary(inner)
+        }
         Expr::Apply(inner, _, _) => requires_space_after_unary(&inner.value),
         Expr::TrySuffix { target: _, expr } => requires_space_after_unary(expr),
         Expr::SpaceAfter(inner, _) | Expr::SpaceBefore(inner, _) => {
@@ -646,9 +749,10 @@ fn is_outdentable_collection(expr: &Expr<'_>) -> bool {
 
 fn fmt_parens(sub_expr: &Expr<'_>, buf: &mut Buf<'_>, indent: u16) {
     let should_add_newlines = match sub_expr {
-        Expr::Closure(..) | Expr::SpaceBefore(..) | Expr::SpaceAfter(Expr::Closure(..), ..) => {
-            false
-        }
+        Expr::Closure(..)
+        | Expr::SpaceBefore(..)
+        | Expr::SpaceAfter(Expr::Closure(..), ..)
+        | Expr::DbgStmt { .. } => false,
         _ => sub_expr.is_multiline(),
     };
 
@@ -670,7 +774,7 @@ fn fmt_parens(sub_expr: &Expr<'_>, buf: &mut Buf<'_>, indent: u16) {
     sub_expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, next_indent);
 
     if !matches!(sub_expr, Expr::SpaceAfter(..)) && should_add_newlines {
-        buf.newline();
+        buf.ensure_ends_with_newline();
     }
     buf.indent(indent);
     buf.push(')');
@@ -740,6 +844,7 @@ fn starts_with_newline(expr: &Expr) -> bool {
         SpaceBefore(_, comment_or_newline) => {
             matches!(comment_or_newline.first(), Some(CommentOrNewline::Newline))
         }
+        DbgStmt { .. } => true,
         _ => false,
     }
 }
@@ -1010,7 +1115,7 @@ pub fn expr_lift_spaces<'a, 'b: 'a>(
                 after: body_lifted.after,
             }
         }
-        Expr::If { .. } | Expr::When(_, _) | Expr::Return(_, _) => {
+        Expr::If { .. } | Expr::When(_, _) => {
             if parens == Parens::InApply || parens == Parens::InApplyLastArg {
                 Spaces {
                     before: &[],
@@ -1022,6 +1127,34 @@ pub fn expr_lift_spaces<'a, 'b: 'a>(
                     before: &[],
                     item: *expr,
                     after: &[],
+                }
+            }
+        }
+        Expr::Return(val, opt_after) => {
+            if parens == Parens::InApply || parens == Parens::InApplyLastArg {
+                Spaces {
+                    before: &[],
+                    item: Expr::ParensAround(arena.alloc(*expr)),
+                    after: &[],
+                }
+            } else if let Some(after) = opt_after {
+                let after_lifted = expr_lift_spaces_after(Parens::NotNeeded, arena, &after.value);
+
+                Spaces {
+                    before: &[],
+                    item: Expr::Return(
+                        val,
+                        Some(arena.alloc(Loc::at(after.region, after_lifted.item))),
+                    ),
+                    after: after_lifted.after,
+                }
+            } else {
+                let val_lifted = expr_lift_spaces_after(Parens::NotNeeded, arena, &val.value);
+
+                Spaces {
+                    before: &[],
+                    item: Expr::Return(arena.alloc(Loc::at(val.region, val_lifted.item)), None),
+                    after: val_lifted.after,
                 }
             }
         }
@@ -1381,7 +1514,6 @@ fn fmt_when<'a>(
     buf: &mut Buf,
     loc_condition: &'a Loc<Expr<'a>>,
     branches: &[&'a WhenBranch<'a>],
-
     indent: u16,
 ) {
     buf.ensure_ends_with_newline();
@@ -1471,11 +1603,14 @@ fn fmt_when<'a>(
         }
 
         buf.indent(indent + INDENT);
+        let line_indent = buf.cur_line_indent();
         buf.push_str(" ->");
+
+        let inner_indent = line_indent + INDENT;
 
         match expr.value {
             Expr::SpaceBefore(nested, spaces) => {
-                fmt_spaces_no_blank_lines(buf, spaces.iter(), indent + (INDENT * 2));
+                fmt_spaces_no_blank_lines(buf, spaces.iter(), inner_indent);
 
                 if is_multiline_expr {
                     buf.ensure_ends_with_newline();
@@ -1483,12 +1618,7 @@ fn fmt_when<'a>(
                     buf.spaces(1);
                 }
 
-                nested.format_with_options(
-                    buf,
-                    Parens::NotNeeded,
-                    Newlines::Yes,
-                    indent + 2 * INDENT,
-                );
+                nested.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, inner_indent);
             }
             _ => {
                 if is_multiline_expr {
@@ -1497,12 +1627,7 @@ fn fmt_when<'a>(
                     buf.spaces(1);
                 }
 
-                expr.format_with_options(
-                    buf,
-                    Parens::NotNeeded,
-                    Newlines::Yes,
-                    indent + 2 * INDENT,
-                );
+                expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, inner_indent);
             }
         }
 
@@ -1516,9 +1641,9 @@ fn fmt_dbg_stmt<'a>(
     extra_args: &'a [&'a Loc<Expr<'a>>],
     continuation: &'a Loc<Expr<'a>>,
     parens: Parens,
-
     indent: u16,
 ) {
+    buf.ensure_ends_with_newline();
     let mut args = Vec::with_capacity_in(extra_args.len() + 1, buf.text.bump());
     args.push(condition);
     args.extend_from_slice(extra_args);
@@ -1558,14 +1683,16 @@ fn fmt_return<'a>(
     after_return: &Option<&'a Loc<Expr<'a>>>,
     parens: Parens,
     newlines: Newlines,
-
     indent: u16,
 ) {
     buf.ensure_ends_with_newline();
     buf.indent(indent);
     buf.push_str(keyword::RETURN);
 
-    if matches!(return_value.value.extract_spaces().item, Expr::Defs(..)) {
+    if matches!(
+        return_value.value.extract_spaces().item,
+        Expr::Defs(..) | Expr::Backpassing(..)
+    ) {
         buf.ensure_ends_with_newline();
     } else {
         buf.spaces(1);
@@ -1895,7 +2022,7 @@ fn fmt_record_like<'a, 'b: 'a, Field, ToSpacesAround>(
     indent: u16,
     to_space_around: ToSpacesAround,
 ) where
-    Field: Formattable,
+    Field: Formattable + std::fmt::Debug,
     ToSpacesAround: Fn(&'a Bump, &'b Field) -> Spaces<'a, Field>,
 {
     let loc_fields = fields.items;
@@ -1967,6 +2094,7 @@ fn fmt_record_like<'a, 'b: 'a, Field, ToSpacesAround>(
                     Newlines::No,
                     field_indent,
                 );
+                buf.indent(field_indent);
                 buf.push_str(",");
                 last_after = field_lifted.after;
             }

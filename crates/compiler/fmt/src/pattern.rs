@@ -102,7 +102,6 @@ fn fmt_pattern_inner(
     pat: &Pattern<'_>,
     buf: &mut Buf,
     parens: Parens,
-
     indent: u16,
     outer_is_multiline: bool,
     force_newline_at_start: bool,
@@ -127,7 +126,7 @@ fn fmt_pattern_inner(
 
     let is_multiline = me.item.is_multiline();
 
-    fmt_pattern_only(me, buf, indent, parens, is_multiline);
+    fmt_pattern_only(&me.item, buf, parens, indent, is_multiline);
 
     if !me.after.is_empty() {
         if starts_with_inline_comment(me.after.iter()) {
@@ -147,13 +146,13 @@ fn fmt_pattern_inner(
 }
 
 fn fmt_pattern_only(
-    me: Spaces<'_, Pattern<'_>>,
+    me: &Pattern<'_>,
     buf: &mut Buf<'_>,
-    indent: u16,
     parens: Parens,
+    indent: u16,
     is_multiline: bool,
 ) {
-    match me.item {
+    match me {
         Pattern::Identifier { ident: string } => {
             buf.indent(indent);
             snakify_camel_ident(buf, string);
@@ -188,29 +187,49 @@ fn fmt_pattern_only(
                 }
             }
 
-            fmt_pattern_inner(&pat.item, buf, Parens::InApply, indent, is_multiline, false);
+            fmt_pattern_only(&pat.item, buf, Parens::InApply, indent, is_multiline);
 
-            if !pat.after.is_empty() {
-                if !is_multiline {
-                    fmt_comments_only(buf, pat.after.iter(), NewlineAt::Bottom, indent_more)
-                } else {
-                    fmt_spaces(buf, pat.after.iter(), indent_more);
-                }
-            }
+            let mut last_after = pat.after;
 
-            let mut add_newlines = false;
+            let mut add_newlines = is_multiline;
 
             for loc_arg in loc_arg_patterns.iter() {
                 buf.spaces(1);
-                let was_multiline = fmt_pattern_inner(
-                    &loc_arg.value,
-                    buf,
-                    Parens::InApply,
-                    indent_more,
-                    is_multiline,
-                    add_newlines,
-                );
+
+                let parens = Parens::InApply;
+                let arg = pattern_lift_spaces(buf.text.bump(), &loc_arg.value);
+
+                let mut was_multiline = arg.item.is_multiline();
+
+                let before = merge_spaces(buf.text.bump(), last_after, arg.before);
+
+                if !before.is_empty() {
+                    if !is_multiline {
+                        was_multiline |= before.iter().any(|s| s.is_comment());
+                        fmt_comments_only(buf, before.iter(), NewlineAt::Bottom, indent_more)
+                    } else {
+                        was_multiline |= true;
+                        fmt_spaces(buf, before.iter(), indent_more);
+                    }
+                }
+
+                if add_newlines {
+                    buf.ensure_ends_with_newline();
+                }
+
+                fmt_pattern_only(&arg.item, buf, parens, indent_more, arg.item.is_multiline());
+
+                last_after = arg.after;
+
                 add_newlines |= was_multiline;
+            }
+
+            if !last_after.is_empty() {
+                if !is_multiline {
+                    fmt_comments_only(buf, last_after.iter(), NewlineAt::Bottom, indent_more)
+                } else {
+                    fmt_spaces(buf, last_after.iter(), indent_more);
+                }
             }
 
             if parens {
@@ -305,7 +324,7 @@ fn fmt_pattern_only(
             is_negative,
         } => {
             buf.indent(indent);
-            if is_negative {
+            if *is_negative {
                 buf.push('-');
             }
 
@@ -322,7 +341,7 @@ fn fmt_pattern_only(
             buf.indent(indent);
             buf.push_str(string);
         }
-        Pattern::StrLiteral(literal) => fmt_str_literal(buf, literal, indent),
+        Pattern::StrLiteral(literal) => fmt_str_literal(buf, *literal, indent),
         Pattern::SingleQuote(string) => {
             buf.indent(indent);
             format_sq_literal(buf, string);
@@ -336,15 +355,17 @@ fn fmt_pattern_only(
             buf.indent(indent);
             buf.push_str("(");
 
+            let mut add_newlines = false;
+
             let mut it = loc_patterns.iter().peekable();
             while let Some(loc_pattern) = it.next() {
-                fmt_pattern_inner(
+                add_newlines |= fmt_pattern_inner(
                     &loc_pattern.value,
                     buf,
                     Parens::NotNeeded,
                     indent,
                     is_multiline,
-                    false,
+                    add_newlines,
                 );
 
                 if it.peek().is_some() {
@@ -361,15 +382,17 @@ fn fmt_pattern_only(
             buf.indent(indent);
             buf.push_str("[");
 
+            let mut add_newlines = false;
+
             let mut it = loc_patterns.iter().peekable();
             while let Some(loc_pattern) = it.next() {
-                fmt_pattern_inner(
+                add_newlines |= fmt_pattern_inner(
                     &loc_pattern.value,
                     buf,
                     Parens::NotNeeded,
                     indent,
                     is_multiline,
-                    false,
+                    add_newlines,
                 );
 
                 if it.peek().is_some() {
@@ -449,6 +472,7 @@ pub fn pattern_lift_spaces<'a, 'b: 'a>(
     match pat {
         Pattern::Apply(func, args) => {
             let func_lifted = pattern_lift_spaces(arena, &func.value);
+
             let args = arena.alloc_slice_copy(args);
             let (before, func, after) = if let Some(last) = args.last_mut() {
                 let last_lifted = pattern_lift_spaces(arena, &last.value);
@@ -504,6 +528,19 @@ pub fn pattern_lift_spaces<'a, 'b: 'a>(
         Pattern::SpaceBefore(expr, spaces) => {
             let mut inner = pattern_lift_spaces(arena, expr);
             inner.before = merge_spaces(arena, spaces, inner.before);
+
+            if starts_with_block_str(&inner.item)
+                && matches!(inner.before.last(), Some(CommentOrNewline::Newline))
+            {
+                // Ick!
+                // The block string will keep "generating" newlines when formatted (it wants to start on its own line),
+                // so we strip one out here.
+                //
+                // Note that this doesn't affect Expr's because those have explicit parens, and we can control
+                // whether spaces cross that boundary.
+                inner.before = &inner.before[..inner.before.len() - 1];
+            }
+
             inner
         }
         Pattern::SpaceAfter(expr, spaces) => {
@@ -516,6 +553,17 @@ pub fn pattern_lift_spaces<'a, 'b: 'a>(
             item: *pat,
             after: &[],
         },
+    }
+}
+
+fn starts_with_block_str(item: &Pattern<'_>) -> bool {
+    match item {
+        Pattern::As(inner, _) | Pattern::Apply(inner, _) => starts_with_block_str(&inner.value),
+        Pattern::SpaceBefore(inner, _) | Pattern::SpaceAfter(inner, _) => {
+            starts_with_block_str(inner)
+        }
+        Pattern::StrLiteral(str_literal) => is_str_multiline(str_literal),
+        _ => false,
     }
 }
 
