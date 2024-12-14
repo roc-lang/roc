@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use core::borrow::Borrow;
 use core::ffi::c_void;
 use libc;
 use roc_std::{RocList, RocStr};
@@ -97,13 +98,15 @@ pub unsafe extern "C" fn roc_shm_open(
 }
 
 #[no_mangle]
-pub extern "C" fn rust_main() -> i32 {
-    let arg = env::args()
-        .nth(1)
-        .expect("Please pass a .false file as a command-line argument to the false interpreter!");
-    let arg = RocStr::from(arg.as_str());
+pub unsafe extern "C" fn rust_main(argc: i32, argv: *const *const i8) -> i32 {
+    let args = std::slice::from_raw_parts(argv, argc as usize);
+    if args.len() < 2 {
+        panic!("Please pass a .false file as a command-line argument to the false interpreter!");
+    }
+    let c_str = unsafe { std::ffi::CStr::from_ptr(args[1]) };
+    let roc_str = RocStr::from(c_str.to_string_lossy().borrow());
 
-    unsafe { roc_main(&arg) };
+    unsafe { roc_main(&roc_str) };
 
     // Exit code
     0
