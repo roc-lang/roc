@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::env;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
+use std::mem::ManuallyDrop;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
@@ -20,7 +21,7 @@ fn file_handles() -> &'static Mutex<HashMap<u64, BufReader<File>>> {
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed"]
-    fn roc_main(args: RocStr);
+    fn roc_main(args: ManuallyDrop<RocStr>);
 }
 
 #[no_mangle]
@@ -103,7 +104,7 @@ pub extern "C" fn rust_main() -> i32 {
         .expect("Please pass a .false file as a command-line argument to the false interpreter!");
     let arg = RocStr::from(arg.as_str());
 
-    unsafe { roc_main(arg) };
+    unsafe { roc_main(ManuallyDrop::new(arg)) };
 
     // Exit code
     0
