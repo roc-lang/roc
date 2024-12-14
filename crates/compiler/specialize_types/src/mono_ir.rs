@@ -359,7 +359,7 @@ impl WhenBranches {
         &self,
         branches: Slice<WhenBranch>,
     ) -> impl Iterator<Item = &MaybeUninit<WhenBranch>> {
-        branches.indices().into_iter().map(|index| {
+        branches.indices().map(|index| {
             debug_assert!(self.branches.len() > index, "Slice index out of bounds");
 
             unsafe { self.branches.get_unchecked(index) }

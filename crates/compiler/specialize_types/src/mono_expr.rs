@@ -469,7 +469,7 @@ impl<'a, 'c, 'd, 'i, 's, 't, 'p, 'w, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, '
         }
     }
 
-    fn to_mono_pattern(&mut self, can_pattern: &Pattern) -> MonoPattern {
+    pub fn to_mono_pattern(&mut self, can_pattern: &Pattern) -> MonoPattern {
         match can_pattern {
             Pattern::Identifier(ident) => MonoPattern::Identifier(*ident),
             Pattern::As(_, _) => todo!(),
