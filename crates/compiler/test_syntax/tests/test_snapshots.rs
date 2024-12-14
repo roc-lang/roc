@@ -320,6 +320,7 @@ mod test_snapshots {
         pass/backpassing_bananza.expr,
         pass/backpassing_comment_pattern_fun.expr,
         pass/backpassing_in_parens_in_tuple.expr,
+        pass/backpassing_record_str_crazyness.expr,
         pass/bang_newline_double_accessor.expr,
         pass/bangs_and_tuple_accessors.expr,
         pass/basic_apply.expr,

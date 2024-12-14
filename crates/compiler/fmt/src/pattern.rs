@@ -257,6 +257,7 @@ fn fmt_pattern_only(
 
             if !loc_patterns.is_empty() {
                 buf.spaces(1);
+                let mut last_was_multiline = false;
                 let mut it = loc_patterns.iter().peekable();
                 while let Some(loc_pattern) = it.next() {
                     let item = pattern_lift_spaces(buf.text.bump(), &loc_pattern.value);
@@ -269,6 +270,10 @@ fn fmt_pattern_only(
                         }
                     }
 
+                    if last_was_multiline {
+                        buf.ensure_ends_with_newline();
+                    }
+
                     fmt_pattern_inner(
                         &item.item,
                         buf,
@@ -279,6 +284,7 @@ fn fmt_pattern_only(
                     );
 
                     let is_multiline = item.item.is_multiline();
+                    last_was_multiline = is_multiline;
 
                     if it.peek().is_some() {
                         buf.push_str(",");
