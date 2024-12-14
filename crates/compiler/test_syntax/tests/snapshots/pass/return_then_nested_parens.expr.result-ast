@@ -1,0 +1,37 @@
+@0-17 SpaceAfter(
+    Return(
+        @0-8 Var {
+            module_name: "",
+            ident: "n",
+        },
+        Some(
+            @9-17 SpaceBefore(
+                ParensAround(
+                    SpaceAfter(
+                        ParensAround(
+                            SpaceAfter(
+                                Num(
+                                    "0",
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
+                        ),
+                        [
+                            LineComment(
+                                "",
+                            ),
+                        ],
+                    ),
+                ),
+                [
+                    Newline,
+                ],
+            ),
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

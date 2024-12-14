@@ -1,0 +1,28 @@
+@0-12 SpaceAfter(
+    Apply(
+        @0-10 Record(
+            [
+                @1-9 OptionalValue(
+                    @1-2 "l",
+                    [],
+                    @3-9 Str(
+                        Block(
+                            [],
+                        ),
+                    ),
+                ),
+            ],
+        ),
+        [
+            @10-12 Str(
+                PlainLine(
+                    "",
+                ),
+            ),
+        ],
+        Space,
+    ),
+    [
+        Newline,
+    ],
+)
