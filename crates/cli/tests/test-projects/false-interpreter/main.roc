@@ -12,16 +12,6 @@ import Variable exposing [Variable]
 # 1) The input files are considered too large to just read in at once. Instead it is read via buffer or line.
 # 2) The output is also considered too large to generate in memory. It must be printed as we go via buffer or line.
 
-# All of the notes below this line are hopefully outdated with purity inference.
-# ----------
-# I think one of the biggest issues with this implementation is that it doesn't return to the platform frequently enough.
-# What I mean by that is we build a chain of all Tasks period and return that to the host.
-# In something like the elm architecture you return a single step with one Task.
-# The huge difference here is when it comes to things like stack overflows.
-# In an imperative language, a few of these pieces would be in while loops and it would basically never overflow.
-# This implementation is easy to overflow, either make the input long enough or make a false while loop run long enough.
-# I assume all of the Task.awaits are the cause of this, but I am not 100% sure.
-
 InterpreterErrors : [BadUtf8, DivByZero, EmptyStack, InvalidBooleanValue, InvalidChar Str, MaxInputNumber, NoLambdaOnStack, NoNumberOnStack, NoVariableOnStack, NoScope, OutOfBounds, UnexpectedEndOfData]
 
 main! : Str => {}
