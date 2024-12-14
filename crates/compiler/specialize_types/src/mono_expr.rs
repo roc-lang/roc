@@ -47,13 +47,13 @@ impl MonoFnCache {
     }
 }
 
-pub struct Env<'a, 'c, 'd, 'i, 's, 't, 'w, P> {
+pub struct Env<'a, 'c, 'd, 'i, 's, 't, 'p, 'w, P> {
     arena: &'a Bump,
     subs: &'s mut Subs,
     types_cache: &'c mut MonoTypeCache,
     mono_types: &'t mut MonoTypes,
     mono_exprs: &'t mut MonoExprs,
-    mono_patterns: &'t mut MonoPatterns,
+    mono_patterns: &'p mut MonoPatterns,
     when_branches: &'w mut WhenBranches,
     record_field_ids: RecordFieldIds,
     tuple_elem_ids: TupleElemIds,
@@ -62,14 +62,14 @@ pub struct Env<'a, 'c, 'd, 'i, 's, 't, 'w, P> {
     problems: P,
 }
 
-impl<'a, 'c, 'd, 'i, 's, 't, 'w, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, 'w, P> {
+impl<'a, 'c, 'd, 'i, 's, 't, 'p, 'w, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, 't, 'p, 'w, P> {
     pub fn new(
         arena: &'a Bump,
         subs: &'s mut Solved<Subs>,
         types_cache: &'c mut MonoTypeCache,
         mono_types: &'t mut MonoTypes,
         mono_exprs: &'t mut MonoExprs,
-        mono_patterns: &'t mut MonoPatterns,
+        mono_patterns: &'p mut MonoPatterns,
         when_branches: &'w mut WhenBranches,
         record_field_ids: RecordFieldIds,
         tuple_elem_ids: TupleElemIds,
