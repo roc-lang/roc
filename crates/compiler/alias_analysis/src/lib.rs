@@ -360,6 +360,13 @@ where
         OptLevel::Development | OptLevel::Normal => morphic_lib::solve_trivial(program),
         // TODO(#7367): Change this back to `morphic_lib::solve`.
         // For now, using solve_trivial to avoid bug with loops.
+        // Note: when disabling this, there was not much of a change in performance.
+        // Notably, NQueens was about 5% slower. False interpreter was 0-5% faster (depending on input).
+        // cFold and derive saw minor gains ~1.5%. rBTreeCk saw a big gain of ~4%.
+        // This feels wrong, morphic should not really be able to slow down code.
+        // Likely, noise or the bug and wrong inplace mutation lead to these perf changes.
+        // When re-enabling this, we should analysis the perf and inplace mutations of a few apps.
+        // It might be the case that our current benchmarks just aren't affected by morphic much.
         OptLevel::Optimize | OptLevel::Size => morphic_lib::solve_trivial(program),
     }
 }
