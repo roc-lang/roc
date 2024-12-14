@@ -1,3 +1,4 @@
-S implements d : J
-            m #
+S implements
+    d : J
+        m #
 D

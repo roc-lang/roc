@@ -424,6 +424,7 @@ mod test_snapshots {
         pass/i_over_not_g.expr,
         pass/if_def.expr,
         pass/if_newline_then_negate_else_recordupdater.expr,
+        pass/implements_newline_in_fn_ty.expr,
         pass/implements_newlines_comments.expr,
         pass/import.moduledefs,
         pass/import_from_package.moduledefs,

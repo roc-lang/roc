@@ -494,12 +494,22 @@ impl<'a> Formattable for TypeDef<'a> {
                     );
                 } else {
                     for member in members.iter() {
-                        member.format_with_options(
-                            buf,
-                            Parens::NotNeeded,
-                            Newlines::Yes,
-                            indent + INDENT,
-                        );
+                        let Spaces {
+                            before,
+                            item,
+                            after,
+                        } = member.name.value.extract_spaces();
+                        fmt_spaces(buf, before.iter(), indent + INDENT);
+                        buf.ensure_ends_with_newline();
+
+                        buf.indent(indent + INDENT);
+                        buf.push_str(item);
+                        fmt_spaces(buf, after.iter(), indent + INDENT);
+                        buf.spaces(1);
+                        buf.push(':');
+                        buf.spaces(1);
+
+                        member.typ.value.format(buf, indent + 2 * INDENT);
                     }
                 }
             }
