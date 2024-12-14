@@ -1183,15 +1183,10 @@ fn might_be_confused_with_implements(body: &Expr<'_>) -> bool {
             }
 
             for expr in *args {
-                match expr.extract_spaces().item {
-                    Expr::Var { module_name, ident } => {
-                        if module_name.is_empty()
-                            && (ident == "implements" || ident == "implements!")
-                        {
-                            return true;
-                        }
+                if let Expr::Var { module_name, ident } = expr.extract_spaces().item {
+                    if module_name.is_empty() && (ident == "implements" || ident == "implements!") {
+                        return true;
                     }
-                    _ => {}
                 }
             }
 
