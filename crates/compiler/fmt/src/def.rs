@@ -568,7 +568,13 @@ impl<'a> Formattable for TypeHeader<'a> {
             last_after = var.after;
             last_multiline = var.item.is_multiline();
 
-            let need_parens = matches!(var.item, Pattern::Apply(..));
+            let need_parens = matches!(
+                var.item,
+                Pattern::Apply(..)
+                    | Pattern::Identifier {
+                        ident: "implements"
+                    }
+            );
 
             if need_parens {
                 buf.indent(vars_indent);

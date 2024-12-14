@@ -454,6 +454,7 @@ mod test_snapshots {
         pass/list_minus_newlines.expr,
         pass/list_pattern_weird_indent.expr,
         pass/list_patterns.expr,
+        pass/looks_like_implements.expr,
         pass/lowest_float.expr,
         pass/lowest_int.expr,
         pass/mega_parens_pat.expr,
