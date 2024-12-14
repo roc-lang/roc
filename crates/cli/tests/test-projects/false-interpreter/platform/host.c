@@ -1,5 +1,5 @@
-extern int rust_main(int argc, char* argv[]);
+extern int rust_main();
 
-int main(int argc, char* argv[]) {
-  return rust_main(argc, argv);
+int main() {
+  return rust_main();
 }
