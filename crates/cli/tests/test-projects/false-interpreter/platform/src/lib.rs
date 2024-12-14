@@ -20,7 +20,7 @@ fn file_handles() -> &'static Mutex<HashMap<u64, BufReader<File>>> {
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed"]
-    fn roc_main(args: &RocStr);
+    fn roc_main(args: RocStr);
 }
 
 #[no_mangle]
@@ -102,9 +102,8 @@ pub extern "C" fn rust_main() -> i32 {
         .nth(1)
         .expect("Please pass a .false file as a command-line argument to the false interpreter!");
     let arg = RocStr::from(arg.as_str());
-    dbg!(arg.as_str());
 
-    unsafe { roc_main(&arg) };
+    unsafe { roc_main(arg) };
 
     // Exit code
     0
