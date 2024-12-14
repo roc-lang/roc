@@ -1911,7 +1911,6 @@ fn fmt_backpassing<'a>(
     loc_patterns: &'a [Loc<Pattern<'a>>],
     loc_body: &'a Loc<Expr<'a>>,
     loc_ret: &'a Loc<Expr<'a>>,
-
     outer_indent: u16,
 ) {
     use self::Expr::*;
@@ -1936,7 +1935,7 @@ fn fmt_backpassing<'a>(
             Parens::NotNeeded
         };
 
-        let pat = loc_pattern.value.extract_spaces();
+        let pat = pattern_lift_spaces(buf.text.bump(), &loc_pattern.value);
 
         if !first {
             buf.indent(arg_indent);
