@@ -44,6 +44,18 @@ mod specialize_when {
     }
 
     #[test]
+    fn multiple_patterns_per_branch() {
+        expect_mono_expr_str(
+            r"
+                when 123 is
+                    123 | 321 -> 321
+                    _ -> 0
+            ",
+            "When(Number(I16(123)), Number(I16(123)) | Number(I16(321)) -> Number(I16(321)), Underscore -> Number(I16(0)))"
+        );
+    }
+
+    #[test]
     fn guard() {
         expect_mono_expr_str(
             r"
