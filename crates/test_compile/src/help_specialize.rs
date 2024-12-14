@@ -12,6 +12,8 @@ pub struct SpecializedExprOut {
     pub region: Region,
     pub mono_types: MonoTypes,
     pub mono_exprs: MonoExprs,
+    pub mono_patterns: MonoPatterns,
+    pub when_branches: WhenBranches,
     pub problems: Vec<Problem>,
 }
 
@@ -61,6 +63,8 @@ impl SpecializedExpr {
             problems,
             mono_types,
             mono_exprs,
+            mono_patterns,
+            when_branches,
         }
     }
 

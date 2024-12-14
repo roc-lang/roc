@@ -7,8 +7,8 @@ use roc_load::LoadedModule;
 use roc_region::all::Region;
 use roc_solve::FunctionKind;
 use roc_specialize_types::{
-    DebugInfo, Env, Interns, MonoExpr, MonoExprs, MonoPatterns, MonoTypeCache, MonoTypes,
-    RecordFieldIds, TupleElemIds, WhenBranches,
+    DebugInfo, Env, Interns, MonoExpr, MonoExprs, MonoPattern, MonoPatterns, MonoTypeCache,
+    MonoTypes, RecordFieldIds, TupleElemIds, WhenBranches,
 };
 use test_compile::{trim_and_deindent, SpecializedExprOut};
 use test_solve_helpers::{format_problems, run_load_and_infer};
@@ -98,6 +98,8 @@ fn specialize_expr<'a>(
         problems,
         mono_types,
         mono_exprs,
+        mono_patterns,
+        when_branches,
         region,
     }
 }
@@ -121,9 +123,17 @@ pub fn expect_mono_expr(input: impl AsRef<str>, mono_expr: MonoExpr) {
 pub fn expect_mono_expr_str(input: impl AsRef<str>, expr_str: impl AsRef<str>) {
     expect_mono_expr_custom(
         input,
-        |_, _, _| expr_str.as_ref().to_string(),
-        |arena, mono_exprs, interns, expr| {
-            dbg_mono_expr(arena, mono_exprs, interns, expr).to_string()
+        |_, _, _, _, _| expr_str.as_ref().to_string(),
+        |arena, mono_exprs, mono_patterns, when_branches, interns, expr| {
+            dbg_mono_expr(
+                arena,
+                mono_exprs,
+                mono_patterns,
+                when_branches,
+                interns,
+                expr,
+            )
+            .to_string()
         },
     );
 }
@@ -131,12 +141,23 @@ pub fn expect_mono_expr_str(input: impl AsRef<str>, expr_str: impl AsRef<str>) {
 fn dbg_mono_expr<'a>(
     arena: &'a Bump,
     mono_exprs: &MonoExprs,
+    mono_patterns: &MonoPatterns,
+    when_branches: &WhenBranches,
     interns: &Interns<'a>,
     expr: &MonoExpr,
 ) -> &'a str {
     let mut buf = bumpalo::collections::String::new_in(arena);
 
-    dbg_mono_expr_help(arena, mono_exprs, interns, expr, &mut buf).unwrap();
+    dbg_mono_expr_help(
+        arena,
+        mono_exprs,
+        mono_patterns,
+        when_branches,
+        interns,
+        expr,
+        &mut buf,
+    )
+    .unwrap();
 
     buf.into_bump_str()
 }
@@ -144,6 +165,8 @@ fn dbg_mono_expr<'a>(
 fn dbg_mono_expr_help<'a>(
     arena: &'a Bump,
     mono_exprs: &MonoExprs,
+    mono_patterns: &MonoPatterns,
+    when_branches: &WhenBranches,
     interns: &Interns<'a>,
     expr: &MonoExpr,
     buf: &mut impl Write,
@@ -163,7 +186,15 @@ fn dbg_mono_expr_help<'a>(
                     write!(buf, ", ")?;
                 }
 
-                dbg_mono_expr_help(arena, mono_exprs, interns, expr, buf)?;
+                dbg_mono_expr_help(
+                    arena,
+                    mono_exprs,
+                    mono_patterns,
+                    when_branches,
+                    interns,
+                    expr,
+                    buf,
+                )?;
             }
 
             write!(buf, "])")
@@ -183,9 +214,25 @@ fn dbg_mono_expr_help<'a>(
                     write!(buf, ", ")?;
                 }
 
-                dbg_mono_expr_help(arena, mono_exprs, interns, cond, buf)?;
+                dbg_mono_expr_help(
+                    arena,
+                    mono_exprs,
+                    mono_patterns,
+                    when_branches,
+                    interns,
+                    cond,
+                    buf,
+                )?;
                 write!(buf, " -> ")?;
-                dbg_mono_expr_help(arena, mono_exprs, interns, branch, buf)?;
+                dbg_mono_expr_help(
+                    arena,
+                    mono_exprs,
+                    mono_patterns,
+                    when_branches,
+                    interns,
+                    branch,
+                    buf,
+                )?;
                 write!(buf, ")")?;
             }
 
@@ -193,6 +240,8 @@ fn dbg_mono_expr_help<'a>(
             dbg_mono_expr_help(
                 arena,
                 mono_exprs,
+                mono_patterns,
+                when_branches,
                 interns,
                 mono_exprs.get_expr(*final_else),
                 buf,
@@ -201,6 +250,73 @@ fn dbg_mono_expr_help<'a>(
         }
         MonoExpr::Lookup(ident, _mono_type_id) => {
             write!(buf, "{:?}", ident)
+        }
+        MonoExpr::When {
+            value,
+            value_type: _,
+            branch_type: _,
+            branches,
+        } => {
+            write!(buf, "When(")?;
+
+            dbg_mono_expr_help(
+                arena,
+                mono_exprs,
+                mono_patterns,
+                when_branches,
+                interns,
+                mono_exprs.get_expr(*value),
+                buf,
+            )?;
+
+            write!(buf, ", ")?;
+
+            for (index, branch) in when_branches.iter_slice(branches.as_slice()).enumerate() {
+                if index > 0 {
+                    write!(buf, ", ")?;
+                }
+
+                let branch = unsafe { branch.assume_init() };
+
+                for (index, pattern) in mono_patterns
+                    .iter_slice(branch.patterns.as_slice())
+                    .enumerate()
+                {
+                    if index > 0 {
+                        write!(buf, " | ")?;
+                    }
+
+                    dbg_mono_pattern_help(arena, mono_patterns, interns, pattern, buf)?;
+                }
+
+                if let Some(guard) = branch.guard {
+                    write!(buf, " if ")?;
+
+                    dbg_mono_expr_help(
+                        arena,
+                        mono_exprs,
+                        mono_patterns,
+                        when_branches,
+                        interns,
+                        mono_exprs.get_expr(guard),
+                        buf,
+                    )?;
+                }
+
+                write!(buf, " -> ")?;
+
+                dbg_mono_expr_help(
+                    arena,
+                    mono_exprs,
+                    mono_patterns,
+                    when_branches,
+                    interns,
+                    mono_exprs.get_expr(branch.value),
+                    buf,
+                )?;
+            }
+
+            write!(buf, ")")
         }
         // MonoExpr::List { elem_type, elems } => todo!(),
         // MonoExpr::ParameterizedLookup {
@@ -285,6 +401,44 @@ fn dbg_mono_expr_help<'a>(
     }
 }
 
+fn dbg_mono_pattern_help<'a>(
+    _arena: &'a Bump,
+    _mono_patterns: &MonoPatterns,
+    _interns: &Interns<'a>,
+    pattern: &MonoPattern,
+    buf: &mut impl Write,
+) -> Result<(), core::fmt::Error> {
+    match pattern {
+        MonoPattern::Identifier(ident) => {
+            write!(buf, "Identifier({:?})", ident)
+        }
+        MonoPattern::As(_, _) => {
+            todo!()
+        }
+        MonoPattern::StrLiteral(_) => {
+            todo!()
+        }
+        MonoPattern::NumberLiteral(_) => {
+            todo!()
+        }
+        MonoPattern::AppliedTag { .. } => {
+            todo!()
+        }
+        MonoPattern::StructDestructure { .. } => {
+            todo!()
+        }
+        MonoPattern::List { .. } => {
+            todo!()
+        }
+        MonoPattern::Underscore => {
+            todo!()
+        }
+        MonoPattern::CompilerBug(_) => {
+            todo!()
+        }
+    }
+}
+
 #[track_caller]
 pub fn expect_mono_expr_with_interns(
     input: impl AsRef<str>,
@@ -292,24 +446,44 @@ pub fn expect_mono_expr_with_interns(
 ) {
     expect_mono_expr_custom(
         input,
-        |arena, _exprs, interns| from_interns(arena, interns),
-        |_, _, _, expr| *expr,
+        |arena, _exprs, _, _, interns| from_interns(arena, interns),
+        |_, _, _, _, _, expr| *expr,
     );
 }
 
 #[track_caller]
 pub fn expect_mono_expr_custom<T: PartialEq + core::fmt::Debug>(
     input: impl AsRef<str>,
-    to_expected: impl for<'a> Fn(&'a Bump, &MonoExprs, &Interns<'a>) -> T,
-    to_actual: impl for<'a> Fn(&'a Bump, &MonoExprs, &Interns<'a>, &MonoExpr) -> T,
+    to_expected: impl for<'a> Fn(&'a Bump, &MonoExprs, &MonoPatterns, &WhenBranches, &Interns<'a>) -> T,
+    to_actual: impl for<'a> Fn(
+        &'a Bump,
+        &MonoExprs,
+        &MonoPatterns,
+        &WhenBranches,
+        &Interns<'a>,
+        &MonoExpr,
+    ) -> T,
 ) {
     let arena = Bump::new();
     let mut string_interns = Interns::new();
     let out = specialize_expr(&arena, input.as_ref(), &mut string_interns);
 
     let actual_expr = out.mono_exprs.get_expr(out.mono_expr_id); // Must run first, to populate string interns!
-    let actual = to_actual(&arena, &out.mono_exprs, &string_interns, actual_expr);
-    let expected = to_expected(&arena, &out.mono_exprs, &string_interns);
+    let actual = to_actual(
+        &arena,
+        &out.mono_exprs,
+        &out.mono_patterns,
+        &out.when_branches,
+        &string_interns,
+        actual_expr,
+    );
+    let expected = to_expected(
+        &arena,
+        &out.mono_exprs,
+        &out.mono_patterns,
+        &out.when_branches,
+        &string_interns,
+    );
 
     assert_eq!(expected, actual);
 }

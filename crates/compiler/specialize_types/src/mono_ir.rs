@@ -318,6 +318,7 @@ pub struct WhenBranch {
     pub value: MonoExprId,
 }
 
+#[derive(Debug, Default)]
 pub struct WhenBranches {
     branches: Vec<MaybeUninit<WhenBranch>>,
 }
@@ -352,5 +353,16 @@ impl WhenBranches {
         unsafe {
             self.branches.get_unchecked_mut(id.index()).write(branch);
         }
+    }
+
+    pub fn iter_slice(
+        &self,
+        branches: Slice<WhenBranch>,
+    ) -> impl Iterator<Item = &MaybeUninit<WhenBranch>> {
+        branches.indices().into_iter().map(|index| {
+            debug_assert!(self.branches.len() > index, "Slice index out of bounds");
+
+            unsafe { self.branches.get_unchecked(index) }
+        })
     }
 }

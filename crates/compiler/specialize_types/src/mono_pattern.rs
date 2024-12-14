@@ -43,8 +43,8 @@ impl MonoPatterns {
 
     pub fn insert(&mut self, id: Index<MonoPattern>, pattern: MonoPattern, region: Region) {
         debug_assert!(
-            self.patterns.get(id.index()).is_some(),
-            "A Pattern index was not found in MonoPatterns. This should never happen!"
+            self.patterns.len() > id.index(),
+            "Pattern index out of bounds"
         );
 
         // Safety: we should only ever hand out WhenBranch indices that are valid indices into here.
@@ -52,6 +52,17 @@ impl MonoPatterns {
             *self.patterns.get_unchecked_mut(id.index()) = pattern;
             *self.regions.get_unchecked_mut(id.index()) = region;
         }
+    }
+
+    pub fn iter_slice(&self, patterns: Slice<MonoPattern>) -> impl Iterator<Item = &MonoPattern> {
+        patterns.indices().map(|index| {
+            debug_assert!(
+                self.patterns.len() > index,
+                "MonoPattern Slice out of bounds"
+            );
+
+            unsafe { self.patterns.get_unchecked(index) }
+        })
     }
 }
 
