@@ -31,5 +31,6 @@ fn main() {
     };
 
     let text = std::fs::read_to_string(&args[2]).unwrap();
-    print_minimizations(&text, kind);
+    let found_error = print_minimizations(&text, kind);
+    std::process::exit(if found_error { 0 } else { 1 });
 }

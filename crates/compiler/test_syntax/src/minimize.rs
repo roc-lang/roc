@@ -9,10 +9,10 @@ use crate::test_helpers::{Input, InputKind};
 use bumpalo::Bump;
 use roc_parse::{ast::Malformed, normalize::Normalize};
 
-pub fn print_minimizations(text: &str, kind: InputKind) {
+pub fn print_minimizations(text: &str, kind: InputKind) -> bool {
     let Some(original_error) = round_trip_once_and_extract_error(text, kind) else {
         eprintln!("No error found");
-        return;
+        return false;
     };
 
     eprintln!("Error found: {}", original_error);
@@ -51,6 +51,8 @@ pub fn print_minimizations(text: &str, kind: InputKind) {
 
     eprintln!("Final result:");
     println!("{}", s);
+
+    true
 }
 
 fn make_replacements(s: &str, update: &Update) -> Option<String> {
