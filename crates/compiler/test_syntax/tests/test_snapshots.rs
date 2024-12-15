@@ -691,6 +691,7 @@ mod test_snapshots {
         pass/two_backpassing.expr,
         pass/two_branch_when.expr,
         pass/two_spaced_def.expr,
+        pass/type_ann_tag_union_parens_applies.expr,
         pass/type_decl_with_underscore.expr,
         pass/type_signature_def.expr,
         pass/type_signature_function_def.expr,

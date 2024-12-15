@@ -1275,9 +1275,10 @@ fn parens_around_node<'a, 'b: 'a>(
         item: Node::DelimitedSequence(
             Braces::Round,
             arena.alloc_slice_copy(&[(item.before, item.item)]),
-            item.after,
+            &[],
         ),
-        after: &[],
+        // We move the comments/newlines to the outer scope, since they tend to migrate there when re-parsed
+        after: item.after,
     }
 }
 
