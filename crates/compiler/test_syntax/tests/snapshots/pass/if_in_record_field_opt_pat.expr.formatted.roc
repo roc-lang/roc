@@ -1,4 +1,5 @@
-O { p ? if
+O
+    { p ? if
         a
     then
         A

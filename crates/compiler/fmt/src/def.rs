@@ -7,7 +7,7 @@ use crate::expr::{
     expr_lift_and_lower, expr_lift_spaces, expr_lift_spaces_after, expr_lift_spaces_before,
     fmt_str_literal, is_str_multiline, sub_expr_requests_parens,
 };
-use crate::pattern::{fmt_pattern, pattern_lift_spaces};
+use crate::pattern::{fmt_pattern, pattern_fmt_apply, pattern_lift_spaces};
 use crate::pattern::{pattern_lift_spaces_before, starts_with_inline_comment};
 use crate::spaces::{
     fmt_comments_only, fmt_default_newline, fmt_default_spaces, fmt_spaces, NewlineAt, INDENT,
@@ -527,80 +527,16 @@ impl<'a> Formattable for TypeHeader<'a> {
         buf: &mut Buf,
         _parens: Parens,
         _newlines: Newlines,
-
         indent: u16,
     ) {
-        buf.indent(indent);
-        buf.push_str(self.name.value);
-
-        let vars_indent = if self.vars.iter().any(|v| v.is_multiline()) {
-            indent + INDENT
-        } else {
-            indent
-        };
-
-        let mut last_after: &[CommentOrNewline<'_>] = &[];
-        let mut last_multiline = false;
-
-        for var in self.vars.iter() {
-            let var = pattern_lift_spaces(buf.text.bump(), &var.value);
-
-            let before = if !last_after.is_empty() {
-                merge_spaces(buf.text.bump(), last_after, var.before)
-            } else {
-                var.before
-            };
-
-            if !before.is_empty() {
-                if !var.item.is_multiline() {
-                    fmt_comments_only(buf, before.iter(), NewlineAt::Bottom, vars_indent)
-                } else {
-                    fmt_spaces(buf, before.iter(), vars_indent);
-                }
-            }
-
-            if last_multiline {
-                buf.ensure_ends_with_newline();
-            } else {
-                buf.ensure_ends_with_whitespace();
-            }
-
-            last_after = var.after;
-            last_multiline = var.item.is_multiline();
-
-            let need_parens = matches!(
-                var.item,
-                Pattern::Apply(..)
-                    | Pattern::Identifier {
-                        ident: "implements"
-                    }
-            );
-
-            if need_parens {
-                buf.indent(vars_indent);
-                buf.push_str("(");
-            }
-
-            fmt_pattern(buf, &var.item, vars_indent, Parens::NotNeeded);
-
-            buf.indent(vars_indent);
-
-            if need_parens {
-                buf.push_str(")");
-            }
-        }
-
-        if !last_after.is_empty() {
-            if starts_with_inline_comment(last_after.iter()) {
-                buf.spaces(1);
-            }
-
-            if !last_multiline {
-                fmt_comments_only(buf, last_after.iter(), NewlineAt::Bottom, indent)
-            } else {
-                fmt_spaces(buf, last_after.iter(), indent);
-            }
-        }
+        pattern_fmt_apply(
+            buf,
+            Pattern::Tag(self.name.value),
+            self.vars,
+            Parens::NotNeeded,
+            indent,
+            self.vars.iter().any(|v| v.is_multiline()),
+        );
     }
 }
 

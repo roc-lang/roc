@@ -153,103 +153,27 @@ fn fmt_pattern_only(
     is_multiline: bool,
 ) {
     match me {
-        Pattern::Identifier { ident: string } => {
+        Pattern::Identifier { ident } => {
             buf.indent(indent);
-            snakify_camel_ident(buf, string);
+            if *ident == "implements" {
+                buf.push_str("(implements)");
+            } else {
+                snakify_camel_ident(buf, ident);
+            }
         }
         Pattern::Tag(name) | Pattern::OpaqueRef(name) => {
             buf.indent(indent);
             buf.push_str(name);
         }
         Pattern::Apply(loc_pattern, loc_arg_patterns) => {
-            buf.indent(indent);
-            // Sometimes, an Apply pattern needs parens around it.
-            // In particular when an Apply's argument is itself an Apply (> 0) arguments
-            let parens = !loc_arg_patterns.is_empty() && (parens == Parens::InApply);
-
-            let indent_more = if is_multiline {
-                indent + INDENT
-            } else {
-                indent
-            };
-
-            if parens {
-                buf.push('(');
-            }
-
-            let pat = pattern_lift_spaces(buf.text.bump(), &loc_pattern.value);
-
-            if !pat.before.is_empty() {
-                if !is_multiline {
-                    fmt_comments_only(buf, pat.before.iter(), NewlineAt::Bottom, indent)
-                } else {
-                    fmt_spaces(buf, pat.before.iter(), indent);
-                }
-            }
-
-            fmt_pattern_only(&pat.item, buf, Parens::InApply, indent, is_multiline);
-
-            let mut last_after = pat.after;
-
-            let mut add_newlines = is_multiline;
-
-            for loc_arg in loc_arg_patterns.iter() {
-                buf.spaces(1);
-
-                let parens = Parens::InApply;
-                let arg = pattern_lift_spaces(buf.text.bump(), &loc_arg.value);
-
-                let mut was_multiline = arg.item.is_multiline();
-
-                let mut before = merge_spaces(buf.text.bump(), last_after, arg.before);
-
-                if !before.is_empty() {
-                    if starts_with_block_str(&arg.item) {
-                        // Ick!
-                        // The block string will keep "generating" newlines when formatted (it wants to start on its own line),
-                        // so we strip one out here.
-                        //
-                        // Note that this doesn't affect Expr's because those have explicit parens, and we can control
-                        // whether spaces cross that boundary.
-                        let chop_off = before
-                            .iter()
-                            .rev()
-                            .take_while(|&&s| matches!(s, CommentOrNewline::Newline))
-                            .count();
-                        before = &before[..before.len() - chop_off];
-                    }
-
-                    if !is_multiline {
-                        was_multiline |= before.iter().any(|s| s.is_comment());
-                        fmt_comments_only(buf, before.iter(), NewlineAt::Bottom, indent_more)
-                    } else {
-                        was_multiline |= true;
-                        fmt_spaces(buf, before.iter(), indent_more);
-                    }
-                }
-
-                if add_newlines {
-                    buf.ensure_ends_with_newline();
-                }
-
-                fmt_pattern_only(&arg.item, buf, parens, indent_more, arg.item.is_multiline());
-
-                last_after = arg.after;
-
-                add_newlines |= was_multiline;
-            }
-
-            if !last_after.is_empty() {
-                if !is_multiline {
-                    fmt_comments_only(buf, last_after.iter(), NewlineAt::Bottom, indent_more)
-                } else {
-                    fmt_spaces(buf, last_after.iter(), indent_more);
-                }
-            }
-
-            if parens {
-                buf.push(')');
-            }
+            pattern_fmt_apply(
+                buf,
+                loc_pattern.value,
+                *loc_arg_patterns,
+                parens,
+                indent,
+                is_multiline,
+            );
         }
         Pattern::RecordDestructure(loc_patterns) => {
             buf.indent(indent);
@@ -474,6 +398,104 @@ fn fmt_pattern_only(
 
             snakify_camel_ident(buf, ident);
         }
+    }
+}
+
+pub fn pattern_fmt_apply(
+    buf: &mut Buf<'_>,
+    func: Pattern<'_>,
+    args: &[Loc<Pattern<'_>>],
+    parens: Parens,
+    indent: u16,
+    is_multiline: bool,
+) {
+    buf.indent(indent);
+    // Sometimes, an Apply pattern needs parens around it.
+    // In particular when an Apply's argument is itself an Apply (> 0) arguments
+    let parens = !args.is_empty() && (parens == Parens::InApply);
+
+    let indent_more = if is_multiline {
+        indent + INDENT
+    } else {
+        indent
+    };
+
+    if parens {
+        buf.push('(');
+    }
+
+    let func = pattern_lift_spaces(buf.text.bump(), &func);
+
+    if !func.before.is_empty() {
+        if !is_multiline {
+            fmt_comments_only(buf, func.before.iter(), NewlineAt::Bottom, indent)
+        } else {
+            fmt_spaces(buf, func.before.iter(), indent);
+        }
+    }
+
+    fmt_pattern_only(&func.item, buf, Parens::InApply, indent, is_multiline);
+
+    let mut last_after = func.after;
+
+    let mut add_newlines = is_multiline;
+
+    for loc_arg in args.iter() {
+        buf.spaces(1);
+
+        let parens = Parens::InApply;
+        let arg = pattern_lift_spaces(buf.text.bump(), &loc_arg.value);
+
+        let mut was_multiline = arg.item.is_multiline();
+
+        let mut before = merge_spaces(buf.text.bump(), last_after, arg.before);
+
+        if !before.is_empty() {
+            if starts_with_block_str(&arg.item) {
+                // Ick!
+                // The block string will keep "generating" newlines when formatted (it wants to start on its own line),
+                // so we strip one out here.
+                //
+                // Note that this doesn't affect Expr's because those have explicit parens, and we can control
+                // whether spaces cross that boundary.
+                let chop_off = before
+                    .iter()
+                    .rev()
+                    .take_while(|&&s| matches!(s, CommentOrNewline::Newline))
+                    .count();
+                before = &before[..before.len() - chop_off];
+            }
+
+            if !is_multiline {
+                was_multiline |= before.iter().any(|s| s.is_comment());
+                fmt_comments_only(buf, before.iter(), NewlineAt::Bottom, indent_more)
+            } else {
+                was_multiline |= true;
+                fmt_spaces(buf, before.iter(), indent_more);
+            }
+        }
+
+        if add_newlines {
+            buf.ensure_ends_with_newline();
+        }
+
+        fmt_pattern_only(&arg.item, buf, parens, indent_more, arg.item.is_multiline());
+
+        last_after = arg.after;
+
+        add_newlines |= was_multiline;
+    }
+
+    if !last_after.is_empty() {
+        if !is_multiline {
+            fmt_comments_only(buf, last_after.iter(), NewlineAt::Bottom, indent_more)
+        } else {
+            fmt_spaces(buf, last_after.iter(), indent_more);
+        }
+    }
+
+    if parens {
+        buf.push(')');
     }
 }
 

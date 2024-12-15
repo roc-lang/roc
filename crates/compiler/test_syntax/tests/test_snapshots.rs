@@ -612,6 +612,7 @@ mod test_snapshots {
         pass/provides_type.header,
         pass/qualified_field.expr,
         pass/qualified_var.expr,
+        pass/quotes_in_parens_in_pat.expr,
         pass/record_access_after_tuple.expr,
         pass/record_builder.expr,
         pass/record_builder_ignored_fields.expr,
