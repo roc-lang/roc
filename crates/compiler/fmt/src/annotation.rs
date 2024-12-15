@@ -365,18 +365,24 @@ fn fmt_ty_ann(
                 buf.push('(')
             }
 
+            buf.indent(indent);
+            let lhs_indent = buf.cur_line_indent();
             lhs.value
                 .format_with_options(buf, Parens::InAsPattern, Newlines::No, indent);
             buf.spaces(1);
             format_spaces(buf, spaces, newlines, indent);
-            buf.indent(indent);
+            buf.indent(lhs_indent + INDENT);
             buf.push_str("as");
             buf.spaces(1);
             buf.push_str(name.value);
             for var in *vars {
                 buf.spaces(1);
-                var.value
-                    .format_with_options(buf, Parens::NotNeeded, Newlines::No, indent);
+                var.value.format_with_options(
+                    buf,
+                    Parens::NotNeeded,
+                    Newlines::No,
+                    lhs_indent + INDENT,
+                );
             }
 
             if write_parens {
