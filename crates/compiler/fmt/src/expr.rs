@@ -1847,29 +1847,17 @@ fn fmt_closure<'a>(
         buf.spaces(1);
     }
 
+    let arrow_line_indent = buf.cur_line_indent();
     buf.push_str("->");
+    buf.spaces(1);
 
     let is_multiline = loc_ret.value.is_multiline();
 
     // If the body is multiline, go down a line and indent.
     let body_indent = if is_multiline {
-        indent + INDENT
+        arrow_line_indent + INDENT
     } else {
         indent
-    };
-
-    // the body of the Closure can be on the same line, or
-    // on a new line. If it's on the same line, insert a space.
-
-    match &loc_ret.value {
-        SpaceBefore(_, _) => {
-            // the body starts with (first comment and then) a newline
-            // do nothing
-        }
-        _ => {
-            // add a space after the `->`
-            buf.spaces(1);
-        }
     };
 
     if is_multiline {

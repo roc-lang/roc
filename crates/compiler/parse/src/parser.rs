@@ -2576,6 +2576,10 @@ where
     move |arena, state, _min_indent| parser.parse(arena, state, 0)
 }
 
+pub fn capture_line_indent<'a, X: 'a>() -> impl Parser<'a, u32, X> {
+    move |_arena, state: State<'a>, _min_indent| Ok((NoProgress, state.line_indent(), state))
+}
+
 pub fn set_min_indent<'a, P, T, X: 'a>(min_indent: u32, parser: P) -> impl Parser<'a, T, X>
 where
     P: Parser<'a, T, X>,

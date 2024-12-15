@@ -14,7 +14,7 @@ use crate::ident::{
     integer_ident, lowercase_ident, parse_ident, unqualified_ident, Accessor, Ident, Suffix,
 };
 use crate::parser::{
-    self, and, backtrackable, between, byte, byte_indent, collection_inner,
+    self, and, backtrackable, between, byte, byte_indent, capture_line_indent, collection_inner,
     collection_trailing_sep_e, either, increment_min_indent, indented_seq_skip_first, loc, map,
     map_with_arena, optional, reset_min_indent, sep_by1, sep_by1_e, set_min_indent, skip_first,
     skip_second, specialize_err, specialize_err_ref, then, two_bytes, zero_or_more, EClosure,
@@ -2611,21 +2611,24 @@ mod when {
     }
 }
 
-fn if_branch<'a>() -> impl Parser<'a, (Loc<Expr<'a>>, Loc<Expr<'a>>), EIf<'a>> {
+fn if_branch<'a>() -> impl Parser<'a, ((Loc<Expr<'a>>, u32), Loc<Expr<'a>>), EIf<'a>> {
     let options = ExprParseOptions {
         accept_multi_backpassing: true,
         check_for_arrow: true,
     };
     skip_second(
         and(
-            skip_second(
+            and(
                 space0_around_ee(
                     specialize_err_ref(EIf::Condition, loc_expr(true)),
                     EIf::IndentCondition,
                     EIf::IndentThenToken,
                 )
                 .trace("if_condition"),
-                parser::keyword(keyword::THEN, EIf::Then),
+                skip_second(
+                    capture_line_indent(),
+                    parser::keyword(keyword::THEN, EIf::Then),
+                ),
             ),
             map_with_arena(
                 space0_after_e(
@@ -2742,8 +2745,8 @@ fn if_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EIf<
 
         let mut loop_state = state;
 
-        let state_final_else = loop {
-            let (_, (cond, then_branch), state) = if_branch()
+        let (state_final_else, then_indent) = loop {
+            let (_, ((cond, then_indent), then_branch), state) = if_branch()
                 .parse(arena, loop_state, min_indent)
                 .map_err(|(_p, err)| (MadeProgress, err))?;
 
@@ -2757,7 +2760,7 @@ fn if_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EIf<
             );
 
             match optional_if.parse(arena, state.clone(), min_indent) {
-                Err((_, _)) => break state,
+                Err((_, _)) => break (state, then_indent),
                 Ok((_, _, state)) => {
                     loop_state = state;
                     continue;
@@ -2770,7 +2773,7 @@ fn if_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EIf<
             .is_ok();
 
         let else_indent = state_final_else.line_indent();
-        let indented_else = else_indent > if_indent && has_newline_next;
+        let indented_else = else_indent > then_indent && has_newline_next;
 
         let min_indent = if !indented_else {
             else_indent + 1
