@@ -465,6 +465,7 @@ pub fn pattern_fmt_apply(
                     .count();
                 before = &before[..before.len() - chop_off];
             }
+            handle_multiline_str_spaces(&arg.item, &mut before);
 
             if !is_multiline {
                 was_multiline |= before.iter().any(|s| s.is_comment());
@@ -571,6 +572,9 @@ pub fn pattern_lift_spaces<'a, 'b: 'a>(
         Pattern::SpaceBefore(expr, spaces) => {
             let mut inner = pattern_lift_spaces(arena, expr);
             inner.before = merge_spaces(arena, spaces, inner.before);
+
+            handle_multiline_str_spaces(expr, &mut inner.before);
+
             inner
         }
         Pattern::SpaceAfter(expr, spaces) => {
@@ -583,6 +587,23 @@ pub fn pattern_lift_spaces<'a, 'b: 'a>(
             item: *pat,
             after: &[],
         },
+    }
+}
+
+fn handle_multiline_str_spaces<'a>(pat: &Pattern<'_>, before: &mut &'a [CommentOrNewline<'a>]) {
+    if starts_with_block_str(pat) {
+        // Ick!
+        // The block string will keep "generating" newlines when formatted (it wants to start on its own line),
+        // so we strip one out here.
+        //
+        // Note that this doesn't affect Expr's because those have explicit parens, and we can control
+        // whether spaces cross that boundary.
+        let chop_off = before
+            .iter()
+            .rev()
+            .take_while(|&&s| matches!(s, CommentOrNewline::Newline))
+            .count();
+        *before = &before[..before.len() - chop_off];
     }
 }
 

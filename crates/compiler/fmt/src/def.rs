@@ -859,7 +859,6 @@ fn fmt_general_def<L: Formattable>(
     lhs: L,
     lhs_parens: Parens,
     buf: &mut Buf,
-
     indent: u16,
     sep: &str,
     rhs: &TypeAnnotation,
