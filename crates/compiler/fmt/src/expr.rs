@@ -1685,22 +1685,29 @@ fn fmt_return<'a>(
     buf.indent(indent);
     buf.push_str(keyword::RETURN);
 
-    if matches!(
-        return_value.value.extract_spaces().item,
-        Expr::Defs(..) | Expr::Backpassing(..)
-    ) {
-        buf.ensure_ends_with_newline();
-    } else {
-        buf.spaces(1);
-    }
-
     let return_indent = if return_value.is_multiline() {
         indent + INDENT
     } else {
         indent
     };
 
-    return_value.format_with_options(buf, parens, Newlines::No, return_indent);
+    let value = expr_lift_spaces(parens, buf.text.bump(), &return_value.value);
+
+    if !value.before.is_empty() {
+        format_spaces(buf, value.before, newlines, return_indent);
+    }
+
+    if matches!(value.item, Expr::Defs(..) | Expr::Backpassing(..)) {
+        buf.ensure_ends_with_newline();
+    } else {
+        buf.spaces(1);
+    }
+
+    format_expr_only(&value.item, buf, parens, newlines, return_indent);
+
+    if !value.after.is_empty() {
+        format_spaces(buf, value.after, newlines, indent);
+    }
 
     if let Some(after_return) = after_return {
         let lifted = expr_lift_spaces(Parens::NotNeeded, buf.text.bump(), &after_return.value);
