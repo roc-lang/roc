@@ -1026,7 +1026,6 @@ fn to_str_report<'a>(
     parse_problem: &roc_parse::parser::EString<'a>,
     start: Position,
 ) -> Report<'a> {
-    use roc_parse::parser::EString;
     let severity = Severity::RuntimeError;
 
     match *parse_problem {

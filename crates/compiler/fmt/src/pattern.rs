@@ -169,7 +169,7 @@ fn fmt_pattern_only(
             pattern_fmt_apply(
                 buf,
                 loc_pattern.value,
-                *loc_arg_patterns,
+                loc_arg_patterns,
                 parens,
                 indent,
                 is_multiline,
