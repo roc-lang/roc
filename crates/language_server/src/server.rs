@@ -620,4 +620,28 @@ mod tests {
         "#]]
         .assert_debug_eq(&actual);
     }
+
+    #[tokio::test]
+    async fn test_completion_on_utf8() {
+        let actual = completion_test(
+            indoc! {r"
+            main =
+              "},
+            "ç",
+            Position::new(4, 3),
+        )
+        .await;
+
+        expect![[r#"
+            Some(
+                [
+                    (
+                        "main",
+                        None,
+                    ),
+                ],
+            )
+        "#]]
+        .assert_debug_eq(&actual);
+    }
 }
