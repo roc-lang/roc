@@ -621,8 +621,18 @@ fn normalize_str_segments<'a>(
             }
             StrSegment::Unicode(t) => {
                 let hex_code: &str = t.value;
-                let c = char::from_u32(u32::from_str_radix(hex_code, 16).unwrap()).unwrap();
-                last_text.push(c);
+                if let Some(c) = u32::from_str_radix(hex_code, 16)
+                    .ok()
+                    .and_then(char::from_u32)
+                {
+                    last_text.push(c);
+                } else {
+                    if !last_text.is_empty() {
+                        let text = std::mem::replace(last_text, String::new_in(arena));
+                        new_segments.push(StrSegment::Plaintext(text.into_bump_str()));
+                    }
+                    new_segments.push(StrSegment::Unicode(Loc::at_zero(t.value)));
+                }
             }
             StrSegment::EscapedChar(c) => {
                 last_text.push(c.unescape());
