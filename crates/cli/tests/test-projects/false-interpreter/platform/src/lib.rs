@@ -7,7 +7,6 @@ use std::collections::HashMap;
 use std::env;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::mem::ManuallyDrop;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
@@ -20,8 +19,8 @@ fn file_handles() -> &'static Mutex<HashMap<u64, BufReader<File>>> {
 }
 
 extern "C" {
-    #[link_name = "roc__mainForHost_1_exposed"]
-    fn roc_main(args: ManuallyDrop<RocStr>);
+    #[link_name = "roc__mainForHost_1_exposed_generic"]
+    fn roc_main(void: *const c_void, args: *mut RocStr);
 }
 
 #[no_mangle]
@@ -102,9 +101,10 @@ pub extern "C" fn rust_main() -> i32 {
     let arg = env::args()
         .nth(1)
         .expect("Please pass a .false file as a command-line argument to the false interpreter!");
-    let arg = ManuallyDrop::new(RocStr::from(arg.as_str()));
+    let mut arg = RocStr::from(arg.as_str());
 
-    unsafe { roc_main(arg) };
+    unsafe { roc_main(std::ptr::null(), &mut arg) };
+    std::mem::forget(arg);
 
     // This really shouldn't need to be freed, but valgrid is picky about possibly lost.
     *file_handles().lock().unwrap() = HashMap::default();
