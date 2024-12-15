@@ -1162,6 +1162,12 @@ impl<'a> Normalize<'a> for EString<'a> {
             EString::ExpectedDoubleQuoteGotSingleQuote(_) => {
                 EString::ExpectedDoubleQuoteGotSingleQuote(Position::zero())
             }
+            EString::InvalidUnicodeCodepoint(_region) => {
+                EString::InvalidUnicodeCodepoint(Region::zero())
+            }
+            EString::UnicodeEscapeTooLarge(_region) => {
+                EString::UnicodeEscapeTooLarge(Region::zero())
+            }
         }
     }
 }
@@ -1248,6 +1254,7 @@ impl<'a> Normalize<'a> for EPattern<'a> {
             EPattern::AsIndentStart(_) => EPattern::AsIndentStart(Position::zero()),
             EPattern::AccessorFunction(_) => EPattern::AccessorFunction(Position::zero()),
             EPattern::RecordUpdaterFunction(_) => EPattern::RecordUpdaterFunction(Position::zero()),
+            EPattern::Str(e, _) => EPattern::Str(e.normalize(arena), Position::zero()),
         }
     }
 }

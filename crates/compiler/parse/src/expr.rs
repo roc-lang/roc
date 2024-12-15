@@ -3872,13 +3872,17 @@ fn apply_expr_access_chain<'a>(
 }
 
 fn string_like_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EString<'a>> {
-    map_with_arena(
+    then(
         crate::string_literal::parse_str_like_literal(),
-        |arena, lit| match lit {
-            StrLikeLiteral::Str(s) => Expr::Str(s),
+        |arena, state, progress, lit| match lit {
+            StrLikeLiteral::Str(s) => Ok((progress, Expr::Str(s), state)),
             StrLikeLiteral::SingleQuote(s) => {
                 // TODO: preserve the original escaping
-                Expr::SingleQuote(s.to_str_in(arena))
+                Ok((
+                    progress,
+                    Expr::SingleQuote(s.to_str_in(arena).map_err(|e| (MadeProgress, e))?),
+                    state,
+                ))
             }
         },
     )

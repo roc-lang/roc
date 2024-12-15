@@ -1,4 +1,4 @@
-use roc_parse::parser::{ENumber, EReturn, ESingleQuote, FileError, PList, SyntaxError};
+use roc_parse::parser::{ENumber, EReturn, ESingleQuote, EString, FileError, PList, SyntaxError};
 use roc_problem::Severity;
 use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Position, Region};
 use std::path::PathBuf;
@@ -1311,6 +1311,52 @@ fn to_str_report<'a>(
                 severity,
             }
         }
+        EString::InvalidUnicodeCodepoint(region) => {
+            let region = LineColumnRegion::from_pos(lines.convert_pos(region.start()));
+
+            let doc = alloc.stack([
+                alloc.reflow(
+                    r"I am partway through parsing a unicode code point, but I got stuck here:",
+                ),
+                alloc.region(region, severity),
+                alloc.concat([
+                    alloc.reflow(r"I was expecting a hexadecimal number, like "),
+                    alloc.parser_suggestion("\\u(1100)"),
+                    alloc.reflow(" or "),
+                    alloc.parser_suggestion("\\u(00FF)"),
+                    alloc.text("."),
+                ]),
+                alloc.reflow(r"Learn more about working with unicode in roc at TODO"),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "INVALID UNICODE CODE POINT".to_string(),
+                severity,
+            }
+        }
+        EString::UnicodeEscapeTooLarge(region) => {
+            let region = LineColumnRegion::from_pos(lines.convert_pos(region.start()));
+
+            let doc = alloc.stack([
+                alloc.reflow(
+                    r"I am partway through parsing a unicode code point, but I got stuck here:",
+                ),
+                alloc.region(region, severity),
+                alloc.concat([
+                    alloc.reflow(r"The unicode code point is too large to fit in a U32."),
+                    alloc.reflow(r"Try using a smaller code point."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "UNICODE CODE POINT TOO LARGE".to_string(),
+                severity,
+            }
+        }
     }
 }
 fn to_expr_in_parens_report<'a>(
@@ -2218,7 +2264,7 @@ fn to_pattern_report<'a>(
     let severity = Severity::RuntimeError;
 
     match parse_problem {
-        EPattern::Start(pos) => {
+        EPattern::Str(EString::Open(..), pos) | EPattern::Start(pos) => {
             let surroundings = Region::new(start, *pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
 
@@ -2235,6 +2281,7 @@ fn to_pattern_report<'a>(
                 severity,
             }
         }
+        EPattern::Str(err, pos) => to_str_report(alloc, lines, filename, err, *pos),
         EPattern::Record(record, pos) => to_precord_report(alloc, lines, filename, record, *pos),
         EPattern::List(list, pos) => to_plist_report(alloc, lines, filename, list, *pos),
         EPattern::PInParens(inparens, pos) => {

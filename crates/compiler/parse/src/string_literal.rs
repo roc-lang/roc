@@ -295,7 +295,7 @@ pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EStri
                     //   -> TODO: do we want to change this?
 
                     // Simply by decoding this, it's guaranteed to be valid utf-8
-                    let text = expr.to_str_in(arena);
+                    let text = expr.to_str_in(arena).map_err(|e| (MadeProgress, e))?;
 
                     if text.len() > 5 {
                         return Err((

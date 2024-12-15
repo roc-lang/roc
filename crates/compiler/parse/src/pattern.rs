@@ -3,9 +3,9 @@ use crate::blankspace::{space0_e, spaces, spaces_before};
 use crate::ident::{lowercase_ident, parse_ident, Accessor, Ident};
 use crate::keyword;
 use crate::parser::{
-    self, backtrackable, byte, collection_trailing_sep_e, fail_when, loc, map, map_with_arena,
-    optional, skip_first, specialize_err, specialize_err_ref, then, three_bytes, two_bytes,
-    zero_or_more, EPattern, PInParens, PList, PRecord, Parser,
+    self, backtrackable, byte, collection_trailing_sep_e, fail_when, loc, map, optional,
+    skip_first, specialize_err, specialize_err_ref, then, three_bytes, two_bytes, zero_or_more,
+    EPattern, PInParens, PList, PRecord, Parser,
 };
 use crate::parser::{either, Progress::*};
 use crate::state::State;
@@ -251,18 +251,25 @@ fn number_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
 }
 
 fn string_like_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
-    specialize_err(
-        |_, pos| EPattern::Start(pos),
-        map_with_arena(
+    then(
+        specialize_err(
+            |_, pos| EPattern::Start(pos),
             crate::string_literal::parse_str_like_literal(),
-            |arena, lit| match lit {
-                StrLikeLiteral::Str(s) => Pattern::StrLiteral(s),
-                StrLikeLiteral::SingleQuote(s) => {
-                    // TODO: preserve the original escaping
-                    Pattern::SingleQuote(s.to_str_in(arena))
-                }
-            },
         ),
+        |arena, state, progress, lit| match lit {
+            StrLikeLiteral::Str(s) => Ok((progress, Pattern::StrLiteral(s), state)),
+            StrLikeLiteral::SingleQuote(s) => {
+                // TODO: preserve the original escaping
+                Ok((
+                    progress,
+                    Pattern::SingleQuote(
+                        s.to_str_in(arena)
+                            .map_err(|e| (MadeProgress, EPattern::Str(e, state.pos())))?,
+                    ),
+                    state,
+                ))
+            }
+        },
     )
 }
 

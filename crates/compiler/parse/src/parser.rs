@@ -642,6 +642,8 @@ pub enum EString<'a> {
     FormatEnd(Position),
     MultilineInsufficientIndent(Position),
     ExpectedDoubleQuoteGotSingleQuote(Position),
+    InvalidUnicodeCodepoint(Region),
+    UnicodeEscapeTooLarge(Region),
 }
 
 impl<'a> EString<'a> {
@@ -663,6 +665,9 @@ impl<'a> EString<'a> {
             | EString::FormatEnd(p)
             | EString::MultilineInsufficientIndent(p)
             | EString::ExpectedDoubleQuoteGotSingleQuote(p) => Region::from_pos(*p),
+            EString::InvalidUnicodeCodepoint(region) | EString::UnicodeEscapeTooLarge(region) => {
+                *region
+            }
         }
     }
 }
@@ -1066,6 +1071,7 @@ pub enum EPattern<'a> {
 
     AccessorFunction(Position),
     RecordUpdaterFunction(Position),
+    Str(EString<'a>, Position),
 }
 
 impl<'a> EPattern<'a> {
@@ -1075,6 +1081,7 @@ impl<'a> EPattern<'a> {
             EPattern::Record(expr, _) => expr.get_region(),
             EPattern::List(expr, _) => expr.get_region(),
             EPattern::PInParens(expr, _) => expr.get_region(),
+            EPattern::Str(e_string, _) => e_string.get_region(),
 
             // Cases with Position values
             EPattern::AsKeyword(position)
