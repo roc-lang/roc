@@ -63,26 +63,30 @@ table tr td {
 .pkg-full-name {
   display: flex;
   align-items: center;
-  font-size: 32px;
+  font-size: 24px;
   margin: 0 8px;
   font-weight: normal;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  height: 100%;
 }
 
 .entry-name {
   white-space: pre-wrap;
   font-family: var(--font-mono);
-  font-size: 18px;
+  font-size: 16px;
   font-weight: normal;
-  color: var(--violet);
+  background-color: var(--violet-bg);
+  color: white;
   width: auto;
   margin-top: 0;
   margin-bottom: 24px;
-  padding: 8px 16px;
-  border-left: 2px solid var(--violet);
+  padding: 12px 16px;
+  border: 2px solid var(--violet);
+}
+
+.entry-name strong {
+    color: var(--violet);
 }
 
 .entry-name a {
@@ -109,6 +113,9 @@ table tr td {
 .pkg-full-name a {
   padding-top: 12px;
   padding-bottom: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 a {
@@ -124,8 +131,12 @@ a:hover code {
   min-width: 0; /* necessary for text-overflow: ellipsis to work in descendants */
   display: flex;
   align-items: center;
-  height: 100%;
+  justify-content: space-between;
+  gap: 16px;
   background-color: var(--violet-bg);
+  padding-block: 16px;
+  position: sticky;
+  top: 0px;
 }
 
 .pkg-and-logo a,
@@ -154,36 +165,48 @@ a:hover code {
 body {
   display: grid;
   grid-template-columns:
-      [before-sidebar] 1fr [sidebar] var(--sidebar-width)
-      [main-content] fit-content(calc(1280px - var(--sidebar-width)))
-      [end] 1fr;
-  grid-template-rows: [top-header] var(--top-header-height) [above-footer] auto [footer] auto;
+      [sidebar] var(--sidebar-width)
+      [main-content] 1fr
+      [content-end];
+  grid-template-rows: 1fr;
+  height: 100dvh;
   box-sizing: border-box;
   margin: 0;
   padding: 0;
   font-family: var(--font-sans);
   color: var(--text-color);
   background-color: var(--body-bg-color);
+  overflow: hidden;
 }
 
 main {
   grid-column-start: main-content;
-  grid-column-end: main-content;
-  grid-row-start: above-footer;
-  grid-row-end: above-footer;
+  grid-column-end: content-end;
   box-sizing: border-box;
   position: relative;
-  font-size: 18px;
+  font-size: 16px;
   line-height: 1.85em;
   margin-top: 2px;
-  padding: 48px;
-  max-width: 740px;
+  padding: 16px;
+  padding-top: 0px;
   /* necessary for text-overflow: ellipsis to work in descendants */
   min-width: 0;
   overflow-x: auto;
   /* fixes issues with horizonatal scroll in cases where word is too long,
   like in one of the examples at https://www.roc-lang.org/builtins/Num#Dec */
   overflow-wrap: break-word;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: [main-start] 1fr [main-content-start] 60ch [main-content-end] 1fr [main-end];
+  grid-template-rows: auto;
+  flex-direction: column;
+  scrollbar-color: var(--violet) var(--body-bg-color);
+  scrollbar-gutter: stable both-edges;
+}
+
+main > * {
+    grid-column-start: main-content-start;
+    grid-column-end: main-content-end;
 }
 
 /* Module links on the package index page (/index.html) */
@@ -195,7 +218,7 @@ main {
 
 section {
   padding: 0px 0px 16px 0px;
-  margin: 72px 0px;
+  margin: 36px 0px;
 }
 
 section blockquote {
@@ -229,33 +252,19 @@ padding: 0px 16px;
 }
 
 #sidebar-nav {
-  grid-column-start: sidebar;
-  grid-column-end: sidebar;
-  grid-row-start: above-footer;
-  grid-row-end: above-footer;
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
-  padding-left: 56px;
-  padding-top: 6px;
-  width: 100%;
-}
-
-.header-start-extension {
-  grid-column-start: before-sidebar;
-  grid-column-end: sidebar;
-  grid-row-start: top-header;
-  grid-row-end: top-header;
-  background-color: var(--violet-bg);
-}
-
-.header-end-extension {
-  grid-column-start: end;
-  grid-column-end: end;
-  grid-row-start: top-header;
-  grid-row-end: top-header;
-  background-color: var(--violet-bg);
+    grid-column-start: sidebar;
+    grid-column-end: main-content;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+    width: 100%;
+    background-color: var(--violet-bg);
+    overflow-y: auto;
+    scrollbar-color: var(--violet) var(--violet-bg);
+    scrollbar-gutter: stable both-edges;
+    view-transition-name: sidebar;
+    transition: 1s linear;
 }
 
 .top-header {
@@ -269,7 +278,7 @@ padding: 0px 16px;
   flex-wrap: nowrap;
   box-sizing: border-box;
   font-family: var(--font-sans);
-  font-size: 24px;
+  font-size: 20px;
   height: 100%;
   background-color: var(--violet-bg);
   /* min-width must be set to something (even 0) for text-overflow: ellipsis to work in descendants, but we want this anyway. */
@@ -282,10 +291,6 @@ p {
 }
 
 footer {
-  grid-column-start: main-content;
-  grid-column-end: main-content;
-  grid-row-start: footer;
-  grid-row-end: footer;
   max-width: var(--main-content-max-width);
   font-size: 14px;
   box-sizing: border-box;
@@ -312,15 +317,19 @@ footer p {
 
 .sidebar-entry a {
   box-sizing: border-box;
-  min-height: 48px;
+  min-height: 40px;
   min-width: 48px;
-  padding: 12px 16px;
+  padding: 8px 16px;
   font-family: var(--font-mono);
 }
 
 .sidebar-entry a,
 .sidebar-entry a:visited {
   color: var(--text-color);
+}
+
+.sidebar-sub-entries {
+    font-size: 14px;
 }
 
 .sidebar-sub-entries a {
@@ -332,14 +341,15 @@ footer p {
   margin-left: 14px;
   padding-left: 26px;
   border-left: 2px solid var(--violet);
+  white-space: nowrap;
 }
 
 .module-name {
-  font-size: 56px;
+  font-size: 28px;
   line-height: 1em;
   font-family: var(--font-mono);
   font-weight: bold;
-  margin-top: 18px;
+  margin-top: 48px;
   margin-bottom: 48px;
   color: var(--violet);
 }
@@ -355,7 +365,7 @@ color: inherit;
 
 .sidebar-module-link {
   box-sizing: border-box;
-  font-size: 18px;
+  font-size: 16px;
   line-height: 24px;
   font-family: var(--font-mono);
   display: block;
@@ -446,11 +456,17 @@ pre>samp {
   align-items: center;
   align-content: center;
   height: 100%;
-  background-color: var(--violet-bg);
-  position: relative;
+  position: sticky;
   flex-grow: 1;
   box-sizing: border-box;
-  padding: 0px var(--module-search-form-padding-width);
+  padding-top: 16px;
+  background-color: var(--body-bg-color);
+  top: 0;
+  z-index: 1;
+}
+
+.menu-toggle {
+    display:none;
 }
 
 #module-search,
@@ -467,12 +483,13 @@ pre>samp {
   box-sizing: border-box;
   width: 100%;
   box-sizing: border-box;
-  font-size: 18px;
+  font-size: 16px;
   line-height: 18px;
   border: none;
   color: var(--faded-color);
   background-color: var(--body-bg-color);
   font-family: var(--font-serif);
+  border: 2px solid var(--violet-bg);
 }
 
 #module-search::placeholder {
@@ -481,7 +498,7 @@ pre>samp {
 }
 
 #module-search:focus, #module-search:hover {
-  outline: 2px solid var(--faded-color);
+  outline: 2px solid var(--violet);
 }
 
 #search-type-ahead {
@@ -563,13 +580,9 @@ pre>samp {
   box-sizing: border-box;
   align-items: center;
   font-size: 18px;
-  line-height: 18px;
-  padding: 12px 16px;
-  height: 48px;
   pointer-events: none;
   position: absolute;
-  top: 12px;
-  left: 96px;
+  right: 72px;
 }
 
 #search-shortcut-key {
@@ -602,7 +615,6 @@ pre>samp {
 
 .module-name {
     flex-grow: 1;
-    margin-bottom: 0;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -637,143 +649,163 @@ pre>samp {
 
 @media only screen and (max-device-width: 480px) and (orientation: portrait) {
     body {
-      grid-template-areas:
-        "header"
-        "main"
-        "sidebar"
-        "footer";
+        display: block;
+        overflow-y: auto;
+        overflow-x: hidden;
     }
 
     #sidebar-nav {
-      grid-area: sidebar;
+        display: none;
+        left: calc(-1 * var(--sidebar-width));
+        top: 0;
+        bottom: 0;
+        position: fixed;
+        z-index: 2;
+        transition: 1s linear;
+    }
+
+    body.sidebar-open #sidebar-nav {
+        display: block;
+        left: 0;
     }
 
     main {
-      grid-area: main;
+        display: block;
+        margin: 0 16px;
+    }
+
+    :root {
+        --top-header-height: 160px;
+    }
+
+    #search-shortcut-key, .header-start-extension, .header-end-extension, #search-label {
+        display: none;
+    }
+
+    #module-search-form {
+        padding: 16px 16px;
+        height: auto;
+        margin-bottom: 16px;
+        grid-column-start: main-content-start;
+        grid-column-end: main-content-end;
+        position: fixed;
+        left: 0;
+        right: 0;
+    }
+
+    .menu-toggle {
+        display: inline-block;
+        margin-right: 8px;
+        appearance: none;
+        background-color: transparent;
+        outline: none;
+        border: none;
+        color: var(--text-color);
+        padding: 0;
+    }
+
+    .menu-toggle svg {
+        height: 48px;
+        width: 48px;
+    }
+
+    /* Hide the Copy Link button on mobile. */
+    .entry-name a:first-of-type {
+        display: none;
+    }
+
+    .search-icon {
+        display: block; /* This is only visible in mobile. */
+        top: calc(1lh / 2 + 16px);
     }
 
     .top-header {
-      grid-area: header;
+        flex-direction: column;
+        height: auto;
+        justify-content: space-between;
+        /* min-width must be set to something (even 0) for text-overflow: ellipsis to work in descendants. */
+        min-width: 0;
     }
 
-    footer {
-      grid-area: footer;
+    .pkg-full-name {
+        font-size: 20px;
+        padding-bottom: 14px;
     }
-  :root {
-      --top-header-height: 160px;
-  }
 
-  #search-shortcut-key, .header-start-extension, .header-end-extension, #search-label {
-      display: none;
-  }
+    .pkg-full-name a {
+        vertical-align: middle;
+        padding: 18px 0;
+    }
 
-  #module-search-form {
-      padding: 0 16px;
-      width: 100%;
-      height: auto;
-      margin-bottom: 16px;
-  }
+    .logo {
+        width: 50px;
+        height: 54px;
+    }
 
-  /* Hide the Copy Link button on mobile. */
-  .entry-name a:first-of-type {
-      display: none;
-  }
+    .version {
+        margin: 0;
+        font-weight: normal;
+        font-size: 18px;
+        padding-bottom: 16px;
+    }
 
-  .search-button {
-      display: block; /* This is only visible in mobile. */
-  }
+    .module-name {
+        font-size: 24px;
+        margin-top: 8px;
+        margin-bottom: 8px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
 
-  .top-header {
-      flex-direction: column;
-      height: auto;
-      justify-content: space-between;
-      /* min-width must be set to something (even 0) for text-overflow: ellipsis to work in descendants. */
-      min-width: 0;
-  }
+    main {
+        padding: 18px;
+        font-size: 16px;
+        padding-top: calc(16px + 16px + 1lh + 16px);
+    }
 
-  .pkg-full-name {
-      margin-left: 8px;
-      margin-right: 12px;
-      font-size: 24px;
-      padding-bottom: 14px;
-  }
+    #sidebar-nav {
+        margin-top: 0;
+        padding-left: 0;
+        width: var(--sidebar-width);
+    }
 
-  .pkg-full-name a {
-      vertical-align: middle;
-      padding: 18px 0;
-  }
+    #sidebar-heading {
+        font-size: 24px;
+        margin: 16px;
+    }
 
-  .logo {
-      padding-left: 2px;
-      width: 50px;
-      height: 54px;
-  }
+    h3 {
+        font-size: 18px;
+        margin: 0;
+        padding: 0;
+    }
 
-  .version {
-      margin: 0;
-      font-weight: normal;
-      font-size: 18px;
-      padding-bottom: 16px;
-  }
+    h4 {
+        font-size: 16px;
+    }
 
-  .module-name {
-      font-size: 36px;
-      margin-top: 8px;
-      margin-bottom: 8px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-  }
+    body {
+        margin: 0;
+        min-width: 320px;
+        max-width: 100dvw;
+    }
 
-  main {
-      padding: 18px;
-      font-size: 16px;
-      max-width: 480px;
-  }
+    .top-header-triangle {
+        display: none;
+    }
 
-  #sidebar-nav {
-      margin-top: 0;
-      padding-left: 0;
-      width: auto;
-  }
+    .pkg-and-logo {
+        width: 100%;
+    }
 
-  #sidebar-heading {
-      font-size: 24px;
-      margin: 16px;
-  }
+    .pkg-full-name {
+        flex-grow: 1;
+    }
 
-  h3 {
-      font-size: 18px;
-      margin: 0;
-      padding: 0;
-  }
-
-  h4 {
-      font-size: 16px;
-  }
-
-  body {
-      grid-template-columns: auto;
-      margin: 0;
-      min-width: 320px;
-      max-width: 100%;
-  }
-
-  .top-header-triangle {
-      display: none;
-  }
-
-  .pkg-and-logo {
-      width: 100%;
-  }
-
-  .pkg-full-name {
-      flex-grow: 1;
-  }
-
-  .pkg-full-name a {
-      padding-top: 24px;
-      padding-bottom: 12px;
-  }
+    .pkg-full-name a {
+        padding-top: 24px;
+        padding-bottom: 12px;
+    }
 }
 
 /* Comments `#` and Documentation comments `##` */
