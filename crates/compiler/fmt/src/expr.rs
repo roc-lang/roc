@@ -1872,7 +1872,6 @@ fn fmt_closure<'a>(
                 };
 
                 if should_outdent {
-                    buf.spaces(1);
                     sub_expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
                 } else {
                     loc_ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, body_indent);
