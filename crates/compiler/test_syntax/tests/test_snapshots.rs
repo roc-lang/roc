@@ -299,6 +299,7 @@ mod test_snapshots {
         pass/annotated_tuple_destructure.expr,
         pass/annotation_apply_newlines.expr,
         pass/annotation_comment_before_colon.expr,
+        pass/annotation_double_as.expr,
         pass/annotation_tag_parens_comment.expr,
         pass/annotation_tuple_comment.expr,
         pass/annotation_tuple_newline.expr,
