@@ -367,6 +367,7 @@ mod test_snapshots {
         pass/comment_in_tuple_ext.expr,
         pass/comment_indent_in_parens.expr,
         pass/comment_inside_empty_list.expr,
+        pass/comment_parens_in_typ_annotation_record_field.expr,
         pass/comment_with_non_ascii.expr,
         pass/compare_apply_record.expr,
         pass/control_characters_in_scalar.expr,

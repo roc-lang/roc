@@ -1,12 +1,15 @@
 use crate::{
     collection::{fmt_collection, Braces},
     expr::{format_spaces, merge_spaces_conservative},
-    node::{Node, Nodify, Sp},
+    node::{Node, NodeSequenceBuilder, Nodify, Sp},
     pattern::pattern_lift_spaces_after,
     spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT},
     Buf,
 };
-use bumpalo::{collections::Vec, Bump};
+use bumpalo::{
+    collections::{String, Vec},
+    Bump,
+};
 use roc_parse::ast::{
     AbilityImpls, AssignedField, Collection, CommentOrNewline, Expr, ExtractSpaces, FunctionArrow,
     ImplementsAbilities, ImplementsAbility, ImplementsClause, Spaceable, Spaces, SpacesAfter,
@@ -354,7 +357,7 @@ fn fmt_ty_ann(
         }
 
         TypeAnnotation::Record { fields, ext } => {
-            fmt_collection(buf, indent, Braces::Curly, *fields, newlines);
+            fmt_ty_field_collection(buf, indent, *fields, newlines);
             fmt_ext(ext, buf, indent);
         }
 
@@ -421,6 +424,37 @@ fn fmt_ty_ann(
     }
 }
 
+fn fmt_ty_field_collection(
+    buf: &mut Buf<'_>,
+    indent: u16,
+    fields: Collection<'_, Loc<AssignedField<'_, TypeAnnotation<'_>>>>,
+    newlines: Newlines,
+) {
+    let arena = buf.text.bump();
+    let mut new_items: Vec<'_, NodeSpaces<'_, Node<'_>>> =
+        Vec::with_capacity_in(fields.len(), arena);
+
+    let mut last_after: &[CommentOrNewline<'_>] = &[];
+
+    for item in fields.items.iter() {
+        let lifted = item.value.to_node(arena, Parens::NotNeeded);
+        let before = merge_spaces_conservative(arena, last_after, lifted.before);
+        last_after = lifted.after;
+        new_items.push(NodeSpaces {
+            before,
+            item: lifted.item,
+            after: &[],
+        });
+    }
+
+    let final_comments = merge_spaces_conservative(arena, last_after, fields.final_comments());
+
+    let new_items =
+        Collection::with_items_and_comments(arena, new_items.into_bump_slice(), final_comments);
+
+    fmt_collection(buf, indent, Braces::Curly, new_items, newlines);
+}
+
 fn fmt_tag_collection<'a>(
     buf: &mut Buf<'_>,
     indent: u16,
@@ -474,7 +508,7 @@ impl<'a> Nodify<'a> for Tag<'a> {
                         let lifted = arg.value.to_node(arena, Parens::InApply);
                         let before = merge_spaces_conservative(arena, last_after, lifted.before);
                         last_after = lifted.after;
-                        new_args.push((before, lifted.item));
+                        new_args.push((Sp::with_space(before), lifted.item));
                     }
 
                     Spaces {
@@ -639,6 +673,70 @@ impl<'a> Formattable for AssignedField<'a, Expr<'a>> {
     fn format_with_options(&self, buf: &mut Buf, _parens: Parens, newlines: Newlines, indent: u16) {
         // we abuse the `Newlines` type to decide between multiline or single-line layout
         format_assigned_field_help(self, buf, indent, 0, newlines == Newlines::Yes);
+    }
+}
+
+impl<'a> Nodify<'a> for AssignedField<'a, TypeAnnotation<'a>> {
+    fn to_node<'b>(&'a self, arena: &'b Bump, parens: Parens) -> Spaces<'b, Node<'b>>
+    where
+        'a: 'b,
+    {
+        match self {
+            AssignedField::RequiredValue(name, sp, value) => {
+                assigned_field_value_to_node(name.value, arena, sp, &value.value, ":")
+            }
+            AssignedField::IgnoredValue(name, sp, value) => {
+                let mut n = String::with_capacity_in(name.value.len() + 1, arena);
+                n.push('_');
+                n.push_str(name.value);
+                assigned_field_value_to_node(n.into_bump_str(), arena, sp, &value.value, ":")
+            }
+            AssignedField::OptionalValue(name, sp, value) => {
+                assigned_field_value_to_node(name.value, arena, sp, &value.value, "?")
+            }
+            AssignedField::LabelOnly(name) => Spaces {
+                before: &[],
+                item: Node::Literal(name.value),
+                after: &[],
+            },
+            AssignedField::SpaceBefore(inner, sp) => {
+                let mut inner = inner.to_node(arena, parens);
+                inner.before = merge_spaces_conservative(arena, sp, inner.before);
+                inner
+            }
+            AssignedField::SpaceAfter(inner, sp) => {
+                let mut inner = inner.to_node(arena, parens);
+                inner.after = merge_spaces_conservative(arena, inner.after, sp);
+                inner
+            }
+        }
+    }
+}
+
+fn assigned_field_value_to_node<'a, 'b>(
+    name: &'b str,
+    arena: &'b Bump,
+    sp: &'a [CommentOrNewline<'a>],
+    value: &'a TypeAnnotation<'a>,
+    sep: &'static str,
+) -> Spaces<'b, Node<'b>>
+where
+    'a: 'b,
+{
+    let first = Node::Literal(name);
+
+    let mut b = NodeSequenceBuilder::new(arena, first, 2);
+
+    b.push(Sp::with_space(sp), Node::Literal(sep));
+
+    let value_lifted = value.to_node(arena, Parens::NotNeeded);
+
+    b.push(Sp::with_space(value_lifted.before), value_lifted.item);
+
+    Spaces {
+        before: &[],
+        item: b.build(),
+        after: value_lifted.after,
     }
 }
 
@@ -1274,8 +1372,8 @@ fn parens_around_node<'a, 'b: 'a>(
         before: &[],
         item: Node::DelimitedSequence(
             Braces::Round,
-            arena.alloc_slice_copy(&[(item.before, item.item)]),
-            &[],
+            arena.alloc_slice_copy(&[(item.before.into(), item.item)]),
+            Sp::empty(),
         ),
         // We move the comments/newlines to the outer scope, since they tend to migrate there when re-parsed
         after: item.after,

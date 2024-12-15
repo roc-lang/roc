@@ -1,4 +1,4 @@
-use bumpalo::Bump;
+use bumpalo::{collections::Vec, Bump};
 use roc_parse::ast::{CommentOrNewline, Spaces, TypeAnnotation};
 
 use crate::{
@@ -8,7 +8,42 @@ use crate::{
     Buf,
 };
 
-pub type Sp<'a> = &'a [CommentOrNewline<'a>];
+#[derive(Copy, Clone, Debug)]
+pub struct Sp<'a> {
+    default_space: bool, // if true and comments is empty, use a space (' ')
+    comments: &'a [CommentOrNewline<'a>],
+}
+
+impl<'a> Sp<'a> {
+    pub fn empty() -> Sp<'a> {
+        Sp {
+            default_space: false,
+            comments: &[],
+        }
+    }
+    pub fn space() -> Sp<'a> {
+        Sp {
+            default_space: true,
+            comments: &[],
+        }
+    }
+
+    pub fn with_space(sp: &'a [CommentOrNewline<'a>]) -> Self {
+        Sp {
+            default_space: true,
+            comments: sp,
+        }
+    }
+}
+
+impl<'a> From<&'a [CommentOrNewline<'a>]> for Sp<'a> {
+    fn from(comments: &'a [CommentOrNewline<'a>]) -> Self {
+        Sp {
+            default_space: false,
+            comments,
+        }
+    }
+}
 
 #[derive(Copy, Clone, Debug)]
 pub enum Node<'a> {
@@ -24,20 +59,28 @@ pub trait Nodify<'a> {
         'a: 'b;
 }
 
+fn fmt_sp(buf: &mut Buf, sp: Sp<'_>, indent: u16) {
+    if !sp.comments.is_empty() {
+        fmt_spaces(buf, sp.comments.iter(), indent);
+    } else if sp.default_space {
+        buf.spaces(1);
+    }
+}
+
 impl<'a> Formattable for Node<'a> {
     fn is_multiline(&self) -> bool {
         match self {
             Node::DelimitedSequence(_braces, lefts, right) => {
-                right.is_empty()
+                right.comments.is_empty()
                     && lefts
                         .iter()
-                        .any(|(sp, l)| l.is_multiline() || !sp.is_empty())
+                        .any(|(sp, l)| l.is_multiline() || !sp.comments.is_empty())
             }
             Node::Sequence(first, rest) => {
                 first.is_multiline()
                     || rest
                         .iter()
-                        .any(|(sp, l)| l.is_multiline() || !sp.is_empty())
+                        .any(|(sp, l)| l.is_multiline() || !sp.comments.is_empty())
             }
             Node::TypeAnnotation(type_annotation) => type_annotation.is_multiline(),
             Node::Literal(_) => false,
@@ -51,16 +94,10 @@ impl<'a> Formattable for Node<'a> {
                 buf.push(braces.start());
 
                 for (sp, l) in *lefts {
-                    if !sp.is_empty() {
-                        fmt_spaces(buf, sp.iter(), indent);
-                    }
-
+                    fmt_sp(buf, *sp, indent);
                     l.format_with_options(buf, parens, newlines, indent);
                 }
-
-                if !right.is_empty() {
-                    fmt_spaces(buf, right.iter(), indent);
-                }
+                fmt_sp(buf, *right, indent);
 
                 buf.indent(indent);
                 buf.push(braces.end());
@@ -69,12 +106,7 @@ impl<'a> Formattable for Node<'a> {
                 first.format_with_options(buf, parens, newlines, indent);
 
                 for (sp, l) in *rest {
-                    if !sp.is_empty() {
-                        fmt_spaces(buf, sp.iter(), indent);
-                    } else {
-                        buf.spaces(1);
-                    }
-
+                    fmt_sp(buf, *sp, indent);
                     l.format_with_options(buf, parens, newlines, indent);
                 }
             }
@@ -86,5 +118,30 @@ impl<'a> Formattable for Node<'a> {
                 buf.push_str(text);
             }
         }
+    }
+}
+
+pub struct NodeSequenceBuilder<'a> {
+    first: Node<'a>,
+    rest: Vec<'a, (Sp<'a>, Node<'a>)>,
+}
+
+impl<'a> NodeSequenceBuilder<'a> {
+    pub fn new(arena: &'a Bump, first: Node<'a>, capacity: usize) -> Self {
+        Self {
+            first,
+            rest: Vec::with_capacity_in(capacity, arena),
+        }
+    }
+
+    pub fn push(&mut self, sp: Sp<'a>, literal: Node<'a>) {
+        self.rest.push((sp, literal));
+    }
+
+    pub fn build(self) -> Node<'a> {
+        Node::Sequence(
+            self.rest.bump().alloc(self.first),
+            self.rest.into_bump_slice(),
+        )
     }
 }
