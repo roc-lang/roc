@@ -894,8 +894,8 @@ impl<'a> Formattable for ImplementsAbilities<'a> {
             ImplementsAbilities::Implements(has_abilities) => {
                 if newlines == Newlines::Yes {
                     buf.newline();
-                    buf.indent(indent);
                 }
+                buf.indent(indent);
                 buf.push_str(roc_parse::keyword::IMPLEMENTS);
                 buf.spaces(1);
                 fmt_collection(buf, indent, Braces::Square, *has_abilities, Newlines::No);

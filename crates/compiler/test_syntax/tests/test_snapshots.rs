@@ -373,6 +373,7 @@ mod test_snapshots {
         pass/crazy_annotation_left.expr,
         pass/crazy_annotation_left2.expr,
         pass/crazy_backpassing_parens.expr,
+        pass/crazy_implements_bangs.expr,
         pass/crazy_pat_ann.expr,
         pass/dbg.expr,
         pass/dbg_bang_neg_bang_if_bang.expr,
