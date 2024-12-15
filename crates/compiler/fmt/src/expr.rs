@@ -1837,7 +1837,7 @@ fn fmt_closure<'a>(
         }
 
         arg.item
-            .format_with_options(buf, Parens::InAsPattern, Newlines::No, indent);
+            .format_with_options(buf, Parens::InClosurePattern, Newlines::No, indent);
 
         if !arg.after.is_empty() {
             if starts_with_inline_comment(arg.after.iter()) {

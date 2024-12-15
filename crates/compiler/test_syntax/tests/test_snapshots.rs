@@ -344,6 +344,7 @@ mod test_snapshots {
         pass/call_bang.expr,
         pass/call_bang_no_space.expr,
         pass/capture_body_parens_comment.expr,
+        pass/closure_arg_parens_then_comment.expr,
         pass/closure_complex_pattern_indent_issue.expr,
         pass/closure_in_apply_in_binop.expr,
         pass/closure_in_binop_with_spaces.expr,

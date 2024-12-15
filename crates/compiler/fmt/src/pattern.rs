@@ -261,7 +261,14 @@ fn fmt_pattern_only(
 
         Pattern::NumLiteral(string) => {
             buf.indent(indent);
+            let needs_parens = parens == Parens::InClosurePattern;
+            if needs_parens {
+                buf.push('(');
+            }
             buf.push_str(string);
+            if needs_parens {
+                buf.push(')');
+            }
         }
         Pattern::NonBase10Literal {
             base,
@@ -269,6 +276,10 @@ fn fmt_pattern_only(
             is_negative,
         } => {
             buf.indent(indent);
+            let needs_parens = parens == Parens::InClosurePattern;
+            if needs_parens {
+                buf.push('(');
+            }
             if *is_negative {
                 buf.push('-');
             }
@@ -281,15 +292,42 @@ fn fmt_pattern_only(
             }
 
             buf.push_str(string);
+
+            if needs_parens {
+                buf.push(')');
+            }
         }
         Pattern::FloatLiteral(string) => {
             buf.indent(indent);
+            let needs_parens = parens == Parens::InClosurePattern;
+            if needs_parens {
+                buf.push('(');
+            }
             buf.push_str(string);
+            if needs_parens {
+                buf.push(')');
+            }
         }
-        Pattern::StrLiteral(literal) => fmt_str_literal(buf, *literal, indent),
+        Pattern::StrLiteral(literal) => {
+            let needs_parens = parens == Parens::InClosurePattern;
+            if needs_parens {
+                buf.push('(');
+            }
+            fmt_str_literal(buf, *literal, indent);
+            if needs_parens {
+                buf.push(')');
+            }
+        }
         Pattern::SingleQuote(string) => {
             buf.indent(indent);
+            let needs_parens = parens == Parens::InClosurePattern;
+            if needs_parens {
+                buf.push('(');
+            }
             format_sq_literal(buf, string);
+            if needs_parens {
+                buf.push(')');
+            }
         }
         Pattern::Underscore(name) => {
             buf.indent(indent);
@@ -363,7 +401,9 @@ fn fmt_pattern_only(
         }
 
         Pattern::As(pattern, pattern_as) => {
-            let needs_parens = parens == Parens::InAsPattern || parens == Parens::InApply;
+            let needs_parens = parens == Parens::InAsPattern
+                || parens == Parens::InApply
+                || parens == Parens::InClosurePattern;
 
             if needs_parens {
                 buf.indent(indent);
@@ -412,7 +452,7 @@ pub fn pattern_fmt_apply(
     buf.indent(indent);
     // Sometimes, an Apply pattern needs parens around it.
     // In particular when an Apply's argument is itself an Apply (> 0) arguments
-    let parens = !args.is_empty() && (parens == Parens::InApply);
+    let parens = !args.is_empty() && parens == Parens::InApply;
 
     let indent_more = if is_multiline {
         indent + INDENT

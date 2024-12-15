@@ -49,6 +49,7 @@ pub enum Parens {
     InOperator,
     InAsPattern,
     InApplyLastArg,
+    InClosurePattern,
 }
 
 /// In an AST node, do we show newlines around it
