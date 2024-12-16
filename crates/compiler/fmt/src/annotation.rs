@@ -336,7 +336,11 @@ fn fmt_ty_ann(
         }
         TypeAnnotation::BoundVariable(v) => {
             buf.indent(indent);
-            buf.push_str(v)
+            if *v == "implements" {
+                buf.push_str("(implements)");
+            } else {
+                buf.push_str(v);
+            }
         }
         TypeAnnotation::Wildcard => {
             buf.indent(indent);

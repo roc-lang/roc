@@ -655,6 +655,7 @@ mod test_snapshots {
         pass/single_arg_closure.expr,
         pass/single_arg_with_underscore_closure.expr,
         pass/single_underscore_closure.expr,
+        pass/sneaky_implements_in_opaque_fn_type.expr,
         pass/space_before_colon.full,
         pass/space_before_parens_space_after.expr,
         pass/space_only_after_minus.expr,
