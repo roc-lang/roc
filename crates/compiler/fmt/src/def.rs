@@ -1009,6 +1009,7 @@ pub fn fmt_body<'a>(
     } else {
         buf.spaces(1);
     }
+    let indent = buf.cur_line_indent();
     buf.push_str("=");
 
     let body = expr_lift_and_lower(Parens::NotNeeded, buf.text.bump(), body);

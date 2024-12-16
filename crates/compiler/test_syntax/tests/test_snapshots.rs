@@ -574,6 +574,7 @@ mod test_snapshots {
         pass/ops_with_newlines.expr,
         pass/opt_field_newline_in_pat.expr,
         pass/opt_field_newline_in_ty.expr,
+        pass/opt_record_field_pat_assign.expr,
         pass/outdented_app_with_record.expr,
         pass/outdented_colon_in_record.expr,
         pass/outdented_list.expr,
