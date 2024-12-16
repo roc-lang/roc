@@ -522,6 +522,7 @@ pub fn pattern_fmt_apply(
                 ident: "implements"
             }
         ) {
+            buf.indent(indent_more);
             buf.push_str("(implements)");
         } else {
             fmt_pattern_only(&arg.item, buf, parens, indent_more, arg.item.is_multiline());
