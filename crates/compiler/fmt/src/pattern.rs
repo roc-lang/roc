@@ -155,11 +155,7 @@ fn fmt_pattern_only(
     match me {
         Pattern::Identifier { ident } => {
             buf.indent(indent);
-            if *ident == "implements" {
-                buf.push_str("(implements)");
-            } else {
-                snakify_camel_ident(buf, ident);
-            }
+            snakify_camel_ident(buf, ident);
         }
         Pattern::Tag(name) | Pattern::OpaqueRef(name) => {
             buf.indent(indent);
@@ -520,7 +516,16 @@ pub fn pattern_fmt_apply(
             buf.ensure_ends_with_newline();
         }
 
-        fmt_pattern_only(&arg.item, buf, parens, indent_more, arg.item.is_multiline());
+        if matches!(
+            arg.item,
+            Pattern::Identifier {
+                ident: "implements"
+            }
+        ) {
+            buf.push_str("(implements)");
+        } else {
+            fmt_pattern_only(&arg.item, buf, parens, indent_more, arg.item.is_multiline());
+        }
 
         last_after = arg.after;
 

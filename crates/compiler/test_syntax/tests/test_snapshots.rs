@@ -442,6 +442,7 @@ mod test_snapshots {
         pass/implements_newline_in_fn_ty.expr,
         pass/implements_newlines_comments.expr,
         pass/implements_not_keyword.expr,
+        pass/implements_record_destructure.expr,
         pass/import.moduledefs,
         pass/import_from_package.moduledefs,
         pass/import_in_closure_with_curlies_after.expr,
