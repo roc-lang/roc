@@ -23,7 +23,7 @@
   --font-mono: SFMono-Regular, Consolas, "Liberation Mono", Menlo, Courier,
       monospace;
   --top-header-height: 67px;
-  --sidebar-width: 280px;
+  --sidebar-width: clamp(280px, 33dvw, 650px);
   --module-search-height: 48px;
   --module-search-padding-height: 12px;
   --module-search-form-padding-width: 20px;
@@ -131,7 +131,7 @@ a:hover code {
   min-width: 0; /* necessary for text-overflow: ellipsis to work in descendants */
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 16px;
   background-color: var(--violet-bg);
   padding-block: 16px;
@@ -202,6 +202,7 @@ main {
   flex-direction: column;
   scrollbar-color: var(--violet) var(--body-bg-color);
   scrollbar-gutter: stable both-edges;
+  scroll-padding-top: calc(16px + 16px + 1lh + 16px + 16px);
 }
 
 main > * {
@@ -263,8 +264,7 @@ padding: 0px 16px;
     overflow-y: auto;
     scrollbar-color: var(--violet) var(--violet-bg);
     scrollbar-gutter: stable both-edges;
-    view-transition-name: sidebar;
-    transition: 1s linear;
+    transition: all 1s linear;
 }
 
 .top-header {
@@ -339,9 +339,15 @@ footer p {
   overflow: hidden;
   text-overflow: ellipsis;
   margin-left: 14px;
-  padding-left: 26px;
-  border-left: 2px solid var(--violet);
+  padding-left: 27px;
+  border-left: 2px solid rgb(from var(--gray) r g b / .30);
   white-space: nowrap;
+}
+
+.sidebar-sub-entries a:hover {
+    border-left-color: rgb(from var(--violet) r g b / .60);
+    color: hsl(from var(--text-color) h s calc(l * 1.5));
+    background-color: rgb(from white r g b / .10);
 }
 
 .module-name {
@@ -655,17 +661,15 @@ pre>samp {
     }
 
     #sidebar-nav {
-        display: none;
         left: calc(-1 * var(--sidebar-width));
         top: 0;
         bottom: 0;
         position: fixed;
         z-index: 2;
-        transition: 1s linear;
+        transition: all .2s linear;
     }
 
     body.sidebar-open #sidebar-nav {
-        display: block;
         left: 0;
     }
 
@@ -796,6 +800,8 @@ pre>samp {
 
     .pkg-and-logo {
         width: 100%;
+        padding-block: 4px;
+        align-items: space-between;
     }
 
     .pkg-full-name {
