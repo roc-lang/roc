@@ -260,7 +260,7 @@ padding: 0px 16px;
     flex-direction: column;
     box-sizing: border-box;
     width: 100%;
-    background-color: var(--violet-bg);
+    background-color: hsl(from var(--violet) h calc(s * 1.3) calc(l * .3));
     overflow-y: auto;
     scrollbar-color: var(--violet) var(--violet-bg);
     scrollbar-gutter: stable both-edges;
