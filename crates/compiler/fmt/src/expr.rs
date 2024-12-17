@@ -1605,27 +1605,25 @@ fn fmt_when<'a>(
 
         let inner_indent = line_indent + INDENT;
 
-        match expr.value {
-            Expr::SpaceBefore(nested, spaces) => {
-                fmt_spaces_no_blank_lines(buf, spaces.iter(), inner_indent);
+        let expr = expr_lift_spaces(Parens::NotNeeded, buf.text.bump(), &expr.value);
+        fmt_spaces_no_blank_lines(buf, expr.before.iter(), inner_indent);
+        if is_multiline_expr {
+            buf.ensure_ends_with_newline();
+        } else {
+            buf.spaces(1);
+        }
 
-                if is_multiline_expr {
-                    buf.ensure_ends_with_newline();
-                } else {
-                    buf.spaces(1);
-                }
+        // expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, inner_indent);
+        format_expr_only(
+            &expr.item,
+            buf,
+            Parens::NotNeeded,
+            Newlines::Yes,
+            inner_indent,
+        );
 
-                nested.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, inner_indent);
-            }
-            _ => {
-                if is_multiline_expr {
-                    buf.ensure_ends_with_newline();
-                } else {
-                    buf.spaces(1);
-                }
-
-                expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, inner_indent);
-            }
+        if !expr.after.is_empty() {
+            format_spaces(buf, expr.after, Newlines::Yes, inner_indent);
         }
 
         prev_branch_was_multiline = is_multiline_expr || is_multiline_patterns;
