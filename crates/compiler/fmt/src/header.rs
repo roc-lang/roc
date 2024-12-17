@@ -412,8 +412,11 @@ impl<'a> Formattable for ExposedName<'a> {
     ) {
         buf.indent(indent);
         if buf.flags().snakify
-            && !self.as_str().is_empty()
-            && self.as_str().chars().nth(0).unwrap().is_ascii_lowercase()
+            && self
+                .as_str()
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_lowercase())
         {
             snakify_camel_ident(buf, self.as_str());
         } else {
