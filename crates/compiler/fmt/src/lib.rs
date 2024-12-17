@@ -7,6 +7,7 @@ pub mod collection;
 pub mod def;
 pub mod expr;
 pub mod header;
+pub mod node;
 pub mod pattern;
 pub mod spaces;
 
@@ -94,11 +95,7 @@ impl<'a> Buf<'a> {
 
     #[track_caller]
     pub fn push_str_allow_spaces(&mut self, s: &str) {
-        debug_assert!(
-            !self.beginning_of_line,
-            "push_str: `{s}` with text:\n{}",
-            self.text
-        );
+        debug_assert!(!self.beginning_of_line, "push_str: `{s}`");
 
         self.flush_spaces();
 
@@ -107,11 +104,7 @@ impl<'a> Buf<'a> {
 
     #[track_caller]
     pub fn push_str(&mut self, s: &str) {
-        debug_assert!(
-            !self.beginning_of_line,
-            "push_str: `{s}` with text:\n{}",
-            self.text
-        );
+        debug_assert!(!self.beginning_of_line, "push_str: `{s}`");
         debug_assert!(!s.contains('\n'));
         debug_assert!(!s.ends_with(' '));
 
