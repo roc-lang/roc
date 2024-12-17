@@ -3,6 +3,7 @@ use std::cmp::max;
 use crate::annotation::{is_collection_multiline, Formattable, Newlines, Parens};
 use crate::collection::{fmt_collection, Braces};
 use crate::expr::fmt_str_literal;
+use crate::pattern::snakify_camel_ident;
 use crate::spaces::{fmt_comments_only, fmt_default_spaces, fmt_spaces, NewlineAt, INDENT};
 use crate::Buf;
 use roc_parse::ast::{Collection, CommentOrNewline, Header, Spaced, Spaces, SpacesBefore};
@@ -410,7 +411,14 @@ impl<'a> Formattable for ExposedName<'a> {
         indent: u16,
     ) {
         buf.indent(indent);
-        buf.push_str(self.as_str());
+        if buf.flags().snakify
+            && !self.as_str().is_empty()
+            && self.as_str().chars().nth(0).unwrap().is_ascii_lowercase()
+        {
+            snakify_camel_ident(buf, self.as_str());
+        } else {
+            buf.push_str(self.as_str());
+        }
     }
 }
 

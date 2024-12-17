@@ -687,7 +687,7 @@ pub fn pattern_lift_spaces_after<'a, 'b: 'a>(
 }
 
 /// Convert camelCase identifier to snake case
-fn snakify_camel_ident(buf: &mut Buf, string: &str) {
+pub fn snakify_camel_ident(buf: &mut Buf, string: &str) {
     let chars: Vec<char> = string.chars().collect();
     if !buf.flags().snakify || (string.contains('_') && !string.ends_with('_')) {
         buf.push_str(string);

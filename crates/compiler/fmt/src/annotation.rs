@@ -2,7 +2,7 @@ use crate::{
     collection::{fmt_collection, Braces},
     expr::{format_spaces, merge_spaces_conservative},
     node::{Node, NodeSequenceBuilder, Nodify, Sp},
-    pattern::pattern_lift_spaces_after,
+    pattern::{pattern_lift_spaces_after, snakify_camel_ident},
     spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT},
     Buf,
 };
@@ -775,7 +775,11 @@ fn format_assigned_field_help<T>(
             }
 
             buf.indent(indent);
-            buf.push_str(name.value);
+            if buf.flags().snakify {
+                snakify_camel_ident(buf, name.value);
+            } else {
+                buf.push_str(name.value);
+            }
 
             if !spaces.is_empty() {
                 fmt_spaces(buf, spaces.iter(), indent);
@@ -793,7 +797,11 @@ fn format_assigned_field_help<T>(
             }
 
             buf.indent(indent);
-            buf.push_str(name.value);
+            if buf.flags().snakify {
+                snakify_camel_ident(buf, name.value);
+            } else {
+                buf.push_str(name.value);
+            }
 
             if !spaces.is_empty() {
                 fmt_spaces(buf, spaces.iter(), indent);
@@ -812,7 +820,11 @@ fn format_assigned_field_help<T>(
 
             buf.indent(indent);
             buf.push('_');
-            buf.push_str(name.value);
+            if buf.flags().snakify {
+                snakify_camel_ident(buf, name.value);
+            } else {
+                buf.push_str(name.value);
+            }
 
             if !spaces.is_empty() {
                 fmt_spaces(buf, spaces.iter(), indent);
@@ -830,7 +842,11 @@ fn format_assigned_field_help<T>(
             }
 
             buf.indent(indent);
-            buf.push_str(name.value);
+            if buf.flags().snakify {
+                snakify_camel_ident(buf, name.value);
+            } else {
+                buf.push_str(name.value);
+            }
         }
         AssignedField::SpaceBefore(sub_field, spaces) => {
             fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
