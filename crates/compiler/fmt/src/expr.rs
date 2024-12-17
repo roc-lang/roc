@@ -895,6 +895,7 @@ fn format_str_segment(seg: &StrSegment, buf: &mut Buf) {
                 Newlines::No,      // Interpolations can never have newlines
                 min_indent,
             );
+            buf.indent(min_indent);
             buf.push(')');
         }
     }

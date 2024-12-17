@@ -584,6 +584,7 @@ mod test_snapshots {
         pass/paren_newline_before_return.expr,
         pass/parens_apply_newline.expr,
         pass/parens_apply_not_parens.expr,
+        pass/parens_comment_in_str_interpolation.expr,
         pass/parens_comment_in_ty_annotation.expr,
         pass/parens_comment_tuple.expr,
         pass/parens_empty_record_apply.expr,
