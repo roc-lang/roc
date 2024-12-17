@@ -744,6 +744,7 @@ mod test_snapshots {
         pass/when_with_records.expr,
         pass/when_with_tuple_in_record.expr,
         pass/when_with_tuples.expr,
+        pass/where_and_implements_lookalikes.expr,
         pass/where_clause_function.expr,
         pass/where_clause_multiple_bound_abilities.expr,
         pass/where_clause_multiple_has.expr,

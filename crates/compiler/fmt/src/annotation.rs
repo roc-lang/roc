@@ -410,6 +410,7 @@ fn fmt_ty_ann(
                 buf.spaces(1);
             }
             for (i, has) in implements_clauses.iter().enumerate() {
+                buf.indent(indent);
                 buf.push_str(if i == 0 {
                     roc_parse::keyword::WHERE
                 } else {
