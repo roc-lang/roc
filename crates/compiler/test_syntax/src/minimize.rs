@@ -123,7 +123,7 @@ fn round_trip_once(input: Input<'_>, options: Options) -> Option<String> {
             if options.minimize_full_error {
                 return Some(format!("Reparse failed: {:?}", e.normalize(&arena)));
             } else {
-                return Some(format!("Reparse failed"));
+                return Some("Reparse failed".to_string());
             }
         }
     };
