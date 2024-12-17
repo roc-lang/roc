@@ -31,4 +31,3 @@ fromUtf8 = \char ->
 toIndex : Variable -> U64
 toIndex = \@Variable char ->
     Num.intCast (char - 0x61) # "a"
-# List.first (Str.toUtf8 "a")
