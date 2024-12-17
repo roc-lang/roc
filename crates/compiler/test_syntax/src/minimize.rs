@@ -9,8 +9,15 @@ use crate::test_helpers::{Input, InputKind};
 use bumpalo::Bump;
 use roc_parse::{ast::Malformed, normalize::Normalize};
 
-pub fn print_minimizations(text: &str, kind: InputKind) -> bool {
-    let Some(original_error) = round_trip_once_and_extract_error(text, kind) else {
+#[derive(Copy, Clone, Debug)]
+pub struct Options {
+    pub kind: InputKind,
+    pub minimize_full_error: bool,
+    pub minimize_initial_parse_error: bool,
+}
+
+pub fn print_minimizations(text: &str, options: Options) -> bool {
+    let Some(original_error) = round_trip_once_and_extract_error(text, options) else {
         eprintln!("No error found");
         return false;
     };
@@ -33,7 +40,7 @@ pub fn print_minimizations(text: &str, kind: InputKind) -> bool {
                 update.replacements
             );
 
-            if let Some(result) = round_trip_once_and_extract_error(&new_s, kind) {
+            if let Some(result) = round_trip_once_and_extract_error(&new_s, options) {
                 if result == original_error {
                     eprintln!("Successfully minimized, new length: {}", new_s.len());
                     s = new_s;
@@ -72,9 +79,9 @@ fn make_replacements(s: &str, update: &Update) -> Option<String> {
     Some(new_s)
 }
 
-fn round_trip_once_and_extract_error(text: &str, kind: InputKind) -> Option<String> {
-    let input = kind.with_text(text);
-    let res = std::panic::catch_unwind(|| round_trip_once(input));
+fn round_trip_once_and_extract_error(text: &str, options: Options) -> Option<String> {
+    let input = options.kind.with_text(text);
+    let res = std::panic::catch_unwind(|| round_trip_once(input, options));
 
     match res {
         Ok(res) => res,
@@ -90,13 +97,18 @@ fn round_trip_once_and_extract_error(text: &str, kind: InputKind) -> Option<Stri
     }
 }
 
-fn round_trip_once(input: Input<'_>) -> Option<String> {
+fn round_trip_once(input: Input<'_>, options: Options) -> Option<String> {
     let arena = Bump::new();
 
     let actual = match input.parse_in(&arena) {
         Ok(a) => a,
-        Err(_e) => return None,
-        //     Err(e) => return Some(format!("Initial parse failed: {:?}", e.normalize(&arena))),
+        Err(e) => {
+            if options.minimize_initial_parse_error {
+                return Some(format!("Initial parse failed: {:?}", e.normalize(&arena)));
+            } else {
+                return None;
+            }
+        }
     };
 
     if actual.is_malformed() {
@@ -107,7 +119,13 @@ fn round_trip_once(input: Input<'_>) -> Option<String> {
 
     let reparsed_ast = match output.as_ref().parse_in(&arena) {
         Ok(r) => r,
-        Err(e) => return Some(format!("Reparse failed: {:?}", e.normalize(&arena))),
+        Err(e) => {
+            if options.minimize_full_error {
+                return Some(format!("Reparse failed: {:?}", e.normalize(&arena)));
+            } else {
+                return Some(format!("Reparse failed"));
+            }
+        }
     };
 
     let ast_normalized = actual.normalize(&arena);
