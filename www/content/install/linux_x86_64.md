@@ -44,7 +44,7 @@ which includes the Roc compiler and some helpful utilities.
 1. Run [hello world](https://github.com/roc-lang/examples/blob/main/examples/HelloWorld/main.roc):
 
     ```sh
-    roc hello.roc
+    roc main.roc
     ```
 
 ## Next Steps
