@@ -178,6 +178,7 @@ fn run_command(mut command: Command, flaky_fail_counter: usize) {
                 if error_str.contains("FileNotFound")
                     || error_str.contains("unable to save cached ZIR code")
                     || error_str.contains("LLVM failed to emit asm")
+                    || error_str.contains("ir-wasm32 transitive failure")
                 {
                     if flaky_fail_counter == 10 {
                         internal_error!("{} failed 10 times in a row. The following error is unlikely to be a flaky error: {}", command_str, error_str);
