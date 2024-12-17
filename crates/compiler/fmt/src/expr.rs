@@ -1616,6 +1616,7 @@ fn fmt_when<'a>(
         }
 
         if let Some(guard_expr) = &branch.guard {
+            buf.indent(indent + INDENT);
             buf.push_str(" if");
             buf.spaces(1);
             guard_expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent + INDENT);
