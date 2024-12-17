@@ -406,7 +406,7 @@ fn fmt_pattern_only(
                 buf.push('(');
             }
 
-            fmt_pattern(buf, &pattern.value, indent, parens);
+            fmt_pattern(buf, &pattern.value, indent, Parens::InAsPattern);
 
             pattern_as.format(buf, indent + INDENT);
 
