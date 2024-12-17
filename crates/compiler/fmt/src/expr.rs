@@ -2,7 +2,8 @@ use crate::annotation::{except_last, is_collection_multiline, Formattable, Newli
 use crate::collection::{fmt_collection, Braces};
 use crate::def::{fmt_defs, valdef_lift_spaces_before};
 use crate::pattern::{
-    fmt_pattern, pattern_lift_spaces, pattern_lift_spaces_before, starts_with_inline_comment,
+    fmt_pattern, pattern_lift_spaces, pattern_lift_spaces_before, snakify_camel_ident,
+    starts_with_inline_comment,
 };
 use crate::spaces::{
     count_leading_newlines, fmt_comments_only, fmt_spaces, fmt_spaces_no_blank_lines,
@@ -72,8 +73,11 @@ fn format_expr_only(
                 buf.push_str(module_name);
                 buf.push('.');
             }
-
-            buf.push_str(ident);
+            if buf.flags().snakify {
+                snakify_camel_ident(buf, ident);
+            } else {
+                buf.push_str(ident);
+            }
         }
         Expr::Underscore(name) => {
             buf.indent(indent);
@@ -303,19 +307,33 @@ fn format_expr_only(
             buf.indent(indent);
             buf.push('.');
             match key {
-                Accessor::RecordField(key) => buf.push_str(key),
+                Accessor::RecordField(key) => {
+                    if buf.flags().snakify {
+                        snakify_camel_ident(buf, key);
+                    } else {
+                        buf.push_str(key);
+                    }
+                }
                 Accessor::TupleIndex(key) => buf.push_str(key),
             }
         }
         Expr::RecordUpdater(key) => {
             buf.indent(indent);
             buf.push('&');
-            buf.push_str(key);
+            if buf.flags().snakify {
+                snakify_camel_ident(buf, key);
+            } else {
+                buf.push_str(key);
+            }
         }
         Expr::RecordAccess(expr, key) => {
             expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
             buf.push('.');
-            buf.push_str(key);
+            if buf.flags().snakify {
+                snakify_camel_ident(buf, key);
+            } else {
+                buf.push_str(key);
+            }
         }
         Expr::TupleAccess(expr, key) => {
             expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
@@ -331,7 +349,11 @@ fn format_expr_only(
         }
         Expr::MalformedIdent(str, _) => {
             buf.indent(indent);
-            buf.push_str(str)
+            if buf.flags().snakify {
+                snakify_camel_ident(buf, str);
+            } else {
+                buf.push_str(str);
+            }
         }
         Expr::MalformedSuffixed(loc_expr) => {
             buf.indent(indent);
