@@ -436,6 +436,7 @@ mod test_snapshots {
         pass/function_with_tuple_ext_type.expr,
         pass/function_with_tuple_type.expr,
         pass/h_greater_comment_minus_div.expr,
+        pass/h_parens_as_parens_h_ann.expr,
         pass/highest_float.expr,
         pass/highest_int.expr,
         pass/i_over_not_g.expr,

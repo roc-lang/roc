@@ -367,13 +367,13 @@ fn fmt_ty_ann(
         }
 
         TypeAnnotation::As(lhs, spaces, TypeHeader { name, vars }) => {
-            let write_parens = parens == Parens::InAsPattern;
+            let write_parens = parens == Parens::InAsPattern || parens == Parens::InApply;
 
+            buf.indent(indent);
             if write_parens {
                 buf.push('(')
             }
 
-            buf.indent(indent);
             let lhs_indent = buf.cur_line_indent();
             lhs.value
                 .format_with_options(buf, Parens::InAsPattern, Newlines::No, indent);
