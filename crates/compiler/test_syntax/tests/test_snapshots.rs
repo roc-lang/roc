@@ -684,6 +684,7 @@ mod test_snapshots {
         pass/tag_destructure_bang.expr,
         pass/tag_destructure_bang_no_space.expr,
         pass/tag_pattern.expr,
+        pass/tag_union_ann_with_as.expr,
         pass/ten_times_eleven.expr,
         pass/three_arg_closure.expr,
         pass/triple_paren_pat_ann.expr,
@@ -773,7 +774,7 @@ mod test_snapshots {
                 true
             }
 
-            "parens_newlines_before_as" => {
+            "parens_newlines_before_as" | "tag_union_ann_with_as" => {
                 // Found unbound type variables {66}
                 //  in type alias `Test.IdentId(0)` [] [] : <66>
                 // Location: crates/compiler/can/src/scope.rs:541:13

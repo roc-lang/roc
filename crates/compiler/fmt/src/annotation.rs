@@ -1374,6 +1374,19 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                     inner
                 }
             }
+            TypeAnnotation::As(_left, _sp, _right) => {
+                let lifted = ann_lift_spaces(arena, self);
+                let item = Spaces {
+                    before: lifted.before,
+                    item: Node::TypeAnnotation(lifted.item),
+                    after: lifted.after,
+                };
+                if parens == Parens::InApply || parens == Parens::InAsPattern {
+                    parens_around_node(arena, item)
+                } else {
+                    item
+                }
+            }
             _ => {
                 let lifted = ann_lift_spaces(arena, self);
                 Spaces {
