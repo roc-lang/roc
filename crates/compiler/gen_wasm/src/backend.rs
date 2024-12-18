@@ -1009,10 +1009,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 initializer,
                 element_layout,
             } => self.expr_alloca(*initializer, *element_layout, storage),
-
-            Expr::RuntimeErrorFunction(_) => {
-                todo!("Expression `{}`", expr.to_pretty(100, false))
-            }
         }
     }
 

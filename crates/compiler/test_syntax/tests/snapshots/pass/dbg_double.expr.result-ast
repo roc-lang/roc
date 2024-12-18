@@ -1,0 +1,20 @@
+@0-11 SpaceAfter(
+    Apply(
+        @0-3 Dbg,
+        [
+            @4-7 Dbg,
+            @8-9 Var {
+                module_name: "",
+                ident: "g",
+            },
+            @10-11 Var {
+                module_name: "",
+                ident: "g",
+            },
+        ],
+        Space,
+    ),
+    [
+        Newline,
+    ],
+)

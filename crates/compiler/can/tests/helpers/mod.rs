@@ -3,7 +3,6 @@ extern crate bumpalo;
 use self::bumpalo::Bump;
 use roc_can::desugar;
 use roc_can::env::Env;
-use roc_can::expr::Output;
 use roc_can::expr::{canonicalize_expr, Expr};
 use roc_can::scope::Scope;
 use roc_collections::all::MutMap;
@@ -26,12 +25,8 @@ pub fn can_expr(expr_str: &str) -> CanExprOut {
 
 pub struct CanExprOut {
     pub loc_expr: Loc<Expr>,
-    pub output: Output,
     pub problems: Vec<Problem>,
-    pub home: ModuleId,
     pub interns: Interns,
-    pub var_store: VarStore,
-    pub var: Variable,
 }
 
 #[allow(dead_code)]
@@ -43,7 +38,6 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     });
 
     let mut var_store = VarStore::default();
-    let var = var_store.fresh();
     let qualified_module_ids = PackageModuleIds::default();
 
     let mut scope = Scope::new(
@@ -86,7 +80,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
         roc_types::types::AliasKind::Structural,
     );
 
-    let (loc_expr, output) = canonicalize_expr(
+    let (loc_expr, _) = canonicalize_expr(
         &mut env,
         &mut var_store,
         &mut scope,
@@ -104,12 +98,8 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
 
     CanExprOut {
         loc_expr,
-        output,
         problems: env.problems,
-        home: env.home,
-        var_store,
         interns,
-        var,
     }
 }
 

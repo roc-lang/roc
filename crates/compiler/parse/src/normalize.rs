@@ -396,10 +396,22 @@ impl<'a> Normalize<'a> for ValueDef<'a> {
 
         match *self {
             Annotation(a, b) => Annotation(a.normalize(arena), b.normalize(arena)),
-            Body(a, b) => Body(
-                arena.alloc(a.normalize(arena)),
-                arena.alloc(b.normalize(arena)),
-            ),
+            Body(a, b) => {
+                let a = a.normalize(arena);
+                let b = b.normalize(arena);
+
+                let is_unit_assignment = if let Pattern::RecordDestructure(collection) = a.value {
+                    collection.is_empty()
+                } else {
+                    false
+                };
+
+                if is_unit_assignment {
+                    Stmt(arena.alloc(b))
+                } else {
+                    Body(arena.alloc(a), arena.alloc(b))
+                }
+            }
             AnnotatedBody {
                 ann_pattern,
                 ann_type,
@@ -560,26 +572,6 @@ impl<'a> Normalize<'a> for StrLiteral<'a> {
         match *self {
             StrLiteral::PlainLine(t) => StrLiteral::PlainLine(t),
             StrLiteral::Line(t) => {
-                let mut needs_merge = false;
-                let mut last_was_mergable = false;
-                for segment in t.iter() {
-                    let mergable = matches!(
-                        segment,
-                        StrSegment::Plaintext(_)
-                            | StrSegment::Unicode(_)
-                            | StrSegment::EscapedChar(_)
-                    );
-                    if mergable && last_was_mergable {
-                        needs_merge = true;
-                        break;
-                    }
-                    last_was_mergable = mergable;
-                }
-
-                if !needs_merge {
-                    return StrLiteral::Line(t.normalize(arena));
-                }
-
                 let mut new_segments = Vec::new_in(arena);
                 let mut last_text = String::new_in(arena);
 
@@ -629,8 +621,18 @@ fn normalize_str_segments<'a>(
             }
             StrSegment::Unicode(t) => {
                 let hex_code: &str = t.value;
-                let c = char::from_u32(u32::from_str_radix(hex_code, 16).unwrap()).unwrap();
-                last_text.push(c);
+                if let Some(c) = u32::from_str_radix(hex_code, 16)
+                    .ok()
+                    .and_then(char::from_u32)
+                {
+                    last_text.push(c);
+                } else {
+                    if !last_text.is_empty() {
+                        let text = std::mem::replace(last_text, String::new_in(arena));
+                        new_segments.push(StrSegment::Plaintext(text.into_bump_str()));
+                    }
+                    new_segments.push(StrSegment::Unicode(Loc::at_zero(t.value)));
+                }
             }
             StrSegment::EscapedChar(c) => {
                 last_text.push(c.unescape());
@@ -713,39 +715,29 @@ impl<'a> Normalize<'a> for Expr<'a> {
                 arena.alloc(b.normalize(arena)),
             ),
             Expr::Crash => Expr::Crash,
-            Expr::Defs(a, b) => {
-                let mut defs = a.clone();
-                defs.space_before = vec![Default::default(); defs.len()];
-                defs.space_after = vec![Default::default(); defs.len()];
-                defs.regions = vec![Region::zero(); defs.len()];
-                defs.spaces.clear();
-
-                for type_def in defs.type_defs.iter_mut() {
-                    *type_def = type_def.normalize(arena);
-                }
-
-                for value_def in defs.value_defs.iter_mut() {
-                    *value_def = value_def.normalize(arena);
-                }
-
-                Expr::Defs(arena.alloc(defs), arena.alloc(b.normalize(arena)))
-            }
+            Expr::Defs(a, b) => fold_defs(arena, a.defs(), b.value.normalize(arena)),
             Expr::Backpassing(a, b, c) => Expr::Backpassing(
                 arena.alloc(a.normalize(arena)),
                 arena.alloc(b.normalize(arena)),
                 arena.alloc(c.normalize(arena)),
             ),
             Expr::Dbg => Expr::Dbg,
-            Expr::DbgStmt(a, b) => Expr::DbgStmt(
-                arena.alloc(a.normalize(arena)),
-                arena.alloc(b.normalize(arena)),
-            ),
+            Expr::DbgStmt {
+                first,
+                extra_args,
+                continuation,
+            } => Expr::DbgStmt {
+                first: arena.alloc(first.normalize(arena)),
+                extra_args: extra_args.normalize(arena),
+                continuation: arena.alloc(continuation.normalize(arena)),
+            },
             Expr::LowLevelDbg(x, a, b) => Expr::LowLevelDbg(
                 x,
                 arena.alloc(a.normalize(arena)),
                 arena.alloc(b.normalize(arena)),
             ),
             Expr::Try => Expr::Try,
+            Expr::LowLevelTry(a, kind) => Expr::LowLevelTry(arena.alloc(a.normalize(arena)), kind),
             Expr::Return(a, b) => Expr::Return(
                 arena.alloc(a.normalize(arena)),
                 b.map(|loc_b| &*arena.alloc(loc_b.normalize(arena))),
@@ -755,7 +747,22 @@ impl<'a> Normalize<'a> for Expr<'a> {
             }
             Expr::BinOps(a, b) => Expr::BinOps(a.normalize(arena), arena.alloc(b.normalize(arena))),
             Expr::UnaryOp(a, b) => {
-                Expr::UnaryOp(arena.alloc(a.normalize(arena)), b.normalize(arena))
+                let a = a.normalize(arena);
+                match (a.value, b.value) {
+                    (Expr::Num(text), UnaryOp::Negate) if !text.starts_with('-') => {
+                        let mut res = String::new_in(arena);
+                        res.push('-');
+                        res.push_str(text);
+                        Expr::Num(res.into_bump_str())
+                    }
+                    (Expr::Float(text), UnaryOp::Negate) if !text.starts_with('-') => {
+                        let mut res = String::new_in(arena);
+                        res.push('-');
+                        res.push_str(text);
+                        Expr::Float(res.into_bump_str())
+                    }
+                    _ => Expr::UnaryOp(arena.alloc(a), b.normalize(arena)),
+                }
             }
             Expr::If {
                 if_thens,
@@ -776,7 +783,7 @@ impl<'a> Normalize<'a> for Expr<'a> {
             Expr::PrecedenceConflict(a) => Expr::PrecedenceConflict(a),
             Expr::SpaceBefore(a, _) => a.normalize(arena),
             Expr::SpaceAfter(a, _) => a.normalize(arena),
-            Expr::SingleQuote(a) => Expr::Num(a),
+            Expr::SingleQuote(a) => Expr::SingleQuote(a),
             Expr::EmptyRecordBuilder(a) => {
                 Expr::EmptyRecordBuilder(arena.alloc(a.normalize(arena)))
             }
@@ -789,6 +796,61 @@ impl<'a> Normalize<'a> for Expr<'a> {
             ),
         }
     }
+}
+
+fn fold_defs<'a>(
+    arena: &'a Bump,
+    mut defs: impl Iterator<Item = Result<&'a TypeDef<'a>, &'a ValueDef<'a>>>,
+    final_expr: Expr<'a>,
+) -> Expr<'a> {
+    let mut new_defs = Defs::default();
+
+    while let Some(def) = defs.next() {
+        match def {
+            Ok(td) => {
+                let td = td.normalize(arena);
+                new_defs.push_type_def(td, Region::zero(), &[], &[]);
+            }
+            Err(vd) => {
+                let vd = vd.normalize(arena);
+
+                match vd {
+                    ValueDef::Stmt(&Loc {
+                        value:
+                            Expr::Apply(
+                                &Loc {
+                                    value: Expr::Dbg, ..
+                                },
+                                args,
+                                _,
+                            ),
+                        ..
+                    }) => {
+                        let rest = fold_defs(arena, defs, final_expr);
+                        let new_final = Expr::DbgStmt {
+                            first: args[0],
+                            extra_args: &args[1..],
+                            continuation: arena.alloc(Loc::at_zero(rest)),
+                        };
+                        if new_defs.is_empty() {
+                            return new_final;
+                        }
+                        return Expr::Defs(
+                            arena.alloc(new_defs),
+                            arena.alloc(Loc::at_zero(new_final)),
+                        );
+                    }
+                    _ => {
+                        new_defs.push_value_def(vd, Region::zero(), &[], &[]);
+                    }
+                }
+            }
+        }
+    }
+    if new_defs.is_empty() {
+        return final_expr;
+    }
+    Expr::Defs(arena.alloc(new_defs), arena.alloc(Loc::at_zero(final_expr)))
 }
 
 fn remove_spaces_bad_ident(ident: BadIdent) -> BadIdent {
@@ -804,6 +866,7 @@ fn remove_spaces_bad_ident(ident: BadIdent) -> BadIdent {
             position: Position::zero(),
             declaration_region,
         },
+        BadIdent::TooManyUnderscores(_) => BadIdent::TooManyUnderscores(Position::zero()),
         BadIdent::QualifiedTag(_) => BadIdent::QualifiedTag(Position::zero()),
         BadIdent::WeirdAccessor(_) => BadIdent::WeirdAccessor(Position::zero()),
         BadIdent::WeirdDotAccess(_) => BadIdent::WeirdDotAccess(Position::zero()),
@@ -847,7 +910,7 @@ impl<'a> Normalize<'a> for Pattern<'a> {
                 is_negative,
             },
             Pattern::FloatLiteral(a) => Pattern::FloatLiteral(a),
-            Pattern::StrLiteral(a) => Pattern::StrLiteral(a),
+            Pattern::StrLiteral(a) => Pattern::StrLiteral(a.normalize(arena)),
             Pattern::Underscore(a) => Pattern::Underscore(a),
             Pattern::Malformed(a) => Pattern::Malformed(a),
             Pattern::MalformedIdent(a, b) => Pattern::MalformedIdent(a, remove_spaces_bad_ident(b)),
@@ -1109,6 +1172,12 @@ impl<'a> Normalize<'a> for EString<'a> {
             EString::ExpectedDoubleQuoteGotSingleQuote(_) => {
                 EString::ExpectedDoubleQuoteGotSingleQuote(Position::zero())
             }
+            EString::InvalidUnicodeCodepoint(_region) => {
+                EString::InvalidUnicodeCodepoint(Region::zero())
+            }
+            EString::UnicodeEscapeTooLarge(_region) => {
+                EString::UnicodeEscapeTooLarge(Region::zero())
+            }
         }
     }
 }
@@ -1195,6 +1264,7 @@ impl<'a> Normalize<'a> for EPattern<'a> {
             EPattern::AsIndentStart(_) => EPattern::AsIndentStart(Position::zero()),
             EPattern::AccessorFunction(_) => EPattern::AccessorFunction(Position::zero()),
             EPattern::RecordUpdaterFunction(_) => EPattern::RecordUpdaterFunction(Position::zero()),
+            EPattern::Str(e, _) => EPattern::Str(e.normalize(arena), Position::zero()),
         }
     }
 }

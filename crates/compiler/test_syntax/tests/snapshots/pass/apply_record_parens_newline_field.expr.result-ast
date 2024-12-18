@@ -1,0 +1,40 @@
+@0-16 SpaceAfter(
+    Apply(
+        @0-1 Num(
+            "0",
+        ),
+        [
+            @1-16 Record(
+                [
+                    @2-3 LabelOnly(
+                        @2-3 "l",
+                    ),
+                    @4-6 LabelOnly(
+                        @4-6 "xt",
+                    ),
+                    @7-15 RequiredValue(
+                        @7-8 "l",
+                        [],
+                        @9-15 ParensAround(
+                            SpaceAfter(
+                                Var {
+                                    module_name: "",
+                                    ident: "se",
+                                },
+                                [
+                                    LineComment(
+                                        "",
+                                    ),
+                                ],
+                            ),
+                        ),
+                    ),
+                ],
+            ),
+        ],
+        Space,
+    ),
+    [
+        Newline,
+    ],
+)

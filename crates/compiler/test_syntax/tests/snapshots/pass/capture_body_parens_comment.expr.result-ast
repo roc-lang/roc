@@ -1,0 +1,25 @@
+@0-10 SpaceAfter(
+    Closure(
+        [
+            @1-2 Tag(
+                "L",
+            ),
+        ],
+        @4-10 ParensAround(
+            SpaceAfter(
+                Tag(
+                    "E",
+                ),
+                [
+                    Newline,
+                    LineComment(
+                        "",
+                    ),
+                ],
+            ),
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

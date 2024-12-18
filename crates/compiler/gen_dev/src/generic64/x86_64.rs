@@ -2603,6 +2603,28 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
+    fn neg_freg64_freg64(
+        buf: &mut Vec<'_, u8>,
+        relocs: &mut Vec<'_, Relocation>,
+        dst: X86_64FloatReg,
+        src: X86_64FloatReg,
+    ) {
+        Self::mov_freg64_imm64(buf, relocs, dst, f64::from_bits(0x8000_0000_0000_0000));
+        xorpd_freg64_freg64(buf, dst, src);
+    }
+
+    #[inline(always)]
+    fn neg_freg32_freg32(
+        buf: &mut Vec<'_, u8>,
+        relocs: &mut Vec<'_, Relocation>,
+        dst: X86_64FloatReg,
+        src: X86_64FloatReg,
+    ) {
+        Self::mov_freg32_imm32(buf, relocs, dst, f32::from_bits(0x8000_0000));
+        xorps_freg32_freg32(buf, dst, src);
+    }
+
+    #[inline(always)]
     fn sub_reg64_reg64_imm32(
         buf: &mut Vec<'_, u8>,
         dst: X86_64GeneralReg,
@@ -3349,6 +3371,49 @@ fn sqrtss_freg32_freg32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64F
         ])
     } else {
         buf.extend([0xF3, 0x0F, 0x51, 0xC0 | (dst_mod << 3) | (src_mod)])
+    }
+}
+
+/// `XORPD xmm1, xmm2/m128` -> Bitwise exclusive-OR of xmm2/m128 and xmm1.
+#[inline(always)]
+fn xorpd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+    let dst_high = dst as u8 > 7;
+    let dst_mod = dst as u8 % 8;
+
+    let src_high = src as u8 > 7;
+    let src_mod = src as u8 % 8;
+
+    if dst_high || src_high {
+        buf.extend([
+            0x66,
+            0x40 | ((dst_high as u8) << 2) | (src_high as u8),
+            0x0F,
+            0x57,
+            0xC0 | (dst_mod << 3) | src_mod,
+        ])
+    } else {
+        buf.extend([0x66, 0x0F, 0x57, 0xC0 | (dst_mod << 3) | src_mod]);
+    }
+}
+
+/// `XORPS xmm1,xmm2/m128` -> Bitwise exclusive-OR of xmm2/m128 and xmm1.
+#[inline(always)]
+fn xorps_freg32_freg32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+    let dst_high = dst as u8 > 7;
+    let dst_mod = dst as u8 % 8;
+
+    let src_high = src as u8 > 7;
+    let src_mod = src as u8 % 8;
+
+    if dst_high || src_high {
+        buf.extend([
+            0x40 | ((dst_high as u8) << 2) | (src_high as u8),
+            0x0F,
+            0x57,
+            0xC0 | (dst_mod << 3) | src_mod,
+        ]);
+    } else {
+        buf.extend([0x0F, 0x57, 0xC0 | (dst_mod << 3) | src_mod]);
     }
 }
 

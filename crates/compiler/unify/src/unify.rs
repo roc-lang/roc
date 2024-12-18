@@ -448,9 +448,9 @@ fn debug_print_unified_types<M: MetaCollector>(
         //        let (type1, _problems1) = subs.var_to_error_type(ctx.first);
         //        let (type2, _problems2) = subs.var_to_error_type(ctx.second);
         //        println!("\n --------------- \n");
-        //        dbg!(ctx.first, type1);
+        //        eprintln!("{:?}, {:?}", ctx.first, type1);
         //        println!("\n --- \n");
-        //        dbg!(ctx.second, type2);
+        //        eprintln!({:?}, {:?}", ctx.second, type2);
         //        println!("\n --------------- \n");
         let content_1 = env.get(ctx.first).content;
         let content_2 = env.get(ctx.second).content;
@@ -3336,6 +3336,17 @@ fn unify_flat_type<M: MetaCollector>(
         }
         (EffectfulFunc, Func(args, closure, ret, fx)) => {
             let mut outcome = unify_pool(env, pool, Variable::EFFECTFUL, *fx, ctx.mode);
+
+            outcome.union(merge(
+                env,
+                ctx,
+                Structure(Func(*args, *closure, *ret, Variable::EFFECTFUL)),
+            ));
+
+            outcome
+        }
+        (Func(args, closure, ret, fx), EffectfulFunc) => {
+            let mut outcome = unify_pool(env, pool, *fx, Variable::EFFECTFUL, ctx.mode);
 
             outcome.union(merge(
                 env,

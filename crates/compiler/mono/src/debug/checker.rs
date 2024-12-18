@@ -537,7 +537,6 @@ impl<'a, 'r> Ctx<'a, 'r> {
 
                 None
             }
-            Expr::RuntimeErrorFunction(_) => None,
         }
     }
 

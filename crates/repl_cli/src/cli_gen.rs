@@ -3,7 +3,7 @@ use inkwell::context::Context;
 use libloading::Library;
 use roc_build::link::llvm_module_to_dylib;
 use roc_collections::all::MutSet;
-use roc_error_macros::internal_error;
+
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
@@ -199,8 +199,6 @@ fn mono_module_to_dylib_llvm<'a>(
     ));
 
     let module = arena.alloc(module);
-    let (module_pass, function_pass) =
-        roc_gen_llvm::llvm::build::construct_optimization_passes(module, opt_level);
 
     let (dibuilder, compile_unit) = roc_gen_llvm::llvm::build::Env::new_debug_info(module);
 
@@ -243,7 +241,7 @@ fn mono_module_to_dylib_llvm<'a>(
         }
     };
 
-    let (main_fn_name, main_fn) = roc_gen_llvm::llvm::build::build_procedures_return_main(
+    let (main_fn_name, _main_fn) = roc_gen_llvm::llvm::build::build_procedures_return_main(
         &env,
         &layout_interner,
         opt_level,
@@ -252,26 +250,15 @@ fn mono_module_to_dylib_llvm<'a>(
         entry_point,
     );
 
-    env.dibuilder.finalize();
-
-    // Uncomment this to see the module's un-optimized LLVM instruction output:
-    // env.module.print_to_stderr();
-
-    if main_fn.verify(true) {
-        function_pass.run_on(&main_fn);
-    } else {
-        internal_error!("Main function {main_fn_name} failed LLVM verification in build. Uncomment things nearby to see more details.", );
-    }
-
-    module_pass.run_on(env.module);
-
-    // Uncomment this to see the module's optimized LLVM instruction output:
-    // env.module.print_to_stderr();
-
-    // Verify the module
-    if let Err(errors) = env.module.verify() {
-        internal_error!("Errors defining module:\n{}", errors.to_string());
-    }
+    let emit_debug_info = true;
+    let ll_file_path = std::env::temp_dir().join("repl.ll");
+    roc_build::llvm_passes::optimize_llvm_ir(
+        &env,
+        target,
+        opt_level,
+        emit_debug_info,
+        &ll_file_path,
+    );
 
     llvm_module_to_dylib(env.module, target, opt_level)
         .map(|lib| (lib, main_fn_name, subs, layout_interner))

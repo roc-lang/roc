@@ -113,8 +113,6 @@ pub struct SpecializationId(NonZeroU32);
 
 static_assertions::assert_eq_size!(SpecializationId, Option<SpecializationId>);
 
-pub enum SpecializationLambdaSetError {}
-
 /// A key into a particular implementation of an ability member for an opaque type.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct ImplKey {

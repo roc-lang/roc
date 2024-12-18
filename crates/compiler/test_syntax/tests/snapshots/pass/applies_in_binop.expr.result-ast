@@ -1,0 +1,56 @@
+@0-72 SpaceAfter(
+    BinOps(
+        [
+            (
+                @0-36 SpaceAfter(
+                    Apply(
+                        @0-13 Var {
+                            module_name: "Str",
+                            ident: "getUnsafe",
+                        },
+                        [
+                            @14-22 Var {
+                                module_name: "",
+                                ident: "haystack",
+                            },
+                            @23-36 Var {
+                                module_name: "",
+                                ident: "haystackIndex",
+                            },
+                        ],
+                        Space,
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+                @37-39 Equals,
+            ),
+        ],
+        @40-72 Apply(
+            @40-53 SpaceBefore(
+                Var {
+                    module_name: "Str",
+                    ident: "getUnsafe",
+                },
+                [
+                    Newline,
+                ],
+            ),
+            [
+                @54-60 Var {
+                    module_name: "",
+                    ident: "needle",
+                },
+                @61-72 Var {
+                    module_name: "",
+                    ident: "needleIndex",
+                },
+            ],
+            Space,
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

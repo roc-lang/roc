@@ -1,7 +1,7 @@
 use inkwell::{
     attributes::{Attribute, AttributeLoc},
     module::Linkage,
-    types::{BasicType, IntType},
+    types::IntType,
     values::{
         BasicValue, BasicValueEnum, FloatValue, FunctionValue, InstructionOpcode, IntValue,
         StructValue,
@@ -237,12 +237,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                                 intrinsic,
                             );
 
-                            let roc_return_type = basic_type_from_layout(
-                                env,
-                                layout_interner,
-                                layout_interner.get_repr(layout),
-                            )
-                            .ptr_type(AddressSpace::default());
+                            let roc_return_type = env.context.ptr_type(AddressSpace::default());
 
                             let roc_return_alloca = env.builder.new_build_pointer_cast(
                                 zig_return_alloca,
@@ -331,12 +326,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                         intrinsic,
                     );
 
-                    let roc_return_type = basic_type_from_layout(
-                        env,
-                        layout_interner,
-                        layout_interner.get_repr(layout),
-                    )
-                    .ptr_type(AddressSpace::default());
+                    let roc_return_type = env.context.ptr_type(AddressSpace::default());
 
                     let roc_return_alloca = env.builder.new_build_pointer_cast(
                         zig_return_alloca,
@@ -1147,15 +1137,37 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             )
         }
         NumIntCast => {
-            arguments!(arg);
+            arguments_with_layouts!((arg, arg_layout));
 
             let to = basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout))
                 .into_int_type();
             let to_signed = intwidth_from_layout(layout).is_signed();
+            let from_signed = intwidth_from_layout(arg_layout).is_signed();
+            let extend = intwidth_from_layout(layout).stack_size()
+                > intwidth_from_layout(arg_layout).stack_size();
+            //Examples given with sizes of 32, 16, and 8
+            let result = match (from_signed, to_signed, extend) {
+                //I16 -> I32
+                (true, true, true) => {
+                    env.builder
+                        .build_int_s_extend(arg.into_int_value(), to, "inc_cast")
+                }
+                //U16 -> X32
+                (false, _, true) => {
+                    env.builder
+                        .build_int_z_extend(arg.into_int_value(), to, "inc_cast")
+                },
+                //I16 -> U32
+                (true,false,true)
+                //Any case where it is not an extension, also perhaps warn here?
+                | (_, _, false) => {
+                    Ok(env.builder
+                    .new_build_int_cast_sign_flag(arg.into_int_value(), to, to_signed, "inc_cast"))
+                }
+            };
 
-            env.builder
-                .new_build_int_cast_sign_flag(arg.into_int_value(), to, to_signed, "inc_cast")
-                .into()
+            let Ok(value) = result else { todo!() };
+            value.into()
         }
         NumToFloatCast => {
             arguments_with_layouts!((arg, arg_layout));
@@ -1363,7 +1375,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
 
             let ptr = env.builder.new_build_pointer_cast(
                 data_ptr.into_pointer_value(),
-                env.context.i8_type().ptr_type(AddressSpace::default()),
+                env.context.ptr_type(AddressSpace::default()),
                 "cast_to_i8_ptr",
             );
 
@@ -1758,7 +1770,7 @@ fn build_float_binop<'ctx>(
     };
 
     match op {
-        NumAdd => bd.new_build_float_add(lhs, rhs, "add_float").into(),
+        NumAdd | NumAddSaturated => bd.new_build_float_add(lhs, rhs, "add_float").into(),
         NumAddChecked => {
             let context = env.context;
 
@@ -1785,7 +1797,7 @@ fn build_float_binop<'ctx>(
             struct_value.into()
         }
         NumAddWrap => unreachable!("wrapping addition is not defined on floats"),
-        NumSub => bd.new_build_float_sub(lhs, rhs, "sub_float").into(),
+        NumSub | NumSubSaturated => bd.new_build_float_sub(lhs, rhs, "sub_float").into(),
         NumSubChecked => {
             let context = env.context;
 
@@ -1812,8 +1824,7 @@ fn build_float_binop<'ctx>(
             struct_value.into()
         }
         NumSubWrap => unreachable!("wrapping subtraction is not defined on floats"),
-        NumMul => bd.new_build_float_mul(lhs, rhs, "mul_float").into(),
-        NumMulSaturated => bd.new_build_float_mul(lhs, rhs, "mul_float").into(),
+        NumMul | NumMulSaturated => bd.new_build_float_mul(lhs, rhs, "mul_float").into(),
         NumMulChecked => {
             let context = env.context;
 
@@ -1855,7 +1866,7 @@ fn build_float_binop<'ctx>(
             &bitcode::NUM_POW[float_width],
         ),
         _ => {
-            unreachable!("Unrecognized int binary operation: {:?}", op);
+            unreachable!("Unrecognized float binary operation: {:?}", op);
         }
     }
 }
@@ -1979,7 +1990,7 @@ fn dec_alloca<'ctx>(env: &Env<'_, 'ctx, '_>, value: IntValue<'ctx>) -> BasicValu
 
             let ptr = env.builder.new_build_pointer_cast(
                 alloca,
-                value.get_type().ptr_type(AddressSpace::default()),
+                env.context.ptr_type(AddressSpace::default()),
                 "cast_to_i128_ptr",
             );
 
@@ -2000,7 +2011,7 @@ fn dec_alloca<'ctx>(env: &Env<'_, 'ctx, '_>, value: IntValue<'ctx>) -> BasicValu
             instruction.set_alignment(16).unwrap();
             let ptr = env.builder.new_build_pointer_cast(
                 alloca,
-                value.get_type().ptr_type(AddressSpace::default()),
+                env.context.ptr_type(AddressSpace::default()),
                 "cast_to_i128_ptr",
             );
             env.builder.new_build_store(ptr, value);
@@ -2215,6 +2226,7 @@ fn build_dec_unary_op<'a, 'ctx>(
 
     match op {
         NumAbs => dec_unary_op(env, bitcode::DEC_ABS, arg),
+        NumNeg => dec_unary_op(env, bitcode::DEC_NEGATE, arg),
         NumAcos => dec_unary_op(env, bitcode::DEC_ACOS, arg),
         NumAsin => dec_unary_op(env, bitcode::DEC_ASIN, arg),
         NumAtan => dec_unary_op(env, bitcode::DEC_ATAN, arg),
@@ -2225,6 +2237,11 @@ fn build_dec_unary_op<'a, 'ctx>(
         NumRound => dec_unary_op(env, &bitcode::DEC_ROUND[int_width()], arg),
         NumFloor => dec_unary_op(env, &bitcode::DEC_FLOOR[int_width()], arg),
         NumCeiling => dec_unary_op(env, &bitcode::DEC_CEILING[int_width()], arg),
+
+        // return constant value bools
+        NumIsFinite => env.context.bool_type().const_int(1, false).into(),
+        NumIsInfinite => env.context.bool_type().const_int(0, false).into(),
+        NumIsNan => env.context.bool_type().const_int(0, false).into(),
 
         _ => {
             unreachable!("Unrecognized dec unary operation: {:?}", op);
@@ -2280,6 +2297,9 @@ fn build_dec_binop<'a, 'ctx>(
             rhs,
             "Decimal multiplication overflowed",
         ),
+        NumAddSaturated => dec_binary_op(env, bitcode::DEC_ADD_SATURATED, lhs, rhs),
+        NumSubSaturated => dec_binary_op(env, bitcode::DEC_SUB_SATURATED, lhs, rhs),
+        NumMulSaturated => dec_binary_op(env, bitcode::DEC_MUL_SATURATED, lhs, rhs),
         NumDivFrac => dec_binop_with_unchecked(env, bitcode::DEC_DIV, lhs, rhs),
 
         NumLt => call_bitcode_fn(env, &[lhs, rhs], &bitcode::NUM_LESS_THAN[IntWidth::I128]),
@@ -2480,12 +2500,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                                     intrinsic,
                                 );
 
-                                let roc_return_type = basic_type_from_layout(
-                                    env,
-                                    layout_interner,
-                                    layout_interner.get_repr(return_layout),
-                                )
-                                .ptr_type(AddressSpace::default());
+                                let roc_return_type = env.context.ptr_type(AddressSpace::default());
 
                                 let roc_return_alloca = env.builder.new_build_pointer_cast(
                                     zig_return_alloca,

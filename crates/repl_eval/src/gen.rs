@@ -24,7 +24,7 @@ pub fn format_answer<'a>(arena: &'a Bump, answer: Expr<'_>) -> &'a str {
     match answer {
         Expr::Closure(_, _) => "<function>",
         _ => {
-            let mut expr = roc_fmt::Buf::new_in(arena);
+            let mut expr = roc_fmt::Buf::new_in(arena, roc_fmt::MigrationFlags::new(false));
 
             answer.format_with_options(&mut expr, Parens::NotNeeded, Newlines::Yes, 0);
 
@@ -80,7 +80,7 @@ pub fn compile_to_mono<'a, 'i, I: Iterator<Item = &'i str>>(
                 (m.can_problems, m.type_problems)
             );
         }
-        Err(LoadMonomorphizedError::LoadingProblem(LoadingProblem::FormattedReport(report))) => {
+        Err(LoadMonomorphizedError::LoadingProblem(LoadingProblem::FormattedReport(report, _))) => {
             return (
                 None,
                 Problems {

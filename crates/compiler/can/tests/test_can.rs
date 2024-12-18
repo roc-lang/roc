@@ -803,6 +803,106 @@ mod test_can {
     }
 
     #[test]
+    fn question_suffix_simple() {
+        let src = indoc!(
+            r#"
+                (Str.toU64 "123")?
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems, Vec::new());
+
+        // Assert that we desugar to:
+        //
+        // Try(Str.toU64 "123")
+
+        let cond_expr = assert_try_expr(&out.loc_expr.value);
+        let cond_args = assert_func_call(cond_expr, "toU64", CalledVia::Space, &out.interns);
+
+        assert_eq!(cond_args.len(), 1);
+        assert_str_value(&cond_args[0].1.value, "123");
+    }
+
+    #[test]
+    fn question_suffix_after_function() {
+        let src = indoc!(
+            r#"
+                Str.toU64? "123"
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems, Vec::new());
+
+        // Assert that we desugar to:
+        //
+        // Try(Str.toU64 "123")
+
+        let cond_expr = assert_try_expr(&out.loc_expr.value);
+        let cond_args = assert_func_call(cond_expr, "toU64", CalledVia::Try, &out.interns);
+
+        assert_eq!(cond_args.len(), 1);
+        assert_str_value(&cond_args[0].1.value, "123");
+    }
+
+    #[test]
+    fn question_suffix_pipe() {
+        let src = indoc!(
+            r#"
+                "123" |> Str.toU64?
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems, Vec::new());
+
+        // Assert that we desugar to:
+        //
+        // Try(Str.toU64 "123")
+
+        let cond_expr = assert_try_expr(&out.loc_expr.value);
+        let cond_args = assert_func_call(cond_expr, "toU64", CalledVia::Try, &out.interns);
+
+        assert_eq!(cond_args.len(), 1);
+        assert_str_value(&cond_args[0].1.value, "123");
+    }
+
+    #[test]
+    fn question_suffix_pipe_nested() {
+        let src = indoc!(
+            r#"
+                "123" |> Str.toU64? (Ok 123)?
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems, Vec::new());
+
+        // Assert that we desugar to:
+        //
+        // Try(Str.toU64 "123" Try(Ok 123))
+
+        let cond_expr = assert_try_expr(&out.loc_expr.value);
+        let cond_args = assert_func_call(cond_expr, "toU64", CalledVia::Try, &out.interns);
+
+        assert_eq!(cond_args.len(), 2);
+
+        assert_str_value(&cond_args[0].1.value, "123");
+
+        let ok_tag = assert_try_expr(&cond_args[1].1.value);
+        let tag_args = assert_tag_application(ok_tag, "Ok");
+
+        assert_eq!(tag_args.len(), 1);
+
+        assert_num_value(&tag_args[0].1.value, 123);
+    }
+
+    #[test]
     fn try_desugar_plain_prefix() {
         let src = indoc!(
             r#"
@@ -816,64 +916,13 @@ mod test_can {
 
         // Assert that we desugar to:
         //
-        // when Str.toU64 "123" is
-        //     Ok `0` -> `0`
-        //     Err `1` -> return Err `1`
+        // Try(Str.toU64 "123")
 
-        let (cond_expr, branches) = assert_when(&out.loc_expr.value);
+        let cond_expr = assert_try_expr(&out.loc_expr.value);
         let cond_args = assert_func_call(cond_expr, "toU64", CalledVia::Try, &out.interns);
 
         assert_eq!(cond_args.len(), 1);
         assert_str_value(&cond_args[0].1.value, "123");
-
-        assert_eq!(branches.len(), 2);
-
-        assert_eq!(branches[0].patterns.len(), 1);
-        assert!(!branches[0].patterns[0].degenerate);
-        match &branches[0].patterns[0].pattern.value {
-            Pattern::AppliedTag {
-                tag_name,
-                arguments,
-                ..
-            } => {
-                assert_eq!(tag_name.0.to_string(), "Ok");
-                assert_eq!(arguments.len(), 1);
-                assert_pattern_name(&arguments[0].1.value, "0", &out.interns);
-            }
-            other => panic!("First argument was not an applied tag: {:?}", other),
-        }
-
-        assert!(&branches[0].guard.is_none());
-        assert_var_usage(&branches[0].value.value, "0", &out.interns);
-
-        assert_eq!(branches[1].patterns.len(), 1);
-        assert!(!branches[1].patterns[0].degenerate);
-        match &branches[1].patterns[0].pattern.value {
-            Pattern::AppliedTag {
-                tag_name,
-                arguments,
-                ..
-            } => {
-                assert_eq!(tag_name.0.to_string(), "Err");
-                assert_eq!(arguments.len(), 1);
-                assert_pattern_name(&arguments[0].1.value, "1", &out.interns);
-            }
-            other => panic!("First argument was not an applied tag: {:?}", other),
-        }
-
-        match &branches[1].value.value {
-            Expr::Return { return_value, .. } => match &return_value.value {
-                Expr::Tag {
-                    name, arguments, ..
-                } => {
-                    assert_eq!(name.0.to_string(), "Err");
-                    assert_eq!(arguments.len(), 1);
-                    assert_var_usage(&arguments[0].1.value, "1", &out.interns);
-                }
-                other_inner => panic!("Expr was not a Tag: {:?}", other_inner),
-            },
-            other_outer => panic!("Expr was not a Return: {:?}", other_outer),
-        }
     }
 
     #[test]
@@ -890,64 +939,13 @@ mod test_can {
 
         // Assert that we desugar to:
         //
-        // when Str.toU64 "123" is
-        //     Ok `0` -> `0`
-        //     Err `1` -> return Err `1`
+        // Try(Str.toU64 "123")
 
-        let (cond_expr, branches) = assert_when(&out.loc_expr.value);
+        let cond_expr = assert_try_expr(&out.loc_expr.value);
         let cond_args = assert_func_call(cond_expr, "toU64", CalledVia::Try, &out.interns);
 
         assert_eq!(cond_args.len(), 1);
         assert_str_value(&cond_args[0].1.value, "123");
-
-        assert_eq!(branches.len(), 2);
-
-        assert_eq!(branches[0].patterns.len(), 1);
-        assert!(!branches[0].patterns[0].degenerate);
-        match &branches[0].patterns[0].pattern.value {
-            Pattern::AppliedTag {
-                tag_name,
-                arguments,
-                ..
-            } => {
-                assert_eq!(tag_name.0.to_string(), "Ok");
-                assert_eq!(arguments.len(), 1);
-                assert_pattern_name(&arguments[0].1.value, "0", &out.interns);
-            }
-            other => panic!("First argument was not an applied tag: {:?}", other),
-        }
-
-        assert!(&branches[0].guard.is_none());
-        assert_var_usage(&branches[0].value.value, "0", &out.interns);
-
-        assert_eq!(branches[1].patterns.len(), 1);
-        assert!(!branches[1].patterns[0].degenerate);
-        match &branches[1].patterns[0].pattern.value {
-            Pattern::AppliedTag {
-                tag_name,
-                arguments,
-                ..
-            } => {
-                assert_eq!(tag_name.0.to_string(), "Err");
-                assert_eq!(arguments.len(), 1);
-                assert_pattern_name(&arguments[0].1.value, "1", &out.interns);
-            }
-            other => panic!("First argument was not an applied tag: {:?}", other),
-        }
-
-        match &branches[1].value.value {
-            Expr::Return { return_value, .. } => match &return_value.value {
-                Expr::Tag {
-                    name, arguments, ..
-                } => {
-                    assert_eq!(name.0.to_string(), "Err");
-                    assert_eq!(arguments.len(), 1);
-                    assert_var_usage(&arguments[0].1.value, "1", &out.interns);
-                }
-                other_inner => panic!("Expr was not a Tag: {:?}", other_inner),
-            },
-            other_outer => panic!("Expr was not a Return: {:?}", other_outer),
-        }
     }
 
     #[test]
@@ -964,64 +962,13 @@ mod test_can {
 
         // Assert that we desugar to:
         //
-        // when Str.toU64 "123" is
-        //     Ok `0` -> `0`
-        //     Err `1` -> return Err `1`
+        // Try(Str.toU64 "123")
 
-        let (cond_expr, branches) = assert_when(&out.loc_expr.value);
+        let cond_expr = assert_try_expr(&out.loc_expr.value);
         let cond_args = assert_func_call(cond_expr, "toU64", CalledVia::Space, &out.interns);
 
         assert_eq!(cond_args.len(), 1);
         assert_str_value(&cond_args[0].1.value, "123");
-
-        assert_eq!(branches.len(), 2);
-
-        assert_eq!(branches[0].patterns.len(), 1);
-        assert!(!branches[0].patterns[0].degenerate);
-        match &branches[0].patterns[0].pattern.value {
-            Pattern::AppliedTag {
-                tag_name,
-                arguments,
-                ..
-            } => {
-                assert_eq!(tag_name.0.to_string(), "Ok");
-                assert_eq!(arguments.len(), 1);
-                assert_pattern_name(&arguments[0].1.value, "0", &out.interns);
-            }
-            other => panic!("First argument was not an applied tag: {:?}", other),
-        }
-
-        assert!(&branches[0].guard.is_none());
-        assert_var_usage(&branches[0].value.value, "0", &out.interns);
-
-        assert_eq!(branches[1].patterns.len(), 1);
-        assert!(!branches[1].patterns[0].degenerate);
-        match &branches[1].patterns[0].pattern.value {
-            Pattern::AppliedTag {
-                tag_name,
-                arguments,
-                ..
-            } => {
-                assert_eq!(tag_name.0.to_string(), "Err");
-                assert_eq!(arguments.len(), 1);
-                assert_pattern_name(&arguments[0].1.value, "1", &out.interns);
-            }
-            other => panic!("First argument was not an applied tag: {:?}", other),
-        }
-
-        match &branches[1].value.value {
-            Expr::Return { return_value, .. } => match &return_value.value {
-                Expr::Tag {
-                    name, arguments, ..
-                } => {
-                    assert_eq!(name.0.to_string(), "Err");
-                    assert_eq!(arguments.len(), 1);
-                    assert_var_usage(&arguments[0].1.value, "1", &out.interns);
-                }
-                other_inner => panic!("Expr was not a Tag: {:?}", other_inner),
-            },
-            other_outer => panic!("Expr was not a Return: {:?}", other_outer),
-        }
     }
 
     #[test]
@@ -1126,6 +1073,16 @@ mod test_can {
         }
     }
 
+    fn assert_tag_application(expr: &Expr, tag_name: &str) -> Vec<(Variable, Loc<Expr>)> {
+        match expr {
+            Expr::LetNonRec(_, loc_expr) => assert_tag_application(&loc_expr.value, tag_name),
+            Expr::Tag {
+                name, arguments, ..
+            } if *name == tag_name.into() => arguments.clone(),
+            _ => panic!("Expr was not a Tag named {tag_name:?}: {expr:?}",),
+        }
+    }
+
     fn assert_pattern_name(pattern: &Pattern, name: &str, interns: &roc_module::symbol::Interns) {
         match pattern {
             Pattern::Identifier(sym) => assert_eq!(sym.as_str(interns), name),
@@ -1139,6 +1096,13 @@ mod test_can {
                 loc_cond, branches, ..
             } => (&loc_cond.value, branches),
             _ => panic!("Expr was not a When: {:?}", expr),
+        }
+    }
+
+    fn assert_try_expr(expr: &Expr) -> &Expr {
+        match expr {
+            Expr::Try { result_expr, .. } => &result_expr.value,
+            _ => panic!("Expr was not a Try: {:?}", expr),
         }
     }
 

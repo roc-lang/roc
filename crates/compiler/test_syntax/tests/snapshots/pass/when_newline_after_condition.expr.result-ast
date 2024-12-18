@@ -1,0 +1,27 @@
+@0-17 When(
+    @5-6 SpaceAfter(
+        Var {
+            module_name: "",
+            ident: "n",
+        },
+        [
+            Newline,
+            LineComment(
+                "s",
+            ),
+        ],
+    ),
+    [
+        WhenBranch {
+            patterns: [
+                @13-14 Tag(
+                    "O",
+                ),
+            ],
+            value: @16-17 Num(
+                "1",
+            ),
+            guard: None,
+        },
+    ],
+)

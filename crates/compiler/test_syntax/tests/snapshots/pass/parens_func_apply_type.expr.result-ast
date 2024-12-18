@@ -1,0 +1,55 @@
+@0-14 Defs(
+    Defs {
+        tags: [
+            EitherIndex(2147483648),
+        ],
+        regions: [
+            @0-12,
+        ],
+        space_before: [
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        ],
+        space_after: [
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        ],
+        spaces: [],
+        type_defs: [],
+        value_defs: [
+            Annotation(
+                @0-2 Identifier {
+                    ident: "si",
+                },
+                @3-12 Tuple {
+                    elems: [
+                        @4-5 BoundVariable(
+                            "e",
+                        ),
+                    ],
+                    ext: Some(
+                        @7-11 Function(
+                            [
+                                @7-8 BoundVariable(
+                                    "e",
+                                ),
+                            ],
+                            Pure,
+                            @10-11 Apply(
+                                "",
+                                "A",
+                                [],
+                            ),
+                        ),
+                    ),
+                },
+            ),
+        ],
+    },
+    @13-14 SpaceBefore(
+        Tag(
+            "A",
+        ),
+        [
+            Newline,
+        ],
+    ),
+)

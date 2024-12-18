@@ -1,0 +1,23 @@
+@0-8 ParensAround(
+    Apply(
+        @1-6 UnaryOp(
+            @3-4 ParensAround(
+                SpaceAfter(
+                    Num(
+                        "4",
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+            ),
+            @1-2 Not,
+        ),
+        [
+            @6-7 Num(
+                "4",
+            ),
+        ],
+        Space,
+    ),
+)

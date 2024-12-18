@@ -1,0 +1,41 @@
+@0-13 Defs(
+    Defs {
+        tags: [
+            EitherIndex(2147483648),
+        ],
+        regions: [
+            @0-10,
+        ],
+        space_before: [
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        ],
+        space_after: [
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        ],
+        spaces: [],
+        type_defs: [],
+        value_defs: [
+            Stmt(
+                @0-10 ParensAround(
+                    Return(
+                        @1-9 AccessorFunction(
+                            RecordField(
+                                "o",
+                            ),
+                        ),
+                        None,
+                    ),
+                ),
+            ),
+        ],
+    },
+    @11-13 SpaceBefore(
+        Var {
+            module_name: "",
+            ident: "ss",
+        },
+        [
+            Newline,
+        ],
+    ),
+)

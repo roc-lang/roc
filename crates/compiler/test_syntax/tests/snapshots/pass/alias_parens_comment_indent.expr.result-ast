@@ -1,0 +1,59 @@
+@0-11 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(0),
+            ],
+            regions: [
+                @0-9,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [
+                Alias {
+                    header: TypeHeader {
+                        name: @0-1 "O",
+                        vars: [],
+                    },
+                    ann: @2-9 Apply(
+                        "",
+                        "O",
+                        [
+                            @4-5 SpaceAfter(
+                                BoundVariable(
+                                    "z",
+                                ),
+                                [
+                                    Newline,
+                                    LineComment(
+                                        "",
+                                    ),
+                                ],
+                            ),
+                        ],
+                    ),
+                },
+            ],
+            value_defs: [],
+        },
+        @10-11 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "b",
+            },
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        LineComment(
+            "",
+        ),
+    ],
+)

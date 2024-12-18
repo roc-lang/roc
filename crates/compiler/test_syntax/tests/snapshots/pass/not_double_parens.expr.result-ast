@@ -1,0 +1,25 @@
+@0-9 UnaryOp(
+    @3-7 SpaceBefore(
+        ParensAround(
+            SpaceAfter(
+                ParensAround(
+                    SpaceBefore(
+                        Tag(
+                            "E",
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ),
+                [
+                    Newline,
+                ],
+            ),
+        ),
+        [
+            Newline,
+        ],
+    ),
+    @0-1 Not,
+)

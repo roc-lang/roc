@@ -358,7 +358,16 @@ where
 
     match opt_level {
         OptLevel::Development | OptLevel::Normal => morphic_lib::solve_trivial(program),
-        OptLevel::Optimize | OptLevel::Size => morphic_lib::solve(program),
+        // TODO(#7367): Change this back to `morphic_lib::solve`.
+        // For now, using solve_trivial to avoid bug with loops.
+        // Note: when disabling this, there was not much of a change in performance.
+        // Notably, NQueens was about 5% slower. False interpreter was 0-5% faster (depending on input).
+        // cFold and derive saw minor gains ~1.5%. rBTreeCk saw a big gain of ~4%.
+        // This feels wrong, morphic should not really be able to slow down code.
+        // Likely, noise or the bug and wrong inplace mutation lead to these perf changes.
+        // When re-enabling this, we should analysis the perf and inplace mutations of a few apps.
+        // It might be the case that our current benchmarks just aren't affected by morphic much.
+        OptLevel::Optimize | OptLevel::Size => morphic_lib::solve_trivial(program),
     }
 }
 
@@ -1026,10 +1035,10 @@ fn lowlevel_spec<'a>(
             let _unit1 = builder.add_touch(block, cell)?;
             let _unit2 = builder.add_update(block, update_mode_var, cell)?;
 
-            builder.add_bag_insert(block, bag, to_insert)?;
+            let new_bag = builder.add_bag_insert(block, bag, to_insert)?;
 
-            let old_value = builder.add_bag_get(block, bag)?;
-            let new_list = with_new_heap_cell(builder, block, bag)?;
+            let old_value = builder.add_bag_get(block, new_bag)?;
+            let new_list = with_new_heap_cell(builder, block, new_bag)?;
 
             // depending on the types, the list or value will come first in the struct
             let fields = match interner.get_repr(layout) {
@@ -1201,12 +1210,6 @@ fn recursive_variant_types<'a>(
     }
 
     Ok(result)
-}
-
-#[allow(dead_code)]
-fn worst_case_type(context: &mut impl TypeContext) -> Result<TypeId> {
-    let cell = context.add_heap_cell_type();
-    context.add_bag_type(cell)
 }
 
 fn expr_spec<'a>(
@@ -1452,11 +1455,6 @@ fn expr_spec<'a>(
             let loaded_type = layout_spec(env, builder, interner, interner.get_repr(layout))?;
 
             erasure_load(builder, block, value, *field, loaded_type)
-        }
-        RuntimeErrorFunction(_) => {
-            let type_id = layout_spec(env, builder, interner, interner.get_repr(layout))?;
-
-            builder.add_terminate(block, type_id)
         }
         GetTagId { .. } => {
             // TODO touch heap cell in recursive cases

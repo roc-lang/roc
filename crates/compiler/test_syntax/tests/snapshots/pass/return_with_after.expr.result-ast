@@ -1,0 +1,45 @@
+@0-13 Return(
+    @0-8 Num(
+        "-1",
+    ),
+    Some(
+        @10-13 Defs(
+            Defs {
+                tags: [
+                    EitherIndex(2147483648),
+                ],
+                regions: [
+                    @10-11,
+                ],
+                space_before: [
+                    Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
+                ],
+                space_after: [
+                    Slice<roc_parse::ast::CommentOrNewline> { start: 1, length: 0 },
+                ],
+                spaces: [
+                    LineComment(
+                        "",
+                    ),
+                ],
+                type_defs: [],
+                value_defs: [
+                    Stmt(
+                        @10-11 Tag(
+                            "X",
+                        ),
+                    ),
+                ],
+            },
+            @12-13 SpaceBefore(
+                Var {
+                    module_name: "",
+                    ident: "s",
+                },
+                [
+                    Newline,
+                ],
+            ),
+        ),
+    ),
+)

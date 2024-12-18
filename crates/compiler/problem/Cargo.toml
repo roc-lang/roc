@@ -8,8 +8,8 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-roc_collections = { path = "../collections" }
-roc_module = { path = "../module" }
-roc_parse = { path = "../parse" }
-roc_region = { path = "../region" }
-roc_types = { path = "../types" }
+roc_collections.workspace = true
+roc_module.workspace = true
+roc_parse.workspace = true
+roc_region.workspace = true
+roc_types.workspace = true

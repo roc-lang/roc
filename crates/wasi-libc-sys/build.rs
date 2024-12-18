@@ -10,7 +10,7 @@ fn main() {
 
     // out_dir == "<project_root>/target/[<platform>/]<profile>/build/wasi_libc_sys_<hex>/"
     let out_dir = env::var("OUT_DIR").unwrap();
-    let zig_cache_dir = PathBuf::from(&out_dir).join("zig-cache");
+    let zig_cache_dir = PathBuf::from(&out_dir).join(".zig-cache");
 
     // out_file == "<project_root>/target/[<platform>/]<profile>/lib/wasi-libc.a"
     let mut out_file = PathBuf::from(&out_dir);
