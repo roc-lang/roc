@@ -44,7 +44,9 @@ const MISLEADING_CHARACTERS_IN_URL: [char; 5] = [
     '\u{FF0F}', // U+2215 == ／ Fullwidth Solidus
     '\u{29F8}', // U+29F8 == ⧸ Big Solidus
 ];
-const ALLOWED_URL_CHARACTERS: [char; 22] = [
+
+// Unsafe URL characters that should be encoded can be found here: https://datatracker.ietf.org/doc/html/rfc1738
+const ALLOWED_URL_CHARACTERS: [char; 21] = [
     '-',
     '.',
     '_',
@@ -59,7 +61,6 @@ const ALLOWED_URL_CHARACTERS: [char; 22] = [
     '!',
     '$',
     '&',
-    '\'',
     '(',
     ')',
     '*',
@@ -97,13 +98,19 @@ impl<'a> PackageMetadata<'a> {
             }
         };
 
-        // Next, check if there are misleading characters in the URL
-        for (i, ch) in url.chars().enumerate() {
+        if let Some((index, ch)) = url
+            .chars()
+            .enumerate()
+            .find(|(_, ch)| !ch.is_alphanumeric() && !ALLOWED_URL_CHARACTERS.contains(ch)) 
+        {
+            // Check if there is an intentionally misleading url character
+            // Otherwise check if there is a possibly insecure character in the url
             if MISLEADING_CHARACTERS_IN_URL.contains(&ch) {
                 return Err(UrlProblem::MisleadingCharacter);
-            } else if !ch.is_alphanumeric() && !ALLOWED_URL_CHARACTERS.contains(&ch) {
-                return Err(UrlProblem::InsecureCharacter((ch.to_string(), i)));
+            } else {
+                return Err(UrlProblem::InsecureCharacter((ch.to_string(), index)));
             }
+            
         }
 
         // Next, get the (optional) URL fragment, which must be a .roc filename
@@ -182,14 +189,18 @@ fn url_problem_misleading_characters() {
 
 #[test]
 fn url_problem_insecure_characters() {
-    let expected = Err(UrlProblem::InsecureCharacter(("<".to_string(), 24)));
+    let expected = [
+        ("https://github.com/roc-l<ang/", Err(UrlProblem::InsecureCharacter(("<".to_string(), 24)))),   
+        ("https://github.com/roc-l>ang/", Err(UrlProblem::InsecureCharacter((">".to_string(), 24)))),
+        ("https://github.com/roc-l~ang/", Err(UrlProblem::InsecureCharacter(("~".to_string(), 24)))),  
+        ("https://github.com/roc-l`ang/", Err(UrlProblem::InsecureCharacter(("`".to_string(), 24)))),    
+    ];
 
-    for insecure_character_example in [
-        "https://github.com/roc-l<ang/",
-    ] {
+
+    for (test_url, expected_err) in expected {
         assert_eq!(
-            PackageMetadata::try_from(insecure_character_example),
-            expected
+            PackageMetadata::try_from(test_url),
+            expected_err
         );
     }
 }
