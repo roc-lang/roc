@@ -19,7 +19,7 @@ jobs:
         with:
           version: 0.13.0
 
-      - name: Install zlib on macOS-13
+      - name: Install z3 on macOS-13
         if: matrix.os == 'macos-13'
         run: brew install z3
 
