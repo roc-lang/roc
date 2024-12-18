@@ -666,15 +666,15 @@ pre>samp {
 @media (prefers-color-scheme: dark) {
   :root {
       /* WCAG AAA Compliant colors */
-    --code-bg: hsl(228.95deg 37.25% 20%);
-    --gray: hsl(0 0% 90% / 1);
-    --orange: hsl(25 98% 90% / 1);
-    --green: hsl(115 40% 90% / 1);
-    --cyan: hsl(176 84% 90% / 1);
-    --blue: hsl(243 43% 90% / 1);
+    --code-bg: hsl(228.95deg 37.25% 15%);
+    --gray: hsl(0 0% 70% / 1);
+    --orange: hsl(25 98% 70% / 1);
+    --green: hsl(115 40% 70% / 1);
+    --cyan: hsl(176 84% 70% / 1);
+    --blue: hsl(243 43% 80% / 1);
     --violet: #caadfb;
     --violet-bg: #332944;
-    --magenta: hsl(348 79% 90% / 1);
+    --magenta: hsl(348 79% 80% / 1);
       --link-hover-color: #fff;
 
       --link-color: var(--violet);
