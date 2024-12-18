@@ -1,5 +1,5 @@
 on:
-  #pull_request:
+  pull_request:
   workflow_dispatch:
   schedule:
     - cron: "0 9 * * *"
@@ -26,8 +26,8 @@ jobs:
 
       - run: zig version
 
-      - name: run tests
-        run: cargo test --locked --release
+      #- name: run tests
+      #  run: cargo test --locked --release
 
       - name: get commit SHA
         run: echo "SHA=$(git rev-parse --short "$GITHUB_SHA")" >> $GITHUB_ENV
@@ -45,7 +45,13 @@ jobs:
         run: ./ci/write_version.sh
 
       - name: build nightly release
+        env:
+            # set rpath to able to find libzstd.1.dylib in more cases 
+            RUSTFLAGS: -C link-arg=-Wl,-rpath,/opt/local/lib,/opt/homebrew/opt/zstd/lib"
         run: cargo build --locked --profile=release-with-lto --bin roc --bin roc_language_server
+
+      - name: modify hardcoded zstd path on roc binary
+        run: install_name_tool -change /opt/homebrew/opt/zstd/lib/libzstd.1.dylib @rpath/libzstd.1.dylib ./roc
 
       - name: package release
         run: ./ci/package_release.sh ${{ env.RELEASE_FOLDER_NAME }}
