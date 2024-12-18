@@ -1,4 +1,5 @@
 on:
+  pull_request:
   workflow_dispatch:
 
 name: Test latest nightly releases for macOS and Linux x86_64
@@ -20,7 +21,7 @@ jobs:
 
       - name: Install zlib on macOS-13
         if: matrix.os == 'macos-13'
-        run: brew install zlib
+        run: brew install z3
 
       - name: get the latest release archive for linux (x86_64)
         if: startsWith(matrix.os, 'ubuntu')
