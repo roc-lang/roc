@@ -18,6 +18,12 @@ which includes the Roc compiler and some helpful utilities.
     cd roc_night<TAB TO AUTOCOMPLETE>
     ```
 
+1. Install z3:
+
+    ```sh
+    brew install z3
+    ```
+
 1. To be able to run the `roc` command anywhere on your system; add the line below to your shell startup script (.profile, .zshrc, ...):
 
     ```sh
@@ -26,9 +32,10 @@ which includes the Roc compiler and some helpful utilities.
 
 1. Check everything worked by executing `roc version`
 
-1. Run [hello world](https://github.com/roc-lang/examples/blob/main/examples/HelloWorld/main.roc):
+1. Download and run hello world:
 
     ```sh
+    curl -OL https://raw.githubusercontent.com/roc-lang/examples/refs/heads/main/examples/HelloWorld/main.roc
     roc main.roc
     ```
 

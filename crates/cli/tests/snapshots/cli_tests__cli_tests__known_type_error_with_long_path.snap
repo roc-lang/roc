@@ -1,6 +1,7 @@
 ---
 source: crates/cli/tests/cli_tests.rs
 expression: cli_check_out.normalize_stdout_and_stderr()
+snapshot_kind: text
 ---
 
 ── UNUSED IMPORT in ...nown_bad/UnusedImportButWithALongFileNameForTesting.roc ─
@@ -14,4 +15,5 @@ Since Symbol isn't used, you don't need to import it.
 
 ────────────────────────────────────────────────────────────────────────────────
 
-0 error and 1 warning found in <ignored for test> ms
+0 errors and 1 warning found in <ignored for test> ms.
+

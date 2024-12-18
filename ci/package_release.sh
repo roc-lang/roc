@@ -19,7 +19,9 @@ rm $1/examples/platform-switching/rocLovesRust.roc
 rm -rf $1/examples/platform-switching/rust-platform
 
 # copy zig builtins
-mkdir $1/examples/platform-switching/zig-platform/glue
-mv crates/compiler/builtins/bitcode/src/* $1/examples/platform-switching/zig-platform/glue
+if [ ! -d "$1/examples/platform-switching/zig-platform/glue" ]; then
+    mkdir $1/examples/platform-switching/zig-platform/glue
+    mv crates/compiler/builtins/bitcode/src/* $1/examples/platform-switching/zig-platform/glue
+fi
  
 tar -czvf "$1.tar.gz" $1

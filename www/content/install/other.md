@@ -4,10 +4,11 @@
 
 1. [Build Roc from source](https://github.com/roc-lang/roc/blob/main/BUILDING_FROM_SOURCE.md)
 
-1. Run [hello world](https://github.com/roc-lang/examples/blob/main/examples/HelloWorld/main.roc):
+1. Download and run hello world:
 
     ```sh
-    roc hello.roc
+    curl -OL https://raw.githubusercontent.com/roc-lang/examples/refs/heads/main/examples/HelloWorld/main.roc
+    roc main.roc
     ```
 
 ## Next Steps
