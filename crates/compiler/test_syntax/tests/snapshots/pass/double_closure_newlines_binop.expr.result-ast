@@ -1,0 +1,52 @@
+@0-16 SpaceAfter(
+    Closure(
+        [
+            @1-2 Identifier {
+                ident: "j",
+            },
+        ],
+        @4-16 BinOps(
+            [
+                (
+                    @4-12 SpaceAfter(
+                        Apply(
+                            @4-5 Var {
+                                module_name: "",
+                                ident: "e",
+                            },
+                            [
+                                @5-12 Closure(
+                                    [
+                                        @6-7 SpaceAfter(
+                                            Tag(
+                                                "B",
+                                            ),
+                                            [
+                                                Newline,
+                                            ],
+                                        ),
+                                    ],
+                                    @11-12 Tag(
+                                        "B",
+                                    ),
+                                ),
+                            ],
+                            Space,
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                    @14-15 GreaterThan,
+                ),
+            ],
+            @15-16 Var {
+                module_name: "",
+                ident: "s",
+            },
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

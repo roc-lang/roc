@@ -1405,8 +1405,12 @@ fn fmt_binops<'a>(
             expr_lift_spaces(Parens::InOperator, buf.text.bump(), &loc_left_side.value);
         format_spaces(buf, lifted_left_side.before, Newlines::Yes, indent);
 
+        buf.indent(indent);
+        let line_indent = buf.cur_line_indent();
+
         let need_parens = matches!(lifted_left_side.item, Expr::BinOps(..))
-            || starts_with_unary_minus(lifted_left_side.item);
+            || starts_with_unary_minus(lifted_left_side.item)
+            || (ends_with_closure(&lifted_left_side.item) && line_indent < indent);
 
         if need_parens {
             fmt_parens(&lifted_left_side.item, buf, indent);
@@ -1449,6 +1453,17 @@ fn fmt_binops<'a>(
     }
 
     format_spaces(buf, lifted_right_side.after, Newlines::Yes, indent);
+}
+
+fn ends_with_closure(item: &Expr<'_>) -> bool {
+    match item {
+        Expr::Closure(..) => true,
+        Expr::Apply(expr, args, _) => args
+            .last()
+            .map(|a| ends_with_closure(&a.value))
+            .unwrap_or_else(|| ends_with_closure(&expr.value)),
+        _ => false,
+    }
 }
 
 fn starts_with_unary_minus(item: Expr<'_>) -> bool {
