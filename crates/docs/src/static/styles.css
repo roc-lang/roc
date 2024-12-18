@@ -85,6 +85,10 @@ table tr td {
   border-left: 2px solid var(--violet);
 }
 
+.entry-name:target {
+  background-color: var(--violet-bg);
+}
+
 .entry-name a {
   visibility: hidden;
   display: inline-block;

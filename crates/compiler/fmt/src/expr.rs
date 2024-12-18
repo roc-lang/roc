@@ -2,7 +2,8 @@ use crate::annotation::{except_last, is_collection_multiline, Formattable, Newli
 use crate::collection::{fmt_collection, Braces};
 use crate::def::{fmt_defs, valdef_lift_spaces_before};
 use crate::pattern::{
-    fmt_pattern, pattern_lift_spaces, pattern_lift_spaces_before, starts_with_inline_comment,
+    fmt_pattern, pattern_lift_spaces, pattern_lift_spaces_before, snakify_camel_ident,
+    starts_with_inline_comment,
 };
 use crate::spaces::{
     count_leading_newlines, fmt_comments_only, fmt_spaces, fmt_spaces_no_blank_lines,
@@ -72,8 +73,11 @@ fn format_expr_only(
                 buf.push_str(module_name);
                 buf.push('.');
             }
-
-            buf.push_str(ident);
+            if buf.flags().snakify {
+                snakify_camel_ident(buf, ident);
+            } else {
+                buf.push_str(ident);
+            }
         }
         Expr::Underscore(name) => {
             buf.indent(indent);
@@ -303,19 +307,33 @@ fn format_expr_only(
             buf.indent(indent);
             buf.push('.');
             match key {
-                Accessor::RecordField(key) => buf.push_str(key),
+                Accessor::RecordField(key) => {
+                    if buf.flags().snakify {
+                        snakify_camel_ident(buf, key);
+                    } else {
+                        buf.push_str(key);
+                    }
+                }
                 Accessor::TupleIndex(key) => buf.push_str(key),
             }
         }
         Expr::RecordUpdater(key) => {
             buf.indent(indent);
             buf.push('&');
-            buf.push_str(key);
+            if buf.flags().snakify {
+                snakify_camel_ident(buf, key);
+            } else {
+                buf.push_str(key);
+            }
         }
         Expr::RecordAccess(expr, key) => {
             expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
             buf.push('.');
-            buf.push_str(key);
+            if buf.flags().snakify {
+                snakify_camel_ident(buf, key);
+            } else {
+                buf.push_str(key);
+            }
         }
         Expr::TupleAccess(expr, key) => {
             expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
@@ -331,7 +349,11 @@ fn format_expr_only(
         }
         Expr::MalformedIdent(str, _) => {
             buf.indent(indent);
-            buf.push_str(str)
+            if buf.flags().snakify {
+                snakify_camel_ident(buf, str);
+            } else {
+                buf.push_str(str);
+            }
         }
         Expr::MalformedSuffixed(loc_expr) => {
             buf.indent(indent);
@@ -715,20 +737,16 @@ fn fmt_apply(
         }
 
         last_after = arg.after;
-
-        if should_reflow_outdentable {
-            buf.spaces(1);
-
-            // Ignore any comments+newlines before/after.
-            // We checked above that there's only a single newline before the last arg,
-            // which we're intentionally ignoring.
-
-            format_expr_only(&arg.item, buf, Parens::InApply, Newlines::Yes, arg_indent);
-        } else if needs_indent {
+        if needs_indent {
             buf.ensure_ends_with_newline();
-            format_expr_only(&arg.item, buf, Parens::InApply, Newlines::Yes, arg_indent);
         } else {
             buf.spaces(1);
+        }
+
+        if matches!(arg.item, Expr::Var { module_name, ident } if module_name.is_empty() && ident == "implements")
+        {
+            fmt_parens(&arg.item, buf, arg_indent);
+        } else {
             format_expr_only(&arg.item, buf, Parens::InApply, Newlines::Yes, arg_indent);
         }
     }
@@ -899,6 +917,7 @@ fn format_str_segment(seg: &StrSegment, buf: &mut Buf) {
                 Newlines::No,      // Interpolations can never have newlines
                 min_indent,
             );
+            buf.indent(min_indent);
             buf.push(')');
         }
     }
@@ -1608,27 +1627,25 @@ fn fmt_when<'a>(
 
         let inner_indent = line_indent + INDENT;
 
-        match expr.value {
-            Expr::SpaceBefore(nested, spaces) => {
-                fmt_spaces_no_blank_lines(buf, spaces.iter(), inner_indent);
+        let expr = expr_lift_spaces(Parens::NotNeeded, buf.text.bump(), &expr.value);
+        fmt_spaces_no_blank_lines(buf, expr.before.iter(), inner_indent);
+        if is_multiline_expr {
+            buf.ensure_ends_with_newline();
+        } else {
+            buf.spaces(1);
+        }
 
-                if is_multiline_expr {
-                    buf.ensure_ends_with_newline();
-                } else {
-                    buf.spaces(1);
-                }
+        // expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, inner_indent);
+        format_expr_only(
+            &expr.item,
+            buf,
+            Parens::NotNeeded,
+            Newlines::Yes,
+            inner_indent,
+        );
 
-                nested.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, inner_indent);
-            }
-            _ => {
-                if is_multiline_expr {
-                    buf.ensure_ends_with_newline();
-                } else {
-                    buf.spaces(1);
-                }
-
-                expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, inner_indent);
-            }
+        if !expr.after.is_empty() {
+            format_spaces(buf, expr.after, Newlines::Yes, inner_indent);
         }
 
         prev_branch_was_multiline = is_multiline_expr || is_multiline_patterns;
@@ -1689,22 +1706,29 @@ fn fmt_return<'a>(
     buf.indent(indent);
     buf.push_str(keyword::RETURN);
 
-    if matches!(
-        return_value.value.extract_spaces().item,
-        Expr::Defs(..) | Expr::Backpassing(..)
-    ) {
-        buf.ensure_ends_with_newline();
-    } else {
-        buf.spaces(1);
-    }
-
     let return_indent = if return_value.is_multiline() {
         indent + INDENT
     } else {
         indent
     };
 
-    return_value.format_with_options(buf, parens, Newlines::No, return_indent);
+    let value = expr_lift_spaces(parens, buf.text.bump(), &return_value.value);
+
+    if !value.before.is_empty() {
+        format_spaces(buf, value.before, newlines, return_indent);
+    }
+
+    if matches!(value.item, Expr::Defs(..) | Expr::Backpassing(..)) {
+        buf.ensure_ends_with_newline();
+    } else {
+        buf.spaces(1);
+    }
+
+    format_expr_only(&value.item, buf, parens, newlines, return_indent);
+
+    if !value.after.is_empty() {
+        format_spaces(buf, value.after, newlines, indent);
+    }
 
     if let Some(after_return) = after_return {
         let lifted = expr_lift_spaces(Parens::NotNeeded, buf.text.bump(), &after_return.value);
@@ -1834,7 +1858,7 @@ fn fmt_closure<'a>(
         }
 
         arg.item
-            .format_with_options(buf, Parens::InAsPattern, Newlines::No, indent);
+            .format_with_options(buf, Parens::InClosurePattern, Newlines::No, indent);
 
         if !arg.after.is_empty() {
             if starts_with_inline_comment(arg.after.iter()) {
@@ -1851,29 +1875,17 @@ fn fmt_closure<'a>(
         buf.spaces(1);
     }
 
+    let arrow_line_indent = buf.cur_line_indent();
     buf.push_str("->");
+    buf.spaces(1);
 
     let is_multiline = loc_ret.value.is_multiline();
 
     // If the body is multiline, go down a line and indent.
     let body_indent = if is_multiline {
-        indent + INDENT
+        arrow_line_indent + INDENT
     } else {
         indent
-    };
-
-    // the body of the Closure can be on the same line, or
-    // on a new line. If it's on the same line, insert a space.
-
-    match &loc_ret.value {
-        SpaceBefore(_, _) => {
-            // the body starts with (first comment and then) a newline
-            // do nothing
-        }
-        _ => {
-            // add a space after the `->`
-            buf.spaces(1);
-        }
     };
 
     if is_multiline {
@@ -1888,7 +1900,6 @@ fn fmt_closure<'a>(
                 };
 
                 if should_outdent {
-                    buf.spaces(1);
                     sub_expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
                 } else {
                     loc_ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, body_indent);
@@ -1911,11 +1922,8 @@ fn fmt_backpassing<'a>(
     loc_patterns: &'a [Loc<Pattern<'a>>],
     loc_body: &'a Loc<Expr<'a>>,
     loc_ret: &'a Loc<Expr<'a>>,
-
     outer_indent: u16,
 ) {
-    use self::Expr::*;
-
     let arguments_are_multiline = loc_patterns
         .iter()
         .any(|loc_pattern| loc_pattern.is_multiline());
@@ -1936,7 +1944,7 @@ fn fmt_backpassing<'a>(
             Parens::NotNeeded
         };
 
-        let pat = loc_pattern.value.extract_spaces();
+        let pat = pattern_lift_spaces(buf.text.bump(), &loc_pattern.value);
 
         if !first {
             buf.indent(arg_indent);
@@ -1982,22 +1990,39 @@ fn fmt_backpassing<'a>(
         arg_indent
     };
 
-    // the body of the Backpass can be on the same line, or
-    // on a new line. If it's on the same line, insert a space.
+    buf.spaces(1);
+    let body_lifted = expr_lift_spaces(Parens::NotNeeded, buf.text.bump(), &loc_body.value);
+    let ret_lifted = expr_lift_spaces(Parens::NotNeeded, buf.text.bump(), &loc_ret.value);
 
-    match &loc_body.value {
-        SpaceBefore(_, _) => {
-            // the body starts with (first comment and then) a newline
-            // do nothing
-        }
-        _ => {
-            // add a space after the `<-`
-            buf.spaces(1);
-        }
-    };
+    if !body_lifted.before.is_empty() {
+        format_spaces(buf, body_lifted.before, Newlines::Yes, body_indent);
+    }
 
-    loc_body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, body_indent);
-    loc_ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, outer_indent);
+    format_expr_only(
+        &body_lifted.item,
+        buf,
+        Parens::NotNeeded,
+        Newlines::Yes,
+        body_indent,
+    );
+
+    let between = merge_spaces(buf.text.bump(), body_lifted.after, ret_lifted.before);
+
+    if !between.is_empty() {
+        format_spaces(buf, between, Newlines::Yes, outer_indent);
+    }
+
+    format_expr_only(
+        &ret_lifted.item,
+        buf,
+        Parens::NotNeeded,
+        Newlines::Yes,
+        outer_indent,
+    );
+
+    if !ret_lifted.after.is_empty() {
+        format_spaces(buf, ret_lifted.after, Newlines::Yes, outer_indent);
+    }
 }
 
 fn pattern_needs_parens_when_backpassing(pat: &Pattern) -> bool {

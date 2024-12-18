@@ -621,8 +621,18 @@ fn normalize_str_segments<'a>(
             }
             StrSegment::Unicode(t) => {
                 let hex_code: &str = t.value;
-                let c = char::from_u32(u32::from_str_radix(hex_code, 16).unwrap()).unwrap();
-                last_text.push(c);
+                if let Some(c) = u32::from_str_radix(hex_code, 16)
+                    .ok()
+                    .and_then(char::from_u32)
+                {
+                    last_text.push(c);
+                } else {
+                    if !last_text.is_empty() {
+                        let text = std::mem::replace(last_text, String::new_in(arena));
+                        new_segments.push(StrSegment::Plaintext(text.into_bump_str()));
+                    }
+                    new_segments.push(StrSegment::Unicode(Loc::at_zero(t.value)));
+                }
             }
             StrSegment::EscapedChar(c) => {
                 last_text.push(c.unescape());
@@ -1162,6 +1172,12 @@ impl<'a> Normalize<'a> for EString<'a> {
             EString::ExpectedDoubleQuoteGotSingleQuote(_) => {
                 EString::ExpectedDoubleQuoteGotSingleQuote(Position::zero())
             }
+            EString::InvalidUnicodeCodepoint(_region) => {
+                EString::InvalidUnicodeCodepoint(Region::zero())
+            }
+            EString::UnicodeEscapeTooLarge(_region) => {
+                EString::UnicodeEscapeTooLarge(Region::zero())
+            }
         }
     }
 }
@@ -1248,6 +1264,7 @@ impl<'a> Normalize<'a> for EPattern<'a> {
             EPattern::AsIndentStart(_) => EPattern::AsIndentStart(Position::zero()),
             EPattern::AccessorFunction(_) => EPattern::AccessorFunction(Position::zero()),
             EPattern::RecordUpdaterFunction(_) => EPattern::RecordUpdaterFunction(Position::zero()),
+            EPattern::Str(e, _) => EPattern::Str(e.normalize(arena), Position::zero()),
         }
     }
 }

@@ -1,0 +1,27 @@
+@0-14 SpaceAfter(
+    Apply(
+        @0-1 Var {
+            module_name: "",
+            ident: "m",
+        },
+        [
+            @1-13 Str(
+                Line(
+                    [
+                        Unicode(
+                            @5-11 "FFFFFF",
+                        ),
+                    ],
+                ),
+            ),
+            @13-14 Var {
+                module_name: "",
+                ident: "s",
+            },
+        ],
+        Space,
+    ),
+    [
+        Newline,
+    ],
+)
