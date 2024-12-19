@@ -1,5 +1,5 @@
 use bumpalo::{collections::Vec, Bump};
-use roc_parse::ast::{CommentOrNewline, Spaces, TypeAnnotation};
+use roc_parse::ast::{CommentOrNewline, Pattern, Spaces, TypeAnnotation};
 
 use crate::{
     annotation::{Formattable, Newlines, Parens},
@@ -50,7 +50,38 @@ pub enum Node<'a> {
     Literal(&'a str),
     Sequence(&'a Node<'a>, &'a [(Sp<'a>, Node<'a>)]),
     DelimitedSequence(Braces, &'a [(Sp<'a>, Node<'a>)], Sp<'a>),
+
+    // Temporary! TODO: translate these into proper Node elements
     TypeAnnotation(TypeAnnotation<'a>),
+    Pattern(Pattern<'a>),
+}
+
+pub fn parens_around_node<'a, 'b: 'a>(
+    arena: &'a Bump,
+    item: Spaces<'b, Node<'b>>,
+    allow_spaces_before: bool,
+) -> Spaces<'a, Node<'a>> {
+    Spaces {
+        before: if allow_spaces_before {
+            item.before
+        } else {
+            &[]
+        },
+        item: Node::DelimitedSequence(
+            Braces::Round,
+            arena.alloc_slice_copy(&[(
+                if allow_spaces_before {
+                    Sp::empty()
+                } else {
+                    item.before.into()
+                },
+                item.item,
+            )]),
+            Sp::empty(),
+        ),
+        // We move the comments/newlines to the outer scope, since they tend to migrate there when re-parsed
+        after: item.after,
+    }
 }
 
 pub trait Nodify<'a> {
@@ -82,8 +113,9 @@ impl<'a> Formattable for Node<'a> {
                         .iter()
                         .any(|(sp, l)| l.is_multiline() || !sp.comments.is_empty())
             }
-            Node::TypeAnnotation(type_annotation) => type_annotation.is_multiline(),
             Node::Literal(_) => false,
+            Node::TypeAnnotation(type_annotation) => type_annotation.is_multiline(),
+            Node::Pattern(pat) => pat.is_multiline(),
         }
     }
 
@@ -110,12 +142,15 @@ impl<'a> Formattable for Node<'a> {
                     l.format_with_options(buf, parens, newlines, indent);
                 }
             }
-            Node::TypeAnnotation(type_annotation) => {
-                type_annotation.format_with_options(buf, parens, newlines, indent);
-            }
             Node::Literal(text) => {
                 buf.indent(indent);
                 buf.push_str(text);
+            }
+            Node::TypeAnnotation(type_annotation) => {
+                type_annotation.format_with_options(buf, parens, newlines, indent);
+            }
+            Node::Pattern(pat) => {
+                pat.format_with_options(buf, parens, newlines, indent);
             }
         }
     }

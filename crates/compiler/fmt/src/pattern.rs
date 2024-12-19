@@ -2,6 +2,7 @@ use crate::annotation::{Formattable, Newlines, Parens};
 use crate::expr::{
     expr_is_multiline, expr_lift_spaces_after, fmt_str_literal, format_sq_literal, is_str_multiline,
 };
+use crate::node::{parens_around_node, Node, NodeSequenceBuilder, Sp};
 use crate::spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT};
 use crate::Buf;
 use bumpalo::Bump;
@@ -543,6 +544,41 @@ pub fn pattern_fmt_apply(
 
     if parens {
         buf.push(')');
+    }
+}
+
+pub fn pattern_apply_to_node<'b, 'a: 'b>(
+    arena: &'b Bump,
+    parens: Parens,
+    func: Pattern<'a>,
+    args: &[Loc<Pattern<'a>>],
+) -> Spaces<'b, Node<'b>> {
+    let func_lifted = pattern_lift_spaces(arena, &func);
+    let mut b = NodeSequenceBuilder::new(arena, Node::Pattern(func_lifted.item), args.len());
+
+    let mut last_after = func_lifted.after;
+
+    for arg in args {
+        let arg_lifted = pattern_lift_spaces(arena, &arg.value);
+        b.push(
+            Sp::with_space(merge_spaces(arena, last_after, arg_lifted.before)),
+            Node::Pattern(arg_lifted.item),
+        );
+        last_after = arg_lifted.after;
+    }
+
+    let item = Spaces {
+        before: func_lifted.before,
+        item: b.build(),
+        after: last_after,
+    };
+
+    let parens = !args.is_empty() && parens == Parens::InApply;
+
+    if parens {
+        parens_around_node(arena, item, true)
+    } else {
+        item
     }
 }
 

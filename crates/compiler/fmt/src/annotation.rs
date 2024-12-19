@@ -1,8 +1,9 @@
 use crate::{
     collection::{fmt_collection, Braces},
     expr::{format_spaces, merge_spaces_conservative},
-    node::{Node, NodeSequenceBuilder, Nodify, Sp},
-    pattern::{pattern_lift_spaces_after, snakify_camel_ident},
+    node::{parens_around_node, Node, NodeSequenceBuilder, Nodify, Sp},
+    pattern::pattern_lift_spaces_after,
+    pattern::snakify_camel_ident,
     spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT},
     Buf,
 };
@@ -10,12 +11,15 @@ use bumpalo::{
     collections::{String, Vec},
     Bump,
 };
-use roc_parse::ast::{
-    AbilityImpls, AssignedField, Collection, CommentOrNewline, Expr, ExtractSpaces, FunctionArrow,
-    ImplementsAbilities, ImplementsAbility, ImplementsClause, Spaceable, Spaces, SpacesAfter,
-    SpacesBefore, Tag, TypeAnnotation, TypeHeader,
-};
 use roc_parse::ident::UppercaseIdent;
+use roc_parse::{
+    ast::{
+        AbilityImpls, AssignedField, Collection, CommentOrNewline, Expr, ExtractSpaces,
+        FunctionArrow, ImplementsAbilities, ImplementsAbility, ImplementsClause, Spaceable, Spaces,
+        SpacesAfter, SpacesBefore, Tag, TypeAnnotation, TypeHeader,
+    },
+    expr::merge_spaces,
+};
 use roc_region::all::Loc;
 
 /// Does an AST node need parens around it?
@@ -1369,19 +1373,29 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                     item: Node::TypeAnnotation(new_ann),
                     after: new_res.after,
                 };
-                if parens == Parens::InCollection || parens == Parens::InApply {
+                if parens == Parens::InCollection
+                    || parens == Parens::InApply
+                    || parens == Parens::InAsPattern
+                {
                     parens_around_node(arena, inner, true)
                 } else {
                     inner
                 }
             }
-            TypeAnnotation::As(_left, _sp, _right) => {
-                let lifted = ann_lift_spaces(arena, self);
+            TypeAnnotation::As(left, sp, right) => {
+                let left = left.value.to_node(arena, Parens::InAsPattern);
+                let right = right.to_node(arena, Parens::InAsPattern);
+                let before_as = merge_spaces(arena, left.after, sp);
+                let mut b = NodeSequenceBuilder::new(arena, left.item, 2);
+                b.push(Sp::with_space(before_as), Node::Literal("as"));
+                b.push(Sp::with_space(right.before), right.item);
+
                 let item = Spaces {
-                    before: lifted.before,
-                    item: Node::TypeAnnotation(lifted.item),
-                    after: lifted.after,
+                    before: left.before,
+                    item: b.build(),
+                    after: right.after,
                 };
+
                 if parens == Parens::InApply || parens == Parens::InAsPattern {
                     parens_around_node(arena, item, true)
                 } else {
@@ -1397,34 +1411,6 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                 }
             }
         }
-    }
-}
-
-fn parens_around_node<'a, 'b: 'a>(
-    arena: &'a Bump,
-    item: Spaces<'b, Node<'b>>,
-    allow_spaces_before: bool,
-) -> Spaces<'a, Node<'a>> {
-    Spaces {
-        before: if allow_spaces_before {
-            item.before
-        } else {
-            &[]
-        },
-        item: Node::DelimitedSequence(
-            Braces::Round,
-            arena.alloc_slice_copy(&[(
-                if allow_spaces_before {
-                    Sp::empty()
-                } else {
-                    item.before.into()
-                },
-                item.item,
-            )]),
-            Sp::empty(),
-        ),
-        // We move the comments/newlines to the outer scope, since they tend to migrate there when re-parsed
-        after: item.after,
     }
 }
 
