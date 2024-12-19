@@ -15,6 +15,7 @@ let
         cd $packagePath
         brotli -d *.tar.br
         tar -xf *.tar --one-top-level
+        rm *.tar.br
         rm *.tar
       done
     '';
@@ -26,8 +27,9 @@ let
 in pkgs.stdenv.mkDerivation {
   inherit name src;
   nativeBuildInputs = [ roc-cli ];
+  XDG_CACHE_HOME = packageDependencies;
+
   buildPhase = ''
-    export XDG_CACHE_HOME=${packageDependencies}
     roc build ${entryPoint} --output ${name} --optimize --linker=legacy
 
     mkdir -p $out/bin

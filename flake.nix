@@ -2,7 +2,8 @@
   description = "Roc flake";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs?rev=184957277e885c06a505db112b35dfbec7c60494";
+    nixpkgs.url =
+      "github:nixos/nixpkgs?rev=184957277e885c06a505db112b35dfbec7c60494";
 
     # rust from nixpkgs has some libc problems, this is patched in the rust-overlay
     rust-overlay = {
@@ -27,23 +28,26 @@
 
   outputs = { self, nixpkgs, rust-overlay, flake-utils, nixgl, ... }@inputs:
     let
-      supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" "aarch64-linux" ];
+      supportedSystems =
+        [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" "aarch64-linux" ];
 
       templates = import ./nix/templates { };
-    in
-    { inherit templates; } //
-    flake-utils.lib.eachSystem supportedSystems (system:
+      lib = { buildRocPackage = import ./nix/buildRocPackage.nix; };
+    in {
+      inherit templates lib;
+    } // flake-utils.lib.eachSystem supportedSystems (system:
       let
 
         overlays = [ (import rust-overlay) ]
-        ++ (if system == "x86_64-linux" then [ nixgl.overlay ] else [ ]);
+          ++ (if system == "x86_64-linux" then [ nixgl.overlay ] else [ ]);
         pkgs = import nixpkgs { inherit system overlays; };
 
         rocBuild = import ./nix { inherit pkgs; };
 
         compile-deps = rocBuild.compile-deps;
-        inherit (compile-deps) zigPkg llvmPkgs llvmVersion
-          llvmMajorMinorStr glibcPath libGccSPath darwinInputs;
+        inherit (compile-deps)
+          zigPkg llvmPkgs llvmVersion llvmMajorMinorStr glibcPath libGccSPath
+          darwinInputs;
 
         # DevInputs are not necessary to build roc as a user
         linuxDevInputs = with pkgs;
@@ -64,11 +68,11 @@
         # DevInputs are not necessary to build roc as a user
         darwinDevInputs = with pkgs;
           lib.optionals stdenv.isDarwin
-            (with pkgs.darwin.apple_sdk.frameworks; [
-              CoreVideo # for examples/gui
-              Metal # for examples/gui
-              curl # for wasm-bindgen-cli libcurl (see ./ci/www-repl.sh)
-            ]);
+          (with pkgs.darwin.apple_sdk.frameworks; [
+            CoreVideo # for examples/gui
+            Metal # for examples/gui
+            curl # for wasm-bindgen-cli libcurl (see ./ci/www-repl.sh)
+          ]);
 
         sharedInputs = (with pkgs; [
           # build libraries
@@ -114,15 +118,15 @@
           alias fmtc='cargo fmt --all -- --check'
         '';
 
-      in
-      {
+      in {
 
         devShell = pkgs.mkShell {
-          buildInputs = sharedInputs ++ sharedDevInputs ++ darwinInputs ++ darwinDevInputs ++ linuxDevInputs
-          ++ (if system == "x86_64-linux" then
-            [ pkgs.nixgl.nixVulkanIntel ]
-          else
-            [ ]);
+          buildInputs = sharedInputs ++ sharedDevInputs ++ darwinInputs
+            ++ darwinDevInputs ++ linuxDevInputs
+            ++ (if system == "x86_64-linux" then
+              [ pkgs.nixgl.nixVulkanIntel ]
+            else
+              [ ]);
 
           # nix does not store libs in /usr/lib or /lib
           # for libgcc_s.so.1
@@ -134,7 +138,7 @@
 
           LD_LIBRARY_PATH = with pkgs;
             lib.makeLibraryPath
-              ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib ]
+            ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib ]
               ++ linuxDevInputs);
           NIXPKGS_ALLOW_UNFREE =
             1; # to run the GUI examples with NVIDIA's closed source drivers
@@ -159,10 +163,6 @@
 
           lang-server = rocBuild.roc-lang-server;
           lang-server-debug = rocBuild.roc-lang-server-debug;
-        };
-
-        lib = {
-          buildRocPackage = import ./nix/buildRocPackage.nix;
         };
 
         apps = {
