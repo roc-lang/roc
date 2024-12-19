@@ -1,6 +1,6 @@
 use crate::{
     collection::{fmt_collection, Braces},
-    expr::{format_spaces, merge_spaces_conservative},
+    expr::merge_spaces_conservative,
     node::{parens_around_node, Node, NodeSequenceBuilder, Nodify, Sp},
     pattern::pattern_lift_spaces_after,
     pattern::snakify_camel_ident,
@@ -370,36 +370,40 @@ fn fmt_ty_ann(
             fmt_ext(ext, buf, indent);
         }
 
-        TypeAnnotation::As(lhs, spaces, TypeHeader { name, vars }) => {
-            let write_parens = parens == Parens::InAsPattern || parens == Parens::InApply;
+        TypeAnnotation::As(..) => {
+            me.item
+                .to_node(buf.text.bump(), parens)
+                .item
+                .format(buf, indent);
+            // let write_parens = parens == Parens::InAsPattern || parens == Parens::InApply;
 
-            buf.indent(indent);
-            if write_parens {
-                buf.push('(')
-            }
+            // buf.indent(indent);
+            // if write_parens {
+            //     buf.push('(')
+            // }
 
-            let lhs_indent = buf.cur_line_indent();
-            lhs.value
-                .format_with_options(buf, Parens::InAsPattern, Newlines::No, indent);
-            buf.spaces(1);
-            format_spaces(buf, spaces, newlines, indent);
-            buf.indent(lhs_indent + INDENT);
-            buf.push_str("as");
-            buf.spaces(1);
-            buf.push_str(name.value);
-            for var in *vars {
-                buf.spaces(1);
-                var.value.format_with_options(
-                    buf,
-                    Parens::NotNeeded,
-                    Newlines::No,
-                    lhs_indent + INDENT,
-                );
-            }
+            // let lhs_indent = buf.cur_line_indent();
+            // lhs.value
+            //     .format_with_options(buf, Parens::InAsPattern, Newlines::No, indent);
+            // buf.spaces(1);
+            // format_spaces(buf, spaces, newlines, indent);
+            // buf.indent(lhs_indent + INDENT);
+            // buf.push_str("as");
+            // buf.spaces(1);
+            // buf.push_str(name.value);
+            // for var in *vars {
+            //     buf.spaces(1);
+            //     var.value.format_with_options(
+            //         buf,
+            //         Parens::NotNeeded,
+            //         Newlines::No,
+            //         lhs_indent + INDENT,
+            //     );
+            // }
 
-            if write_parens {
-                buf.push(')')
-            }
+            // if write_parens {
+            //     buf.push(')')
+            // }
         }
 
         TypeAnnotation::Where(annot, implements_clauses) => {
@@ -523,7 +527,11 @@ impl<'a> Nodify<'a> for Tag<'a> {
 
                     Spaces {
                         before: &[],
-                        item: Node::Sequence(arena.alloc(first), new_args.into_bump_slice()),
+                        item: Node::Sequence {
+                            first: arena.alloc(first),
+                            extra_indent_for_rest: true,
+                            rest: new_args.into_bump_slice(),
+                        },
                         after: last_after,
                     }
                 }
@@ -735,7 +743,7 @@ where
 {
     let first = Node::Literal(name);
 
-    let mut b = NodeSequenceBuilder::new(arena, first, 2);
+    let mut b = NodeSequenceBuilder::new(arena, first, 2, false);
 
     b.push(Sp::with_space(sp), Node::Literal(sep));
 
@@ -1386,7 +1394,7 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                 let left = left.value.to_node(arena, Parens::InAsPattern);
                 let right = right.to_node(arena, Parens::InAsPattern);
                 let before_as = merge_spaces(arena, left.after, sp);
-                let mut b = NodeSequenceBuilder::new(arena, left.item, 2);
+                let mut b = NodeSequenceBuilder::new(arena, left.item, 2, true);
                 b.push(Sp::with_space(before_as), Node::Literal("as"));
                 b.push(Sp::with_space(right.before), right.item);
 

@@ -554,7 +554,7 @@ pub fn pattern_apply_to_node<'b, 'a: 'b>(
     args: &[Loc<Pattern<'a>>],
 ) -> Spaces<'b, Node<'b>> {
     let func_lifted = pattern_lift_spaces(arena, &func);
-    let mut b = NodeSequenceBuilder::new(arena, Node::Pattern(func_lifted.item), args.len());
+    let mut b = NodeSequenceBuilder::new(arena, Node::Pattern(func_lifted.item), args.len(), true);
 
     let mut last_after = func_lifted.after;
 

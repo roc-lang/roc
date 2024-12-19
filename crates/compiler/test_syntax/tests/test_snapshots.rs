@@ -693,6 +693,7 @@ mod test_snapshots {
         pass/tag_destructure_bang_no_space.expr,
         pass/tag_pattern.expr,
         pass/tag_union_ann_with_as.expr,
+        pass/tag_union_functions_as.expr,
         pass/ten_times_eleven.expr,
         pass/three_arg_closure.expr,
         pass/triple_paren_pat_ann.expr,

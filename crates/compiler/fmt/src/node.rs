@@ -4,7 +4,7 @@ use roc_parse::ast::{CommentOrNewline, Pattern, Spaces, TypeAnnotation};
 use crate::{
     annotation::{Formattable, Newlines, Parens},
     collection::Braces,
-    spaces::fmt_spaces,
+    spaces::{fmt_spaces, INDENT},
     Buf,
 };
 
@@ -48,7 +48,11 @@ impl<'a> From<&'a [CommentOrNewline<'a>]> for Sp<'a> {
 #[derive(Copy, Clone, Debug)]
 pub enum Node<'a> {
     Literal(&'a str),
-    Sequence(&'a Node<'a>, &'a [(Sp<'a>, Node<'a>)]),
+    Sequence {
+        first: &'a Node<'a>,
+        extra_indent_for_rest: bool,
+        rest: &'a [(Sp<'a>, Node<'a>)],
+    },
     DelimitedSequence(Braces, &'a [(Sp<'a>, Node<'a>)], Sp<'a>),
 
     // Temporary! TODO: translate these into proper Node elements
@@ -107,7 +111,11 @@ impl<'a> Formattable for Node<'a> {
                         .iter()
                         .any(|(sp, l)| l.is_multiline() || !sp.comments.is_empty())
             }
-            Node::Sequence(first, rest) => {
+            Node::Sequence {
+                first,
+                extra_indent_for_rest: _,
+                rest,
+            } => {
                 first.is_multiline()
                     || rest
                         .iter()
@@ -134,12 +142,23 @@ impl<'a> Formattable for Node<'a> {
                 buf.indent(indent);
                 buf.push(braces.end());
             }
-            Node::Sequence(first, rest) => {
+            Node::Sequence {
+                first,
+                extra_indent_for_rest,
+                rest,
+            } => {
+                buf.indent(indent);
+                let cur_indent = buf.cur_line_indent();
                 first.format_with_options(buf, parens, newlines, indent);
+                let next_indent = if *extra_indent_for_rest {
+                    cur_indent + INDENT
+                } else {
+                    indent
+                };
 
                 for (sp, l) in *rest {
-                    fmt_sp(buf, *sp, indent);
-                    l.format_with_options(buf, parens, newlines, indent);
+                    fmt_sp(buf, *sp, next_indent);
+                    l.format_with_options(buf, parens, newlines, next_indent);
                 }
             }
             Node::Literal(text) => {
@@ -158,13 +177,20 @@ impl<'a> Formattable for Node<'a> {
 
 pub struct NodeSequenceBuilder<'a> {
     first: Node<'a>,
+    extra_indent_for_rest: bool,
     rest: Vec<'a, (Sp<'a>, Node<'a>)>,
 }
 
 impl<'a> NodeSequenceBuilder<'a> {
-    pub fn new(arena: &'a Bump, first: Node<'a>, capacity: usize) -> Self {
+    pub fn new(
+        arena: &'a Bump,
+        first: Node<'a>,
+        capacity: usize,
+        extra_indent_for_rest: bool,
+    ) -> Self {
         Self {
             first,
+            extra_indent_for_rest,
             rest: Vec::with_capacity_in(capacity, arena),
         }
     }
@@ -174,9 +200,10 @@ impl<'a> NodeSequenceBuilder<'a> {
     }
 
     pub fn build(self) -> Node<'a> {
-        Node::Sequence(
-            self.rest.bump().alloc(self.first),
-            self.rest.into_bump_slice(),
-        )
+        Node::Sequence {
+            first: self.rest.bump().alloc(self.first),
+            extra_indent_for_rest: self.extra_indent_for_rest,
+            rest: self.rest.into_bump_slice(),
+        }
     }
 }

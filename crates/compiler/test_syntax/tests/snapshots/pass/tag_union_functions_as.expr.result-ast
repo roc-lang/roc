@@ -1,0 +1,112 @@
+@0-104 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-101,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                AnnotatedBody {
+                    ann_pattern: @0-11 Identifier {
+                        ident: "mainForHost",
+                    },
+                    ann_type: @14-0 As(
+                        @14-76 TagUnion {
+                            ext: None,
+                            tags: [
+                                @15-41 Apply {
+                                    name: @15-26 "StdoutWrite",
+                                    args: [
+                                        @27-30 Apply(
+                                            "",
+                                            "Str",
+                                            [],
+                                        ),
+                                        @32-40 Function(
+                                            [
+                                                @32-34 Record {
+                                                    fields: [],
+                                                    ext: None,
+                                                },
+                                            ],
+                                            Pure,
+                                            @38-40 Apply(
+                                                "",
+                                                "Op",
+                                                [],
+                                            ),
+                                        ),
+                                    ],
+                                },
+                                @43-69 Apply {
+                                    name: @43-54 "StderrWrite",
+                                    args: [
+                                        @55-58 Apply(
+                                            "",
+                                            "Str",
+                                            [],
+                                        ),
+                                        @60-68 Function(
+                                            [
+                                                @60-62 Record {
+                                                    fields: [],
+                                                    ext: None,
+                                                },
+                                            ],
+                                            Pure,
+                                            @66-68 Apply(
+                                                "",
+                                                "Op",
+                                                [],
+                                            ),
+                                        ),
+                                    ],
+                                },
+                                @71-75 Apply {
+                                    name: @71-75 "Done",
+                                    args: [],
+                                },
+                            ],
+                        },
+                        [],
+                        TypeHeader {
+                            name: @80-82 "Op",
+                            vars: [],
+                        },
+                    ),
+                    lines_between: [
+                        Newline,
+                    ],
+                    body_pattern: @83-94 Identifier {
+                        ident: "mainForHost",
+                    },
+                    body_expr: @97-101 Var {
+                        module_name: "",
+                        ident: "main",
+                    },
+                },
+            ],
+        },
+        @102-104 SpaceBefore(
+            Num(
+                "42",
+            ),
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)
