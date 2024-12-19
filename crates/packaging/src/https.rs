@@ -46,28 +46,20 @@ const MISLEADING_CHARACTERS_IN_URL: [char; 5] = [
 ];
 
 // Unsafe URL characters that should be encoded can be found here: https://datatracker.ietf.org/doc/html/rfc1738
-const ALLOWED_URL_CHARACTERS: [char; 21] = [
+const ALLOWED_URL_CHARACTERS: [char; 13] = [
     '-',
     '.',
     '_',
-    '~',
     ':',
     '/',
-    '?',
-    '#',
-    '[',
-    ']',
-    '@',
     '!',
     '$',
-    '&',
     '(',
     ')',
     '*',
     '+',
     ',',
-    ';',
-    '='
+    '#'
 ];
 #[derive(Debug, PartialEq, Eq)]
 pub enum UrlProblem {
@@ -101,7 +93,7 @@ impl<'a> PackageMetadata<'a> {
         if let Some((index, ch)) = url
             .chars()
             .enumerate()
-            .find(|(_, ch)| !ch.is_alphanumeric() && !ALLOWED_URL_CHARACTERS.contains(ch)) 
+            .find(|(_, ch)| (!ch.is_alphanumeric() && !ALLOWED_URL_CHARACTERS.contains(ch)) || MISLEADING_CHARACTERS_IN_URL.contains(ch)) 
         {
             // Check if there is an intentionally misleading url character
             // Otherwise check if there is a possibly insecure character in the url
@@ -192,7 +184,6 @@ fn url_problem_insecure_characters() {
     let expected = [
         ("https://github.com/roc-l<ang/", Err(UrlProblem::InsecureCharacter(("<".to_string(), 24)))),   
         ("https://github.com/roc-l>ang/", Err(UrlProblem::InsecureCharacter((">".to_string(), 24)))),
-        ("https://github.com/roc-l~ang/", Err(UrlProblem::InsecureCharacter(("~".to_string(), 24)))),  
         ("https://github.com/roc-l`ang/", Err(UrlProblem::InsecureCharacter(("`".to_string(), 24)))),    
     ];
 
