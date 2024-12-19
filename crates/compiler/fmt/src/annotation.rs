@@ -222,8 +222,6 @@ fn fmt_ty_ann(
 ) {
     let me = ann_lift_spaces(buf.text.bump(), me);
 
-    let self_is_multiline = me.item.is_multiline();
-
     if !me.before.is_empty() {
         buf.ensure_ends_with_newline();
         fmt_comments_only(buf, me.before.iter(), NewlineAt::Bottom, indent);
@@ -1214,59 +1212,43 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
     {
         match self {
             TypeAnnotation::Apply(module, func, args) => {
-                if args.is_empty() {
-                    return Spaces {
-                        item: Node::TypeAnnotation(*self),
-                        before: &[],
-                        after: &[],
-                    };
-                }
-                let mut new_args = Vec::with_capacity_in(args.len(), arena);
-
-                if !args.is_empty() {
-                    for arg in args.iter().take(args.len() - 1) {
-                        let lifted = ann_lift_spaces(arena, &arg.value);
-                        new_args.push(Loc::at(arg.region, lower(arena, lifted)));
-                    }
-                }
-
-                let after = if let Some(last) = args.last() {
-                    let lifted = ann_lift_spaces(arena, &last.value);
-                    if lifted.before.is_empty() {
-                        new_args.push(Loc::at(last.region, lifted.item));
-                    } else {
-                        new_args.push(Loc::at(
-                            last.region,
-                            TypeAnnotation::SpaceBefore(arena.alloc(lifted.item), lifted.before),
-                        ));
-                    }
-                    lifted.after
+                let first = if module.is_empty() {
+                    Node::Literal(func)
                 } else {
-                    &[]
+                    Node::Literal(arena.alloc_str(&format!("{}.{}", module, func)))
                 };
 
-                let item = Node::TypeAnnotation(TypeAnnotation::Apply(
-                    module,
-                    func,
-                    new_args.into_bump_slice(),
-                ));
+                let mut last_after: &[CommentOrNewline<'_>] = &[];
+                let mut rest = Vec::with_capacity_in(args.len(), arena);
 
-                if parens == Parens::InApply {
-                    parens_around_node(
-                        arena,
-                        Spaces {
-                            before: &[],
-                            item,
-                            after,
-                        },
-                        true,
-                    )
+                for arg in *args {
+                    let lifted = arg.value.to_node(arena, Parens::InApply);
+                    let before = merge_spaces_conservative(arena, last_after, lifted.before);
+                    last_after = lifted.after;
+                    rest.push(Item {
+                        before,
+                        comma: false,
+                        newline: false,
+                        space: true,
+                        node: lifted.item,
+                    });
+                }
+
+                let item = Spaces {
+                    before: &[],
+                    item: Node::CommaSequence {
+                        allow_blank_lines: false,
+                        indent_rest: true,
+                        first: arena.alloc(first),
+                        rest: rest.into_bump_slice(),
+                    },
+                    after: last_after,
+                };
+
+                if parens == Parens::InApply && !args.is_empty() {
+                    parens_around_node(arena, item, false)
                 } else {
-                    Spaces {
-                        before: &[],
-                        item,
-                        after,
-                    }
+                    item
                 }
             }
             TypeAnnotation::SpaceBefore(expr, spaces) => {
@@ -1335,6 +1317,7 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                     before: first_node.before,
                     item: Node::CommaSequence {
                         allow_blank_lines: false,
+                        indent_rest: false,
                         first: arena.alloc(first_node.item),
                         rest: rest_nodes.into_bump_slice(),
                     },
@@ -1346,7 +1329,7 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                     || parens == Parens::InAsPattern
                     || parens == Parens::InFunctionType
                 {
-                    parens_around_node(arena, inner, true)
+                    parens_around_node(arena, item, false)
                 } else {
                     item
                 }
@@ -1375,7 +1358,7 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                 let item = Spaces::item(Node::Literal(text));
 
                 if *text == "implements" {
-                    parens_around_node(arena, item)
+                    parens_around_node(arena, item, false)
                 } else {
                     item
                 }

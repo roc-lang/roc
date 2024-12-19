@@ -56,6 +56,7 @@ pub enum Node<'a> {
     DelimitedSequence(Braces, &'a [(Sp<'a>, Node<'a>)], Sp<'a>),
     CommaSequence {
         allow_blank_lines: bool,
+        indent_rest: bool,
         first: &'a Node<'a>,
         rest: &'a [Item<'a>],
     },
@@ -160,6 +161,7 @@ impl<'a> Formattable for Node<'a> {
             }
             Node::CommaSequence {
                 allow_blank_lines: _,
+                indent_rest: _,
                 first,
                 rest,
             } => first.is_multiline() || rest.iter().any(|item| item.is_multiline()),
@@ -205,10 +207,16 @@ impl<'a> Formattable for Node<'a> {
             }
             Node::CommaSequence {
                 allow_blank_lines,
+                indent_rest,
                 first,
                 rest,
             } => {
                 buf.indent(indent);
+                let inner_indent = if *indent_rest {
+                    indent + INDENT
+                } else {
+                    indent
+                };
                 first.format_with_options(buf, parens, newlines, indent);
 
                 for item in *rest {
@@ -218,14 +226,15 @@ impl<'a> Formattable for Node<'a> {
                     if *allow_blank_lines {
                         fmt_spaces(buf, item.before.iter(), indent);
                     } else {
-                        fmt_spaces_no_blank_lines(buf, item.before.iter(), indent);
+                        fmt_spaces_no_blank_lines(buf, item.before.iter(), inner_indent);
                     }
                     if item.newline {
                         buf.ensure_ends_with_newline();
                     } else if item.space {
                         buf.ensure_ends_with_whitespace();
                     }
-                    item.node.format_with_options(buf, parens, newlines, indent);
+                    item.node
+                        .format_with_options(buf, parens, newlines, inner_indent);
                 }
             }
             Node::Literal(text) => {
