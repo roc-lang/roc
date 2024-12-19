@@ -204,7 +204,6 @@ fn gen_from_mono_module_llvm<'a>(
 
     let builder = context.create_builder();
     let (dibuilder, compile_unit) = roc_gen_llvm::llvm::build::Env::new_debug_info(module);
-    let (mpm, _fpm) = roc_gen_llvm::llvm::build::construct_optimization_passes(module, opt_level);
 
     // Compile and add all the Procs before adding main
     let env = roc_gen_llvm::llvm::build::Env {
@@ -264,31 +263,7 @@ fn gen_from_mono_module_llvm<'a>(
     let generate_final_ir = all_code_gen_start.elapsed();
     let code_gen_object_start = Instant::now();
 
-    env.dibuilder.finalize();
-
-    if !emit_debug_info {
-        module.strip_debug_info();
-    }
-
-    // Uncomment this to see the module's optimized LLVM instruction output:
-    // env.module.print_to_stderr();
-
-    mpm.run_on(module);
-
-    // Verify the module
-    if let Err(errors) = env.module.verify() {
-        // write the ll code to a file, so we can modify it
-        env.module.print_to_file(&app_ll_file).unwrap();
-
-        internal_error!(
-            "😱 LLVM errors when defining module; I wrote the full LLVM IR to {:?}\n\n {}",
-            app_ll_file,
-            errors.to_string(),
-        );
-    }
-
-    // Uncomment this to see the module's optimized LLVM instruction output:
-    // env.module.print_to_stderr();
+    crate::llvm_passes::optimize_llvm_ir(&env, target, opt_level, emit_debug_info, &app_ll_file);
 
     let gen_sanitizers = cfg!(feature = "sanitizers") && std::env::var("ROC_SANITIZERS").is_ok();
     let memory_buffer = if fuzz || gen_sanitizers {

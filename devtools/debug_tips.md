@@ -61,7 +61,7 @@ $ source <(cargo llvm-cov show-env --export-prefix)
 $ cargo llvm-cov clean --workspace
 $ cargo build --bin roc
 # Replace with the command you want to generate coverage for:
-$ ./target/debug/roc build ./examples/platform-switching/rocLovesRust.roc
+$ ./target/debug/roc build yourFile.roc
 # To view in editor
 $ cargo llvm-cov report --lcov  --output-path lcov.info
 # To view in browser. This html report also allows you to see how many times each line of code was run. 
@@ -71,7 +71,7 @@ Viewing lcov.info will depend on your editor. For vscode, you can use the [cover
 
 ## Trace all Function Calls
 
-[uftrace](https://github.com/namhyung/uftrace) allows you to trace all functions that were called in the compiler in order. For example, you can use it with `./target/debug/roc build examples/platform-switching/rocLovesRust.roc`. The output looks like this:
+[uftrace](https://github.com/namhyung/uftrace) allows you to trace all functions that were called in the compiler in order. For example, you can use it with `./target/debug/roc build yourFile.roc`. The output looks like this:
 ```
 roc::main() {
   roc_tracing::setup_tracing();
@@ -92,7 +92,7 @@ It can be valuable if you want to compare two compiler versions/commits and see 
 2. In the roc repo in rust-toolchain.toml, switch to the commented out nightly channel
 3. `export RUSTFLAGS="-Awarnings -Z instrument-mcount -C passes=ee-instrument<post-inline>"`
 4. `cargo build --bin roc`
-5. Example usage: `uftrace record --filter 'roc_*' ./target/debug/roc build examples/platform-switching/rocLovesRust.roc`
+5. Example usage: `uftrace record --filter 'roc_*' ./target/debug/roc build yourFile.roc`
 6. Show the trace and drop all functions that do not start with `roc`: `uftrace replay -f none --notrace '^[^r]|^r[^o]|^ro[^c]' -D 5`. `-D 5` sets the function call depth, feel free to modify it to best suit your purpose.
 
 Depending on which functions you are interested in, you may also want to set `let threads = Threads::Single;` in the function `load` in `crates/compiler/load_internal/src/file.rs`. That avoids function calls from being obscured between multiple threads.

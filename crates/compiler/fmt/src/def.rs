@@ -7,8 +7,8 @@ use crate::expr::{
     expr_lift_and_lower, expr_lift_spaces, expr_lift_spaces_after, expr_lift_spaces_before,
     fmt_str_literal, is_str_multiline, sub_expr_requests_parens,
 };
-use crate::pattern::{fmt_pattern, pattern_lift_spaces};
-use crate::pattern::{pattern_lift_spaces_before, starts_with_inline_comment};
+use crate::pattern::pattern_fmt_apply;
+use crate::pattern::pattern_lift_spaces_before;
 use crate::spaces::{
     fmt_comments_only, fmt_default_newline, fmt_default_spaces, fmt_spaces, NewlineAt, INDENT,
 };
@@ -16,10 +16,10 @@ use crate::Buf;
 use bumpalo::Bump;
 use roc_error_macros::internal_error;
 use roc_parse::ast::{
-    AbilityMember, CommentOrNewline, Defs, Expr, ExtractSpaces, ImportAlias, ImportAsKeyword,
-    ImportExposingKeyword, ImportedModuleName, IngestedFileAnnotation, IngestedFileImport,
-    ModuleImport, ModuleImportParams, Pattern, Spaceable, Spaces, SpacesAfter, SpacesBefore,
-    StrLiteral, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    AbilityMember, Defs, Expr, ExtractSpaces, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
+    ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport,
+    ModuleImportParams, Pattern, Spaceable, Spaces, SpacesAfter, SpacesBefore, StrLiteral,
+    TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use roc_parse::expr::merge_spaces;
 use roc_parse::header::Keyword;
@@ -37,7 +37,6 @@ impl<'a> Formattable for Defs<'a> {
         buf: &mut Buf,
         _parens: Parens,
         _newlines: Newlines,
-
         indent: u16,
     ) {
         let mut prev_spaces = true;
@@ -495,12 +494,22 @@ impl<'a> Formattable for TypeDef<'a> {
                     );
                 } else {
                     for member in members.iter() {
-                        member.format_with_options(
-                            buf,
-                            Parens::NotNeeded,
-                            Newlines::Yes,
-                            indent + INDENT,
-                        );
+                        let Spaces {
+                            before,
+                            item,
+                            after,
+                        } = member.name.value.extract_spaces();
+                        fmt_spaces(buf, before.iter(), indent + INDENT);
+                        buf.ensure_ends_with_newline();
+
+                        buf.indent(indent + INDENT);
+                        buf.push_str(item);
+                        fmt_spaces(buf, after.iter(), indent + INDENT);
+                        buf.spaces(1);
+                        buf.push(':');
+                        buf.spaces(1);
+
+                        member.typ.value.format(buf, indent + 2 * INDENT);
                     }
                 }
             }
@@ -518,69 +527,16 @@ impl<'a> Formattable for TypeHeader<'a> {
         buf: &mut Buf,
         _parens: Parens,
         _newlines: Newlines,
-
         indent: u16,
     ) {
-        buf.indent(indent);
-        buf.push_str(self.name.value);
-
-        let vars_indent = if self.vars.iter().any(|v| v.is_multiline()) {
-            indent + INDENT
-        } else {
-            indent
-        };
-
-        let mut last_after: &[CommentOrNewline<'_>] = &[];
-        let mut last_multiline = false;
-
-        for var in self.vars.iter() {
-            let var = pattern_lift_spaces(buf.text.bump(), &var.value);
-
-            let before = if !last_after.is_empty() {
-                merge_spaces(buf.text.bump(), last_after, var.before)
-            } else {
-                var.before
-            };
-
-            if !before.is_empty() {
-                if !var.item.is_multiline() {
-                    fmt_comments_only(buf, before.iter(), NewlineAt::Bottom, vars_indent)
-                } else {
-                    fmt_spaces(buf, before.iter(), vars_indent);
-                }
-            }
-
-            buf.ensure_ends_with_whitespace();
-
-            last_after = var.after;
-            last_multiline = var.item.is_multiline();
-
-            let need_parens = matches!(var.item, Pattern::Apply(..));
-
-            if need_parens {
-                buf.push_str("(");
-            }
-
-            fmt_pattern(buf, &var.item, vars_indent, Parens::NotNeeded);
-
-            buf.indent(vars_indent);
-
-            if need_parens {
-                buf.push_str(")");
-            }
-        }
-
-        if !last_after.is_empty() {
-            if starts_with_inline_comment(last_after.iter()) {
-                buf.spaces(1);
-            }
-
-            if !last_multiline {
-                fmt_comments_only(buf, last_after.iter(), NewlineAt::Bottom, indent)
-            } else {
-                fmt_spaces(buf, last_after.iter(), indent);
-            }
-        }
+        pattern_fmt_apply(
+            buf,
+            Pattern::Tag(self.name.value),
+            self.vars,
+            Parens::NotNeeded,
+            indent,
+            self.vars.iter().any(|v| v.is_multiline()),
+        );
     }
 }
 
@@ -697,6 +653,7 @@ impl<'a> Formattable for IngestedFileImport<'a> {
         fmt_str_literal(buf, path.value, indent);
 
         name.keyword.format(buf, indent);
+        buf.indent(indent);
         buf.push_str(name.item.value);
 
         annotation.format(buf, indent);
@@ -803,6 +760,7 @@ impl<'a> Formattable for IngestedFileAnnotation<'a> {
         } = self;
 
         fmt_default_spaces(buf, before_colon, indent);
+        buf.indent(indent);
         buf.push_str(":");
         buf.spaces(1);
         annotation.format(buf, indent);
@@ -901,7 +859,6 @@ fn fmt_general_def<L: Formattable>(
     lhs: L,
     lhs_parens: Parens,
     buf: &mut Buf,
-
     indent: u16,
     sep: &str,
     rhs: &TypeAnnotation,
@@ -1032,6 +989,9 @@ pub fn fmt_body<'a>(
             && pattern_extracted.before.iter().all(|s| s.is_newline())
             && pattern_extracted.after.iter().all(|s| s.is_newline())
             && !matches!(body.extract_spaces().item, Expr::Defs(..))
+            && !matches!(body.extract_spaces().item, Expr::Return(..))
+            && !matches!(body.extract_spaces().item, Expr::Backpassing(..))
+            && !starts_with_expect_ident(body)
     } else {
         false
     };
@@ -1049,6 +1009,7 @@ pub fn fmt_body<'a>(
     } else {
         buf.spaces(1);
     }
+    let indent = buf.cur_line_indent();
     buf.push_str("=");
 
     let body = expr_lift_and_lower(Parens::NotNeeded, buf.text.bump(), body);
@@ -1139,6 +1100,19 @@ pub fn fmt_body<'a>(
     } else {
         buf.spaces(1);
         body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
+    }
+}
+
+fn starts_with_expect_ident(expr: &Expr<'_>) -> bool {
+    // We need to be persnickety about not formatting `{}=expect foo` into `expect foo`,
+    // because `expect` is treated as a keyword at the statement level but not at the expr level.
+    // If we removed the `{}=` in this case, that would change the meaning
+    match expr {
+        Expr::Apply(inner, _, _) => starts_with_expect_ident(&inner.value),
+        Expr::Var { module_name, ident } => {
+            module_name.is_empty() && (*ident == "expect" || *ident == "expect!")
+        }
+        _ => false,
     }
 }
 

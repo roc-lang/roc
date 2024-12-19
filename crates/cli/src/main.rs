@@ -282,6 +282,7 @@ fn main() -> io::Result<()> {
                     ) {
                         Ok((problems, total_time)) => {
                             problems.print_error_warning_count(total_time);
+                            println!(".\n");
                             Ok(problems.exit_code())
                         }
 

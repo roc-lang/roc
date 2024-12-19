@@ -1,8 +1,9 @@
-use crate::ast::{EscapedChar, SingleQuoteLiteral, StrLiteral, StrSegment};
+use crate::ast::{EscapedChar, SingleQuoteLiteral, Spaceable, StrLiteral, StrSegment};
+use crate::blankspace::space0_e;
 use crate::expr;
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    allocated, between, byte, loc, reset_min_indent, skip_second, specialize_err_ref, then,
+    allocated, and, between, byte, loc, reset_min_indent, skip_second, specialize_err_ref, then,
     BadInputError, ESingleQuote, EString, Parser,
 };
 use crate::state::State;
@@ -295,7 +296,7 @@ pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EStri
                     //   -> TODO: do we want to change this?
 
                     // Simply by decoding this, it's guaranteed to be valid utf-8
-                    let text = expr.to_str_in(arena);
+                    let text = expr.to_str_in(arena).map_err(|e| (MadeProgress, e))?;
 
                     if text.len() > 5 {
                         return Err((
@@ -324,8 +325,10 @@ pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EStri
                         let without_newline = &state.bytes()[0..(segment_parsed_bytes - 1)];
                         let with_newline = &state.bytes()[0..segment_parsed_bytes];
 
-                        state.advance_mut(segment_parsed_bytes);
+                        state.advance_mut(segment_parsed_bytes - 1);
+                        state = state.advance_newline();
                         state = consume_indent(state, indent)?;
+                        state = state.mark_current_indent();
                         bytes = state.bytes().iter();
 
                         if state.bytes().starts_with(b"\"\"\"") {
@@ -455,15 +458,19 @@ pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EStri
                     let original_byte_count = state.bytes().len();
 
                     // Parse an arbitrary expression, followed by ')'
-                    let (_progress, loc_expr, new_state) = skip_second(
+                    let (_progress, (mut loc_expr, sp), new_state) = and(
                         specialize_err_ref(
                             EString::Format,
                             loc(allocated(reset_min_indent(expr::expr_help())))
                                 .trace("str_interpolation"),
                         ),
-                        byte(b')', EString::FormatEnd),
+                        skip_second(space0_e(EString::FormatEnd), byte(b')', EString::FormatEnd)),
                     )
                     .parse(arena, state, min_indent)?;
+
+                    if !sp.is_empty() {
+                        loc_expr.value = arena.alloc(loc_expr.value.after(sp));
+                    }
 
                     // Advance the iterator past the expr we just parsed.
                     for _ in 0..(original_byte_count - new_state.bytes().len()) {

@@ -156,6 +156,7 @@ pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
                 "<!-- Package Name -->",
                 render_name_link(package_name.as_str()).as_str(),
             )
+            .replace("<!-- Package Name String -->", package_name.as_str())
             .replace(
                 "<!-- Module Docs -->",
                 render_package_index(&exposed_module_docs).as_str(),
@@ -183,6 +184,7 @@ pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
                 "<!-- Package Name -->",
                 render_name_link(package_name.as_str()).as_str(),
             )
+            .replace("<!-- Package Name String -->", package_name.as_str())
             .replace(
                 "<!-- Module Docs -->",
                 render_module_documentation(

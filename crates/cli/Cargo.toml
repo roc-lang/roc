@@ -43,6 +43,7 @@ sanitizers = ["roc_build/sanitizers"]
 
 
 [dependencies]
+copy_zig_glue.workspace = true
 roc_build.workspace = true
 roc_builtins.workspace = true
 roc_can.workspace = true

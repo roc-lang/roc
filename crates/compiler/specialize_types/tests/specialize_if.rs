@@ -5,7 +5,7 @@ extern crate pretty_assertions;
 mod helpers;
 
 #[cfg(test)]
-mod specialize_structs {
+mod specialize_if {
     use crate::helpers::expect_mono_expr_str;
 
     #[test]

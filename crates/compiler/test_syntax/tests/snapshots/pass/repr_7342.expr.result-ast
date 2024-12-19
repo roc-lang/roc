@@ -1,0 +1,61 @@
+@0-14 SpaceAfter(
+    ParensAround(
+        Defs(
+            Defs {
+                tags: [
+                    EitherIndex(2147483648),
+                ],
+                regions: [
+                    @1-11,
+                ],
+                space_before: [
+                    Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                ],
+                space_after: [
+                    Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                ],
+                spaces: [],
+                type_defs: [],
+                value_defs: [
+                    Annotation(
+                        @2-3 Apply(
+                            @2-3 SpaceAfter(
+                                NumLiteral(
+                                    "1",
+                                ),
+                                [
+                                    LineComment(
+                                        "",
+                                    ),
+                                ],
+                            ),
+                            [
+                                @6-7 Tag(
+                                    "Q",
+                                ),
+                                @8-9 Identifier {
+                                    ident: "a",
+                                },
+                            ],
+                        ),
+                        @10-11 BoundVariable(
+                            "t",
+                        ),
+                    ),
+                ],
+            },
+            @12-13 SpaceBefore(
+                Var {
+                    module_name: "",
+                    ident: "n",
+                },
+                [
+                    Newline,
+                ],
+            ),
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

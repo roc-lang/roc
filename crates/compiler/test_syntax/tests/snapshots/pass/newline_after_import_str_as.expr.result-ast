@@ -1,0 +1,52 @@
+@0-17 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-15,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                IngestedFileImport(
+                    IngestedFileImport {
+                        before_path: [],
+                        path: @6-8 PlainLine(
+                            "",
+                        ),
+                        name: KeywordItem {
+                            keyword: Spaces {
+                                before: [],
+                                item: ImportAsKeyword,
+                                after: [
+                                    Newline,
+                                ],
+                            },
+                            item: @12-15 "das",
+                        },
+                        annotation: None,
+                    },
+                ),
+            ],
+        },
+        @16-17 SpaceBefore(
+            Tag(
+                "A",
+            ),
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

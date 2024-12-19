@@ -5,7 +5,7 @@ use crate::header::{
     self, AppHeader, HostedHeader, ModuleHeader, ModuleName, PackageHeader, PlatformHeader,
 };
 use crate::ident::Accessor;
-use crate::parser::ESingleQuote;
+use crate::parser::{ESingleQuote, EString};
 use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
 use roc_collections::soa::{index_push_new, slice_extend_new};
@@ -360,9 +360,9 @@ pub enum SingleQuoteLiteral<'a> {
 }
 
 impl<'a> SingleQuoteLiteral<'a> {
-    pub fn to_str_in(&self, arena: &'a Bump) -> &'a str {
+    pub fn to_str_in(&self, arena: &'a Bump) -> Result<&'a str, EString<'a>> {
         match self {
-            SingleQuoteLiteral::PlainLine(s) => s,
+            SingleQuoteLiteral::PlainLine(s) => Ok(s),
             SingleQuoteLiteral::Line(segments) => {
                 let mut s = String::new_in(arena);
                 for segment in *segments {
@@ -370,15 +370,19 @@ impl<'a> SingleQuoteLiteral<'a> {
                         SingleQuoteSegment::Plaintext(s2) => s.push_str(s2),
                         SingleQuoteSegment::Unicode(loc) => {
                             let s2 = loc.value;
-                            let c = u32::from_str_radix(s2, 16).expect("Invalid unicode escape");
-                            s.push(char::from_u32(c).expect("Invalid unicode codepoint"));
+                            let c = u32::from_str_radix(s2, 16)
+                                .map_err(|_| EString::UnicodeEscapeTooLarge(loc.region))?;
+                            s.push(
+                                char::from_u32(c)
+                                    .ok_or(EString::InvalidUnicodeCodepoint(loc.region))?,
+                            );
                         }
                         SingleQuoteSegment::EscapedChar(c) => {
                             s.push(c.unescape());
                         }
                     }
                 }
-                s.into_bump_str()
+                Ok(s.into_bump_str())
             }
         }
     }

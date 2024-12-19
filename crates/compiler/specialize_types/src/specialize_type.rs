@@ -35,6 +35,9 @@ pub enum Problem {
     BadNumTypeParam,
     UninitializedReservedExpr,
     FnDidNotHaveFnType,
+    WhenHasNoBranches,
+    WhenBranchHasNoPatterns,
+    UninitializedReservedPattern,
 }
 
 /// For MonoTypes that are records, store their field indices.
