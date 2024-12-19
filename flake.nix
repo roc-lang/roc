@@ -161,6 +161,10 @@
           lang-server-debug = rocBuild.roc-lang-server-debug;
         };
 
+        lib = {
+          buildRocPackage = import ./nix/buildRocPackage.nix;
+        };
+
         apps = {
           default = {
             type = "app";
