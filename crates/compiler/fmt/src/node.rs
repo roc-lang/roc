@@ -4,7 +4,7 @@ use roc_parse::ast::{CommentOrNewline, Pattern, Spaces, TypeAnnotation};
 use crate::{
     annotation::{Formattable, Newlines, Parens},
     collection::Braces,
-    spaces::{fmt_spaces, INDENT},
+    spaces::{fmt_spaces, fmt_spaces_no_blank_lines, INDENT},
     Buf,
 };
 
@@ -54,10 +54,47 @@ pub enum Node<'a> {
         rest: &'a [(Sp<'a>, Node<'a>)],
     },
     DelimitedSequence(Braces, &'a [(Sp<'a>, Node<'a>)], Sp<'a>),
+    CommaSequence {
+        allow_blank_lines: bool,
+        first: &'a Node<'a>,
+        rest: &'a [Item<'a>],
+    },
 
     // Temporary! TODO: translate these into proper Node elements
     TypeAnnotation(TypeAnnotation<'a>),
     Pattern(Pattern<'a>),
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct Item<'a> {
+    pub before: &'a [CommentOrNewline<'a>],
+    pub comma: bool,
+    pub newline: bool,
+    pub space: bool,
+    pub node: Node<'a>,
+}
+
+impl<'a> Item<'a> {
+    fn is_multiline(&self) -> bool {
+        self.newline || !self.before.is_empty() || self.node.is_multiline()
+    }
+}
+
+impl<'a> Node<'a> {
+    pub fn space_seq_3(
+        arena: &'a Bump,
+        a: Node<'a>,
+        b_sp: &'a [CommentOrNewline<'a>],
+        c: Node<'a>,
+        d_sp: &'a [CommentOrNewline<'a>],
+        e: Node<'a>,
+    ) -> Node<'a> {
+        Node::Sequence {
+            first: arena.alloc(a),
+            extra_indent_for_rest: true,
+            rest: arena.alloc_slice_copy(&[(Sp::with_space(b_sp), c), (Sp::with_space(d_sp), e)]),
+        }
+    }
 }
 
 pub fn parens_around_node<'a, 'b: 'a>(
@@ -105,12 +142,6 @@ fn fmt_sp(buf: &mut Buf, sp: Sp<'_>, indent: u16) {
 impl<'a> Formattable for Node<'a> {
     fn is_multiline(&self) -> bool {
         match self {
-            Node::DelimitedSequence(_braces, lefts, right) => {
-                right.comments.is_empty()
-                    && lefts
-                        .iter()
-                        .any(|(sp, l)| l.is_multiline() || !sp.comments.is_empty())
-            }
             Node::Sequence {
                 first,
                 extra_indent_for_rest: _,
@@ -121,6 +152,17 @@ impl<'a> Formattable for Node<'a> {
                         .iter()
                         .any(|(sp, l)| l.is_multiline() || !sp.comments.is_empty())
             }
+            Node::DelimitedSequence(_braces, lefts, right) => {
+                right.comments.is_empty()
+                    && lefts
+                        .iter()
+                        .any(|(sp, l)| l.is_multiline() || !sp.comments.is_empty())
+            }
+            Node::CommaSequence {
+                allow_blank_lines: _,
+                first,
+                rest,
+            } => first.is_multiline() || rest.iter().any(|item| item.is_multiline()),
             Node::Literal(_) => false,
             Node::TypeAnnotation(type_annotation) => type_annotation.is_multiline(),
             Node::Pattern(pat) => pat.is_multiline(),
@@ -159,6 +201,31 @@ impl<'a> Formattable for Node<'a> {
                 for (sp, l) in *rest {
                     fmt_sp(buf, *sp, next_indent);
                     l.format_with_options(buf, parens, newlines, next_indent);
+                }
+            }
+            Node::CommaSequence {
+                allow_blank_lines,
+                first,
+                rest,
+            } => {
+                buf.indent(indent);
+                first.format_with_options(buf, parens, newlines, indent);
+
+                for item in *rest {
+                    if item.comma {
+                        buf.push(',');
+                    }
+                    if *allow_blank_lines {
+                        fmt_spaces(buf, item.before.iter(), indent);
+                    } else {
+                        fmt_spaces_no_blank_lines(buf, item.before.iter(), indent);
+                    }
+                    if item.newline {
+                        buf.ensure_ends_with_newline();
+                    } else if item.space {
+                        buf.ensure_ends_with_whitespace();
+                    }
+                    item.node.format_with_options(buf, parens, newlines, indent);
                 }
             }
             Node::Literal(text) => {

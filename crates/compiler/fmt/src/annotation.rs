@@ -1,7 +1,7 @@
 use crate::{
     collection::{fmt_collection, Braces},
     expr::merge_spaces_conservative,
-    node::{parens_around_node, Node, NodeSequenceBuilder, Nodify, Sp},
+    node::{parens_around_node, Item, Node, NodeSequenceBuilder, Nodify, Sp},
     pattern::pattern_lift_spaces_after,
     pattern::snakify_camel_ident,
     spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT},
@@ -236,59 +236,6 @@ fn fmt_ty_ann(
         TypeAnnotation::SpaceBefore(_ann, _spaces) | TypeAnnotation::SpaceAfter(_ann, _spaces) => {
             unreachable!()
         }
-        TypeAnnotation::Function(args, arrow, ret) => {
-            let needs_parens = parens != Parens::NotNeeded;
-
-            buf.indent(indent);
-
-            if needs_parens {
-                buf.push('(')
-            }
-
-            for (index, argument) in args.iter().enumerate() {
-                let is_first = index == 0;
-
-                if !is_first {
-                    buf.indent(indent);
-                    buf.push_str(",");
-                    if !self_is_multiline {
-                        buf.spaces(1);
-                    }
-                }
-
-                let newline_at_top = !is_first && self_is_multiline;
-
-                fmt_ty_ann(
-                    &argument.value,
-                    buf,
-                    indent,
-                    Parens::InFunctionType,
-                    Newlines::Yes,
-                    newline_at_top,
-                );
-            }
-
-            if self_is_multiline {
-                buf.newline();
-                buf.indent(indent);
-            } else {
-                buf.spaces(1);
-            }
-
-            match arrow {
-                FunctionArrow::Pure => buf.push_str("->"),
-                FunctionArrow::Effectful => buf.push_str("=>"),
-            }
-
-            buf.spaces(1);
-
-            ret.value
-                .format_with_options(buf, Parens::InFunctionType, Newlines::No, indent);
-
-            if needs_parens {
-                buf.push(')')
-            }
-        }
         TypeAnnotation::Apply(pkg, name, arguments) => {
             buf.indent(indent);
             let write_parens = parens == Parens::InApply && !arguments.is_empty();
@@ -370,40 +317,11 @@ fn fmt_ty_ann(
             fmt_ext(ext, buf, indent);
         }
 
-        TypeAnnotation::As(..) => {
+        TypeAnnotation::Function(..) | TypeAnnotation::As(..) => {
             me.item
                 .to_node(buf.text.bump(), parens)
                 .item
                 .format(buf, indent);
-            // let write_parens = parens == Parens::InAsPattern || parens == Parens::InApply;
-
-            // buf.indent(indent);
-            // if write_parens {
-            //     buf.push('(')
-            // }
-
-            // let lhs_indent = buf.cur_line_indent();
-            // lhs.value
-            //     .format_with_options(buf, Parens::InAsPattern, Newlines::No, indent);
-            // buf.spaces(1);
-            // format_spaces(buf, spaces, newlines, indent);
-            // buf.indent(lhs_indent + INDENT);
-            // buf.push_str("as");
-            // buf.spaces(1);
-            // buf.push_str(name.value);
-            // for var in *vars {
-            //     buf.spaces(1);
-            //     var.value.format_with_options(
-            //         buf,
-            //         Parens::NotNeeded,
-            //         Newlines::No,
-            //         lhs_indent + INDENT,
-            //     );
-            // }
-
-            // if write_parens {
-            //     buf.push(')')
-            // }
         }
 
         TypeAnnotation::Where(annot, implements_clauses) => {
@@ -1362,32 +1280,75 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                 inner
             }
             TypeAnnotation::Function(args, purity, res) => {
-                let new_args = arena.alloc_slice_copy(args);
-                let before = if let Some(first) = new_args.first_mut() {
-                    let lifted = ann_lift_spaces_before(arena, &first.value);
-                    first.value = lifted.item;
-                    lifted.before
-                } else {
-                    &[]
+                let (first, rest) = args.split_first().expect("args must not be empty");
+                let first_node = first.value.to_node(arena, Parens::InFunctionType);
+                let mut last_after: &'_ [CommentOrNewline<'_>] = &[];
+                let mut rest_nodes = Vec::with_capacity_in(rest.len() + 2, arena);
+
+                let mut multiline = first_node.item.is_multiline() || !first_node.after.is_empty();
+
+                for item in rest {
+                    let node = item.value.to_node(arena, Parens::InFunctionType);
+                    let before = merge_spaces_conservative(arena, last_after, node.before);
+                    multiline |= node.item.is_multiline() || !before.is_empty();
+                    last_after = node.after;
+                    rest_nodes.push(Item {
+                        before,
+                        comma: true,
+                        newline: false,
+                        space: true,
+                        node: node.item,
+                    });
+                }
+
+                let res_node = res.value.to_node(arena, Parens::InFunctionType);
+                multiline |= res_node.item.is_multiline()
+                    || !last_after.is_empty()
+                    || !res_node.before.is_empty();
+
+                if multiline {
+                    for item in rest_nodes.iter_mut() {
+                        item.newline = true;
+                    }
+                }
+
+                rest_nodes.push(Item {
+                    before: last_after,
+                    comma: false,
+                    newline: multiline,
+                    space: true,
+                    node: Node::Literal(match purity {
+                        FunctionArrow::Pure => "->",
+                        FunctionArrow::Effectful => "=>",
+                    }),
+                });
+
+                rest_nodes.push(Item {
+                    before: res_node.before,
+                    comma: false,
+                    newline: false,
+                    space: true,
+                    node: res_node.item,
+                });
+
+                let item = Spaces {
+                    before: first_node.before,
+                    item: Node::CommaSequence {
+                        allow_blank_lines: false,
+                        first: arena.alloc(first_node.item),
+                        rest: rest_nodes.into_bump_slice(),
+                    },
+                    after: res_node.after,
                 };
-                let new_res = ann_lift_spaces_after(arena, &res.value);
-                let new_ann = TypeAnnotation::Function(
-                    new_args,
-                    *purity,
-                    arena.alloc(Loc::at_zero(new_res.item)),
-                );
-                let inner = Spaces {
-                    before,
-                    item: Node::TypeAnnotation(new_ann),
-                    after: new_res.after,
-                };
+
                 if parens == Parens::InCollection
                     || parens == Parens::InApply
                     || parens == Parens::InAsPattern
+                    || parens == Parens::InFunctionType
                 {
                     parens_around_node(arena, inner, true)
                 } else {
-                    inner
+                    item
                 }
             }
             TypeAnnotation::As(left, sp, right) => {
