@@ -50,7 +50,6 @@ mod cli_tests {
     const TEST_LEGACY_LINKER: bool = false;
 
     #[test]
-    #[ignore = "Needs investigation, see also github.com/roc-lang/roc/pull/7231"]
     fn platform_switching_rust() {
         // pre-build the platform
         std::process::Command::new("bash")
