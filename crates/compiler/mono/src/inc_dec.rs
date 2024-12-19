@@ -1289,6 +1289,8 @@ pub(crate) fn lowlevel_borrow_signature(op: LowLevel) -> &'static [Ownership] {
         | NumAsin
         | NumIntCast
         | NumToIntChecked
+        | NumToDecCast
+        | NumToDecChecked
         | NumToFloatCast
         | NumToFloatChecked
         | NumCountLeadingZeroBits
