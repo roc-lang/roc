@@ -40,6 +40,16 @@ impl<'a, T: Copy> ExtractSpaces<'a> for Spaces<'a, T> {
     }
 }
 
+impl<'a, T> Spaces<'a, T> {
+    pub fn item(item: T) -> Self {
+        Self {
+            before: &[],
+            item,
+            after: &[],
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct SpacesBefore<'a, T> {
     pub before: &'a [CommentOrNewline<'a>],

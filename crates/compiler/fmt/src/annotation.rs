@@ -1410,6 +1410,18 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                     item
                 }
             }
+            TypeAnnotation::BoundVariable(text) => {
+                let item = Spaces::item(Node::Literal(text));
+
+                if *text == "implements" {
+                    parens_around_node(arena, item)
+                } else {
+                    item
+                }
+            }
+            TypeAnnotation::Inferred => Spaces::item(Node::Literal("_")),
+            TypeAnnotation::Wildcard => Spaces::item(Node::Literal("*")),
+            TypeAnnotation::Malformed(text) => Spaces::item(Node::Literal(text)),
             _ => {
                 let lifted = ann_lift_spaces(arena, self);
                 Spaces {
