@@ -85,15 +85,16 @@ dependencies = [
 
 [[package]]
 name = "anstream"
-version = "0.6.4"
+version = "0.6.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ab91ebe16eb252986481c5b62f6098f3b698a45e34b5b98200cf20dd2484a44"
+checksum = "64e15c1ab1f89faffbf04a634d5e1962e9074f2741eef6d97f3c4e322426d526"
 dependencies = [
  "anstyle",
  "anstyle-parse",
  "anstyle-query",
  "anstyle-wincon",
  "colorchoice",
+ "is_terminal_polyfill",
  "utf8parse",
 ]
 
@@ -130,6 +131,12 @@ dependencies = [
  "anstyle",
  "windows-sys 0.48.0",
 ]
+
+[[package]]
+name = "anyhow"
+version = "1.0.86"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3d1d046238990b9cf5bcde22a3fb3584ee5cf65fb2765f454ed428c7a0063da"
 
 [[package]]
 name = "arrayref"
@@ -546,6 +553,13 @@ name = "constant_time_eq"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f7144d30dcf0fafbce74250a3963025d8d52177934239851c917d29f1df280c2"
+
+[[package]]
+name = "copy_zig_glue"
+version = "0.0.1"
+dependencies = [
+ "roc_test_utils_dir",
+]
 
 [[package]]
 name = "core-foundation"
@@ -1299,8 +1313,8 @@ checksum = "bfa799dd5ed20a7e349f3b4639aa80d74549c81716d9ec4f994c9b5815598306"
 
 [[package]]
 name = "inkwell"
-version = "0.2.0"
-source = "git+https://github.com/roc-lang/inkwell?branch=inkwell-llvm-16#d1a596391894933aa1f0f91ec87187e47917cf86"
+version = "0.4.0"
+source = "git+https://github.com/TheDan64/inkwell?rev=89e06af#89e06af9dd70dc5d6bc5ae42a2a03f680a367d37"
 dependencies = [
  "either",
  "inkwell_internals",
@@ -1312,8 +1326,8 @@ dependencies = [
 
 [[package]]
 name = "inkwell_internals"
-version = "0.8.0"
-source = "git+https://github.com/roc-lang/inkwell?branch=inkwell-llvm-16#d1a596391894933aa1f0f91ec87187e47917cf86"
+version = "0.9.0"
+source = "git+https://github.com/TheDan64/inkwell?rev=89e06af#89e06af9dd70dc5d6bc5ae42a2a03f680a367d37"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1349,6 +1363,12 @@ dependencies = [
  "rustix",
  "windows-sys 0.52.0",
 ]
+
+[[package]]
+name = "is_terminal_polyfill"
+version = "1.70.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7943c866cc5cd64cbc25b2e01621d07fa8eb2a1a23160ee81ce38704e97b8ecf"
 
 [[package]]
 name = "itertools"
@@ -1456,14 +1476,15 @@ checksum = "da2479e8c062e40bf0066ffa0bc823de0a9368974af99c9f6df941d2c231e03f"
 
 [[package]]
 name = "llvm-sys"
-version = "160.1.3"
+version = "180.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0bf51981ac0622b10fe4790763e3de1f3d68a0ee4222e03accaaab6731bd508d"
+checksum = "778fa5fa02e32728e718f11eec147e6f134137399ab02fd2c13d32476337affa"
 dependencies = [
+ "anyhow",
  "cc",
  "lazy_static",
  "libc",
- "regex",
+ "regex-lite",
  "semver",
 ]
 
@@ -2111,6 +2132,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "regex-lite"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53a49587ad06b26609c52e423de037e7f57f20d53535d66e08c695f347df952a"
+
+[[package]]
 name = "regex-syntax"
 version = "0.6.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2354,6 +2381,7 @@ dependencies = [
  "roc_types",
  "soa",
  "static_assertions",
+ "test_compile",
  "ven_pretty",
 ]
 
@@ -2387,6 +2415,7 @@ dependencies = [
  "clap 4.4.6",
  "cli_test_utils",
  "const_format",
+ "copy_zig_glue",
  "criterion",
  "distance",
  "errno",
@@ -2558,6 +2587,7 @@ dependencies = [
  "roc_module",
  "roc_parse",
  "roc_region",
+ "soa",
 ]
 
 [[package]]
@@ -2630,7 +2660,6 @@ dependencies = [
  "cli_test_utils",
  "dircpy",
  "fnv",
- "indexmap",
  "indoc",
  "libc",
  "libloading",
@@ -2683,6 +2712,7 @@ dependencies = [
  "parking_lot",
  "roc_can",
  "roc_collections",
+ "roc_error_macros",
  "roc_fmt",
  "roc_load",
  "roc_module",
@@ -2954,7 +2984,6 @@ dependencies = [
  "rustyline-derive",
  "target-lexicon",
  "tempfile",
- "unicode-segmentation",
 ]
 
 [[package]]
@@ -3138,6 +3167,36 @@ name = "roc_solve_schema"
 version = "0.0.1"
 dependencies = [
  "bitflags 1.3.2",
+]
+
+[[package]]
+name = "roc_specialize_types"
+version = "0.0.1"
+dependencies = [
+ "arrayvec 0.7.4",
+ "bitvec",
+ "bumpalo",
+ "hashbrown",
+ "indoc",
+ "parking_lot",
+ "pretty_assertions",
+ "roc_builtins",
+ "roc_can",
+ "roc_collections",
+ "roc_derive",
+ "roc_load",
+ "roc_module",
+ "roc_parse",
+ "roc_problem",
+ "roc_region",
+ "roc_reporting",
+ "roc_solve",
+ "roc_target",
+ "roc_types",
+ "soa",
+ "static_assertions",
+ "test_compile",
+ "test_solve_helpers",
 ]
 
 [[package]]
@@ -3782,6 +3841,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "test_compile"
+version = "0.0.1"
+dependencies = [
+ "bumpalo",
+ "pretty_assertions",
+ "roc_builtins",
+ "roc_can",
+ "roc_collections",
+ "roc_constrain",
+ "roc_derive",
+ "roc_load",
+ "roc_module",
+ "roc_parse",
+ "roc_problem",
+ "roc_region",
+ "roc_reporting",
+ "roc_solve",
+ "roc_solve_problem",
+ "roc_specialize_types",
+ "roc_target",
+ "roc_types",
+]
+
+[[package]]
 name = "test_derive"
 version = "0.0.1"
 dependencies = [
@@ -3908,13 +3991,16 @@ dependencies = [
  "bumpalo",
  "indoc",
  "pretty_assertions",
+ "roc_can",
  "roc_collections",
+ "roc_error_macros",
  "roc_fmt",
  "roc_module",
  "roc_parse",
  "roc_region",
  "roc_test_utils",
  "roc_test_utils_dir",
+ "roc_types",
  "walkdir",
 ]
 
@@ -4351,6 +4437,7 @@ version = "0.0.1"
 dependencies = [
  "bumpalo",
  "cli_test_utils",
+ "copy_zig_glue",
  "indoc",
  "roc_build",
  "roc_command_utils",

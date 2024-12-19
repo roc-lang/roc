@@ -16,10 +16,11 @@ use roc_can::abilities::{AbilitiesStore, MemberSpecializationInfo};
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::{
     Cycle, FxCallConstraint, FxSuffixConstraint, FxSuffixKind, LetConstraint, OpportunisticResolve,
+    TryTargetConstraint,
 };
 use roc_can::expected::{Expected, PExpected};
 use roc_can::module::ModuleParams;
-use roc_collections::VecMap;
+use roc_collections::{VecMap, VecSet};
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_VERIFY_RIGID_LET_GENERALIZED;
@@ -136,6 +137,7 @@ fn run_help(
         function_kind,
         module_params,
         module_params_vars,
+        host_exposed_symbols,
         ..
     } = config;
 
@@ -190,6 +192,7 @@ fn run_help(
         &mut awaiting_specializations,
         module_params,
         module_params_vars,
+        host_exposed_symbols,
     );
 
     RunSolveOutput {
@@ -249,6 +252,7 @@ fn solve(
     awaiting_specializations: &mut AwaitingSpecializations,
     module_params: Option<ModuleParams>,
     module_params_vars: VecMap<ModuleId, Variable>,
+    host_exposed_symbols: Option<&VecSet<Symbol>>,
 ) -> State {
     let scope = Scope::new(module_params);
 
@@ -455,6 +459,7 @@ fn solve(
                     solve_suffix_fx(
                         env,
                         problems,
+                        host_exposed_symbols,
                         FxSuffixKind::Let(*symbol),
                         loc_var.value,
                         &loc_var.region,
@@ -853,7 +858,7 @@ fn solve(
                     *type_index,
                 );
 
-                solve_suffix_fx(env, problems, *kind, actual, region);
+                solve_suffix_fx(env, problems, host_exposed_symbols, *kind, actual, region);
                 state
             }
             ExpectEffectful(variable, reason, region) => {
@@ -901,6 +906,96 @@ fn solve(
                     | Content::Alias(_, _, _, _)
                     | Content::RangedNumber(_) => {
                         internal_error!("FlexToPure: unexpected content: {:?}", content)
+                    }
+                }
+            }
+            TryTarget(index) => {
+                let try_target_constraint = &env.constraints.try_target_constraints[index.index()];
+
+                let TryTargetConstraint {
+                    target_type_index,
+                    ok_payload_var,
+                    err_payload_var,
+                    region,
+                    kind,
+                } = try_target_constraint;
+
+                let target_actual = either_type_index_to_var(
+                    env,
+                    rank,
+                    problems,
+                    abilities_store,
+                    obligation_cache,
+                    &mut can_types,
+                    aliases,
+                    *target_type_index,
+                );
+
+                let wanted_result_ty = can_types.from_old_type(&Type::TagUnion(
+                    vec![
+                        ("Ok".into(), vec![Type::Variable(*ok_payload_var)]),
+                        ("Err".into(), vec![Type::Variable(*err_payload_var)]),
+                    ],
+                    TypeExtension::Closed,
+                ));
+                let wanted_result_var = type_to_var(
+                    env,
+                    rank,
+                    problems,
+                    abilities_store,
+                    obligation_cache,
+                    &mut can_types,
+                    aliases,
+                    wanted_result_ty,
+                );
+
+                match unify(
+                    &mut env.uenv(),
+                    target_actual,
+                    wanted_result_var,
+                    UnificationMode::EQ,
+                    Polarity::OF_VALUE,
+                ) {
+                    Success {
+                        vars,
+                        must_implement_ability,
+                        lambda_sets_to_specialize,
+                        extra_metadata: _,
+                    } => {
+                        env.introduce(rank, &vars);
+
+                        if !must_implement_ability.is_empty() {
+                            let new_problems = obligation_cache.check_obligations(
+                                env.subs,
+                                abilities_store,
+                                must_implement_ability,
+                                AbilityImplError::BadExpr(
+                                    *region,
+                                    Category::TryTarget,
+                                    target_actual,
+                                ),
+                            );
+                            problems.extend(new_problems);
+                        }
+                        compact_lambdas_and_check_obligations(
+                            env,
+                            problems,
+                            abilities_store,
+                            obligation_cache,
+                            awaiting_specializations,
+                            lambda_sets_to_specialize,
+                        );
+
+                        state
+                    }
+                    Failure(vars, actual_type, _expected_type, _bad_impls) => {
+                        env.introduce(rank, &vars);
+
+                        let problem = TypeError::InvalidTryTarget(*region, actual_type, *kind);
+
+                        problems.push(problem);
+
+                        state
                     }
                 }
             }
@@ -1625,6 +1720,7 @@ fn solve(
 fn solve_suffix_fx(
     env: &mut InferenceEnv<'_>,
     problems: &mut Vec<TypeError>,
+    host_exposed_symbols: Option<&VecSet<Symbol>>,
     kind: FxSuffixKind,
     variable: Variable,
     region: &Region,
@@ -1651,7 +1747,16 @@ fn solve_suffix_fx(
                 let fx = *fx;
                 match env.subs.get_content_without_compacting(fx) {
                     Content::Pure => {
-                        problems.push(TypeError::SuffixedPureFunction(*region, kind));
+                        match (kind.symbol(), host_exposed_symbols) {
+                            (Some(sym), Some(host_exposed)) if host_exposed.contains(sym) => {
+                                // If exposed to the platform, it's allowed to be suffixed but pure
+                                // The platform might require a `main!` function that could perform
+                                // effects, but that's not a requirement.
+                            }
+                            _ => {
+                                problems.push(TypeError::SuffixedPureFunction(*region, kind));
+                            }
+                        }
                     }
                     Content::FlexVar(_) => {
                         env.subs.set_content(fx, Content::Effectful);

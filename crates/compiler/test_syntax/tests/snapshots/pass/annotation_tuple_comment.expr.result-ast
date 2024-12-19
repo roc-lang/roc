@@ -1,0 +1,56 @@
+@0-13 Defs(
+    Defs {
+        tags: [
+            EitherIndex(2147483648),
+        ],
+        regions: [
+            @0-10,
+        ],
+        space_before: [
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        ],
+        space_after: [
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        ],
+        spaces: [],
+        type_defs: [],
+        value_defs: [
+            Annotation(
+                @0-1 NumLiteral(
+                    "3",
+                ),
+                @2-10 Function(
+                    [
+                        @2-7 Tuple {
+                            elems: Collection {
+                                items: [],
+                                final_comments: [
+                                    LineComment(
+                                        "",
+                                    ),
+                                ],
+                            },
+                            ext: Some(
+                                @6-7 BoundVariable(
+                                    "n",
+                                ),
+                            ),
+                        },
+                    ],
+                    Pure,
+                    @9-10 BoundVariable(
+                        "n",
+                    ),
+                ),
+            ),
+        ],
+    },
+    @12-13 SpaceBefore(
+        Num(
+            "0",
+        ),
+        [
+            Newline,
+        ],
+    ),
+)

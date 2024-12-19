@@ -1,42 +1,5 @@
-use crate::pattern::Pattern;
-use crate::{expr::Expr, scope::SymbolLookup};
+use crate::scope::SymbolLookup;
 use roc_module::symbol::{ModuleId, Symbol};
-use roc_region::all::{Loc, Region};
-use roc_types::subs::Variable;
-
-#[derive(Clone, Debug)]
-pub struct Procedure {
-    pub name: Option<Box<str>>,
-    pub is_self_tail_recursive: bool,
-    pub definition: Region,
-    pub args: Vec<Loc<Pattern>>,
-    pub body: Loc<Expr>,
-    pub references: References,
-    pub var: Variable,
-    pub ret_var: Variable,
-}
-
-impl Procedure {
-    pub fn new(
-        definition: Region,
-        args: Vec<Loc<Pattern>>,
-        body: Loc<Expr>,
-        references: References,
-        var: Variable,
-        ret_var: Variable,
-    ) -> Procedure {
-        Procedure {
-            name: None,
-            is_self_tail_recursive: false,
-            definition,
-            args,
-            body,
-            references,
-            var,
-            ret_var,
-        }
-    }
-}
 
 #[derive(Debug, Default, Clone, Copy)]
 struct ReferencesBitflags(u8);

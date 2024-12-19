@@ -11,7 +11,7 @@ use crate::layout::{
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
 use roc_can::abilities::SpecializationId;
-use roc_can::expr::{AnnotatedMark, ClosureData, ExpectLookup};
+use roc_can::expr::{AnnotatedMark, ClosureData, ExpectLookup, WhenBranch, WhenBranchPattern};
 use roc_can::module::ExposedByModule;
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
 use roc_collections::VecMap;
@@ -1947,8 +1947,6 @@ pub enum Expr<'a> {
         symbol: Symbol,
         update_mode: UpdateModeId,
     },
-
-    RuntimeErrorFunction(&'a str),
 }
 
 impl<'a> Literal<'a> {
@@ -2110,8 +2108,6 @@ impl<'a> Expr<'a> {
                 index, structure, ..
             } => text!(alloc, "StructAtIndex {} ", index)
                 .append(symbol_to_doc(alloc, *structure, pretty)),
-
-            RuntimeErrorFunction(s) => text!(alloc, "ErrorFunction {}", s),
 
             GetTagId { structure, .. } => alloc
                 .text("GetTagId ")
@@ -2934,7 +2930,7 @@ fn pattern_to_when_help(
     body: Loc<roc_can::expr::Expr>,
     symbol: Symbol,
 ) -> (Symbol, Loc<roc_can::expr::Expr>) {
-    use roc_can::expr::{Expr, WhenBranch, WhenBranchPattern};
+    use roc_can::expr::Expr;
 
     let wrapped_body = Expr::When {
         cond_var: pattern_var,
@@ -5875,6 +5871,86 @@ pub fn with_hole<'a>(
                 }
             }
         }
+        Try {
+            result_expr,
+            result_var,
+            return_var,
+            ok_payload_var,
+            err_payload_var,
+            err_ext_var,
+            kind: _,
+        } => {
+            let ok_symbol = env.unique_symbol();
+            let err_symbol = env.unique_symbol();
+
+            let ok_branch = WhenBranch {
+                patterns: vec![WhenBranchPattern {
+                    pattern: Loc::at_zero(roc_can::pattern::Pattern::AppliedTag {
+                        whole_var: result_var,
+                        ext_var: Variable::EMPTY_TAG_UNION,
+                        tag_name: "Ok".into(),
+                        arguments: vec![(
+                            ok_payload_var,
+                            Loc::at_zero(roc_can::pattern::Pattern::Identifier(ok_symbol)),
+                        )],
+                    }),
+                    degenerate: false,
+                }],
+                value: Loc::at_zero(Var(ok_symbol, ok_payload_var)),
+                guard: None,
+                redundant: RedundantMark::known_non_redundant(),
+            };
+
+            let err_branch = WhenBranch {
+                patterns: vec![WhenBranchPattern {
+                    pattern: Loc::at_zero(roc_can::pattern::Pattern::AppliedTag {
+                        whole_var: result_var,
+                        ext_var: err_ext_var,
+                        tag_name: "Err".into(),
+                        arguments: vec![(
+                            err_payload_var,
+                            Loc::at_zero(roc_can::pattern::Pattern::Identifier(err_symbol)),
+                        )],
+                    }),
+                    degenerate: false,
+                }],
+                value: Loc::at_zero(Return {
+                    return_var,
+                    return_value: Box::new(Loc::at_zero(Tag {
+                        tag_union_var: return_var,
+                        ext_var: err_ext_var,
+                        name: "Err".into(),
+                        arguments: vec![(
+                            err_payload_var,
+                            Loc::at_zero(Var(err_symbol, err_payload_var)),
+                        )],
+                    })),
+                }),
+                guard: None,
+                redundant: RedundantMark::known_non_redundant(),
+            };
+
+            let result_region = result_expr.region;
+            let when_expr = When {
+                loc_cond: result_expr,
+                cond_var: result_var,
+                expr_var: ok_payload_var,
+                region: result_region,
+                branches: vec![ok_branch, err_branch],
+                branches_cond_var: result_var,
+                exhaustive: ExhaustiveMark::known_exhaustive(),
+            };
+
+            with_hole(
+                env,
+                when_expr,
+                variable,
+                procs,
+                layout_cache,
+                assigned,
+                hole,
+            )
+        }
         Return {
             return_value,
             return_var,
@@ -5897,7 +5973,6 @@ pub fn with_hole<'a>(
                 Stmt::Ret(return_symbol),
             )
         }
-        TypedHole(_) => runtime_error(env, "Hit a blank"),
         RuntimeError(e) => runtime_error(env, env.arena.alloc(e.runtime_message())),
         Crash { msg, ret_var: _ } => {
             let msg_sym = possible_reuse_symbol_or_specialize(
@@ -7729,7 +7804,7 @@ fn substitute_in_expr<'a>(
     use Expr::*;
 
     match expr {
-        Literal(_) | EmptyArray | RuntimeErrorFunction(_) => None,
+        Literal(_) | EmptyArray => None,
 
         Call(call) => substitute_in_call(arena, call, subs).map(Expr::Call),
 

@@ -1,6 +1,6 @@
 #![no_main]
-use libfuzzer_sys::fuzz_target;
 use bumpalo::Bump;
+use libfuzzer_sys::fuzz_target;
 use test_syntax::test_helpers::Input;
 
 fuzz_target!(|data: &[u8]| {
@@ -8,7 +8,7 @@ fuzz_target!(|data: &[u8]| {
         let input = Input::Full(input);
         let arena = Bump::new();
         if input.parse_in(&arena).is_ok() {
-            input.check_invariants(|_| (), true);
+            input.check_invariants(|_| (), true, None);
         }
     }
 });

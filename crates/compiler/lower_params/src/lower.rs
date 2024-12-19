@@ -373,6 +373,17 @@ impl<'a> LowerParams<'a> {
                     expr_stack.push(&mut loc_message.value);
                     expr_stack.push(&mut loc_continuation.value);
                 }
+                Try {
+                    result_expr,
+                    result_var: _,
+                    return_var: _,
+                    ok_payload_var: _,
+                    err_payload_var: _,
+                    err_ext_var: _,
+                    kind: _,
+                } => {
+                    expr_stack.push(&mut result_expr.value);
+                }
                 Return {
                     return_value,
                     return_var: _,
@@ -389,7 +400,6 @@ impl<'a> LowerParams<'a> {
                 }
                 | OpaqueWrapFunction(_)
                 | EmptyRecord
-                | TypedHole(_)
                 | RuntimeError(_)
                 | Num(_, _, _, _)
                 | Int(_, _, _, _, _)

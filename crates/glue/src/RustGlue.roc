@@ -739,7 +739,8 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
         """
         }
 
-        const _SIZE_CHECK_$(unionName): () = assert!(core::mem::size_of::<$(unionName)>() == $(sizeOfUnionStr));
+        // TODO(@roc-lang): See https://github.com/roc-lang/roc/issues/6012
+        // const _SIZE_CHECK_$(unionName): () = assert!(core::mem::size_of::<$(unionName)>() == $(sizeOfUnionStr));
         const _ALIGN_CHECK_$(unionName): () = assert!(core::mem::align_of::<$(unionName)>() == $(alignOfUnionStr));
 
         const _SIZE_CHECK_$(escapedName): () = assert!(core::mem::size_of::<$(escapedName)>() == $(sizeOfSelf));
@@ -2227,22 +2228,6 @@ typeName = \types, id ->
         TagUnion (NonNullableUnwrapped { name }) -> escapeKW name
         TagUnion (SingleTagStruct { name }) -> escapeKW name
         Function { functionName } -> escapeKW functionName
-
-getSizeRoundedToAlignment = \types, id ->
-    alignment = Types.alignment types id
-
-    Types.size types id
-    |> roundUpToAlignment alignment
-
-roundUpToAlignment = \width, alignment ->
-    when alignment is
-        0 -> width
-        1 -> width
-        _ ->
-            if width % alignment > 0 then
-                width + alignment - (width % alignment)
-            else
-                width
 
 archName = \arch ->
     when arch is

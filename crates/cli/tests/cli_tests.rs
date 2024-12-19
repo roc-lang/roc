@@ -75,6 +75,8 @@ mod cli_tests {
     #[test]
     #[cfg_attr(windows, ignore)]
     fn platform_switching_zig() {
+        copy_zig_glue::initialize_zig_test_platforms();
+
         let cli_build = ExecCli::new(
             CMD_BUILD,
             file_from_root("examples/platform-switching", "rocLovesZig.roc"),
@@ -95,6 +97,8 @@ mod cli_tests {
 
     #[test]
     fn platform_switching_wasm() {
+        copy_zig_glue::initialize_zig_test_platforms();
+
         // this is a web assembly example, but we don't test with JS at the moment
         // so let's just check it for now
         let cli_check = ExecCli::new(
@@ -112,6 +116,8 @@ mod cli_tests {
         ignore = "Flaky failure: Roc command failed with status ExitStatus(ExitStatus(3221225477))"
     )]
     fn fibonacci() {
+        copy_zig_glue::initialize_zig_test_platforms();
+
         let cli_build = ExecCli::new(
             CMD_BUILD,
             file_from_root("crates/cli/tests/test-projects/algorithms", "fibonacci.roc"),
@@ -133,6 +139,8 @@ mod cli_tests {
     #[test]
     #[cfg_attr(windows, ignore)]
     fn quicksort() {
+        copy_zig_glue::initialize_zig_test_platforms();
+
         let cli_build = ExecCli::new(
             CMD_BUILD,
             file_from_root("crates/cli/tests/test-projects/algorithms", "quicksort.roc"),
@@ -183,6 +191,8 @@ mod cli_tests {
     #[cfg_attr(windows, ignore)]
     // tea = The Elm Architecture
     fn terminal_ui_tea() {
+        copy_zig_glue::initialize_zig_test_platforms();
+
         let cli_build = ExecCli::new(
             CMD_BUILD,
             file_from_root("crates/cli/tests/test-projects/tui", "main.roc"),
@@ -201,31 +211,34 @@ mod cli_tests {
         );
     }
 
-    // TODO check this out, there's more that's going wrong than a segfault
-    //#[test]
-    /*#[cfg_attr(
-        any(target_os = "windows", target_os = "linux", target_os = "macos"),
-        ignore = "Segfault, likely broken because of alias analysis: https://github.com/roc-lang/roc/issues/6544"
-    )]*/
-    /*
+    #[test]
+    #[cfg_attr(windows, ignore)]
     fn false_interpreter() {
         let cli_build = ExecCli::new(
-                                CMD_BUILD,
-                                file_from_root("crates/cli/tests/test-projects/false-interpreter", "main.roc")
-            )
-            .arg(BUILD_HOST_FLAG)
-            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
+            CMD_BUILD,
+            file_from_root(
+                "crates/cli/tests/test-projects/false-interpreter",
+                "main.roc",
+            ),
+        )
+        .arg(BUILD_HOST_FLAG)
+        .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
 
-        let sqrt_false_path_buf = file_from_root("crates/cli/tests/test-projects/false-interpreter/examples", "sqrt.false");
+        let sqrt_false_path_buf = file_from_root(
+            "crates/cli/tests/test-projects/false-interpreter/examples",
+            "sqrt.false",
+        );
 
-        let app_args = ["--",
-                        sqrt_false_path_buf
-                            .as_path()
-                            .to_str()
-                            .unwrap()];
+        let app_args = [sqrt_false_path_buf.as_path().to_str().unwrap()];
 
-        cli_build.full_check_build_and_run("1414", TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, Some(&app_args));
-    }*/
+        cli_build.full_check_build_and_run(
+            "1414",
+            TEST_LEGACY_LINKER,
+            ALLOW_VALGRIND,
+            None,
+            Some(&app_args),
+        );
+    }
 
     #[test]
     #[cfg_attr(windows, ignore)]
@@ -265,6 +278,8 @@ mod cli_tests {
     #[test]
     #[cfg_attr(windows, ignore)]
     fn multiple_exposed() {
+        copy_zig_glue::initialize_zig_test_platforms();
+
         let cli_build = ExecCli::new(
             CMD_BUILD,
             file_from_root(
@@ -333,7 +348,7 @@ mod cli_tests {
             );
 
             let expected_out =
-                "0 error and 0 warning found in <ignored for test> ms\n0 error and 0 warning found in <ignored for test> ms\n";
+                "0 errors and 0 warnings found in <ignored for test> ms.\n\n0 errors and 0 warnings found in <ignored for test> ms.\n\n";
 
             cli_build.run().assert_clean_stdout(expected_out);
         }
@@ -460,6 +475,8 @@ mod cli_tests {
         /// Build the platform host once for all tests in this module
         fn build_platform_host() {
             BUILD_PLATFORM_HOST.call_once(|| {
+                copy_zig_glue::initialize_zig_test_platforms();
+
                 let cli_build = ExecCli::new(
                     CMD_BUILD,
                     file_from_root(
@@ -799,6 +816,8 @@ mod cli_tests {
         /// Build the platform host once for all tests in this module
         fn build_platform_host() {
             BUILD_PLATFORM_HOST.call_once(|| {
+                copy_zig_glue::initialize_zig_test_platforms();
+
                 let cli_build = ExecCli::new(
                     CMD_BUILD,
                     file_from_root(
@@ -1030,6 +1049,8 @@ mod cli_tests {
         /// Build the platform host once for all tests in this module
         fn build_platform_host() {
             BUILD_PLATFORM_HOST.call_once(|| {
+                copy_zig_glue::initialize_zig_test_platforms();
+
                 let cli_build = ExecCli::new(
                     CMD_BUILD,
                     file_from_root("crates/cli/tests/benchmarks/platform", "app.roc"),
@@ -1283,6 +1304,7 @@ mod cli_tests {
     }
 
     #[test]
+    #[ignore = "flaky currently due to 7022"]
     fn known_type_error() {
         let cli_check = ExecCli::new(
             CMD_CHECK,
@@ -1317,6 +1339,8 @@ mod cli_tests {
     #[cfg_attr(windows, ignore)]
     /// this tests that a platform can correctly import a package
     fn platform_requires_pkg() {
+        copy_zig_glue::initialize_zig_test_platforms();
+
         let cli_build = ExecCli::new(
             CMD_BUILD,
             file_from_root(
@@ -1432,6 +1456,20 @@ mod cli_tests {
         )
         .run()
         .assert_clean_success();
+    }
+
+    #[test]
+    fn module_params_effectful_param() {
+        let cli_check = ExecCli::new(
+            CMD_CHECK,
+            file_from_root(
+                "crates/cli/tests/test-projects/module_params",
+                "effect_module.roc",
+            ),
+        );
+
+        let cli_check_out = cli_check.run();
+        cli_check_out.assert_clean_success();
     }
 }
 

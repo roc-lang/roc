@@ -1,0 +1,53 @@
+@0-9 SpaceAfter(
+    UnaryOp(
+        @2-8 ParensAround(
+            Apply(
+                @3-6 ParensAround(
+                    Defs(
+                        Defs {
+                            tags: [
+                                EitherIndex(2147483648),
+                            ],
+                            regions: [
+                                @3-4,
+                            ],
+                            space_before: [
+                                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                            ],
+                            space_after: [
+                                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                            ],
+                            spaces: [],
+                            type_defs: [],
+                            value_defs: [
+                                Stmt(
+                                    @3-4 Num(
+                                        "4",
+                                    ),
+                                ),
+                            ],
+                        },
+                        @5-6 SpaceBefore(
+                            Num(
+                                "4",
+                            ),
+                            [
+                                Newline,
+                            ],
+                        ),
+                    ),
+                ),
+                [
+                    @7-8 Num(
+                        "4",
+                    ),
+                ],
+                Space,
+            ),
+        ),
+        @0-1 Negate,
+    ),
+    [
+        Newline,
+    ],
+)

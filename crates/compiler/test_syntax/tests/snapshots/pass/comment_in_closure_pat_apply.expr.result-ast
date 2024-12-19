@@ -1,0 +1,28 @@
+@0-12 Closure(
+    [
+        @1-2 Tag(
+            "L",
+        ),
+        @3-8 Apply(
+            @3-4 Tag(
+                "M",
+            ),
+            [
+                @7-8 SpaceBefore(
+                    Tag(
+                        "Q",
+                    ),
+                    [
+                        LineComment(
+                            "",
+                        ),
+                    ],
+                ),
+            ],
+        ),
+    ],
+    @10-12 Var {
+        module_name: "",
+        ident: "f8",
+    },
+)

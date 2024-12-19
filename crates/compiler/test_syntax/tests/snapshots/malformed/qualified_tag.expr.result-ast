@@ -1,4 +1,4 @@
-MalformedIdent(
+@0-12 MalformedIdent(
     "One.Two.Whee",
     QualifiedTag(
         @12,

@@ -1,4 +1,4 @@
-SpaceAfter(
+@0-31 SpaceAfter(
     ParensAround(
         When(
             @6-7 Var {

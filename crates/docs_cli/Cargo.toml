@@ -19,7 +19,7 @@ test = false
 bench = false
 
 [dependencies]
-roc_docs = { path = "../docs" }
+roc_docs.workspace = true
 
 clap.workspace = true
 

@@ -173,6 +173,7 @@ fn compiles_to_ir(test_name: &str, src: &str, mode: &str, allow_type_errors: boo
         Ok(x) => x,
         Err(LoadMonomorphizedError::LoadingProblem(roc_load::LoadingProblem::FormattedReport(
             report,
+            _,
         ))) => {
             println!("{report}");
             panic!();
@@ -3692,6 +3693,21 @@ fn dec_refcount_for_usage_after_early_return_in_if() {
             "$(first), $(second)"
 
         displayN 3
+        "#
+    )
+}
+
+#[mono_test]
+fn return_annotated() {
+    indoc!(
+        r#"
+        validateInput : Str -> Result U64 _
+        validateInput = \str ->
+            num = try Str.toU64 str
+
+            Ok num
+
+        validateInput "123"
         "#
     )
 }

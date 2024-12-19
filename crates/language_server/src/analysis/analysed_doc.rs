@@ -1,4 +1,5 @@
 use log::{debug, info};
+use roc_fmt::MigrationFlags;
 use std::collections::HashMap;
 
 use bumpalo::Bump;
@@ -13,7 +14,10 @@ use tower_lsp::lsp_types::{
 };
 
 use crate::{
-    analysis::completion::{field_completion, get_completion_items, get_module_completion_items},
+    analysis::completion::{
+        field_completion, get_completion_items, get_module_completion_items,
+        get_tag_completion_items,
+    },
     convert::{ToRange, ToRocPosition},
 };
 
@@ -79,6 +83,11 @@ impl DocInfo {
             .rev()
             .take_while(|&a| is_roc_identifier_char(&(*a as char)))
             .count();
+
+        if symbol_len == 0 {
+            return String::from("");
+        }
+
         let symbol = &self.source[offset - symbol_len..offset];
 
         String::from(symbol)
@@ -89,7 +98,8 @@ impl DocInfo {
         let arena = &Bump::new();
 
         let ast = Ast::parse(arena, source).ok()?;
-        let fmt = ast.fmt();
+        let flags = MigrationFlags::new(false);
+        let fmt = ast.fmt(flags);
 
         if source == fmt.as_str() {
             None
@@ -261,7 +271,7 @@ impl AnalyzedDocument {
             if is_module_completion {
                 info!("Getting module dot completion...");
                 Some(get_module_completion_items(
-                    symbol_prefix,
+                    &symbol_prefix,
                     interns,
                     imports,
                     modules_info,
@@ -284,13 +294,16 @@ impl AnalyzedDocument {
 
             if is_module_or_type_completion {
                 info!("Getting module completion...");
-                let completions = get_module_completion_items(
-                    symbol_prefix,
+                let mut completions = get_module_completion_items(
+                    &symbol_prefix,
                     interns,
                     imports,
                     modules_info,
                     true,
                 );
+                let tag_completions =
+                    get_tag_completion_items(&symbol_prefix, module_id, modules_info);
+                completions.extend(tag_completions);
                 Some(completions)
             } else {
                 info!("Getting variable completion...");

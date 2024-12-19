@@ -1,4 +1,5 @@
 use core::{
+    any,
     cmp::Ordering,
     fmt::{self, Formatter},
     hash::{Hash, Hasher},
@@ -39,7 +40,7 @@ impl<T> Ord for Index<T> {
 
 impl<T> fmt::Debug for Index<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "Index({})", self.index)
+        write!(f, "Index<{}>({})", any::type_name::<T>(), self.index)
     }
 }
 

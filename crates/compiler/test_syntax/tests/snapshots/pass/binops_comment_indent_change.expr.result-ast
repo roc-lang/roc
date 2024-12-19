@@ -1,0 +1,42 @@
+@0-11 BinOps(
+    [
+        (
+            @0-1 Var {
+                module_name: "",
+                ident: "r",
+            },
+            @1-2 Caret,
+        ),
+    ],
+    @3-11 Apply(
+        @3-5 SpaceAfter(
+            SpaceBefore(
+                UnaryOp(
+                    @4-5 Var {
+                        module_name: "",
+                        ident: "f",
+                    },
+                    @3-4 Negate,
+                ),
+                [
+                    Newline,
+                ],
+            ),
+            [
+                Newline,
+                LineComment(
+                    "",
+                ),
+            ],
+        ),
+        [
+            @9-11 UnaryOp(
+                @10-11 Tag(
+                    "P",
+                ),
+                @9-10 Negate,
+            ),
+        ],
+        Space,
+    ),
+)

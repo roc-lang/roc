@@ -29,7 +29,7 @@ pub(crate) struct SharedMemoryPointer<'ctx>(PointerValue<'ctx>);
 
 impl<'ctx> SharedMemoryPointer<'ctx> {
     pub(crate) fn get<'a, 'env>(env: &Env<'a, 'ctx, 'env>) -> Self {
-        let start_function = if let LlvmBackendMode::BinaryDev = env.mode {
+        let start_function = if let LlvmBackendMode::BinaryWithExpect = env.mode {
             bitcode::UTILS_EXPECT_FAILED_START_SHARED_FILE
         } else {
             bitcode::UTILS_EXPECT_FAILED_START_SHARED_BUFFER
@@ -100,7 +100,7 @@ fn read_state<'ctx>(
     env: &Env<'_, 'ctx, '_>,
     ptr: PointerValue<'ctx>,
 ) -> (IntValue<'ctx>, IntValue<'ctx>) {
-    let ptr_type = env.ptr_int().ptr_type(AddressSpace::default());
+    let ptr_type = env.context.ptr_type(AddressSpace::default());
     let ptr = env.builder.new_build_pointer_cast(ptr, ptr_type, "");
 
     let one = env.ptr_int().const_int(1, false);
@@ -120,7 +120,7 @@ fn write_state<'ctx>(
     count: IntValue<'ctx>,
     offset: IntValue<'ctx>,
 ) {
-    let ptr_type = env.ptr_int().ptr_type(AddressSpace::default());
+    let ptr_type = env.context.ptr_type(AddressSpace::default());
     let ptr = env.builder.new_build_pointer_cast(ptr, ptr_type, "");
 
     let one = env.ptr_int().const_int(1, false);
@@ -249,7 +249,7 @@ pub(crate) fn clone_to_shared_memory<'a, 'ctx>(
                     )
                 };
 
-                let u32_ptr = env.context.i32_type().ptr_type(AddressSpace::default());
+                let u32_ptr = env.context.ptr_type(AddressSpace::default());
                 let ptr = env
                     .builder
                     .new_build_pointer_cast(ptr, u32_ptr, "cast_ptr_type");
@@ -321,7 +321,7 @@ fn build_clone<'a, 'ctx>(
                     )
                 };
 
-                let ptr_type = value.get_type().ptr_type(AddressSpace::default());
+                let ptr_type = env.context.ptr_type(AddressSpace::default());
                 let ptr = env
                     .builder
                     .new_build_pointer_cast(ptr, ptr_type, "cast_ptr_type");
@@ -446,10 +446,7 @@ fn build_clone_tag<'a, 'ctx>(
 
             let function_type = env.ptr_int().fn_type(
                 &[
-                    env.context
-                        .i8_type()
-                        .ptr_type(AddressSpace::default())
-                        .into(),
+                    env.context.ptr_type(AddressSpace::default()).into(),
                     env.ptr_int().into(),
                     env.ptr_int().into(),
                     BasicMetadataTypeEnum::from(value.get_type()),
@@ -523,7 +520,7 @@ fn load_tag_data<'a, 'ctx>(
 
     let data_ptr = env.builder.new_build_pointer_cast(
         raw_data_ptr,
-        tag_type.ptr_type(AddressSpace::default()),
+        env.context.ptr_type(AddressSpace::default()),
         "data_ptr",
     );
 
@@ -545,7 +542,7 @@ fn clone_tag_payload_and_id<'a, 'ctx>(
 
     let payload_ptr = env.builder.new_build_pointer_cast(
         opaque_payload_ptr,
-        payload_type.ptr_type(AddressSpace::default()),
+        env.context.ptr_type(AddressSpace::default()),
         "cast_payload_ptr",
     );
 
@@ -948,7 +945,7 @@ fn build_copy<'ctx>(
         )
     };
 
-    let ptr_type = value.get_type().ptr_type(AddressSpace::default());
+    let ptr_type = env.context.ptr_type(AddressSpace::default());
     let ptr = env
         .builder
         .new_build_pointer_cast(ptr, ptr_type, "cast_ptr_type");
@@ -1016,18 +1013,16 @@ fn build_clone_builtin<'a, 'ctx>(
                 let dest = pointer_at_offset(bd, env.context.i8_type(), ptr, elements_start_offset);
                 let src = bd.new_build_pointer_cast(
                     elements,
-                    env.context.i8_type().ptr_type(AddressSpace::default()),
+                    env.context.ptr_type(AddressSpace::default()),
                     "to_bytes_pointer",
                 );
                 bd.build_memcpy(dest, 1, src, 1, elements_width).unwrap();
 
                 bd.new_build_int_add(elements_start_offset, elements_width, "new_offset")
             } else {
-                let element_type =
-                    basic_type_from_layout(env, layout_interner, layout_interner.get_repr(elem));
                 let elements = bd.new_build_pointer_cast(
                     elements,
-                    element_type.ptr_type(AddressSpace::default()),
+                    env.context.ptr_type(AddressSpace::default()),
                     "elements",
                 );
 

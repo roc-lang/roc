@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 
 const O_RDWR: c_int = 2;
 const O_CREAT: c_int = 64;
@@ -83,11 +83,10 @@ pub fn notifyParent(shared_buffer: [*]u8, tag: u32) callconv(.C) void {
     if (builtin.os.tag == .macos or builtin.os.tag == .linux) {
         const usize_ptr = @as([*]u32, @ptrCast(@alignCast(shared_buffer)));
         const atomic_ptr = @as(*Atomic(u32), @ptrCast(&usize_ptr[5]));
-        atomic_ptr.storeUnchecked(tag);
+        atomic_ptr.store(tag, .unordered);
 
         // wait till the parent is done before proceeding
-        const Ordering = std.atomic.Ordering;
-        while (atomic_ptr.load(Ordering.Acquire) != 0) {
+        while (atomic_ptr.load(.acquire) != 0) {
             std.atomic.spinLoopHint();
         }
     }

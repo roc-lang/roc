@@ -15,23 +15,23 @@ target-x86 = ["roc_build/target-x86"]
 target-x86_64 = ["roc_build/target-x86_64"]
 
 [dependencies]
-roc_build = { path = "../compiler/build" }
-roc_builtins = { path = "../compiler/builtins" }
-roc_bitcode = { path = "../compiler/builtins/bitcode" }
-roc_collections = { path = "../compiler/collections" }
-roc_gen_llvm = { path = "../compiler/gen_llvm" }
-roc_gen_dev = { path = "../compiler/gen_dev" }
-roc_load = { path = "../compiler/load" }
-roc_mono = { path = "../compiler/mono" }
-roc_parse = { path = "../compiler/parse" }
-roc_region = { path = "../compiler/region" }
-roc_repl_eval = { path = "../repl_eval" }
-roc_reporting = { path = "../reporting" }
-roc_std = { path = "../roc_std" }
-roc_target = { path = "../compiler/roc_target" }
-roc_types = { path = "../compiler/types" }
-roc_error_macros = { path = "../error_macros" }
-roc_repl_ui = { path = "../repl_ui" }
+roc_build.workspace = true
+roc_builtins.workspace = true
+roc_bitcode.workspace = true
+roc_collections.workspace = true
+roc_gen_llvm.workspace = true
+roc_gen_dev.workspace = true
+roc_load.workspace = true
+roc_mono.workspace = true
+roc_parse.workspace = true
+roc_region.workspace = true
+roc_repl_eval.workspace = true
+roc_reporting.workspace = true
+roc_std.workspace = true
+roc_target.workspace = true
+roc_types.workspace = true
+roc_error_macros.workspace = true
+roc_repl_ui.workspace = true
 
 tempfile.workspace = true
 bumpalo.workspace = true
@@ -41,7 +41,6 @@ libloading.workspace = true
 rustyline-derive.workspace = true
 rustyline.workspace = true
 target-lexicon.workspace = true
-unicode-segmentation.workspace = true
 
 [lib]
 name = "roc_repl_cli"

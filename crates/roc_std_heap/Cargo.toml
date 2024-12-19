@@ -9,5 +9,5 @@ repository = "https://github.com/roc-lang/roc"
 version = "0.0.1"
 
 [dependencies]
-roc_std = { path = "../roc_std" }
-memmap2 = "=0.9.4"
+roc_std.workspace = true
+memmap2 = "=0.9.4"       # should this be a workspace dependency? workspace is at "0.5.10"

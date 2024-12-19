@@ -306,7 +306,7 @@ impl FromIterator<Symbol> for AbilitySet {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct OptAbleVar {
     pub var: Variable,
     pub opt_abilities: Option<AbilitySet>,
@@ -3483,6 +3483,7 @@ pub enum Reason {
     CrashArg,
     ImportParams(ModuleId),
     FunctionOutput,
+    TryResult,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -3532,8 +3533,19 @@ pub enum Category {
 
     Expect,
     Dbg,
-    Return,
+
+    TryTarget,
+    TrySuccess,
+    TryFailure,
+
+    Return(EarlyReturnKind),
     Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EarlyReturnKind {
+    Return,
+    Try,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3575,6 +3587,13 @@ impl AliasKind {
             AliasKind::Opaque => "opaque",
         }
     }
+
+    pub fn as_str_plural(&self) -> &'static str {
+        match self {
+            AliasKind::Structural => "aliases",
+            AliasKind::Opaque => "opaque types",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3613,7 +3632,7 @@ pub enum MemberImpl {
     Error,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Alias {
     pub region: Region,
     pub type_variables: Vec<Loc<AliasVar>>,

@@ -5,6 +5,7 @@ use std::sync::Arc;
 use crate::abilities::SpecializationId;
 use crate::exhaustive::{ExhaustiveContext, SketchedRows};
 use crate::expected::{Expected, PExpected};
+use crate::expr::TryKind;
 use roc_collections::soa::{index_push_new, slice_extend_new};
 use roc_module::ident::{IdentSuffix, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
@@ -31,6 +32,7 @@ pub struct Constraints {
     pub cycles: Vec<Cycle>,
     pub fx_call_constraints: Vec<FxCallConstraint>,
     pub fx_suffix_constraints: Vec<FxSuffixConstraint>,
+    pub try_target_constraints: Vec<TryTargetConstraint>,
 }
 
 impl std::fmt::Debug for Constraints {
@@ -87,6 +89,7 @@ impl Constraints {
         let cycles = Vec::new();
         let fx_call_constraints = Vec::with_capacity(16);
         let fx_suffix_constraints = Vec::new();
+        let result_type_constraints = Vec::new();
 
         categories.extend([
             Category::Record,
@@ -103,7 +106,6 @@ impl Constraints {
             Category::List,
             Category::Str,
             Category::Character,
-            Category::Return,
         ]);
 
         pattern_categories.extend([
@@ -138,6 +140,7 @@ impl Constraints {
             cycles,
             fx_call_constraints,
             fx_suffix_constraints,
+            try_target_constraints: result_type_constraints,
         }
     }
 
@@ -635,6 +638,27 @@ impl Constraints {
         Constraint::FlexToPure(fx_var)
     }
 
+    pub fn try_target(
+        &mut self,
+        result_type_index: TypeOrVar,
+        ok_payload_var: Variable,
+        err_payload_var: Variable,
+        region: Region,
+        kind: TryKind,
+    ) -> Constraint {
+        let constraint = TryTargetConstraint {
+            target_type_index: result_type_index,
+            ok_payload_var,
+            err_payload_var,
+            region,
+            kind,
+        };
+
+        let constraint_index = index_push_new(&mut self.try_target_constraints, constraint);
+
+        Constraint::TryTarget(constraint_index)
+    }
+
     pub fn contains_save_the_environment(&self, constraint: &Constraint) -> bool {
         match constraint {
             Constraint::SaveTheEnvironment => true,
@@ -660,6 +684,7 @@ impl Constraints {
             | Constraint::Lookup(..)
             | Constraint::Pattern(..)
             | Constraint::ExpectEffectful(..)
+            | Constraint::TryTarget(_)
             | Constraint::FxCall(_)
             | Constraint::FxSuffix(_)
             | Constraint::FlexToPure(_)
@@ -843,6 +868,8 @@ pub enum Constraint {
     FlexToPure(Variable),
     /// Expect statement or ignored def to be effectful
     ExpectEffectful(Variable, ExpectEffectfulReason, Region),
+    /// Expect value to be some kind of Result
+    TryTarget(Index<TryTargetConstraint>),
     /// Used for things that always unify, e.g. blanks and runtime errors
     True,
     SaveTheEnvironment,
@@ -909,6 +936,15 @@ pub struct IncludesTag {
     pub region: Region,
 }
 
+#[derive(Debug, Clone)]
+pub struct TryTargetConstraint {
+    pub target_type_index: TypeOrVar,
+    pub ok_payload_var: Variable,
+    pub err_payload_var: Variable,
+    pub region: Region,
+    pub kind: TryKind,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Cycle {
     pub def_names: Slice<(Symbol, Region)>,
@@ -929,7 +965,7 @@ pub struct FxExpectation {
     pub ann_region: Option<Region>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FxCallKind {
     Call(Option<Symbol>),
     Stmt,
@@ -943,7 +979,7 @@ pub struct FxSuffixConstraint {
     pub region: Region,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FxSuffixKind {
     Let(Symbol),
     Pattern(Symbol),
@@ -957,9 +993,16 @@ impl FxSuffixKind {
             Self::UnsuffixedRecordField => IdentSuffix::None,
         }
     }
+
+    pub fn symbol(&self) -> Option<&Symbol> {
+        match self {
+            Self::Let(symbol) | Self::Pattern(symbol) => Some(symbol),
+            Self::UnsuffixedRecordField => None,
+        }
+    }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ExpectEffectfulReason {
     Stmt,
     Ignored,
@@ -992,6 +1035,9 @@ impl std::fmt::Debug for Constraint {
             }
             Self::FlexToPure(arg0) => {
                 write!(f, "FlexToPure({arg0:?})")
+            }
+            Self::TryTarget(arg0) => {
+                write!(f, "ExpectResultType({arg0:?})")
             }
             Self::True => write!(f, "True"),
             Self::SaveTheEnvironment => write!(f, "SaveTheEnvironment"),

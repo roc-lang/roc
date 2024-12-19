@@ -1,4 +1,4 @@
-UnaryOp(
+@0-4 UnaryOp(
     @1-4 Var {
         module_name: "",
         ident: "inf",

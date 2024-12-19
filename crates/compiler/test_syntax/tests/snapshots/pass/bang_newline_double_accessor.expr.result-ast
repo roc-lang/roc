@@ -1,0 +1,56 @@
+@0-9 Defs(
+    Defs {
+        tags: [
+            EitherIndex(2147483648),
+            EitherIndex(2147483649),
+        ],
+        regions: [
+            @0-1,
+            @2-6,
+        ],
+        space_before: [
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
+        ],
+        space_after: [
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            Slice<roc_parse::ast::CommentOrNewline> { start: 1, length: 0 },
+        ],
+        spaces: [
+            Newline,
+        ],
+        type_defs: [],
+        value_defs: [
+            Stmt(
+                @0-1 Num(
+                    "0",
+                ),
+            ),
+            Stmt(
+                @2-6 UnaryOp(
+                    @4-6 SpaceBefore(
+                        AccessorFunction(
+                            RecordField(
+                                "d",
+                            ),
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                    @2-3 Not,
+                ),
+            ),
+        ],
+    },
+    @7-9 SpaceBefore(
+        AccessorFunction(
+            RecordField(
+                "d",
+            ),
+        ),
+        [
+            Newline,
+        ],
+    ),
+)

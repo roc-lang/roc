@@ -237,7 +237,10 @@ impl LanguageServer for RocServer {
         let TextDocumentItem {
             uri, text, version, ..
         } = params.text_document;
-        self.change(uri, text, version).await;
+        let _res = unwind_async(self.change(uri, text, version)).await;
+        if let Err(e) = _res {
+            self.client.log_message(MessageType::ERROR, e.message).await
+        }
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -251,7 +254,10 @@ impl LanguageServer for RocServer {
             .last()
             .expect("textDocument change event had no changes ");
 
-        self.change(uri, text, version).await;
+        let _res = unwind_async(self.change(uri, text, version)).await;
+        if let Err(e) = _res {
+            self.client.log_message(MessageType::ERROR, e.message).await
+        }
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
@@ -359,6 +365,8 @@ async fn main() {
     let stdout = tokio::io::stdout();
 
     let (service, socket) = LspService::new(RocServer::new);
+    use roc_error_macros::set_panic_not_exit;
+    set_panic_not_exit(true);
     Server::new(stdin, stdout, socket).serve(service).await;
 }
 
@@ -606,6 +614,30 @@ mod tests {
                                 },
                             ),
                         ),
+                    ),
+                ],
+            )
+        "#]]
+        .assert_debug_eq(&actual);
+    }
+
+    #[tokio::test]
+    async fn test_completion_on_utf8() {
+        let actual = completion_test(
+            indoc! {r"
+            main =
+              "},
+            "ç",
+            Position::new(4, 3),
+        )
+        .await;
+
+        expect![[r#"
+            Some(
+                [
+                    (
+                        "main",
+                        None,
                     ),
                 ],
             )

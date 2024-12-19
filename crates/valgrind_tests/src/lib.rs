@@ -61,6 +61,8 @@ fn build_host() {
 }
 
 fn valgrind_test(source: &str) {
+    copy_zig_glue::initialize_zig_test_platforms();
+
     #[cfg(target_os = "linux")]
     {
         valgrind_test_linux(source)
@@ -164,7 +166,7 @@ fn valgrind_test_linux(source: &str) {
             run_with_valgrind(&binary_path);
         }
         Err(roc_build::program::BuildFileError::LoadingProblem(
-            roc_load::LoadingProblem::FormattedReport(report),
+            roc_load::LoadingProblem::FormattedReport(report, _),
         )) => {
             eprintln!("{report}");
             panic!("");
