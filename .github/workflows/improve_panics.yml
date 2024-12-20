@@ -33,12 +33,12 @@ jobs:
           path: target_branch_dir
           ref: ${{ github.base_ref }}
 
-      - name: Compare panics, expects, and unwraps between source and target brach
+      - name: Compare panics, expects, and unwraps between source and target branch
         run: |
           for branch_dir in source_branch_dir target_branch_dir; do
             cd $branch_dir
-            echo "Calculating violations in &branch_dir..."
-            VIOLATIONS=$(nix develop -c cargo clippy --no-deps -- -W clippy::unwrap_used -W clippy::expect_used -W clippy::panic 2> >(grep -e "warning: \`panic\`" -e "warning: used" -e "warning: usage of" | wc -l ))
+            echo "Calculating violations in $branch_dir..."
+            VIOLATIONS=$(nix develop -c cargo clippy --no-deps -- -W clippy::unwrap_used -W clippy::expect_used -W clippy::panic 2> >(grep -e "warning: \`panic\`" -e "warning: used" -e "warning: usage of" | tee violations.txt | wc -l ))
             echo $VIOLATIONS > violations
             cd ..
           done
@@ -48,6 +48,9 @@ jobs:
           if [ "$SOURCE_VIOLATIONS" -gt "$TARGET_VIOLATIONS" ]; then
             echo "You added panic/unwrap/expect, in this PR their count increased from $TARGET_VIOLATIONS to $SOURCE_VIOLATIONS."
             echo "These calls can kill the REPL, try alternative error handling."
+            echo ""
+            echo "New violations:"
+            diff target_branch_dir/violations.txt source_branch_dir/violations.txt | grep "^>" || true
             echo ""
             echo "TIP: Ask AI \"In rust, how can I rewrite code that contains panic or unwrap so it doesn't crash?\""
             echo ""
