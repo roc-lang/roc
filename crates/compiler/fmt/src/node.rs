@@ -10,19 +10,22 @@ use crate::{
 
 #[derive(Copy, Clone, Debug)]
 pub struct Sp<'a> {
-    default_space: bool, // if true and comments is empty, use a space (' ')
-    comments: &'a [CommentOrNewline<'a>],
+    pub default_space: bool, // if true and comments is empty, use a space (' ')
+    pub force_newline: bool, // if true, force a newline (irrespectively of comments)
+    pub comments: &'a [CommentOrNewline<'a>],
 }
 
 impl<'a> Sp<'a> {
     pub fn empty() -> Sp<'a> {
         Sp {
+            force_newline: false,
             default_space: false,
             comments: &[],
         }
     }
     pub fn space() -> Sp<'a> {
         Sp {
+            force_newline: false,
             default_space: true,
             comments: &[],
         }
@@ -30,15 +33,37 @@ impl<'a> Sp<'a> {
 
     pub fn with_space(sp: &'a [CommentOrNewline<'a>]) -> Self {
         Sp {
+            force_newline: false,
             default_space: true,
             comments: sp,
         }
+    }
+
+    pub fn maybe_with_space(space: bool, sp: &'a [CommentOrNewline<'a>]) -> Sp<'a> {
+        Sp {
+            force_newline: false,
+            default_space: space,
+            comments: sp,
+        }
+    }
+
+    pub fn force_newline(sp: &'a [CommentOrNewline<'a>]) -> Self {
+        Sp {
+            force_newline: true,
+            default_space: false,
+            comments: sp,
+        }
+    }
+
+    pub fn is_multiline(&self) -> bool {
+        self.force_newline || !self.comments.is_empty()
     }
 }
 
 impl<'a> From<&'a [CommentOrNewline<'a>]> for Sp<'a> {
     fn from(comments: &'a [CommentOrNewline<'a>]) -> Self {
         Sp {
+            force_newline: false,
             default_space: false,
             comments,
         }
@@ -53,7 +78,12 @@ pub enum Node<'a> {
         extra_indent_for_rest: bool,
         rest: &'a [(Sp<'a>, Node<'a>)],
     },
-    DelimitedSequence(Braces, &'a [(Sp<'a>, Node<'a>)], Sp<'a>),
+    DelimitedSequence {
+        braces: Braces,
+        indent_items: bool,
+        items: &'a [DelimitedItem<'a>],
+        after: Sp<'a>,
+    },
     CommaSequence {
         allow_blank_lines: bool,
         indent_rest: bool,
@@ -67,9 +97,24 @@ pub enum Node<'a> {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct Item<'a> {
+pub struct DelimitedItem<'a> {
     pub before: &'a [CommentOrNewline<'a>],
-    pub comma: bool,
+    pub newline: bool,
+    pub space: bool,
+    pub node: Node<'a>,
+    pub comma_after: bool,
+}
+
+impl<'a> DelimitedItem<'a> {
+    fn is_multiline(&self) -> bool {
+        self.newline || !self.before.is_empty() || self.node.is_multiline()
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct Item<'a> {
+    pub comma_before: bool,
+    pub before: &'a [CommentOrNewline<'a>],
     pub newline: bool,
     pub space: bool,
     pub node: Node<'a>,
@@ -109,27 +154,32 @@ pub fn parens_around_node<'b, 'a: 'b>(
         } else {
             &[]
         },
-        item: Node::DelimitedSequence(
-            Braces::Round,
-            arena.alloc_slice_copy(&[(
-                if allow_spaces_before {
-                    Sp::empty()
+        node: Node::DelimitedSequence {
+            braces: Braces::Round,
+            indent_items: false,
+            items: arena.alloc_slice_copy(&[DelimitedItem {
+                before: if allow_spaces_before {
+                    &[]
                 } else {
-                    item.before.into()
+                    item.before
                 },
-                item.item,
-            )]),
-            Sp::empty(),
-        ),
+                node: item.node,
+                newline: false,
+                space: false,
+                comma_after: false,
+            }]),
+            after: Sp::empty(),
+        },
         // We move the comments/newlines to the outer scope, since they tend to migrate there when re-parsed
         after: item.after,
         needs_indent: true, // Maybe want to make parens outdentable?
     }
 }
 
+#[derive(Copy, Clone, Debug)]
 pub struct NodeInfo<'b> {
     pub before: &'b [CommentOrNewline<'b>],
-    pub item: Node<'b>,
+    pub node: Node<'b>,
     pub after: &'b [CommentOrNewline<'b>],
     pub needs_indent: bool,
 }
@@ -137,7 +187,7 @@ impl<'b> NodeInfo<'b> {
     pub fn item(text: Node<'b>) -> NodeInfo<'b> {
         NodeInfo {
             before: &[],
-            item: text,
+            node: text,
             after: &[],
             needs_indent: true,
         }
@@ -169,14 +219,14 @@ impl<'a> Formattable for Node<'a> {
                 first.is_multiline()
                     || rest
                         .iter()
-                        .any(|(sp, l)| l.is_multiline() || !sp.comments.is_empty())
+                        .any(|(sp, l)| l.is_multiline() || sp.is_multiline())
             }
-            Node::DelimitedSequence(_braces, lefts, right) => {
-                right.comments.is_empty()
-                    && lefts
-                        .iter()
-                        .any(|(sp, l)| l.is_multiline() || !sp.comments.is_empty())
-            }
+            Node::DelimitedSequence {
+                braces: _,
+                indent_items: _,
+                items,
+                after,
+            } => after.is_multiline() || items.iter().any(|item| item.is_multiline()),
             Node::CommaSequence {
                 allow_blank_lines: _,
                 indent_rest: _,
@@ -191,15 +241,35 @@ impl<'a> Formattable for Node<'a> {
 
     fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
         match self {
-            Node::DelimitedSequence(braces, lefts, right) => {
+            Node::DelimitedSequence {
+                braces,
+                indent_items,
+                items: lefts,
+                after: right,
+            } => {
                 buf.indent(indent);
                 buf.push(braces.start());
 
-                for (sp, l) in *lefts {
-                    fmt_sp(buf, *sp, indent);
-                    l.format_with_options(buf, parens, newlines, indent);
+                let inner_indent = if *indent_items {
+                    indent + INDENT
+                } else {
+                    indent
+                };
+
+                for item in *lefts {
+                    fmt_spaces(buf, item.before.iter(), inner_indent);
+                    if item.newline {
+                        buf.ensure_ends_with_newline();
+                    } else if item.space {
+                        buf.ensure_ends_with_whitespace();
+                    }
+                    item.node
+                        .format_with_options(buf, parens, newlines, inner_indent);
+                    if item.comma_after {
+                        buf.push(',');
+                    }
                 }
-                fmt_sp(buf, *right, indent);
+                fmt_sp(buf, *right, inner_indent);
 
                 buf.indent(indent);
                 buf.push(braces.end());
@@ -238,7 +308,7 @@ impl<'a> Formattable for Node<'a> {
                 first.format_with_options(buf, parens, newlines, indent);
 
                 for item in *rest {
-                    if item.comma {
+                    if item.comma_before {
                         buf.push(',');
                     }
                     if *allow_blank_lines {

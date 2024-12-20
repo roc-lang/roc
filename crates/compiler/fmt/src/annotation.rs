@@ -1,7 +1,9 @@
 use crate::{
     collection::{fmt_collection, Braces},
     expr::merge_spaces_conservative,
-    node::{parens_around_node, Item, Node, NodeInfo, NodeSequenceBuilder, Nodify, Sp},
+    node::{
+        parens_around_node, DelimitedItem, Item, Node, NodeInfo, NodeSequenceBuilder, Nodify, Sp,
+    },
     pattern::pattern_lift_spaces_after,
     pattern::snakify_camel_ident,
     spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT},
@@ -54,6 +56,7 @@ pub enum Parens {
     InAsPattern,
     InApplyLastArg,
     InClosurePattern,
+    InTypeExt,
 }
 
 /// In an AST node, do we show newlines around it
@@ -318,7 +321,7 @@ fn fmt_ty_ann(
         TypeAnnotation::Function(..) | TypeAnnotation::As(..) => {
             me.item
                 .to_node(buf.text.bump(), parens)
-                .item
+                .node
                 .format(buf, indent);
         }
 
@@ -372,7 +375,7 @@ fn fmt_ty_field_collection(
         last_after = lifted.after;
         new_items.push(NodeSpaces {
             before,
-            item: lifted.item,
+            item: lifted.node,
             after: &[],
         });
     }
@@ -402,7 +405,7 @@ fn fmt_tag_collection<'a>(
         last_after = lifted.after;
         new_items.push(NodeSpaces {
             before,
-            item: lifted.item,
+            item: lifted.node,
             after: &[],
         });
     }
@@ -434,12 +437,12 @@ impl<'a> Nodify<'a> for Tag<'a> {
                         let lifted = arg.value.to_node(arena, Parens::InApply);
                         let before = merge_spaces_conservative(arena, last_after, lifted.before);
                         last_after = lifted.after;
-                        new_args.push((Sp::with_space(before), lifted.item));
+                        new_args.push((Sp::with_space(before), lifted.node));
                     }
 
                     NodeInfo {
                         before: &[],
-                        item: Node::Sequence {
+                        node: Node::Sequence {
                             first: arena.alloc(first),
                             extra_indent_for_rest: true,
                             rest: new_args.into_bump_slice(),
@@ -509,7 +512,7 @@ fn fmt_ty_collection(
         last_after = lifted.after;
         new_items.push(NodeSpaces {
             before,
-            item: lifted.item,
+            item: lifted.node,
             after: &[],
         });
     }
@@ -627,7 +630,7 @@ impl<'a> Nodify<'a> for AssignedField<'a, TypeAnnotation<'a>> {
             }
             AssignedField::LabelOnly(name) => NodeInfo {
                 before: &[],
-                item: Node::Literal(name.value),
+                node: Node::Literal(name.value),
                 after: &[],
                 needs_indent: true,
             },
@@ -663,11 +666,11 @@ where
 
     let value_lifted = value.to_node(arena, Parens::NotNeeded);
 
-    b.push(Sp::with_space(value_lifted.before), value_lifted.item);
+    b.push(Sp::with_space(value_lifted.before), value_lifted.node);
 
     NodeInfo {
         before: &[],
-        item: b.build(),
+        node: b.build(),
         after: value_lifted.after,
         needs_indent: true,
     }
@@ -1226,16 +1229,16 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                     last_after = lifted.after;
                     rest.push(Item {
                         before,
-                        comma: false,
+                        comma_before: false,
                         newline: false,
                         space: true,
-                        node: lifted.item,
+                        node: lifted.node,
                     });
                 }
 
                 let item = NodeInfo {
                     before: &[],
-                    item: Node::CommaSequence {
+                    node: Node::CommaSequence {
                         allow_blank_lines: false,
                         indent_rest: true,
                         first: arena.alloc(first),
@@ -1266,25 +1269,24 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                 let first_node = first.value.to_node(arena, Parens::InFunctionType);
                 let mut last_after: &'_ [CommentOrNewline<'_>] = &[];
                 let mut rest_nodes = Vec::with_capacity_in(rest.len() + 2, arena);
-
-                let mut multiline = first_node.item.is_multiline() || !first_node.after.is_empty();
+                let mut multiline = first_node.node.is_multiline() || !first_node.after.is_empty();
 
                 for item in rest {
                     let node = item.value.to_node(arena, Parens::InFunctionType);
                     let before = merge_spaces_conservative(arena, last_after, node.before);
-                    multiline |= node.item.is_multiline() || !before.is_empty();
+                    multiline |= node.node.is_multiline() || !before.is_empty();
                     last_after = node.after;
                     rest_nodes.push(Item {
                         before,
-                        comma: true,
+                        comma_before: true,
                         newline: false,
                         space: true,
-                        node: node.item,
+                        node: node.node,
                     });
                 }
 
                 let res_node = res.value.to_node(arena, Parens::InFunctionType);
-                multiline |= res_node.item.is_multiline()
+                multiline |= res_node.node.is_multiline()
                     || !last_after.is_empty()
                     || !res_node.before.is_empty();
 
@@ -1296,7 +1298,7 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
 
                 rest_nodes.push(Item {
                     before: last_after,
-                    comma: false,
+                    comma_before: false,
                     newline: multiline,
                     space: true,
                     node: Node::Literal(match purity {
@@ -1307,18 +1309,18 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
 
                 rest_nodes.push(Item {
                     before: res_node.before,
-                    comma: false,
+                    comma_before: false,
                     newline: false,
                     space: true,
-                    node: res_node.item,
+                    node: res_node.node,
                 });
 
                 let item = NodeInfo {
                     before: first_node.before,
-                    item: Node::CommaSequence {
+                    node: Node::CommaSequence {
                         allow_blank_lines: false,
                         indent_rest: false,
-                        first: arena.alloc(first_node.item),
+                        first: arena.alloc(first_node.node),
                         rest: rest_nodes.into_bump_slice(),
                     },
                     after: res_node.after,
@@ -1339,13 +1341,13 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                 let left = left.value.to_node(arena, Parens::InAsPattern);
                 let right = right.to_node(arena, Parens::InAsPattern);
                 let before_as = merge_spaces(arena, left.after, sp);
-                let mut b = NodeSequenceBuilder::new(arena, left.item, 2, true);
+                let mut b = NodeSequenceBuilder::new(arena, left.node, 2, true);
                 b.push(Sp::with_space(before_as), Node::Literal("as"));
-                b.push(Sp::with_space(right.before), right.item);
+                b.push(Sp::with_space(right.before), right.node);
 
                 let item = NodeInfo {
                     before: left.before,
-                    item: b.build(),
+                    node: b.build(),
                     after: right.after,
                     needs_indent: true,
                 };
@@ -1368,11 +1370,73 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
             TypeAnnotation::Inferred => NodeInfo::item(Node::Literal("_")),
             TypeAnnotation::Wildcard => NodeInfo::item(Node::Literal("*")),
             TypeAnnotation::Malformed(text) => NodeInfo::item(Node::Literal(text)),
+            TypeAnnotation::Record { fields, ext } => {
+                let mut items = Vec::with_capacity_in(fields.len(), arena);
+                let mut last_after: &[CommentOrNewline<'_>] = &[];
+                let mut multiline = false;
+                for field in fields.iter() {
+                    let node = field.value.to_node(arena, Parens::InCollection);
+                    dbg!(node);
+                    let before = merge_spaces_conservative(arena, last_after, node.before);
+                    multiline |= node.node.is_multiline() || !before.is_empty();
+                    last_after = node.after;
+                    items.push(DelimitedItem {
+                        before,
+                        newline: false,
+                        space: true,
+                        node: node.node,
+                        comma_after: true,
+                    });
+                }
+                if multiline {
+                    for item in items.iter_mut() {
+                        item.newline = true;
+                    }
+                } else if let Some(last) = items.last_mut() {
+                    last.comma_after = false;
+                }
+                let delim = Node::DelimitedSequence {
+                    braces: Braces::Curly,
+                    after: Sp {
+                        default_space: !items.is_empty(),
+                        force_newline: multiline,
+                        comments: merge_spaces_conservative(
+                            arena,
+                            last_after,
+                            fields.final_comments(),
+                        ),
+                    },
+                    items: items.into_bump_slice(),
+                    indent_items: multiline,
+                };
+                if let Some(ext) = ext {
+                    let ext = ext.value.to_node(arena, Parens::InTypeExt);
+                    debug_assert_eq!(ext.before, &[]);
+                    let item = Node::Sequence {
+                        first: arena.alloc(delim),
+                        extra_indent_for_rest: false,
+                        rest: arena.alloc_slice_copy(&[(Sp::empty(), ext.node)]),
+                    };
+                    NodeInfo {
+                        before: &[],
+                        node: item,
+                        after: ext.after,
+                        needs_indent: false,
+                    }
+                } else {
+                    NodeInfo {
+                        before: &[],
+                        node: delim,
+                        after: &[],
+                        needs_indent: false,
+                    }
+                }
+            }
             _ => {
                 let lifted = ann_lift_spaces(arena, self);
                 NodeInfo {
                     before: lifted.before,
-                    item: Node::TypeAnnotation(lifted.item),
+                    node: Node::TypeAnnotation(lifted.item),
                     after: lifted.after,
                     needs_indent: true,
                 }

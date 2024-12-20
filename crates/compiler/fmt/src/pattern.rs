@@ -569,7 +569,7 @@ pub fn pattern_apply_to_node<'b, 'a: 'b>(
 
     let item = NodeInfo {
         before: func_lifted.before,
-        item: b.build(),
+        node: b.build(),
         after: last_after,
         needs_indent: true,
     };
