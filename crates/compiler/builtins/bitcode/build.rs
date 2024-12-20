@@ -180,10 +180,14 @@ fn run_command(mut command: Command, flaky_fail_counter: usize) {
                     internal_error!("{} failed with:\n\n  {}\n\nWorkaround:\n\n  Re-run the cargo command that triggered this build.\n\n", command_str, error_str);
                 } else {
                     // We have bunch of flaky failures here on macos particularly since upgrading to zig 13 github.com/roc-lang/roc/pull/6921
-                    if cfg!(target_os = "macos") && flaky_fail_counter == 10 {
-                        internal_error!("{} failed 10 times in a row. The following error is unlikely to be a flaky error: {}", command_str, error_str);
+                    if cfg!(target_os = "macos") {
+                        if flaky_fail_counter == 10 {
+                            internal_error!("{} failed 10 times in a row. The following error is unlikely to be a flaky error: {}", command_str, error_str);
+                        } else {
+                            run_command(command, flaky_fail_counter + 1)
+                        }
                     } else {
-                        run_command(command, flaky_fail_counter + 1)
+                        internal_error!("{} failed with:\n\n  {}\n", command_str, error_str);
                     }
                 }
             }
