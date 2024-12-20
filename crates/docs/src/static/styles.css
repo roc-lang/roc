@@ -200,7 +200,7 @@ main {
   overflow-wrap: break-word;
   overflow-y: auto;
   display: grid;
-  grid-template-columns: [main-start] 1fr [main-content-start] 60ch [main-content-end] 1fr [main-end];
+  grid-template-columns: [main-start] minmax(16px,1fr) [main-content-start] minmax(calc(100% - 32px), 60ch) [main-content-end] minmax(16px,1fr) [main-end];
   grid-template-rows: auto;
   flex-direction: column;
   scrollbar-color: var(--violet) var(--body-bg-color);
@@ -697,7 +697,7 @@ pre>samp {
   }
 }
 
-@media only screen and (max-device-width: 480px) and (orientation: portrait) {
+@media only screen and (max-device-width: 768px) and (orientation: portrait) {
     body {
         display: block;
         overflow-y: auto;
