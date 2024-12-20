@@ -2,7 +2,7 @@ use crate::annotation::{Formattable, Newlines, Parens};
 use crate::expr::{
     expr_is_multiline, expr_lift_spaces_after, fmt_str_literal, format_sq_literal, is_str_multiline,
 };
-use crate::node::{parens_around_node, Node, NodeSequenceBuilder, Sp};
+use crate::node::{parens_around_node, Node, NodeInfo, NodeSequenceBuilder, Sp};
 use crate::spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT};
 use crate::Buf;
 use bumpalo::Bump;
@@ -552,7 +552,7 @@ pub fn pattern_apply_to_node<'b, 'a: 'b>(
     parens: Parens,
     func: Pattern<'a>,
     args: &[Loc<Pattern<'a>>],
-) -> Spaces<'b, Node<'b>> {
+) -> NodeInfo<'b> {
     let func_lifted = pattern_lift_spaces(arena, &func);
     let mut b = NodeSequenceBuilder::new(arena, Node::Pattern(func_lifted.item), args.len(), true);
 
@@ -567,10 +567,11 @@ pub fn pattern_apply_to_node<'b, 'a: 'b>(
         last_after = arg_lifted.after;
     }
 
-    let item = Spaces {
+    let item = NodeInfo {
         before: func_lifted.before,
         item: b.build(),
         after: last_after,
+        needs_indent: true,
     };
 
     let parens = !args.is_empty() && parens == Parens::InApply;

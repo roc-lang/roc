@@ -1,7 +1,7 @@
 use crate::{
     collection::{fmt_collection, Braces},
     expr::merge_spaces_conservative,
-    node::{parens_around_node, Item, Node, NodeSequenceBuilder, Nodify, Sp},
+    node::{parens_around_node, Item, Node, NodeInfo, NodeSequenceBuilder, Nodify, Sp},
     pattern::pattern_lift_spaces_after,
     pattern::snakify_camel_ident,
     spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT},
@@ -416,18 +416,14 @@ fn fmt_tag_collection<'a>(
 }
 
 impl<'a> Nodify<'a> for Tag<'a> {
-    fn to_node<'b>(&'a self, arena: &'b Bump, parens: Parens) -> Spaces<'b, Node<'b>>
+    fn to_node<'b>(&'a self, arena: &'b Bump, parens: Parens) -> NodeInfo<'b>
     where
         'a: 'b,
     {
         match self {
             Tag::Apply { name, args } => {
                 if args.is_empty() {
-                    Spaces {
-                        before: &[],
-                        item: Node::Literal(name.value),
-                        after: &[],
-                    }
+                    NodeInfo::item(Node::Literal(name.value))
                 } else {
                     let first = Node::Literal(name.value);
                     let mut new_args: Vec<'b, (Sp<'b>, Node<'b>)> =
@@ -441,7 +437,7 @@ impl<'a> Nodify<'a> for Tag<'a> {
                         new_args.push((Sp::with_space(before), lifted.item));
                     }
 
-                    Spaces {
+                    NodeInfo {
                         before: &[],
                         item: Node::Sequence {
                             first: arena.alloc(first),
@@ -449,6 +445,7 @@ impl<'a> Nodify<'a> for Tag<'a> {
                             rest: new_args.into_bump_slice(),
                         },
                         after: last_after,
+                        needs_indent: true,
                     }
                 }
             }
@@ -611,7 +608,7 @@ impl<'a> Formattable for AssignedField<'a, Expr<'a>> {
 }
 
 impl<'a> Nodify<'a> for AssignedField<'a, TypeAnnotation<'a>> {
-    fn to_node<'b>(&'a self, arena: &'b Bump, parens: Parens) -> Spaces<'b, Node<'b>>
+    fn to_node<'b>(&'a self, arena: &'b Bump, parens: Parens) -> NodeInfo<'b>
     where
         'a: 'b,
     {
@@ -628,10 +625,11 @@ impl<'a> Nodify<'a> for AssignedField<'a, TypeAnnotation<'a>> {
             AssignedField::OptionalValue(name, sp, value) => {
                 assigned_field_value_to_node(name.value, arena, sp, &value.value, "?")
             }
-            AssignedField::LabelOnly(name) => Spaces {
+            AssignedField::LabelOnly(name) => NodeInfo {
                 before: &[],
                 item: Node::Literal(name.value),
                 after: &[],
+                needs_indent: true,
             },
             AssignedField::SpaceBefore(inner, sp) => {
                 let mut inner = inner.to_node(arena, parens);
@@ -653,7 +651,7 @@ fn assigned_field_value_to_node<'a, 'b>(
     sp: &'a [CommentOrNewline<'a>],
     value: &'a TypeAnnotation<'a>,
     sep: &'static str,
-) -> Spaces<'b, Node<'b>>
+) -> NodeInfo<'b>
 where
     'a: 'b,
 {
@@ -667,10 +665,11 @@ where
 
     b.push(Sp::with_space(value_lifted.before), value_lifted.item);
 
-    Spaces {
+    NodeInfo {
         before: &[],
         item: b.build(),
         after: value_lifted.after,
+        needs_indent: true,
     }
 }
 
@@ -1206,7 +1205,7 @@ pub fn type_head_lift_spaces_after<'a, 'b: 'a>(
 }
 
 impl<'a> Nodify<'a> for TypeAnnotation<'a> {
-    fn to_node<'b>(&'a self, arena: &'b Bump, parens: Parens) -> Spaces<'b, Node<'b>>
+    fn to_node<'b>(&'a self, arena: &'b Bump, parens: Parens) -> NodeInfo<'b>
     where
         'a: 'b,
     {
@@ -1234,7 +1233,7 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                     });
                 }
 
-                let item = Spaces {
+                let item = NodeInfo {
                     before: &[],
                     item: Node::CommaSequence {
                         allow_blank_lines: false,
@@ -1243,6 +1242,7 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                         rest: rest.into_bump_slice(),
                     },
                     after: last_after,
+                    needs_indent: true,
                 };
 
                 if parens == Parens::InApply && !args.is_empty() {
@@ -1313,7 +1313,7 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                     node: res_node.item,
                 });
 
-                let item = Spaces {
+                let item = NodeInfo {
                     before: first_node.before,
                     item: Node::CommaSequence {
                         allow_blank_lines: false,
@@ -1322,6 +1322,7 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                         rest: rest_nodes.into_bump_slice(),
                     },
                     after: res_node.after,
+                    needs_indent: true,
                 };
 
                 if parens == Parens::InCollection
@@ -1342,10 +1343,11 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                 b.push(Sp::with_space(before_as), Node::Literal("as"));
                 b.push(Sp::with_space(right.before), right.item);
 
-                let item = Spaces {
+                let item = NodeInfo {
                     before: left.before,
                     item: b.build(),
                     after: right.after,
+                    needs_indent: true,
                 };
 
                 if parens == Parens::InApply || parens == Parens::InAsPattern {
@@ -1355,7 +1357,7 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                 }
             }
             TypeAnnotation::BoundVariable(text) => {
-                let item = Spaces::item(Node::Literal(text));
+                let item = NodeInfo::item(Node::Literal(text));
 
                 if *text == "implements" {
                     parens_around_node(arena, item, false)
@@ -1363,15 +1365,16 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                     item
                 }
             }
-            TypeAnnotation::Inferred => Spaces::item(Node::Literal("_")),
-            TypeAnnotation::Wildcard => Spaces::item(Node::Literal("*")),
-            TypeAnnotation::Malformed(text) => Spaces::item(Node::Literal(text)),
+            TypeAnnotation::Inferred => NodeInfo::item(Node::Literal("_")),
+            TypeAnnotation::Wildcard => NodeInfo::item(Node::Literal("*")),
+            TypeAnnotation::Malformed(text) => NodeInfo::item(Node::Literal(text)),
             _ => {
                 let lifted = ann_lift_spaces(arena, self);
-                Spaces {
+                NodeInfo {
                     before: lifted.before,
                     item: Node::TypeAnnotation(lifted.item),
                     after: lifted.after,
+                    needs_indent: true,
                 }
             }
         }

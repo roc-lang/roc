@@ -1,5 +1,5 @@
 use bumpalo::{collections::Vec, Bump};
-use roc_parse::ast::{CommentOrNewline, Pattern, Spaces, TypeAnnotation};
+use roc_parse::ast::{CommentOrNewline, Pattern, TypeAnnotation};
 
 use crate::{
     annotation::{Formattable, Newlines, Parens},
@@ -98,12 +98,12 @@ impl<'a> Node<'a> {
     }
 }
 
-pub fn parens_around_node<'a, 'b: 'a>(
-    arena: &'a Bump,
-    item: Spaces<'b, Node<'b>>,
+pub fn parens_around_node<'b, 'a: 'b>(
+    arena: &'b Bump,
+    item: NodeInfo<'a>,
     allow_spaces_before: bool,
-) -> Spaces<'a, Node<'a>> {
-    Spaces {
+) -> NodeInfo<'b> {
+    NodeInfo {
         before: if allow_spaces_before {
             item.before
         } else {
@@ -123,11 +123,29 @@ pub fn parens_around_node<'a, 'b: 'a>(
         ),
         // We move the comments/newlines to the outer scope, since they tend to migrate there when re-parsed
         after: item.after,
+        needs_indent: true, // Maybe want to make parens outdentable?
+    }
+}
+
+pub struct NodeInfo<'b> {
+    pub before: &'b [CommentOrNewline<'b>],
+    pub item: Node<'b>,
+    pub after: &'b [CommentOrNewline<'b>],
+    pub needs_indent: bool,
+}
+impl<'b> NodeInfo<'b> {
+    pub fn item(text: Node<'b>) -> NodeInfo<'b> {
+        NodeInfo {
+            before: &[],
+            item: text,
+            after: &[],
+            needs_indent: true,
+        }
     }
 }
 
 pub trait Nodify<'a> {
-    fn to_node<'b>(&'a self, arena: &'b Bump, parens: Parens) -> Spaces<'b, Node<'b>>
+    fn to_node<'b>(&'a self, arena: &'b Bump, parens: Parens) -> NodeInfo<'b>
     where
         'a: 'b;
 }

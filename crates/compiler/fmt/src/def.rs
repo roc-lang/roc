@@ -7,7 +7,7 @@ use crate::expr::{
     expr_lift_and_lower, expr_lift_spaces, expr_lift_spaces_after, expr_lift_spaces_before,
     fmt_str_literal, is_str_multiline, sub_expr_requests_parens,
 };
-use crate::node::Nodify;
+use crate::node::{NodeInfo, Nodify};
 use crate::pattern::pattern_lift_spaces_before;
 use crate::pattern::{pattern_apply_to_node, pattern_fmt_apply};
 use crate::spaces::{
@@ -542,7 +542,7 @@ impl<'a> Formattable for TypeHeader<'a> {
 }
 
 impl<'a> Nodify<'a> for TypeHeader<'a> {
-    fn to_node<'b>(&'a self, arena: &'b Bump, parens: Parens) -> Spaces<'b, crate::node::Node<'b>>
+    fn to_node<'b>(&'a self, arena: &'b Bump, parens: Parens) -> NodeInfo<'b>
     where
         'a: 'b,
     {
