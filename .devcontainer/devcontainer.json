@@ -15,9 +15,9 @@
 	// ]
 
 	// Features to add to the dev container. More info: https://containers.dev/features.
-	
-        "features": {
-		"ghcr.io/devcontainers-contrib/features/zig:1": {}
+	"features": {
+		"ghcr.io/devcontainers-contrib/features/zig:1": {},
+		"ghcr.io/devcontainers-community/features/llvm": {}
 	}
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
 	// "forwardPorts": [],
