@@ -1,27 +1,34 @@
-(() => {
+const toggleSidebarEntryActive = (moduleName) => {
   let sidebar = document.getElementById("sidebar-nav");
 
   if (sidebar != null) {
     // Un-hide everything
-    sidebar
-      .querySelectorAll(".sidebar-entry a")
-      .forEach((entry) => entry.classList.remove("hidden"));
-
-    // Re-hide all the sub-entries except for those of the current module
-    let currentModuleName = document.querySelector(".module-name").textContent;
-
     sidebar.querySelectorAll(".sidebar-entry").forEach((entry) => {
-      let entryName = entry.querySelector(".sidebar-module-link").textContent;
-      if (currentModuleName === entryName) {
-        entry.firstChild.classList.add("active");
-        return;
+      let entryName = entry.querySelector(".sidebar-module-link").dataset
+        .moduleName;
+      if (moduleName === entryName) {
+        entry.firstChild.classList.toggle("active");
       }
-      entry
-        .querySelectorAll(".sidebar-sub-entries a")
-        .forEach((subEntry) => subEntry.classList.add("hidden"));
     });
   }
+};
 
+const setupSidebarNav = () => {
+  // Re-hide all the sub-entries except for those of the current module
+  let currentModuleName = document.querySelector(".module-name").textContent;
+  toggleSidebarEntryActive(currentModuleName);
+
+  document.querySelectorAll(".entry-toggle").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      const moduleName = e.target.parentElement.dataset.moduleName;
+      toggleSidebarEntryActive(moduleName);
+    });
+  });
+};
+
+const setupSearch = () => {
   let searchTypeAhead = document.getElementById("search-type-ahead");
   let searchBox = document.getElementById("module-search");
   let searchForm = document.getElementById("module-search-form");
@@ -184,16 +191,18 @@
       }
     });
   }
+};
 
-  const isTouchSupported = () => {
-    try {
-      document.createEvent("TouchEvent");
-      return true;
-    } catch (e) {
-      return false;
-    }
-  };
+const isTouchSupported = () => {
+  try {
+    document.createEvent("TouchEvent");
+    return true;
+  } catch (e) {
+    return false;
+  }
+};
 
+const setupCodeBlocks = () => {
   // Select all <samp> elements that are children of <pre> elements
   const codeBlocks = document.querySelectorAll("pre > samp");
 
@@ -245,9 +254,9 @@
       });
     }
   });
-})();
+};
 
-(() => {
+const setupSidebarToggle = () => {
   let body = document.body;
   const sidebarOpen = "sidebar-open";
   const removeOpenClass = () => {
@@ -267,4 +276,9 @@
       });
     },
   );
-})();
+};
+
+setupSidebarNav();
+setupSearch();
+setupCodeBlocks();
+setupSidebarToggle();
