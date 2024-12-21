@@ -2380,6 +2380,7 @@ fn update<'a>(
                 extend_module_with_builtin_import(parsed, ModuleId::HASH);
                 extend_module_with_builtin_import(parsed, ModuleId::INSPECT);
                 extend_module_with_builtin_import(parsed, ModuleId::TASK);
+                extend_module_with_builtin_import(parsed, ModuleId::CRYPTO);
             }
             state
                 .module_cache
@@ -3701,6 +3702,7 @@ fn load_module<'a>(
         "Hash", ModuleId::HASH
         "Inspect", ModuleId::INSPECT
         "Task", ModuleId::TASK
+        "Crypto", ModuleId::CRYPTO
     }
 
     let (filename, opt_shorthand) = module_name_to_path(src_dir, &module_name, arc_shorthands);
@@ -5275,6 +5277,7 @@ fn canonicalize_and_constrain<'a>(
                         | ModuleId::HASH
                         | ModuleId::INSPECT
                         | ModuleId::TASK
+                        | ModuleId::CRYPTO
                 );
 
                 if !name.is_builtin() || should_include_builtin {
