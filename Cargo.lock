@@ -3108,6 +3108,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_roar"
+version = "0.0.1"
+dependencies = [
+ "roc_module",
+ "roc_mono",
+]
+
+[[package]]
 name = "roc_serialize"
 version = "0.0.1"
 dependencies = [
