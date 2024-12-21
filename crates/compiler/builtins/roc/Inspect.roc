@@ -258,7 +258,9 @@ dbgStr = \s ->
     custom \f0 ->
         f0
         |> dbgWrite "\""
-        |> dbgWrite s # TODO: Should we be escaping strings for dbg/logging?
+        |> \f1 -> 
+            escapeS = Str.replaceEach s "*" "*" # escape exotic characters like invisible unicode characters \u(feff)
+            dbgWrite f1 escapeS
         |> dbgWrite "\""
 
 dbgOpaque : * -> Inspector DbgFormatter
