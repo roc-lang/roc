@@ -1349,6 +1349,7 @@ define_builtins! {
         166 NUM_NAN_F64: "nanF64"
         167 NUM_INFINITY_F32: "infinityF32"
         168 NUM_INFINITY_F64: "infinityF64"
+        169 NUM_FROM_BOOL: "fromBool"
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" exposed_type=true // the Bool.Bool type alias
