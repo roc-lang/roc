@@ -5,12 +5,12 @@ use roc_module::symbol;
 #[non_exhaustive]
 pub struct Proc {
     ///The instructions themselves
-    instructions : Vec<Operation>,
+    pub instructions : Vec<Operation>,
     ///A list of inputs, in order, taken by the function
     ///The reason it's type is `Output` and not `Input` is that we want the values to be written from certain registers, not read from them
-    inputs : Vec<Output>,
+    pub inputs : Vec<Output>,
     ///A list of computed registers used by the operation
-    annotations : Annotations
+    pub annotations : Annotations
 }
 ///Some annotations on the internal level that may or may not be present
 #[derive(Clone,Debug)]

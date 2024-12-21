@@ -9,9 +9,9 @@ pub struct ByteSize(u32);
 pub(crate) type Offset = ByteSize;
 pub(crate) const WORD_SIZE : ByteSize = ByteSize(8);
 #[derive(Clone,Debug)]
-pub(crate) struct Register(Id);
+pub(crate) struct Register(pub Id);
 #[derive(Clone,Debug)]
-pub(crate) struct FloatRegister(Id);
+pub(crate) struct FloatRegister(pub Id);
 #[derive(Clone,Debug)]
 pub(crate) struct Global(Symbol);
 #[derive(Clone,Debug)]

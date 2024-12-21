@@ -1,6 +1,6 @@
 use std::fmt::Display;
-use super::{ops::*,storage::*};
-fn mnemonic(op_code: OpCode) -> String {
+use super::{ops::*,storage::*,proc::*};
+fn mnemonic(op_code: &OpCode) -> String {
     use Sign::*;
     match op_code {
         OpCode::Add(Signed) => "adds",
@@ -56,14 +56,61 @@ impl Display for LiteralValue {
         }
     }
 }
+impl Display for Operation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f,"{}",self.output);
+        write!(f," <- ");
+        write!(f,"{} ",mnemonic(&self.opcode));
+        for input in &self.inputs {
+            write!(f,"{} ",input);
+        }
+        write!(f,"")
+    }
+}
 
 impl Display for Input {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        todo!()
+        match self {
+            Input::Register(register) => write!(f,"{}",register),
+            Input::FloatRegister(register) => write!(f,"{}",register),
+            Input::Global(global) => write!(f,"{:?}",global),
+            Input::Value(literal_value) => write!(f,"{}",literal_value),
+            Input::Data(vec) => write!(f,"{:?}",vec),
+        }
     }
 }
 impl Display for Output {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        todo!()
+        match self {
+            Output::Register(register) => write!(f,"{}",register),
+            Output::FloatRegister(register) => write!(f,"{}",register),
+            Output::Global(global) => write!(f,"{:?}",global),
+            Output::Null => write!(f,"_")
+        }
+    }
+}
+
+impl Display for Register {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f,"%{}",self.0)
+    }
+}
+impl Display for FloatRegister {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f,"#{}",self.0)
+    }
+}
+impl Display for Proc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f,"[");
+        for input in &self.inputs {
+            write!(f,"{} ",input);
+        }
+        //FIXME do this in a way that doesn't use the ascii backspace...
+        write!(f,"\x08] {{\n");
+        for op in &self.instructions {
+            writeln!(f,"\t{}",op);
+        }
+        writeln!(f,"}}")
     }
 }

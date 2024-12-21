@@ -61,9 +61,9 @@ pub(crate) enum OpCode {
 #[non_exhaustive]
 ///The actual type of operations in ROAR
 pub struct Operation {
-    output : Output,
-    opcode : OpCode,
-    input : Vec<Input>
+    pub output : Output,
+    pub opcode : OpCode,
+    pub inputs : Vec<Input>
 }
 
 
