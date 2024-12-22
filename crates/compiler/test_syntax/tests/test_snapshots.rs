@@ -551,6 +551,7 @@ mod test_snapshots {
         pass/nonempty_hosted_header.header,
         pass/nonempty_package_header.header,
         pass/nonempty_platform_header.header,
+        pass/not_closure_with_multibackpassing.expr,
         pass/not_double_parens.expr,
         pass/not_multiline_string.expr,
         pass/not_record_updater.expr,

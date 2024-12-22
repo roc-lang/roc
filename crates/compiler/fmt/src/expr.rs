@@ -291,7 +291,7 @@ fn format_expr_only(
                 let inner_parens = if needs_parens {
                     Parens::NotNeeded
                 } else {
-                    Parens::InApply
+                    Parens::InApplyLastArg
                 };
 
                 if !before_all_newlines {
