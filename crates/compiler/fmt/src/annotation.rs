@@ -303,23 +303,8 @@ fn fmt_ty_ann(
             buf.push('_')
         }
 
-        TypeAnnotation::TagUnion { tags, ext } => {
-            fmt_tag_collection(buf, indent, *tags, newlines);
-            fmt_ext(ext, buf, indent);
-        }
-
-        // TypeAnnotation::Tuple { elems: fields, ext } => {
-        //     fmt_ty_collection(buf, indent, Braces::Round, *fields, newlines);
-        //     fmt_ext(ext, buf, indent);
-        // }
-
-        // TypeAnnotation::Record { fields, ext } => {
-        //     fmt_ty_field_collection(buf, indent, *fields, newlines);
-        //     fmt_ext(ext, buf, indent);
-        // }
-
-        // TypeAnnotation::TagUnion { .. } |
-        TypeAnnotation::Tuple { .. }
+        TypeAnnotation::TagUnion { .. }
+        | TypeAnnotation::Tuple { .. }
         | TypeAnnotation::Record { .. }
         | TypeAnnotation::Function(..)
         | TypeAnnotation::As(..) => {
