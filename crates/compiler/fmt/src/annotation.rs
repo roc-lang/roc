@@ -338,12 +338,10 @@ fn fmt_ty_ann(
             buf.indent(indent);
             if *v == "implements" {
                 buf.push_str("(implements)");
+            } else if buf.flags().snakify {
+                snakify_camel_ident(buf, v);
             } else {
-                if buf.flags().snakify {
-                    snakify_camel_ident(buf, v);
-                } else {
-                    buf.push_str(v);
-                }
+                buf.push_str(v);
             }
         }
         TypeAnnotation::Wildcard => {
