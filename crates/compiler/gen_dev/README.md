@@ -137,6 +137,10 @@ Disassembly of section .text.1000000000:
 
 The output lines contain the hexadecimal representation of the x86 opcodes and fields followed by the `intel` assembly syntax. This setup is very useful for figuring out the causes of invalid pointer references (or equivalent) when running the resulting x86 assembly.
 
+## Roc Optimizable Abstract Representation (ROAR)
+
+Roc Optimizable Abstract Representation (ROAR) is a planned step in between monomorphization and the `dev` backend, intended to not be as low-level as a [assembly representation](https://en.wikipedia.org/wiki/Assembly_language) but more specific than a [bytecode](https://en.wikipedia.org/wiki/Assembly_language). More detail may be found at the ROAR [README](src/roar/README.md)
+
 ## Helpful Resources
 
 - [Compiler Explorer](https://godbolt.org/) -
