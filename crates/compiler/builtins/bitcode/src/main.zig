@@ -10,6 +10,14 @@ const ROC_BUILTINS = "roc_builtins";
 const NUM = "num";
 const STR = "str";
 
+// Crypt Module
+const crypto = @import("crypto.zig");
+comptime {
+    exportCryptoFn(crypto.emptySha256, "emptySha256");
+    exportCryptoFn(crypto.sha256AddBytes, "sha256AddBytes");
+    exportCryptoFn(crypto.sha256Digest, "sha256Digest");
+}
+
 // Dec Module
 const dec = @import("dec.zig");
 
@@ -388,6 +396,9 @@ fn exportListFn(comptime func: anytype, comptime func_name: []const u8) void {
 }
 fn exportDecFn(comptime func: anytype, comptime func_name: []const u8) void {
     exportBuiltinFn(func, "dec." ++ func_name);
+}
+fn exportCryptoFn(comptime func: anytype, comptime func_name: []const u8) void {
+    exportBuiltinFn(func, "crypto." ++ func_name);
 }
 
 fn exportUtilsFn(comptime func: anytype, comptime func_name: []const u8) void {
