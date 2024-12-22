@@ -1358,14 +1358,46 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                 });
                 maybe_add_ext(arena, coll, ext)
             }
-            _ => {
-                let lifted = ann_lift_spaces(arena, self);
+            TypeAnnotation::Where(annot, implements_clauses) => {
+                let mut items = Vec::with_capacity_in(implements_clauses.len() + 2, arena);
+
+                let annot = annot
+                    .value
+                    .to_node(arena)
+                    .add_parens(arena, Parens::InAsPattern);
+
+                items.push(Item {
+                    comma_before: false,
+                    before: annot.after,
+                    newline: false,
+                    space: true,
+                    node: Node::Literal(roc_parse::keyword::WHERE),
+                });
+
+                let mut last_after: &[CommentOrNewline<'_>] = &[];
+
+                for (i, clause) in implements_clauses.iter().enumerate() {
+                    let node = clause.value.to_node(arena);
+                    let before = merge_spaces_conservative(arena, last_after, node.before);
+                    items.push(Item {
+                        before,
+                        comma_before: i > 0,
+                        newline: false,
+                        space: true,
+                        node: node.node,
+                    });
+                }
+
                 NodeInfo {
-                    before: lifted.before,
-                    node: Node::TypeAnnotation(lifted.item),
-                    after: lifted.after,
+                    before: annot.before,
+                    node: Node::Sequence {
+                        first: arena.alloc(annot.node),
+                        extra_indent_for_rest: false,
+                        rest: arena.alloc_slice_copy(&items),
+                    },
+                    after: &[],
                     needs_indent: true,
-                    prec: ann_prec(self),
+                    prec: Prec::Term,
                 }
             }
         }
