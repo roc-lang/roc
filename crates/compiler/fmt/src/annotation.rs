@@ -4,7 +4,7 @@ use crate::{
     node::{Node, NodeSequenceBuilder, Nodify, Sp},
     pattern::{pattern_lift_spaces_after, snakify_camel_ident},
     spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT},
-    Buf,
+    Buf, MigrationFlags,
 };
 use bumpalo::{
     collections::{String, Vec},
@@ -339,7 +339,11 @@ fn fmt_ty_ann(
             if *v == "implements" {
                 buf.push_str("(implements)");
             } else {
-                buf.push_str(v);
+                if buf.flags().snakify {
+                    snakify_camel_ident(buf, v);
+                } else {
+                    buf.push_str(v);
+                }
             }
         }
         TypeAnnotation::Wildcard => {
@@ -442,7 +446,7 @@ fn fmt_ty_field_collection(
     let mut last_after: &[CommentOrNewline<'_>] = &[];
 
     for item in fields.items.iter() {
-        let lifted = item.value.to_node(arena, Parens::NotNeeded);
+        let lifted = item.value.to_node(arena, Parens::NotNeeded, buf.flags());
         let before = merge_spaces_conservative(arena, last_after, lifted.before);
         last_after = lifted.after;
         new_items.push(NodeSpaces {
@@ -472,7 +476,7 @@ fn fmt_tag_collection<'a>(
     let mut last_after: &[CommentOrNewline<'_>] = &[];
 
     for item in tags.items.iter() {
-        let lifted = item.value.to_node(arena, Parens::NotNeeded);
+        let lifted = item.value.to_node(arena, Parens::NotNeeded, buf.flags());
         let before = merge_spaces_conservative(arena, last_after, lifted.before);
         last_after = lifted.after;
         new_items.push(NodeSpaces {
@@ -491,7 +495,12 @@ fn fmt_tag_collection<'a>(
 }
 
 impl<'a> Nodify<'a> for Tag<'a> {
-    fn to_node<'b>(&'a self, arena: &'b Bump, parens: Parens) -> Spaces<'b, Node<'b>>
+    fn to_node<'b>(
+        &'a self,
+        arena: &'b Bump,
+        parens: Parens,
+        flags: MigrationFlags,
+    ) -> Spaces<'b, Node<'b>>
     where
         'a: 'b,
     {
@@ -510,7 +519,7 @@ impl<'a> Nodify<'a> for Tag<'a> {
                     let mut last_after: &[CommentOrNewline<'_>] = &[];
 
                     for arg in args.iter() {
-                        let lifted = arg.value.to_node(arena, Parens::InApply);
+                        let lifted = arg.value.to_node(arena, Parens::InApply, flags);
                         let before = merge_spaces_conservative(arena, last_after, lifted.before);
                         last_after = lifted.after;
                         new_args.push((Sp::with_space(before), lifted.item));
@@ -524,12 +533,12 @@ impl<'a> Nodify<'a> for Tag<'a> {
                 }
             }
             Tag::SpaceBefore(inner, sp) => {
-                let mut inner = inner.to_node(arena, parens);
+                let mut inner = inner.to_node(arena, parens, flags);
                 inner.before = merge_spaces_conservative(arena, sp, inner.before);
                 inner
             }
             Tag::SpaceAfter(inner, sp) => {
-                let mut inner = inner.to_node(arena, parens);
+                let mut inner = inner.to_node(arena, parens, flags);
                 inner.after = merge_spaces_conservative(arena, inner.after, sp);
                 inner
             }
@@ -578,7 +587,7 @@ fn fmt_ty_collection(
         } else {
             Parens::NotNeeded
         };
-        let lifted = item.value.to_node(arena, parens);
+        let lifted = item.value.to_node(arena, parens, buf.flags());
         let before = merge_spaces_conservative(arena, last_after, lifted.before);
         last_after = lifted.after;
         new_items.push(NodeSpaces {
@@ -682,22 +691,27 @@ impl<'a> Formattable for AssignedField<'a, Expr<'a>> {
 }
 
 impl<'a> Nodify<'a> for AssignedField<'a, TypeAnnotation<'a>> {
-    fn to_node<'b>(&'a self, arena: &'b Bump, parens: Parens) -> Spaces<'b, Node<'b>>
+    fn to_node<'b>(
+        &'a self,
+        arena: &'b Bump,
+        parens: Parens,
+        flags: MigrationFlags,
+    ) -> Spaces<'b, Node<'b>>
     where
         'a: 'b,
     {
         match self {
             AssignedField::RequiredValue(name, sp, value) => {
-                assigned_field_value_to_node(name.value, arena, sp, &value.value, ":")
+                assigned_field_value_to_node(name.value, arena, sp, &value.value, ":", flags)
             }
             AssignedField::IgnoredValue(name, sp, value) => {
                 let mut n = String::with_capacity_in(name.value.len() + 1, arena);
                 n.push('_');
                 n.push_str(name.value);
-                assigned_field_value_to_node(n.into_bump_str(), arena, sp, &value.value, ":")
+                assigned_field_value_to_node(n.into_bump_str(), arena, sp, &value.value, ":", flags)
             }
             AssignedField::OptionalValue(name, sp, value) => {
-                assigned_field_value_to_node(name.value, arena, sp, &value.value, "?")
+                assigned_field_value_to_node(name.value, arena, sp, &value.value, "?", flags)
             }
             AssignedField::LabelOnly(name) => Spaces {
                 before: &[],
@@ -705,12 +719,12 @@ impl<'a> Nodify<'a> for AssignedField<'a, TypeAnnotation<'a>> {
                 after: &[],
             },
             AssignedField::SpaceBefore(inner, sp) => {
-                let mut inner = inner.to_node(arena, parens);
+                let mut inner = inner.to_node(arena, parens, flags);
                 inner.before = merge_spaces_conservative(arena, sp, inner.before);
                 inner
             }
             AssignedField::SpaceAfter(inner, sp) => {
-                let mut inner = inner.to_node(arena, parens);
+                let mut inner = inner.to_node(arena, parens, flags);
                 inner.after = merge_spaces_conservative(arena, inner.after, sp);
                 inner
             }
@@ -724,17 +738,26 @@ fn assigned_field_value_to_node<'a, 'b>(
     sp: &'a [CommentOrNewline<'a>],
     value: &'a TypeAnnotation<'a>,
     sep: &'static str,
+    flags: MigrationFlags,
 ) -> Spaces<'b, Node<'b>>
 where
     'a: 'b,
 {
-    let first = Node::Literal(name);
+    let first = if flags.snakify {
+        let mut buf = Buf::new_in(arena, flags);
+        buf.indent(0);
+        snakify_camel_ident(&mut buf, name);
+        let n = arena.alloc_str(buf.as_str());
+        Node::Literal(n)
+    } else {
+        Node::Literal(name)
+    };
 
     let mut b = NodeSequenceBuilder::new(arena, first, 2);
 
     b.push(Sp::with_space(sp), Node::Literal(sep));
 
-    let value_lifted = value.to_node(arena, Parens::NotNeeded);
+    let value_lifted = value.to_node(arena, Parens::NotNeeded, flags);
 
     b.push(Sp::with_space(value_lifted.before), value_lifted.item);
 
@@ -1277,7 +1300,12 @@ pub fn type_head_lift_spaces_after<'a, 'b: 'a>(
 }
 
 impl<'a> Nodify<'a> for TypeAnnotation<'a> {
-    fn to_node<'b>(&'a self, arena: &'b Bump, parens: Parens) -> Spaces<'b, Node<'b>>
+    fn to_node<'b>(
+        &'a self,
+        arena: &'b Bump,
+        parens: Parens,
+        flags: MigrationFlags,
+    ) -> Spaces<'b, Node<'b>>
     where
         'a: 'b,
     {
@@ -1338,12 +1366,12 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                 }
             }
             TypeAnnotation::SpaceBefore(expr, spaces) => {
-                let mut inner = expr.to_node(arena, parens);
+                let mut inner = expr.to_node(arena, parens, flags);
                 inner.before = merge_spaces_conservative(arena, spaces, inner.before);
                 inner
             }
             TypeAnnotation::SpaceAfter(expr, spaces) => {
-                let mut inner = expr.to_node(arena, parens);
+                let mut inner = expr.to_node(arena, parens, flags);
                 inner.after = merge_spaces_conservative(arena, inner.after, spaces);
                 inner
             }
