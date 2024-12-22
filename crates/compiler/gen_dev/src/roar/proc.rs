@@ -1,11 +1,13 @@
 use super::ops::Operation;
 use super::storage::{Args,ByteSize, Constant, FloatRegister, Input, Offset, Output, Register, Global, ProcRef};
+use bumpalo::collections;
+use capstone::Instructions;
 use roc_module::symbol;
 #[derive(Clone, Debug)]
 #[non_exhaustive]
-pub struct Proc {
+pub struct Proc<'a> {
     ///The instructions themselves
-    pub instructions: Vec<Operation>,
+    pub instructions: collections::Vec<'a,Instructions>,
     ///A list of inputs, in order, taken by the function
     pub inputs: Args,
     ///A list of computed registers used by the operation
@@ -33,10 +35,10 @@ impl Default for Annotations {
 #[non_exhaustive]
 pub struct Section {
     ///The instructions themselves
-    pub procedures: Vec<Proc>,
+    pub procedures: collections::Vec<'a,Proc<'a>>,
     ///A list of inputs, in order, taken by the function
     ///The reason it's type is `Output` and not `Input` is that we want the values to be written from certain registers, not read from them
-    pub globals: Vec<Global>,
+    pub globals: collections::Vec<'a,Global>,
     ///A list of computed registers used by the operation
     pub annotations: SectionAnnotations,
 }

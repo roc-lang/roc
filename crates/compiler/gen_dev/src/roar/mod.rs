@@ -1,5 +1,5 @@
 //! Roc's abstract representation for the dev backend, optimzed for convertibility and optimizability to machine code
-
+#![warn(missing-docs)]
 ///Convert mono IR into ROAR
 mod convert;
 ///Implements `std::fmt::Display` for various types
@@ -10,7 +10,7 @@ mod proc;
 ///All possible values to be used in ROAR
 mod storage;
 
-//Just some temporary quick and dirty tests, will be removed
+///Just some temporary quick and dirty tests, will be removed
 #[cfg(test)]
 mod test {
     use std::default;

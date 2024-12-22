@@ -1,3 +1,5 @@
+use std::mem;
+
 use super::storage::{Args,ByteSize, Constant, Input, Offset, Output,ProcRef,Label};
 
 #[derive(Clone, Debug)]
@@ -8,6 +10,7 @@ pub(crate) enum Sign {
 #[derive(Clone, Debug)]
 pub(crate) enum Flag {
     Neq,
+    Eq
 }
 type Flags = Flag;
 #[derive(Clone, Debug)]
@@ -54,7 +57,13 @@ pub(crate) enum OpCode {
     ShiftRight(Sign),
     ///Basic move instruction
     Move,
+    ///Get the reference to a given procedure 
+    MoveProc(ProcRef),
+    ///Call a given procedure
     Call(ProcRef,Box<Args>),
+    ///Apply a given procedure, with consant arguements but non-constant pointer 
+    Apply(Box<Args>),
+    Return
 }
 #[derive(Clone, Debug)]
 #[non_exhaustive]
@@ -65,3 +74,5 @@ pub struct Operation {
     ///Every function (except `call`) has (in terms of non-constant arguements) an arity of 2, so only two inputs are allowed
     pub inputs: (Input,Input),
 }
+//Assert that the operation is at most 8 bytes
+assert!(mem::size_of<Operation>() <= 8);
