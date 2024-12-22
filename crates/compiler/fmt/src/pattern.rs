@@ -2,7 +2,7 @@ use crate::annotation::{Formattable, Newlines, Parens};
 use crate::expr::{
     expr_is_multiline, expr_lift_spaces_after, fmt_str_literal, format_sq_literal, is_str_multiline,
 };
-use crate::node::{parens_around_node, Node, NodeInfo, NodeSequenceBuilder, Sp};
+use crate::node::{Node, NodeInfo, NodeSequenceBuilder, Prec, Sp};
 use crate::spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT};
 use crate::Buf;
 use bumpalo::Bump;
@@ -549,7 +549,6 @@ pub fn pattern_fmt_apply(
 
 pub fn pattern_apply_to_node<'b, 'a: 'b>(
     arena: &'b Bump,
-    parens: Parens,
     func: Pattern<'a>,
     args: &[Loc<Pattern<'a>>],
 ) -> NodeInfo<'b> {
@@ -567,19 +566,40 @@ pub fn pattern_apply_to_node<'b, 'a: 'b>(
         last_after = arg_lifted.after;
     }
 
-    let item = NodeInfo {
+    NodeInfo {
         before: func_lifted.before,
         node: b.build(),
         after: last_after,
         needs_indent: true,
-    };
+        prec: if args.is_empty() {
+            pattern_prec(func)
+        } else {
+            Prec::Apply
+        },
+    }
+}
 
-    let parens = !args.is_empty() && parens == Parens::InApply;
-
-    if parens {
-        parens_around_node(arena, item, true)
-    } else {
-        item
+fn pattern_prec(pat: Pattern<'_>) -> Prec {
+    match pat {
+        Pattern::Identifier { .. }
+        | Pattern::QualifiedIdentifier { .. }
+        | Pattern::Tag(_)
+        | Pattern::OpaqueRef(_)
+        | Pattern::RecordDestructure(..)
+        | Pattern::RequiredField(_, _)
+        | Pattern::OptionalField(_, _)
+        | Pattern::NumLiteral(_)
+        | Pattern::NonBase10Literal { .. }
+        | Pattern::FloatLiteral(_)
+        | Pattern::StrLiteral(..)
+        | Pattern::Underscore(_)
+        | Pattern::SingleQuote(_)
+        | Pattern::Tuple(..)
+        | Pattern::List(..)
+        | Pattern::ListRest(_) => Prec::Term,
+        Pattern::Apply(_, _) | Pattern::As(_, _) => Prec::Apply,
+        Pattern::SpaceBefore(inner, _) | Pattern::SpaceAfter(inner, _) => pattern_prec(*inner),
+        Pattern::Malformed(_) | Pattern::MalformedIdent(..) => Prec::Term,
     }
 }
 

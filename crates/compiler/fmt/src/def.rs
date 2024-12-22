@@ -542,11 +542,11 @@ impl<'a> Formattable for TypeHeader<'a> {
 }
 
 impl<'a> Nodify<'a> for TypeHeader<'a> {
-    fn to_node<'b>(&'a self, arena: &'b Bump, parens: Parens) -> NodeInfo<'b>
+    fn to_node<'b>(&'a self, arena: &'b Bump) -> NodeInfo<'b>
     where
         'a: 'b,
     {
-        pattern_apply_to_node(arena, parens, Pattern::Tag(self.name.value), self.vars)
+        pattern_apply_to_node(arena, Pattern::Tag(self.name.value), self.vars)
     }
 }
 impl<'a> Formattable for ModuleImport<'a> {

@@ -146,23 +146,15 @@ impl<'a> Node<'a> {
 pub fn parens_around_node<'b, 'a: 'b>(
     arena: &'b Bump,
     item: NodeInfo<'a>,
-    allow_spaces_before: bool,
+    allow_space_before: bool,
 ) -> NodeInfo<'b> {
     NodeInfo {
-        before: if allow_spaces_before {
-            item.before
-        } else {
-            &[]
-        },
+        before: if allow_space_before { item.before } else { &[] },
         node: Node::DelimitedSequence {
             braces: Braces::Round,
-            indent_items: false,
+            indent_items: true,
             items: arena.alloc_slice_copy(&[DelimitedItem {
-                before: if allow_spaces_before {
-                    &[]
-                } else {
-                    item.before
-                },
+                before: if allow_space_before { &[] } else { item.before },
                 node: item.node,
                 newline: false,
                 space: false,
@@ -173,6 +165,7 @@ pub fn parens_around_node<'b, 'a: 'b>(
         // We move the comments/newlines to the outer scope, since they tend to migrate there when re-parsed
         after: item.after,
         needs_indent: true, // Maybe want to make parens outdentable?
+        prec: Prec::Term,
     }
 }
 
@@ -182,7 +175,33 @@ pub struct NodeInfo<'b> {
     pub node: Node<'b>,
     pub after: &'b [CommentOrNewline<'b>],
     pub needs_indent: bool,
+    pub prec: Prec,
 }
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub enum Prec {
+    Term,
+    Apply,
+    AsType,
+    FunctionType,
+    Outer,
+}
+
+impl From<Parens> for Prec {
+    fn from(parens: Parens) -> Self {
+        match parens {
+            Parens::NotNeeded => Prec::Outer,
+            Parens::InClosurePattern => Prec::Outer,
+            Parens::InApply => Prec::Apply,
+            Parens::InApplyLastArg => Prec::Apply,
+            Parens::InCollection => Prec::FunctionType,
+            Parens::InFunctionType => Prec::FunctionType,
+            Parens::InOperator => Prec::FunctionType,
+            Parens::InAsPattern => Prec::AsType,
+        }
+    }
+}
+
 impl<'b> NodeInfo<'b> {
     pub fn item(text: Node<'b>) -> NodeInfo<'b> {
         NodeInfo {
@@ -190,12 +209,35 @@ impl<'b> NodeInfo<'b> {
             node: text,
             after: &[],
             needs_indent: true,
+            prec: Prec::Term,
+        }
+    }
+
+    pub fn add_parens<'a>(&self, arena: &'a Bump, parens: Parens) -> NodeInfo<'a>
+    where
+        'b: 'a,
+    {
+        if self.prec < parens.into() {
+            *self
+        } else {
+            parens_around_node(arena, *self, true)
+        }
+    }
+
+    pub fn add_ty_ext_parens<'a>(&self, arena: &'a Bump) -> NodeInfo<'a>
+    where
+        'b: 'a,
+    {
+        if self.prec <= Prec::Term && self.before.is_empty() {
+            *self
+        } else {
+            parens_around_node(arena, *self, false)
         }
     }
 }
 
 pub trait Nodify<'a> {
-    fn to_node<'b>(&'a self, arena: &'b Bump, parens: Parens) -> NodeInfo<'b>
+    fn to_node<'b>(&'a self, arena: &'b Bump) -> NodeInfo<'b>
     where
         'a: 'b;
 }
@@ -203,6 +245,8 @@ pub trait Nodify<'a> {
 fn fmt_sp(buf: &mut Buf, sp: Sp<'_>, indent: u16) {
     if !sp.comments.is_empty() {
         fmt_spaces(buf, sp.comments.iter(), indent);
+    } else if sp.force_newline {
+        buf.ensure_ends_with_newline();
     } else if sp.default_space {
         buf.spaces(1);
     }
