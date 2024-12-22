@@ -237,55 +237,6 @@ fn fmt_ty_ann(
         TypeAnnotation::SpaceBefore(_ann, _spaces) | TypeAnnotation::SpaceAfter(_ann, _spaces) => {
             unreachable!()
         }
-        TypeAnnotation::Apply(pkg, name, arguments) => {
-            buf.indent(indent);
-            let write_parens = parens == Parens::InApply && !arguments.is_empty();
-
-            if write_parens {
-                buf.push('(')
-            }
-
-            if !pkg.is_empty() {
-                buf.push_str(pkg);
-                buf.push('.');
-            }
-
-            buf.push_str(name);
-
-            let needs_indent = except_last(arguments).any(|a| a.is_multiline())
-                || arguments
-                    .last()
-                    .map(|a| {
-                        a.is_multiline()
-                            && (!a.extract_spaces().before.is_empty()
-                                || !ty_is_outdentable(&a.value))
-                    })
-                    .unwrap_or_default();
-
-            let arg_indent = if needs_indent {
-                indent + INDENT
-            } else {
-                indent
-            };
-
-            for arg in arguments.iter() {
-                if needs_indent {
-                    let arg = arg.extract_spaces();
-                    fmt_spaces(buf, arg.before.iter(), arg_indent);
-                    buf.ensure_ends_with_newline();
-                    arg.item
-                        .format_with_options(buf, Parens::InApply, Newlines::Yes, arg_indent);
-                    fmt_spaces(buf, arg.after.iter(), arg_indent);
-                } else {
-                    buf.spaces(1);
-                    arg.format_with_options(buf, Parens::InApply, Newlines::No, arg_indent);
-                }
-            }
-
-            if write_parens {
-                buf.push(')')
-            }
-        }
         TypeAnnotation::BoundVariable(v) => {
             buf.indent(indent);
             if *v == "implements" {
@@ -303,7 +254,8 @@ fn fmt_ty_ann(
             buf.push('_')
         }
 
-        TypeAnnotation::TagUnion { .. }
+        TypeAnnotation::Apply(..)
+        | TypeAnnotation::TagUnion { .. }
         | TypeAnnotation::Tuple { .. }
         | TypeAnnotation::Record { .. }
         | TypeAnnotation::Function(..)
@@ -1216,17 +1168,32 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                 let mut last_after: &[CommentOrNewline<'_>] = &[];
                 let mut rest = Vec::with_capacity_in(args.len(), arena);
 
-                for arg in *args {
+                let mut multiline = false;
+                let mut indent_rest = true;
+
+                for (i, arg) in args.iter().enumerate() {
+                    let is_last = i == args.len() - 1;
                     dbg!(arg, arg.value.to_node(arena));
-                    let lifted = arg.value.to_node(arena).add_parens(arena, Parens::InApply);
-                    let before = merge_spaces_conservative(arena, last_after, lifted.before);
-                    last_after = lifted.after;
+                    let node = arg.value.to_node(arena).add_parens(arena, Parens::InApply);
+                    let before = merge_spaces_conservative(arena, last_after, node.before);
+
+                    if is_last && !multiline && node.node.is_multiline() && !node.needs_indent {
+                        // We can outdent the last argument, e.g.:
+                        // foo {
+                        //   a:b,
+                        // }
+                        // In this case, the argument does its own indentation.
+                        indent_rest = false;
+                    }
+
+                    multiline |= node.node.is_multiline() || !before.is_empty();
+                    last_after = node.after;
                     rest.push(Item {
                         before,
                         comma_before: false,
                         newline: false,
                         space: true,
-                        node: lifted.node,
+                        node: node.node,
                     });
                 }
 
@@ -1234,7 +1201,7 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                     before: &[],
                     node: Node::CommaSequence {
                         allow_blank_lines: false,
-                        indent_rest: true,
+                        indent_rest,
                         first: arena.alloc(first),
                         rest: rest.into_bump_slice(),
                     },
