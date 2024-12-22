@@ -196,6 +196,7 @@ mod test_snapshots {
         fail/double_plus.expr,
         fail/elm_function_syntax.expr,
         fail/empty_or_pattern.expr,
+        fail/empty_record_assign_expect_bang.expr,
         fail/empty_return.expr,
         fail/error_inline_alias_argument_uppercase.expr,
         fail/error_inline_alias_not_an_alias.expr,
@@ -225,6 +226,7 @@ mod test_snapshots {
         fail/module_with_unfinished_params.header,
         fail/multi_no_end.expr,
         fail/nested_tuples_annotation_terrible_perf.expr,
+        fail/nested_when_expect_binop_when.expr,
         fail/newline_before_operator_with_defs.expr,
         fail/opaque_type_def_with_newline.expr,
         fail/pattern_binds_keyword.expr,
@@ -394,6 +396,7 @@ mod test_snapshots {
         pass/defs_suffixed_middle_extra_indents.moduledefs,
         pass/destructure_tag_assignment.expr,
         pass/docs.expr,
+        pass/double_closure_newlines_binop.expr,
         pass/double_parens_as_in_backpassing_pat.expr,
         pass/double_parens_comment_tuple_pat.expr,
         pass/double_space_before.expr,
@@ -406,7 +409,6 @@ mod test_snapshots {
         pass/empty_platform_header.header,
         pass/empty_record.expr,
         pass/empty_record_assign_backpassing.expr,
-        pass/empty_record_assign_expect_bang.expr,
         pass/empty_record_assign_implements.expr,
         pass/empty_record_assign_return.expr,
         pass/empty_record_assign_tag.expr,
@@ -434,6 +436,7 @@ mod test_snapshots {
         pass/function_with_tuple_ext_type.expr,
         pass/function_with_tuple_type.expr,
         pass/h_greater_comment_minus_div.expr,
+        pass/h_parens_as_parens_h_ann.expr,
         pass/highest_float.expr,
         pass/highest_int.expr,
         pass/i_over_not_g.expr,
@@ -681,6 +684,7 @@ mod test_snapshots {
         pass/tag_destructure_bang.expr,
         pass/tag_destructure_bang_no_space.expr,
         pass/tag_pattern.expr,
+        pass/tag_union_ann_with_as.expr,
         pass/ten_times_eleven.expr,
         pass/three_arg_closure.expr,
         pass/triple_paren_pat_ann.expr,
@@ -726,6 +730,7 @@ mod test_snapshots {
         pass/var_then.expr,
         pass/var_when.expr,
         pass/when_comment_after_pattern.expr,
+        pass/when_comment_bbefore_if.expr,
         pass/when_if_guard.expr,
         pass/when_in_assignment.expr,
         pass/when_in_binops.expr,
@@ -744,6 +749,7 @@ mod test_snapshots {
         pass/when_with_records.expr,
         pass/when_with_tuple_in_record.expr,
         pass/when_with_tuples.expr,
+        pass/where_and_implements_lookalikes.expr,
         pass/where_clause_function.expr,
         pass/where_clause_multiple_bound_abilities.expr,
         pass/where_clause_multiple_has.expr,
@@ -768,7 +774,7 @@ mod test_snapshots {
                 true
             }
 
-            "parens_newlines_before_as" => {
+            "parens_newlines_before_as" | "tag_union_ann_with_as" => {
                 // Found unbound type variables {66}
                 //  in type alias `Test.IdentId(0)` [] [] : <66>
                 // Location: crates/compiler/can/src/scope.rs:541:13
