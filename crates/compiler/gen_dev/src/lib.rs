@@ -30,6 +30,7 @@ mod object_builder;
 pub use object_builder::build_module;
 use roc_target::Target;
 mod run_roc;
+mod roar;
 
 #[derive(Debug, Clone, Copy)]
 pub enum AssemblyBackendMode {

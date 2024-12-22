@@ -1,18 +1,16 @@
+use super::storage::{Args,ByteSize, Constant, Input, Offset, Output,ProcRef,Label};
 
-
-use crate::storage::{Constant,ByteSize,Offset,Input,Output};
-
-#[derive(Clone,Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum Sign {
-    Signed, 
-    Unsigned 
+    Signed,
+    Unsigned,
 }
-#[derive(Clone,Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum Flag {
-    Neq
+    Neq,
 }
 type Flags = Flag;
-#[derive(Clone,Debug)]
+#[derive(Clone, Debug)]
 ///All operations used, arithemetic operations take a signedness flag to increase readability
 pub(crate) enum OpCode {
     Add(Sign),
@@ -22,14 +20,14 @@ pub(crate) enum OpCode {
     FloatMul,
     FloatDiv,
     FloatSub,
-    Jump,
-    JumpIf(Flags),
+    Jump(Label),
+    JumpIf(Flags, Label),
     ///Create a structure reference  
     Create,
-    Load(Offset),
-    Store(Offset),
+    Load(ByteSize),
+    Store(ByteSize),
     ///Copy `$3` number bytes from offset `$1` to offset `$2`
-    Copy(Offset,Offset,ByteSize),
+    Copy(ByteSize),
     BitAnd,
     BitOr,
     BitXor,
@@ -39,31 +37,31 @@ pub(crate) enum OpCode {
     ///Set the highest bit to zero (even if it is unsigned)
     Abs,
     ///Truncate a register, if signed, copy sign bit to new highest point
-    Trunc(Sign,ByteSize),
+    Trunc(Sign, ByteSize),
     ///Extend a register, if signed, copy sign bit to new highest point, then zero out the original point
-    Extend(Sign,ByteSize),
+    Extend(Sign, ByteSize),
     ///Convert a floating point register to a regular register
     ToInt,
     ///Convert a regular register to a floating point register
     ToFloat,
     ///Copy bits from a float register to a regular register, without conversion
     ToIntRaw,
-    ///Copy bits from a regular register to a floating point register, without conversion 
+    ///Copy bits from a regular register to a floating point register, without conversion
     ToFloatRaw,
     ///Shift left instruction, whether arithmetic or logical depends on `Sign` flag
-    ShiftLeft(Sign,ByteSize),
+    ShiftLeft(Sign),
     ///Shift right instruction, whether arithmetic or logical depends on `Sign` flag
-    ShiftRight(Sign,ByteSize),
-    ///Basic move instruction 
-    Move
+    ShiftRight(Sign),
+    ///Basic move instruction
+    Move,
+    Call(ProcRef,Box<Args>),
 }
-#[derive(Clone,Debug)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 ///The actual type of operations in ROAR
 pub struct Operation {
-    pub output : Output,
-    pub opcode : OpCode,
-    pub inputs : Vec<Input>
+    pub output: Output,
+    pub opcode: OpCode,
+    ///Every function (except `call`) has (in terms of non-constant arguements) an arity of 2, so only two inputs are allowed
+    pub inputs: (Input,Input),
 }
-
-

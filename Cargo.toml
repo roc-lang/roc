@@ -208,7 +208,6 @@ roc_repl_eval = { path = "crates/repl_eval" }
 roc_repl_expect = { path = "crates/repl_expect" }
 roc_repl_ui = { path = "crates/repl_ui" }
 roc_reporting = { path = "crates/reporting" }
-roc_roar = { path = "crates/compiler/roar" }
 roc_serialize = { path = "crates/compiler/serialize" }
 roc_solve = { path = "crates/compiler/solve" }
 roc_solve_schema = { path = "crates/compiler/solve_schema" }
