@@ -209,6 +209,7 @@ mod test_snapshots {
         fail/if_outdented_else_branch.expr,
         fail/if_outdented_then.expr,
         fail/ifbang_eqeq.expr,
+        fail/implements_in_multibackpassing_parens.expr,
         fail/import_with_lowercase_alias.moduledefs,
         fail/imports_missing_comma.header,
         fail/inline_hastype.expr,

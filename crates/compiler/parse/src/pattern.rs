@@ -1,4 +1,4 @@
-use crate::ast::{Collection, Implements, Pattern, PatternAs, Spaceable};
+use crate::ast::{Collection, ExtractSpaces, Implements, Pattern, PatternAs, Spaceable};
 use crate::blankspace::{space0_e, spaces, spaces_before};
 use crate::ident::{lowercase_ident, parse_ident, Accessor, Ident};
 use crate::keyword;
@@ -150,7 +150,7 @@ fn loc_tag_pattern_arg<'a>(
 
         if stop_on_has_kw
             && matches!(
-                value,
+                value.extract_spaces().item,
                 Pattern::Identifier {
                     ident: crate::keyword::IMPLEMENTS,
                     ..
