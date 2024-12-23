@@ -4046,6 +4046,7 @@ where
         "=" => good!(OperatorOrDef::Assignment, 1),
         ":=" => good!(OperatorOrDef::AliasOrOpaque(AliasOrOpaque::Opaque), 2),
         ":" => good!(OperatorOrDef::AliasOrOpaque(AliasOrOpaque::Alias), 1),
+        "??" => good!(OperatorOrDef::BinOp(BinOp::DoubleQuestion), 2),
         "|>" => good!(OperatorOrDef::BinOp(BinOp::Pizza), 2),
         "==" => good!(OperatorOrDef::BinOp(BinOp::Equals), 2),
         "!=" => good!(OperatorOrDef::BinOp(BinOp::NotEquals), 2),
