@@ -1,6 +1,7 @@
 use roc_module::symbol::Symbol;
 use roc_mono::layout;
 use std::fmt::{Debug, Display};
+use std::cell::Cell;
 ///The type used to identify registers
 pub(crate) type Id = u32;
 #[derive(Clone, Debug)]
@@ -16,39 +17,32 @@ pub(crate) struct Register(pub Id);
 #[derive(Clone, Debug, Hash)]
 ///A basic float register refrence
 pub(crate) struct FloatRegister(pub Id);
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug,Hash)]
 ///A given global
 pub(crate) struct Global(Symbol);
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug,Hash)]
 #[non_exhaustive]
 ///The type of all literal values that fit inside a word
 pub enum LiteralValue {
     Signed(i64),
     Unsigned(u64),
-    Float(f64),
+    //Float(f64),
     //Add more in future?
 }
 
 ///The type of literal data, for instance strings
 pub(crate) type LiteralData = Vec<u8>;
-#[derive(Clone, Debug, Hash)]
-///All valid outputs of an operation
-pub enum Output {
-    ///`_`, the null register, for things to be discarded (say, subtractions used as compares)
-    Null,
-    Register(Register),
-    FloatRegister(FloatRegister),
-}
-#[derive(Clone, Debug)]
-///All valid inputs of an operation
-pub enum Input {
+
+#[derive(Clone, Debug,Hash)]
+//All possible values to be read and written to
+pub enum Value {
     Register(Register),
     FloatRegister(FloatRegister),
     Global(Global),
     Value(LiteralValue),
     Data(LiteralData),
     ///If a function takes less than three args, use these for remaining
-    Empty,
+    Null,
 }
 #[derive(Clone, Debug)]
 ///A values that are valid as constants, for example as offsets
@@ -71,31 +65,31 @@ pub enum ProcRef {
     Name(Symbol),
 }
 
-pub type Args = Vec<Output>;
+pub type Args = Vec<Value>;
 
 pub fn display_size(ByteSize(byte_size): ByteSize) -> String {
     (byte_size * 8).to_string()
 }
 ///Gets simple names to new registers, `%0`, then `%1` etc
 pub(super) struct RegisterAllocater {
-    highest: u32,
-    highest_float: u32,
+    highest: Cell<u32>,
+    highest_float: Cell<u32>,
 }
 impl RegisterAllocater {
     pub fn new() -> Self {
         Self {
-            highest: 0,
-            highest_float: 0,
+            highest: Cell::new(0),
+            highest_float: Cell::new(0),
         }
     }
-    pub fn new_register(mut self) -> Register {
-        let reg = Register(self.highest);
-        self.highest += 1;
+    pub fn new_register(&self) -> Register {
+        let reg = Register(self.highest.get());
+        self.highest.set(self.highest.get()+1);
         return reg;
     }
-    pub fn new_float_register(mut self) -> FloatRegister {
-        let reg = FloatRegister(self.highest_float);
-        self.highest_float += 1;
+    pub fn new_float_register(&self) -> FloatRegister {
+        let reg = FloatRegister(self.highest_float.get());
+        self.highest_float.set(self.highest_float.get()+1);
         return reg;
     }
 }

@@ -34,3 +34,4 @@ capstone.workspace = true
 [features]
 target-aarch64 = []
 target-x86_64 = []
+use_roar = []

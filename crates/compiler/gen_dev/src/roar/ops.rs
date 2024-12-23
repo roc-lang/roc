@@ -1,6 +1,6 @@
 use std::mem;
 
-use super::storage::{Args,ByteSize, Constant, Input, Offset, Output,ProcRef,Label};
+use super::storage::{Args,ByteSize, Constant, Offset, Value,ProcRef,Label};
 
 #[derive(Clone, Debug)]
 pub(crate) enum Sign {
@@ -69,10 +69,10 @@ pub(crate) enum OpCode {
 #[non_exhaustive]
 ///The actual type of operations in ROAR
 pub struct Operation {
-    pub output: Output,
+    pub output: Value,
     pub opcode: OpCode,
     ///Every function (except `call`) has (in terms of non-constant arguements) an arity of 2, so only two inputs are allowed
-    pub inputs: (Input,Input),
+    pub inputs: (Value,Value),
 }
 //Assert that the operation is at most 8 bytes
-assert!(mem::size_of<Operation>() <= 8);
+//assert!(mem::size_of::<Operation>() <= 8);

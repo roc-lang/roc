@@ -16,6 +16,7 @@ fn mnemonic(op_code: &OpCode) -> &'static str {
         OpCode::Jump(_) => "jmp", //TODO
         OpCode::JumpIf(flag, _) => match flag {
             Flag::Neq => "jne",
+            Flag::Eq => "jeq"
         },
         OpCode::Create => "create",
         OpCode::Load(_) => "load",
@@ -51,47 +52,39 @@ impl Display for LiteralValue {
         match self {
             LiteralValue::Signed(value) => write!(f, "#{:+x}", value),
             LiteralValue::Unsigned(value) => write!(f, "#{:x}", value),
-            LiteralValue::Float(value) => write!(f, "!{}", value),
+            //LiteralValue::Float(value) => write!(f, "!{}", value),
         }
     }
 }
 
 impl Display for Operation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use super::storage::Input::*;
+        use super::storage::Value::*;
         write!(f, "{}", self.output);
         write!(f, " <- ");
         write!(f, "{} ", mnemonic(&self.opcode));
         match &self.inputs {
-            (Empty,Empty) => write!(f,""),
-            (Empty,arg) | (arg,Empty) => write!(f,"{}",arg),
+            (Null,Null) => write!(f,""),
+            (Null,arg) | (arg,Null) => write!(f,"{}",arg),
             (arg_a,arg_b) => write!(f,"{} {}",arg_a,arg_b)
         };
         write!(f, "")
     }
 }
 
-impl Display for Input {
+impl Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Input::Register(register) => write!(f, "{}", register),
-            Input::FloatRegister(register) => write!(f, "{}", register),
-            Input::Global(global) => write!(f, "{:?}", global),
-            Input::Value(literal_value) => write!(f, "{}", literal_value),
-            Input::Data(vec) => write!(f, "{:?}", vec),
-            Input::Empty => write!(f,"")
+            Value::Register(register) => write!(f, "{}", register),
+            Value::FloatRegister(register) => write!(f, "{}", register),
+            Value::Global(global) => write!(f, "{:?}", global),
+            Value::Value(literal_value) => write!(f, "{}", literal_value),
+            Value::Data(vec) => write!(f, "{:?}", vec),
+            Value::Null => write!(f,"_")
         }
     }
 }
-impl Display for Output {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Output::Register(register) => write!(f, "{}", register),
-            Output::FloatRegister(register) => write!(f, "{}", register),
-            Output::Null => write!(f, "_"),
-        }
-    }
-}
+
 
 impl Display for Register {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -103,7 +96,7 @@ impl Display for FloatRegister {
         write!(f, "#{}", self.0)
     }
 }
-impl Display for Proc {
+impl<'a> Display for Proc<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "[");
         for input in &self.inputs {

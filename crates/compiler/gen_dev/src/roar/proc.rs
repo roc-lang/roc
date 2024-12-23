@@ -1,13 +1,14 @@
 use super::ops::Operation;
-use super::storage::{Args,ByteSize, Constant, FloatRegister, Input, Offset, Output, Register, Global, ProcRef};
+use super::storage::{Args,ByteSize, Constant, FloatRegister, Offset, Value, Register, Global, ProcRef};
+#[macro_use]
+use bumpalo;
 use bumpalo::collections;
-use capstone::Instructions;
 use roc_module::symbol;
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct Proc<'a> {
     ///The instructions themselves
-    pub instructions: collections::Vec<'a,Instructions>,
+    pub instructions: collections::Vec<'a,Operation>,
     ///A list of inputs, in order, taken by the function
     pub inputs: Args,
     ///A list of computed registers used by the operation
@@ -18,14 +19,14 @@ pub struct Proc<'a> {
 #[derive(Clone, Debug)]
 pub struct Annotations {
     ///All the registers it uses
-    uses: Option<Vec<Output>>,
+    uses: Option<Vec<Value>>,
     ///It's name in the AST
     symbol: Option<symbol::Symbol>,
 }
 impl Default for Annotations {
     fn default() -> Self {
         Self {
-            uses: None::<Vec<Output>>,
+            uses: None::<Vec<Value>>,
             symbol: None::<symbol::Symbol>,
         }
     }
@@ -33,7 +34,7 @@ impl Default for Annotations {
 
 #[derive(Clone, Debug)]
 #[non_exhaustive]
-pub struct Section {
+pub struct Section<'a> {
     ///The instructions themselves
     pub procedures: collections::Vec<'a,Proc<'a>>,
     ///A list of inputs, in order, taken by the function
@@ -42,11 +43,11 @@ pub struct Section {
     ///A list of computed registers used by the operation
     pub annotations: SectionAnnotations,
 }
-impl Section {
-    pub fn new() -> Self {
+impl<'a> Section<'a> {
+    pub fn new(arena : &'a bumpalo::Bump) -> Self {
         Self {
-            procedures: vec![],
-            globals: vec![],
+            procedures: bumpalo::vec![in arena;],
+            globals: bumpalo::vec![in arena;],
             annotations: SectionAnnotations::default(),
         }
     }
@@ -68,10 +69,10 @@ impl Default for SectionAnnotations {
     }
 }
 
-impl Proc {
-    pub fn new(args: Args) -> Self {
+impl<'a> Proc<'a> {
+    pub fn new(args: Args,arena : &'a bumpalo::Bump) -> Self {
         Self {
-            instructions: vec![],
+            instructions: bumpalo::vec![in arena;],
             inputs: args,
             annotations: Annotations::default(),
         }
