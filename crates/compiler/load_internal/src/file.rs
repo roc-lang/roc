@@ -998,12 +998,51 @@ pub enum LoadingProblem<'a> {
     TriedToImportAppModule,
 
     /// a formatted report
-    FormattedReport(String),
+    FormattedReport(String, Option<Region>),
 
     ImportCycle(PathBuf, Vec<ModuleId>),
     IncorrectModuleName(FileError<'a, IncorrectModuleName<'a>>),
     CouldNotFindCacheDir,
     ChannelProblem(ChannelProblem),
+}
+impl<'a> LoadingProblem<'a> {
+    pub fn get_region(&self) -> Option<Region> {
+        match self {
+            LoadingProblem::ParsingFailed(err) => err.problem.problem.get_region(),
+            LoadingProblem::MultiplePlatformPackages {
+                filename: _,
+                module_id: _,
+                source: _,
+                region,
+            } => Some(*region),
+            LoadingProblem::NoPlatformPackage {
+                filename: _,
+                module_id: _,
+                source: _,
+                region,
+            } => Some(*region),
+            LoadingProblem::UnrecognizedPackageShorthand {
+                filename: _,
+                module_id: _,
+                source: _,
+                region,
+                shorthand: _,
+                available: _,
+            } => Some(*region),
+            LoadingProblem::FileProblem {
+                filename: _,
+                error: _,
+            } => None,
+            LoadingProblem::UnexpectedHeader(_) => None,
+            LoadingProblem::ErrJoiningWorkerThreads => None,
+            LoadingProblem::TriedToImportAppModule => None,
+            LoadingProblem::FormattedReport(_, region) => *region,
+            LoadingProblem::ImportCycle(_, _) => None,
+            LoadingProblem::IncorrectModuleName(_) => None,
+            LoadingProblem::CouldNotFindCacheDir => None,
+            LoadingProblem::ChannelProblem(_) => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -1179,12 +1218,12 @@ impl<'a> LoadStart<'a> {
                     })
                     .into_inner()
                     .into_module_ids();
-
+                let region = problem.get_region();
                 let report = report_loading_problem(problem, module_ids, render, palette);
 
                 // TODO try to gracefully recover and continue
                 // instead of changing the control flow to exit.
-                return Err(LoadingProblem::FormattedReport(report));
+                return Err(LoadingProblem::FormattedReport(report, region));
             }
         };
 
@@ -1672,10 +1711,11 @@ fn state_thread_step<'a>(
                 }
                 Msg::FailedToReadFile { filename, error } => {
                     let buf = to_file_problem_report_string(filename, error, true);
-                    Err(LoadingProblem::FormattedReport(buf))
+                    Err(LoadingProblem::FormattedReport(buf, None))
                 }
 
                 Msg::FailedToParse(problem) => {
+                    let region = problem.problem.problem.get_region();
                     let module_ids = (*state.arc_modules).lock().clone().into_module_ids();
                     let buf = to_parse_problem_report(
                         problem,
@@ -1684,14 +1724,14 @@ fn state_thread_step<'a>(
                         state.render,
                         state.palette,
                     );
-                    Err(LoadingProblem::FormattedReport(buf))
+                    Err(LoadingProblem::FormattedReport(buf, region))
                 }
                 Msg::IncorrectModuleName(FileError {
                     problem: SourceError { problem, bytes },
                     filename,
                 }) => {
                     let module_ids = (*state.arc_modules).lock().clone().into_module_ids();
-                    let buf = to_incorrect_module_name_report(
+                    let (buf, region) = to_incorrect_module_name_report(
                         module_ids,
                         state.constrained_ident_ids,
                         problem,
@@ -1699,7 +1739,7 @@ fn state_thread_step<'a>(
                         bytes,
                         state.render,
                     );
-                    Err(LoadingProblem::FormattedReport(buf))
+                    Err(LoadingProblem::FormattedReport(buf, Some(region)))
                 }
                 msg => {
                     // This is where most of the main thread's work gets done.
@@ -1716,6 +1756,7 @@ fn state_thread_step<'a>(
                     match res_state {
                         Ok(new_state) => Ok(ControlFlow::Continue(new_state)),
                         Err(LoadingProblem::ParsingFailed(problem)) => {
+                            let region = problem.problem.problem.get_region();
                             let module_ids = Arc::try_unwrap(arc_modules)
                                 .unwrap_or_else(|_| {
                                     panic!(
@@ -1734,7 +1775,7 @@ fn state_thread_step<'a>(
                                 render,
                                 palette,
                             );
-                            Err(LoadingProblem::FormattedReport(buf))
+                            Err(LoadingProblem::FormattedReport(buf, region))
                         }
                         Err(LoadingProblem::ImportCycle(filename, cycle)) => {
                             let module_ids = arc_modules.lock().clone().into_module_ids();
@@ -1747,7 +1788,7 @@ fn state_thread_step<'a>(
                                 filename,
                                 render,
                             );
-                            return Err(LoadingProblem::FormattedReport(buf));
+                            return Err(LoadingProblem::FormattedReport(buf, None));
                         }
                         Err(LoadingProblem::IncorrectModuleName(FileError {
                             problem: SourceError { problem, bytes },
@@ -1756,7 +1797,7 @@ fn state_thread_step<'a>(
                             let module_ids = arc_modules.lock().clone().into_module_ids();
 
                             let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
-                            let buf = to_incorrect_module_name_report(
+                            let (buf, region) = to_incorrect_module_name_report(
                                 module_ids,
                                 root_exposed_ident_ids,
                                 problem,
@@ -1764,7 +1805,7 @@ fn state_thread_step<'a>(
                                 bytes,
                                 render,
                             );
-                            return Err(LoadingProblem::FormattedReport(buf));
+                            return Err(LoadingProblem::FormattedReport(buf, Some(region)));
                         }
                         Err(LoadingProblem::UnrecognizedPackageShorthand {
                             filename,
@@ -1788,7 +1829,7 @@ fn state_thread_step<'a>(
                                 available,
                                 render,
                             );
-                            return Err(LoadingProblem::FormattedReport(buf));
+                            return Err(LoadingProblem::FormattedReport(buf, Some(region)));
                         }
                         Err(e) => Err(e),
                     }
@@ -1836,8 +1877,9 @@ pub fn report_loading_problem(
                 bytes,
                 render,
             )
+            .0
         }
-        LoadingProblem::FormattedReport(report) => report,
+        LoadingProblem::FormattedReport(report, _region) => report,
         LoadingProblem::FileProblem { filename, error } => {
             to_file_problem_report_string(filename, error, true)
         }
@@ -2085,7 +2127,7 @@ fn load_multi_threaded<'a>(
                     "command can sometimes give a more helpful error report than other commands.\n\n"
                 )
                 .to_string(),
-            ))
+            None))
         })
     }
 }
@@ -3046,7 +3088,7 @@ fn register_package_shorthands<'a>(
                             Problem::InvalidUrl(url_err),
                             module_path.to_path_buf(),
                         );
-                        return Err(LoadingProblem::FormattedReport(buf));
+                        return Err(LoadingProblem::FormattedReport(buf, None));
                     }
                 }
             }
@@ -3164,7 +3206,7 @@ fn finish_specialization<'a>(
                     Valid(To::NewPackage(p_or_p)) => PathBuf::from(p_or_p.as_str()),
                     other => {
                         let buf = report_cannot_run(state.root_id, state.root_path, other);
-                        return Err(LoadingProblem::FormattedReport(buf));
+                        return Err(LoadingProblem::FormattedReport(buf, None));
                     }
                 };
 
@@ -3686,9 +3728,9 @@ enum ShorthandPath {
         root_module: PathBuf,
     },
     RelativeToSrc {
-        /// e.g. "/home/rtfeldman/my-roc-code/examples/cli/cli-platform/"
+        /// e.g. "/home/username/roc/examples/platform-switching/zig-platform/"
         root_module_dir: PathBuf,
-        /// e.g. "/home/rtfeldman/my-roc-code/examples/cli/cli-platform/main.roc"
+        /// e.g. "/home/username/roc/examples/platform-switching/zig-platform/main.roc"
         root_module: PathBuf,
     },
 }
@@ -4129,7 +4171,9 @@ fn load_packages<'a>(
                     Err(problem) => {
                         let buf = to_https_problem_report_string(src, problem, filename);
 
-                        load_messages.push(Msg::FailedToLoad(LoadingProblem::FormattedReport(buf)));
+                        load_messages.push(Msg::FailedToLoad(LoadingProblem::FormattedReport(
+                            buf, None,
+                        )));
                         return;
                     }
                 }
@@ -6447,7 +6491,7 @@ fn to_incorrect_module_name_report<'a>(
     filename: PathBuf,
     src: &'a [u8],
     render: RenderTarget,
-) -> String {
+) -> (String, Region) {
     use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
     use ven_pretty::DocAllocator;
 
@@ -6488,7 +6532,7 @@ fn to_incorrect_module_name_report<'a>(
     let mut buf = String::new();
     let palette = DEFAULT_PALETTE;
     report.render(render, &mut buf, &alloc, &palette);
-    buf
+    (buf, found.region)
 }
 
 fn to_no_platform_package_report(

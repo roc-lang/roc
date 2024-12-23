@@ -7,7 +7,10 @@ use roc_can::expr::canonicalize_expr;
 use roc_can::scope::Scope;
 use roc_error_macros::set_panic_not_exit;
 use roc_fmt::{annotation::Formattable, header::fmt_header, MigrationFlags};
+use roc_module::ident::QualifiedModuleName;
 use roc_module::symbol::{IdentIds, Interns, ModuleIds, PackageModuleIds, Symbol};
+use roc_parse::ast::RecursiveValueDefIter;
+use roc_parse::ast::ValueDef;
 use roc_parse::header::parse_module_defs;
 use roc_parse::parser::Parser;
 use roc_parse::parser::SyntaxError;
@@ -146,8 +149,35 @@ impl<'a> Output<'a> {
             }
             Output::Expr(loc_expr) => {
                 let mut var_store = VarStore::default();
-                let qualified_module_ids = PackageModuleIds::default();
-                let home = ModuleIds::default().get_or_insert(&"Test".into());
+                let mut imported: Vec<(QualifiedModuleName, Region)> = vec![];
+
+                let empty_defs = Defs::default();
+                let mut it = RecursiveValueDefIter::new(&empty_defs);
+                it.push_pending_from_expr(&loc_expr.value);
+                for (def, region) in it {
+                    if let ValueDef::ModuleImport(import) = def {
+                        imported.push((import.name.value.into(), *region));
+                    }
+                }
+
+                let mut module_ids = ModuleIds::default();
+                let mut qualified_module_ids = PackageModuleIds::default();
+                let mut dep_idents = IdentIds::exposed_builtins(0);
+
+                // Make sure the module_ids has ModuleIds for all our deps,
+                // then record those ModuleIds in can_module_ids for later.
+                // For each of our imports, add an entry to deps_by_name
+                //
+                // e.g. for `import pf.Foo exposing [bar]`, add `Foo` to deps_by_name
+                //
+                // Also build a list of imported_values_to_expose (like `bar` above.)
+                for (qualified_module_name, _region) in imported.into_iter() {
+                    let pq_module_name = qualified_module_name.into_pq_module_name(None);
+                    let module_id = qualified_module_ids.get_or_insert(&pq_module_name);
+                    dep_idents.get_or_insert(module_id);
+                }
+
+                let home = module_ids.get_or_insert(&"Test".into());
 
                 let mut scope = Scope::new(
                     home,
@@ -156,7 +186,6 @@ impl<'a> Output<'a> {
                     Default::default(),
                 );
 
-                let dep_idents = IdentIds::exposed_builtins(0);
                 let mut env = Env::new(
                     arena,
                     src,
@@ -331,8 +360,8 @@ impl<'a> Input<'a> {
                 * * * AST after formatting:\n{:#?}\n\n",
                 self.as_str(),
                 output.as_ref().as_str(),
-                actual,
-                reparsed_ast
+                ast_normalized,
+                reparsed_ast_normalized
             );
         }
 

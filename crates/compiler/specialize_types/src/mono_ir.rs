@@ -1,18 +1,14 @@
 use crate::{
     foreign_symbol::ForeignSymbolId, mono_module::InternedStrId, mono_num::Number,
-    mono_struct::MonoFieldId, mono_type::MonoTypeId, specialize_type::Problem,
+    mono_struct::MonoFieldId, mono_type::MonoTypeId, specialize_type::Problem, MonoPattern,
+    MonoPatternId,
 };
 use roc_can::expr::Recursive;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
-use soa::{Index, NonEmptySlice, Slice, Slice2, Slice3};
-use std::iter;
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct MonoPatternId {
-    inner: u32,
-}
+use soa::{Index, NonEmptySlice, PairSlice, Slice, Slice2};
+use std::{iter, mem::MaybeUninit};
 
 pub type IdentId = Symbol; // TODO make this an Index into an array local to this module
 
@@ -129,18 +125,66 @@ impl MonoExprs {
         })
     }
 
-    pub fn extend(
-        &mut self,
-        exprs: impl Iterator<Item = (MonoExpr, Region)> + Clone,
-    ) -> Slice<MonoExpr> {
+    pub fn extend(&mut self, exprs: impl Iterator<Item = (MonoExpr, Region)>) -> Slice<MonoExpr> {
         let start = self.exprs.len();
 
-        self.exprs.extend(exprs.clone().map(|(expr, _region)| expr));
-        self.regions.extend(exprs.map(|(_expr, region)| region));
+        let (size_hint, _) = exprs.size_hint();
+
+        self.exprs.reserve(size_hint);
+        self.regions.reserve(size_hint);
+
+        for (expr, region) in exprs {
+            self.exprs.push(expr);
+            self.regions.push(region);
+        }
 
         let len = self.exprs.len() - start;
 
         Slice::new(start as u32, len as u16)
+    }
+
+    pub fn iter_pair_slice(
+        &self,
+        exprs: PairSlice<MonoExpr>,
+    ) -> impl Iterator<Item = (&MonoExpr, &MonoExpr)> {
+        exprs.indices_iter().map(|(index_a, index_b)| {
+            debug_assert!(
+                self.exprs.len() > index_a && self.exprs.len() > index_b,
+                "A Slice index was not found in MonoExprs. This should never happen!"
+            );
+
+            // Safety: we should only ever hand out MonoExprId slices that are valid indices into here.
+            unsafe {
+                (
+                    self.exprs.get_unchecked(index_a),
+                    self.exprs.get_unchecked(index_b),
+                )
+            }
+        })
+    }
+
+    pub fn extend_pairs(
+        &mut self,
+        exprs: impl Iterator<Item = ((MonoExpr, Region), (MonoExpr, Region))>,
+    ) -> PairSlice<MonoExpr> {
+        let start = self.exprs.len();
+
+        let additional = exprs.size_hint().0 * 2;
+        self.exprs.reserve(additional);
+        self.regions.reserve(additional);
+
+        let mut pairs = 0;
+
+        for ((expr_a, region_a), (expr_b, region_b)) in exprs {
+            self.exprs.push(expr_a);
+            self.exprs.push(expr_b);
+            self.regions.push(region_a);
+            self.regions.push(region_b);
+
+            pairs += 1;
+        }
+
+        PairSlice::new(start as u32, pairs)
     }
 }
 
@@ -153,82 +197,6 @@ impl MonoExprId {
     pub(crate) unsafe fn new_unchecked(inner: Index<MonoExpr>) -> Self {
         Self { inner }
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct MonoStmtId {
-    inner: Index<MonoStmt>,
-}
-
-impl MonoStmtId {
-    pub(crate) unsafe fn new_unchecked(inner: Index<MonoStmt>) -> Self {
-        Self { inner }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum MonoStmt {
-    /// Assign to a variable.
-    Assign(IdentId, MonoExprId),
-    AssignRec(IdentId, MonoExprId),
-
-    /// Introduce a variable, e.g. `var foo_` (we'll MonoStmt::Assign to it later.)
-    Declare(IdentId),
-
-    /// The `return` statement
-    Return(MonoExprId),
-
-    /// The "crash" keyword. Importantly, during code gen we must mark this as "nothing happens after this"
-    Crash {
-        msg: MonoExprId,
-        /// The type of the `crash` expression (which will have unified to whatever's around it)
-        expr_type: MonoTypeId,
-    },
-
-    Expect {
-        condition: MonoExprId,
-        /// If the expectation fails, we print the values of all the named variables
-        /// in the final expr. These are those values.
-        lookups_in_cond: Slice2<MonoTypeId, IdentId>,
-    },
-
-    Dbg {
-        source_location: InternedStrId,
-        source: InternedStrId,
-        expr: MonoExprId,
-        expr_type: MonoTypeId,
-        name: IdentId,
-    },
-
-    // Call a function that has no return value (or which we are discarding due to an underscore pattern).
-    CallVoid {
-        fn_type: MonoTypeId,
-        fn_expr: MonoExprId,
-        args: Slice2<MonoTypeId, MonoExprId>,
-        /// This is the type of the closure based only on canonical IR info,
-        /// not considering what other closures might later influence it.
-        /// Lambda set specialization may change this type later!
-        capture_type: MonoTypeId,
-    },
-
-    // Branching
-    When {
-        /// The actual condition of the when expression.
-        cond: MonoExprId,
-        cond_type: MonoTypeId,
-        /// Type of each branch (and therefore the type of the entire `when` expression)
-        branch_type: MonoTypeId,
-        /// Note: if the branches weren't exhaustive, we will have already generated a default
-        /// branch which crashes if it's reached. (The compiler will have reported an error already;
-        /// this is for if you want to run anyway.)
-        branches: NonEmptySlice<WhenBranch>,
-    },
-    If {
-        /// Type of each branch (and therefore the type of the entire `if` expression)
-        branch_type: MonoTypeId,
-        branches: Slice<(MonoStmtId, MonoStmtId)>,
-        final_else: Option<MonoTypeId>,
-    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -279,6 +247,8 @@ pub enum MonoExpr {
         recursive: Recursive,
     },
 
+    Unit,
+
     /// A record literal or a tuple literal.
     /// These have already been sorted alphabetically.
     Struct(NonEmptySlice<MonoExpr>),
@@ -318,9 +288,21 @@ pub enum MonoExpr {
         args: Slice2<MonoTypeId, MonoExprId>,
     },
 
-    Block {
-        stmts: Slice<MonoStmtId>,
-        final_expr: MonoExprId,
+    If {
+        branch_type: MonoTypeId,
+        branches: PairSlice<MonoExpr>,
+        final_else: MonoExprId,
+    },
+
+    When {
+        /// The value being matched on
+        value: MonoExprId,
+        /// The type of the value being matched on
+        value_type: MonoTypeId,
+        /// The return type of all branches and thus the whole when expression
+        branch_type: MonoTypeId,
+        /// The branches of the when expression
+        branches: NonEmptySlice<WhenBranch>,
     },
 
     CompilerBug(Problem),
@@ -328,45 +310,59 @@ pub enum MonoExpr {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WhenBranch {
-    pub patterns: Slice<MonoPatternId>,
-    pub body: Slice<MonoStmtId>,
+    /// The pattern(s) to match the value against
+    pub patterns: NonEmptySlice<MonoPattern>,
+    /// A boolean expression that must be true for this branch to be taken
     pub guard: Option<MonoExprId>,
+    /// The expression to produce if the pattern matches
+    pub value: MonoExprId,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum MonoPattern {
-    Identifier(IdentId),
-    As(MonoPatternId, IdentId),
-    StrLiteral(InternedStrId),
-    NumberLiteral(Number),
-    AppliedTag {
-        tag_union_type: MonoTypeId,
-        tag_name: IdentId,
-        args: Slice<MonoPatternId>,
-    },
-    StructDestructure {
-        struct_type: MonoTypeId,
-        destructs: Slice3<IdentId, MonoFieldId, DestructType>,
-    },
-    List {
-        elem_type: MonoTypeId,
-        patterns: Slice<MonoPatternId>,
-
-        /// Where a rest pattern splits patterns before and after it, if it does at all.
-        /// If present, patterns at index >= the rest index appear after the rest pattern.
-        /// For example:
-        ///   [ .., A, B ] -> patterns = [A, B], rest = 0
-        ///   [ A, .., B ] -> patterns = [A, B], rest = 1
-        ///   [ A, B, .. ] -> patterns = [A, B], rest = 2
-        /// Optionally, the rest pattern can be named - e.g. `[ A, B, ..others ]`
-        opt_rest: Option<(u16, Option<IdentId>)>,
-    },
-    Underscore,
+#[derive(Debug, Default)]
+pub struct WhenBranches {
+    branches: Vec<MaybeUninit<WhenBranch>>,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum DestructType {
-    Required,
-    Optional(MonoTypeId, MonoExprId),
-    Guard(MonoTypeId, MonoPatternId),
+impl WhenBranches {
+    pub fn new() -> Self {
+        Self {
+            branches: Vec::new(),
+        }
+    }
+
+    pub fn reserve(&mut self, count: usize) -> Slice<WhenBranch> {
+        let start = self.branches.len();
+
+        let new_size = start + count;
+        self.branches.reserve(count);
+
+        unsafe {
+            self.branches.set_len(new_size);
+        }
+
+        Slice::new(start as u32, count as u16)
+    }
+
+    pub fn insert(&mut self, id: Index<WhenBranch>, branch: WhenBranch) {
+        debug_assert!(
+            self.branches.get(id.index()).is_some(),
+            "A WhenBranch index was not found in WhenBranches. This should never happen!"
+        );
+
+        // Safety: we should only ever hand out WhenBranch indices that are valid indices into here.
+        unsafe {
+            self.branches.get_unchecked_mut(id.index()).write(branch);
+        }
+    }
+
+    pub fn iter_slice(
+        &self,
+        branches: Slice<WhenBranch>,
+    ) -> impl Iterator<Item = &MaybeUninit<WhenBranch>> {
+        branches.indices().map(|index| {
+            debug_assert!(self.branches.len() > index, "Slice index out of bounds");
+
+            unsafe { self.branches.get_unchecked(index) }
+        })
+    }
 }

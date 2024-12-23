@@ -1,0 +1,32 @@
+@0-18 SpaceAfter(
+    List(
+        [
+            @1-17 When(
+                @6-7 Num(
+                    "2",
+                ),
+                [
+                    WhenBranch {
+                        patterns: [
+                            @11-12 NumLiteral(
+                                "8",
+                            ),
+                        ],
+                        value: @14-17 List(
+                            Collection {
+                                items: [],
+                                final_comments: [
+                                    Newline,
+                                ],
+                            },
+                        ),
+                        guard: None,
+                    },
+                ],
+            ),
+        ],
+    ),
+    [
+        Newline,
+    ],
+)

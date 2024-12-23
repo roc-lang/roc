@@ -152,7 +152,7 @@ For Ubuntu and Debian:
 sudo apt -y install lsb-release software-properties-common gnupg
 wget https://apt.llvm.org/llvm.sh
 chmod +x llvm.sh
-./llvm.sh 16
+./llvm.sh 18
 ```
 
 If you use this script, you'll need to add `clang` to your `PATH`.
@@ -169,7 +169,7 @@ There are also alternative installation options at <http://releases.llvm.org/dow
 For Fedora:
 
 ```sh
-sudo dnf install llvm16 llvm16-devel
+sudo dnf install llvm18 llvm18-devel
 ```
 
 #### LLVM Linux troubleshooting
@@ -183,20 +183,20 @@ If you encounter:
 
 ```text
 error: No suitable version of LLVM was found system-wide or pointed
-       to by LLVM_SYS_160_PREFIX.
+       to by LLVM_SYS_180_PREFIX.
 ```
 
-Add `export LLVM_SYS_160_PREFIX=/usr/lib/llvm-16` to your `~/.bashrc` or equivalent file for your shell.
+Add `export LLVM_SYS_180_PREFIX=/usr/lib/llvm-18` to your `~/.bashrc` or equivalent file for your shell.
 
 ### LLVM installation on MacOS
 
-For macOS, you can install LLVM 16 using `brew install llvm@16` and then adding
-`$(brew --prefix llvm@16)/bin` to your `PATH`. You can confirm this worked by
+For macOS, you can install LLVM 18 using `brew install llvm@18` and then adding
+`$(brew --prefix llvm@18)/bin` to your `PATH`. You can confirm this worked by
 running `llc --version` - it should mention "LLVM version 16.0.x" at the top.
 You may also need to manually specify a prefix env var like so:
 
 ```sh
-export LLVM_SYS_160_PREFIX=$(brew --prefix llvm@16)
+export LLVM_SYS_180_PREFIX=$(brew --prefix llvm@18)
 ```
 
 #### LLVM MacOS troubleshooting
@@ -215,14 +215,14 @@ export CPPFLAGS="-I/usr/local/opt/llvm/include"
 **Warning** While `cargo build` works on windows, linking roc programs does not yet, see issue #2608. This also means the repl, and many tests will not work on windows.
 The official LLVM pre-built binaries for Windows lack features that roc needs. Instead:
 
-1. Download the custom LLVM 7z archive [here](https://github.com/roc-lang/llvm-package-windows/releases/download/v16.0.6/LLVM-16.0.6-win64.7z).
+1. Download the custom LLVM 7z archive [here](https://github.com/roc-lang/llvm-package-windows/releases/download/v18.1.8/LLVM-18.1.8-win64.7z).
 1. [Download 7-zip](https://www.7-zip.org/) to be able to extract this archive.
 1. Extract the 7z file to where you want to permanently keep the folder. We recommend you pick a path without any spaces in it.
-1. In powershell, set the `LLVM_SYS_160_PREFIX` environment variable (check [here](https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_environment_variables?view=powershell-7.2#saving-environment-variables-with-the-system-control-panel) to make this a permanent environment variable):
+1. In powershell, set the `LLVM_SYS_180_PREFIX` environment variable (check [here](https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_environment_variables?view=powershell-7.2#saving-environment-variables-with-the-system-control-panel) to make this a permanent environment variable):
 
 ```text
 <# ! Replace YOUR_USERNAME ! #>
-$env:LLVM_SYS_160_PREFIX = 'C:\Users\YOUR_USERNAME\Downloads\LLVM-16.0.6-win64'
+$env:LLVM_SYS_180_PREFIX = 'C:\Users\YOUR_USERNAME\Downloads\LLVM-18.1.8-win64'
 ```
 
 Once all that was done, `cargo build` ran successfully for Roc!

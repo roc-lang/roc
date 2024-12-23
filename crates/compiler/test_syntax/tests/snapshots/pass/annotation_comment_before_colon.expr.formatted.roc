@@ -1,3 +1,4 @@
-A e # g
+A
+    e # g
  : A
 AA

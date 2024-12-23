@@ -1,0 +1,32 @@
+@0-15 SpaceAfter(
+    Return(
+        @0-13 ParensAround(
+            SpaceAfter(
+                Num(
+                    "3",
+                ),
+                [
+                    LineComment(
+                        "",
+                    ),
+                    LineComment(
+                        "",
+                    ),
+                ],
+            ),
+        ),
+        Some(
+            @14-15 SpaceBefore(
+                Tag(
+                    "Z",
+                ),
+                [
+                    Newline,
+                ],
+            ),
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

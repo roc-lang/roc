@@ -1,0 +1,62 @@
+@0-31 SpaceAfter(
+    When(
+        @5-6 Num(
+            "6",
+        ),
+        [
+            WhenBranch {
+                patterns: [
+                    @10-15 SpaceBefore(
+                        Apply(
+                            @10-11 Tag(
+                                "O",
+                            ),
+                            [
+                                @14-15 SpaceBefore(
+                                    Tag(
+                                        "B",
+                                    ),
+                                    [
+                                        LineComment(
+                                            "",
+                                        ),
+                                    ],
+                                ),
+                            ],
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @17-31 When(
+                    @22-23 Num(
+                        "6",
+                    ),
+                    [
+                        WhenBranch {
+                            patterns: [
+                                @27-28 SpaceBefore(
+                                    NumLiteral(
+                                        "1",
+                                    ),
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                            ],
+                            value: @30-31 Tag(
+                                "O",
+                            ),
+                            guard: None,
+                        },
+                    ],
+                ),
+                guard: None,
+            },
+        ],
+    ),
+    [
+        Newline,
+    ],
+)

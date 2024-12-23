@@ -254,7 +254,7 @@ fn main() -> io::Result<()> {
                                 exit_code = problems.exit_code();
                             }
 
-                            Err(LoadingProblem::FormattedReport(report)) => {
+                            Err(LoadingProblem::FormattedReport(report, _)) => {
                                 print!("{report}");
 
                                 exit_code = 1;
@@ -282,10 +282,11 @@ fn main() -> io::Result<()> {
                     ) {
                         Ok((problems, total_time)) => {
                             problems.print_error_warning_count(total_time);
+                            println!(".\n");
                             Ok(problems.exit_code())
                         }
 
-                        Err(LoadingProblem::FormattedReport(report)) => {
+                        Err(LoadingProblem::FormattedReport(report, _)) => {
                             print!("{report}");
 
                             Ok(1)

@@ -19,7 +19,7 @@ fn main() {
     // dunce can be removed once ziglang/zig#5109 is fixed
     let bitcode_path = dunce::canonicalize(Path::new(".")).unwrap();
 
-    // workaround for github.com/ziglang/zig/issues/9711
+    // workaround for github.com/ziglang/zig/issues/20501
     #[cfg(target_os = "macos")]
     let zig_cache_dir = tempdir().expect("Failed to create temp directory for zig cache");
     #[cfg(target_os = "macos")]
@@ -70,6 +70,10 @@ fn generate_object_file(bitcode_path: &Path, zig_object: &str, object_file_name:
 
     println!("Compiling zig object `{zig_object}` to: {src_obj}");
 
+    // workaround for github.com/ziglang/zig/issues/20501
+    #[cfg(target_os = "macos")]
+    let _ = fs::remove_dir_all("./.zig-cache");
+
     let mut zig_cmd = zig();
 
     zig_cmd
@@ -119,7 +123,7 @@ fn copy_zig_builtins_to_target_dir(bitcode_path: &Path) {
     });
 }
 
-// recursively copy all the .zig files from this directory, but do *not* recurse into zig-cache/
+// recursively copy all the .zig files from this directory, but do *not* recurse into .zig-cache/
 fn cp_unless_zig_cache(src_dir: &Path, target_dir: &Path) -> io::Result<()> {
     // Make sure the destination directory exists before we try to copy anything into it.
     std::fs::create_dir_all(target_dir).unwrap_or_else(|err| {
@@ -146,8 +150,8 @@ fn cp_unless_zig_cache(src_dir: &Path, target_dir: &Path) -> io::Result<()> {
                     err
                 );
             });
-        } else if src_path.is_dir() && src_filename != "zig-cache" {
-            // Recursively copy all directories except zig-cache
+        } else if src_path.is_dir() && src_filename != ".zig-cache" {
+            // Recursively copy all directories except .zig-cache
             cp_unless_zig_cache(&src_path, &target_dir.join(src_filename))?;
         }
     }
@@ -170,22 +174,21 @@ fn run_command(mut command: Command, flaky_fail_counter: usize) {
                     Err(_) => format!("Failed to run \"{command_str}\""),
                 };
 
-                // Flaky test errors that only occur sometimes on MacOS ci server.
-                if error_str.contains("FileNotFound")
-                    || error_str.contains("unable to save cached ZIR code")
-                    || error_str.contains("LLVM failed to emit asm")
-                {
-                    if flaky_fail_counter == 10 {
-                        internal_error!("{} failed 10 times in a row. The following error is unlikely to be a flaky error: {}", command_str, error_str);
-                    } else {
-                        run_command(command, flaky_fail_counter + 1)
-                    }
-                } else if error_str
+                if error_str
                     .contains("lld-link: error: failed to write the output file: Permission denied")
                 {
                     internal_error!("{} failed with:\n\n  {}\n\nWorkaround:\n\n  Re-run the cargo command that triggered this build.\n\n", command_str, error_str);
                 } else {
-                    internal_error!("{} failed with:\n\n  {}\n", command_str, error_str);
+                    // We have bunch of flaky failures here on macos, particularly since upgrading to zig 13 github.com/roc-lang/roc/pull/6921
+                    if cfg!(target_os = "macos") {
+                        if flaky_fail_counter == 10 {
+                            internal_error!("{} failed 10 times in a row. The following error is unlikely to be a flaky error: {}", command_str, error_str);
+                        } else {
+                            run_command(command, flaky_fail_counter + 1)
+                        }
+                    } else {
+                        internal_error!("{} failed with:\n\n  {}\n", command_str, error_str);
+                    }
                 }
             }
         },
@@ -199,7 +202,7 @@ fn get_zig_files(dir: &Path, cb: &dyn Fn(&Path)) -> io::Result<()> {
             let entry = entry?;
             let path_buf = entry.path();
             if path_buf.is_dir() {
-                if !path_buf.ends_with("zig-cache") {
+                if !path_buf.ends_with(".zig-cache") {
                     get_zig_files(&path_buf, cb).unwrap();
                 }
             } else {

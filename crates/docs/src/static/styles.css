@@ -1,16 +1,15 @@
 :root {
-  /* WCAG AAA Compliant colors */
-  --code-bg: #f4f8f9;
-  --gray: #717171;
-  --orange: #bf5000;
-  --green: #0b8400;
-  --cyan: #067c94;
+  /* WCAG AAA Compliant colors - important that luminence (the l in hsl) is 18% for font colors against the bg's luminence of 96-97% when the font-size is at least 14pt */
+  --code-bg: hsl(262 33% 96% / 1);
+  --gray: hsl(0 0% 18% / 1);
+  --orange: hsl(25 100% 18% / 1);
+  --green: hsl(115 100% 18% / 1);
+  --cyan: hsl(190 100% 18% / 1);
   --blue: #05006d;
   --violet: #7c38f5;
-  --violet-bg: #ece2fd;
+  --violet-bg: hsl(262.22deg 87.1% 96%);
   --magenta: #a20031;
   --link-hover-color: #333;
-
   --link-color: var(--violet);
   --code-link-color: var(--violet);
   --text-color: #000;
@@ -18,16 +17,16 @@
   --body-bg-color: #ffffff;
   --border-color: #717171;
   --faded-color: #4c4c4c;
-  --font-sans: -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial,
-      sans-serif;
-  --font-mono: SFMono-Regular, Consolas, "Liberation Mono", Menlo, Courier,
-      monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: SFMono-Regular, Consolas, "Liberation Mono", Menlo, Courier, monospace;
   --top-header-height: 67px;
-  --sidebar-width: 280px;
-  --module-search-height: 48px;
-  --module-search-padding-height: 12px;
+  --sidebar-width: clamp(280px, 25dvw, 500px);
+  --module-search-height: 56px;
+  --module-search-padding-height: 16px;
   --module-search-form-padding-width: 20px;
+  --sidebar-bg-color: hsl(from var(--violet-bg) h calc(s * 1.05) calc(l * 0.95));
 }
+
 
 a {
   color: var(--violet);
@@ -40,10 +39,6 @@ table tr th {
 table tr th,
 table tr td {
   padding: 6px 13px;
-}
-
-.logo {
-  padding: 2px 8px;
 }
 
 .logo svg {
@@ -63,26 +58,39 @@ table tr td {
 .pkg-full-name {
   display: flex;
   align-items: center;
-  font-size: 32px;
+  font-size: 24px;
   margin: 0 8px;
   font-weight: normal;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  height: 100%;
 }
 
 .entry-name {
   white-space: pre-wrap;
   font-family: var(--font-mono);
-  font-size: 18px;
+  font-size: 16px;
   font-weight: normal;
-  color: var(--violet);
+  background-color: var(--violet-bg);
+  color: var(--text-color);
   width: auto;
   margin-top: 0;
   margin-bottom: 24px;
-  padding: 8px 16px;
-  border-left: 2px solid var(--violet);
+  padding: 12px 16px;
+  border-left: 4px solid var(--violet);
+  display: flex;
+}
+
+.entry-name strong {
+    color: var(--text-color);
+}
+
+.entry-name code {
+    background: none;
+}
+
+.entry-name:target {
+  background-color: var(--violet-bg);
 }
 
 .entry-name a {
@@ -109,6 +117,9 @@ table tr td {
 .pkg-full-name a {
   padding-top: 12px;
   padding-bottom: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 a {
@@ -124,8 +135,10 @@ a:hover code {
   min-width: 0; /* necessary for text-overflow: ellipsis to work in descendants */
   display: flex;
   align-items: center;
-  height: 100%;
+  justify-content: flex-start;
+  gap: 8px;
   background-color: var(--violet-bg);
+  padding: 16px;
 }
 
 .pkg-and-logo a,
@@ -154,36 +167,50 @@ a:hover code {
 body {
   display: grid;
   grid-template-columns:
-      [before-sidebar] 1fr [sidebar] var(--sidebar-width)
-      [main-content] fit-content(calc(1280px - var(--sidebar-width)))
-      [end] 1fr;
-  grid-template-rows: [top-header] var(--top-header-height) [above-footer] auto [footer] auto;
+      [sidebar] var(--sidebar-width)
+      [main-content] 1fr
+      [content-end];
+  grid-template-rows: 1fr;
+  height: 100dvh;
   box-sizing: border-box;
   margin: 0;
   padding: 0;
   font-family: var(--font-sans);
   color: var(--text-color);
   background-color: var(--body-bg-color);
+  overflow: hidden;
 }
 
 main {
   grid-column-start: main-content;
-  grid-column-end: main-content;
-  grid-row-start: above-footer;
-  grid-row-end: above-footer;
+  grid-column-end: content-end;
   box-sizing: border-box;
   position: relative;
-  font-size: 18px;
+  font-size: 14pt; /* This keeps links AAA compliant while still making the links distinctly colored. */
   line-height: 1.85em;
   margin-top: 2px;
-  padding: 48px;
-  max-width: 740px;
+  padding: 16px;
+  padding-top: 0px;
   /* necessary for text-overflow: ellipsis to work in descendants */
   min-width: 0;
   overflow-x: auto;
   /* fixes issues with horizonatal scroll in cases where word is too long,
   like in one of the examples at https://www.roc-lang.org/builtins/Num#Dec */
   overflow-wrap: break-word;
+  overflow-y: auto;
+  display: grid;
+  --main-content-width: clamp(100px, calc(100% - 32px), 60ch); 
+  grid-template-columns: [main-start] minmax(16px,1fr) [main-content-start] var(--main-content-width) [main-content-end] minmax(16px,1fr) [main-end];
+  grid-template-rows: auto;
+  flex-direction: column;
+  scrollbar-color: var(--violet) var(--body-bg-color);
+  scrollbar-gutter: stable both-edges;
+  scroll-padding-top: calc(16px + 16px + 1lh + 16px + 16px);
+}
+
+main > * {
+    grid-column-start: main-content-start;
+    grid-column-end: main-content-end;
 }
 
 /* Module links on the package index page (/index.html) */
@@ -195,7 +222,7 @@ main {
 
 section {
   padding: 0px 0px 16px 0px;
-  margin: 72px 0px;
+  margin: 36px 0px;
 }
 
 section blockquote {
@@ -229,33 +256,31 @@ padding: 0px 16px;
 }
 
 #sidebar-nav {
-  grid-column-start: sidebar;
-  grid-column-end: sidebar;
-  grid-row-start: above-footer;
-  grid-row-end: above-footer;
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
-  padding-left: 56px;
-  padding-top: 6px;
-  width: 100%;
+    grid-column-start: sidebar;
+    grid-column-end: main-content;
+    position: relative;
+    display: grid;
+    grid-template-rows: min-content 1fr;
+    box-sizing: border-box;
+    width: 100%;
+    background-color: var(--sidebar-bg-color);
+    transition: all 1s linear;
 }
 
-.header-start-extension {
-  grid-column-start: before-sidebar;
-  grid-column-end: sidebar;
-  grid-row-start: top-header;
-  grid-row-end: top-header;
-  background-color: var(--violet-bg);
+#sidebar-nav .module-links-container {
+    position: relative;
 }
 
-.header-end-extension {
-  grid-column-start: end;
-  grid-column-end: end;
-  grid-row-start: top-header;
-  grid-row-end: top-header;
-  background-color: var(--violet-bg);
+
+#sidebar-nav .module-links {
+    position: absolute;
+    inset: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-color: var(--violet) var(--sidebar-bg-color);
+    scrollbar-gutter: stable;
+    padding: 16px 8px;
+    transition: all .2s linear;
 }
 
 .top-header {
@@ -269,7 +294,7 @@ padding: 0px 16px;
   flex-wrap: nowrap;
   box-sizing: border-box;
   font-family: var(--font-sans);
-  font-size: 24px;
+  font-size: 20px;
   height: 100%;
   background-color: var(--violet-bg);
   /* min-width must be set to something (even 0) for text-overflow: ellipsis to work in descendants, but we want this anyway. */
@@ -282,10 +307,6 @@ p {
 }
 
 footer {
-  grid-column-start: main-content;
-  grid-column-end: main-content;
-  grid-row-start: footer;
-  grid-row-end: footer;
   max-width: var(--main-content-max-width);
   font-size: 14px;
   box-sizing: border-box;
@@ -312,9 +333,9 @@ footer p {
 
 .sidebar-entry a {
   box-sizing: border-box;
-  min-height: 48px;
+  min-height: 40px;
   min-width: 48px;
-  padding: 12px 16px;
+  padding: 8px 16px;
   font-family: var(--font-mono);
 }
 
@@ -323,25 +344,63 @@ footer p {
   color: var(--text-color);
 }
 
+.sidebar-sub-entries {
+    font-size: 12pt;
+    display: none;
+}
+
+.active + .sidebar-sub-entries {
+    display: block;
+}
+
 .sidebar-sub-entries a {
   display: block;
   line-height: 24px;
   width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
-  margin-left: 14px;
-  padding-left: 26px;
-  border-left: 2px solid var(--violet);
+  margin-left: 20px;
+  padding-left: 27px;
+  border-left: 2px solid rgb(from var(--gray) r g b / .30);
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+}
+
+.sidebar-sub-entries a:first-child {
+    margin-top: 8px;
+    padding-top: 0;
+}
+
+.sidebar-sub-entries a:last-child {
+    margin-bottom: 8px;
+    padding-bottom: 0;
+}
+
+.sidebar-sub-entries a:hover {
+    border-left-color: rgb(from var(--violet) r g b / .60);
+    color: var(--violet);
+    text-decoration: none;
 }
 
 .module-name {
-  font-size: 56px;
+  font-size: 40pt;
   line-height: 1em;
   font-family: var(--font-mono);
   font-weight: bold;
-  margin-top: 18px;
-  margin-bottom: 48px;
+  margin-top: 36px;
+  margin-bottom: 16px;
   color: var(--violet);
+}
+
+main h2 {
+    font-size: 28pt;
+}
+main h3 {
+    font-size: 24pt;
+}
+main h4 {
+    font-size: 20pt;
 }
 
 .module-name a,
@@ -353,21 +412,62 @@ color: inherit;
   color: var(--link-hover-color);
 }
 
-.sidebar-module-link {
+a.sidebar-module-link {
   box-sizing: border-box;
-  font-size: 18px;
+  font-size: 14pt;
   line-height: 24px;
   font-family: var(--font-mono);
-  display: block;
+  display: flex;
+  flex-direction: row-reverse;
+  justify-content: space-between;
+  align-items: center;
   width: 100%;
-  padding: 8px 0;
+  padding: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+.sidebar-module-link:hover {
+    text-decoration: none;
+
+    span:hover {
+        color: var(--violet);
+    }
+}
+
+.sidebar-module-link span {
+    display: inline-block;
+    flex-grow: 1;
+}
+
 .sidebar-module-link.active {
   font-weight: bold;
+}
+
+.sidebar-module-link > .entry-toggle {
+    background-color: transparent;
+    appearance: none;
+    border: none;
+    color: transparent;
+    color: rgba(from var(--text-color) r g b / .6);
+    transition: all 80ms linear;
+    text-decoration: none;
+    font-size: 0.6rem;
+    cursor: pointer;
+    padding: 8px 16px;
+    
+    &:hover {
+        color: var(--violet);
+    }
+}
+
+:hover >  .entry-toggle {
+    color: var(--text-color);
+}
+
+.active .entry-toggle {
+    rotate: 90deg;
 }
 
 a,
@@ -414,6 +514,7 @@ a code {
   color: var(--code-link-color);
   background: none;
   padding: 0;
+  font-weight: bold; /* Important for AAA compliance while keeping color distinct */
 }
 
 code a:visited,
@@ -426,14 +527,16 @@ pre {
   padding: 8px 16px;
   box-sizing: border-box;
   background-color: var(--code-bg);
-  overflow-x: hidden;
   position: relative;
   word-wrap: normal;
 }
 
 pre>samp {
-  overflow-x: auto;
-  display: block;
+    overflow-x: auto;
+    display: block;
+    scrollbar-color: var(--violet) var(--code-bg);
+    scrollbar-width: thin;
+    scrollbar-gutter: stable;
 }
 
 .hidden {
@@ -446,12 +549,32 @@ pre>samp {
   align-items: center;
   align-content: center;
   height: 100%;
-  background-color: var(--violet-bg);
-  position: relative;
+  position: sticky;
   flex-grow: 1;
   box-sizing: border-box;
-  padding: 0px var(--module-search-form-padding-width);
+  padding-block: 16px;
+  background-color: var(--body-bg-color);
+  top: 0;
+  z-index: 1;
 }
+
+.menu-toggle {
+    display: none;
+    margin-right: 8px;
+    appearance: none;
+    background-color: transparent;
+    outline: none;
+    border: none;
+    color: var(--violet);
+    padding: 0;
+    cursor: pointer;
+}
+
+.menu-toggle svg {
+    height: 48px;
+    width: 48px;
+}
+
 
 #module-search,
 #module-search:focus {
@@ -467,12 +590,19 @@ pre>samp {
   box-sizing: border-box;
   width: 100%;
   box-sizing: border-box;
-  font-size: 18px;
+  font-size: 16px;
   line-height: 18px;
   border: none;
   color: var(--faded-color);
   background-color: var(--body-bg-color);
   font-family: var(--font-serif);
+  border: 2px solid var(--violet-bg);
+}
+
+@media (prefers-color-scheme: light) {
+    #module-search {
+        outline: 1px solid var(--gray);
+    }
 }
 
 #module-search::placeholder {
@@ -481,7 +611,7 @@ pre>samp {
 }
 
 #module-search:focus, #module-search:hover {
-  outline: 2px solid var(--faded-color);
+  outline: 2px solid var(--violet);
 }
 
 #search-type-ahead {
@@ -563,13 +693,9 @@ pre>samp {
   box-sizing: border-box;
   align-items: center;
   font-size: 18px;
-  line-height: 18px;
-  padding: 12px 16px;
-  height: 48px;
   pointer-events: none;
   position: absolute;
-  top: 12px;
-  left: 96px;
+  right: 72px;
 }
 
 #search-shortcut-key {
@@ -579,7 +705,6 @@ pre>samp {
   padding: 1px 3px 3px;
   font-style: normal;
   line-height: 15px;
-  opacity: 0.6;
   pointer-events: none;
 }
 
@@ -602,32 +727,31 @@ pre>samp {
 
 .module-name {
     flex-grow: 1;
-    margin-bottom: 0;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
       /* WCAG AAA Compliant colors */
-      --code-bg: #202746;
-      --gray: #b6b6b6;
-      --orange: #fd6e08;
-      --green: #8ecc88;
-      --cyan: #12c9be;
-      --blue: #b1afdf;
-      --violet: #CAADFB;
-      --violet-bg: #332944;
-      --magenta: #f39bac;
+    --code-bg: hsl(228.95deg 37.25% 15%);
+    --gray: hsl(0 0% 70% / 1);
+    --orange: hsl(25 98% 70% / 1);
+    --green: hsl(115 40% 70% / 1);
+    --cyan: hsl(176 84% 70% / 1);
+    --blue: hsl(243 43% 80% / 1);
+    --violet: #caadfb;
+    --violet-bg: hsl(262 25% 15% / 1);
+    --magenta: hsl(348 79% 80% / 1);
       --link-hover-color: #fff;
 
       --link-color: var(--violet);
       --code-link-color: var(--violet);
       --text-color: #eaeaea;
-      --body-bg-color: #0e0e0f;
+      --body-bg-color: hsl(from var(--violet-bg) h s calc(l * .5));
       --border-color: var(--gray);
       --code-color: #eeeeee;
       --logo-solid: #8f8f8f;
       --faded-color: #bbbbbb;
-      --gray: #6e6e6e;
+      --sidebar-bg-color: hsl(from var(--violet-bg) h calc(s * 1.1) calc(l * 0.75));
   }
 
   html {
@@ -635,145 +759,172 @@ pre>samp {
   }
 }
 
-@media only screen and (max-device-width: 480px) and (orientation: portrait) {
+@media only screen and (max-width: 768px) {
+    :root {
+        --sidebar-width: clamp(280px, 50dvw, 385px);
+    }
     body {
-      grid-template-areas:
-        "header"
-        "main"
-        "sidebar"
-        "footer";
+        display: block;
+        overflow-y: auto;
+        overflow-x: hidden;
     }
 
     #sidebar-nav {
-      grid-area: sidebar;
+        left: calc(-1 * var(--sidebar-width));
+        top: 0;
+        bottom: 0;
+        position: fixed;
+        z-index: 2;
+        transition: all .2s linear;
+    }
+
+    .entry-toggle {
+        height: 48px;
+        width: 48px;
+    }
+
+    body.sidebar-open #sidebar-nav {
+        left: 0;
     }
 
     main {
-      grid-area: main;
+        display: block;
+        margin: 0 16px;
+        --main-content-width: minmax(calc(100% - 32px), 60ch);
+    }
+
+    :root {
+        --top-header-height: 160px;
+    }
+
+    #search-shortcut-key, .header-start-extension, .header-end-extension, #search-label {
+        display: none;
+    }
+
+    #module-search-form {
+        padding: 16px 16px;
+        height: auto;
+        margin-bottom: 16px;
+        grid-column-start: main-content-start;
+        grid-column-end: main-content-end;
+        position: fixed;
+        left: 0;
+        right: 0;
+    }
+
+    .menu-toggle {
+        display: inline-block;
+        margin-right: 8px;
+        appearance: none;
+        background-color: transparent;
+        outline: none;
+        border: none;
+        color: var(--text-color);
+        padding: 0;
+    }
+
+    .menu-toggle svg {
+        height: 48px;
+        width: 48px;
+    }
+
+    /* Hide the Copy Link button on mobile. */
+    .entry-name a:first-of-type {
+        display: none;
+    }
+
+    .search-icon {
+        display: block; /* This is only visible in mobile. */
+        top: calc(1lh / 2 + 16px);
     }
 
     .top-header {
-      grid-area: header;
+        flex-direction: column;
+        height: auto;
+        justify-content: space-between;
+        /* min-width must be set to something (even 0) for text-overflow: ellipsis to work in descendants. */
+        min-width: 0;
     }
 
-    footer {
-      grid-area: footer;
+    .pkg-full-name {
+        font-size: 20px;
+        padding-bottom: 14px;
     }
-  :root {
-      --top-header-height: 160px;
-  }
 
-  #search-shortcut-key, .header-start-extension, .header-end-extension, #search-label {
-      display: none;
-  }
+    .pkg-full-name a {
+        vertical-align: middle;
+        padding: 18px 0;
+    }
 
-  #module-search-form {
-      padding: 0 16px;
-      width: 100%;
-      height: auto;
-      margin-bottom: 16px;
-  }
+    .logo {
+        width: 50px;
+        height: 54px;
+    }
 
-  /* Hide the Copy Link button on mobile. */
-  .entry-name a:first-of-type {
-      display: none;
-  }
+    .version {
+        margin: 0;
+        font-weight: normal;
+        font-size: 18px;
+        padding-bottom: 16px;
+    }
 
-  .search-button {
-      display: block; /* This is only visible in mobile. */
-  }
+    .module-name {
+        font-size: 24px;
+        margin-top: 8px;
+        margin-bottom: 8px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
 
-  .top-header {
-      flex-direction: column;
-      height: auto;
-      justify-content: space-between;
-      /* min-width must be set to something (even 0) for text-overflow: ellipsis to work in descendants. */
-      min-width: 0;
-  }
+    main {
+        padding: 18px;
+        font-size: 16px;
+        padding-top: calc(16px + 16px + 1lh + 16px);
+    }
 
-  .pkg-full-name {
-      margin-left: 8px;
-      margin-right: 12px;
-      font-size: 24px;
-      padding-bottom: 14px;
-  }
+    #sidebar-nav {
+        margin-top: 0;
+        padding-left: 0;
+        width: var(--sidebar-width);
+    }
 
-  .pkg-full-name a {
-      vertical-align: middle;
-      padding: 18px 0;
-  }
+    #sidebar-heading {
+        font-size: 24px;
+        margin: 16px;
+    }
 
-  .logo {
-      padding-left: 2px;
-      width: 50px;
-      height: 54px;
-  }
+    h3 {
+        font-size: 18px;
+        margin: 0;
+        padding: 0;
+    }
 
-  .version {
-      margin: 0;
-      font-weight: normal;
-      font-size: 18px;
-      padding-bottom: 16px;
-  }
+    h4 {
+        font-size: 16px;
+    }
 
-  .module-name {
-      font-size: 36px;
-      margin-top: 8px;
-      margin-bottom: 8px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-  }
+    body {
+        margin: 0;
+        min-width: 320px;
+        max-width: 100dvw;
+    }
 
-  main {
-      padding: 18px;
-      font-size: 16px;
-      max-width: 480px;
-  }
+    .top-header-triangle {
+        display: none;
+    }
 
-  #sidebar-nav {
-      margin-top: 0;
-      padding-left: 0;
-      width: auto;
-  }
+    .pkg-and-logo {
+        padding-block: 4px;
+    }
 
-  #sidebar-heading {
-      font-size: 24px;
-      margin: 16px;
-  }
+    .pkg-full-name {
+        flex-grow: 1;
+    }
 
-  h3 {
-      font-size: 18px;
-      margin: 0;
-      padding: 0;
-  }
-
-  h4 {
-      font-size: 16px;
-  }
-
-  body {
-      grid-template-columns: auto;
-      margin: 0;
-      min-width: 320px;
-      max-width: 100%;
-  }
-
-  .top-header-triangle {
-      display: none;
-  }
-
-  .pkg-and-logo {
-      width: 100%;
-  }
-
-  .pkg-full-name {
-      flex-grow: 1;
-  }
-
-  .pkg-full-name a {
-      padding-top: 24px;
-      padding-bottom: 12px;
-  }
+    .pkg-full-name a {
+        padding-top: 24px;
+        padding-bottom: 12px;
+    }
 }
 
 /* Comments `#` and Documentation comments `##` */
