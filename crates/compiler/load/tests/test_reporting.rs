@@ -6458,6 +6458,39 @@ All branches in an `if` must have the same type!
         )
     }
 
+    #[test]
+    fn unneeded_module_name() {
+        report_header_problem_as(
+            indoc!(
+                r"
+                module foobar []
+                "
+            ),
+            indoc!(
+                r#"
+                ── WEIRD MODULE NAME in /code/proj/Main.roc ────────────────────────────────────
+
+                I am partway through parsing a header, but I got stuck here:
+
+                1│  module foobar []
+                           ^
+
+                I am expecting a list of exports like
+
+                    module [func, value]
+
+                or module params like
+
+                    module { echo } -> [func, value]
+
+                If you're trying to specify a module name, recall that unlike
+                application names, module names are not specified in the header.
+                Instead, they are derived from the name of the module's filename.
+            "#
+            ),
+        )
+    }
+
     test_report!(
         apply_unary_negative,
         indoc!(
