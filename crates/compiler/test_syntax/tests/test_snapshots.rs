@@ -701,6 +701,7 @@ mod test_snapshots {
         pass/tuple_accessor_function.expr,
         pass/tuple_apply_parens_comment.expr,
         pass/tuple_destructure_bang.expr,
+        pass/tuple_funcs_in_parens.expr,
         pass/tuple_function_annotation.expr,
         pass/tuple_type.expr,
         pass/tuple_type_ext.expr,
