@@ -399,6 +399,7 @@ mod test_snapshots {
         pass/double_closure_newlines_binop.expr,
         pass/double_parens_as_in_backpassing_pat.expr,
         pass/double_parens_comment_tuple_pat.expr,
+        pass/double_question_binop.expr,
         pass/double_space_before.expr,
         pass/effectful_closure_statements.expr,
         pass/empty_app_header.header,
