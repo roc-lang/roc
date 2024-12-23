@@ -259,7 +259,7 @@ dbgStr = \s ->
         f0
         |> dbgWrite "\""
         |> \f1 -> 
-            # escape invisible unicode characters
+            # escape invisible unicode characters as in fmt_str_body crates/compiler/fmt/src/expr.rs
             escapeS = Str.replaceEach s "\u(feff)" "\\u(feff)"
                 |> Str.replaceEach "\u(200b)" "\\u(200b)" 
                 |> Str.replaceEach "\u(200c)" "\\u(200c)"
