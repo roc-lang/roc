@@ -1329,6 +1329,7 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                             item,
                             after,
                         },
+                        true,
                     )
                 } else {
                     Spaces {
@@ -1369,7 +1370,7 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                     after: new_res.after,
                 };
                 if parens == Parens::InCollection || parens == Parens::InApply {
-                    parens_around_node(arena, inner)
+                    parens_around_node(arena, inner, true)
                 } else {
                     inner
                 }
@@ -1382,7 +1383,7 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                     after: lifted.after,
                 };
                 if parens == Parens::InApply || parens == Parens::InAsPattern {
-                    parens_around_node(arena, item)
+                    parens_around_node(arena, item, true)
                 } else {
                     item
                 }
@@ -1402,12 +1403,24 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
 fn parens_around_node<'a, 'b: 'a>(
     arena: &'a Bump,
     item: Spaces<'b, Node<'b>>,
+    allow_spaces_before: bool,
 ) -> Spaces<'a, Node<'a>> {
     Spaces {
-        before: &[],
+        before: if allow_spaces_before {
+            item.before
+        } else {
+            &[]
+        },
         item: Node::DelimitedSequence(
             Braces::Round,
-            arena.alloc_slice_copy(&[(item.before.into(), item.item)]),
+            arena.alloc_slice_copy(&[(
+                if allow_spaces_before {
+                    Sp::empty()
+                } else {
+                    item.before.into()
+                },
+                item.item,
+            )]),
             Sp::empty(),
         ),
         // We move the comments/newlines to the outer scope, since they tend to migrate there when re-parsed
