@@ -30,12 +30,12 @@ procedure List.8 (#Attr.2, #Attr.3):
     ret List.671;
 
 procedure Num.127 (#Attr.2):
-    let Num.282 : U8 = lowlevel NumIntCast #Attr.2;
-    ret Num.282;
+    let Num.284 : U8 = lowlevel NumIntCast #Attr.2;
+    ret Num.284;
 
 procedure Num.96 (#Attr.2):
-    let Num.281 : Str = lowlevel NumToStr #Attr.2;
-    ret Num.281;
+    let Num.283 : Str = lowlevel NumToStr #Attr.2;
+    ret Num.283;
 
 procedure Str.12 (#Attr.2):
     let Str.255 : List U8 = lowlevel StrToUtf8 #Attr.2;
