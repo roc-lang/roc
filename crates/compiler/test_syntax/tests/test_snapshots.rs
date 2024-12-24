@@ -355,6 +355,7 @@ mod test_snapshots {
         pass/closure_newline_empty_record_newline.expr,
         pass/closure_parens_double_newlines.expr,
         pass/closure_pat_reccord_comment.expr,
+        pass/closure_with_binops_and_unary.expr,
         pass/closure_with_underscores.expr,
         pass/comma_prefixed_indented_record.expr,
         pass/comment_after_annotation.expr,

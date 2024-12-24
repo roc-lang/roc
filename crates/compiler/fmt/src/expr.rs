@@ -1313,13 +1313,21 @@ pub fn expr_lift_spaces<'a, 'b: 'a>(
                 after: right_lifted.after,
             }
         }
-        Expr::UnaryOp(expr, op) => {
-            let expr_lifted = expr_lift_spaces_after(Parens::InOperator, arena, &expr.value);
+        Expr::UnaryOp(inner, op) => {
+            if parens == Parens::InApply && matches!(inner.without_spaces(), Expr::Closure(..)) {
+                return Spaces {
+                    before: &[],
+                    item: Expr::ParensAround(arena.alloc(*expr)),
+                    after: &[],
+                };
+            }
+
+            let inner_lifted = expr_lift_spaces_after(Parens::InOperator, arena, &inner.value);
 
             Spaces {
                 before: &[],
-                item: Expr::UnaryOp(arena.alloc(Loc::at(expr.region, expr_lifted.item)), *op),
-                after: expr_lifted.after,
+                item: Expr::UnaryOp(arena.alloc(Loc::at(inner.region, inner_lifted.item)), *op),
+                after: inner_lifted.after,
             }
         }
 
