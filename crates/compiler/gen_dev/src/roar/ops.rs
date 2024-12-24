@@ -1,6 +1,6 @@
 use std::mem;
 
-use super::storage::{Args,ByteSize, Constant, Offset, Value,ProcRef,Label};
+use super::storage::{Args,ByteSize, Constant, Offset, Input, Output,ProcRef,Label};
 
 #[derive(Clone, Debug)]
 pub(crate) enum Sign {
@@ -69,10 +69,12 @@ pub(crate) enum OpCode {
 #[non_exhaustive]
 ///The actual type of operations in ROAR
 pub struct Operation {
-    pub output: Value,
+    pub output: Output,
     pub opcode: OpCode,
     ///Every function (except `call`) has (in terms of non-constant arguements) an arity of 2, so only two inputs are allowed
-    pub inputs: (Value,Value),
+    pub inputs: (Input,Input),
 }
-//Assert that the operation is at most 8 bytes
-//assert!(mem::size_of::<Operation>() <= 8);
+///The type of expressions. Not really expressions, just the non-output portion of a ROAR op
+pub type Expr = (OpCode,Input,Input);
+
+//TODO ? make a macro for instructions?

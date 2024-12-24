@@ -59,7 +59,7 @@ impl Display for LiteralValue {
 
 impl Display for Operation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use super::storage::Value::*;
+        use super::storage::Input::*;
         write!(f, "{}", self.output);
         write!(f, " <- ");
         write!(f, "{} ", mnemonic(&self.opcode));
@@ -72,15 +72,25 @@ impl Display for Operation {
     }
 }
 
-impl Display for Value {
+impl Display for Input {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Value::Register(register) => write!(f, "{}", register),
-            Value::FloatRegister(register) => write!(f, "{}", register),
-            Value::Global(global) => write!(f, "{:?}", global),
-            Value::Value(literal_value) => write!(f, "{}", literal_value),
-            Value::Data(vec) => write!(f, "{:?}", vec),
-            Value::Null => write!(f,"_")
+            Input::Register(register) => write!(f, "{}", register),
+            Input::FloatRegister(register) => write!(f, "{}", register),
+            Input::Global(global) => write!(f, "{:?}", global),
+            Input::Value(literal_value) => write!(f, "{}", literal_value),
+            Input::Data(vec) => write!(f, "{:?}", vec),
+            Input::Null => write!(f,"_"),
+            Input::ByteSize(ByteSize(byte_size)) => write!(f, "#{}", 8*byte_size),
+        }
+    }
+}
+impl Display for Output {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Output::Register(register) => write!(f, "{}", register),
+            Output::FloatRegister(register) => write!(f, "{}", register),
+            Output::Null => write!(f,"_")
         }
     }
 }
