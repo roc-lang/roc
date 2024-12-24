@@ -5,7 +5,7 @@ use crate::{
     annotation::{Formattable, Newlines, Parens},
     collection::Braces,
     spaces::fmt_spaces,
-    Buf,
+    Buf, MigrationFlags,
 };
 
 #[derive(Copy, Clone, Debug)]
@@ -54,7 +54,12 @@ pub enum Node<'a> {
 }
 
 pub trait Nodify<'a> {
-    fn to_node<'b>(&'a self, arena: &'b Bump, parens: Parens) -> Spaces<'b, Node<'b>>
+    fn to_node<'b>(
+        &'a self,
+        arena: &'b Bump,
+        parens: Parens,
+        flags: MigrationFlags,
+    ) -> Spaces<'b, Node<'b>>
     where
         'a: 'b;
 }

@@ -772,6 +772,7 @@ mod snakify_test {
         );
         assert_eq!(check_snakify(&arena, "number4Yellow"), "number4_yellow");
         assert_eq!(check_snakify(&arena, "useCases4Cobol"), "use_cases4_cobol");
-        assert_eq!(check_snakify(&arena, "c3PO"), "c3_po")
+        assert_eq!(check_snakify(&arena, "c3PO"), "c3_po");
+        assert_eq!(check_snakify(&arena, "siblingIds"), "sibling_ids");
     }
 }

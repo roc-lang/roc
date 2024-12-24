@@ -100,8 +100,17 @@ pub enum Output<'a> {
 
 impl<'a> Output<'a> {
     pub fn format(&self) -> InputOwned {
-        let arena = Bump::new();
         let flags = MigrationFlags::new(false);
+        self.format_help(flags)
+    }
+
+    pub fn format_with_migrate(&self) -> InputOwned {
+        let flags = MigrationFlags::new(true);
+        self.format_help(flags)
+    }
+
+    pub fn format_help(&self, flags: MigrationFlags) -> InputOwned {
+        let arena = Bump::new();
         let mut buf = Buf::new_in(&arena, flags);
         match self {
             Output::Header(header) => {
@@ -304,6 +313,92 @@ impl<'a> Input<'a> {
                 let defs = parse_module_defs(arena, state, defs)?;
 
                 Ok(Output::Full(FullAst { header, defs }))
+            }
+        }
+    }
+
+    pub fn check_migrated_invariants(
+        &self,
+        handle_formatted_output: impl Fn(Input),
+        check_idempotency: bool,
+        canonicalize_mode: Option<bool>,
+    ) {
+        let arena = Bump::new();
+
+        let actual = self.parse_in(&arena).unwrap_or_else(|err| {
+            panic!("Unexpected parse failure when parsing this for formatting with --migrate flags:\n\n{}\n\nParse error was:\n\n{:?}\n\n", self.as_str(), err);
+        });
+
+        let output = actual.format_with_migrate();
+
+        handle_formatted_output(output.as_ref());
+
+        let reparsed_ast = output.as_ref().parse_in(&arena).unwrap_or_else(|err| {
+            panic!(
+                "After formatting with --migrate flag, the source code no longer parsed!\n\n\
+                Parse error was: {:?}\n\n\
+                The original code was:\n\n{}\n\n\
+                The code that failed to parse:\n\n{}\n\n\
+                The original ast was:\n\n{:#?}\n\n",
+                err,
+                self.as_str(),
+                output.as_ref().as_str(),
+                actual
+            );
+        });
+
+        // Now verify that the resultant formatting is _idempotent_ - i.e. that it doesn't change again if re-formatted
+        if check_idempotency {
+            let reformatted = reparsed_ast.format_with_migrate();
+
+            if output != reformatted {
+                eprintln!("Formatting bug; formatting with --migrate flag is not stable.\nOriginal code:\n{}\n\nFormatted code:\n{}\n\nAST:\n{:#?}\n\nReparsed AST:\n{:#?}\n\n",
+                    self.as_str(),
+                    output.as_ref().as_str(),
+                    actual,
+                    reparsed_ast);
+                eprintln!("Reformatting the formatted code changed it again, as follows:\n\n");
+
+                assert_multiline_str_eq!(output.as_ref().as_str(), reformatted.as_ref().as_str());
+            }
+        }
+
+        // Check that running format WITHOUT the --migrate flag does not change anything (all
+        // migrated syntax should be supported by the formatter as is).
+        if check_idempotency {
+            let reformatted = reparsed_ast.format();
+
+            if output != reformatted {
+                eprintln!("Formatting bug; formatting with --migrate flag is not stable.\nOriginal code:\n{}\n\nFormatted code:\n{}\n\nAST:\n{:#?}\n\nReparsed AST:\n{:#?}\n\n",
+                    self.as_str(),
+                    output.as_ref().as_str(),
+                    actual,
+                    reparsed_ast);
+                eprintln!("Reformatting the formatted code changed it again, as follows:\n\n");
+
+                assert_multiline_str_eq!(output.as_ref().as_str(), reformatted.as_ref().as_str());
+            }
+        }
+
+        if let Some(expect_panic) = canonicalize_mode {
+            if expect_panic {
+                let text = self.as_str();
+                let res = std::panic::catch_unwind(|| {
+                    let new_arena = Bump::new();
+                    actual.canonicalize(&new_arena, text);
+                });
+
+                assert!(
+                    res.is_err(),
+                    "Canonicalize was expected to panic, but it did not. \
+                    If you're running test_snapshots, you may need to remove this test from \
+                    the list of tests that are expected to panic (great!), \
+                    in `fn expect_canonicalize_panics`"
+                );
+            } else {
+                // TODO grab the output here and assert things about it.
+                // For now we just make sure that it doesn't crash on this input
+                actual.canonicalize(&arena, self.as_str());
             }
         }
     }

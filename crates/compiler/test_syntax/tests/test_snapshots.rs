@@ -95,6 +95,8 @@ mod test_snapshots {
                     for file in list(&res_dir) {
                         let test = if let Some(test) = file.strip_suffix(".formatted.roc") {
                             test
+                        } else if let Some(test) = file.strip_suffix(".formattedmigrate.roc") {
+                            test
                         } else if let Some(test) = file.strip_suffix(".roc") {
                             test
                         } else if let Some(test) = file.strip_suffix(".result-ast") {
@@ -841,6 +843,7 @@ mod test_snapshots {
         let input_path = parent.join(format!("{name}.{ty}.roc"));
         let result_path = parent.join(format!("{name}.{ty}.result-ast"));
         let formatted_path = parent.join(format!("{name}.{ty}.formatted.roc"));
+        let formatted_with_migrate_path = parent.join(format!("{name}.{ty}.formattedmigrate.roc"));
 
         let source = std::fs::read_to_string(&input_path).unwrap_or_else(|err| {
             panic!("Could not find a snapshot test result at {input_path:?} - {err:?}")
@@ -858,8 +861,6 @@ mod test_snapshots {
             }
             Err(err) => Err(format!("{err:?}")),
         };
-
-        println!("{:?}", result);
 
         if expect == TestExpectation::Pass {
             let tokens = roc_parse::highlight::highlight(&source);
@@ -882,10 +883,16 @@ mod test_snapshots {
         compare_snapshots(&result_path, Some(&actual_result));
 
         if expect == TestExpectation::Pass || expect == TestExpectation::Malformed {
+            let mode = Some(expect_canonicalize_panics(name));
             input.check_invariants(
                 check_saved_formatting(input.as_str(), formatted_path),
                 true,
-                Some(expect_canonicalize_panics(name)),
+                mode,
+            );
+            input.check_migrated_invariants(
+                check_saved_formatting(input.as_str(), formatted_with_migrate_path),
+                true,
+                mode,
             );
         }
     }
