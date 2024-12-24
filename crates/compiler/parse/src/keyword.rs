@@ -21,6 +21,7 @@ pub const WHERE: &str = "where";
 // These keywords are valid in headers
 pub const PLATFORM: &str = "platform";
 
-pub const KEYWORDS: [&str; 11] = [
+pub const KEYWORDS: [&str; 12] = [
     IF, THEN, ELSE, WHEN, AS, IS, DBG, IMPORT, EXPECT, RETURN, CRASH,
+    "expect!", // not itself a keyword, but it's problematic if we allow an identifier like this!
 ];

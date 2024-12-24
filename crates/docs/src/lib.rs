@@ -5,6 +5,7 @@ extern crate roc_load;
 use bumpalo::Bump;
 use roc_can::scope::Scope;
 use roc_collections::VecSet;
+use roc_highlight::highlight_roc_code_inline;
 use roc_load::docs::{DocEntry, TypeAnnotation};
 use roc_load::docs::{ModuleDocumentation, RecordField};
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
@@ -314,13 +315,15 @@ fn render_module_documentation(
                     let def_name = doc_def.name.as_str();
                     let href = format!("{module_name}#{def_name}");
                     let mut content = String::new();
+                    let mut anno_buf = String::new();
 
                     push_html(&mut content, "a", [("href", href.as_str())], LINK_SVG);
-                    push_html(&mut content, "strong", [], def_name);
+                    // push_html(&mut content, "strong", [], def_name);
+                    anno_buf.push_str(def_name);
 
                     for type_var in &doc_def.type_vars {
-                        content.push(' ');
-                        content.push_str(type_var.as_str());
+                        anno_buf.push(' ');
+                        anno_buf.push_str(type_var.as_str());
                     }
 
                     let type_ann = &doc_def.type_annotation;
@@ -328,13 +331,14 @@ fn render_module_documentation(
                     if !matches!(type_ann, TypeAnnotation::NoTypeAnn) {
                         // Ability declarations don't have ":" after the name, just `implements`
                         if !matches!(type_ann, TypeAnnotation::Ability { .. }) {
-                            content.push_str(" :");
+                            anno_buf.push_str(" :");
                         }
 
-                        content.push(' ');
+                        anno_buf.push(' ');
 
-                        type_annotation_to_html(0, &mut content, type_ann, false);
+                        type_annotation_to_html(0, &mut anno_buf, type_ann, false);
                     }
+                    content.push_str(highlight_roc_code_inline(anno_buf.as_str()).as_str());
 
                     push_html(
                         &mut buf,
@@ -460,12 +464,26 @@ fn render_sidebar<'a, I: Iterator<Item = &'a ModuleDocumentation>>(modules: I) -
     for module in modules {
         let href = module.name.as_str();
         let mut sidebar_entry_content = String::new();
+        let mut module_link_content = String::new();
+
+        push_html(&mut module_link_content, "span", [], module.name.as_str());
+
+        push_html(
+            &mut module_link_content,
+            "button",
+            [("class", "entry-toggle")],
+            "▶",
+        );
 
         push_html(
             &mut sidebar_entry_content,
             "a",
-            [("class", "sidebar-module-link"), ("href", href)],
-            module.name.as_str(),
+            [
+                ("class", "sidebar-module-link"),
+                ("href", href),
+                ("data-module-name", module.name.as_str()),
+            ],
+            module_link_content.as_str(),
         );
 
         let entries = {

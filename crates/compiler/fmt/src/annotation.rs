@@ -367,13 +367,13 @@ fn fmt_ty_ann(
         }
 
         TypeAnnotation::As(lhs, spaces, TypeHeader { name, vars }) => {
-            let write_parens = parens == Parens::InAsPattern;
+            let write_parens = parens == Parens::InAsPattern || parens == Parens::InApply;
 
+            buf.indent(indent);
             if write_parens {
                 buf.push('(')
             }
 
-            buf.indent(indent);
             let lhs_indent = buf.cur_line_indent();
             lhs.value
                 .format_with_options(buf, Parens::InAsPattern, Newlines::No, indent);
@@ -410,6 +410,7 @@ fn fmt_ty_ann(
                 buf.spaces(1);
             }
             for (i, has) in implements_clauses.iter().enumerate() {
+                buf.indent(indent);
                 buf.push_str(if i == 0 {
                     roc_parse::keyword::WHERE
                 } else {
@@ -1371,6 +1372,19 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                     parens_around_node(arena, inner)
                 } else {
                     inner
+                }
+            }
+            TypeAnnotation::As(_left, _sp, _right) => {
+                let lifted = ann_lift_spaces(arena, self);
+                let item = Spaces {
+                    before: lifted.before,
+                    item: Node::TypeAnnotation(lifted.item),
+                    after: lifted.after,
+                };
+                if parens == Parens::InApply || parens == Parens::InAsPattern {
+                    parens_around_node(arena, item)
+                } else {
+                    item
                 }
             }
             _ => {
