@@ -165,7 +165,7 @@ mod solve_expr {
                 Str.fromUtf8
                 "
             ),
-            "List U8 -> Result Str [BadUtf8 Utf8ByteProblem U64]",
+            "List U8 -> Result Str [BadUtf8 { index : U64, problem : Utf8ByteProblem }]",
         );
     }
 
