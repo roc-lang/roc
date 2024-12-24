@@ -1,0 +1,49 @@
+@0-14 SpaceAfter(
+    BinOps(
+        [
+            (
+                @0-1 SpaceAfter(
+                    Var {
+                        module_name: "",
+                        ident: "m",
+                    },
+                    [
+                        Newline,
+                    ],
+                ),
+                @3-4 Caret,
+            ),
+        ],
+        @5-14 Apply(
+            @5-11 UnaryOp(
+                @6-11 Closure(
+                    [
+                        @7-8 Identifier {
+                            ident: "w",
+                        },
+                    ],
+                    @10-11 Var {
+                        module_name: "",
+                        ident: "m",
+                    },
+                ),
+                @5-6 Negate,
+            ),
+            [
+                @13-14 SpaceBefore(
+                    Var {
+                        module_name: "",
+                        ident: "w",
+                    },
+                    [
+                        Newline,
+                    ],
+                ),
+            ],
+            Space,
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

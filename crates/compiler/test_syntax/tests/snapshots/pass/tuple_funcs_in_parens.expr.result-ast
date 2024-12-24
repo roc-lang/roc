@@ -1,0 +1,72 @@
+@0-27 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-25,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Annotation(
+                    @0-1 Identifier {
+                        ident: "f",
+                    },
+                    @3-25 Tuple {
+                        elems: [
+                            @4-13 Function(
+                                [
+                                    @4-5 BoundVariable(
+                                        "a",
+                                    ),
+                                    @7-8 BoundVariable(
+                                        "b",
+                                    ),
+                                ],
+                                Pure,
+                                @12-13 BoundVariable(
+                                    "c",
+                                ),
+                            ),
+                            @15-21 Function(
+                                [
+                                    @15-16 BoundVariable(
+                                        "d",
+                                    ),
+                                ],
+                                Pure,
+                                @20-21 BoundVariable(
+                                    "e",
+                                ),
+                            ),
+                            @23-24 BoundVariable(
+                                "g",
+                            ),
+                        ],
+                        ext: None,
+                    },
+                ),
+            ],
+        },
+        @26-27 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "f",
+            },
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)
