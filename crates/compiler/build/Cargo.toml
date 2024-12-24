@@ -50,6 +50,7 @@ target-arm = []
 target-wasm32 = []
 target-x86 = []
 target-x86_64 = ["roc_gen_dev/target-x86_64"]
+use_roar = ["roc_gen_dev/use_roar"]
 
 # This is used to enable fuzzing and sanitizers.
 # Example use is describe here: https://github.com/bhansconnect/roc-fuzz

@@ -1,11 +1,12 @@
+use super::roar;
 use crate::generic64::{aarch64, new_backend_64bit, x86_64};
 use crate::{AssemblyBackendMode, Backend, Env, Relocation};
 use bumpalo::collections::Vec;
 use object::write::{self, SectionId, SymbolId};
 use object::write::{Object, StandardSection, StandardSegment, Symbol, SymbolSection};
 use object::{
-    Architecture, BinaryFormat, Endianness, RelocationEncoding, RelocationKind, SectionKind,
-    SymbolFlags, SymbolKind, SymbolScope,
+    Architecture, BinaryFormat, Endianness, RelocationEncoding, RelocationKind, Section,
+    SectionKind, SymbolFlags, SymbolKind, SymbolScope,
 };
 use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
@@ -51,86 +52,98 @@ fn build_module_help<'a, 'r>(
     target: Target,
     procedures: MutMap<(symbol::Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Object<'a> {
-    match target {
-        Target::LinuxX64 if cfg!(feature = "target-x86_64") => {
-            let backend = new_backend_64bit::<
-                x86_64::X86_64GeneralReg,
-                x86_64::X86_64FloatReg,
-                x86_64::X86_64Assembler,
-                x86_64::X86_64SystemV,
-            >(env, target, interns, layout_interner);
-            // Newer version of `ld` require `.note.GNU-stack` for security reasons.
-            // It specifies that we will not execute code stored on the stack.
-            let mut object =
-                Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
-            object.add_section(
-                vec![],
-                b".note.GNU-stack".to_vec(),
-                SectionKind::Elf(object::elf::SHT_PROGBITS),
-            );
-            build_object(procedures, backend, object)
+    println!("Running...");
+    if cfg!(feature = "use_roar") {
+        //For using experimental ROAR pipeline
+        let mut arena: bumpalo::Bump = bumpalo::Bump::new();
+        let converter = roar::convert::Converter::new(layout_interner, arena);
+        let section = converter.build_section(&procedures);
+        println!("roar is {:?}", section);
+        match target {
+            _ => todo!(),
         }
-        Target::MacX64 if cfg!(feature = "target-x86_64") => {
-            let backend = new_backend_64bit::<
-                x86_64::X86_64GeneralReg,
-                x86_64::X86_64FloatReg,
-                x86_64::X86_64Assembler,
-                x86_64::X86_64SystemV,
-            >(env, target, interns, layout_interner);
-            build_object(
-                procedures,
-                backend,
-                Object::new(
-                    BinaryFormat::MachO,
-                    Architecture::X86_64,
-                    Endianness::Little,
-                ),
-            )
+    } else {
+        match target {
+            Target::LinuxX64 if cfg!(feature = "target-x86_64") => {
+                let backend = new_backend_64bit::<
+                    x86_64::X86_64GeneralReg,
+                    x86_64::X86_64FloatReg,
+                    x86_64::X86_64Assembler,
+                    x86_64::X86_64SystemV,
+                >(env, target, interns, layout_interner);
+                // Newer version of `ld` require `.note.GNU-stack` for security reasons.
+                // It specifies that we will not execute code stored on the stack.
+                let mut object =
+                    Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
+                object.add_section(
+                    vec![],
+                    b".note.GNU-stack".to_vec(),
+                    SectionKind::Elf(object::elf::SHT_PROGBITS),
+                );
+                build_object(procedures, backend, object)
+            }
+            Target::MacX64 if cfg!(feature = "target-x86_64") => {
+                let backend = new_backend_64bit::<
+                    x86_64::X86_64GeneralReg,
+                    x86_64::X86_64FloatReg,
+                    x86_64::X86_64Assembler,
+                    x86_64::X86_64SystemV,
+                >(env, target, interns, layout_interner);
+                build_object(
+                    procedures,
+                    backend,
+                    Object::new(
+                        BinaryFormat::MachO,
+                        Architecture::X86_64,
+                        Endianness::Little,
+                    ),
+                )
+            }
+            Target::WinX64 if cfg!(feature = "target-x86_64") => {
+                let backend = new_backend_64bit::<
+                    x86_64::X86_64GeneralReg,
+                    x86_64::X86_64FloatReg,
+                    x86_64::X86_64Assembler,
+                    x86_64::X86_64WindowsFastcall,
+                >(env, target, interns, layout_interner);
+                build_object(
+                    procedures,
+                    backend,
+                    Object::new(BinaryFormat::Coff, Architecture::X86_64, Endianness::Little),
+                )
+            }
+            Target::LinuxArm64 if cfg!(feature = "target-aarch64") => {
+                let backend = new_backend_64bit::<
+                    aarch64::AArch64GeneralReg,
+                    aarch64::AArch64FloatReg,
+                    aarch64::AArch64Assembler,
+                    aarch64::AArch64Call,
+                >(env, target, interns, layout_interner);
+                build_object(
+                    procedures,
+                    backend,
+                    Object::new(BinaryFormat::Elf, Architecture::Aarch64, Endianness::Little),
+                )
+            }
+            Target::MacArm64 if cfg!(feature = "target-aarch64") => {
+                let backend = new_backend_64bit::<
+                    aarch64::AArch64GeneralReg,
+                    aarch64::AArch64FloatReg,
+                    aarch64::AArch64Assembler,
+                    aarch64::AArch64Call,
+                >(env, target, interns, layout_interner);
+                build_object(
+                    procedures,
+                    backend,
+                    Object::new(
+                        BinaryFormat::MachO,
+                        Architecture::Aarch64,
+                        Endianness::Little,
+                    ),
+                )
+            }
+            x => unimplemented!("the target, {:?}", x),
         }
-        Target::WinX64 if cfg!(feature = "target-x86_64") => {
-            let backend = new_backend_64bit::<
-                x86_64::X86_64GeneralReg,
-                x86_64::X86_64FloatReg,
-                x86_64::X86_64Assembler,
-                x86_64::X86_64WindowsFastcall,
-            >(env, target, interns, layout_interner);
-            build_object(
-                procedures,
-                backend,
-                Object::new(BinaryFormat::Coff, Architecture::X86_64, Endianness::Little),
-            )
-        }
-        Target::LinuxArm64 if cfg!(feature = "target-aarch64") => {
-            let backend = new_backend_64bit::<
-                aarch64::AArch64GeneralReg,
-                aarch64::AArch64FloatReg,
-                aarch64::AArch64Assembler,
-                aarch64::AArch64Call,
-            >(env, target, interns, layout_interner);
-            build_object(
-                procedures,
-                backend,
-                Object::new(BinaryFormat::Elf, Architecture::Aarch64, Endianness::Little),
-            )
-        }
-        Target::MacArm64 if cfg!(feature = "target-aarch64") => {
-            let backend = new_backend_64bit::<
-                aarch64::AArch64GeneralReg,
-                aarch64::AArch64FloatReg,
-                aarch64::AArch64Assembler,
-                aarch64::AArch64Call,
-            >(env, target, interns, layout_interner);
-            build_object(
-                procedures,
-                backend,
-                Object::new(
-                    BinaryFormat::MachO,
-                    Architecture::Aarch64,
-                    Endianness::Little,
-                ),
-            )
-        }
-        x => unimplemented!("the target, {:?}", x),
     }
 }
 
