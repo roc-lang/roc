@@ -353,6 +353,7 @@ mod test_snapshots {
         pass/closure_in_apply_in_binop.expr,
         pass/closure_in_binop_with_spaces.expr,
         pass/closure_newline_empty_record_newline.expr,
+        pass/closure_parens_double_newlines.expr,
         pass/closure_pat_reccord_comment.expr,
         pass/closure_with_underscores.expr,
         pass/comma_prefixed_indented_record.expr,

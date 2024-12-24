@@ -1445,6 +1445,10 @@ impl<'a, T: Copy> ExtractSpaces<'a> for NodeSpaces<'a, T> {
             after: self.after,
         }
     }
+
+    fn without_spaces(&self) -> T {
+        self.item
+    }
 }
 
 impl<'a, V: Formattable> Formattable for NodeSpaces<'a, V> {

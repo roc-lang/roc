@@ -150,7 +150,7 @@ fn loc_tag_pattern_arg<'a>(
 
         if stop_on_has_kw
             && matches!(
-                value.extract_spaces().item,
+                value.without_spaces(),
                 Pattern::Identifier {
                     ident: crate::keyword::IMPLEMENTS,
                     ..
