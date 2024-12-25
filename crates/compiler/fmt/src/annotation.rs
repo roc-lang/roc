@@ -14,7 +14,7 @@ use bumpalo::{
     collections::{String, Vec},
     Bump,
 };
-use roc_parse::ident::UppercaseIdent;
+use roc_parse::{ast::Spaced, ident::UppercaseIdent};
 use roc_parse::{
     ast::{
         AbilityImpls, AssignedField, Collection, CommentOrNewline, Expr, ExtractSpaces,
@@ -255,6 +255,7 @@ fn fmt_ty_ann(
         }
 
         TypeAnnotation::Apply(..)
+        | TypeAnnotation::Where(..)
         | TypeAnnotation::TagUnion { .. }
         | TypeAnnotation::Tuple { .. }
         | TypeAnnotation::Record { .. }
@@ -267,28 +268,28 @@ fn fmt_ty_ann(
                 .format(buf, indent);
         }
 
-        TypeAnnotation::Where(annot, implements_clauses) => {
-            annot.format_with_options(buf, parens, newlines, indent);
-            if implements_clauses
-                .iter()
-                .any(|implements| implements.is_multiline())
-            {
-                buf.newline();
-                buf.indent(indent);
-            } else {
-                buf.spaces(1);
-            }
-            for (i, has) in implements_clauses.iter().enumerate() {
-                buf.indent(indent);
-                buf.push_str(if i == 0 {
-                    roc_parse::keyword::WHERE
-                } else {
-                    ","
-                });
-                buf.spaces(1);
-                has.format_with_options(buf, parens, newlines, indent);
-            }
-        }
+        // TypeAnnotation::Where(annot, implements_clauses) => {
+        //     annot.format_with_options(buf, parens, newlines, indent);
+        //     if implements_clauses
+        //         .iter()
+        //         .any(|implements| implements.is_multiline())
+        //     {
+        //         buf.newline();
+        //         buf.indent(indent);
+        //     } else {
+        //         buf.spaces(1);
+        //     }
+        //     for (i, has) in implements_clauses.iter().enumerate() {
+        //         buf.indent(indent);
+        //         buf.push_str(if i == 0 {
+        //             roc_parse::keyword::WHERE
+        //         } else {
+        //             ","
+        //         });
+        //         buf.spaces(1);
+        //         has.format_with_options(buf, parens, newlines, indent);
+        //     }
+        // }
         TypeAnnotation::Malformed(raw) => {
             buf.indent(indent);
             buf.push_str(raw)
@@ -1201,6 +1202,7 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                     before: &[],
                     node: Node::CommaSequence {
                         allow_blank_lines: false,
+                        allow_newlines: true,
                         indent_rest,
                         first: arena.alloc(first),
                         rest: rest.into_bump_slice(),
@@ -1288,6 +1290,7 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                     before: first_node.before,
                     node: Node::CommaSequence {
                         allow_blank_lines: false,
+                        allow_newlines: true,
                         indent_rest: false,
                         first: arena.alloc(first_node.node),
                         rest: rest_nodes.into_bump_slice(),
@@ -1364,7 +1367,7 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                 let annot = annot
                     .value
                     .to_node(arena)
-                    .add_parens(arena, Parens::InAsPattern);
+                    .add_parens(arena, Parens::NotNeeded);
 
                 items.push(Item {
                     comma_before: false,
@@ -1379,6 +1382,7 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                 for (i, clause) in implements_clauses.iter().enumerate() {
                     let node = clause.value.to_node(arena);
                     let before = merge_spaces_conservative(arena, last_after, node.before);
+                    last_after = node.after;
                     items.push(Item {
                         before,
                         comma_before: i > 0,
@@ -1390,16 +1394,113 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
 
                 NodeInfo {
                     before: annot.before,
-                    node: Node::Sequence {
+                    node: Node::CommaSequence {
                         first: arena.alloc(annot.node),
-                        extra_indent_for_rest: false,
                         rest: arena.alloc_slice_copy(&items),
+                        allow_blank_lines: false,
+                        allow_newlines: false,
+                        indent_rest: false,
                     },
-                    after: &[],
+                    after: last_after,
                     needs_indent: true,
                     prec: Prec::Term,
                 }
             }
+        }
+    }
+}
+
+impl<'a> Nodify<'a> for &'a str {
+    fn to_node<'b>(&'a self, arena: &'b Bump) -> NodeInfo<'b>
+    where
+        'a: 'b,
+    {
+        NodeInfo::item(Node::Literal(*self))
+    }
+}
+
+impl<'a, T: Nodify<'a>> Nodify<'a> for Spaced<'a, T> {
+    fn to_node<'b>(&'a self, arena: &'b Bump) -> NodeInfo<'b>
+    where
+        'a: 'b,
+    {
+        match self {
+            Spaced::Item(item) => item.to_node(arena),
+            Spaced::SpaceBefore(inner, sp) => {
+                let mut inner = inner.to_node(arena);
+                inner.before = merge_spaces_conservative(arena, sp, inner.before);
+                inner
+            }
+            Spaced::SpaceAfter(inner, sp) => {
+                let mut inner = inner.to_node(arena);
+                inner.after = merge_spaces_conservative(arena, inner.after, sp);
+                inner
+            }
+        }
+    }
+}
+
+impl<'a> Nodify<'a> for ImplementsClause<'a> {
+    fn to_node<'b>(&'a self, arena: &'b Bump) -> NodeInfo<'b>
+    where
+        'a: 'b,
+    {
+        let mut items = Vec::with_capacity_in(self.abilities.len() + 2, arena);
+
+        let var = self
+            .var
+            .value
+            .to_node(arena)
+            .add_parens(arena, Parens::InAsPattern);
+
+        items.push(Item {
+            comma_before: false,
+            before: var.after,
+            newline: false,
+            space: true,
+            node: Node::Literal(roc_parse::keyword::IMPLEMENTS),
+        });
+
+        let mut last_after: &[CommentOrNewline<'_>] = &[];
+
+        for (i, clause) in self.abilities.iter().enumerate() {
+            let node = clause.value.to_node(arena);
+            let before = merge_spaces_conservative(arena, last_after, node.before);
+            last_after = node.after;
+
+            if i > 0 {
+                // push the '&' separator
+                items.push(Item {
+                    before: &[],
+                    comma_before: false,
+                    newline: false,
+                    space: true,
+                    node: Node::Literal("&"),
+                });
+            }
+
+            // push the item
+            items.push(Item {
+                before,
+                comma_before: false,
+                newline: false,
+                space: true,
+                node: node.node,
+            });
+        }
+
+        NodeInfo {
+            before: var.before,
+            node: Node::CommaSequence {
+                first: arena.alloc(var.node),
+                rest: arena.alloc_slice_copy(&items),
+                allow_blank_lines: false,
+                allow_newlines: true,
+                indent_rest: false,
+            },
+            after: last_after,
+            needs_indent: true,
+            prec: Prec::Term,
         }
     }
 }

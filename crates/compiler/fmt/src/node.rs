@@ -4,7 +4,7 @@ use roc_parse::ast::{CommentOrNewline, Pattern, TypeAnnotation};
 use crate::{
     annotation::{Formattable, Newlines, Parens},
     collection::Braces,
-    spaces::{fmt_spaces, fmt_spaces_no_blank_lines, INDENT},
+    spaces::{fmt_comments_only, fmt_spaces, fmt_spaces_no_blank_lines, NewlineAt, INDENT},
     Buf,
 };
 
@@ -86,6 +86,7 @@ pub enum Node<'a> {
     },
     CommaSequence {
         allow_blank_lines: bool,
+        allow_newlines: bool,
         indent_rest: bool,
         first: &'a Node<'a>,
         rest: &'a [Item<'a>],
@@ -273,6 +274,7 @@ impl<'a> Formattable for Node<'a> {
             } => after.is_multiline() || items.iter().any(|item| item.is_multiline()),
             Node::CommaSequence {
                 allow_blank_lines: _,
+                allow_newlines: _,
                 indent_rest: _,
                 first,
                 rest,
@@ -339,6 +341,7 @@ impl<'a> Formattable for Node<'a> {
             }
             Node::CommaSequence {
                 allow_blank_lines,
+                allow_newlines,
                 indent_rest,
                 first,
                 rest,
@@ -357,8 +360,10 @@ impl<'a> Formattable for Node<'a> {
                     }
                     if *allow_blank_lines {
                         fmt_spaces(buf, item.before.iter(), indent);
-                    } else {
+                    } else if *allow_newlines {
                         fmt_spaces_no_blank_lines(buf, item.before.iter(), inner_indent);
+                    } else {
+                        fmt_comments_only(buf, item.before.iter(), NewlineAt::Bottom, inner_indent);
                     }
                     if item.newline {
                         buf.ensure_ends_with_newline();
