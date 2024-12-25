@@ -22,7 +22,7 @@ mod test_can {
     use roc_problem::can::{CycleEntry, FloatErrorKind, IntErrorKind, Problem, RuntimeError};
     use roc_region::all::{Loc, Position, Region};
     use roc_types::subs::Variable;
-    use std::{assert_eq, f64, i64};
+    use std::{f64, i64};
 
     fn assert_can_runtime_error(input: &str, expected: RuntimeError) {
         let arena = Bump::new();
