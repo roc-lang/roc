@@ -217,7 +217,6 @@ impl<'a> Formattable for TypeAnnotation<'a> {
 fn fmt_ty_ann(
     me: &TypeAnnotation<'_>,
     buf: &mut Buf<'_>,
-
     indent: u16,
     parens: Parens,
     newlines: Newlines,
@@ -233,68 +232,12 @@ fn fmt_ty_ann(
         buf.ensure_ends_with_newline();
     }
 
-    match &me.item {
-        TypeAnnotation::SpaceBefore(_ann, _spaces) | TypeAnnotation::SpaceAfter(_ann, _spaces) => {
-            unreachable!()
-        }
-        TypeAnnotation::BoundVariable(v) => {
-            buf.indent(indent);
-            if *v == "implements" {
-                buf.push_str("(implements)");
-            } else {
-                buf.push_str(v);
-            }
-        }
-        TypeAnnotation::Wildcard => {
-            buf.indent(indent);
-            buf.push('*')
-        }
-        TypeAnnotation::Inferred => {
-            buf.indent(indent);
-            buf.push('_')
-        }
+    me.item
+        .to_node(buf.text.bump())
+        .add_parens(buf.text.bump(), parens)
+        .node
+        .format(buf, indent);
 
-        TypeAnnotation::Apply(..)
-        | TypeAnnotation::Where(..)
-        | TypeAnnotation::TagUnion { .. }
-        | TypeAnnotation::Tuple { .. }
-        | TypeAnnotation::Record { .. }
-        | TypeAnnotation::Function(..)
-        | TypeAnnotation::As(..) => {
-            me.item
-                .to_node(buf.text.bump())
-                .add_parens(buf.text.bump(), parens)
-                .node
-                .format(buf, indent);
-        }
-
-        // TypeAnnotation::Where(annot, implements_clauses) => {
-        //     annot.format_with_options(buf, parens, newlines, indent);
-        //     if implements_clauses
-        //         .iter()
-        //         .any(|implements| implements.is_multiline())
-        //     {
-        //         buf.newline();
-        //         buf.indent(indent);
-        //     } else {
-        //         buf.spaces(1);
-        //     }
-        //     for (i, has) in implements_clauses.iter().enumerate() {
-        //         buf.indent(indent);
-        //         buf.push_str(if i == 0 {
-        //             roc_parse::keyword::WHERE
-        //         } else {
-        //             ","
-        //         });
-        //         buf.spaces(1);
-        //         has.format_with_options(buf, parens, newlines, indent);
-        //     }
-        // }
-        TypeAnnotation::Malformed(raw) => {
-            buf.indent(indent);
-            buf.push_str(raw)
-        }
-    }
     if !me.after.is_empty() {
         fmt_comments_only(buf, me.after.iter(), NewlineAt::Bottom, indent);
     }
@@ -1411,7 +1354,7 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
 }
 
 impl<'a> Nodify<'a> for &'a str {
-    fn to_node<'b>(&'a self, arena: &'b Bump) -> NodeInfo<'b>
+    fn to_node<'b>(&'a self, _arena: &'b Bump) -> NodeInfo<'b>
     where
         'a: 'b,
     {
