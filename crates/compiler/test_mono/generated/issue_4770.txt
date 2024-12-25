@@ -119,24 +119,24 @@ procedure List.80 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2, #Derived_gen.
     inc #Derived_gen.0;
     jump List.675 #Derived_gen.0 #Derived_gen.1 #Derived_gen.2 #Derived_gen.3 #Derived_gen.4;
 
-procedure Num.148 (Num.225, Num.226):
-    let Num.288 : Int1 = CallByName Num.22 Num.225 Num.226;
-    if Num.288 then
-        ret Num.225;
-    else
+procedure Num.148 (Num.226, Num.227):
+    let Num.290 : Int1 = CallByName Num.22 Num.226 Num.227;
+    if Num.290 then
         ret Num.226;
+    else
+        ret Num.227;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.281 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.281;
+    let Num.283 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.283;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.286 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.286;
+    let Num.288 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.288;
 
 procedure Num.51 (#Attr.2, #Attr.3):
-    let Num.284 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
-    ret Num.284;
+    let Num.286 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    ret Num.286;
 
 procedure Test.1 (#Derived_gen.5):
     joinpoint Test.26 Test.6:

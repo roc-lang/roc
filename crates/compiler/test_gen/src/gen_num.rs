@@ -4086,6 +4086,40 @@ fn f64_from_parts() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn from_bool_true() {
+    assert_evals_to!(
+        indoc!(
+            r"
+            bool : Bool
+            bool = Bool.true
+
+            Num.fromBool bool
+            "
+        ),
+        1,
+        u64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn from_bool_false() {
+    assert_evals_to!(
+        indoc!(
+            r"
+            bool : Bool
+            bool = Bool.false
+
+            Num.fromBool bool
+            "
+        ),
+        0,
+        u64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn nan_f32() {
     assert_evals_to!(r"Num.nanF32", true, f32, |f: f32| f.is_nan());
 }

@@ -63,16 +63,16 @@ procedure List.71 (#Attr.2, #Attr.3):
     ret List.677;
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.283 : U8 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.283;
-
-procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.285 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    let Num.285 : U8 = lowlevel NumAdd #Attr.2 #Attr.3;
     ret Num.285;
 
+procedure Num.22 (#Attr.2, #Attr.3):
+    let Num.287 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.287;
+
 procedure Num.51 (#Attr.2, #Attr.3):
-    let Num.284 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
-    ret Num.284;
+    let Num.286 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    ret Num.286;
 
 procedure Test.4 (Test.5, #Attr.12):
     let Test.16 : U8 = UnionAtIndex (Id 0) (Index 0) #Attr.12;

@@ -48,12 +48,12 @@ procedure List.71 (#Attr.2, #Attr.3):
     ret List.677;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.282 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.282;
+    let Num.284 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.284;
 
 procedure Num.51 (#Attr.2, #Attr.3):
-    let Num.281 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
-    ret Num.281;
+    let Num.283 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    ret Num.283;
 
 procedure Test.2 (Test.3):
     let Test.7 : {} = Struct {};
