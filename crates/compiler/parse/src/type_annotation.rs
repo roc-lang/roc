@@ -393,7 +393,8 @@ fn loc_type_in_parens<'a>(
                             state = new_state;
                             let end = state.pos();
 
-                            let last = fields.pop().expect("must have at least one tuple field");
+                            let last = fields[fields.len() - 1];
+                            fields.pop();
                             let region = Region::between(last.region.start(), end);
                             fields.push(Loc::at(
                                 region,
