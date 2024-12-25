@@ -783,13 +783,6 @@ mod test_snapshots {
                 true
             }
 
-            "parens_newlines_before_as" | "tag_union_ann_with_as" => {
-                // Found unbound type variables {66}
-                //  in type alias `Test.IdentId(0)` [] [] : <66>
-                // Location: crates/compiler/can/src/scope.rs:541:13
-                cfg!(debug_assertions)
-            }
-
             // When adding new snapshot tests, strongly prefer fixing any canonicalization panics
             // they may run into rather than adding them to this list.
             _ => false,
