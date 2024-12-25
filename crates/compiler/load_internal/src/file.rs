@@ -1342,7 +1342,31 @@ fn handle_root_type<'a>(
 
                 Ok((header_output, RootType::Module { main_path }))
             }
-            App { .. } | Package { .. } | Platform { .. } => Ok((header_output, RootType::Main)),
+            Package { .. } => {
+                let main_path = opt_main_path.or_else(|| find_main_roc_recursively(src_dir));
+
+                let cache_dir = roc_cache_dir.as_persistent_path();
+
+                if let (Some(main_path), Some(cache_dir)) = (main_path.clone(), cache_dir) {
+                    let mut messages = Vec::with_capacity(4);
+                    messages.push(header_output.msg);
+                    load_packages_from_main(
+                        arena,
+                        src_dir.clone(),
+                        main_path,
+                        &mut messages,
+                        Arc::clone(&arc_modules),
+                        Arc::clone(&ident_ids_by_module),
+                        Arc::clone(&arc_shorthands),
+                        cache_dir,
+                    )?;
+
+                    header_output.msg = Msg::Many(messages);
+                }
+
+                Ok((header_output, RootType::Main))
+            }
+            App { .. } | Platform { .. } => Ok((header_output, RootType::Main)),
         }
     } else {
         Ok((header_output, RootType::Main))
