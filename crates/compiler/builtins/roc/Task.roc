@@ -191,20 +191,6 @@ fromResult = \res ->
 ## Apply a task to another task applicatively.
 ##
 ## DEPRECATED: Modern record builders use [combine].
-##
-## This can be used with [ok] to build a [Task] that returns a record.
-##
-## The following example returns a Record with two fields, `apples` and
-## `oranges`, each of which is a `List Str`. If it fails it returns the tag
-## `NoFruitAvailable`.
-##
-## ```
-## getFruitBasket : Task { apples : List Str, oranges : List Str } [NoFruitAvailable]
-## getFruitBasket = Task.ok {
-##     apples: <- getFruit Apples |> Task.batch,
-##     oranges: <- getFruit Oranges |> Task.batch,
-## }
-## ```
 batch : Task a c -> (Task (a -> b) c -> Task b c)
 batch = \current ->
     \next ->
