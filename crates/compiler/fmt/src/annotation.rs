@@ -1071,7 +1071,6 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                 }
             }
             TypeAnnotation::As(left, sp, right) => {
-                dbg!(left, left.value.to_node(arena));
                 let left = left
                     .value
                     .to_node(arena)
