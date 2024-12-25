@@ -980,60 +980,11 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                     Node::Literal(arena.alloc_str(&format!("{}.{}", module, func)))
                 };
 
-                let mut last_after: &[CommentOrNewline<'_>] = &[];
-                let mut rest = Vec::with_capacity_in(args.len(), arena);
-
-                let mut multiline = false;
-                let mut indent_rest = true;
-
-                for (i, arg) in args.iter().enumerate() {
-                    let is_last = i == args.len() - 1;
-                    dbg!(arg, arg.value.to_node(arena));
-                    let node = arg.value.to_node(arena).add_parens(arena, Parens::InApply);
-                    let before = merge_spaces_conservative(arena, last_after, node.before);
-
-                    if is_last
-                        && !multiline
-                        && node.node.is_multiline()
-                        && !node.needs_indent
-                        && before.is_empty()
-                    {
-                        // We can outdent the last argument, e.g.:
-                        // foo {
-                        //   a:b,
-                        // }
-                        // In this case, the argument does its own indentation.
-                        indent_rest = false;
-                    }
-
-                    multiline |= node.node.is_multiline() || !before.is_empty();
-                    last_after = node.after;
-                    rest.push(Item {
-                        before,
-                        comma_before: false,
-                        newline: false,
-                        space: true,
-                        node: node.node,
-                    });
-                }
-
-                NodeInfo {
-                    before: &[],
-                    node: Node::CommaSequence {
-                        allow_blank_lines: false,
-                        allow_newlines: true,
-                        indent_rest,
-                        first: arena.alloc(first),
-                        rest: rest.into_bump_slice(),
-                    },
-                    after: last_after,
-                    needs_indent: true,
-                    prec: if args.is_empty() {
-                        Prec::Term
-                    } else {
-                        Prec::Apply
-                    },
-                }
+                NodeInfo::apply(
+                    arena,
+                    NodeInfo::item(first),
+                    args.iter().map(|arg| arg.value.to_node(arena)),
+                )
             }
             TypeAnnotation::SpaceBefore(expr, spaces) => {
                 let mut inner = expr.to_node(arena);

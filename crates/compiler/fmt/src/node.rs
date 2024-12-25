@@ -4,6 +4,7 @@ use roc_parse::ast::{CommentOrNewline, Pattern, TypeAnnotation};
 use crate::{
     annotation::{Formattable, Newlines, Parens},
     collection::Braces,
+    expr::merge_spaces_conservative,
     spaces::{fmt_comments_only, fmt_spaces, fmt_spaces_no_blank_lines, NewlineAt, INDENT},
     Buf,
 };
@@ -211,6 +212,67 @@ impl<'b> NodeInfo<'b> {
             after: &[],
             needs_indent: true,
             prec: Prec::Term,
+        }
+    }
+
+    pub fn apply(
+        arena: &'b Bump,
+        first: NodeInfo<'b>,
+        args: impl Iterator<Item = NodeInfo<'b>>,
+    ) -> NodeInfo<'b> {
+        let mut last_after = first.after;
+        let mut rest = Vec::with_capacity_in(args.size_hint().0, arena);
+
+        let mut multiline = false;
+        let mut indent_rest = true;
+
+        let mut it = args.peekable();
+        while let Some(arg) = it.next() {
+            let is_last = it.peek().is_none();
+            let arg = arg.add_parens(arena, Parens::InApply);
+            let before = merge_spaces_conservative(arena, last_after, arg.before);
+
+            if is_last
+                && !multiline
+                && arg.node.is_multiline()
+                && !arg.needs_indent
+                && before.is_empty()
+            {
+                // We can outdent the last argument, e.g.:
+                // foo {
+                //   a:b,
+                // }
+                // In this case, the argument does its own indentation.
+                indent_rest = false;
+            }
+
+            multiline |= arg.node.is_multiline() || !before.is_empty();
+            last_after = arg.after;
+            rest.push(Item {
+                before,
+                comma_before: false,
+                newline: false,
+                space: true,
+                node: arg.node,
+            });
+        }
+
+        NodeInfo {
+            before: first.before,
+            prec: if rest.is_empty() {
+                Prec::Term
+            } else {
+                Prec::Apply
+            },
+            node: Node::CommaSequence {
+                allow_blank_lines: false,
+                allow_newlines: true,
+                indent_rest,
+                first: arena.alloc(first.node),
+                rest: rest.into_bump_slice(),
+            },
+            after: last_after,
+            needs_indent: true,
         }
     }
 
