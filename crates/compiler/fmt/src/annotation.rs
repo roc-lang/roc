@@ -992,7 +992,12 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                     let node = arg.value.to_node(arena).add_parens(arena, Parens::InApply);
                     let before = merge_spaces_conservative(arena, last_after, node.before);
 
-                    if is_last && !multiline && node.node.is_multiline() && !node.needs_indent {
+                    if is_last
+                        && !multiline
+                        && node.node.is_multiline()
+                        && !node.needs_indent
+                        && before.is_empty()
+                    {
                         // We can outdent the last argument, e.g.:
                         // foo {
                         //   a:b,

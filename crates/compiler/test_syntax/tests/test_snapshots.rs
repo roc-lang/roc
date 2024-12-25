@@ -290,6 +290,7 @@ mod test_snapshots {
         pass/alias_parens_comment.expr,
         pass/alias_parens_comment_indent.expr,
         pass/all_the_bangs.expr,
+        pass/ann_apply_record_with_newlines.expr,
         pass/ann_closed_union.expr,
         pass/ann_effectful_fn.expr,
         pass/ann_open_union.expr,
