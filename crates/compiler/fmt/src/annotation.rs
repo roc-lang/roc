@@ -209,8 +209,8 @@ impl<'a> Formattable for TypeAnnotation<'a> {
         }
     }
 
-    fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
-        fmt_ty_ann(self, buf, indent, parens, newlines, false);
+    fn format_with_options(&self, buf: &mut Buf, parens: Parens, _newlines: Newlines, indent: u16) {
+        fmt_ty_ann(self, buf, indent, parens, false);
     }
 }
 
@@ -219,7 +219,6 @@ fn fmt_ty_ann(
     buf: &mut Buf<'_>,
     indent: u16,
     parens: Parens,
-    newlines: Newlines,
     newline_at_top: bool,
 ) {
     let me = ann_lift_spaces(buf.text.bump(), me);
@@ -241,67 +240,6 @@ fn fmt_ty_ann(
     if !me.after.is_empty() {
         fmt_comments_only(buf, me.after.iter(), NewlineAt::Bottom, indent);
     }
-}
-
-fn fmt_ty_field_collection(
-    buf: &mut Buf<'_>,
-    indent: u16,
-    fields: Collection<'_, Loc<AssignedField<'_, TypeAnnotation<'_>>>>,
-    newlines: Newlines,
-) {
-    let arena = buf.text.bump();
-    let mut new_items: Vec<'_, NodeSpaces<'_, Node<'_>>> =
-        Vec::with_capacity_in(fields.len(), arena);
-
-    let mut last_after: &[CommentOrNewline<'_>] = &[];
-
-    for item in fields.items.iter() {
-        let lifted = item.value.to_node(arena);
-        let before = merge_spaces_conservative(arena, last_after, lifted.before);
-        last_after = lifted.after;
-        new_items.push(NodeSpaces {
-            before,
-            item: lifted.node,
-            after: &[],
-        });
-    }
-
-    let final_comments = merge_spaces_conservative(arena, last_after, fields.final_comments());
-
-    let new_items =
-        Collection::with_items_and_comments(arena, new_items.into_bump_slice(), final_comments);
-
-    fmt_collection(buf, indent, Braces::Curly, new_items, newlines);
-}
-
-fn fmt_tag_collection<'a>(
-    buf: &mut Buf<'_>,
-    indent: u16,
-    tags: Collection<'a, Loc<Tag<'a>>>,
-    newlines: Newlines,
-) {
-    let arena = buf.text.bump();
-    let mut new_items: Vec<'_, NodeSpaces<'_, Node<'_>>> = Vec::with_capacity_in(tags.len(), arena);
-
-    let mut last_after: &[CommentOrNewline<'_>] = &[];
-
-    for item in tags.items.iter() {
-        let lifted = item.value.to_node(arena);
-        let before = merge_spaces_conservative(arena, last_after, lifted.before);
-        last_after = lifted.after;
-        new_items.push(NodeSpaces {
-            before,
-            item: lifted.node,
-            after: &[],
-        });
-    }
-
-    let final_comments = merge_spaces_conservative(arena, last_after, tags.final_comments());
-
-    let new_items =
-        Collection::with_items_and_comments(arena, new_items.into_bump_slice(), final_comments);
-
-    fmt_collection(buf, indent, Braces::Square, new_items, newlines);
 }
 
 impl<'a> Nodify<'a> for Tag<'a> {
@@ -373,73 +311,6 @@ fn lower<'a, 'b: 'a>(
         )),
         lifted.before,
     )
-}
-
-fn fmt_ty_collection(
-    buf: &mut Buf<'_>,
-    indent: u16,
-    braces: Braces,
-    items: Collection<'_, Loc<TypeAnnotation<'_>>>,
-    newlines: Newlines,
-) {
-    let arena = buf.text.bump();
-    let mut new_items: Vec<'_, NodeSpaces<'_, Node<'_>>> =
-        Vec::with_capacity_in(items.len(), arena);
-
-    let mut last_after: &[CommentOrNewline<'_>] = &[];
-
-    for (i, item) in items.items.iter().enumerate() {
-        let parens = if i > 0 {
-            Parens::InCollection
-        } else {
-            Parens::NotNeeded
-        };
-        let lifted = item.value.to_node(arena).add_parens(arena, parens);
-        let before = merge_spaces_conservative(arena, last_after, lifted.before);
-        last_after = lifted.after;
-        new_items.push(NodeSpaces {
-            before,
-            item: lifted.node,
-            after: &[],
-        });
-    }
-
-    let final_comments = merge_spaces_conservative(arena, last_after, items.final_comments());
-
-    let new_items =
-        Collection::with_items_and_comments(arena, new_items.into_bump_slice(), final_comments);
-
-    fmt_collection(buf, indent, braces, new_items, newlines)
-}
-
-fn fmt_ext(ext: &Option<&Loc<TypeAnnotation<'_>>>, buf: &mut Buf<'_>, indent: u16) {
-    if let Some(loc_ext_ann) = *ext {
-        let me = ann_lift_spaces(buf.text.bump(), &loc_ext_ann.value);
-        let parens_needed = !me.before.is_empty() || ext_needs_parens(me.item);
-        if parens_needed {
-            // We need to make sure to not have whitespace before the ext of a type,
-            // since that would make it parse as something else.
-            buf.push('(');
-            loc_ext_ann.value.format(buf, indent + INDENT);
-            buf.indent(indent);
-            buf.push(')');
-        } else {
-            loc_ext_ann.value.format(buf, indent + INDENT);
-        }
-    }
-}
-
-fn ext_needs_parens(item: TypeAnnotation<'_>) -> bool {
-    match item {
-        TypeAnnotation::Record { .. }
-        | TypeAnnotation::TagUnion { .. }
-        | TypeAnnotation::Tuple { .. }
-        | TypeAnnotation::BoundVariable(..)
-        | TypeAnnotation::Wildcard
-        | TypeAnnotation::Inferred => false,
-        TypeAnnotation::Apply(_module, _func, args) => !args.is_empty(),
-        _ => true,
-    }
 }
 
 pub fn ty_is_outdentable(mut rhs: &TypeAnnotation) -> bool {
@@ -1448,25 +1319,6 @@ impl<'a> Nodify<'a> for ImplementsClause<'a> {
     }
 }
 
-fn ann_prec(ann: &TypeAnnotation<'_>) -> Prec {
-    match ann {
-        TypeAnnotation::Function(_, _, _) => Prec::FunctionType,
-        TypeAnnotation::Apply(_, _, _) => Prec::Apply,
-        TypeAnnotation::BoundVariable(_) => Prec::Term,
-        TypeAnnotation::As(_, _, _) => Prec::Apply,
-        TypeAnnotation::Record { .. } => Prec::Term,
-        TypeAnnotation::Tuple { .. } => Prec::Term,
-        TypeAnnotation::TagUnion { .. } => Prec::Term,
-        TypeAnnotation::Inferred => Prec::Term,
-        TypeAnnotation::Wildcard => Prec::Term,
-        TypeAnnotation::Where(_, _) => Prec::Apply,
-        TypeAnnotation::SpaceBefore(inner, _) | TypeAnnotation::SpaceAfter(inner, _) => {
-            ann_prec(inner)
-        }
-        TypeAnnotation::Malformed(_) => Prec::Term,
-    }
-}
-
 fn collection_to_node<'b, 'a: 'b, T>(
     arena: &'b Bump,
     braces: Braces,
@@ -1606,7 +1458,6 @@ impl<'a, V: Formattable> Formattable for NodeSpaces<'a, V> {
         buf: &mut Buf,
         parens: crate::annotation::Parens,
         newlines: Newlines,
-
         indent: u16,
     ) {
         fmt_spaces(buf, self.before.iter(), indent);
