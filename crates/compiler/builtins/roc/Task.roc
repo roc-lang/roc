@@ -11,6 +11,7 @@ module [
     loop,
     fromResult,
     batch,
+    combine,
     sequence,
     forEach,
     result,
@@ -187,25 +188,34 @@ fromResult : Result a b -> Task a b
 fromResult = \res ->
     @Task \{} -> res
 
-## Apply a task to another task applicatively. This can be used with
-## [ok] to build a [Task] that returns a record.
+## Apply a task to another task applicatively.
 ##
-## The following example returns a Record with two fields, `apples` and
-## `oranges`, each of which is a `List Str`. If it fails it returns the tag
-## `NoFruitAvailable`.
-##
-## ```
-## getFruitBasket : Task { apples : List Str, oranges : List Str } [NoFruitAvailable]
-## getFruitBasket = Task.ok {
-##     apples: <- getFruit Apples |> Task.batch,
-##     oranges: <- getFruit Oranges |> Task.batch,
-## }
-## ```
+## DEPRECATED: Modern record builders use [combine].
 batch : Task a c -> (Task (a -> b) c -> Task b c)
 batch = \current ->
     \next ->
         await next \f ->
             map current f
+
+## Combine the values of two tasks with a custom combining function.
+##
+## This is primarily used with record builders.
+##
+## ```
+## { a, b, c } =
+##     { Task.combine <-
+##         a: Task.ok 123,
+##         b: File.read "file.txt",
+##         c: Http.get "http://api.com/",
+##     }!
+## ```
+combine : Task a err, Task b err, (a, b -> c) -> Task c err
+combine = \@Task leftTask, @Task rightTask, combiner ->
+    @Task \{} ->
+        left = try leftTask {}
+        right = try rightTask {}
+
+        Ok (combiner left right)
 
 ## Apply each task in a list sequentially, and return a list of the resulting values.
 ## Each task will be awaited before beginning the next task.

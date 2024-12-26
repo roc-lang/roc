@@ -1,0 +1,65 @@
+@0-29 SpaceAfter(
+    ParensAround(
+        Defs(
+            Defs {
+                tags: [
+                    EitherIndex(2147483648),
+                ],
+                regions: [
+                    @1-26,
+                ],
+                space_before: [
+                    Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                ],
+                space_after: [
+                    Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                ],
+                spaces: [],
+                type_defs: [],
+                value_defs: [
+                    Annotation(
+                        @1-2 Identifier {
+                            ident: "i",
+                        },
+                        @3-26 Where(
+                            @3-4 SpaceAfter(
+                                BoundVariable(
+                                    "a",
+                                ),
+                                [
+                                    LineComment(
+                                        "",
+                                    ),
+                                ],
+                            ),
+                            [
+                                @13-26 ImplementsClause {
+                                    var: @13-14 "w",
+                                    abilities: [
+                                        @25-26 Apply(
+                                            "",
+                                            "I",
+                                            [],
+                                        ),
+                                    ],
+                                },
+                            ],
+                        ),
+                    ),
+                ],
+            },
+            @27-28 SpaceBefore(
+                Var {
+                    module_name: "",
+                    ident: "e",
+                },
+                [
+                    Newline,
+                ],
+            ),
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

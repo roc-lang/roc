@@ -112,7 +112,11 @@ fn round_trip_once(input: Input<'_>, options: Options) -> Option<String> {
     };
 
     if actual.is_malformed() {
-        return Some("Initial parse is malformed".to_string());
+        if options.minimize_initial_parse_error {
+            return Some("Initial parse is malformed".to_string());
+        } else {
+            return None;
+        }
     }
 
     let output = actual.format();
