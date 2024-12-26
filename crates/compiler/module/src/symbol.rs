@@ -1730,9 +1730,10 @@ define_builtins! {
         9 TASK_MAP_ERR: "mapErr"
         10 TASK_FROM_RESULT: "fromResult"
         11 TASK_BATCH: "batch"
-        12 TASK_SEQUENCE: "sequence"
-        13 TASK_FOR_EACH: "forEach"
-        14 TASK_RESULT: "result"
+        12 TASK_COMBINE: "combine"
+        13 TASK_SEQUENCE: "sequence"
+        14 TASK_FOR_EACH: "forEach"
+        15 TASK_RESULT: "result"
     }
 
     num_modules: 16 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
