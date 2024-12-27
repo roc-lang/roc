@@ -108,7 +108,7 @@ pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
             exposed_module_docs
                 .iter()
                 .map(|(_, module)| {
-                    let module_href = module.name.replace(".", "/");
+                    let module_href = module.name.replace('.', "/");
                     let href = module_href.as_str();
 
                     format!(r#"<link rel="prefetch" href="{href}"/>"#)
@@ -238,7 +238,7 @@ fn render_package_index(docs_by_module: &[(ModuleId, ModuleDocumentation)]) -> S
         push_html(
             &mut link_buf,
             "a",
-            [("href", module.name.replace(".", "/").as_str())],
+            [("href", module.name.replace('.', "/").as_str())],
             module.name.as_str(),
         );
 
@@ -463,7 +463,7 @@ fn render_sidebar<'a, I: Iterator<Item = &'a ModuleDocumentation>>(modules: I) -
     let mut buf = String::new();
 
     for module in modules {
-        let module_href = module.name.replace(".", "/");
+        let module_href = module.name.replace('.', "/");
         let href = module_href.as_str();
         let mut sidebar_entry_content = String::new();
         let mut module_link_content = String::new();
@@ -575,7 +575,7 @@ fn render_search_type_ahead<'a, I: Iterator<Item = &'a ModuleDocumentation>>(mod
 
                     let mut entry_href = String::new();
 
-                    entry_href.push_str(&module_name.replace(".", "/"));
+                    entry_href.push_str(&module_name.replace('.', "/"));
                     entry_href.push('#');
                     entry_href.push_str(&doc_def.name);
 
