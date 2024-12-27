@@ -2,6 +2,17 @@
 
 If you run into any problems getting Roc built from source, please ask for help in the `#beginners` channel on [Roc Zulip](https://roc.zulipchat.com) (the fastest way), or create an issue in this repo!
 
+## Using Devcontainer
+
+### Codespaces
+To access the browser-based editor, you can change the URL of your repository to https://github.dev/roc-lang/roc, replacing github.com with github.dev or go to the roc repo on https://github.com/roc-lang/roc and press . (period key).
+
+Or use it locally in [VSCode](https://code.visualstudio.com/docs/remote/codespaces)
+
+### Docker
+
+Or even run it in your local Docker environment [Developing inside a Container](https://code.visualstudio.com/docs/devcontainers/containers)
+
 ## Using Nix
 
 On MacOS and Linux, we highly recommend Using [nix](https://nixos.org/download.html) to quickly install all dependencies necessary to build roc.
@@ -140,7 +151,7 @@ To use the `repl` subcommand, execute `cargo run repl`.
 
 The default is a developer build. For an optimized build, use:
 
-```
+```sh
 cargo build --release --bin roc
 ```
 
