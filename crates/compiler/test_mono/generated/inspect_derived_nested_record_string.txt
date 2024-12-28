@@ -284,12 +284,12 @@ procedure List.66 (#Attr.2, #Attr.3):
     ret List.681;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.284 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.284;
+    let Num.286 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.286;
 
 procedure Num.51 (#Attr.2, #Attr.3):
-    let Num.283 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
-    ret Num.283;
+    let Num.285 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    ret Num.285;
 
 procedure Str.3 (#Attr.2, #Attr.3):
     let Str.247 : Str = lowlevel StrConcat #Attr.2 #Attr.3;

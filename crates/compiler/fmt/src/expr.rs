@@ -291,7 +291,7 @@ fn format_expr_only(
                 let inner_parens = if needs_parens {
                     Parens::NotNeeded
                 } else {
-                    Parens::InApply
+                    Parens::InApplyLastArg
                 };
 
                 if !before_all_newlines {
@@ -941,6 +941,7 @@ fn push_op(buf: &mut Buf, op: BinOp) {
         called_via::BinOp::And => buf.push_str("&&"),
         called_via::BinOp::Or => buf.push_str("||"),
         called_via::BinOp::Pizza => buf.push_str("|>"),
+        called_via::BinOp::DoubleQuestion => buf.push_str("??"),
     }
 }
 
@@ -1313,13 +1314,21 @@ pub fn expr_lift_spaces<'a, 'b: 'a>(
                 after: right_lifted.after,
             }
         }
-        Expr::UnaryOp(expr, op) => {
-            let expr_lifted = expr_lift_spaces_after(Parens::InOperator, arena, &expr.value);
+        Expr::UnaryOp(inner, op) => {
+            if parens == Parens::InApply && matches!(inner.without_spaces(), Expr::Closure(..)) {
+                return Spaces {
+                    before: &[],
+                    item: Expr::ParensAround(arena.alloc(*expr)),
+                    after: &[],
+                };
+            }
+
+            let inner_lifted = expr_lift_spaces_after(Parens::InOperator, arena, &inner.value);
 
             Spaces {
                 before: &[],
-                item: Expr::UnaryOp(arena.alloc(Loc::at(expr.region, expr_lifted.item)), *op),
-                after: expr_lifted.after,
+                item: Expr::UnaryOp(arena.alloc(Loc::at(inner.region, inner_lifted.item)), *op),
+                after: inner_lifted.after,
             }
         }
 
@@ -2223,7 +2232,8 @@ pub fn sub_expr_requests_parens(expr: &Expr<'_>) -> bool {
                     | BinOp::GreaterThanOrEq
                     | BinOp::And
                     | BinOp::Or
-                    | BinOp::Pizza => true,
+                    | BinOp::Pizza
+                    | BinOp::DoubleQuestion => true,
                 })
         }
         Expr::If { .. } => true,
