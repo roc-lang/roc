@@ -73,7 +73,7 @@ mod test_fmt {
             Ok((actual, state)) => {
                 use roc_parse::normalize::Normalize;
 
-                let flags = MigrationFlags::new(false, false);
+                let flags = MigrationFlags{ snakify: false, parens_and_commas: false };
                 let mut buf = Buf::new_in(&arena, flags);
 
                 fmt_module_and_defs(&arena, src, &actual, state, &mut buf);
