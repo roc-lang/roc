@@ -943,14 +943,20 @@ impl BigString {
         assert_ne!(self.capacity(), 0);
 
         let ptr = self.ptr_to_refcount();
-        unsafe { std::ptr::write(ptr, 0) }
+        // Only safe to write to the pointer if it is not constant (0)
+        if unsafe { std::ptr::read(ptr) } != 0 {
+            unsafe { std::ptr::write(ptr, 0) }
+        }
     }
 
     fn inc(&mut self) {
         let ptr = self.ptr_to_refcount();
         unsafe {
             let value = std::ptr::read(ptr);
-            std::ptr::write(ptr, Ord::max(0, ((value as isize) + 1) as usize));
+            // Only safe to write to the pointer if it is not constant (0)
+            if value != 0 {
+                std::ptr::write(ptr, (value as isize + 1) as usize);
+            }
         }
     }
 

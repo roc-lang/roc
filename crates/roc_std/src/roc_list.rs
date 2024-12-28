@@ -174,7 +174,10 @@ where
     /// should be considered for marking read-only.
     pub unsafe fn set_readonly(&mut self) {
         if let Some((_, storage)) = self.elements_and_storage() {
-            storage.set(Storage::Readonly);
+            // Only safe to write to the pointer if it is not constant (0)
+            if !matches!(storage.get(), Storage::Readonly) {
+                storage.set(Storage::Readonly);
+            }
         }
     }
 
@@ -676,7 +679,10 @@ where
         let ptr = self.ptr_to_refcount();
         unsafe {
             let value = std::ptr::read(ptr);
-            std::ptr::write(ptr, Ord::max(0, ((value as isize) + 1) as usize));
+            // Only safe to write to the pointer if it is not constant (0)
+            if value != 0 {
+                std::ptr::write(ptr, (value as isize + 1) as usize);
+            }
         }
     }
 
