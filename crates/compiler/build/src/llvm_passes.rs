@@ -50,7 +50,7 @@ pub fn optimize_llvm_ir(
     // env.module.print_to_stderr();
 
     let inkwell_opt_level = crate::target::convert_opt_level(opt_level);
-    let inkwell_llvm_passes = get_llvm_passes_string(&env.arena, opt_level);
+    let inkwell_llvm_passes = get_llvm_passes_string(env.arena, opt_level);
     let inkwell_target_machine =
         crate::target::target_machine(target, inkwell_opt_level, inkwell::targets::RelocMode::PIC)
             .unwrap_or_else(|| internal_error!("invalid target machine"));
