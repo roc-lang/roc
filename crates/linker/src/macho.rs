@@ -1325,7 +1325,6 @@ fn surgery_macho_help(
             );
         }
 
-        let mut addend: Option<i64> = None;
         let mut subtractor: Option<SymbolIndex> = None;
         for rel in sec.relocations() {
             if verbose {
@@ -1395,7 +1394,7 @@ fn surgery_macho_help(
                         }
                         RelocationKind::MachO { value, relative: _ } => match value {
                             macho::ARM64_RELOC_SUBTRACTOR => {
-                                if let Some(_) = subtractor {
+                                if subtractor.is_some() {
                                     internal_error!("Malformed object: SUBTRACTOR must not be followed by SUBTRACTOR");
                                 } else {
                                     subtractor = Some(index);
@@ -1643,8 +1642,7 @@ fn get_target_offset(
     } else {
         app_obj
             .symbol_by_index(index)
-            .and_then(|sym| sym.name())
-            .and_then(|name| Ok(name.trim_start_matches('_')))
+            .and_then(|sym| sym.name().map(|name| name.trim_start_matches('_')))
             .ok()
             .and_then(|name| {
                 md.roc_symbol_vaddresses.get(name).map(|address| {
