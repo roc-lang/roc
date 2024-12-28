@@ -21,7 +21,7 @@ use core::{
 use std::ffi::{CStr, CString};
 use std::{ops::Range, ptr::NonNull};
 
-use crate::{roc_realloc, RocList, RocRefcounted};
+use crate::{roc_realloc, RocList, RocRefcounted, ROC_REFCOUNT_CONSTANT};
 
 #[repr(transparent)]
 pub struct RocStr(RocStrInner);
@@ -944,8 +944,8 @@ impl BigString {
 
         let ptr = self.ptr_to_refcount();
         // Only safe to write to the pointer if it is not constant (0)
-        if unsafe { std::ptr::read(ptr) } != 0 {
-            unsafe { std::ptr::write(ptr, 0) }
+        if unsafe { std::ptr::read(ptr) } != ROC_REFCOUNT_CONSTANT {
+            unsafe { std::ptr::write(ptr, ROC_REFCOUNT_CONSTANT) }
         }
     }
 
@@ -954,7 +954,7 @@ impl BigString {
         unsafe {
             let value = std::ptr::read(ptr);
             // Only safe to write to the pointer if it is not constant (0)
-            if value != 0 {
+            if value != ROC_REFCOUNT_CONSTANT {
                 std::ptr::write(ptr, (value as isize + 1) as usize);
             }
         }

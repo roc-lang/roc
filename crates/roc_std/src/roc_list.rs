@@ -14,7 +14,9 @@ use core::{
 };
 use std::{cmp::max, ops::Range};
 
-use crate::{roc_alloc, roc_dealloc, roc_realloc, storage::Storage, RocRefcounted};
+use crate::{
+    roc_alloc, roc_dealloc, roc_realloc, storage::Storage, RocRefcounted, ROC_REFCOUNT_CONSTANT,
+};
 
 #[cfg(feature = "serde")]
 use core::marker::PhantomData;
@@ -680,7 +682,7 @@ where
         unsafe {
             let value = std::ptr::read(ptr);
             // Only safe to write to the pointer if it is not constant (0)
-            if value != 0 {
+            if value != ROC_REFCOUNT_CONSTANT {
                 std::ptr::write(ptr, (value as isize + 1) as usize);
             }
         }

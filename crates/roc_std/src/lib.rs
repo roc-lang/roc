@@ -582,6 +582,9 @@ impl Hash for U128 {
     }
 }
 
+pub const ROC_REFCOUNT_CONSTANT: usize = 0;
+pub const ROC_REFCOUNT_ONE: usize = isize::MIN as usize;
+
 /// All Roc types that are refcounted must implement this trait.
 ///
 /// For aggregate types, this must recurse down the structure.
