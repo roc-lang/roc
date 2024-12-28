@@ -41,6 +41,11 @@ fn literal_4point2() {
 }
 
 #[test]
+fn literal_4point2e3() {
+    expect_success("4.2e3", "4200 : Frac *");
+}
+
+#[test]
 fn num_addition() {
     expect_success("1 + 2", "3 : Num *");
 }
