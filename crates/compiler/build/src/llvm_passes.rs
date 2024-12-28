@@ -8,7 +8,7 @@ use std::path::Path;
 //
 // we also include a "globaldce" pass at the beginning of each pipeline here, which is required
 // to prevent bugs with the surgical linker, and also improves the build time.
-pub fn get_llvm_passes_string<'a>(arena: &'a Bump, opt_level: OptLevel) -> &'a str {
+pub fn get_llvm_passes_string(arena: &Bump, opt_level: OptLevel) -> &str {
     (String::from_str_in("globaldce,", arena)
         + match opt_level {
             OptLevel::Development | OptLevel::Normal => "default<O0>",
