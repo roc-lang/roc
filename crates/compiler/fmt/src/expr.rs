@@ -100,13 +100,7 @@ fn format_expr_only(
             if apply_needs_parens && !loc_args.is_empty() {
                 fmt_parens(item, buf, indent);
             } else {
-                fmt_apply(
-                    loc_expr,
-                    loc_args,
-                    indent,
-                    buf,
-                    buf.flags().parens_and_commas,
-                );
+                fmt_apply(loc_expr, loc_args, indent, buf, false);
             }
         }
         &Expr::Num(string) => {
@@ -652,7 +646,7 @@ fn fmt_apply(
 
     indent: u16,
     buf: &mut Buf<'_>,
-    use_parens: bool,
+    expr_used_commas_and_parens: bool,
 ) {
     // should_reflow_outdentable, aka should we transform this:
     //
@@ -672,6 +666,7 @@ fn fmt_apply(
     //   2,
     // ]
     // ```
+    let use_commas_and_parens = expr_used_commas_and_parens || buf.flags().parens_and_commas;
     let should_reflow_outdentable = loc_expr.extract_spaces().after.is_empty()
         && except_last(loc_args).all(|a| !a.is_multiline())
         && loc_args
@@ -710,7 +705,7 @@ fn fmt_apply(
     expr.item
         .format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
 
-    if use_parens {
+    if use_commas_and_parens {
         buf.push('(');
     }
 
@@ -742,7 +737,7 @@ fn fmt_apply(
         last_after = arg.after;
         if needs_indent {
             buf.ensure_ends_with_newline();
-        } else if !(is_first_arg && use_parens) {
+        } else if !(is_first_arg && use_commas_and_parens) {
             buf.spaces(1);
         }
 
@@ -753,7 +748,7 @@ fn fmt_apply(
             format_expr_only(
                 &arg.item,
                 buf,
-                if use_parens {
+                if use_commas_and_parens {
                     Parens::NotNeeded
                 } else {
                     Parens::InApply
@@ -762,7 +757,7 @@ fn fmt_apply(
                 arg_indent,
             );
         }
-        if use_parens && (!is_last_arg || needs_indent) {
+        if use_commas_and_parens && (!is_last_arg || needs_indent) {
             buf.push(',');
         }
     }
@@ -771,7 +766,7 @@ fn fmt_apply(
         format_spaces(buf, last_after, Newlines::Yes, arg_indent);
     }
 
-    if use_parens {
+    if use_commas_and_parens {
         if needs_indent {
             buf.ensure_ends_with_newline();
             buf.indent(indent);
