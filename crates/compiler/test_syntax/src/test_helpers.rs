@@ -101,7 +101,7 @@ pub enum Output<'a> {
 impl<'a> Output<'a> {
     pub fn format(&self) -> InputOwned {
         let arena = Bump::new();
-        let flags = MigrationFlags::new(false);
+        let flags = MigrationFlags::new(false, false);
         let mut buf = Buf::new_in(&arena, flags);
         match self {
             Output::Header(header) => {

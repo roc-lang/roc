@@ -58,7 +58,7 @@ impl<'a> Renderer<'a> {
     ) -> RocDocBuilder<'a> {
         use roc_fmt::annotation::Formattable;
 
-        let mut buf = roc_fmt::Buf::new_in(self.arena, MigrationFlags::new(false));
+        let mut buf = roc_fmt::Buf::new_in(self.arena, MigrationFlags::new(false, false));
         expr.format(&mut buf, 0);
 
         self.alloc.vcat([
@@ -202,7 +202,7 @@ impl<'a> Renderer<'a> {
 
         let expr = expressions[0];
 
-        let mut buf = roc_fmt::Buf::new_in(self.arena, MigrationFlags::new(false));
+        let mut buf = roc_fmt::Buf::new_in(self.arena, MigrationFlags::new(false, false));
         {
             use roc_fmt::annotation::Formattable;
             expr.format(&mut buf, 0);

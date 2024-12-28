@@ -305,7 +305,7 @@ main =
     fn test_single_file_needs_reformatting() {
         let dir = tempdir().unwrap();
         let file_path = setup_test_file(dir.path(), "test1.roc", UNFORMATTED_ROC);
-        let flags = MigrationFlags::new(false);
+        let flags = MigrationFlags::new(false, false);
 
         let result = format_files(vec![file_path.clone()], FormatMode::CheckOnly, flags);
         assert!(result.is_err());
@@ -325,7 +325,7 @@ main =
         let dir = tempdir().unwrap();
         let file1 = setup_test_file(dir.path(), "test1.roc", UNFORMATTED_ROC);
         let file2 = setup_test_file(dir.path(), "test2.roc", UNFORMATTED_ROC);
-        let flags = MigrationFlags::new(false);
+        let flags = MigrationFlags::new(false, false);
 
         let result = format_files(vec![file1, file2], FormatMode::CheckOnly, flags);
         assert!(result.is_err());
@@ -339,7 +339,7 @@ main =
     fn test_no_files_need_reformatting() {
         let dir = tempdir().unwrap();
         let file_path = setup_test_file(dir.path(), "formatted.roc", FORMATTED_ROC);
-        let flags = MigrationFlags::new(false);
+        let flags = MigrationFlags::new(false, false);
 
         let result = format_files(vec![file_path], FormatMode::CheckOnly, flags);
         assert!(result.is_ok());
@@ -353,7 +353,7 @@ main =
         let file_formatted = setup_test_file(dir.path(), "formatted.roc", FORMATTED_ROC);
         let file1_unformated = setup_test_file(dir.path(), "test1.roc", UNFORMATTED_ROC);
         let file2_unformated = setup_test_file(dir.path(), "test2.roc", UNFORMATTED_ROC);
-        let flags = MigrationFlags::new(false);
+        let flags = MigrationFlags::new(false, false);
 
         let result = format_files(
             vec![file_formatted, file1_unformated, file2_unformated],

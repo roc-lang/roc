@@ -26,11 +26,15 @@ pub struct Buf<'a> {
 #[derive(Debug, Copy, Clone)]
 pub struct MigrationFlags {
     pub(crate) snakify: bool,
+    pub(crate) parens_and_commas: bool,
 }
 
 impl MigrationFlags {
-    pub fn new(snakify: bool) -> Self {
-        MigrationFlags { snakify }
+    pub fn new(snakify: bool, parens_and_commas: bool) -> Self {
+        MigrationFlags {
+            snakify,
+            parens_and_commas,
+        }
     }
 
     pub fn at_least_one_active(&self) -> bool {

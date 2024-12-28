@@ -73,7 +73,7 @@ mod test_fmt {
             Ok((actual, state)) => {
                 use roc_parse::normalize::Normalize;
 
-                let flags = MigrationFlags::new(false);
+                let flags = MigrationFlags::new(false, false);
                 let mut buf = Buf::new_in(&arena, flags);
 
                 fmt_module_and_defs(&arena, src, &actual, state, &mut buf);
@@ -3493,6 +3493,48 @@ mod test_fmt {
             combine
                 peanutButter
                 chocolate
+            "
+        ));
+    }
+
+    #[test]
+    fn single_line_application_with_parens() {
+        expr_formats_same(indoc!(
+            r"
+            combine(peanut_butter, chocolate)
+            "
+        ));
+    }
+
+    #[test]
+    fn single_line_nested_application_with_parens() {
+        expr_formats_same(indoc!(
+            r"
+            combine(combine(peanut_butter, honey), chocolate)
+            "
+        ));
+    }
+
+    #[test]
+    fn multi_line_application_with_parens() {
+        expr_formats_same(indoc!(
+            r"
+            combine(
+                peanut_butter,
+                chocolate,
+            )
+            "
+        ));
+    }
+
+    #[test]
+    fn multi_line_nested_application_with_parens() {
+        expr_formats_same(indoc!(
+            r"
+            combine(
+                combine(peanut_butter, honey),
+                chocolate,
+            )
             "
         ));
     }

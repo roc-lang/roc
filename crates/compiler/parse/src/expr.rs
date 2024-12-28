@@ -218,6 +218,7 @@ fn loc_term_or_underscore<'a>(
         loc(underscore_expression()),
         loc(record_literal_help()),
         loc(specialize_err(EExpr::List, list_literal_help())),
+        loc(apply_with_pnc()),
         ident_seq(),
     )
     .trace("term_or_underscore")
@@ -240,8 +241,42 @@ fn loc_term<'a>(check_for_arrow: CheckForArrow) -> impl Parser<'a, Loc<Expr<'a>>
         loc(try_kw()),
         loc(record_literal_help()),
         loc(specialize_err(EExpr::List, list_literal_help())),
+        loc(apply_with_pnc()),
         ident_seq(),
     )
+}
+
+fn apply_with_pnc<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
+    |arena: &'a Bump, state: State<'a>, min_indent: u32| {
+        let (_, ident, new_state) = ident_seq().parse(arena, state, min_indent)?;
+
+        let (_, args, newer_state) = specialize_err(
+            EExpr::InParens,
+            collection_trailing_sep_e(
+                byte(b'(', EInParens::Open),
+                specialize_err_ref(EInParens::Expr, loc_expr_block(false, true)),
+                byte(b',', EInParens::End),
+                byte(b')', EInParens::End),
+                Expr::SpaceBefore,
+            ),
+        )
+        .parse(arena, new_state, min_indent)?;
+
+        let arg_slice: &[&Loc<Expr<'a>>] = {
+            let mut args_vec = Vec::new_in(arena);
+            for arg in args.items.iter() {
+                let a: &Loc<Expr<'a>> = arena.alloc(arg);
+                args_vec.push(a);
+            }
+            args_vec.into_bump_slice()
+        };
+
+        Ok((
+            Progress::MadeProgress,
+            Expr::Apply(arena.alloc(ident), arg_slice, CalledVia::ParensAndCommas),
+            newer_state,
+        ))
+    }
 }
 
 fn ident_seq<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {

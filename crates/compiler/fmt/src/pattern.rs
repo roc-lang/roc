@@ -791,7 +791,7 @@ mod snakify_test {
     use crate::{Buf, MigrationFlags};
 
     fn check_snakify(arena: &Bump, original: &str) -> String {
-        let flags = MigrationFlags::new(true);
+        let flags = MigrationFlags::new(true, false);
         let mut buf = Buf::new_in(arena, flags);
         buf.indent(0);
         snakify_camel_ident(&mut buf, original);
