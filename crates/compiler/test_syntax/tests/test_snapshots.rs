@@ -420,6 +420,7 @@ mod test_snapshots {
         pass/empty_platform_header.header,
         pass/empty_record.expr,
         pass/empty_record_assign_backpassing.expr,
+        pass/empty_record_assign_dbg.expr,
         pass/empty_record_assign_implements.expr,
         pass/empty_record_assign_return.expr,
         pass/empty_record_assign_tag.expr,

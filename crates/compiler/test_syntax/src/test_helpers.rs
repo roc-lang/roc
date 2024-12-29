@@ -360,8 +360,8 @@ impl<'a> Input<'a> {
                 * * * AST after formatting:\n{:#?}\n\n",
                 self.as_str(),
                 output.as_ref().as_str(),
-                ast_normalized,
-                reparsed_ast_normalized
+                actual,
+                reparsed_ast
             );
         }
 

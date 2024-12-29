@@ -991,6 +991,7 @@ pub fn fmt_body<'a>(
             && !matches!(body.extract_spaces().item, Expr::Defs(..))
             && !matches!(body.extract_spaces().item, Expr::Return(..))
             && !matches!(body.extract_spaces().item, Expr::Backpassing(..))
+            && !matches!(body.extract_spaces().item, Expr::DbgStmt { .. })
             && !starts_with_expect_ident(body)
     } else {
         false
