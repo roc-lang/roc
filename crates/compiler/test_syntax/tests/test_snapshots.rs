@@ -440,6 +440,7 @@ mod test_snapshots {
         pass/fn_with_record_arg.expr,
         pass/full_app_header.header,
         pass/full_app_header_trailing_commas.header,
+        pass/func_ty_parens_crazyness.expr,
         pass/function_effect_types.header,
         pass/function_with_tuple_ext_type.expr,
         pass/function_with_tuple_type.expr,
