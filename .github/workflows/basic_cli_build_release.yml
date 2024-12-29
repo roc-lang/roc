@@ -80,12 +80,24 @@ jobs:
       - name: Download the previously uploaded roc_nightly archives
         uses: actions/download-artifact@v4
 
+      - name: Install musl tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools musl-dev gcc-aarch64-linux-gnu
+
+      - name: Check versions
+        run: |
+          uname -a
+          clang-18 --version
+          llvm-ar-18 --version
+          rust-lld --version
+
       - name: build basic-cli
         env:
           CARGO_BUILD_TARGET: aarch64-unknown-linux-musl
-          # CC_aarch64_unknown_linux_musl: clang-18
-          # AR_aarch64_unknown_linux_musl: llvm-ar-18
-          # CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: "-Clink-self-contained=yes -Clinker=rust-lld"
+          CC_aarch64_unknown_linux_musl: clang-18
+          AR_aarch64_unknown_linux_musl: llvm-ar-18
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: "-Clink-self-contained=yes -Clinker=rust-lld -Ctarget-feature=+crt-static"
         run: ./ci/build_basic_cli.sh linux_arm64
 
       - name: Save .a file
