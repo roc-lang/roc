@@ -421,6 +421,7 @@ pub fn build_app() -> Command {
                     .required(false)
                     .default_value(DEFAULT_ROC_FILENAME)
             )
+            .arg(flag_linker.clone())
         )
         .subcommand(Command::new(CMD_PREPROCESS_HOST)
             .about("Runs the surgical linker preprocessor to generate `.rh` and `.rm` files.")
@@ -916,12 +917,17 @@ pub fn build(
 
     let linking_strategy = if wasm_dev_backend {
         LinkingStrategy::Additive
-    } else if !roc_linker::supported(link_type, target)
-        || matches.get_one::<String>(FLAG_LINKER).map(|s| s.as_str()) == Some("legacy")
-    {
+    } else if matches.get_one::<String>(FLAG_LINKER).map(|s| s.as_str()) == Some("legacy") {
         LinkingStrategy::Legacy
     } else {
-        LinkingStrategy::Surgical
+        match roc_linker::support_level(link_type, target) {
+            roc_linker::SupportLevel::Full => LinkingStrategy::Surgical,
+            roc_linker::SupportLevel::Wip => {
+                println!("Warning! Using an unfinished surgical linker for target {target}");
+                LinkingStrategy::Surgical
+            }
+            roc_linker::SupportLevel::None => LinkingStrategy::Legacy,
+        }
     };
 
     // All hosts should be prebuilt, this flag keeps the rebuilding behvaiour
