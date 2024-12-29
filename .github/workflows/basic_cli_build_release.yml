@@ -1,5 +1,5 @@
 on:
-  #  pull_request:
+  pull_request:
   workflow_dispatch:
 
 # this cancels workflows currently in progress if you start a new one
@@ -11,7 +11,7 @@ env:
   # use .tar.gz for quick testing
   ARCHIVE_FORMAT: .tar.br
   # Make a new basic-cli git tag and set it here before starting this workflow
-  RELEASE_TAG: 0.17.0
+  RELEASE_TAG: 0.19.0-sqlite
 
 jobs:
   prepare:
@@ -34,14 +34,14 @@ jobs:
           fi
 
       # get latest nightly releases
-      #- run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
-      #- run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_arm64-latest.tar.gz
-      #- run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_x86_64-latest.tar.gz
-      #- run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_apple_silicon-latest.tar.gz
-      - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-TESTING.tar.gz
-      - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_arm64-TESTING.tar.gz
-      - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_x86_64-TESTING.tar.gz
-      - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_apple_silicon-TESTING.tar.gz
+      - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
+      - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_arm64-latest.tar.gz
+      - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_x86_64-latest.tar.gz
+      - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_apple_silicon-latest.tar.gz
+      # - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-TESTING.tar.gz
+      # - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_arm64-TESTING.tar.gz
+      # - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_x86_64-TESTING.tar.gz
+      # - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_apple_silicon-TESTING.tar.gz
 
       - name: Save roc_nightly archives
         uses: actions/upload-artifact@v4
@@ -86,6 +86,7 @@ jobs:
           CC_aarch64_unknown_linux_musl: clang-18
           AR_aarch64_unknown_linux_musl: llvm-ar-18
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: "-Clink-self-contained=yes -Clinker=rust-lld"
+          CC_ENABLE_DEBUG_OUTPUT: 1
         run: ./ci/build_basic_cli.sh linux_arm64
 
       - name: Save .a file
@@ -96,13 +97,15 @@ jobs:
             basic-cli/platform/linux-arm64.a
 
   build-macos-x86_64-files:
-    runs-on: [macos-12] # I expect the generated files to work on macOS 12 and up
+    runs-on: [macos-13] # I expect the generated files to work on macOS 13 and up
     needs: [prepare]
     steps:
       - uses: actions/checkout@v4
 
       - name: Download the previously uploaded roc_nightly archives
         uses: actions/download-artifact@v4
+
+      - run: brew install z3
 
       - run: ./ci/build_basic_cli.sh macos_x86_64
 
