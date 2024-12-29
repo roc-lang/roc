@@ -61,7 +61,7 @@ pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
     move |_, state: State<'a>, _min_indent: u32| match chomp_lowercase_part(state.bytes()) {
         Err(progress) => Err((progress, ())),
         Ok(ident) => {
-            if !is_allowed_identifier(&ident) {
+            if !is_allowed_identifier(ident) {
                 Err((NoProgress, ()))
             } else {
                 let width = ident.len();
@@ -88,7 +88,7 @@ pub fn lowercase_ident_keyword_e<'a>() -> impl Parser<'a, &'a str, ()> {
     move |_, state: State<'a>, _min_indent: u32| match chomp_lowercase_part(state.bytes()) {
         Err(progress) => Err((progress, ())),
         Ok(ident) => {
-            if !is_allowed_identifier(&ident) {
+            if !is_allowed_identifier(ident) {
                 Err((MadeProgress, ()))
             } else {
                 let width = ident.len();
@@ -138,7 +138,7 @@ pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str, ()> {
     move |_, state: State<'a>, _min_indent: u32| match chomp_anycase_part(state.bytes()) {
         Err(progress) => Err((progress, ())),
         Ok(ident) => {
-            if !is_allowed_identifier(&ident) {
+            if !is_allowed_identifier(ident) {
                 Err((MadeProgress, ()))
             } else {
                 let width = ident.len();
@@ -166,11 +166,9 @@ pub fn parse_ident<'a>(
             let state = advance_state!(state, width as usize)?;
             if let Ident::Access { module_name, parts } = ident {
                 if module_name.is_empty() {
-                    if let Some(first) = parts.first() {
-                        if let Accessor::RecordField(ident) = first {
-                            if !is_allowed_identifier(ident) {
-                                return Err((NoProgress, EExpr::Start(initial.pos())));
-                            }
+                    if let Some(Accessor::RecordField(ident)) = parts.first() {
+                        if !is_allowed_identifier(ident) {
+                            return Err((NoProgress, EExpr::Start(initial.pos())));
                         }
                     }
                 }
