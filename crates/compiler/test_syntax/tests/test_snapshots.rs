@@ -276,6 +276,7 @@ mod test_snapshots {
         fail/when_over_indented_int.expr,
         fail/when_over_indented_underscore.expr,
         fail/where_type_variable.expr,
+        fail/wherem_implementsf.expr,
         fail/wild_case_arrow.expr,
         malformed/bad_opaque_ref.expr,
         malformed/malformed_pattern_field_access.expr, // See https://github.com/roc-lang/roc/issues/399
