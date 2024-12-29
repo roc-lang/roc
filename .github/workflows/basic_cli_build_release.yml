@@ -85,8 +85,7 @@ jobs:
           CARGO_BUILD_TARGET: aarch64-unknown-linux-musl
           CC_aarch64_unknown_linux_musl: clang-18
           AR_aarch64_unknown_linux_musl: llvm-ar-18
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: "-Clink-self-contained=yes -Clinker=rust-lld"
-          CC_ENABLE_DEBUG_OUTPUT: 1
+          # CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: "-Clink-self-contained=yes -Clinker=rust-lld"
         run: ./ci/build_basic_cli.sh linux_arm64
 
       - name: Save .a file
