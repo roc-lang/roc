@@ -1184,7 +1184,7 @@ impl<'a> Nodify<'a> for &'a str {
     where
         'a: 'b,
     {
-        NodeInfo::item(Node::Literal(*self))
+        NodeInfo::item(Node::Literal(self))
     }
 }
 
@@ -1342,7 +1342,7 @@ fn remove_trailing_blank_lines<'a>(sp: &'a [CommentOrNewline<'a>]) -> &'a [Comme
     // Yes! This is not symmetric!
     // Neither are CommentOrNewline's, since they all end in newlines, but they don't all start with newlines.
     let chomp = sp.iter().rev().take_while(|c| c.is_newline()).count();
-    if chomp == sp.len() && sp.len() >= 1 {
+    if chomp == sp.len() && !sp.is_empty() {
         &sp[..1]
     } else {
         &sp[..sp.len() - chomp]
