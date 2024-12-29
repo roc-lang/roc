@@ -44,13 +44,7 @@ cd ..
 roc version
 
 cd basic-cli
-if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-    if [[ $(uname -m) == "aarch64" ]]; then
-        target_arch="aarch64-unknown-linux-musl"
-    else
-        target_arch="x86_64-unknown-linux-musl"
-    fi
-fi
+
 ./jump-start.sh
 
 # build the basic cli platform
