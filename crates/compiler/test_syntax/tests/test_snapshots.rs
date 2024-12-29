@@ -247,6 +247,7 @@ mod test_snapshots {
         fail/return_in_pat.expr,
         fail/single_no_end.expr,
         fail/str_over_large_unicode_escape.expr,
+        fail/sub_minus_o_apply_minus_crash_bang.expr,
         fail/tab_crash.header,
         fail/tag_union_end.expr,
         fail/tag_union_lowercase_tag_name.expr,

@@ -236,6 +236,7 @@ fn loc_term<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr<'a>>, EEx
             positive_number_literal_help()
         )),
         loc(specialize_err(EExpr::Closure, closure_help(options))),
+        loc(crash_kw()),
         loc(specialize_err(EExpr::Dbg, dbg_kw())),
         loc(try_kw()),
         loc(record_literal_help()),
@@ -284,12 +285,13 @@ fn underscore_expression<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
 }
 
 fn crash_kw<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
-    move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
+    (move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
         let (_, _, next_state) = crate::parser::keyword(crate::keyword::CRASH, EExpr::Crash)
             .parse(arena, state, min_indent)?;
 
         Ok((MadeProgress, Expr::Crash, next_state))
-    }
+    })
+    .trace("crash_kw")
 }
 
 fn loc_possibly_negative_or_negated_term<'a>(
