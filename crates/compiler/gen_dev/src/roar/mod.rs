@@ -2,12 +2,15 @@
 #![warn(missing_docs)]
 ///Convert mono IR into ROAR
 pub(super) mod convert;
+///Utilities 
+pub(super) mod util;
+pub(super) use util::*;
 ///Implements `std::fmt::Display` for various types
 mod display;
-mod ops;
+pub mod ops;
 ///Where procedures get implemented
-mod proc;
+pub mod proc;
 ///All possible values to be used in ROAR
-mod storage;
+pub mod storage;
 
 

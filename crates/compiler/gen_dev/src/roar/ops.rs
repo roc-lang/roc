@@ -7,6 +7,22 @@ pub(crate) enum Sign {
     Signed,
     Unsigned,
 }
+impl From<roc_builtins::bitcode::IntWidth> for Sign {
+    fn from(value: roc_builtins::bitcode::IntWidth) -> Self {
+        match value {
+            roc_builtins::bitcode::IntWidth::U8 => Self::Unsigned,
+            roc_builtins::bitcode::IntWidth::U16 => Self::Unsigned,
+            roc_builtins::bitcode::IntWidth::U32 => Self::Unsigned,
+            roc_builtins::bitcode::IntWidth::U64 => Self::Unsigned,
+            roc_builtins::bitcode::IntWidth::U128 => Self::Unsigned,
+            roc_builtins::bitcode::IntWidth::I8 => Self::Signed,
+            roc_builtins::bitcode::IntWidth::I16 => Self::Signed,
+            roc_builtins::bitcode::IntWidth::I32 => Self::Signed,
+            roc_builtins::bitcode::IntWidth::I64 => Self::Signed,
+            roc_builtins::bitcode::IntWidth::I128 => Self::Signed,
+        }
+    }
+}
 #[derive(Clone, Debug)]
 pub(crate) enum Flag {
     Neq,
@@ -77,4 +93,14 @@ pub struct Operation {
 ///The type of expressions. Not really expressions, just the non-output portion of a ROAR op
 pub type Expr = (OpCode,Input,Input);
 
+pub fn to_stmt(expr : Expr,output : Output) -> Operation {
+    let (op,in_a,in_b) = expr else {
+        todo!()
+    };
+    return Operation {
+        output : output,
+        opcode : op,
+        inputs : (in_a,in_b)
+    }
+}
 //TODO ? make a macro for instructions?

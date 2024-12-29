@@ -3,6 +3,7 @@ use roc_mono::layout;
 use std::cell::Cell;
 use std::fmt::{Debug, Display};
 
+
 ///The type used to identify registers
 pub(crate) type Id = u32;
 
@@ -13,6 +14,8 @@ pub struct ByteSize(pub u32);
 
 ///Equivalent to byte size, merely used as to specify the two
 pub use ByteSize as Offset;
+
+use super::*;
 pub fn add_offsets(offset_a : Offset, offset_b : Offset) -> Offset {
     if let (Offset(i_a),Offset(i_b)) = (offset_a,offset_b) {
         return Offset(i_a + i_b);
@@ -26,6 +29,22 @@ pub fn mul_offsets(offset_a : Offset, mult : u32) -> Offset {
         return Offset(i_a * mult);
     } else {
         todo!()
+    }
+}
+impl From<roc_builtins::bitcode::IntWidth> for ByteSize {
+    fn from(value: roc_builtins::bitcode::IntWidth) -> Self {
+        Self(match value {
+            roc_builtins::bitcode::IntWidth::U8 => 1,
+            roc_builtins::bitcode::IntWidth::U16 => 2,
+            roc_builtins::bitcode::IntWidth::U32 => 4,
+            roc_builtins::bitcode::IntWidth::U64 => 8,
+            roc_builtins::bitcode::IntWidth::U128 => 16,
+            roc_builtins::bitcode::IntWidth::I8 => 1,
+            roc_builtins::bitcode::IntWidth::I16 => 2,
+            roc_builtins::bitcode::IntWidth::I32 => 4,
+            roc_builtins::bitcode::IntWidth::I64 => 8,
+            roc_builtins::bitcode::IntWidth::I128 => 16,
+        })
     }
 }
 ///The size of a single word
@@ -77,17 +96,30 @@ pub enum Input {
     Null,
 }
 
-impl std::convert::Into<Input> for Output {
+impl From<Output> for Input {
     ///Convert an output into an input
-    fn into(self) -> Input {
-        match self {
+    fn from(output : Output) -> Input {
+        match output {
             Output::Register(register) => Input::Register(register),
             Output::FloatRegister(float_register) => Input::FloatRegister(float_register),
             Output::Null => Input::Null,
         }
     }
 }
-
+impl TryFrom<Input> for Output {
+    type Error = Error;
+    fn try_from(value: Input) -> Result<Self> {
+        match value {
+            Input::Register(register) => Ok(Output::Register(register)),
+            Input::FloatRegister(float_register) => Ok(Output::FloatRegister(float_register)),
+            Input::Global(global) => Err(Error::Todo),
+            Input::Value(literal_value) => Err(Error::Todo),
+            Input::Data(vec) => Err(Error::Todo),
+            Input::ByteSize(byte_size) => Err(Error::Todo),
+            Input::Null => Ok(Output::Null),
+        }
+    }
+}
 #[derive(Clone, Debug)]
 ///A values that are valid as constants, for example as offsets
 pub enum Constant {
@@ -145,4 +177,25 @@ impl RegisterAllocater {
         return reg;
     }
 
+}
+
+impl Into<Input> for Register {
+    fn into(self) -> Input {
+        Input::Register(self)
+    }
+}
+impl Into<Input> for FloatRegister {
+    fn into(self) -> Input {
+        Input::FloatRegister(self)
+    }
+}
+impl Into<Output> for Register {
+    fn into(self) -> Output {
+        Output::Register(self)
+    }
+}
+impl Into<Output> for FloatRegister {
+    fn into(self) -> Output {
+        Output::FloatRegister(self)
+    }
 }
