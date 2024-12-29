@@ -28,18 +28,25 @@ pub enum LinkType {
     None = 2,
 }
 
-pub fn supported(link_type: LinkType, target: Target) -> bool {
+#[derive(Debug, PartialEq, Eq)]
+pub enum SupportLevel {
+    Full,
+    Wip,
+    None,
+}
+
+pub fn support_level(link_type: LinkType, target: Target) -> SupportLevel {
     if let LinkType::Executable = link_type {
         match target {
-            Target::LinuxX64 => true,
-            Target::WinX64 => true,
+            Target::LinuxX64 => SupportLevel::Full,
+            Target::WinX64 => SupportLevel::Full,
             // macho support is incomplete
-            Target::MacX64 => false,
-            Target::MacArm64 => true,
-            _ => false,
+            Target::MacX64 => SupportLevel::None,
+            Target::MacArm64 => SupportLevel::Wip,
+            _ => SupportLevel::None,
         }
     } else {
-        false
+        SupportLevel::None
     }
 }
 
