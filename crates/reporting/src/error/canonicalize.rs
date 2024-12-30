@@ -68,6 +68,7 @@ const STATEMENT_AFTER_EXPRESSION: &str = "STATEMENT AFTER EXPRESSION";
 const MISSING_EXCLAMATION: &str = "MISSING EXCLAMATION";
 const UNNECESSARY_EXCLAMATION: &str = "UNNECESSARY EXCLAMATION";
 const EMPTY_TUPLE_TYPE: &str = "EMPTY TUPLE TYPE";
+const UNBOUND_TYPE_VARS_IN_AS: &str = "UNBOUND TYPE VARIABLES IN AS";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -1482,6 +1483,19 @@ pub fn can_problem<'b>(
             ]);
 
             title = EMPTY_TUPLE_TYPE.to_string();
+        }
+        Problem::UnboundTypeVarsInAs(region) => {
+            // NOTE for the enterprising contributor:
+            // this may be something we want to support in the future! (not sure?)
+            doc = alloc.stack([
+                alloc.reflow("This type annotation has unbound type variables:"),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.reflow(
+                    "Type variables must be bound in the same scope as the type annotation.",
+                ),
+            ]);
+
+            title = UNBOUND_TYPE_VARS_IN_AS.to_string();
         }
     };
 

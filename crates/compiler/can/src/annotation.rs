@@ -843,6 +843,28 @@ fn can_annotation_help(
             // TODO: handle implicit ext variables in `as` aliases
             let infer_ext_in_output = vec![];
 
+            {
+                let roc_types::types::VariableDetail {
+                    type_variables,
+                    lambda_set_variables: _,
+                    recursion_variables,
+                } = alias_actual.variables_detail();
+
+                let mut hidden = type_variables;
+
+                for var in (lowercase_vars.iter().map(|lv| lv.value.var))
+                    .chain(recursion_variables.iter().copied())
+                    .chain(infer_ext_in_output.iter().copied())
+                {
+                    hidden.remove(&var);
+                }
+
+                if !hidden.is_empty() {
+                    env.problem(roc_problem::can::Problem::UnboundTypeVarsInAs(region));
+                    return Type::Error;
+                }
+            }
+
             scope.add_alias(
                 symbol,
                 region,

@@ -295,6 +295,7 @@ mod test_snapshots {
         pass/alias_parens_comment.expr,
         pass/alias_parens_comment_indent.expr,
         pass/all_the_bangs.expr,
+        pass/ann_apply_record_with_newlines.expr,
         pass/ann_closed_union.expr,
         pass/ann_effectful_fn.expr,
         pass/ann_open_union.expr,
@@ -443,6 +444,7 @@ mod test_snapshots {
         pass/fn_with_record_arg.expr,
         pass/full_app_header.header,
         pass/full_app_header_trailing_commas.header,
+        pass/func_ty_parens_crazyness.expr,
         pass/function_effect_types.header,
         pass/function_with_tuple_ext_type.expr,
         pass/function_with_tuple_type.expr,
@@ -697,6 +699,7 @@ mod test_snapshots {
         pass/tag_destructure_bang_no_space.expr,
         pass/tag_pattern.expr,
         pass/tag_union_ann_with_as.expr,
+        pass/tag_union_functions_as.expr,
         pass/ten_times_eleven.expr,
         pass/three_arg_closure.expr,
         pass/triple_paren_pat_ann.expr,
@@ -785,13 +788,6 @@ mod test_snapshots {
                 // both of these result in:
                 // "a Expr::TrySuffix expression was not completely removed in desugar_value_def_suffixed"
                 true
-            }
-
-            "parens_newlines_before_as" | "tag_union_ann_with_as" => {
-                // Found unbound type variables {66}
-                //  in type alias `Test.IdentId(0)` [] [] : <66>
-                // Location: crates/compiler/can/src/scope.rs:541:13
-                cfg!(debug_assertions)
             }
 
             // When adding new snapshot tests, strongly prefer fixing any canonicalization panics
