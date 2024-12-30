@@ -21,7 +21,13 @@ pub const WHERE: &str = "where";
 // These keywords are valid in headers
 pub const PLATFORM: &str = "platform";
 
-pub const KEYWORDS: [&str; 12] = [
+pub const KEYWORDS: [&str; 11] = [
     IF, THEN, ELSE, WHEN, AS, IS, DBG, IMPORT, EXPECT, RETURN, CRASH,
-    "expect!", // not itself a keyword, but it's problematic if we allow an identifier like this!
 ];
+
+pub fn is_allowed_identifier(mut ident: &str) -> bool {
+    if ident.ends_with('!') {
+        ident = &ident[..ident.len() - 1];
+    }
+    !crate::keyword::KEYWORDS.iter().any(|kw| &ident == kw)
+}

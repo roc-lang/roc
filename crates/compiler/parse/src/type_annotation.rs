@@ -17,7 +17,7 @@ use crate::parser::{
 };
 use crate::parser::{
     allocated, backtrackable, byte, fail, optional, specialize_err, specialize_err_ref, two_bytes,
-    word, EType, ETypeApply, ETypeInParens, ETypeInlineAlias, ETypeRecord, ETypeTagUnion, Parser,
+    EType, ETypeApply, ETypeInParens, ETypeInlineAlias, ETypeRecord, ETypeTagUnion, Parser,
     Progress::*,
 };
 use crate::state::State;
@@ -322,7 +322,10 @@ fn loc_type_in_parens<'a>(
                             specialize_err_ref(ETypeInParens::Type, arrow()),
                             Sep::FunctionArrow
                         ),
-                        map(word(keyword::WHERE, ETypeInParens::End), |_| Sep::Where),
+                        map(
+                            crate::parser::keyword(keyword::WHERE, ETypeInParens::End),
+                            |_| Sep::Where
+                        ),
                     ];
 
                     match sep.parse(arena, state.clone(), 0) {
@@ -707,7 +710,7 @@ fn implements_clause<'a>() -> impl Parser<'a, Loc<ImplementsClause<'a>>, EType<'
             ),
             skip_first(
                 // Parse "implements"; we don't care about this keyword
-                word(crate::keyword::IMPLEMENTS, EType::TImplementsClause),
+                crate::parser::keyword(crate::keyword::IMPLEMENTS, EType::TImplementsClause),
                 // Parse "Hash & ..."; this may be qualified from another module like "Hash.Hash"
                 absolute_column_min_indent(ability_chain()),
             ),
@@ -734,7 +737,7 @@ fn implements_clause_chain<'a>(
     move |arena, state: State<'a>, min_indent: u32| {
         let (_, (spaces_before, ()), state) = and(
             space0_e(EType::TIndentStart),
-            word(crate::keyword::WHERE, EType::TWhereBar),
+            crate::parser::keyword(crate::keyword::WHERE, EType::TWhereBar),
         )
         .parse(arena, state, min_indent)?;
 
@@ -768,7 +771,7 @@ fn parse_implements_clause_chain_after_where<'a>(
 pub fn implements_abilities<'a>() -> impl Parser<'a, Loc<ImplementsAbilities<'a>>, EType<'a>> {
     increment_min_indent(skip_first(
         // Parse "implements"; we don't care about this keyword
-        word(crate::keyword::IMPLEMENTS, EType::TImplementsClause),
+        crate::parser::keyword(crate::keyword::IMPLEMENTS, EType::TImplementsClause),
         // Parse "Hash"; this may be qualified from another module like "Hash.Hash"
         space0_before_e(
             loc(map(

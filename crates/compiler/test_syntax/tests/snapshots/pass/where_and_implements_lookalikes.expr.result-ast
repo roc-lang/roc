@@ -4,46 +4,48 @@
             Defs {
                 tags: [
                     EitherIndex(2147483648),
+                    EitherIndex(2147483649),
                 ],
                 regions: [
-                    @1-26,
+                    @1-4,
+                    @8-26,
                 ],
                 space_before: [
                     Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                    Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
                 ],
                 space_after: [
                     Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                    Slice<roc_parse::ast::CommentOrNewline> { start: 1, length: 0 },
                 ],
-                spaces: [],
+                spaces: [
+                    LineComment(
+                        "",
+                    ),
+                ],
                 type_defs: [],
                 value_defs: [
                     Annotation(
                         @1-2 Identifier {
                             ident: "i",
                         },
-                        @3-26 Where(
-                            @3-4 SpaceAfter(
-                                BoundVariable(
-                                    "a",
-                                ),
-                                [
-                                    LineComment(
-                                        "",
-                                    ),
-                                ],
-                            ),
+                        @3-4 BoundVariable(
+                            "a",
+                        ),
+                    ),
+                    Stmt(
+                        @8-26 Apply(
+                            @8-14 Var {
+                                module_name: "",
+                                ident: "wherew",
+                            },
                             [
-                                @13-26 ImplementsClause {
-                                    var: @13-14 "w",
-                                    abilities: [
-                                        @25-26 Apply(
-                                            "",
-                                            "I",
-                                            [],
-                                        ),
-                                    ],
+                                @15-26 Var {
+                                    module_name: "",
+                                    ident: "implementsI",
                                 },
                             ],
+                            Space,
                         ),
                     ),
                 ],
