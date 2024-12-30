@@ -1359,6 +1359,19 @@ fn surgery_macho_help(
                             RelocationKind::Got => {
                                 println!("\t\tTODO synthesise __got entry for {name}")
                             }
+                            RelocationKind::MachO { value, relative: _ } => match value {
+                                macho::ARM64_RELOC_GOT_LOAD_PAGE21
+                                | macho::ARM64_RELOC_GOT_LOAD_PAGEOFF12 => {
+                                    println!("\t\tTODO synthesise __got entry for {name}")
+                                }
+                                macho::ARM64_RELOC_BRANCH26 => {
+                                    println!("\t\tTODO synthesise __stub entry for {name}")
+                                }
+                                _ => internal_error!(
+                                    "Invalid relocation for libc symbol, {:+x?}: {name}",
+                                    rel
+                                ),
+                            },
                             _ => internal_error!(
                                 "Invalid relocation for libc symbol, {:+x?}: {name}",
                                 rel
