@@ -1,0 +1,58 @@
+@0-10 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-8,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Annotation(
+                    @0-1 NumLiteral(
+                        "8",
+                    ),
+                    @2-8 Apply(
+                        "",
+                        "O",
+                        [
+                            @5-8 SpaceBefore(
+                                Record {
+                                    fields: Collection {
+                                        items: [],
+                                        final_comments: [
+                                            Newline,
+                                        ],
+                                    },
+                                    ext: None,
+                                },
+                                [
+                                    Newline,
+                                ],
+                            ),
+                        ],
+                    ),
+                ),
+            ],
+        },
+        @9-10 SpaceBefore(
+            Tag(
+                "Q",
+            ),
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)
