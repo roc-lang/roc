@@ -18,10 +18,10 @@ which includes the Roc compiler and some helpful utilities.
     cd roc_night<TAB TO AUTOCOMPLETE>
     ```
 
-1. Install llvm 18:
+1. Install llvm 18 and z3:
 
     ```sh
-    brew install llvm@18
+    brew install llvm@18 z3
     ```
 
 1. To be able to run the `roc` command anywhere on your system; add the line below to your shell startup script (.profile, .zshrc, ...):
