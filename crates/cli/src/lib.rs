@@ -242,6 +242,13 @@ pub fn build_app() -> Command {
                     .required(false),
             )
             .arg(
+                Arg::new(FLAG_VERBOSE)
+                    .long(FLAG_VERBOSE)
+                    .help("Print detailed information while building")
+                    .action(ArgAction::SetTrue)
+                    .required(false)
+            )
+            .arg(
                 Arg::new(ROC_FILE)
                     .help("The .roc file to build")
                     .value_parser(value_parser!(PathBuf))
@@ -974,6 +981,7 @@ pub fn build(
     };
 
     let load_config = standard_load_config(target, build_ordering, threading);
+    let verbose = matches.get_flag(FLAG_VERBOSE);
 
     let res_binary_path = roc_build::program::build_file(
         &arena,
@@ -989,6 +997,7 @@ pub fn build(
         roc_cache_dir,
         load_config,
         out_path,
+        verbose,
     );
 
     match res_binary_path {

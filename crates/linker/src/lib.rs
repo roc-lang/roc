@@ -55,8 +55,16 @@ pub fn link_preprocessed_host(
     roc_app_bytes: &[u8],
     binary_path: &Path,
     metadata: PathBuf,
+    verbose: bool,
 ) {
-    surgery(roc_app_bytes, &metadata, binary_path, false, false, target)
+    surgery(
+        roc_app_bytes,
+        &metadata,
+        binary_path,
+        verbose,
+        false,
+        target,
+    )
 }
 
 pub fn generate_stub_lib_from_loaded(
