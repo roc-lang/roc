@@ -74,6 +74,7 @@ module [
     concatUtf8,
     forEach!,
     forEachTry!,
+    walk!,
 ]
 
 import Bool exposing [Bool, Eq]
@@ -1471,7 +1472,7 @@ forEachTry! = \list, func! ->
 ##
 ## This is the same as [walk], except that the step function can have effects.
 walk! : List elem, state, (state, elem => state) => state
-walk! = \list, init, func! ->
+walk! = \list, state, func! ->
     when list is
         [] -> state
 
