@@ -421,6 +421,7 @@ pub fn build_app() -> Command {
                     .required(false)
                     .default_value(DEFAULT_ROC_FILENAME)
             )
+            .arg(flag_linker.clone())
         )
         .subcommand(Command::new(CMD_PREPROCESS_HOST)
             .about("Runs the surgical linker preprocessor to generate `.rh` and `.rm` files.")
@@ -766,6 +767,29 @@ fn nearest_match<'a>(reference: &str, options: &'a [String]) -> Option<(&'a Stri
         .min_by(|(_, a), (_, b)| a.cmp(b))
 }
 
+pub fn default_linking_strategy(
+    matches: &ArgMatches,
+    link_type: LinkType,
+    target: Target,
+) -> LinkingStrategy {
+    let linker_support_level = roc_linker::support_level(link_type, target);
+    match matches.get_one::<String>(FLAG_LINKER).map(AsRef::as_ref) {
+        Some("legacy") => LinkingStrategy::Legacy,
+        Some("surgical") => match linker_support_level {
+            roc_linker::SupportLevel::Full => LinkingStrategy::Surgical,
+            roc_linker::SupportLevel::Wip => {
+                println!("Warning! Using an unfinished surgical linker for target {target}");
+                LinkingStrategy::Surgical
+            }
+            roc_linker::SupportLevel::None => LinkingStrategy::Legacy,
+        },
+        _ => match linker_support_level {
+            roc_linker::SupportLevel::Full => LinkingStrategy::Surgical,
+            _ => LinkingStrategy::Legacy,
+        },
+    }
+}
+
 pub fn build(
     matches: &ArgMatches,
     subcommands: &[String],
@@ -916,12 +940,8 @@ pub fn build(
 
     let linking_strategy = if wasm_dev_backend {
         LinkingStrategy::Additive
-    } else if !roc_linker::supported(link_type, target)
-        || matches.get_one::<String>(FLAG_LINKER).map(|s| s.as_str()) == Some("legacy")
-    {
-        LinkingStrategy::Legacy
     } else {
-        LinkingStrategy::Surgical
+        default_linking_strategy(matches, link_type, target)
     };
 
     // All hosts should be prebuilt, this flag keeps the rebuilding behvaiour
