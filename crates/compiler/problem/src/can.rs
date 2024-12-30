@@ -256,6 +256,7 @@ pub enum Problem {
     UnsuffixedEffectfulRecordField(Region),
     SuffixedPureRecordField(Region),
     EmptyTupleType(Region),
+    UnboundTypeVarsInAs(Region),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -345,6 +346,7 @@ impl Problem {
                 Warning
             }
             Problem::EmptyTupleType(_) => Warning,
+            Problem::UnboundTypeVarsInAs(_) => Warning,
         }
     }
 
@@ -511,6 +513,7 @@ impl Problem {
             | Problem::ReturnOutsideOfFunction { region, .. }
             | Problem::StatementsAfterReturn { region }
             | Problem::ReturnAtEndOfFunction { region }
+            | Problem::UnboundTypeVarsInAs(region)
             | Problem::UnsuffixedEffectfulRecordField(region)
             | Problem::SuffixedPureRecordField(region) => Some(*region),
             Problem::RuntimeError(RuntimeError::CircularDef(cycle_entries))
