@@ -81,6 +81,9 @@ pub fn create_dylib_macho(
             "macos",
             &macos_version,
             &macos_version,
+            // Suppress all warnings, at least for now. Ideally, there are no warnings
+            // from the linker.
+            "-w",
         ])
         .output()
         .unwrap();
