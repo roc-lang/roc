@@ -9,7 +9,7 @@ concurrency:
 
 env:
   # use .tar.gz for quick testing
-  ARCHIVE_FORMAT: .tar.br
+  ARCHIVE_FORMAT: .tar.gz
   # Make a new basic-cli git tag and set it here before starting this workflow
   RELEASE_TAG: 0.18.0
 
@@ -205,15 +205,27 @@ jobs:
           path: |
             docs.tar.gz
 
-  test-release-ubuntu:
+  test-release:
     needs: [create-release-archive]
-    runs-on: [ubuntu-20.04]
+    strategy:
+      matrix:
+        os: [ubuntu-20.04, macos-14]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Download the previously uploaded files
         uses: actions/download-artifact@v4
 
+      - name: Set OS-specific variables
+        id: vars
+        run: |
+          if [ "${{ matrix.os }}" = "ubuntu-20.04" ]; then
+            echo "os_pattern=linux_x86_64" >> $GITHUB_OUTPUT
+          else
+            echo "os_pattern=macos_x86_64" >> $GITHUB_OUTPUT
+          fi
+
       - name: mv roc nightly and simplify name
-        run: mv $(ls -d artifact/* | grep "roc_nightly.*tar\.gz" | grep "linux_x86_64") ./roc_nightly.tar.gz
+        run: mv $(ls -d artifact/* | grep "roc_nightly.*tar\.gz" | grep "${{ steps.vars.outputs.os_pattern }}") ./roc_nightly.tar.gz
 
       - name: decompress the tar
         run: tar -xzvf roc_nightly.tar.gz
@@ -233,11 +245,17 @@ jobs:
           cd basic-cli-platform && ls | grep "tar" | xargs brotli -d
           ls | grep "tar$" | xargs tar -xf
 
-      - name: Install expect for tests if we dont have it yet
-        run: if ! dpkg -l | grep -qw expect; then sudo apt install -y expect; fi
+      - name: Install dependencies (Ubuntu)
+        if: matrix.os == 'ubuntu-20.04'
+        run: |
+          if ! dpkg -l | grep -qw expect; then sudo apt install -y expect; fi
+          if ! dpkg -l | grep -qw ncat; then sudo apt install -y ncat; fi
 
-      - name: Install ncat for tests if we dont have it yet
-        run: if ! dpkg -l | grep -qw ncat; then sudo apt install -y ncat; fi
+      - name: Install dependencies (macOS)
+        if: matrix.os == 'macos-14'
+        run: |
+          brew install expect
+          brew install nmap  # includes ncat
 
       - name: prepare testing
         run: |
