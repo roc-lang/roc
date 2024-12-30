@@ -1048,6 +1048,9 @@ fn link_macos(
             // slightly easier than unpacking compressed info from the __got section
             // and fixups load command.
             "-no_fixup_chains",
+            // Suppress all warnings, at least for now. Ideally, there are no warnings
+            // from the linker.
+            "-w",
         ])
         .args(input_paths)
         .args(extra_link_flags());
