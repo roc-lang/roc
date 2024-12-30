@@ -1,11 +1,11 @@
 //! The `roc` binary that brings together all functionality in the Roc toolset.
 use bumpalo::Bump;
-use roc_build::link::{LinkType, LinkingStrategy};
+use roc_build::link::LinkType;
 use roc_build::program::{check_file, CodeGenBackend};
 use roc_cli::{
-    build_app, format_files, format_src, test, BuildConfig, FormatMode, CMD_BUILD, CMD_CHECK,
-    CMD_DEV, CMD_DOCS, CMD_FORMAT, CMD_GLUE, CMD_PREPROCESS_HOST, CMD_REPL, CMD_RUN, CMD_TEST,
-    CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_LIB, FLAG_LINKER, FLAG_MAIN,
+    build_app, default_linking_strategy, format_files, format_src, test, BuildConfig, FormatMode,
+    CMD_BUILD, CMD_CHECK, CMD_DEV, CMD_DOCS, CMD_FORMAT, CMD_GLUE, CMD_PREPROCESS_HOST, CMD_REPL,
+    CMD_RUN, CMD_TEST, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_LIB, FLAG_MAIN,
     FLAG_MIGRATE, FLAG_NO_COLOR, FLAG_NO_HEADER, FLAG_NO_LINK, FLAG_OUTPUT, FLAG_PP_DYLIB,
     FLAG_PP_HOST, FLAG_PP_PLATFORM, FLAG_STDIN, FLAG_STDOUT, FLAG_TARGET, FLAG_TIME, GLUE_DIR,
     GLUE_SPEC, ROC_FILE, VERSION,
@@ -114,22 +114,8 @@ fn main() -> io::Result<()> {
             };
 
             let link_type = LinkType::Dylib;
-            let linking_strategy =
-                if matches.get_one::<String>(FLAG_LINKER).map(|s| s.as_str()) == Some("legacy") {
-                    LinkingStrategy::Legacy
-                } else {
-                    let target = Triple::host().into();
-                    match roc_linker::support_level(link_type, target) {
-                        roc_linker::SupportLevel::Full => LinkingStrategy::Surgical,
-                        roc_linker::SupportLevel::Wip => {
-                            println!(
-                                "Warning! Using an unfinished surgical linker for target {target}"
-                            );
-                            LinkingStrategy::Surgical
-                        }
-                        roc_linker::SupportLevel::None => LinkingStrategy::Legacy,
-                    }
-                };
+            let target = Triple::host().into();
+            let linking_strategy = default_linking_strategy(matches, link_type, target);
 
             if !output_path.exists() || output_path.is_dir() {
                 roc_glue::generate(
