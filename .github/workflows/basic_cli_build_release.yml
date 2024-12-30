@@ -256,6 +256,7 @@ jobs:
         run: |
           brew install expect
           brew install nmap  # includes ncat
+          brew install z3
 
       - name: prepare testing
         run: |
