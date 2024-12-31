@@ -1,4 +1,5 @@
 on:
+  pull_request:
   workflow_dispatch:
 
 # this cancels workflows currently in progress if you start a new one
@@ -35,22 +36,20 @@ jobs:
 
       - run: expect -v
 
-      # Run all tests
-      - run: ROC=./roc_nightly/roc EXAMPLES_DIR=./examples/ ./ci/all_tests.sh
+      - name: Run all tests on the main branch of basic-cli
+        run: ROC=./roc_nightly/roc EXAMPLES_DIR=./examples/ ./ci/all_tests.sh
 
       ######
       # Now test the latest basic-cli release, not the main branch
       ######
-
-      - name: Remove roc_nightly folder to keep things simple (we'll download it again later)
-        run: rm -rf roc_nightly
 
       - name: Get the repo of the latest basic-cli release
         run: |
           git clone --depth 1 https://github.com/roc-lang/basic-cli
           cd basic-cli
           git fetch --tags
-          latestTag=$(git describe --tags $(git rev-list --tags --max-count=1))
+          # Get the latest tag matching pattern X.Y*
+          latestTag=$(git for-each-ref --sort=-version:refname --format '%(refname:short)' refs/tags/ | grep -E '^[0-9]+\.[0-9]+.*' | head -n1)
           git checkout $latestTag
 
       - name: Run all tests with latest roc nightly and latest basic-cli release
