@@ -1,0 +1,29 @@
+@0-21 SpaceAfter(
+    BinOps(
+        [
+            (
+                @0-12 Apply(
+                    @0-9 Var {
+                        module_name: "",
+                        ident: "get_name!",
+                    },
+                    [
+                        @10-12 Record(
+                            [],
+                        ),
+                    ],
+                    Space,
+                ),
+                @13-15 DoubleQuestion,
+            ),
+        ],
+        @16-21 Str(
+            PlainLine(
+                "Bob",
+            ),
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

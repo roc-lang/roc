@@ -190,6 +190,8 @@ mod test_snapshots {
         fail/backpassing_after_annotation.expr,
         fail/bound_variable.expr,
         fail/comment_with_tab.expr,
+        fail/d_assign_return_bang.expr,
+        fail/dbg_bang_neg_bang_if_bang.expr,
         fail/def_missing_final_expression.expr,
         fail/def_without_newline.expr,
         fail/deprecated_interpolated_string.expr,
@@ -197,6 +199,7 @@ mod test_snapshots {
         fail/elm_function_syntax.expr,
         fail/empty_or_pattern.expr,
         fail/empty_record_assign_expect_bang.expr,
+        fail/empty_record_assignment_d_when_bang.expr,
         fail/empty_return.expr,
         fail/error_inline_alias_argument_uppercase.expr,
         fail/error_inline_alias_not_an_alias.expr,
@@ -209,6 +212,7 @@ mod test_snapshots {
         fail/if_outdented_else_branch.expr,
         fail/if_outdented_then.expr,
         fail/ifbang_eqeq.expr,
+        fail/implements_in_multibackpassing_parens.expr,
         fail/import_with_lowercase_alias.moduledefs,
         fail/imports_missing_comma.header,
         fail/inline_hastype.expr,
@@ -228,6 +232,7 @@ mod test_snapshots {
         fail/nested_tuples_annotation_terrible_perf.expr,
         fail/nested_when_expect_binop_when.expr,
         fail/newline_before_operator_with_defs.expr,
+        fail/oom_repro.expr,
         fail/opaque_type_def_with_newline.expr,
         fail/pattern_binds_keyword.expr,
         fail/pattern_in_parens_end.expr,
@@ -245,6 +250,7 @@ mod test_snapshots {
         fail/return_in_pat.expr,
         fail/single_no_end.expr,
         fail/str_over_large_unicode_escape.expr,
+        fail/sub_minus_o_apply_minus_crash_bang.expr,
         fail/tab_crash.header,
         fail/tag_union_end.expr,
         fail/tag_union_lowercase_tag_name.expr,
@@ -270,6 +276,7 @@ mod test_snapshots {
         fail/when_over_indented_int.expr,
         fail/when_over_indented_underscore.expr,
         fail/where_type_variable.expr,
+        fail/wherem_implementsf.expr,
         fail/wild_case_arrow.expr,
         malformed/bad_opaque_ref.expr,
         malformed/malformed_pattern_field_access.expr, // See https://github.com/roc-lang/roc/issues/399
@@ -288,6 +295,7 @@ mod test_snapshots {
         pass/alias_parens_comment.expr,
         pass/alias_parens_comment_indent.expr,
         pass/all_the_bangs.expr,
+        pass/ann_apply_record_with_newlines.expr,
         pass/ann_closed_union.expr,
         pass/ann_effectful_fn.expr,
         pass/ann_open_union.expr,
@@ -351,7 +359,9 @@ mod test_snapshots {
         pass/closure_in_apply_in_binop.expr,
         pass/closure_in_binop_with_spaces.expr,
         pass/closure_newline_empty_record_newline.expr,
+        pass/closure_parens_double_newlines.expr,
         pass/closure_pat_reccord_comment.expr,
+        pass/closure_with_binops_and_unary.expr,
         pass/closure_with_underscores.expr,
         pass/comma_prefixed_indented_record.expr,
         pass/comment_after_annotation.expr,
@@ -380,8 +390,8 @@ mod test_snapshots {
         pass/crazy_backpassing_parens.expr,
         pass/crazy_implements_bangs.expr,
         pass/crazy_pat_ann.expr,
+        pass/curried_function_type.expr,
         pass/dbg.expr,
-        pass/dbg_bang_neg_bang_if_bang.expr,
         pass/dbg_double.expr,
         pass/dbg_double_newline.expr,
         pass/dbg_extra_parens.expr,
@@ -397,8 +407,10 @@ mod test_snapshots {
         pass/destructure_tag_assignment.expr,
         pass/docs.expr,
         pass/double_closure_newlines_binop.expr,
+        pass/double_function_tuple.expr,
         pass/double_parens_as_in_backpassing_pat.expr,
         pass/double_parens_comment_tuple_pat.expr,
+        pass/double_question_binop.expr,
         pass/double_space_before.expr,
         pass/effectful_closure_statements.expr,
         pass/empty_app_header.header,
@@ -409,11 +421,11 @@ mod test_snapshots {
         pass/empty_platform_header.header,
         pass/empty_record.expr,
         pass/empty_record_assign_backpassing.expr,
+        pass/empty_record_assign_dbg.expr,
         pass/empty_record_assign_implements.expr,
         pass/empty_record_assign_return.expr,
         pass/empty_record_assign_tag.expr,
         pass/empty_record_assignment.expr,
-        pass/empty_record_assignment_d_when_bang.expr,
         pass/empty_record_eq_dbg.expr,
         pass/empty_record_eq_newlines_doubleeq.expr,
         pass/empty_record_newline_assign.expr,
@@ -432,6 +444,7 @@ mod test_snapshots {
         pass/fn_with_record_arg.expr,
         pass/full_app_header.header,
         pass/full_app_header_trailing_commas.header,
+        pass/func_ty_parens_crazyness.expr,
         pass/function_effect_types.header,
         pass/function_with_tuple_ext_type.expr,
         pass/function_with_tuple_type.expr,
@@ -551,6 +564,7 @@ mod test_snapshots {
         pass/nonempty_hosted_header.header,
         pass/nonempty_package_header.header,
         pass/nonempty_platform_header.header,
+        pass/not_closure_with_multibackpassing.expr,
         pass/not_double_parens.expr,
         pass/not_multiline_string.expr,
         pass/not_record_updater.expr,
@@ -685,6 +699,7 @@ mod test_snapshots {
         pass/tag_destructure_bang_no_space.expr,
         pass/tag_pattern.expr,
         pass/tag_union_ann_with_as.expr,
+        pass/tag_union_functions_as.expr,
         pass/ten_times_eleven.expr,
         pass/three_arg_closure.expr,
         pass/triple_paren_pat_ann.expr,
@@ -699,6 +714,7 @@ mod test_snapshots {
         pass/tuple_accessor_function.expr,
         pass/tuple_apply_parens_comment.expr,
         pass/tuple_destructure_bang.expr,
+        pass/tuple_funcs_in_parens.expr,
         pass/tuple_function_annotation.expr,
         pass/tuple_type.expr,
         pass/tuple_type_ext.expr,
@@ -772,13 +788,6 @@ mod test_snapshots {
                 // both of these result in:
                 // "a Expr::TrySuffix expression was not completely removed in desugar_value_def_suffixed"
                 true
-            }
-
-            "parens_newlines_before_as" | "tag_union_ann_with_as" => {
-                // Found unbound type variables {66}
-                //  in type alias `Test.IdentId(0)` [] [] : <66>
-                // Location: crates/compiler/can/src/scope.rs:541:13
-                cfg!(debug_assertions)
             }
 
             // When adding new snapshot tests, strongly prefer fixing any canonicalization panics

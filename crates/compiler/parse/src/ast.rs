@@ -34,6 +34,20 @@ impl<'a, T: Copy> ExtractSpaces<'a> for Spaces<'a, T> {
     fn extract_spaces(&self) -> Spaces<'a, T> {
         *self
     }
+
+    fn without_spaces(&self) -> T {
+        self.item
+    }
+}
+
+impl<'a, T> Spaces<'a, T> {
+    pub fn item(item: T) -> Self {
+        Self {
+            before: &[],
+            item,
+            after: &[],
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -111,12 +125,17 @@ impl<'a, T: Debug> Debug for Spaced<'a, T> {
 pub trait ExtractSpaces<'a>: Sized + Copy {
     type Item;
     fn extract_spaces(&self) -> Spaces<'a, Self::Item>;
+    fn without_spaces(&self) -> Self::Item;
 }
 
 impl<'a, T: ExtractSpaces<'a>> ExtractSpaces<'a> for &'a T {
     type Item = T::Item;
     fn extract_spaces(&self) -> Spaces<'a, Self::Item> {
         (*self).extract_spaces()
+    }
+
+    fn without_spaces(&self) -> Self::Item {
+        (*self).without_spaces()
     }
 }
 
@@ -129,6 +148,10 @@ impl<'a, T: ExtractSpaces<'a>> ExtractSpaces<'a> for Loc<T> {
             item: spaces.item,
             after: spaces.after,
         }
+    }
+
+    fn without_spaces(&self) -> Self::Item {
+        self.value.without_spaces()
     }
 }
 
@@ -2350,6 +2373,17 @@ macro_rules! impl_extract_spaces {
                     }
                 }
             }
+            fn without_spaces(&self) -> Self::Item {
+                match self {
+                    $t::SpaceBefore(item, _) => {
+                        item.without_spaces()
+                    },
+                    $t::SpaceAfter(item, _) => {
+                        item.without_spaces()
+                    },
+                    _ => *self,
+                }
+            }
         }
     };
 }
@@ -2412,6 +2446,14 @@ impl<'a, T: Copy> ExtractSpaces<'a> for Spaced<'a, T> {
             },
         }
     }
+
+    fn without_spaces(&self) -> T {
+        match self {
+            Spaced::SpaceBefore(item, _) => item.without_spaces(),
+            Spaced::SpaceAfter(item, _) => item.without_spaces(),
+            Spaced::Item(item) => *item,
+        }
+    }
 }
 
 impl<'a> ExtractSpaces<'a> for AbilityImpls<'a> {
@@ -2452,6 +2494,14 @@ impl<'a> ExtractSpaces<'a> for AbilityImpls<'a> {
                 AbilityImpls::SpaceBefore(_, _) => todo!(),
                 AbilityImpls::SpaceAfter(_, _) => todo!(),
             },
+        }
+    }
+
+    fn without_spaces(&self) -> Self::Item {
+        match self {
+            AbilityImpls::AbilityImpls(inner) => *inner,
+            AbilityImpls::SpaceBefore(item, _) => item.without_spaces(),
+            AbilityImpls::SpaceAfter(item, _) => item.without_spaces(),
         }
     }
 }

@@ -972,6 +972,47 @@ mod test_can {
     }
 
     #[test]
+    fn try_desugar_double_question_suffix() {
+        let src = indoc!(
+            r#"
+                Str.toU64 "123" ?? Num.maxU64
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems, Vec::new());
+
+        // Assert that we desugar to:
+        //
+        // when Str.toU64 "123"
+        //   Ok success_BRANCH1_0_9 -> success_BRANCH1_0_9
+        //   Err _ -> Num.maxU64
+
+        let (cond_expr, branches) = assert_when(&out.loc_expr.value);
+        let cond_args = assert_func_call(cond_expr, "toU64", CalledVia::Space, &out.interns);
+
+        assert_eq!(cond_args.len(), 1);
+        assert_str_value(&cond_args[0].1.value, "123");
+        assert_eq!(branches.len(), 2);
+        assert_eq!(branches[0].patterns.len(), 1);
+        assert_eq!(branches[1].patterns.len(), 1);
+        assert_pattern_tag_apply_with_ident(
+            &branches[0].patterns[0].pattern.value,
+            "Ok",
+            "success_BRANCH1_0_15",
+            &out.interns,
+        );
+        assert_var_usage(
+            &branches[0].value.value,
+            "success_BRANCH1_0_15",
+            &out.interns,
+        );
+        assert_pattern_tag_apply_with_underscore(&branches[1].patterns[0].pattern.value, "Err");
+        assert_var_usage(&branches[1].value.value, "maxU64", &out.interns);
+    }
+
+    #[test]
     fn try_desugar_works_elsewhere() {
         let src = indoc!(
             r#"
@@ -1087,6 +1128,51 @@ mod test_can {
         match pattern {
             Pattern::Identifier(sym) => assert_eq!(sym.as_str(interns), name),
             _ => panic!("Pattern was not an identifier: {:?}", pattern),
+        }
+    }
+
+    fn assert_pattern_tag_apply_with_ident(
+        pattern: &Pattern,
+        name: &str,
+        ident: &str,
+        interns: &roc_module::symbol::Interns,
+    ) {
+        match pattern {
+            Pattern::AppliedTag {
+                tag_name,
+                arguments,
+                ..
+            } if arguments.len() == 1 => {
+                assert_eq!(tag_name.as_ident_str().as_str(), name);
+                match arguments[0].1.value {
+                    Pattern::Identifier(sym) => assert_eq!(sym.as_str(interns), ident),
+                    _ => panic!(
+                        "The tag was expected to be applied with {:?} but we instead found {:?}",
+                        ident, arguments[0].1.value
+                    ),
+                }
+            }
+            _ => panic!("Pattern was not an applied tag: {:?}", pattern),
+        }
+    }
+
+    fn assert_pattern_tag_apply_with_underscore(pattern: &Pattern, name: &str) {
+        match pattern {
+            Pattern::AppliedTag {
+                tag_name,
+                arguments,
+                ..
+            } if arguments.len() == 1 => {
+                assert_eq!(tag_name.as_ident_str().as_str(), name);
+                match arguments[0].1.value {
+                    Pattern::Underscore => {},
+                    _ => panic!(
+                        "The tag was expected to be applied with an underscore but we instead found {:?}",
+                        arguments[0].1.value
+                    ),
+                }
+            }
+            _ => panic!("Pattern was not an applied tag: {:?}", pattern),
         }
     }
 

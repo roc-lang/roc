@@ -6,7 +6,7 @@ use crate::suffixed::{apply_try_function, unwrap_suffixed_expression, EUnwrapped
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_error_macros::internal_error;
-use roc_module::called_via::BinOp::Pizza;
+use roc_module::called_via::BinOp::{DoubleQuestion, Pizza};
 use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
@@ -153,6 +153,61 @@ fn new_op_call_expr<'a>(
                     Apply(right, env.arena.alloc([left]), CalledVia::BinOp(Pizza))
                 }
             }
+        }
+        DoubleQuestion => {
+            let left = desugar_expr(env, scope, left);
+            let right = desugar_expr(env, scope, right);
+
+            let mut branches = Vec::with_capacity_in(2, env.arena);
+            let mut branch_1_patts = Vec::with_capacity_in(1, env.arena);
+            let mut branch_1_patts_args = Vec::with_capacity_in(1, env.arena);
+            let success_var = env.arena.alloc_str(
+                format!(
+                    "success_BRANCH1_{}_{}",
+                    left.region.start().offset,
+                    left.region.end().offset
+                )
+                .as_str(),
+            );
+            branch_1_patts_args.push(Loc::at(
+                left.region,
+                Pattern::Identifier { ident: success_var },
+            ));
+            let branch_1_tag: &Loc<Pattern<'a>> =
+                env.arena.alloc(Loc::at(left.region, Pattern::Tag("Ok")));
+            branch_1_patts.push(Loc::at(
+                left.region,
+                Pattern::Apply(branch_1_tag, branch_1_patts_args.into_bump_slice()),
+            ));
+            let branch_one: &WhenBranch<'_> = env.arena.alloc(WhenBranch {
+                patterns: branch_1_patts.into_bump_slice(),
+                value: Loc::at(
+                    left.region,
+                    Expr::Var {
+                        module_name: "",
+                        ident: success_var,
+                    },
+                ),
+                guard: None,
+            });
+            branches.push(branch_one);
+            let mut branch_2_patts = Vec::with_capacity_in(1, env.arena);
+            let mut branch_2_patts_args = Vec::with_capacity_in(1, env.arena);
+            branch_2_patts_args.push(Loc::at(right.region, Pattern::Underscore("")));
+            let branch_2_tag: &Loc<Pattern<'a>> =
+                env.arena.alloc(Loc::at(left.region, Pattern::Tag("Err")));
+            branch_2_patts.push(Loc::at(
+                right.region,
+                Pattern::Apply(branch_2_tag, branch_2_patts_args.into_bump_slice()),
+            ));
+            let branch_two: &WhenBranch<'_> = env.arena.alloc(WhenBranch {
+                patterns: branch_2_patts.into_bump_slice(),
+                value: *right,
+                guard: None,
+            });
+            branches.push(branch_two);
+
+            When(left, branches.into_bump_slice())
         }
         binop => {
             let left = desugar_expr(env, scope, left);
@@ -1601,6 +1656,7 @@ fn binop_to_function(binop: BinOp) -> (&'static str, &'static str) {
         And => (ModuleName::BOOL, "and"),
         Or => (ModuleName::BOOL, "or"),
         Pizza => unreachable!("Cannot desugar the |> operator"),
+        DoubleQuestion => unreachable!("Cannot desugar the ?? operator"),
     }
 }
 
