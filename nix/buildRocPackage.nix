@@ -3,7 +3,7 @@ let
   packageDependencies = pkgs.stdenv.mkDerivation {
     inherit src;
     name = "roc-dependencies";
-    nativeBuildInputs = with pkgs; [ gnutar brotli ripgrep wget ];
+    nativeBuildInputs = with pkgs; [ gnutar brotli ripgrep wget openssl ];
 
     buildPhase = ''
       list=$(rg -o 'https://github.com[^"]*' ${entryPoint})
