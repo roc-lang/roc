@@ -1481,7 +1481,6 @@ walk! : List elem, state, (state, elem => state) => state
 walk! = \list, state, func! ->
     when list is
         [] -> state
-
         [elem, .. as rest] ->
             nextState = func! state elem
             walk! rest nextState func!
