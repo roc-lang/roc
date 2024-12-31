@@ -1,9 +1,9 @@
-use super::ops::{to_stmt, Expr, OpCode, Operation, Sign};
+use super::ops::{to_stmt, Expr, OpCode, Stmt, Sign};
 use super::proc::{Proc, Section};
 use super::{ops, storage::*};
 use super::{Error, Result};
 use bumpalo;
-use bumpalo::{collections, collections::CollectIn};
+use bumpalo::{collections, collections::{CollectIn,Vec}, vec};
 use roc_module::low_level::LowLevel;
 use roc_module::{low_level, symbol};
 use roc_mono::ir::Literal;
@@ -13,7 +13,10 @@ use roc_mono::{
 };
 use std::borrow::Cow;
 use std::hash::Hash;
+use std::cell::{Cell,RefCell};
 type SymbolMap<T> = Map<symbol::Symbol, T>;
+
+
 
 ///The type given as output by mono
 type MonoInput<'a> = roc_collections::MutMap<(symbol::Symbol, ir::ProcLayout<'a>), ir::Proc<'a>>;
@@ -26,33 +29,60 @@ type SymbolInfo<'a> = (Output, LayoutRepr<'a>, Form);
 
 ///A expression that requires statements, ie splitting apart a variable
 ///Implemented as a simple way to model expressions in a way that does not require complex forms
+#[derive(Clone, Debug, PartialEq)]
 struct StmtExpr {
-    stmts: Box<[Operation]>,
+    stmts: Box<[Stmt]>,
     expr: Expr,
+    form : Option<Form>
 }
-impl<'a> StmtExpr
-where
-    Self: 'a,
-{
-    fn new(stmts: Box<[Operation]>, expr: Expr) -> Self {
+impl StmtExpr {
+    fn new(stmts: Box<[Stmt]>, expr: Expr) -> Self {
         Self {
             stmts: stmts,
             expr: expr,
+            form : None,
         }
     }
-    fn stmts(self: &'a Self) -> &'a [Operation] {
+    fn new_with_form(stmts: Box<[Stmt]>, expr: Expr, form : Form) -> Self {
+        Self {
+            stmts: stmts,
+            expr: expr,
+            form : Some(form),
+        }
+    }
+    fn stmts(&self) -> &[Stmt] {
         &self.stmts[..]
     }
-    fn expr(self: &'a Self) -> &'a Expr {
+    fn expr(&self) -> &Expr {
         &self.expr
     }
+    fn form(&self) -> &Option<Form> {
+        &self.form
+    }
+    //TODO this should probably not be in place
     ///Make the expr into a statement with the given output, then add a new expression
-    fn append_with(self, with: Output, expr: Expr) -> Self {
-        let new_stmt = to_stmt(self.expr().clone(), with);
+    fn append_with(&self, with: Output, expr: Expr) -> Self {
+        let new_stmt = to_stmt(&self.expr(), with);
+        let mut stmts = self.stmts().to_vec().clone();
+        stmts.push(new_stmt);
         Self {
-            stmts: [self.stmts, Box::new([new_stmt])].concat().into(),
+            stmts: stmts.into(),
             expr: expr,
+            form : None,
         }
+    }
+    fn append_with_form(&self, with: Output, expr: Expr, form : Form) -> Self {
+        let new_stmt = to_stmt(&self.expr(), with);
+        let mut stmts = self.stmts().to_vec().clone();
+        stmts.push(new_stmt);
+        Self {
+            stmts: stmts.into(),
+            expr: expr,
+            form : Some(form),
+        }
+    }
+    fn to_stmts(&self, with: Output) -> Box<[Stmt]> {
+        [self.stmts(),&[to_stmt(self.expr(),with)]].concat().into()
     }
 }
 impl From<Expr> for StmtExpr {
@@ -60,9 +90,17 @@ impl From<Expr> for StmtExpr {
         Self::new(Box::new([]), value)
     }
 }
+impl From<(Expr,Form)> for StmtExpr {
+    fn from(value: (Expr,Form)) -> Self {
+        let (expr, form) = value else {
+            todo!()
+        };
+        Self::new_with_form(Box::new([]), expr, form)
+    }
+}
 
 ///How a layout is passed to a procedure, and it's internals
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 enum Form {
     ///It takes it as a struct register
     ByRef,
@@ -70,25 +108,33 @@ enum Form {
     ByValue,
     ///It takes a value too large to be stored in one register
     Indirect,
+    ///A function pointer 
+    Function,
+    ///It is a float
+    ByFloat
 }
 
+//FIXME some of these lifetimes are proberaly unnenecassary 
 ///Controlls the conversion from Mono to ROAR
 pub(crate) struct Converter<'a, 'b> {
     ///The interner for Mono type layouts
     layout_interner: &'b mut STLayoutInterner<'a>,
     ///The arena, as this controls the Mono -> ROAR phase
-    arena: bumpalo::Bump,
+    arena: &'b bumpalo::Bump,
     ///Register names that have not been yet allocated
     register_alloc: RegisterAllocater,
     ///Refrences from the symbol of a type to a given procedure
     //TODO get this working
     proc_map: Map<symbol::Symbol, ProcRef>,
+    ///A list of proccedures that need to be implemented 
+    //TODO make this not a ref cell
+    proc_queue : RefCell<Vec<'b,(symbol::Symbol,&'b ir::ProcLayout<'b>,&'b ir::Proc<'b>)>>
 }
 
-pub(super) fn get_sym_reg<'a>(
+pub(super) fn get_sym_reg<'f0>(
     sym: &symbol::Symbol,
-    map: &'a SymbolMap<SymbolInfo>,
-) -> Option<&'a Output> {
+    map: &'f0 SymbolMap<SymbolInfo>,
+) -> Option<&'f0 Output> {
     map.get(sym).map(|(value, _, _)| value)
 }
 
@@ -98,54 +144,81 @@ pub(super) fn arg_info<'a>(
 ) -> Option<SymbolInfo<'a>> {
     sym_map.get(sym).cloned()
 }
-impl<'a, 'b> Converter<'a, 'b> {
+
+impl<'c,'a, 'b : 'c> Converter<'a, 'b> where 'b : 'a {
+    pub fn new_register(&mut self) -> Register {
+        self.register_alloc.new_register()
+    }
+
+    pub fn new_float_register(&mut self) -> FloatRegister {
+        self.register_alloc.new_float_register()
+    }
     ///Create a converter
-    pub fn new(layout_interner: &'b mut STLayoutInterner<'a>, arena: bumpalo::Bump) -> Self {
+    pub fn new(layout_interner: &'b mut STLayoutInterner<'a>, arena: &'b bumpalo::Bump) -> Self {
         Self {
             layout_interner: layout_interner,
             arena: arena,
             register_alloc: RegisterAllocater::new(),
             proc_map: Map::new(),
+            proc_queue: RefCell::new(vec![in &arena])
         }
     }
     ///Get the internal interner
-    pub fn intern(&'b self) -> &'b STLayoutInterner<'a> {
+    pub fn intern(&'c self) -> &'c STLayoutInterner<'a> {
         self.layout_interner
     }
     ///From an interned layout get a regular layout and if it's possible to store it in a register
-    pub fn get_form(&'b self, layout: &InLayout<'b>) -> Result<(LayoutRepr<'b>, Form)> {
+    /// Note that this will remove indirection if it exists, ie (Literal,&Int) -> (Ref,Int)
+    pub fn get_form(&self, layout: &InLayout<'b>) -> Result<(LayoutRepr<'b>, Form)> {
         use Form::*;
         let repr = self.intern().get_repr(*layout);
         println!("repr is {:?}", repr);
         Ok(match repr {
-            LayoutRepr::Builtin(builtin) if self.intern().stack_size(*layout) <= 8 => {
-                (repr, ByValue)
+            LayoutRepr::Builtin(builtin) => {
+                if self.intern().stack_size(*layout) <= 8 {
+                    (repr, ByValue)
+                } else {
+                    (repr, Indirect)
+                }
             }
-            LayoutRepr::LambdaSet(lambda_set) => todo!(),
-            LayoutRepr::FunctionPointer(function_pointer) => todo!(),
-            LayoutRepr::Erased(erased) => todo!(),
+            LayoutRepr::LambdaSet(lambda_set) => (repr,Function),
+            LayoutRepr::FunctionPointer(function_pointer) => (repr,Function),
+            LayoutRepr::Erased(erased) => (repr,Function),
             LayoutRepr::Ptr(ptr) => (self.intern().get_repr(ptr), ByRef),
             _ => (repr, ByRef),
         })
     }
+    ///Top level of ROAR, used to convert from Mono to ROAR
+    /// Takes and then returns ownership of self to aviod problems with it
+    pub fn build_roar(mut self, input : &MonoInput<'a>) -> Result<(Self,Section<'b>)> {
+        if let Ok(result) = self.build_section(input) {
+            Ok((self,result))
+        } else {
+            Err(Error::Todo)
+        }
+    }
     ///Convert the mono input into Roar
-    pub fn build_section(&'b self, input: &MonoInput<'a>) -> Result<Section<'b>> {
-        let procs = input
-            .into_iter()
-            .map(|((symbol, layout), proc)| self.build_proc(symbol, layout, proc).unwrap()) //TODO
-            .collect_in::<bumpalo::collections::Vec<Proc>>(&self.arena);
+    pub fn build_section(&mut self, input: &MonoInput<'a>) -> Result<Section<'b>> {
+        let mut procs = vec![in &self.arena];
+        for ((symbol, layout), proc) in input {
+            procs.push(self.build_proc(symbol, layout, proc).unwrap());
+        }
+        // let procs = input
+        //     .into_iter()
+        //     .map(|((symbol, layout), proc)| self.build_proc(symbol, layout, proc).unwrap()) //TODO
+        //     .collect_in::<bumpalo::collections::Vec<Proc>>(&self.arena);
         //let mut roar = Section::new(&self.arena);
         let (roar, refs) = Section::new(&self.arena).add_procs(procs);
         Ok(roar)
     }
     ///Build a single Mono procedure
-    pub fn build_proc(
-        &'b self,
+    pub fn build_proc<'f0>(
+        &mut self,
         sym: &symbol::Symbol,
         layout: &ir::ProcLayout,
         proc: &ir::Proc<'a>,
     ) -> Result<Proc<'b>> {
-        let sym_map: &mut Map<symbol::Symbol, SymbolInfo<'_>> = &mut Map::new();
+        let mut sym_map: Map<symbol::Symbol, SymbolInfo<'_>> = Map::new();
         let args = proc
             .args
             .into_iter()
@@ -157,21 +230,23 @@ impl<'a, 'b> Converter<'a, 'b> {
             })
             .collect();
         let mut roar_proc = Proc::new(args, &self.arena);
-        Ok(roar_proc.add_ops(self.build_stmt(&proc.body, sym_map)?))
+        Ok(roar_proc.add_ops(self.build_stmt(&proc.body, &mut sym_map)?))
     }
     ///Build a single Mono "statement". Because Mono uses a `let in` structure of binding while ROAR uses an imperiative style of simply setting values, a single Mono statement almost always corresponds to mutiple ROAR statements
     pub fn build_stmt(
-        &'b self,
-        stmt: &ir::Stmt<'_>,
-        sym_map: &mut SymbolMap<SymbolInfo<'_>>,
-    ) -> Result<collections::Vec<Operation>> {
-        println!("Trying to build stmt {:?}", stmt);
+        &mut self,
+        stmt: &ir::Stmt<'a>,
+        sym_map: &mut SymbolMap<SymbolInfo<'a>>,
+    ) -> Result<collections::Vec<Stmt>> {
+        println!("Trying to build stmt {:#?}",stmt);
         use super::ops::OpCode::*;
         use super::storage::Input::*;
         match stmt {
+            //Build a let statement
+            //Among the most important transformations 
             ir::Stmt::Let(symbol, expr, in_layout, rest) => {
-                let r_expr = match expr {
-                    ir::Expr::Literal(literal) => (Move, self.build_literal(literal)?, Null).into(),
+                let r_expr : StmtExpr = match expr {
+                    ir::Expr::Literal(literal) => self.build_literal(literal)?.into(),
                     ir::Expr::Call(call) => self.build_call(call, sym_map)?,
                     ir::Expr::Tag {
                         tag_layout,
@@ -219,6 +294,26 @@ impl<'a, 'b> Converter<'a, 'b> {
                         update_mode,
                     } => todo!(),
                 };
+                if let Some((reg,layout,ref form)) = sym_map.get(symbol) {
+                    sym_map.insert(*symbol,(*reg,self.intern().get_repr(*in_layout),*form));
+                    r_expr.to_stmts(*reg)
+                } else {
+                    let new_reg = match r_expr.form() {
+                        
+                        Some(Form::ByFloat) => Output::FloatRegister(self.new_float_register()),
+                        Some(_) => Output::Register(self.new_register()),
+                        None => todo!(),
+                        //_ => self.register_alloc.new_register()
+                    };
+                    let new_form = match r_expr.form() {
+                        Some(form) => *form,
+                        None => self.get_form(in_layout)?.1
+                    };
+                    sym_map.insert(*symbol,(new_reg,self.intern().get_repr(*in_layout),new_form));
+                    r_expr.to_stmts(new_reg)
+                };
+                todo!()
+                
             }
             ir::Stmt::Switch {
                 cond_symbol,
@@ -255,12 +350,39 @@ impl<'a, 'b> Converter<'a, 'b> {
         todo!()
     }
     ///Get a literal representation
-    fn build_literal(&'b self, literal: &Literal<'_>) -> Result<Input> {
-        todo!()
+    fn build_literal(&mut self, literal: &Literal<'_>) -> Result<StmtExpr> {
+        match literal {
+            Literal::Int(int) => todo!(),
+            Literal::U128(unsigned_int) => todo!(),
+            Literal::Float(float) => todo!(),
+            Literal::Decimal(decimal) => todo!(),
+            Literal::Str(str) => {
+            
+                Ok(StmtExpr::new_with_form(
+                    Box::new([]), 
+                    (
+                        OpCode::Create,
+                        
+                        Input::Data(str.as_bytes().to_vec()),
+                        Input::Null
+                        
+                    ), 
+                    Form::ByRef
+                ))
+            },
+            Literal::Bool(bool) => Ok((
+                (OpCode::Move,Input::Value(LiteralValue::Unsigned(*bool as u64)),Input::Null),
+                Form::ByValue
+            ).into()),
+            Literal::Byte(byte) => Ok((
+                (OpCode::Move,Input::Value(LiteralValue::Unsigned(*byte as u64)),Input::Null),
+                Form::ByValue
+            ).into()),
+        }
     }
     ///Make a function call
     pub fn build_call(
-        &'b self,
+        &mut self,
         call: &ir::Call<'_>,
         sym_map: &mut SymbolMap<SymbolInfo<'_>>,
     ) -> Result<StmtExpr> {
@@ -271,15 +393,8 @@ impl<'a, 'b> Converter<'a, 'b> {
                 arg_layouts,
                 specialization_id,
             } => todo!(),
-            ir::CallType::ByPointer {
-                pointer,
-                ret_layout,
-                arg_layouts,
-            } => todo!(),
-            ir::CallType::Foreign {
-                foreign_symbol,
-                ret_layout,
-            } => todo!(),
+            ir::CallType::ByPointer {..} => todo!(), //? NOTE as far as I can tell, this is never used
+            ir::CallType::Foreign {..} => todo!(), //? NOTE as far as I can tell, unused
             ir::CallType::LowLevel { op, update_mode } => {
                 self.build_op(&op, &call.arguments, sym_map)?
             }
@@ -287,7 +402,7 @@ impl<'a, 'b> Converter<'a, 'b> {
         })
     }
     fn build_op(
-        &'b self,
+        &mut self,
         op_code: &low_level::LowLevel,
         args: &[symbol::Symbol],
         sym_map: &mut SymbolMap<SymbolInfo<'_>>,
@@ -421,11 +536,11 @@ impl<'a, 'b> Converter<'a, 'b> {
         })
     }
     ///Seperation of `build_op` for numerics
-    fn build_num_op<'c>(
-        &'b self,
+    fn build_num_op<'f0>(
+        &mut self,
         op_code: &low_level::LowLevel,
         args: &[symbol::Symbol],
-        sym_map: &mut SymbolMap<SymbolInfo<'c>>,
+        sym_map: &mut SymbolMap<SymbolInfo<'f0>>,
     ) -> Result<StmtExpr> {
         use low_level::LowLevel::*;
 
@@ -694,6 +809,7 @@ impl<'a, 'b> Converter<'a, 'b> {
             (Form::Indirect, Form::ByRef) => todo!(),
             (Form::Indirect, Form::ByValue) => todo!(),
             (Form::Indirect, Form::Indirect) => todo!(),
+            (_,_) => todo!()
         };
         todo!()
     }
@@ -702,7 +818,7 @@ impl<'a, 'b> Converter<'a, 'b> {
     ///Just a utility
     ///Always by value
     fn build_access(
-        &'b self,
+        &mut self,
         input: &Input,
         at_byte: Offset,
         sym_map: &mut SymbolMap<SymbolInfo<'_>>,
@@ -713,7 +829,7 @@ impl<'a, 'b> Converter<'a, 'b> {
     ///Split an access into many registers
     ///Always by values
     fn build_split_access(
-        &'b self,
+        &mut self,
         input: &Input,
         at_byte: Offset,
         number: u32,
@@ -732,7 +848,7 @@ impl<'a, 'b> Converter<'a, 'b> {
     ///Build an access into a structure
     ///Always by ref
     fn build_access_field(
-        &'b self,
+        &mut self,
         input: &Input,
         at_byte: Offset,
         bytes: ByteSize,
@@ -744,13 +860,26 @@ impl<'a, 'b> Converter<'a, 'b> {
     ///Build an access into a structure
     ///Always by ref
     fn build_access_index(
-        &'b self,
+        &mut self,
         input: &Input,
         at_byte: Offset,
         bytes: ByteSize,
         sym_map: &mut SymbolMap<SymbolInfo<'_>>,
-    ) -> Result<Expr> {
+    ) -> Result<StmtExpr> {
         todo!()
+    }
+    ///Build a given tag expression()
+    fn build_tag(&mut self, tag : ir::Expr, sym_map: &mut SymbolMap<SymbolInfo<'_>>) -> Result<StmtExpr> {
+        if let ir::Expr::Tag {
+            tag_layout,
+            tag_id,
+            arguments,
+            reuse,
+        } = tag {
+            todo!()
+        } else {
+            return Err(Error::Todo)
+        }
     }
 }
 

@@ -52,12 +52,12 @@ impl Display for LiteralValue {
         match self {
             LiteralValue::Signed(value) => write!(f, "#{:+x}", value),
             LiteralValue::Unsigned(value) => write!(f, "#{:x}", value),
-            //LiteralValue::Float(value) => write!(f, "!{}", value),
+            LiteralValue::Float(value) => write!(f, "!{}", value),
         }
     }
 }
 
-impl Display for Operation {
+impl Display for Stmt {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use super::storage::Input::*;
         write!(f, "{}", self.output);

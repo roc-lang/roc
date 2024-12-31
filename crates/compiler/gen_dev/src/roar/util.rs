@@ -4,6 +4,7 @@ pub(super) use std::result as std_result;
 pub enum Error {
     ///Another generic error
     Other(String),
+    #[deprecated = "Make the actual error"]
     ///Not yet done
     Todo,
 }

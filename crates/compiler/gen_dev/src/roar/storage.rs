@@ -7,7 +7,7 @@ use std::fmt::{Debug, Display};
 ///The type used to identify registers
 pub(crate) type Id = u32;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 ///A number of bytes an operation takes
 pub struct ByteSize(pub u32);
 
@@ -52,31 +52,36 @@ pub(crate) const WORD_SIZE: ByteSize = ByteSize(8);
 ///The align of a single word
 pub(crate) const WORD_ALIGN: Offset = Offset(8);
 ///A basic register refrence
-#[derive(Clone, Debug, Hash)]
+#[derive(Clone, Debug, Hash, PartialEq)]
 pub(crate) struct Register(pub Id);
 
-#[derive(Clone, Debug, Hash)]
+#[derive(Clone, Debug, Hash, PartialEq)]
 ///A basic float register refrence
 pub(crate) struct FloatRegister(pub Id);
 
-#[derive(Clone, Debug, Hash)]
+#[derive(Clone, Debug, Hash, PartialEq)]
 ///A given global
 pub(crate) struct Global(Symbol);
 
-#[derive(Clone, Debug, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 ///The type of all literal values that fit inside a word
 pub enum LiteralValue {
     Signed(i64),
     Unsigned(u64),
-    //Float(f64),
+    Float(f64),
     //Add more in future?
 }
-
+impl std::hash::Hash for LiteralValue {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        unreachable!("Should not be indexing on a literal")
+    }
+}
+//TODO change this to a slice
 ///The type of literal data, for instance strings
 pub(crate) type LiteralData = Vec<u8>;
 
-#[derive(Clone, Debug, Hash)]
+#[derive(Clone, Debug, Hash, PartialEq)]
 //All possible values to be read and written to
 pub enum Output {
     Register(Register),
@@ -84,7 +89,7 @@ pub enum Output {
     Null,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Input {
     Register(Register),
     FloatRegister(FloatRegister),
@@ -120,7 +125,7 @@ impl TryFrom<Input> for Output {
         }
     }
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 ///A values that are valid as constants, for example as offsets
 pub enum Constant {
     LiteralValue(LiteralValue),
@@ -128,13 +133,13 @@ pub enum Constant {
     Offset(Offset),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 ///Values that can be given to the jump instruction
 pub enum Label {
     Absolute(u32),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 ///Values that can be given to call instructions
 pub enum ProcRef {
     ///It's absolute id in the segment

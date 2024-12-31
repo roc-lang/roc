@@ -56,12 +56,15 @@ fn build_module_help<'a, 'r>(
     if cfg!(feature = "use_roar") {
         //For using experimental ROAR pipeline
         let mut arena: bumpalo::Bump = bumpalo::Bump::new();
-        let converter = roar::convert::Converter::new(layout_interner, arena);
-        let section = converter.build_section(&procedures);
+        let mut converter = roar::convert::Converter::new(layout_interner, &arena);
+        let Ok((_,section)) = converter.build_roar(&procedures) else {
+            todo!()
+        };
         println!("roar is {:?}", section);
         match target {
             _ => todo!(),
-        }
+        };
+        todo!()
     } else {
         match target {
             Target::LinuxX64 if cfg!(feature = "target-x86_64") => {

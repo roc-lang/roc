@@ -2,7 +2,7 @@ use std::mem;
 
 use super::storage::{Args,ByteSize, Constant, Offset, Input, Output,ProcRef,Label};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Sign {
     Signed,
     Unsigned,
@@ -23,13 +23,13 @@ impl From<roc_builtins::bitcode::IntWidth> for Sign {
         }
     }
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Flag {
     Neq,
     Eq
 }
 type Flags = Flag;
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 ///All operations used, arithemetic operations take a signedness flag to increase readability
 pub(crate) enum OpCode {
     Add(Sign),
@@ -81,26 +81,36 @@ pub(crate) enum OpCode {
     Apply(Box<Args>),
     Return
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 ///The actual type of operations in ROAR
-pub struct Operation {
+pub struct Stmt {
     pub output: Output,
     pub opcode: OpCode,
     ///Every function (except `call`) has (in terms of non-constant arguements) an arity of 2, so only two inputs are allowed
     pub inputs: (Input,Input),
 }
+
+impl Stmt {
+    pub(crate) fn new(output : Output, opcode : OpCode, inputs : (Input, Input)) -> Self {
+        Self {
+            output : output,
+            opcode : opcode,
+            inputs : inputs
+        }
+    }
+}
 ///The type of expressions. Not really expressions, just the non-output portion of a ROAR op
 pub type Expr = (OpCode,Input,Input);
 
-pub fn to_stmt(expr : Expr,output : Output) -> Operation {
+pub fn to_stmt(expr : &Expr,output : Output) -> Stmt {
     let (op,in_a,in_b) = expr else {
         todo!()
     };
-    return Operation {
+    return Stmt {
         output : output,
-        opcode : op,
-        inputs : (in_a,in_b)
+        opcode : op.clone(),
+        inputs : (in_a.clone(),in_b.clone())
     }
 }
 //TODO ? make a macro for instructions?

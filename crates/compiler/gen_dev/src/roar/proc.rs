@@ -1,4 +1,4 @@
-use super::ops::Operation;
+use super::ops::Stmt;
 use super::storage::{
     Args, ByteSize, Constant, FloatRegister, Global, Input, Offset, Output, ProcRef, Register,
 };
@@ -9,11 +9,11 @@ use bumpalo::collections::CollectIn;
 
 use roc_module::symbol;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Proc<'a> {
     ///The instructions themselves
-    pub instructions: collections::Vec<'a, Operation>,
+    pub instructions: collections::Vec<'a, Stmt>,
     ///A list of inputs, in order, taken by the function
     pub inputs: Args,
     ///A list of computed registers used by the operation
@@ -21,7 +21,7 @@ pub struct Proc<'a> {
 }
 
 ///Some annotations on the internal level that may or may not be present
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Annotations {
     ///All the registers it uses
     uses: Option<Vec<Output>>,
@@ -81,7 +81,7 @@ impl<'a> Section<'a> {
 }
 
 ///Some annotations on the internal level that may or may not be present
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SectionAnnotations {
     ///It's name in the AST
     symbol: Option<symbol::Symbol>,
@@ -105,7 +105,7 @@ impl<'a> Proc<'a> {
             annotations: Annotations::default(),
         }
     }
-    pub fn add_ops(mut self,ops : collections::Vec<'a,Operation>) -> Self {
+    pub fn add_ops(mut self,ops : collections::Vec<'a,Stmt>) -> Self {
         self.instructions.extend(ops);
         self
     }
