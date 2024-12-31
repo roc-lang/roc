@@ -11686,31 +11686,6 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        deprecated_backpassing,
-        indoc!(
-            r#"
-            foo = \bar ->
-                baz <- Result.try bar
-
-                Ok (baz * 3)
-
-            foo (Ok 123)
-            "#
-        ),
-        @r###"
-    ── BACKPASSING DEPRECATED in /code/proj/Main.roc ───────────────────────────────
-
-    Backpassing (<-) like this will soon be deprecated:
-
-    5│          baz <- Result.try bar
-                ^^^^^^^^^^^^^^^^^^^^^
-
-    You should use a ! for awaiting tasks or a ? for trying results, and
-    functions everywhere else.
-    "###
-    );
-
-    test_report!(
         unknown_shorthand_no_deps,
         indoc!(
             r#"

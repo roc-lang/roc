@@ -28,7 +28,7 @@ Without a Yubikey:
 This explanation was based on the steps outlined [here](https://scatteredcode.net/signing-git-commits-using-yubikey-on-windows/).
 
 On linux, run:
-```
+```sh
 gpg --list-keys --keyid-format SHORT | grep ^pub
 gpg --export --armor [Your_Key_ID] > public.asc
 ```
@@ -46,19 +46,19 @@ Install the [YubiKey Minidriver for 64-bit systems – Windows Installer](https:
 Insert your Yubikey and check if it is mentioned in the output of `gpg --card-status` (powershell).
 
 Open powershell and execute:
-```
+```sh
 git config --global gpg.program "c:\Program Files (x86)\GnuPG\bin\gpg.exe"
 git config --global commit.gpgsign true
 gpg --list-secret-keys --keyid-format LONG
 ```
 The last command will show your keyid. On the line that says `[SC]`, copy the id.
 In the example below the id is 683AB68D867FEB5C
-```
+```sh
 sec>  rsa4096/683AB68D867FEB5C 2020-02-02 [SC] [expires: 2022-02-02]
 ```
 
 Tell git your keyid:
-```
+```sh
 >git config --global user.signingkey YOUR_KEY_ID_HERE
 ```
 

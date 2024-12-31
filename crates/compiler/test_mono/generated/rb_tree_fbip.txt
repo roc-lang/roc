@@ -1,10 +1,10 @@
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.284 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.284;
+    let Num.286 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.286;
 
 procedure Num.24 (#Attr.2, #Attr.3):
-    let Num.282 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
-    ret Num.282;
+    let Num.284 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
+    ret Num.284;
 
 procedure Test.3 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2):
     let #Derived_gen.4 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;

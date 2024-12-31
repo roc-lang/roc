@@ -76,7 +76,7 @@ comptime {
 fn testing_roc_alloc(size: usize, nominal_alignment: u32) callconv(.C) ?*anyopaque {
     const real_alignment = 16;
     if (nominal_alignment > real_alignment) {
-        @panic("alignments larger than that of usize are not currently supported");
+        @panic("alignments larger than that of 2 usize are not currently supported");
     }
     // We store an extra usize which is the size of the data plus the size of the size, directly before the data.
     // We need enough clocks of the alignment size to fit this (usually this will be one)
@@ -98,12 +98,16 @@ fn testing_roc_alloc(size: usize, nominal_alignment: u32) callconv(.C) ?*anyopaq
     return data_ptr;
 }
 
-fn testing_roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, _: u32) callconv(.C) ?*anyopaque {
-    const raw_ptr = @as([*]u8, @ptrCast(c_ptr)) - @sizeOf(usize);
+fn testing_roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, nominal_alignment: u32) callconv(.C) ?*anyopaque {
+    const real_alignment = 16;
+    if (nominal_alignment > real_alignment) {
+        @panic("alignments larger than that of 2 usize are not currently supported");
+    }
+    const raw_ptr = @as([*]align(real_alignment) u8, @alignCast(@as([*]u8, @ptrCast(c_ptr)) - @sizeOf(usize)));
     const slice = raw_ptr[0..(old_size + @sizeOf(usize))];
 
     const new_full_size = new_size + @sizeOf(usize);
-    var new_raw_ptr = (std.testing.allocator.realloc(slice, new_full_size) catch unreachable).ptr;
+    var new_raw_ptr = @as([*]u8, @alignCast((std.testing.allocator.realloc(slice, new_full_size) catch unreachable).ptr));
     @as([*]usize, @alignCast(@ptrCast(new_raw_ptr)))[0] = new_full_size;
     new_raw_ptr += @sizeOf(usize);
     const new_ptr = @as(?*anyopaque, @ptrCast(new_raw_ptr));
@@ -177,6 +181,9 @@ pub const Dec = fn (?[*]u8) callconv(.C) void;
 const REFCOUNT_MAX_ISIZE: isize = 0;
 pub const REFCOUNT_ONE_ISIZE: isize = std.math.minInt(isize);
 pub const REFCOUNT_ONE: usize = @as(usize, @bitCast(REFCOUNT_ONE_ISIZE));
+// Only top bit set.
+pub const REFCOUNT_IS_NOT_ATOMIC_MASK: isize = REFCOUNT_ONE_ISIZE;
+pub const REFCOUNT_ONE_ATOMIC_ISIZE: isize = 1;
 
 pub const IntWidth = enum(u8) {
     U8 = 0,
@@ -207,13 +214,14 @@ pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
     }
 
     // Ensure that the refcount is not whole program lifetime.
-    if (ptr_to_refcount.* != REFCOUNT_MAX_ISIZE) {
+    const refcount: isize = ptr_to_refcount.*;
+    if (refcount != REFCOUNT_MAX_ISIZE) {
         // Note: we assume that a refcount will never overflow.
         // As such, we do not need to cap incrementing.
         switch (RC_TYPE) {
             .normal => {
                 if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
-                    const old = @as(usize, @bitCast(ptr_to_refcount.*));
+                    const old = @as(usize, @bitCast(refcount));
                     const new = old + @as(usize, @intCast(amount));
 
                     const oldH = old - REFCOUNT_ONE + 1;
@@ -222,10 +230,16 @@ pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
                     std.debug.print("{} + {} = {}!\n", .{ oldH, amount, newH });
                 }
 
-                ptr_to_refcount.* += amount;
+                ptr_to_refcount.* = refcount + amount;
             },
             .atomic => {
-                _ = @atomicRmw(isize, ptr_to_refcount, .Add, amount, .monotonic);
+                // If the first bit of the refcount is set, this variable is threadlocal.
+                // Use normal refcounting instead of atomic.
+                if (refcount & REFCOUNT_IS_NOT_ATOMIC_MASK != 0) {
+                    ptr_to_refcount.* = refcount + amount;
+                } else {
+                    _ = @atomicRmw(isize, ptr_to_refcount, .Add, amount, .monotonic);
+                }
             },
             .none => unreachable,
         }
@@ -387,9 +401,18 @@ inline fn decref_ptr_to_refcount(
                 }
             },
             .atomic => {
-                const last = @atomicRmw(isize, &refcount_ptr[0], .Sub, 1, .monotonic);
-                if (last == REFCOUNT_ONE_ISIZE) {
-                    free_ptr_to_refcount(refcount_ptr, alignment, elements_refcounted);
+                // If the first bit of the refcount is set, this variable is threadlocal.
+                // Use normal refcounting instead of atomic.
+                if (refcount & REFCOUNT_IS_NOT_ATOMIC_MASK != 0) {
+                    refcount_ptr[0] = refcount -% 1;
+                    if (refcount == REFCOUNT_ONE_ISIZE) {
+                        free_ptr_to_refcount(refcount_ptr, alignment, elements_refcounted);
+                    }
+                } else {
+                    const last = @atomicRmw(isize, &refcount_ptr[0], .Sub, 1, .monotonic);
+                    if (last == REFCOUNT_ONE_ATOMIC_ISIZE) {
+                        free_ptr_to_refcount(refcount_ptr, alignment, elements_refcounted);
+                    }
                 }
             },
             .none => unreachable,
@@ -414,7 +437,17 @@ pub fn isUnique(
         std.debug.print("| is unique {*}\n", .{isizes - 1});
     }
 
-    return refcount == REFCOUNT_ONE_ISIZE;
+    switch (RC_TYPE) {
+        .normal => {
+            return refcount == REFCOUNT_ONE_ISIZE;
+        },
+        .atomic => {
+            return refcount == REFCOUNT_ONE_ISIZE or refcount == REFCOUNT_ONE_ATOMIC_ISIZE;
+        },
+        .none => {
+            return false;
+        },
+    }
 }
 
 // We follow roughly the [fbvector](https://github.com/facebook/folly/blob/main/folly/docs/FBVector.md) when it comes to growing a RocList.
@@ -440,15 +473,16 @@ pub inline fn calculateCapacity(
     requested_length: usize,
     element_width: usize,
 ) usize {
-    // TODO: there are two adjustments that would likely lead to better results for Roc.
-    // 1. Deal with the fact we allocate an extra u64 for refcount.
-    //    This may lead to allocating page size + 8 bytes.
-    //    That could mean allocating an entire page for 8 bytes of data which isn't great.
-    // 2. Deal with the fact that we can request more than 1 element at a time.
-    //    fbvector assumes just appending 1 element at a time when using this algorithm.
-    //    As such, they will generally grow in a way that should better match certain memory multiple.
-    //    This is also the normal case for roc, but we could also grow by a much larger amount.
-    //    We may want to round to multiples of 2 or something similar.
+    // TODO: Deal with the fact we allocate an extra u64 for refcount.
+    // This may lead to allocating page size + 8 bytes.
+    // That could mean allocating an entire page for 8 bytes of data which isn't great.
+
+    if (requested_length != old_capacity + 1) {
+        // The user is explicitly requesting n elements.
+        // Trust the user and just reserve that amount.
+        return requested_length;
+    }
+
     var new_capacity: usize = 0;
     if (element_width == 0) {
         return requested_length;

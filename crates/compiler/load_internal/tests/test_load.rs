@@ -2131,3 +2131,51 @@ fn roc_file_no_extension() {
 
     assert_eq!(err, expected, "\n{}", err);
 }
+
+#[test]
+fn roc_package_depends_on_other_package() {
+    let modules = vec![
+        (
+            "main",
+            indoc!(
+                r#"
+            package [Module] { other: "other/main.roc" }
+            "#
+            ),
+        ),
+        (
+            "Module.roc",
+            indoc!(
+                r#"
+            module [foo]
+
+            import other.OtherMod
+
+            foo = OtherMod.say "hello"
+            "#
+            ),
+        ),
+        (
+            "other/main.roc",
+            indoc!(
+                r#"
+            package [OtherMod] {}
+            "#
+            ),
+        ),
+        (
+            "other/OtherMod.roc",
+            indoc!(
+                r#"
+            module [say]
+
+            say = \msg -> "$(msg), world!"
+            "#
+            ),
+        ),
+    ];
+
+    let result = multiple_modules("roc_package_depends_on_other_package", modules);
+
+    assert!(result.is_ok());
+}

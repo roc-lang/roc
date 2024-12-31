@@ -4,8 +4,8 @@ use bumpalo::collections::Vec;
 use object::write::{self, SectionId, SymbolId};
 use object::write::{Object, StandardSection, StandardSegment, Symbol, SymbolSection};
 use object::{
-    Architecture, BinaryFormat, Endianness, RelocationEncoding, RelocationKind, SectionKind,
-    SymbolFlags, SymbolKind, SymbolScope,
+    Architecture, BinaryFormat, Endianness, RelocationEncoding, RelocationFlags, RelocationKind,
+    SectionKind, SymbolFlags, SymbolKind, SymbolScope,
 };
 use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
@@ -245,11 +245,11 @@ fn generate_roc_panic<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object) 
                         //      0000000000000700:  R_AARCH64_ADR_PREL_PG_HI21   .rodata+0x650
                         let relocation = write::Relocation {
                             offset: offset + proc_offset,
-                            size: 21,
-                            kind: RelocationKind::Elf(object::elf::R_AARCH64_ADR_PREL_PG_HI21),
-                            encoding: RelocationEncoding::Generic,
                             symbol: sym_id,
                             addend: 0,
+                            flags: write::RelocationFlags::Elf {
+                                r_type: object::elf::R_AARCH64_ADR_PREL_PG_HI21,
+                            },
                         };
 
                         output.add_relocation(text_section, relocation).unwrap();
@@ -258,25 +258,24 @@ fn generate_roc_panic<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object) 
                         //      0000000000000704:  R_AARCH64_ADD_ABS_LO12_NC    .rodata+0x650
                         write::Relocation {
                             offset: offset + proc_offset + 4,
-                            size: 12,
-                            kind: RelocationKind::Elf(object::elf::R_AARCH64_ADD_ABS_LO12_NC),
-                            encoding: RelocationEncoding::Generic,
                             symbol: sym_id,
                             addend: 0,
+                            flags: write::RelocationFlags::Elf {
+                                r_type: object::elf::R_AARCH64_ADD_ABS_LO12_NC,
+                            },
                         }
                     } else if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
                         //     4dc: 90000001        adrp    x1, 0x0 <ltmp0>
                         //      00000000000004dc:  ARM64_RELOC_PAGE21   ___unnamed_6
                         let relocation = write::Relocation {
                             offset: offset + proc_offset,
-                            size: 32,
-                            kind: RelocationKind::MachO {
-                                value: object::macho::ARM64_RELOC_PAGE21,
-                                relative: true,
-                            },
-                            encoding: RelocationEncoding::Generic,
                             symbol: sym_id,
                             addend: 0,
+                            flags: write::RelocationFlags::MachO {
+                                r_type: object::macho::ARM64_RELOC_PAGE21,
+                                r_pcrel: true,
+                                r_length: 2,
+                            },
                         };
 
                         output.add_relocation(text_section, relocation).unwrap();
@@ -285,23 +284,24 @@ fn generate_roc_panic<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object) 
                         //      00000000000004e0:  ARM64_RELOC_PAGEOFF12    ___unnamed_6
                         write::Relocation {
                             offset: offset + proc_offset + 4,
-                            size: 32,
-                            kind: RelocationKind::MachO {
-                                value: object::macho::ARM64_RELOC_PAGEOFF12,
-                                relative: false,
-                            },
-                            encoding: RelocationEncoding::Generic,
                             symbol: sym_id,
                             addend: 0,
+                            flags: write::RelocationFlags::MachO {
+                                r_type: object::macho::ARM64_RELOC_PAGEOFF12,
+                                r_pcrel: false,
+                                r_length: 2,
+                            },
                         }
                     } else {
                         write::Relocation {
                             offset: offset + proc_offset,
-                            size: 32,
-                            kind: RelocationKind::GotRelative,
-                            encoding: RelocationEncoding::Generic,
                             symbol: sym_id,
                             addend: -4,
+                            flags: write::RelocationFlags::Generic {
+                                kind: RelocationKind::GotRelative,
+                                encoding: RelocationEncoding::Generic,
+                                size: 32,
+                            },
                         }
                     }
                 } else {
@@ -383,45 +383,46 @@ fn generate_wrapper<'a, B: Backend<'a>>(
 }
 
 fn create_relocation(target: Target, symbol: SymbolId, offset: u64) -> write::Relocation {
-    let (encoding, size, addend, kind) = match target.architecture() {
+    let (flags, addend) = match target.architecture() {
         roc_target::Architecture::Aarch32 => todo!(),
         roc_target::Architecture::Aarch64 => {
             if cfg!(target_os = "macos") {
                 (
-                    RelocationEncoding::Generic,
-                    26,
-                    0,
-                    RelocationKind::MachO {
-                        value: 2,
-                        relative: true,
+                    RelocationFlags::MachO {
+                        r_type: object::macho::ARM64_RELOC_BRANCH26,
+                        r_pcrel: true,
+                        r_length: 2,
                     },
+                    0,
                 )
             } else {
                 (
-                    RelocationEncoding::AArch64Call,
-                    26,
+                    RelocationFlags::Generic {
+                        kind: RelocationKind::PltRelative,
+                        encoding: RelocationEncoding::AArch64Call,
+                        size: 26,
+                    },
                     0,
-                    RelocationKind::PltRelative,
                 )
             }
         }
         roc_target::Architecture::Wasm32 => todo!(),
         roc_target::Architecture::X86_32 => todo!(),
         roc_target::Architecture::X86_64 => (
-            RelocationEncoding::X86Branch,
-            32,
+            RelocationFlags::Generic {
+                kind: RelocationKind::PltRelative,
+                encoding: RelocationEncoding::X86Branch,
+                size: 32,
+            },
             -4,
-            RelocationKind::PltRelative,
         ),
     };
 
     write::Relocation {
         offset,
-        size,
-        kind,
-        encoding,
         symbol,
         addend,
+        flags,
     }
 }
 
@@ -957,11 +958,13 @@ fn build_proc<'a, B: Backend<'a>>(
                 output.add_symbol_data(data_id, data_section, data, 4);
                 write::Relocation {
                     offset: offset + proc_offset,
-                    size: 32,
-                    kind: RelocationKind::Relative,
-                    encoding: RelocationEncoding::Generic,
                     symbol: data_id,
                     addend: -4,
+                    flags: RelocationFlags::Generic {
+                        kind: RelocationKind::Relative,
+                        encoding: RelocationEncoding::Generic,
+                        size: 32,
+                    },
                 }
             }
             Relocation::LinkedData { offset, name } => {
@@ -973,11 +976,11 @@ fn build_proc<'a, B: Backend<'a>>(
                         //      0000000000000700:  R_AARCH64_ADR_PREL_PG_HI21   .rodata+0x650
                         let r = write::Relocation {
                             offset: proc_offset + offset,
-                            size: 21,
-                            kind: RelocationKind::Elf(object::elf::R_AARCH64_ADR_PREL_PG_HI21),
-                            encoding: RelocationEncoding::Generic,
                             symbol: sym_id,
                             addend: -4,
+                            flags: RelocationFlags::Elf {
+                                r_type: object::elf::R_AARCH64_ADR_PREL_PG_HI21,
+                            },
                         };
 
                         relocations.push((section_id, r));
@@ -986,25 +989,24 @@ fn build_proc<'a, B: Backend<'a>>(
                         //      0000000000000704:  R_AARCH64_ADD_ABS_LO12_NC    .rodata+0x650
                         write::Relocation {
                             offset: proc_offset + offset + 4,
-                            size: 12,
-                            kind: RelocationKind::Elf(object::elf::R_AARCH64_ADD_ABS_LO12_NC),
-                            encoding: RelocationEncoding::Generic,
                             symbol: sym_id,
                             addend: 0,
+                            flags: RelocationFlags::Elf {
+                                r_type: object::elf::R_AARCH64_ADD_ABS_LO12_NC,
+                            },
                         }
                     } else if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
                         //    4ed0: 90000000        adrp    x0, 0x4000 <_std.unicode.utf8Decode4+0x16c>
                         //      0000000000004ed0:  ARM64_RELOC_PAGE21   ___unnamed_11
                         let r = write::Relocation {
                             offset: proc_offset + offset,
-                            size: 21,
-                            kind: RelocationKind::MachO {
-                                value: object::macho::ARM64_RELOC_PAGE21,
-                                relative: true,
-                            },
-                            encoding: RelocationEncoding::Generic,
                             symbol: sym_id,
                             addend: 0,
+                            flags: RelocationFlags::MachO {
+                                r_type: object::macho::ARM64_RELOC_PAGE21,
+                                r_pcrel: true,
+                                r_length: 2,
+                            },
                         };
 
                         relocations.push((section_id, r));
@@ -1013,23 +1015,24 @@ fn build_proc<'a, B: Backend<'a>>(
                         //      0000000000004ed4:  ARM64_RELOC_PAGEOFF12    ___unnamed_11
                         write::Relocation {
                             offset: proc_offset + offset + 4,
-                            size: 12,
-                            kind: RelocationKind::MachO {
-                                value: object::macho::ARM64_RELOC_PAGEOFF12,
-                                relative: false,
-                            },
-                            encoding: RelocationEncoding::Generic,
                             symbol: sym_id,
                             addend: 0,
+                            flags: RelocationFlags::MachO {
+                                r_type: object::macho::ARM64_RELOC_PAGEOFF12,
+                                r_pcrel: false,
+                                r_length: 2,
+                            },
                         }
                     } else {
                         write::Relocation {
                             offset: offset + proc_offset,
-                            size: 32,
-                            kind: RelocationKind::GotRelative,
-                            encoding: RelocationEncoding::Generic,
                             symbol: sym_id,
                             addend: -4,
+                            flags: RelocationFlags::Generic {
+                                kind: RelocationKind::GotRelative,
+                                encoding: RelocationEncoding::Generic,
+                                size: 32,
+                            },
                         }
                     }
                 } else {

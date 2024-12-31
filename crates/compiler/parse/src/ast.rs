@@ -34,6 +34,20 @@ impl<'a, T: Copy> ExtractSpaces<'a> for Spaces<'a, T> {
     fn extract_spaces(&self) -> Spaces<'a, T> {
         *self
     }
+
+    fn without_spaces(&self) -> T {
+        self.item
+    }
+}
+
+impl<'a, T> Spaces<'a, T> {
+    pub fn item(item: T) -> Self {
+        Self {
+            before: &[],
+            item,
+            after: &[],
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -111,12 +125,17 @@ impl<'a, T: Debug> Debug for Spaced<'a, T> {
 pub trait ExtractSpaces<'a>: Sized + Copy {
     type Item;
     fn extract_spaces(&self) -> Spaces<'a, Self::Item>;
+    fn without_spaces(&self) -> Self::Item;
 }
 
 impl<'a, T: ExtractSpaces<'a>> ExtractSpaces<'a> for &'a T {
     type Item = T::Item;
     fn extract_spaces(&self) -> Spaces<'a, Self::Item> {
         (*self).extract_spaces()
+    }
+
+    fn without_spaces(&self) -> Self::Item {
+        (*self).without_spaces()
     }
 }
 
@@ -129,6 +148,10 @@ impl<'a, T: ExtractSpaces<'a>> ExtractSpaces<'a> for Loc<T> {
             item: spaces.item,
             after: spaces.after,
         }
+    }
+
+    fn without_spaces(&self) -> Self::Item {
+        self.value.without_spaces()
     }
 }
 
@@ -512,8 +535,6 @@ pub enum Expr<'a> {
     /// Multiple defs in a row
     Defs(&'a Defs<'a>, &'a Loc<Expr<'a>>),
 
-    Backpassing(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
-
     Dbg,
     DbgStmt {
         first: &'a Loc<Expr<'a>>,
@@ -699,7 +720,6 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::Crash => false,
         Expr::Tag(_) => false,
         Expr::OpaqueRef(_) => false,
-        Expr::Backpassing(_, _, _) => false, // TODO: we might want to check this?
         Expr::Dbg => false,
         Expr::DbgStmt {
             first,
@@ -964,11 +984,6 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                     push_stack_from_record_fields!(fields);
                 }
                 Closure(_, body) => expr_stack.push(&body.value),
-                Backpassing(_, a, b) => {
-                    expr_stack.reserve(2);
-                    expr_stack.push(&a.value);
-                    expr_stack.push(&b.value);
-                }
                 DbgStmt {
                     first,
                     extra_args,
@@ -2350,6 +2365,17 @@ macro_rules! impl_extract_spaces {
                     }
                 }
             }
+            fn without_spaces(&self) -> Self::Item {
+                match self {
+                    $t::SpaceBefore(item, _) => {
+                        item.without_spaces()
+                    },
+                    $t::SpaceAfter(item, _) => {
+                        item.without_spaces()
+                    },
+                    _ => *self,
+                }
+            }
         }
     };
 }
@@ -2361,6 +2387,7 @@ impl_extract_spaces!(AssignedField<T>);
 impl_extract_spaces!(TypeAnnotation);
 impl_extract_spaces!(ImplementsAbility);
 impl_extract_spaces!(ImplementsAbilities);
+impl_extract_spaces!(Implements);
 
 impl<'a, T: Copy> ExtractSpaces<'a> for Spaced<'a, T> {
     type Item = T;
@@ -2412,6 +2439,14 @@ impl<'a, T: Copy> ExtractSpaces<'a> for Spaced<'a, T> {
             },
         }
     }
+
+    fn without_spaces(&self) -> T {
+        match self {
+            Spaced::SpaceBefore(item, _) => item.without_spaces(),
+            Spaced::SpaceAfter(item, _) => item.without_spaces(),
+            Spaced::Item(item) => *item,
+        }
+    }
 }
 
 impl<'a> ExtractSpaces<'a> for AbilityImpls<'a> {
@@ -2452,6 +2487,14 @@ impl<'a> ExtractSpaces<'a> for AbilityImpls<'a> {
                 AbilityImpls::SpaceBefore(_, _) => todo!(),
                 AbilityImpls::SpaceAfter(_, _) => todo!(),
             },
+        }
+    }
+
+    fn without_spaces(&self) -> Self::Item {
+        match self {
+            AbilityImpls::AbilityImpls(inner) => *inner,
+            AbilityImpls::SpaceBefore(item, _) => item.without_spaces(),
+            AbilityImpls::SpaceAfter(item, _) => item.without_spaces(),
         }
     }
 }
@@ -2524,7 +2567,6 @@ impl<'a> Malformed for Expr<'a> {
 
             Closure(args, body) => args.iter().any(|arg| arg.is_malformed()) || body.is_malformed(),
             Defs(defs, body) => defs.is_malformed() || body.is_malformed(),
-            Backpassing(args, call, body) => args.iter().any(|arg| arg.is_malformed()) || call.is_malformed() || body.is_malformed(),
             Dbg => false,
             DbgStmt { first, extra_args, continuation } => first.is_malformed() || extra_args.iter().any(|a| a.is_malformed()) || continuation.is_malformed(),
             LowLevelDbg(_, condition, continuation) => condition.is_malformed() || continuation.is_malformed(),
