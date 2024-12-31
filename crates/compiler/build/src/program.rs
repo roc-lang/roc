@@ -449,12 +449,15 @@ fn gen_from_mono_module_dev<'a>(
             preprocessed_host.display()
         ),
         (_, Architecture::X86_64 | Architecture::Aarch64) => {
-            #[cfg(not(feature = "target-wasm32"))]
+            //FIXME revert this, this is not a permanent change
+            //Like really, this is bad, and litterally only works with roar
+            //#[cfg(not(feature = "target-wasm32"))]
             {
                 gen_from_mono_module_dev_assembly(arena, loaded, target, backend_mode)
             }
 
             #[cfg(feature = "target-wasm32")]
+            #[cfg(not(feature = "use_roar"))]
             {
                 internal_error!("Compiler was not built with feature 'target-wasm32'.")
             }
