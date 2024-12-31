@@ -4107,7 +4107,6 @@ fn to_exposes_report<'a>(
         // we're parsing a `module` then saying something like:
         //
         //     I was expecting an exposes list like
-        //
         //         ...
         //
         //     or module params like
