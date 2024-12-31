@@ -257,6 +257,7 @@ jobs:
           brew install expect
           brew install nmap  # includes ncat
           brew install z3
+          echo "DYLD_LIBRARY_PATH=/opt/homebrew/lib:$DYLD_LIBRARY_PATH" >> $GITHUB_ENV
 
       - name: prepare testing
         run: |
