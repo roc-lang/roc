@@ -48,8 +48,6 @@ pub struct Section<'a> {
     pub globals: collections::Vec<'a, Global>,
     ///A list of computed registers used by the operation
     pub annotations: SectionAnnotations,
-    ///bump allocater 
-    pub arena : &'a bumpalo::Bump
 }
 
 impl<'a> Section<'a> {
@@ -58,7 +56,6 @@ impl<'a> Section<'a> {
             procedures: bumpalo::vec![in arena;],
             globals: bumpalo::vec![in arena;],
             annotations: SectionAnnotations::default(),
-            arena : arena
         }
     }
     ///Returns the given ref to the proccedure 0 indexed. Returns ownership to caller
@@ -70,12 +67,12 @@ impl<'a> Section<'a> {
     }
 
     ///Adds a list of procedures. Returns ownership to caller
-    pub fn add_procs(mut self, procs: collections::Vec<'a, Proc>) -> (Self,collections::Vec<'a,ProcRef>) {
+    pub fn add_procs(mut self, procs: collections::Vec<'a, Proc>,arena : &'a bumpalo::Bump) -> (Self,collections::Vec<'a,ProcRef>) {
         //TODO find way to make this not clone
         self.procedures.extend(procs.clone());
         
         //FIXME make this not a raw cast
-        let ret = (self.procedures.len()-procs.len()..self.procedures.len()).map(|x| ProcRef::Absolute(x as u32)).collect_in(self.arena);
+        let ret = (self.procedures.len()-procs.len()..self.procedures.len()).map(|x| ProcRef::Absolute(x as u32)).collect_in(arena);
         (self,ret)
     }
 }

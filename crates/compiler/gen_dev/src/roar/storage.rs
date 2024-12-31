@@ -52,7 +52,7 @@ pub(crate) const WORD_SIZE: ByteSize = ByteSize(8);
 ///The align of a single word
 pub(crate) const WORD_ALIGN: Offset = Offset(8);
 ///A basic register refrence
-#[derive(Clone, Debug, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq)]
 pub(crate) struct Register(pub Id);
 
 #[derive(Clone, Debug, Hash, PartialEq)]

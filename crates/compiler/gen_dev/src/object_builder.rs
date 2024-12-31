@@ -1,5 +1,6 @@
 use super::roar;
 use crate::generic64::{aarch64, new_backend_64bit, x86_64};
+use crate::roar::convert::build_roar;
 use crate::{AssemblyBackendMode, Backend, Env, Relocation};
 use bumpalo::collections::Vec;
 use object::write::{self, SectionId, SymbolId};
@@ -23,7 +24,7 @@ use roc_target::Target;
 
 /// build_module is the high level builder/delegator.
 /// It takes the request to build a module and output the object file for the module.
-pub fn build_module<'a, 'r>(
+pub fn build_module<'a, 'r : 'a>(
     env: &'r Env<'a>,
     interns: &'r mut Interns,
     layout_interner: &'r mut STLayoutInterner<'a>,
@@ -45,7 +46,7 @@ pub fn build_module<'a, 'r>(
     module_object
 }
 
-fn build_module_help<'a, 'r>(
+fn build_module_help<'a, 'r : 'a>(
     env: &'r Env<'a>,
     interns: &'r mut Interns,
     layout_interner: &'r mut STLayoutInterner<'a>,
@@ -54,10 +55,9 @@ fn build_module_help<'a, 'r>(
 ) -> Object<'a> {
     println!("Running...");
     if cfg!(feature = "use_roar") {
+        //TODO clean this back up
         //For using experimental ROAR pipeline
-        let mut arena: bumpalo::Bump = bumpalo::Bump::new();
-        let mut converter = roar::convert::Converter::new(layout_interner, &arena);
-        let Ok((_,section)) = converter.build_roar(&procedures) else {
+        let Ok(section) = build_roar(procedures, layout_interner, env) else {
             todo!()
         };
         println!("roar is {:?}", section);
