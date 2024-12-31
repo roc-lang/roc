@@ -797,6 +797,7 @@ pub fn default_linking_strategy(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn build(
     matches: &ArgMatches,
     subcommands: &[String],
@@ -805,6 +806,7 @@ pub fn build(
     out_path: Option<&Path>,
     roc_cache_dir: RocCacheDir<'_>,
     link_type: LinkType,
+    verbose: bool,
 ) -> io::Result<i32> {
     use BuildConfig::*;
 
@@ -981,7 +983,6 @@ pub fn build(
     };
 
     let load_config = standard_load_config(target, build_ordering, threading);
-    let verbose = matches.get_flag(FLAG_VERBOSE);
 
     let res_binary_path = roc_build::program::build_file(
         &arena,
