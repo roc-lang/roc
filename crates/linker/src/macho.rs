@@ -1206,8 +1206,11 @@ fn surgery_macho_help(
 
     let rodata_sections: Vec<Section> = app_obj
         .sections()
-        .filter(|sec| sec.kind() == SectionKind::ReadOnlyData)
-        .filter(|sec| sec.name().unwrap_or("") != "__eh_frame") // ignore __eh_frame for now
+        .filter(|sec| match sec.kind() {
+            SectionKind::ReadOnlyData => sec.name().unwrap_or("") != "__eh_frame",
+            SectionKind::ReadOnlyString => true,
+            _ => false,
+        })
         .collect();
 
     // bss section is like rodata section, but it has zero file size and non-zero virtual size.
@@ -1351,11 +1354,32 @@ fn surgery_macho_help(
                             .unwrap();
                         match rel.1.kind() {
                             RelocationKind::PltRelative => {
-                                println!("\t\tTODO synthesise __stub entry for {name}")
+                                if verbose {
+                                    println!("\t\tTODO synthesise __stub entry for {name}")
+                                }
                             }
                             RelocationKind::Got => {
-                                println!("\t\tTODO synthesise __got entry for {name}")
+                                if verbose {
+                                    println!("\t\tTODO synthesise __got entry for {name}")
+                                }
                             }
+                            RelocationKind::MachO { value, relative: _ } => match value {
+                                macho::ARM64_RELOC_GOT_LOAD_PAGE21
+                                | macho::ARM64_RELOC_GOT_LOAD_PAGEOFF12 => {
+                                    if verbose {
+                                        println!("\t\tTODO synthesise __got entry for {name}")
+                                    }
+                                }
+                                macho::ARM64_RELOC_BRANCH26 => {
+                                    if verbose {
+                                        println!("\t\tTODO synthesise __stub entry for {name}")
+                                    }
+                                }
+                                _ => internal_error!(
+                                    "Invalid relocation for libc symbol, {:+x?}: {name}",
+                                    rel
+                                ),
+                            },
                             _ => internal_error!(
                                 "Invalid relocation for libc symbol, {:+x?}: {name}",
                                 rel
@@ -1402,7 +1426,12 @@ fn surgery_macho_help(
                                 continue;
                             }
                             _ => {
-                                println!("\t\tHandle other MachO relocs: {value}");
+                                if verbose {
+                                    println!(
+                                        "\t\tHandle other MachO relocs: {}",
+                                        format_reloc_type(value)
+                                    );
+                                }
                                 0
                             }
                         },
@@ -1654,4 +1683,31 @@ fn get_target_offset(
                 })
             })
     }
+}
+
+fn format_reloc_type(value: u8) -> impl std::fmt::Display {
+    struct Inner(u8);
+
+    impl std::fmt::Display for Inner {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let name: &str = match self.0 {
+                macho::ARM64_RELOC_ADDEND => "ARM64_RELOC_ADDEND",
+                macho::ARM64_RELOC_PAGE21 => "ARM64_RELOC_PAGE21",
+                macho::ARM64_RELOC_PAGEOFF12 => "ARM64_RELOC_PAGEOFF12",
+                macho::ARM64_RELOC_BRANCH26 => "ARM64_RELOC_BRANCH26",
+                macho::ARM64_RELOC_UNSIGNED => "ARM64_RELOC_UNSIGNED",
+                macho::ARM64_RELOC_SUBTRACTOR => "ARM64_RELOC_SUBTRACTOR",
+                macho::ARM64_RELOC_GOT_LOAD_PAGE21 => "ARM64_RELOC_GOT_LOAD_PAGE21",
+                macho::ARM64_RELOC_GOT_LOAD_PAGEOFF12 => "ARM64_RELOC_GOT_LOAD_PAGEOFF12",
+                macho::ARM64_RELOC_TLVP_LOAD_PAGE21 => "ARM64_RELOC_TLVP_LOAD_PAGE21",
+                macho::ARM64_RELOC_TLVP_LOAD_PAGEOFF12 => "ARM64_RELOC_TLVP_LOAD_PAGEOFF12",
+                macho::ARM64_RELOC_POINTER_TO_GOT => "ARM64_RELOC_POINTER_TO_GOT",
+                macho::ARM64_RELOC_AUTHENTICATED_POINTER => "ARM64_RELOC_AUTHENTICATED_POINTER",
+                _ => "ARM64_RELOC_UNKNOWN",
+            };
+            write!(f, "{name}({})", self.0)
+        }
+    }
+
+    Inner(value)
 }
