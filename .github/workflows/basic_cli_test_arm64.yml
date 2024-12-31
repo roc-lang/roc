@@ -50,10 +50,12 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/roc-lang/basic-cli
           cd basic-cli
-          git fetch --tags
-          # Get the latest tag matching pattern X.Y*
-          latestTag=$(git for-each-ref --sort=-version:refname --format '%(refname:short)' refs/tags/ | grep -E '^[0-9]+\.[0-9]+.*' | head -n1)
-          git checkout $latestTag
+          git checkout linux-arm64-test-debugging
+          # temp for debugging
+          #git fetch --tags
+          ## Get the latest tag matching pattern X.Y*
+          #latestTag=$(git for-each-ref --sort=-version:refname --format '%(refname:short)' refs/tags/ | grep -E '^[0-9]+\.[0-9]+.*' | head -n1)
+          #git checkout $latestTag
 
       - name: Run all tests with latest roc nightly and latest basic-cli release
         run: |
