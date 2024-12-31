@@ -218,7 +218,7 @@ jobs:
       - name: Set OS-specific variables
         id: vars
         run: |
-          if [ "${{ matrix.os }}" = "ubuntu-20.04" ]; then
+          if [[ "${{ matrix.os }}" =~ ^ubuntu- ]]; then
             echo "os_pattern=linux_x86_64" >> $GITHUB_OUTPUT
           elif [ "${{ matrix.os }}" = "macos-13" ]; then
             echo "os_pattern=macos_x86_64" >> $GITHUB_OUTPUT
@@ -248,13 +248,13 @@ jobs:
           ls | grep "tar$" | xargs tar -xf
 
       - name: Install dependencies (Ubuntu)
-        if: matrix.os == 'ubuntu-20.04'
+        if: startsWith(matrix.os, 'ubuntu-')
         run: |
           if ! dpkg -l | grep -qw expect; then sudo apt install -y expect; fi
           if ! dpkg -l | grep -qw ncat; then sudo apt install -y ncat; fi
 
       - name: Install dependencies (macOS)
-        if: matrix.os == 'macos-14'
+        if: startsWith(matrix.os, 'macos-')
         run: |
           brew install expect
           brew install nmap  # includes ncat
