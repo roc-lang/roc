@@ -7,8 +7,8 @@ use roc_cli::{
     CMD_BUILD, CMD_CHECK, CMD_DEV, CMD_DOCS, CMD_FORMAT, CMD_GLUE, CMD_PREPROCESS_HOST, CMD_REPL,
     CMD_RUN, CMD_TEST, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_LIB, FLAG_MAIN,
     FLAG_MIGRATE, FLAG_NO_COLOR, FLAG_NO_HEADER, FLAG_NO_LINK, FLAG_OUTPUT, FLAG_PP_DYLIB,
-    FLAG_PP_HOST, FLAG_PP_PLATFORM, FLAG_STDIN, FLAG_STDOUT, FLAG_TARGET, FLAG_TIME, GLUE_DIR,
-    GLUE_SPEC, ROC_FILE, VERSION,
+    FLAG_PP_HOST, FLAG_PP_PLATFORM, FLAG_STDIN, FLAG_STDOUT, FLAG_TARGET, FLAG_TIME, FLAG_VERBOSE,
+    GLUE_DIR, GLUE_SPEC, ROC_FILE, VERSION,
 };
 use roc_docs::generate_docs_html;
 use roc_error_macros::user_error;
@@ -54,6 +54,7 @@ fn main() -> io::Result<()> {
                     None,
                     RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
                     LinkType::Executable,
+                    false,
                 )
             } else {
                 Ok(1)
@@ -69,6 +70,7 @@ fn main() -> io::Result<()> {
                     None,
                     RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
                     LinkType::Executable,
+                    false,
                 )
             } else {
                 eprintln!("What .roc file do you want to run? Specify it at the end of the `roc run` command.");
@@ -95,6 +97,7 @@ fn main() -> io::Result<()> {
                     None,
                     RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
                     LinkType::Executable,
+                    false,
                 )
             } else {
                 eprintln!("What .roc file do you want to build? Specify it at the end of the `roc run` command.");
@@ -164,7 +167,7 @@ fn main() -> io::Result<()> {
                 .and_then(|s| Target::from_str(s).ok())
                 .unwrap_or_default();
 
-            let verbose_and_time = matches.get_one::<bool>(roc_cli::FLAG_VERBOSE).unwrap();
+            let verbose_and_time = matches.get_one::<bool>(FLAG_VERBOSE).unwrap();
 
             let preprocessed_path = platform_path.with_file_name(target.prebuilt_surgical_host());
             let metadata_path = platform_path.with_file_name(target.metadata_file_name());
@@ -195,6 +198,7 @@ fn main() -> io::Result<()> {
             let out_path = matches
                 .get_one::<OsString>(FLAG_OUTPUT)
                 .map(OsString::as_ref);
+            let verbose = matches.get_flag(FLAG_VERBOSE);
 
             Ok(build(
                 matches,
@@ -204,6 +208,7 @@ fn main() -> io::Result<()> {
                 out_path,
                 RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
                 link_type,
+                verbose,
             )?)
         }
         Some((CMD_CHECK, matches)) => {

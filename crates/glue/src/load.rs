@@ -92,6 +92,7 @@ pub fn generate(
                     RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
                     load_config,
                     Some(dylib_dir.path()),
+                    false,
                 ),
                 Err(_) => {
                     eprintln!("`roc glue` was unable to create a tempdir.");

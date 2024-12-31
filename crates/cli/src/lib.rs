@@ -242,6 +242,13 @@ pub fn build_app() -> Command {
                     .required(false),
             )
             .arg(
+                Arg::new(FLAG_VERBOSE)
+                    .long(FLAG_VERBOSE)
+                    .help("Print detailed information while building")
+                    .action(ArgAction::SetTrue)
+                    .required(false)
+            )
+            .arg(
                 Arg::new(ROC_FILE)
                     .help("The .roc file to build")
                     .value_parser(value_parser!(PathBuf))
@@ -790,6 +797,7 @@ pub fn default_linking_strategy(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn build(
     matches: &ArgMatches,
     subcommands: &[String],
@@ -798,6 +806,7 @@ pub fn build(
     out_path: Option<&Path>,
     roc_cache_dir: RocCacheDir<'_>,
     link_type: LinkType,
+    verbose: bool,
 ) -> io::Result<i32> {
     use BuildConfig::*;
 
@@ -989,6 +998,7 @@ pub fn build(
         roc_cache_dir,
         load_config,
         out_path,
+        verbose,
     );
 
     match res_binary_path {
