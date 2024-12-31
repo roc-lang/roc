@@ -11,7 +11,7 @@ let
         path=$(echo $url | awk -F'github.com/|/[^/]*$' '{print $2}')
         packagePath=$out/roc/packages/github.com/$path
         mkdir -p $packagePath
-        wget -P $packagePath $url --no-check-certificate
+        wget -P $packagePath $url
         cd $packagePath
         brotli -d *.tar.br
         tar -xf *.tar --one-top-level
