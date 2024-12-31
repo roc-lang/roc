@@ -37,6 +37,14 @@ mod test_fmt {
         )
     }
 
+    fn pattern_formats_same(input: &str) {
+        Input::Pattern(input.trim()).check_invariants(
+            check_formatting(input.trim()),
+            true,
+            Some(false),
+        );
+    }
+
     fn fmt_module_and_defs<'a>(
         arena: &Bump,
         src: &str,
@@ -3498,6 +3506,33 @@ mod test_fmt {
     }
 
     #[test]
+    fn zero_arg_application_with_parens() {
+        expr_formats_same(indoc!(
+            r"
+            a()
+            "
+        ));
+    }
+
+    #[test]
+    fn try_then_application_with_parens() {
+        expr_formats_same(indoc!(
+            r"
+            try something!(arg)
+            "
+        ));
+    }
+
+    #[test]
+    fn dbg_then_application_with_parens() {
+        expr_formats_same(indoc!(
+            r"
+            dbg something!(arg)
+            "
+        ));
+    }
+
+    #[test]
     fn single_line_application_with_parens() {
         expr_formats_same(indoc!(
             r"
@@ -3881,6 +3916,40 @@ mod test_fmt {
 
                 Simple z ->
                     z
+            "
+        ));
+    }
+
+    #[test]
+    fn multi_line_when_condition_2_pnc() {
+        expr_formats_same(indoc!(
+            r"
+            when
+                # this is quite complicated
+                complexFunction(a, b, c)
+                # Watch out
+            is
+                Complex(x, y) ->
+                    simplify(x, y)
+
+                Simple(z) ->
+                    z
+            "
+        ));
+    }
+
+    #[test]
+    fn anthony_testing() {
+        expr_formats_same(indoc!(
+            r"
+            when alter (Ok value) is
+                Ok newValue ->
+                    bucket = listGetUnsafe buckets bucketIndex
+                    newData = List.set data (Num.toU64 bucket.dataIndex) (key, newValue)
+                    @Dict { buckets, data: newData, maxBucketCapacity, maxLoadFactor, shifts }
+
+                Err Missing ->
+                    removeBucket (@Dict { buckets, data, maxBucketCapacity, maxLoadFactor, shifts }) bucketIndex
             "
         ));
     }
@@ -6238,4 +6307,24 @@ mod test_fmt {
     //            "
     //        ));
     //    }
+
+    #[test]
+    fn pattern_tag_apply_with_whitespace_single_arg() {
+        pattern_formats_same(indoc!("Ok a"));
+    }
+
+    #[test]
+    fn pattern_tag_apply_with_pnc_single_arg() {
+        pattern_formats_same(indoc!("Ok(a)"));
+    }
+
+    #[test]
+    fn pattern_tag_apply_with_whitespace_multi_arg() {
+        pattern_formats_same(indoc!("Ok a b"));
+    }
+
+    #[test]
+    fn pattern_tag_apply_with_pnc_multi_arg() {
+        pattern_formats_same(indoc!("Ok(a, b)"));
+    }
 }

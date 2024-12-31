@@ -33,6 +33,9 @@ mod test_snapshots {
         (full => $input:expr) => {
             Input::Full($input)
         };
+        (pattern => $input:expr) => {
+            Input::Pattern($input)
+        };
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -324,6 +327,8 @@ mod test_snapshots {
         pass/apply_record_parens_newline_field.expr,
         pass/apply_tag.expr,
         pass/apply_tag_pnc.expr,
+        pass/apply_tag_single_arg_pnc.pattern,
+        pass/apply_tag_single_arg_whitespace.pattern,
         pass/apply_three_args.expr,
         pass/apply_tuple_ext_parens_ty.expr,
         pass/apply_two_args.expr,
@@ -450,7 +455,7 @@ mod test_snapshots {
         pass/if_in_record_field_opt_pat.expr,
         pass/if_newline_then_negate_else_recordupdater.expr,
         pass/if_then_weird_indent.expr,
-        pass/implements_after_parens_comment.expr,
+        pass/implements_after_comment_with_newline.expr,
         pass/implements_annotation_comment.expr,
         pass/implements_in_pat_after_comment.expr,
         pass/implements_newline_in_fn_ty.expr,
@@ -858,8 +863,6 @@ mod test_snapshots {
             }
             Err(err) => Err(format!("{err:?}")),
         };
-
-        println!("{:?}", result);
 
         if expect == TestExpectation::Pass {
             let tokens = roc_parse::highlight::highlight(&source);

@@ -190,7 +190,7 @@ pub enum FormatProblem {
 
 pub fn format_src(arena: &Bump, src: &str, flags: MigrationFlags) -> Result<String, FormatProblem> {
     let ast = arena.alloc(parse_all(arena, src).unwrap_or_else(|e| {
-        user_error!("Unexpected parse failure when parsing this formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, e)
+        user_error!("Unexpected parse failure when parsing this formatting:\n\n{src}\n\nParse error was:\n\n{:#?}\n\n", e)
     }));
     let mut buf = Buf::new_in(arena, flags);
     fmt_all(&mut buf, ast);

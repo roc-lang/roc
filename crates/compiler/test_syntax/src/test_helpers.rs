@@ -9,13 +9,13 @@ use roc_error_macros::set_panic_not_exit;
 use roc_fmt::{annotation::Formattable, header::fmt_header, MigrationFlags};
 use roc_module::ident::QualifiedModuleName;
 use roc_module::symbol::{IdentIds, Interns, ModuleIds, PackageModuleIds, Symbol};
-use roc_parse::ast::RecursiveValueDefIter;
 use roc_parse::ast::ValueDef;
+use roc_parse::ast::{Pattern, RecursiveValueDefIter};
 use roc_parse::header::parse_module_defs;
 use roc_parse::parser::Parser;
 use roc_parse::parser::SyntaxError;
 use roc_parse::state::State;
-use roc_parse::test_helpers::parse_loc_with;
+use roc_parse::test_helpers::{parse_loc_with, parse_pattern_with};
 use roc_parse::{ast::Malformed, normalize::Normalize};
 use roc_parse::{
     ast::{Defs, Expr, FullAst, Header, SpacesBefore},
@@ -45,6 +45,9 @@ pub enum Input<'a> {
 
     /// Both the header and the module defs
     Full(&'a str),
+
+    /// A single pattern
+    Pattern(&'a str),
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -53,6 +56,7 @@ pub enum InputKind {
     ModuleDefs,
     Expr,
     Full,
+    Pattern,
 }
 
 impl InputKind {
@@ -62,6 +66,7 @@ impl InputKind {
             InputKind::ModuleDefs => Input::ModuleDefs(text),
             InputKind::Expr => Input::Expr(text),
             InputKind::Full => Input::Full(text),
+            InputKind::Pattern => Input::Pattern(text),
         }
     }
 }
@@ -73,6 +78,7 @@ pub enum InputOwned {
     ModuleDefs(String),
     Expr(String),
     Full(String),
+    Pattern(String),
 }
 
 impl InputOwned {
@@ -82,6 +88,7 @@ impl InputOwned {
             InputOwned::ModuleDefs(s) => Input::ModuleDefs(s),
             InputOwned::Expr(s) => Input::Expr(s),
             InputOwned::Full(s) => Input::Full(s),
+            InputOwned::Pattern(s) => Input::Pattern(s),
         }
     }
 }
@@ -96,6 +103,8 @@ pub enum Output<'a> {
     Expr(Loc<Expr<'a>>),
 
     Full(FullAst<'a>),
+
+    Pattern(Loc<Pattern<'a>>),
 }
 
 impl<'a> Output<'a> {
@@ -127,6 +136,10 @@ impl<'a> Output<'a> {
                 buf.fmt_end_of_file();
                 InputOwned::Full(buf.as_str().to_string())
             }
+            Output::Pattern(patt) => {
+                patt.format(&mut buf, 0);
+                InputOwned::Pattern(buf.as_str().to_string())
+            }
         }
     }
 
@@ -136,6 +149,7 @@ impl<'a> Output<'a> {
             Output::ModuleDefs(defs) => format!("{defs:#?}\n"),
             Output::Expr(expr) => format!("{expr:#?}\n"),
             Output::Full { .. } => format!("{self:#?}\n"),
+            Output::Pattern(patt) => format!("{patt:#?}\n"),
         }
     }
 
@@ -150,6 +164,7 @@ impl<'a> Output<'a> {
             Output::Full(_) => {
                 // TODO: canonicalize full ast
             }
+            Output::Pattern(_) => {}
             Output::Expr(loc_expr) => {
                 let mut var_store = VarStore::default();
                 let mut imported: Vec<(QualifiedModuleName, Region)> = vec![];
@@ -248,6 +263,7 @@ impl<'a> Malformed for Output<'a> {
             Output::ModuleDefs(defs) => defs.is_malformed(),
             Output::Expr(expr) => expr.is_malformed(),
             Output::Full(full) => full.is_malformed(),
+            Output::Pattern(patt) => patt.is_malformed(),
         }
     }
 }
@@ -259,6 +275,7 @@ impl<'a> Normalize<'a> for Output<'a> {
             Output::ModuleDefs(defs) => Output::ModuleDefs(defs.normalize(arena)),
             Output::Expr(expr) => Output::Expr(expr.normalize(arena)),
             Output::Full(full) => Output::Full(full.normalize(arena)),
+            Output::Pattern(patt) => Output::Pattern(patt.normalize(arena)),
         }
     }
 }
@@ -270,6 +287,7 @@ impl<'a> Input<'a> {
             Input::ModuleDefs(s) => s,
             Input::Expr(s) => s,
             Input::Full(s) => s,
+            Input::Pattern(s) => s,
         }
     }
 
@@ -308,6 +326,11 @@ impl<'a> Input<'a> {
 
                 Ok(Output::Full(FullAst { header, defs }))
             }
+
+            Input::Pattern(input) => {
+                let patt = parse_pattern_with(arena, input).map_err(|e| e.problem)?;
+                Ok(Output::Pattern(patt))
+            }
         }
     }
 
@@ -325,8 +348,10 @@ impl<'a> Input<'a> {
         let arena = Bump::new();
 
         let actual = self.parse_in(&arena).unwrap_or_else(|err| {
-            panic!("Unexpected parse failure when parsing this for formatting:\n\n{}\n\nParse error was:\n\n{:?}\n\n", self.as_str(), err);
+            panic!("Unexpected parse failure when parsing this for formatting:\n\n{}\n\nParse error was:\n\n{:#?}\n\n", self.as_str(), err);
         });
+
+        println!("Actual {actual:#?}");
 
         let output = actual.format();
 

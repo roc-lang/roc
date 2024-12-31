@@ -11,7 +11,7 @@ use crate::spaces::{
 use crate::Buf;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_module::called_via::{self, BinOp, UnaryOp};
+use roc_module::called_via::{self, BinOp, CalledVia, UnaryOp};
 use roc_parse::ast::{
     AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces, Pattern, Spaceable,
     Spaces, SpacesAfter, SpacesBefore, TryTarget, WhenBranch,
@@ -96,8 +96,9 @@ fn format_expr_only(
         }
         Expr::Apply(loc_expr, loc_args, _) => {
             let apply_needs_parens = parens == Parens::InApply || parens == Parens::InApplyLastArg;
-
-            if apply_needs_parens && !loc_args.is_empty() {
+            if buf.flags().parens_and_commas {
+                fmt_apply(loc_expr, loc_args, indent, buf, false);
+            } else if apply_needs_parens && !loc_args.is_empty() {
                 fmt_parens(item, buf, indent);
             } else {
                 fmt_apply(loc_expr, loc_args, indent, buf, false);
@@ -716,7 +717,9 @@ fn fmt_apply(
         let is_first_arg = i == 0;
 
         let arg = expr_lift_spaces(
-            if is_last_arg {
+            if use_commas_and_parens {
+                Parens::NotNeeded
+            } else if is_last_arg {
                 Parens::InApplyLastArg
             } else {
                 Parens::InApply
@@ -1038,7 +1041,7 @@ pub fn expr_lift_spaces<'a, 'b: 'a>(
 ) -> Spaces<'a, Expr<'a>> {
     match expr {
         Expr::Apply(func, args, called_via) => {
-            if args.is_empty() {
+            if args.is_empty() && !matches!(called_via, CalledVia::ParensAndCommas) {
                 return expr_lift_spaces(Parens::NotNeeded, arena, &func.value);
             }
 
@@ -1082,7 +1085,9 @@ pub fn expr_lift_spaces<'a, 'b: 'a>(
                 }
             };
 
-            if parens == Parens::InApply || parens == Parens::InApplyLastArg {
+            if (parens == Parens::InApply || parens == Parens::InApplyLastArg)
+                && !matches!(called_via, CalledVia::ParensAndCommas)
+            {
                 res = Spaces {
                     before: &[],
                     item: Expr::ParensAround(arena.alloc(lower(arena, res))),

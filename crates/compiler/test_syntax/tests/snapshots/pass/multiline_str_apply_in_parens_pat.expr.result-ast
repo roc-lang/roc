@@ -33,8 +33,10 @@
                                         "0",
                                     ),
                                 ],
+                                Whitespace,
                             ),
                         ],
+                        Whitespace,
                     ),
                     @15-16 BoundVariable(
                         "f",

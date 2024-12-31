@@ -78,6 +78,7 @@ Defs {
                                                     ident: "name",
                                                 },
                                             ],
+                                            Whitespace,
                                         ),
                                     ],
                                     value: @125-154 Apply(
