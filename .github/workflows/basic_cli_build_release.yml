@@ -209,7 +209,7 @@ jobs:
     needs: [create-release-archive]
     strategy:
       matrix:
-        os: [ubuntu-20.04, macos-14]
+        os: [ubuntu-20.04, macos-13, macos-14]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Download the previously uploaded files
@@ -220,6 +220,8 @@ jobs:
         run: |
           if [ "${{ matrix.os }}" = "ubuntu-20.04" ]; then
             echo "os_pattern=linux_x86_64" >> $GITHUB_OUTPUT
+          elif [ "${{ matrix.os }}" = "macos-13" ]; then
+            echo "os_pattern=macos_x86_64" >> $GITHUB_OUTPUT
           else
             echo "os_pattern=macos_apple_silicon" >> $GITHUB_OUTPUT
           fi
