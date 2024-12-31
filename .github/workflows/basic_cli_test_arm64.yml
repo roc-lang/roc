@@ -43,6 +43,9 @@ jobs:
       # Now test the latest basic-cli release, not the main branch
       ######
 
+      - name: Delete nightly to keep things simple, we'll download it again in ./ci/test_latest_release.sh
+        run: rm -rf roc_nightly
+
       - name: Get the repo of the latest basic-cli release
         run: |
           git clone --depth 1 https://github.com/roc-lang/basic-cli
