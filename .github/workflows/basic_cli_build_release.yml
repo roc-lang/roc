@@ -221,7 +221,7 @@ jobs:
           if [ "${{ matrix.os }}" = "ubuntu-20.04" ]; then
             echo "os_pattern=linux_x86_64" >> $GITHUB_OUTPUT
           else
-            echo "os_pattern=macos_x86_64" >> $GITHUB_OUTPUT
+            echo "os_pattern=macos_apple_silicon" >> $GITHUB_OUTPUT
           fi
 
       - name: mv roc nightly and simplify name
@@ -257,7 +257,6 @@ jobs:
           brew install expect
           brew install nmap  # includes ncat
           brew install z3
-          echo "DYLD_LIBRARY_PATH=/opt/homebrew/lib:$DYLD_LIBRARY_PATH" >> $GITHUB_ENV
 
       - name: prepare testing
         run: |
