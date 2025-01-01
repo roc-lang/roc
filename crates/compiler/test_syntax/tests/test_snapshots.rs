@@ -751,6 +751,7 @@ mod test_snapshots {
         pass/var_minus_two.expr,
         pass/var_then.expr,
         pass/var_when.expr,
+        pass/when_branch_comment_after_parens.expr,
         pass/when_comment_after_pattern.expr,
         pass/when_comment_bbefore_if.expr,
         pass/when_if_guard.expr,

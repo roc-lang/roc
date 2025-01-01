@@ -1136,7 +1136,11 @@ pub fn expr_lift_spaces<'a, 'b: 'a>(
                 after: body_lifted.after,
             }
         }
-        Expr::If { .. } | Expr::When(_, _) => {
+        Expr::If {
+            if_thens,
+            final_else,
+            indented_else,
+        } => {
             if parens == Parens::InApply || parens == Parens::InApplyLastArg {
                 Spaces {
                     before: &[],
@@ -1144,10 +1148,52 @@ pub fn expr_lift_spaces<'a, 'b: 'a>(
                     after: &[],
                 }
             } else {
+                let else_lifted =
+                    expr_lift_spaces_after(Parens::NotNeeded, arena, &final_else.value);
+
                 Spaces {
                     before: &[],
-                    item: *expr,
+                    item: Expr::If {
+                        if_thens,
+                        final_else: arena.alloc(Loc::at(final_else.region, else_lifted.item)),
+                        indented_else: *indented_else,
+                    },
+                    after: else_lifted.after,
+                }
+            }
+        }
+        Expr::When(cond, branches) => {
+            if parens == Parens::InApply || parens == Parens::InApplyLastArg {
+                Spaces {
+                    before: &[],
+                    item: Expr::ParensAround(arena.alloc(*expr)),
                     after: &[],
+                }
+            } else {
+                let new_branches = arena.alloc_slice_copy(branches);
+                if let Some(last) = new_branches.last_mut() {
+                    let last_value_lifted =
+                        expr_lift_spaces_after(Parens::NotNeeded, arena, &last.value.value);
+                    *last = arena.alloc(WhenBranch {
+                        patterns: last.patterns,
+                        value: Loc::at(last.value.region, last_value_lifted.item),
+                        guard: last.guard,
+                    });
+
+                    Spaces {
+                        before: &[],
+                        item: Expr::When(
+                            arena.alloc(Loc::at(cond.region, cond.value)),
+                            new_branches,
+                        ),
+                        after: last_value_lifted.after,
+                    }
+                } else {
+                    Spaces {
+                        before: &[],
+                        item: *expr,
+                        after: &[],
+                    }
                 }
             }
         }
