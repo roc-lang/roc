@@ -48,9 +48,8 @@ jobs:
 
       - name: Get the repo of the latest basic-cli release
         run: |
-          git clone --depth 1 https://github.com/roc-lang/basic-cli
+          git clone https://github.com/roc-lang/basic-cli
           cd basic-cli
-          git fetch origin linux-arm64-test-debugging --depth 1
           git checkout linux-arm64-test-debugging
           # temp for debugging
           #git fetch --tags
