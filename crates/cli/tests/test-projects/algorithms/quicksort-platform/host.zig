@@ -117,7 +117,7 @@ pub export fn main() u8 {
     var raw_numbers: [NUM_NUMS + 1]i64 = undefined;
 
     // set refcount to one
-    raw_numbers[0] = -9223372036854775808;
+    raw_numbers[0] = 1;
 
     var numbers = raw_numbers[1..];
 
