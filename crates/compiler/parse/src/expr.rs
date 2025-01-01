@@ -2765,7 +2765,7 @@ fn if_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EIf<
 
         let (state_final_else, then_indent) = loop {
             let (_, ((cond, then_indent), then_branch), state) = if_branch()
-                .parse(arena, loop_state, min_indent)
+                .parse(arena, loop_state, if_indent)
                 .map_err(|(_p, err)| (MadeProgress, err))?;
 
             branches.push((cond, then_branch));
@@ -2794,7 +2794,7 @@ fn if_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EIf<
         let indented_else = else_indent > then_indent && has_newline_next;
 
         let min_indent = if indented_else {
-            std::cmp::min(then_indent, else_indent)
+            std::cmp::min(if_indent, std::cmp::min(then_indent, else_indent))
         } else {
             else_indent + 1
         };

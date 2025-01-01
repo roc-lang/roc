@@ -1,8 +1,8 @@
-@1-23 SpaceAfter(
+@0-22 SpaceAfter(
     If {
         if_thens: [
             (
-                @4-5 SpaceBefore(
+                @3-4 SpaceBefore(
                     SpaceAfter(
                         Var {
                             module_name: "",
@@ -16,7 +16,7 @@
                         Newline,
                     ],
                 ),
-                @11-12 SpaceBefore(
+                @10-11 SpaceBefore(
                     SpaceAfter(
                         Tag(
                             "A",
@@ -31,14 +31,14 @@
                 ),
             ),
         ],
-        final_else: @20-23 SpaceBefore(
+        final_else: @19-22 SpaceBefore(
             Defs(
                 Defs {
                     tags: [
                         EitherIndex(2147483648),
                     ],
                     regions: [
-                        @20-21,
+                        @19-20,
                     ],
                     space_before: [
                         Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
@@ -50,14 +50,14 @@
                     type_defs: [],
                     value_defs: [
                         Stmt(
-                            @20-21 Var {
+                            @19-20 Var {
                                 module_name: "",
                                 ident: "e",
                             },
                         ),
                     ],
                 },
-                @22-23 SpaceBefore(
+                @21-22 SpaceBefore(
                     Var {
                         module_name: "",
                         ident: "r",
