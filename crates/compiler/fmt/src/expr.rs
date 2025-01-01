@@ -96,7 +96,7 @@ fn format_expr_only(
         }
         Expr::Apply(loc_expr, loc_args, _) => {
             let apply_needs_parens = parens == Parens::InApply || parens == Parens::InApplyLastArg;
-            if buf.flags().parens_and_commas || !(apply_needs_parens && !loc_args.is_empty()) {
+            if buf.flags().parens_and_commas || !apply_needs_parens || loc_args.is_empty() {
                 fmt_apply(loc_expr, loc_args, indent, buf, false);
             } else {
                 fmt_parens(item, buf, indent);
