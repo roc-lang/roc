@@ -80,6 +80,15 @@ pub struct ExprParseOptions {
     pub check_for_arrow: bool,
 }
 
+impl ExprParseOptions {
+    pub fn disallow_multi_backpassing(&self) -> Self {
+        Self {
+            accept_multi_backpassing: false,
+            check_for_arrow: self.check_for_arrow,
+        }
+    }
+}
+
 pub fn expr_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     move |arena, state: State<'a>, min_indent: u32| {
         loc_expr(true, false)
@@ -308,7 +317,11 @@ fn loc_possibly_negative_or_negated_term<'a>(
 
         let (_, (loc_op, loc_expr), state) = and(
             loc(unary_negate()),
-            loc_possibly_negative_or_negated_term(options, true, false),
+            loc_possibly_negative_or_negated_term(
+                options.disallow_multi_backpassing(),
+                true,
+                false,
+            ),
         )
         .parse(arena, state, min_indent)?;
 
@@ -325,7 +338,11 @@ fn loc_possibly_negative_or_negated_term<'a>(
             and(
                 loc(unary_not()).trace("not"),
                 space0_before_e(
-                    loc_possibly_negative_or_negated_term(options, true, false),
+                    loc_possibly_negative_or_negated_term(
+                        options.disallow_multi_backpassing(),
+                        true,
+                        false
+                    ),
                     EExpr::IndentStart
                 )
                 .trace("not_expr")
@@ -645,7 +662,11 @@ fn parse_stmt_operator_chain<'a>(
         let allow_negate = state.pos() > end;
         let parser = skip_first(
             crate::blankspace::check_indent(EExpr::IndentEnd),
-            loc_possibly_negative_or_negated_term(options, allow_negate, false),
+            loc_possibly_negative_or_negated_term(
+                options.disallow_multi_backpassing(),
+                allow_negate,
+                false,
+            ),
         );
         end = state.pos();
         match parser.parse(arena, state.clone(), call_min_indent) {
@@ -1495,7 +1516,7 @@ fn parse_stmt_operator<'a>(
                 min_indent,
                 call_min_indent,
                 expr_state,
-                options,
+                options.disallow_multi_backpassing(),
                 initial_state,
                 loc_op.with_value(BinOp::Minus),
             )
@@ -2765,7 +2786,7 @@ fn if_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EIf<
 
         let (state_final_else, then_indent) = loop {
             let (_, ((cond, then_indent), then_branch), state) = if_branch()
-                .parse(arena, loop_state, min_indent)
+                .parse(arena, loop_state, if_indent)
                 .map_err(|(_p, err)| (MadeProgress, err))?;
 
             branches.push((cond, then_branch));
@@ -2793,10 +2814,10 @@ fn if_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EIf<
         let else_indent = state_final_else.line_indent();
         let indented_else = else_indent > then_indent && has_newline_next;
 
-        let min_indent = if !indented_else {
-            else_indent + 1
+        let min_indent = if indented_else {
+            std::cmp::min(if_indent, std::cmp::min(then_indent, else_indent))
         } else {
-            if_indent
+            else_indent + 1
         };
 
         let (_, loc_first_space, state_final_else) =
@@ -2815,7 +2836,8 @@ fn if_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EIf<
             loc_first_space,
             allow_defs,
             false,
-        )?;
+        )
+        .map_err(|(_, err)| (MadeProgress, err))?;
 
         let expr = Expr::If {
             if_thens: branches.into_bump_slice(),

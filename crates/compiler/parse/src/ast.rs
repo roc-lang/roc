@@ -2395,6 +2395,7 @@ impl_extract_spaces!(AssignedField<T>);
 impl_extract_spaces!(TypeAnnotation);
 impl_extract_spaces!(ImplementsAbility);
 impl_extract_spaces!(ImplementsAbilities);
+impl_extract_spaces!(Implements);
 
 impl<'a, T: Copy> ExtractSpaces<'a> for Spaced<'a, T> {
     type Item = T;

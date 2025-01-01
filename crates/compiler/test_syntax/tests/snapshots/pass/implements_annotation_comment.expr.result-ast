@@ -1,0 +1,58 @@
+@0-24 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(0),
+            ],
+            regions: [
+                @0-22,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [
+                Ability {
+                    header: TypeHeader {
+                        name: @0-1 "S",
+                        vars: [],
+                    },
+                    loc_implements: @2-12 Implements,
+                    members: [
+                        AbilityMember {
+                            name: @13-14 "i",
+                            typ: @16-17 SpaceAfter(
+                                BoundVariable(
+                                    "a",
+                                ),
+                                [
+                                    LineComment(
+                                        "",
+                                    ),
+                                    LineComment(
+                                        "",
+                                    ),
+                                ],
+                            ),
+                        },
+                    ],
+                },
+            ],
+            value_defs: [],
+        },
+        @23-24 SpaceBefore(
+            Num(
+                "0",
+            ),
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

@@ -5,11 +5,11 @@ use crate::annotation::{
 use crate::collection::{fmt_collection, Braces};
 use crate::expr::{
     expr_lift_and_lower, expr_lift_spaces, expr_lift_spaces_after, expr_lift_spaces_before,
-    fmt_str_literal, is_str_multiline, sub_expr_requests_parens,
+    fmt_str_literal, is_str_multiline, merge_spaces_conservative, sub_expr_requests_parens,
 };
 use crate::node::{NodeInfo, Nodify};
-use crate::pattern::pattern_lift_spaces_before;
 use crate::pattern::{pattern_apply_to_node, pattern_fmt_apply};
+use crate::pattern::{pattern_lift_spaces, pattern_lift_spaces_before};
 use crate::spaces::{
     fmt_comments_only, fmt_default_newline, fmt_default_spaces, fmt_spaces, NewlineAt, INDENT,
 };
@@ -155,16 +155,30 @@ pub fn tydef_lift_spaces<'a, 'b: 'a>(arena: &'a Bump, def: TypeDef<'b>) -> Space
             }
         }
         TypeDef::Ability {
-            header: _,
-            loc_implements: _,
-            members: _,
+            header,
+            loc_implements,
+            members,
         } => {
-            // TODO: if the fuzzer ever generates examples where it's important to lift spaces from the members,
-            // we'll need to implement this. I'm not sure that's possible, though.
-            Spaces {
-                before: &[],
-                item: def,
-                after: &[],
+            let new_members = arena.alloc_slice_copy(members);
+            if let Some(last) = new_members.last_mut() {
+                let typ = ann_lift_spaces_after(arena, &last.typ.value);
+                last.typ.value = typ.item;
+
+                Spaces {
+                    before: &[],
+                    item: TypeDef::Ability {
+                        header,
+                        loc_implements,
+                        members: new_members,
+                    },
+                    after: typ.after,
+                }
+            } else {
+                Spaces {
+                    before: &[],
+                    item: def,
+                    after: &[],
+                }
             }
         }
     }
@@ -477,12 +491,32 @@ impl<'a> Formattable for TypeDef<'a> {
             }
             Ability {
                 header,
-                loc_implements: _,
+                loc_implements,
                 members,
             } => {
-                header.format_with_options(buf, Parens::NotNeeded, Newlines::No, indent);
+                let header_lifted = type_head_lift_spaces(buf.text.bump(), *header);
+                header_lifted.item.format(buf, indent);
+                let implements = loc_implements.value.extract_spaces();
+                let before_implements = merge_spaces_conservative(
+                    buf.text.bump(),
+                    header_lifted.after,
+                    implements.before,
+                );
                 buf.spaces(1);
+                fmt_comments_only(
+                    buf,
+                    before_implements.iter(),
+                    NewlineAt::Bottom,
+                    indent + INDENT,
+                );
+                buf.indent(indent + INDENT);
                 buf.push_str(roc_parse::keyword::IMPLEMENTS);
+                fmt_comments_only(
+                    buf,
+                    implements.after.iter(),
+                    NewlineAt::Bottom,
+                    indent + INDENT,
+                );
                 buf.spaces(1);
 
                 if !self.is_multiline() {
@@ -539,6 +573,18 @@ impl<'a> Formattable for TypeHeader<'a> {
             self.vars.iter().any(|v| v.is_multiline()),
         );
     }
+}
+
+fn type_head_lift_spaces<'a, 'b: 'a>(
+    arena: &'a Bump,
+    head: TypeHeader<'b>,
+) -> Spaces<'a, Pattern<'a>> {
+    let pat = Pattern::Apply(
+        arena.alloc(Loc::at(head.name.region, Pattern::Tag(head.name.value))),
+        head.vars,
+    );
+
+    pattern_lift_spaces(arena, &pat)
 }
 
 impl<'a> Nodify<'a> for TypeHeader<'a> {
@@ -1142,7 +1188,6 @@ impl<'a> Formattable for AbilityMember<'a> {
         buf: &mut Buf,
         _parens: Parens,
         _newlines: Newlines,
-
         indent: u16,
     ) {
         let Spaces { before, item, .. } = self.name.value.extract_spaces();

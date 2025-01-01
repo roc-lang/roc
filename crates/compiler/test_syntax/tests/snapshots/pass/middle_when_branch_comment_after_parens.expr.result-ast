@@ -1,0 +1,56 @@
+@0-23 SpaceAfter(
+    When(
+        @5-6 Var {
+            module_name: "",
+            ident: "n",
+        },
+        [
+            WhenBranch {
+                patterns: [
+                    @10-11 SpaceBefore(
+                        Tag(
+                            "O",
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @13-17 ParensAround(
+                    SpaceAfter(
+                        Var {
+                            module_name: "",
+                            ident: "s",
+                        },
+                        [
+                            Newline,
+                        ],
+                    ),
+                ),
+                guard: None,
+            },
+            WhenBranch {
+                patterns: [
+                    @19-20 SpaceBefore(
+                        Tag(
+                            "O",
+                        ),
+                        [
+                            LineComment(
+                                "",
+                            ),
+                        ],
+                    ),
+                ],
+                value: @22-23 Var {
+                    module_name: "",
+                    ident: "t",
+                },
+                guard: None,
+            },
+        ],
+    ),
+    [
+        Newline,
+    ],
+)
