@@ -496,6 +496,7 @@ impl<'a> Formattable for TypeDef<'a> {
             } => {
                 header.format_with_options(buf, Parens::NotNeeded, Newlines::No, indent);
                 buf.spaces(1);
+                buf.indent(indent + INDENT);
                 buf.push_str(roc_parse::keyword::IMPLEMENTS);
                 buf.spaces(1);
 

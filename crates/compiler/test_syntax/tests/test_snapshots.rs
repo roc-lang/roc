@@ -459,6 +459,7 @@ mod test_snapshots {
         pass/if_in_record_field_opt_pat.expr,
         pass/if_newline_then_negate_else_recordupdater.expr,
         pass/if_then_weird_indent.expr,
+        pass/implements_after_parens_comment.expr,
         pass/implements_annotation_comment.expr,
         pass/implements_in_pat_after_comment.expr,
         pass/implements_newline_in_fn_ty.expr,
