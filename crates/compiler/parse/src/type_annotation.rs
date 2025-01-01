@@ -4,7 +4,7 @@ use crate::ast::{
     TypeAnnotation, TypeHeader,
 };
 use crate::blankspace::{
-    space0_around_ee, space0_before_e, space0_before_optional_after, space0_e,
+    self, space0_around_ee, space0_before_e, space0_before_optional_after, space0_e,
     spaces_before_optional_after,
 };
 use crate::expr::record_field;
@@ -311,6 +311,7 @@ fn loc_type_in_parens<'a>(
                 fields.push(first_field);
 
                 loop {
+                    #[derive(Debug)]
                     enum Sep {
                         Comma,
                         FunctionArrow(FunctionArrow),
@@ -326,24 +327,42 @@ fn loc_type_in_parens<'a>(
                             crate::parser::keyword(keyword::WHERE, ETypeInParens::End),
                             |_| Sep::Where
                         ),
-                    ];
+                    ]
+                    .trace("sep");
 
                     match sep.parse(arena, state.clone(), 0) {
                         Ok((_, Sep::Comma, next_state)) => {
-                            match spaces_before_optional_after(specialize_err_ref(
-                                ETypeInParens::Type,
-                                term_or_apply_with_as(false),
-                            ))
-                            .parse(arena, next_state.clone(), 0)
-                            {
+                            let parser = map_with_arena(
+                                and(
+                                    backtrackable(blankspace::spaces()),
+                                    and(
+                                        specialize_err_ref(
+                                            ETypeInParens::Type,
+                                            term_or_apply_with_as(false),
+                                        ),
+                                        one_of![
+                                            backtrackable(blankspace::spaces()),
+                                            succeed(&[] as &[_]),
+                                        ],
+                                    ),
+                                ),
+                                blankspace::spaces_around_help,
+                            );
+                            match parser.parse(arena, next_state.clone(), 0) {
                                 Ok((element_progress, next_field, next_state)) => {
+                                    dbg!();
                                     debug_assert_eq!(element_progress, MadeProgress);
                                     state = next_state;
                                     fields.push(next_field);
                                 }
-                                Err((_, _fail)) => {
+                                Err((NoProgress, _fail)) => {
+                                    dbg!();
                                     state = next_state;
                                     break;
+                                }
+                                Err((MadeProgress, fail)) => {
+                                    dbg!();
+                                    return Err((MadeProgress, fail));
                                 }
                             }
                         }
@@ -755,10 +774,10 @@ fn parse_implements_clause_chain_after_where<'a>(
     // Parse the first clause (there must be one), then the rest
     let (_, first_clause, state) = implements_clause().parse(arena, state, min_indent)?;
 
-    let (_, mut clauses, state) = zero_or_more(skip_first(
+    let (_, mut clauses, state) = zero_or_more(backtrackable(skip_first(
         byte(b',', EType::TImplementsClause),
         implements_clause(),
-    ))
+    )))
     .parse(arena, state, min_indent)?;
 
     // Usually the number of clauses shouldn't be too large, so this is okay

@@ -1,0 +1,68 @@
+@0-30 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-28,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Annotation(
+                    @0-1 NumLiteral(
+                        "1",
+                    ),
+                    @2-28 Tuple {
+                        elems: [
+                            @3-26 Where(
+                                @3-4 SpaceAfter(
+                                    Wildcard,
+                                    [
+                                        LineComment(
+                                            "",
+                                        ),
+                                    ],
+                                ),
+                                [
+                                    @12-26 ImplementsClause {
+                                        var: @12-13 "e",
+                                        abilities: [
+                                            @25-26 Apply(
+                                                "",
+                                                "J",
+                                                [],
+                                            ),
+                                        ],
+                                    },
+                                ],
+                            ),
+                        ],
+                        ext: Some(
+                            @27-28 Wildcard,
+                        ),
+                    },
+                ),
+            ],
+        },
+        @29-30 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "l",
+            },
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)
