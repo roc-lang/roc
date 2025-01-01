@@ -123,8 +123,13 @@ pub struct Item<'a> {
 }
 
 impl<'a> Item<'a> {
-    fn is_multiline(&self) -> bool {
-        self.newline || !self.before.is_empty() || self.node.is_multiline()
+    fn is_multiline(&self, allow_newlines: bool) -> bool {
+        let has_newlines = if allow_newlines {
+            !self.before.is_empty()
+        } else {
+            self.before.iter().any(|c| c.is_comment())
+        };
+        self.newline || has_newlines || self.node.is_multiline()
     }
 }
 
@@ -336,11 +341,11 @@ impl<'a> Formattable for Node<'a> {
             } => after.is_multiline() || items.iter().any(|item| item.is_multiline()),
             Node::CommaSequence {
                 allow_blank_lines: _,
-                allow_newlines: _,
+                allow_newlines,
                 indent_rest: _,
                 first,
                 rest,
-            } => first.is_multiline() || rest.iter().any(|item| item.is_multiline()),
+            } => first.is_multiline() || rest.iter().any(|item| item.is_multiline(*allow_newlines)),
             Node::Literal(_) => false,
             Node::TypeAnnotation(type_annotation) => type_annotation.is_multiline(),
             Node::Pattern(pat) => pat.is_multiline(),

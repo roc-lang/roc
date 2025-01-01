@@ -330,6 +330,7 @@ mod test_snapshots {
         pass/apply_unary_negation.expr,
         pass/apply_unary_not.expr,
         pass/arg_pattern_as.expr,
+        pass/as_in_func_type_args.expr,
         pass/backpassing_bananza.expr,
         pass/backpassing_comment_pattern_fun.expr,
         pass/backpassing_in_parens_in_tuple.expr,

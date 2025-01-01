@@ -876,36 +876,30 @@ fn fmt_general_def<L: Formattable>(
     lhs.format_with_options(buf, lhs_parens, Newlines::Yes, indent);
     buf.indent(indent);
 
-    if rhs.is_multiline() {
-        buf.spaces(1);
-        buf.push_str(sep);
-        buf.spaces(1);
+    buf.spaces(1);
+    buf.push_str(sep);
+    buf.spaces(1);
 
-        let rhs_lifted = ann_lift_spaces(buf.text.bump(), rhs);
+    let rhs = rhs.to_node(buf.text.bump());
 
-        if ty_is_outdentable(&rhs_lifted.item) && rhs_lifted.before.iter().all(|s| s.is_newline()) {
-            rhs_lifted
-                .item
+    if rhs.node.is_multiline() || !rhs.before.is_empty() || !rhs.after.is_empty() {
+        if rhs.node.is_multiline() && !rhs.needs_indent && rhs.before.iter().all(|s| s.is_newline())
+        {
+            rhs.node
                 .format_with_options(buf, Parens::NotNeeded, Newlines::No, indent);
         } else {
             buf.ensure_ends_with_newline();
-            fmt_comments_only(
-                buf,
-                rhs_lifted.before.iter(),
-                NewlineAt::Bottom,
-                indent + INDENT,
-            );
-            rhs_lifted
-                .item
+            fmt_comments_only(buf, rhs.before.iter(), NewlineAt::Bottom, indent + INDENT);
+            rhs.node
                 .format_with_options(buf, Parens::NotNeeded, newlines, indent + INDENT);
         }
-        fmt_comments_only(buf, rhs_lifted.after.iter(), NewlineAt::Bottom, indent);
     } else {
-        buf.spaces(1);
-        buf.push_str(sep);
-        buf.spaces(1);
-        rhs.format_with_options(buf, Parens::NotNeeded, Newlines::No, indent);
+        fmt_comments_only(buf, rhs.before.iter(), NewlineAt::Bottom, indent);
+        rhs.node
+            .format_with_options(buf, Parens::NotNeeded, Newlines::No, indent);
     }
+
+    fmt_comments_only(buf, rhs.after.iter(), NewlineAt::Bottom, indent);
 }
 
 fn fmt_dbg_in_def<'a>(buf: &mut Buf, condition: &'a Loc<Expr<'a>>, _: bool, indent: u16) {
