@@ -176,9 +176,9 @@ pub const Dec = fn (?[*]u8) callconv(.C) void;
 
 const REFCOUNT_MAX_ISIZE: isize = 0;
 // Only top bit set.
-pub const REFCOUNT_IS_ATOMIC_MASK: isize = std.math.minInt(isize);
+const REFCOUNT_IS_ATOMIC_MASK: isize = std.math.minInt(isize);
 // All other bits of the refcount.
-pub const REFCOUNT_VALUE_MASK = ~REFCOUNT_IS_ATOMIC_MASK;
+const REFCOUNT_VALUE_MASK = ~REFCOUNT_IS_ATOMIC_MASK;
 
 pub const IntWidth = enum(u8) {
     U8 = 0,
