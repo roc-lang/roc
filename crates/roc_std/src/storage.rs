@@ -2,10 +2,10 @@ use core::num::NonZeroIsize;
 
 /// # Safety
 ///
-/// isize::MIN is definitely not zero. This can become
+/// 1 is definitely not zero. This can become
 /// https://doc.rust-lang.org/std/num/struct.NonZeroIsize.html#associatedconstant.MIN
 /// once it has been stabilized.
-const REFCOUNT_1: NonZeroIsize = unsafe { NonZeroIsize::new_unchecked(isize::MIN) };
+const REFCOUNT_1: NonZeroIsize = unsafe { NonZeroIsize::new_unchecked(1) };
 
 const _ASSERT_STORAGE_SIZE: () =
     assert!(core::mem::size_of::<isize>() == core::mem::size_of::<Storage>());

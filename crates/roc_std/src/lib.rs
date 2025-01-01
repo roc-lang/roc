@@ -583,7 +583,10 @@ impl Hash for U128 {
 }
 
 pub const ROC_REFCOUNT_CONSTANT: usize = 0;
-pub const ROC_REFCOUNT_ONE: usize = isize::MIN as usize;
+// The top bit indicates if refcounts should be atomic.
+pub const ROC_REFCOUNT_IS_ATOMIC: usize = isize::MIN as usize;
+// The remaining bits are the actual refcount.
+pub const ROC_REFCOUNT_VALUE_MASK: usize = !ROC_REFCOUNT_IS_ATOMIC;
 
 /// All Roc types that are refcounted must implement this trait.
 ///

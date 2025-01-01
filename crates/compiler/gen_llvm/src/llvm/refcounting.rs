@@ -77,12 +77,8 @@ impl<'ctx> PointerToRefcount<'ctx> {
     pub fn is_1<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>) -> IntValue<'ctx> {
         let current = self.get_refcount(env);
         let one = match env.target.ptr_width() {
-            roc_target::PtrWidth::Bytes4 => {
-                env.context.i32_type().const_int(i32::MIN as u64, false)
-            }
-            roc_target::PtrWidth::Bytes8 => {
-                env.context.i64_type().const_int(i64::MIN as u64, false)
-            }
+            roc_target::PtrWidth::Bytes4 => env.context.i32_type().const_int(1_u64, false),
+            roc_target::PtrWidth::Bytes8 => env.context.i64_type().const_int(1_u64, false),
         };
 
         env.builder
