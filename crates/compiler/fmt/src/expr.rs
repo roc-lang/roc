@@ -2016,6 +2016,7 @@ fn fmt_closure<'a>(
                 loc_ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
             }
             _ => {
+                buf.ensure_ends_with_newline();
                 loc_ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, body_indent);
             }
         }

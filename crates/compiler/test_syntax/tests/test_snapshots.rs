@@ -747,6 +747,7 @@ mod test_snapshots {
         pass/underscore_expr_in_def.expr,
         pass/underscore_in_assignment_pattern.expr,
         pass/unicode_overflow_str.expr,
+        pass/unindented_if_in_closure.expr,
         pass/value_def_confusion.expr,
         pass/var_else.expr,
         pass/var_if.expr,
