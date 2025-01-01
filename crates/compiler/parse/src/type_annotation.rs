@@ -350,18 +350,15 @@ fn loc_type_in_parens<'a>(
                             );
                             match parser.parse(arena, next_state.clone(), 0) {
                                 Ok((element_progress, next_field, next_state)) => {
-                                    dbg!();
                                     debug_assert_eq!(element_progress, MadeProgress);
                                     state = next_state;
                                     fields.push(next_field);
                                 }
                                 Err((NoProgress, _fail)) => {
-                                    dbg!();
                                     state = next_state;
                                     break;
                                 }
                                 Err((MadeProgress, fail)) => {
-                                    dbg!();
                                     return Err((MadeProgress, fail));
                                 }
                             }
