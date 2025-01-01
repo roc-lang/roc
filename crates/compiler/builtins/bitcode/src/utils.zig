@@ -210,7 +210,7 @@ pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
 
     // Ensure that the refcount is not whole program lifetime.
     const refcount: isize = ptr_to_refcount.*;
-    if (refcount != REFCOUNT_MAX_ISIZE) {
+    if (!rcConstant(refcount)) {
         // Note: we assume that a refcount will never overflow.
         // As such, we do not need to cap incrementing.
         switch (RC_TYPE) {
@@ -373,7 +373,7 @@ inline fn decref_ptr_to_refcount(
 
     // Ensure that the refcount is not whole program lifetime.
     const refcount: isize = refcount_ptr[0];
-    if (refcount != REFCOUNT_MAX_ISIZE) {
+    if (!rcConstant(refcount)) {
         switch (RC_TYPE) {
             .normal => {
                 const old = @as(usize, @bitCast(refcount));
@@ -437,6 +437,20 @@ pub fn rcUnique(refcount: isize) bool {
         },
         .none => {
             return false;
+        },
+    }
+}
+
+pub fn rcConstant(refcount: isize) bool {
+    switch (RC_TYPE) {
+        .normal => {
+            return refcount == REFCOUNT_MAX_ISIZE;
+        },
+        .atomic => {
+            return refcount & REFCOUNT_VALUE_MASK == REFCOUNT_MAX_ISIZE & REFCOUNT_VALUE_MASK;
+        },
+        .none => {
+            return true;
         },
     }
 }
