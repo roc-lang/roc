@@ -267,7 +267,7 @@ fn format_expr_only(
                 )
                 || (matches!(unary_op.value, called_via::UnaryOp::Negate)
                     && requires_space_after_unary(&lifted.item))
-                || (parens == Parens::InApply && ends_with_closure(&lifted.item));
+                || ends_with_closure(&lifted.item);
 
             if needs_parens {
                 // Unary negation can't be followed by whitespace (which is what a newline is) - so
