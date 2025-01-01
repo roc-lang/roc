@@ -915,7 +915,7 @@ impl<'a> HeaderType<'a> {
             HeaderType::Platform { .. } | HeaderType::Package { .. } => &[],
         }
     }
-    pub fn to_string(&'a self) -> &str {
+    pub fn to_string(&self) -> &'static str {
         match self {
             HeaderType::App { .. } => "app",
             HeaderType::Hosted { .. } => "hosted",

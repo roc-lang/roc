@@ -1108,7 +1108,12 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                             .to_node(arena)
                             .add_parens(arena, Parens::InCollection)
                     });
-                maybe_add_ext(arena, coll, ext)
+                maybe_add_ext(
+                    arena,
+                    coll,
+                    ext,
+                    fields.is_empty() && fields.final_comments().is_empty(),
+                )
             }
             TypeAnnotation::TagUnion { ext, tags } => {
                 let coll =
@@ -1117,7 +1122,12 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                             .to_node(arena)
                             .add_parens(arena, Parens::InCollection)
                     });
-                maybe_add_ext(arena, coll, ext)
+                maybe_add_ext(
+                    arena,
+                    coll,
+                    ext,
+                    tags.is_empty() && tags.final_comments().is_empty(),
+                )
             }
             TypeAnnotation::Tuple { elems, ext } => {
                 let coll = collection_to_node(arena, Braces::Round, false, elems, |is_first, e| {
@@ -1128,7 +1138,12 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                         v.add_parens(arena, Parens::InCollection)
                     }
                 });
-                maybe_add_ext(arena, coll, ext)
+                maybe_add_ext(
+                    arena,
+                    coll,
+                    ext,
+                    elems.is_empty() && elems.final_comments().is_empty(),
+                )
             }
             TypeAnnotation::Where(annot, implements_clauses) => {
                 let mut items = Vec::with_capacity_in(implements_clauses.len() + 2, arena);
@@ -1137,6 +1152,8 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                     .value
                     .to_node(arena)
                     .add_parens(arena, Parens::NotNeeded);
+
+                let mut needs_indent = annot.needs_indent || !annot.after.is_empty();
 
                 items.push(Item {
                     comma_before: false,
@@ -1159,6 +1176,8 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                         space: true,
                         node: node.node,
                     });
+
+                    needs_indent |= node.node.is_multiline() || !before.is_empty();
                 }
 
                 NodeInfo {
@@ -1171,7 +1190,7 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                         indent_rest: false,
                     },
                     after: last_after,
-                    needs_indent: true,
+                    needs_indent,
                     prec: Prec::Term,
                 }
             }
@@ -1353,6 +1372,7 @@ fn maybe_add_ext<'a>(
     arena: &'a Bump,
     delim: Node<'a>,
     ext: &Option<&'a Loc<TypeAnnotation<'a>>>,
+    needs_indent: bool,
 ) -> NodeInfo<'a> {
     if let Some(ext) = ext {
         let ext = ext.value.to_node(arena).add_ty_ext_parens(arena);
@@ -1366,7 +1386,7 @@ fn maybe_add_ext<'a>(
             before: &[],
             node: item,
             after: ext.after,
-            needs_indent: false,
+            needs_indent,
             prec: Prec::Term,
         }
     } else {
@@ -1374,7 +1394,7 @@ fn maybe_add_ext<'a>(
             before: &[],
             node: delim,
             after: &[],
-            needs_indent: false,
+            needs_indent,
             prec: Prec::Term,
         }
     }
