@@ -469,15 +469,16 @@ pub inline fn calculateCapacity(
     requested_length: usize,
     element_width: usize,
 ) usize {
-    // TODO: there are two adjustments that would likely lead to better results for Roc.
-    // 1. Deal with the fact we allocate an extra u64 for refcount.
-    //    This may lead to allocating page size + 8 bytes.
-    //    That could mean allocating an entire page for 8 bytes of data which isn't great.
-    // 2. Deal with the fact that we can request more than 1 element at a time.
-    //    fbvector assumes just appending 1 element at a time when using this algorithm.
-    //    As such, they will generally grow in a way that should better match certain memory multiple.
-    //    This is also the normal case for roc, but we could also grow by a much larger amount.
-    //    We may want to round to multiples of 2 or something similar.
+    // TODO: Deal with the fact we allocate an extra u64 for refcount.
+    // This may lead to allocating page size + 8 bytes.
+    // That could mean allocating an entire page for 8 bytes of data which isn't great.
+
+    if (requested_length != old_capacity + 1) {
+        // The user is explicitly requesting n elements.
+        // Trust the user and just reserve that amount.
+        return requested_length;
+    }
+
     var new_capacity: usize = 0;
     if (element_width == 0) {
         return requested_length;
