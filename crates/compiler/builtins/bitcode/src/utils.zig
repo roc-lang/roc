@@ -433,7 +433,17 @@ pub fn isUnique(
         std.debug.print("| is unique {*}\n", .{isizes - 1});
     }
 
-    return refcount == REFCOUNT_ONE_ISIZE;
+    switch (RC_TYPE) {
+        .normal => {
+            return refcount == REFCOUNT_ONE_ISIZE;
+        },
+        .atomic => {
+            return refcount == REFCOUNT_ONE_ISIZE or refcount == REFCOUNT_ONE_ATOMIC_ISIZE;
+        },
+        .none => {
+            return false;
+        },
+    }
 }
 
 // We follow roughly the [fbvector](https://github.com/facebook/folly/blob/main/folly/docs/FBVector.md) when it comes to growing a RocList.
