@@ -1959,6 +1959,7 @@ fn constrain_function_def(
                 signature,
                 new_rigid_variables,
                 new_infer_variables,
+                has_explicit_inference_variables: _,
             } = instantiate_rigids_simple(
                 types,
                 &annotation.signature,
@@ -2313,6 +2314,7 @@ fn constrain_destructure_def(
                 signature,
                 new_rigid_variables,
                 new_infer_variables,
+                has_explicit_inference_variables: _,
             } = instantiate_rigids(
                 types,
                 constraints,
@@ -2420,6 +2422,7 @@ fn constrain_value_def(
                 signature,
                 new_rigid_variables,
                 new_infer_variables,
+                has_explicit_inference_variables: _,
             } = instantiate_rigids_simple(
                 types,
                 &annotation.signature,
@@ -2913,6 +2916,7 @@ fn constrain_typed_def(
         signature,
         new_rigid_variables,
         new_infer_variables,
+        has_explicit_inference_variables: _,
     } = instantiate_rigids(
         types,
         constraints,
@@ -3752,8 +3756,13 @@ fn constrain_closure_size(
 
 pub struct InstantiateRigids {
     pub signature: Index<TypeTag>,
-    pub new_rigid_variables: Vec<Variable>,
-    pub new_infer_variables: Vec<Variable>,
+    pub new_rigid_variables: Vec<Loc<Variable>>,
+    pub new_infer_variables: Vec<Loc<Variable>>,
+    /// Whether the annotation has explicit inference variables `_`.
+    /// Annotations with inference variables are handled specially during typechecking of mutually recursive defs,
+    /// because they are not guaranteed to be generalized (XREF(rec-def-strategy)).
+    /// Ideally, this special-casing would be removed in the future.
+    pub has_explicit_inference_variables: bool,
 }
 
 #[derive(PartialEq, Eq)]
@@ -3802,19 +3811,23 @@ fn instantiate_rigids(
         new_rigid_variables.extend(introduced_vars.lambda_sets.iter().copied());
 
         // ext-infer vars are always freshly introduced in this annotation
-        new_rigid_variables.extend(introduced_vars.infer_ext_in_output.iter().copied());
+        new_infer_variables.extend(introduced_vars.infer_ext_in_output.iter().copied());
 
-        new_infer_variables.extend(introduced_vars.inferred.iter().map(|v| v.value));
+        let has_explicit_inference_variables = !introduced_vars.inferred.is_empty();
+        new_infer_variables.extend(introduced_vars.inferred.iter().copied());
 
         // Instantiate rigid variables
         if !rigid_substitution.is_empty() {
             annotation.substitute_variables(&rigid_substitution);
         }
 
-        types.from_old_type(&annotation)
+        (
+            types.from_old_type(&annotation),
+            has_explicit_inference_variables,
+        )
     };
 
-    let signature = generate_fresh_ann(types);
+    let (signature, has_explicit_inference_variables) = generate_fresh_ann(types);
     {
         // If this is a recursive def, we must also generate a fresh annotation to be used as the
         // type annotation that will be used in the first def headers introduced during the solving
@@ -3825,7 +3838,7 @@ fn instantiate_rigids(
         // So, we generate a fresh annotation here, and return a separate fresh annotation below;
         // the latter annotation is the one used to construct the finalized type.
         let annotation_index = if is_recursive_def == IsRecursiveDef::Yes {
-            generate_fresh_ann(types)
+            generate_fresh_ann(types).0
         } else {
             signature
         };
@@ -3848,6 +3861,7 @@ fn instantiate_rigids(
         signature,
         new_rigid_variables,
         new_infer_variables,
+        has_explicit_inference_variables,
     }
 }
 
@@ -3883,11 +3897,11 @@ fn instantiate_rigids_simple(
     // lambda set vars are always freshly introduced in this annotation
     new_rigid_variables.extend(introduced_vars.lambda_sets.iter().copied());
 
-    // ext-infer vars are always freshly introduced in this annotation
-    new_rigid_variables.extend(introduced_vars.infer_ext_in_output.iter().copied());
+    let has_explicit_inference_variables = !introduced_vars.inferred.is_empty();
+    let mut new_infer_variables: Vec<Loc<Variable>> = introduced_vars.inferred.clone();
 
-    let new_infer_variables: Vec<Variable> =
-        introduced_vars.inferred.iter().map(|v| v.value).collect();
+    // ext-infer vars are always freshly introduced in this annotation
+    new_infer_variables.extend(introduced_vars.infer_ext_in_output.iter().copied());
 
     // Instantiate rigid variables
     if !rigid_substitution.is_empty() {
@@ -3898,6 +3912,7 @@ fn instantiate_rigids_simple(
         signature: types.from_old_type(&annotation),
         new_rigid_variables,
         new_infer_variables,
+        has_explicit_inference_variables,
     }
 }
 
@@ -3981,6 +3996,7 @@ fn constraint_recursive_function(
                 signature,
                 new_rigid_variables,
                 new_infer_variables,
+                has_explicit_inference_variables: _,
             } = instantiate_rigids_simple(
                 types,
                 &annotation.signature,
@@ -4250,6 +4266,7 @@ pub fn rec_defs_help_simple(
                             signature,
                             new_rigid_variables,
                             new_infer_variables,
+                            has_explicit_inference_variables,
                         } = instantiate_rigids_simple(
                             types,
                             &annotation.signature,
@@ -4260,7 +4277,7 @@ pub fn rec_defs_help_simple(
                         let loc_pattern =
                             Loc::at(loc_symbol.region, Pattern::Identifier(loc_symbol.value));
 
-                        let is_hybrid = !new_infer_variables.is_empty();
+                        let is_hybrid = has_explicit_inference_variables;
 
                         hybrid_and_flex_info.vars.extend(new_infer_variables);
 
@@ -4537,6 +4554,7 @@ fn rec_defs_help(
                     signature,
                     new_rigid_variables,
                     new_infer_variables,
+                    has_explicit_inference_variables,
                 } = instantiate_rigids(
                     types,
                     constraints,
@@ -4548,7 +4566,7 @@ fn rec_defs_help(
                     IsRecursiveDef::Yes,
                 );
 
-                let is_hybrid = !new_infer_variables.is_empty();
+                let is_hybrid = has_explicit_inference_variables;
 
                 hybrid_and_flex_info.vars.extend(&new_infer_variables);
 
