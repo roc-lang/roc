@@ -1,4 +1,3 @@
-C
-    4 #
+C 4 #
     implements e : m
 C
