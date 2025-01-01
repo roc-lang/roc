@@ -1,0 +1,79 @@
+@1-23 SpaceAfter(
+    If {
+        if_thens: [
+            (
+                @4-5 SpaceBefore(
+                    SpaceAfter(
+                        Var {
+                            module_name: "",
+                            ident: "k",
+                        },
+                        [
+                            Newline,
+                        ],
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+                @11-12 SpaceBefore(
+                    SpaceAfter(
+                        Tag(
+                            "A",
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+            ),
+        ],
+        final_else: @20-23 SpaceBefore(
+            Defs(
+                Defs {
+                    tags: [
+                        EitherIndex(2147483648),
+                    ],
+                    regions: [
+                        @20-21,
+                    ],
+                    space_before: [
+                        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                    ],
+                    space_after: [
+                        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                    ],
+                    spaces: [],
+                    type_defs: [],
+                    value_defs: [
+                        Stmt(
+                            @20-21 Var {
+                                module_name: "",
+                                ident: "e",
+                            },
+                        ),
+                    ],
+                },
+                @22-23 SpaceBefore(
+                    Var {
+                        module_name: "",
+                        ident: "r",
+                    },
+                    [
+                        Newline,
+                    ],
+                ),
+            ),
+            [
+                Newline,
+            ],
+        ),
+        indented_else: true,
+    },
+    [
+        Newline,
+    ],
+)

@@ -2793,10 +2793,10 @@ fn if_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EIf<
         let else_indent = state_final_else.line_indent();
         let indented_else = else_indent > then_indent && has_newline_next;
 
-        let min_indent = if !indented_else {
-            else_indent + 1
+        let min_indent = if indented_else {
+            std::cmp::min(then_indent, else_indent)
         } else {
-            if_indent
+            else_indent + 1
         };
 
         let (_, loc_first_space, state_final_else) =
