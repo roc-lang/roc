@@ -155,16 +155,30 @@ pub fn tydef_lift_spaces<'a, 'b: 'a>(arena: &'a Bump, def: TypeDef<'b>) -> Space
             }
         }
         TypeDef::Ability {
-            header: _,
-            loc_implements: _,
-            members: _,
+            header,
+            loc_implements,
+            members,
         } => {
-            // TODO: if the fuzzer ever generates examples where it's important to lift spaces from the members,
-            // we'll need to implement this. I'm not sure that's possible, though.
-            Spaces {
-                before: &[],
-                item: def,
-                after: &[],
+            let new_members = arena.alloc_slice_copy(members);
+            if let Some(last) = new_members.last_mut() {
+                let typ = ann_lift_spaces_after(arena, &last.typ.value);
+                last.typ.value = typ.item;
+
+                Spaces {
+                    before: &[],
+                    item: TypeDef::Ability {
+                        header,
+                        loc_implements,
+                        members: new_members,
+                    },
+                    after: typ.after,
+                }
+            } else {
+                Spaces {
+                    before: &[],
+                    item: def,
+                    after: &[],
+                }
             }
         }
     }
@@ -1142,7 +1156,6 @@ impl<'a> Formattable for AbilityMember<'a> {
         buf: &mut Buf,
         _parens: Parens,
         _newlines: Newlines,
-
         indent: u16,
     ) {
         let Spaces { before, item, .. } = self.name.value.extract_spaces();
