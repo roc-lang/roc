@@ -76,7 +76,7 @@ comptime {
 fn testing_roc_alloc(size: usize, nominal_alignment: u32) callconv(.C) ?*anyopaque {
     const real_alignment = 16;
     if (nominal_alignment > real_alignment) {
-        @panic("alignments larger than that of usize are not currently supported");
+        @panic("alignments larger than that of 2 usize are not currently supported");
     }
     // We store an extra usize which is the size of the data plus the size of the size, directly before the data.
     // We need enough clocks of the alignment size to fit this (usually this will be one)
@@ -98,12 +98,16 @@ fn testing_roc_alloc(size: usize, nominal_alignment: u32) callconv(.C) ?*anyopaq
     return data_ptr;
 }
 
-fn testing_roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, _: u32) callconv(.C) ?*anyopaque {
-    const raw_ptr = @as([*]u8, @ptrCast(c_ptr)) - @sizeOf(usize);
+fn testing_roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, nominal_alignment: u32) callconv(.C) ?*anyopaque {
+    const real_alignment = 16;
+    if (nominal_alignment > real_alignment) {
+        @panic("alignments larger than that of 2 usize are not currently supported");
+    }
+    const raw_ptr = @as([*]align(real_alignment) u8, @alignCast(@as([*]u8, @ptrCast(c_ptr)) - @sizeOf(usize)));
     const slice = raw_ptr[0..(old_size + @sizeOf(usize))];
 
     const new_full_size = new_size + @sizeOf(usize);
-    var new_raw_ptr = (std.testing.allocator.realloc(slice, new_full_size) catch unreachable).ptr;
+    var new_raw_ptr = @as([*]u8, @alignCast((std.testing.allocator.realloc(slice, new_full_size) catch unreachable).ptr));
     @as([*]usize, @alignCast(@ptrCast(new_raw_ptr)))[0] = new_full_size;
     new_raw_ptr += @sizeOf(usize);
     const new_ptr = @as(?*anyopaque, @ptrCast(new_raw_ptr));
