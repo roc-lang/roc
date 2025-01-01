@@ -783,6 +783,7 @@ mod test_snapshots {
         pass/where_clause_on_newline.expr,
         pass/where_ident.expr,
         pass/where_in_tuple_after_comment.expr,
+        pass/where_in_tuple_plain.expr,
         pass/zero_float.expr,
         pass/zero_int.expr,
         // END SNAPSHOTS (for automatic test detection via `env ROC_SNAPSHOT_TEST_OVERWRITE=1 cargo test`)
