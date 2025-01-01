@@ -486,6 +486,7 @@ mod test_snapshots {
         pass/list_closing_same_indent_with_trailing_comma.expr,
         pass/list_comma_newlines.expr,
         pass/list_comment_newline.expr,
+        pass/list_list_not_not_closure_newline.expr,
         pass/list_lots_of_spaces.expr,
         pass/list_minus_newlines.expr,
         pass/list_pattern_weird_indent.expr,

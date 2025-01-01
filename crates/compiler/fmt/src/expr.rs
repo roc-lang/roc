@@ -266,7 +266,8 @@ fn format_expr_only(
                     Expr::Apply(..) | Expr::BinOps(..) | Expr::Defs(..)
                 )
                 || (matches!(unary_op.value, called_via::UnaryOp::Negate)
-                    && requires_space_after_unary(&lifted.item));
+                    && requires_space_after_unary(&lifted.item))
+                || (parens == Parens::InApply && ends_with_closure(&lifted.item));
 
             if needs_parens {
                 // Unary negation can't be followed by whitespace (which is what a newline is) - so
@@ -1467,6 +1468,7 @@ fn fmt_binops<'a>(
 fn ends_with_closure(item: &Expr<'_>) -> bool {
     match item {
         Expr::Closure(..) => true,
+        Expr::UnaryOp(inner, _) => ends_with_closure(&inner.value),
         Expr::Apply(expr, args, _) => args
             .last()
             .map(|a| ends_with_closure(&a.value))
