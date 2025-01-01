@@ -370,6 +370,7 @@ mod test_snapshots {
         pass/comment_after_def.moduledefs,
         pass/comment_after_expr_in_parens.expr,
         pass/comment_after_op.expr,
+        pass/comment_after_whitespace_apply_arg_inside_pnc_apply.expr,
         pass/comment_before_colon_def.expr,
         pass/comment_before_comma_in_tuple_type_with_func.expr,
         pass/comment_before_equals_def.expr,

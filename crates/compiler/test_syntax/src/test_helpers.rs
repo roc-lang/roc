@@ -351,8 +351,6 @@ impl<'a> Input<'a> {
             panic!("Unexpected parse failure when parsing this for formatting:\n\n{}\n\nParse error was:\n\n{:#?}\n\n", self.as_str(), err);
         });
 
-        println!("Actual {actual:#?}");
-
         let output = actual.format();
 
         handle_formatted_output(output.as_ref());

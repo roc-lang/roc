@@ -96,12 +96,10 @@ fn format_expr_only(
         }
         Expr::Apply(loc_expr, loc_args, _) => {
             let apply_needs_parens = parens == Parens::InApply || parens == Parens::InApplyLastArg;
-            if buf.flags().parens_and_commas {
+            if buf.flags().parens_and_commas || !(apply_needs_parens && !loc_args.is_empty()) {
                 fmt_apply(loc_expr, loc_args, indent, buf, false);
-            } else if apply_needs_parens && !loc_args.is_empty() {
-                fmt_parens(item, buf, indent);
             } else {
-                fmt_apply(loc_expr, loc_args, indent, buf, false);
+                fmt_parens(item, buf, indent);
             }
         }
         &Expr::Num(string) => {
@@ -1040,8 +1038,21 @@ pub fn expr_lift_spaces<'a, 'b: 'a>(
     expr: &Expr<'b>,
 ) -> Spaces<'a, Expr<'a>> {
     match expr {
+        Expr::Apply(func, args, CalledVia::ParensAndCommas) => {
+            let lifted = expr_lift_spaces_before(Parens::NotNeeded, arena, &func.value);
+
+            Spaces {
+                before: lifted.before,
+                item: Expr::Apply(
+                    arena.alloc(Loc::at(func.region, lifted.item)),
+                    args,
+                    CalledVia::ParensAndCommas,
+                ),
+                after: arena.alloc([]),
+            }
+        }
         Expr::Apply(func, args, called_via) => {
-            if args.is_empty() && !matches!(called_via, CalledVia::ParensAndCommas) {
+            if args.is_empty() {
                 return expr_lift_spaces(Parens::NotNeeded, arena, &func.value);
             }
 
@@ -1085,9 +1096,7 @@ pub fn expr_lift_spaces<'a, 'b: 'a>(
                 }
             };
 
-            if (parens == Parens::InApply || parens == Parens::InApplyLastArg)
-                && !matches!(called_via, CalledVia::ParensAndCommas)
-            {
+            if parens == Parens::InApply || parens == Parens::InApplyLastArg {
                 res = Spaces {
                     before: &[],
                     item: Expr::ParensAround(arena.alloc(lower(arena, res))),

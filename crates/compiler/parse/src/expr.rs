@@ -229,18 +229,17 @@ fn loc_term<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
                 loc(specialize_err(EExpr::List, list_literal_help())),
                 ident_seq(),
             ),
-            optional(pnc_args()),
+            zero_or_more(pnc_args()),
         ),
-        |arena, (expr, maybe_arg_loc)| {
-            if let Some(arg_loc) = maybe_arg_loc {
-                let e = Expr::Apply(arena.alloc(expr), arg_loc.value, CalledVia::ParensAndCommas);
-                Loc {
-                    value: e,
-                    region: Region::span_across(&expr.region, &arg_loc.region),
-                }
-            } else {
-                expr
+        |arena, (expr, arg_locs_vec)| {
+            let mut e = expr;
+            for args_loc in arg_locs_vec.iter() {
+                e = Loc {
+                    value: Expr::Apply(arena.alloc(e), args_loc.value, CalledVia::ParensAndCommas),
+                    region: Region::span_across(&expr.region, &args_loc.region),
+                };
             }
+            e
         },
     )
     .trace("term")
@@ -253,17 +252,33 @@ fn pnc_args<'a>() -> impl Parser<'a, Loc<&'a [&'a Loc<Expr<'a>>]>, EExpr<'a>> {
                 EExpr::InParens,
                 loc(collection_trailing_sep_e(
                     byte(b'(', EInParens::Open),
-                    specialize_err_ref(EInParens::Expr, loc_expr_block(true)),
+                    specialize_err_ref(EInParens::Expr, loc_expr(true)),
                     byte(b',', EInParens::End),
                     byte(b')', EInParens::End),
                     Expr::SpaceBefore,
                 )),
             ),
-            |arena, arg_loc| {
+            |arena, arg_loc: Loc<Collection<'a, Loc<Expr<'a>>>>| {
                 let mut args_vec = Vec::new_in(arena);
-                for arg in arg_loc.value.items.iter() {
-                    let a: &Loc<Expr<'a>> = arena.alloc(arg);
-                    args_vec.push(a);
+                let args_len = arg_loc.value.items.len();
+                for (i, arg) in arg_loc.value.items.iter().enumerate() {
+                    if i == (args_len - 1) {
+                        let last_comments = arg_loc.value.final_comments();
+                        if !last_comments.is_empty() {
+                            let sa = Expr::SpaceAfter(arena.alloc(arg.value), last_comments);
+                            let arg_with_spaces: &Loc<Expr<'a>> = arena.alloc(Loc {
+                                value: sa,
+                                region: arg.region,
+                            });
+                            args_vec.push(arg_with_spaces);
+                        } else {
+                            let a: &Loc<Expr<'a>> = arena.alloc(arg);
+                            args_vec.push(a);
+                        }
+                    } else {
+                        let a: &Loc<Expr<'a>> = arena.alloc(arg);
+                        args_vec.push(a);
+                    }
                 }
                 Loc {
                     value: args_vec.into_bump_slice(),
@@ -3348,7 +3363,8 @@ fn pat_ends_with_spaces_conservative(pat: &Pattern<'_>) -> bool {
         | Pattern::NonBase10Literal { .. }
         | Pattern::ListRest(_)
         | Pattern::As(_, _)
-        | Pattern::OpaqueRef(_) => false,
+        | Pattern::OpaqueRef(_)
+        | Pattern::Apply(_, _, PatternApplyStyle::ParensAndCommas) => false,
         Pattern::Apply(_, args, _) => args
             .last()
             .map_or(false, |a| pat_ends_with_spaces_conservative(&a.value)),

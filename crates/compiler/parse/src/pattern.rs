@@ -95,7 +95,6 @@ fn loc_pattern_help_help<'a>(
             crate::pattern::record_pattern_help()
         )),
         loc(specialize_err(EPattern::List, list_pattern_help())),
-        // Move my pnc tag apply parser here
         loc_ident_pattern_help(can_have_arguments),
     )
 }

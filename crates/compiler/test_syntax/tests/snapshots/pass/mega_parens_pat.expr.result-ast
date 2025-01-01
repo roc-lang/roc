@@ -17,7 +17,7 @@
             type_defs: [],
             value_defs: [
                 Annotation(
-                    @0-9 Apply(
+                    @0-17 Apply(
                         @0-9 Apply(
                             @0-1 NumLiteral(
                                 "1",
@@ -64,7 +64,7 @@
                                 Whitespace,
                             ),
                         ],
-                        Whitespace,
+                        ParensAndCommas,
                     ),
                     @18-19 BoundVariable(
                         "f",
