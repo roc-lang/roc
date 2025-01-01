@@ -2836,7 +2836,8 @@ fn if_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EIf<
             loc_first_space,
             allow_defs,
             false,
-        )?;
+        )
+        .map_err(|(_, err)| (MadeProgress, err))?;
 
         let expr = Expr::If {
             if_thens: branches.into_bump_slice(),

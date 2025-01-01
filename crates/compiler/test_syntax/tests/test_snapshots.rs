@@ -204,6 +204,7 @@ mod test_snapshots {
         fail/error_inline_alias_argument_uppercase.expr,
         fail/error_inline_alias_not_an_alias.expr,
         fail/error_inline_alias_qualified.expr,
+        fail/exponential_else_branch_parsing_repro.expr,
         fail/exposed_type_bang.header,
         fail/expr_to_pattern_fail.expr,
         fail/expression_indentation_end.expr,
