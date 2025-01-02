@@ -209,26 +209,27 @@ pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
     }
 
     // Ensure that the refcount is not whole program lifetime.
-    if (!rcConstant(ptr_to_refcount.*)) {
+    const refcount: isize = ptr_to_refcount.*;
+    if (!rcConstant(refcount)) {
         // Note: we assume that a refcount will never overflow.
         // As such, we do not need to cap incrementing.
         switch (RC_TYPE) {
             .normal => {
                 if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
-                    const old = @as(usize, @bitCast(ptr_to_refcount.*));
+                    const old = @as(usize, @bitCast(refcount));
                     const new = old + @as(usize, @intCast(amount));
 
                     std.debug.print("{} + {} = {}!\n", .{ old, amount, new });
                 }
 
-                ptr_to_refcount.* +%= amount;
+                ptr_to_refcount.* = refcount +% amount;
             },
             .atomic => {
                 // If the first bit of the refcount is set, this variable is atomic.
-                if (ptr_to_refcount.* & REFCOUNT_IS_ATOMIC_MASK != 0) {
+                if (refcount & REFCOUNT_IS_ATOMIC_MASK != 0) {
                     _ = @atomicRmw(isize, ptr_to_refcount, .Add, amount, .monotonic);
                 } else {
-                    ptr_to_refcount.* +%= amount;
+                    ptr_to_refcount.* = refcount +% amount;
                 }
             },
             .none => unreachable,
@@ -371,18 +372,19 @@ inline fn decref_ptr_to_refcount(
     const alignment = @max(ptr_width, element_alignment);
 
     // Ensure that the refcount is not whole program lifetime.
-    if (!rcConstant(refcount_ptr[0])) {
+    const refcount: isize = refcount_ptr[0];
+    if (!rcConstant(refcount)) {
         switch (RC_TYPE) {
             .normal => {
-                const old = @as(usize, @bitCast(refcount_ptr[0]));
                 if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
+                    const old = @as(usize, @bitCast(refcount));
                     const new = @as(usize, @bitCast(refcount_ptr[0] -% 1));
 
                     std.debug.print("{} - 1 = {}!\n", .{ old, new });
                 }
 
-                refcount_ptr[0] -%= 1;
-                if (old == 1) {
+                refcount_ptr[0] = refcount -% 1;
+                if (refcount == 1) {
                     free_ptr_to_refcount(refcount_ptr, alignment, elements_refcounted);
                 }
             },
@@ -394,9 +396,8 @@ inline fn decref_ptr_to_refcount(
                         free_ptr_to_refcount(refcount_ptr, alignment, elements_refcounted);
                     }
                 } else {
-                    const old = @as(usize, @bitCast(refcount_ptr[0]));
-                    refcount_ptr[0] -%= 1;
-                    if (old & REFCOUNT_VALUE_MASK == 1) {
+                    refcount_ptr[0] = refcount -% 1;
+                    if (refcount == 1) {
                         free_ptr_to_refcount(refcount_ptr, alignment, elements_refcounted);
                     }
                 }
@@ -426,7 +427,7 @@ pub fn isUnique(
     return rcUnique(refcount);
 }
 
-pub fn rcUnique(refcount: isize) bool {
+pub inline fn rcUnique(refcount: isize) bool {
     switch (RC_TYPE) {
         .normal => {
             return refcount == 1;
@@ -440,7 +441,7 @@ pub fn rcUnique(refcount: isize) bool {
     }
 }
 
-pub fn rcConstant(refcount: isize) bool {
+pub inline fn rcConstant(refcount: isize) bool {
     switch (RC_TYPE) {
         .normal => {
             return refcount == REFCOUNT_MAX_ISIZE;
