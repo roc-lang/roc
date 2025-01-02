@@ -547,9 +547,6 @@ pub(crate) fn preprocess_macho_le(
         }
     };
 
-    // TODO this is correct on modern Macs (they align to the page size)
-    // but maybe someone can override the alignment somehow? Maybe in the
-    // future this could change? Is there some way to make this more future-proof?
     md.load_align_constraint = page_size(arch);
 
     let out_mmap = gen_macho_le(
