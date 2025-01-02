@@ -37,8 +37,8 @@ use soa::{Index, Slice};
 
 /// This is for constraining Defs
 #[derive(Default, Debug)]
-pub struct Info {
-    pub vars: Vec<Variable>,
+struct Info {
+    pub vars: Vec<Loc<Variable>>,
     pub constraints: Vec<Constraint>,
     pub def_types: VecMap<Symbol, Loc<TypeOrVar>>,
 }
@@ -224,7 +224,7 @@ fn constrain_untyped_closure(
     let cons = [
         constraints.let_constraint(
             [],
-            pattern_state.vars,
+            pattern_state.vars.into_iter().map(Loc::at_zero),
             pattern_state.headers,
             pattern_state_constraints,
             returns_constraint,
@@ -1273,7 +1273,7 @@ pub fn constrain_expr(
             let body_constraints = constraints.and_constraint(body_cons);
             let when_body_con = constraints.let_constraint(
                 [],
-                pattern_vars,
+                pattern_vars.into_iter().map(Loc::at_zero),
                 pattern_headers,
                 pattern_constraints,
                 body_constraints,
@@ -2202,7 +2202,7 @@ fn constrain_function_def(
                 ),
                 constraints.let_constraint(
                     [],
-                    argument_pattern_state.vars,
+                    argument_pattern_state.vars.into_iter().map(Loc::at_zero),
                     argument_pattern_state.headers,
                     defs_constraint,
                     returns_constraint,
@@ -3065,7 +3065,7 @@ fn constrain_typed_def(
                 constraints.store(fx_type_index, fx_var, std::file!(), std::line!()),
                 constraints.let_constraint(
                     [],
-                    argument_pattern_state.vars,
+                    argument_pattern_state.vars.into_iter().map(Loc::at_zero),
                     argument_pattern_state.headers,
                     defs_constraint,
                     returns_constraint,
@@ -3624,14 +3624,15 @@ fn constrain_stmt_def(
 /// Recursive defs should always use `constrain_recursive_defs`.
 pub(crate) fn constrain_def_make_constraint(
     constraints: &mut Constraints,
-    annotation_rigid_variables: impl Iterator<Item = Variable>,
-    annotation_infer_variables: impl Iterator<Item = Variable>,
+    annotation_rigid_variables: impl Iterator<Item = Loc<Variable>>,
+    annotation_infer_variables: impl Iterator<Item = Loc<Variable>>,
     def_expr_con: Constraint,
     after_def_con: Constraint,
     def_pattern_state: PatternState,
     generalizable: Generalizable,
 ) -> Constraint {
-    let all_flex_variables = (def_pattern_state.vars.into_iter()).chain(annotation_infer_variables);
+    let all_flex_variables =
+        (def_pattern_state.vars.into_iter().map(Loc::at_zero)).chain(annotation_infer_variables);
 
     let pattern_constraints = constraints.and_constraint(def_pattern_state.constraints);
     let def_pattern_and_body_con = constraints.and_constraint([pattern_constraints, def_expr_con]);
@@ -3648,8 +3649,8 @@ pub(crate) fn constrain_def_make_constraint(
 
 fn constrain_value_def_make_constraint(
     constraints: &mut Constraints,
-    new_rigid_variables: Vec<Variable>,
-    new_infer_variables: Vec<Variable>,
+    new_rigid_variables: Vec<Loc<Variable>>,
+    new_infer_variables: Vec<Loc<Variable>>,
     expr_con: Constraint,
     body_con: Constraint,
     symbol: Loc<Symbol>,
@@ -3670,7 +3671,7 @@ fn constrain_value_def_make_constraint(
 
     constraints.let_constraint(
         new_rigid_variables,
-        [expr_var],
+        [Loc::at(symbol.region, expr_var)],
         headers,
         def_con,
         body_con,
@@ -3680,8 +3681,8 @@ fn constrain_value_def_make_constraint(
 
 fn constrain_function_def_make_constraint(
     constraints: &mut Constraints,
-    new_rigid_variables: Vec<Variable>,
-    new_infer_variables: Vec<Variable>,
+    new_rigid_variables: Vec<Loc<Variable>>,
+    new_infer_variables: Vec<Loc<Variable>>,
     expr_con: Constraint,
     body_con: Constraint,
     def_pattern_state: PatternState,
@@ -3699,7 +3700,7 @@ fn constrain_function_def_make_constraint(
 
     constraints.let_constraint(
         new_rigid_variables,
-        def_pattern_state.vars,
+        def_pattern_state.vars.into_iter().map(Loc::at_zero),
         def_pattern_state.headers,
         def_con,
         body_con,
@@ -3781,8 +3782,8 @@ fn instantiate_rigids(
     headers: &mut VecMap<Symbol, Loc<TypeOrVar>>,
     is_recursive_def: IsRecursiveDef,
 ) -> InstantiateRigids {
-    let mut new_rigid_variables = vec![];
-    let mut new_infer_variables = vec![];
+    let mut new_rigid_variables: Vec<Loc<Variable>> = vec![];
+    let mut new_infer_variables: Vec<Loc<Variable>> = vec![];
 
     let mut generate_fresh_ann = |types: &mut Types| {
         let mut annotation = annotation.clone();
@@ -3799,19 +3800,24 @@ fn instantiate_rigids(
                 Vacant(vacant) => {
                     // It's possible to use this rigid in nested defs
                     vacant.insert(named.variable());
-                    new_rigid_variables.push(named.variable());
+                    new_rigid_variables.push(Loc::at(named.first_seen(), named.variable()));
                 }
             }
         }
 
         // wildcards are always freshly introduced in this annotation
-        new_rigid_variables.extend(introduced_vars.wildcards.iter().map(|v| v.value));
+        new_rigid_variables.extend(introduced_vars.wildcards.iter().copied());
 
         // lambda set vars are always freshly introduced in this annotation
-        new_rigid_variables.extend(introduced_vars.lambda_sets.iter().copied());
+        new_rigid_variables.extend(introduced_vars.lambda_sets.iter().map(|&v| Loc::at_zero(v)));
 
         // ext-infer vars are always freshly introduced in this annotation
-        new_infer_variables.extend(introduced_vars.infer_ext_in_output.iter().copied());
+        new_infer_variables.extend(
+            introduced_vars
+                .infer_ext_in_output
+                .iter()
+                .map(|&v| Loc::at_zero(v)),
+        );
 
         let has_explicit_inference_variables = !introduced_vars.inferred.is_empty();
         new_infer_variables.extend(introduced_vars.inferred.iter().copied());
@@ -3872,7 +3878,7 @@ fn instantiate_rigids_simple(
     ftv: &mut MutMap<Lowercase, Variable>, // rigids defined before the current annotation
 ) -> InstantiateRigids {
     let mut annotation = annotation.clone();
-    let mut new_rigid_variables: Vec<Variable> = Vec::new();
+    let mut new_rigid_variables: Vec<Loc<Variable>> = Vec::new();
 
     let mut rigid_substitution: MutMap<Variable, Variable> = MutMap::default();
     for named in introduced_vars.iter_named() {
@@ -3886,22 +3892,27 @@ fn instantiate_rigids_simple(
             Vacant(vacant) => {
                 // It's possible to use this rigid in nested defs
                 vacant.insert(named.variable());
-                new_rigid_variables.push(named.variable());
+                new_rigid_variables.push(Loc::at(named.first_seen(), named.variable()));
             }
         }
     }
 
     // wildcards are always freshly introduced in this annotation
-    new_rigid_variables.extend(introduced_vars.wildcards.iter().map(|v| v.value));
+    new_rigid_variables.extend(introduced_vars.wildcards.iter().copied());
 
     // lambda set vars are always freshly introduced in this annotation
-    new_rigid_variables.extend(introduced_vars.lambda_sets.iter().copied());
+    new_rigid_variables.extend(introduced_vars.lambda_sets.iter().map(|&v| Loc::at_zero(v)));
 
     let has_explicit_inference_variables = !introduced_vars.inferred.is_empty();
     let mut new_infer_variables: Vec<Loc<Variable>> = introduced_vars.inferred.clone();
 
     // ext-infer vars are always freshly introduced in this annotation
-    new_infer_variables.extend(introduced_vars.infer_ext_in_output.iter().copied());
+    new_infer_variables.extend(
+        introduced_vars
+            .infer_ext_in_output
+            .iter()
+            .map(|&v| Loc::at_zero(v)),
+    );
 
     // Instantiate rigid variables
     if !rigid_substitution.is_empty() {
@@ -3979,7 +3990,7 @@ fn constraint_recursive_function(
             let expr_con = attach_resolution_constraints(constraints, env, expr_con);
             let def_con = expr_con;
 
-            flex_info.vars.push(expr_var);
+            flex_info.vars.push(Loc::at_zero(expr_var));
             flex_info.constraints.push(def_con);
             flex_info.def_types.insert(
                 loc_symbol.value,
@@ -4125,7 +4136,7 @@ fn constraint_recursive_function(
                 constraints.store(fx_type_index, fx_var, std::file!(), std::line!()),
                 constraints.let_constraint(
                     [],
-                    argument_pattern_state.vars,
+                    argument_pattern_state.vars.into_iter().map(Loc::at_zero),
                     argument_pattern_state.headers,
                     state_constraints,
                     returns_constraint,
@@ -4157,10 +4168,8 @@ fn constraint_recursive_function(
                 // aligns with what the (mutually-)recursive signature says, so finish
                 // generalization of the function.
                 let rigids = new_rigid_variables;
-                let flex = def_pattern_state
-                    .vars
-                    .into_iter()
-                    .chain(new_infer_variables);
+                let flex_pattern_vars = def_pattern_state.vars.into_iter().map(Loc::at_zero);
+                let flex = flex_pattern_vars.chain(new_infer_variables);
 
                 constraints.let_constraint(
                     rigids,
@@ -4233,7 +4242,8 @@ pub fn rec_defs_help_simple(
                 let opt_annotation = &declarations.annotations[index];
 
                 let loc_expr = &declarations.expressions[index];
-                expr_regions.push(loc_expr.region);
+                let expr_region = loc_expr.region;
+                expr_regions.push(expr_region);
 
                 match opt_annotation {
                     None => {
@@ -4251,7 +4261,9 @@ pub fn rec_defs_help_simple(
 
                         let def_con = expr_con;
 
-                        hybrid_and_flex_info.vars.push(expr_var);
+                        hybrid_and_flex_info
+                            .vars
+                            .push(Loc::at(expr_region, expr_var));
                         hybrid_and_flex_info.constraints.push(def_con);
                         hybrid_and_flex_info
                             .def_types
@@ -4329,7 +4341,7 @@ pub fn rec_defs_help_simple(
 
                             rigid_info.constraints.push(constraints.let_constraint(
                                 new_rigid_variables,
-                                [expr_var],
+                                [Loc::at(expr_region, expr_var)],
                                 [], // no headers introduced (at this level)
                                 def_con,
                                 Constraint::True,
@@ -4539,7 +4551,9 @@ fn rec_defs_help(
 
                 let def_con = expr_con;
 
-                hybrid_and_flex_info.vars.extend(def_pattern_state.vars);
+                hybrid_and_flex_info
+                    .vars
+                    .extend(def_pattern_state.vars.into_iter().map(Loc::at_zero));
                 hybrid_and_flex_info.constraints.push(def_con);
                 hybrid_and_flex_info
                     .def_types
@@ -4688,7 +4702,7 @@ fn rec_defs_help(
                             constraints.store(fx_type_index, fx_var, std::file!(), std::line!()),
                             constraints.let_constraint(
                                 [],
-                                argument_pattern_state.vars,
+                                argument_pattern_state.vars.into_iter().map(Loc::at_zero),
                                 argument_pattern_state.headers,
                                 state_constraints,
                                 returns_constraint,
@@ -4724,7 +4738,6 @@ fn rec_defs_help(
                         if is_hybrid {
                             // TODO this is not quite right, types that are purely rigid should not
                             // be stored as hybrid!
-                            // However it might not be possible to fix this before types SoA lands.
                             hybrid_and_flex_info.vars.extend(&new_rigid_variables);
                             hybrid_and_flex_info.constraints.push(def_con);
                             hybrid_and_flex_info
@@ -4734,10 +4747,9 @@ fn rec_defs_help(
                             rigid_info.vars.extend(&new_rigid_variables);
 
                             let rigids = new_rigid_variables;
-                            let flex = def_pattern_state
-                                .vars
-                                .into_iter()
-                                .chain(new_infer_variables);
+                            let flex_pattern_vars =
+                                def_pattern_state.vars.into_iter().map(Loc::at_zero);
+                            let flex = flex_pattern_vars.chain(new_infer_variables);
 
                             rigid_info.constraints.push(constraints.let_constraint(
                                 rigids,
@@ -4784,10 +4796,11 @@ fn rec_defs_help(
                                 .extend(def_pattern_state.headers);
                         } else {
                             rigid_info.vars.extend(&new_rigid_variables);
+                            let flex_vars = def_pattern_state.vars.into_iter().map(Loc::at_zero);
 
                             rigid_info.constraints.push(constraints.let_constraint(
                                 new_rigid_variables,
-                                def_pattern_state.vars,
+                                flex_vars,
                                 [], // no headers introduced (at this level)
                                 def_con,
                                 Constraint::True,
