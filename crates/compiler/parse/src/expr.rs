@@ -224,6 +224,8 @@ fn loc_term<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
                 loc(crash_kw()),
                 loc(specialize_err(EExpr::Dbg, dbg_kw())),
                 loc(try_kw()),
+                // In some contexts we want to parse the `_` as an expression, so it can then be turned into a
+                // pattern later
                 loc(underscore_expression()),
                 loc(record_literal_help()),
                 loc(specialize_err(EExpr::List, list_literal_help())),
