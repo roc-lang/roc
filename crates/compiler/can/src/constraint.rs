@@ -619,23 +619,6 @@ impl Constraints {
         Constraint::FxCall(constraint_index)
     }
 
-    pub fn fx_pattern_suffix(
-        &mut self,
-        symbol: Symbol,
-        type_index: TypeOrVar,
-        region: Region,
-    ) -> Constraint {
-        let constraint = FxSuffixConstraint {
-            kind: FxSuffixKind::Pattern(symbol),
-            type_index,
-            region,
-        };
-
-        let constraint_index = index_push_new(&mut self.fx_suffix_constraints, constraint);
-
-        Constraint::FxSuffix(constraint_index)
-    }
-
     pub fn fx_record_field_unsuffixed(&mut self, variable: Variable, region: Region) -> Constraint {
         let type_index = Self::push_type_variable(variable);
         let constraint = FxSuffixConstraint {

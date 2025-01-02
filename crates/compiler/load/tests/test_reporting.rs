@@ -15615,7 +15615,7 @@ All branches in an `if` must have the same type!
         @r###"
     ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
 
-    This is an effectful function, but its name does not indicate so:
+    This function is effectful, but its name does not indicate so:
 
     10│  forEach! = \l, f ->
                         ^
@@ -15652,7 +15652,7 @@ All branches in an `if` must have the same type!
         @r###"
     ── UNNECESSARY EXCLAMATION in /code/proj/Main.roc ──────────────────────────────
 
-    This is a pure function, but its name suggests otherwise:
+    This function is pure, but its name suggests otherwise:
 
     12│  mapOk = \result, fn! ->
                           ^^^
