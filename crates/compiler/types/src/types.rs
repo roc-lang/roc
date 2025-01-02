@@ -3679,6 +3679,7 @@ pub enum ErrorType {
     /// If the name was auto-generated, it will start with a `#`.
     FlexVar(Lowercase),
     RigidVar(Lowercase),
+    InferenceVar,
     EffectfulFunc,
     /// If the name was auto-generated, it will start with a `#`.
     FlexAbleVar(Lowercase, AbilitySet),
@@ -3733,6 +3734,7 @@ impl ErrorType {
             FlexVar(v) | RigidVar(v) | FlexAbleVar(v, _) | RigidAbleVar(v, _) => {
                 taken.insert(v.clone());
             }
+            InferenceVar => {}
             Record(fields, ext) => {
                 fields
                     .iter()
@@ -3912,13 +3914,14 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
         Infinite => buf.push('∞'),
         Error => buf.push('?'),
         FlexVar(name) | RigidVar(name) => buf.push_str(name.as_str()),
-        FlexAbleVar(name, symbol) | RigidAbleVar(name, symbol) => {
+        InferenceVar => buf.push('_'),
+        FlexAbleVar(name, abilities) | RigidAbleVar(name, abilities) => {
             let write_parens = parens == Parens::InTypeParam;
             if write_parens {
                 buf.push('(');
             }
             buf.push_str(name.as_str());
-            write!(buf, "{} {:?}", roc_parse::keyword::IMPLEMENTS, symbol).unwrap();
+            write!(buf, "{} {:?}", roc_parse::keyword::IMPLEMENTS, abilities).unwrap();
             if write_parens {
                 buf.push(')');
             }

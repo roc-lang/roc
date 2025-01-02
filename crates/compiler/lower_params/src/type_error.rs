@@ -105,7 +105,8 @@ pub fn remove_module_param_arguments(
             | TypeError::ExpectedEffectful(_, _)
             | TypeError::UnsuffixedEffectfulFunction(_, _)
             | TypeError::SuffixedPureFunction(_, _)
-            | TypeError::InvalidTryTarget(_, _, _) => {}
+            | TypeError::InvalidTryTarget(_, _, _)
+            | TypeError::TypeIsNotGeneralized(..) => {}
         }
     }
 }
@@ -213,6 +214,7 @@ fn drop_last_argument(err_type: &mut ErrorType) {
         | ErrorType::Alias(_, _, _, _)
         | ErrorType::Range(_)
         | ErrorType::Error
-        | ErrorType::EffectfulFunc => {}
+        | ErrorType::EffectfulFunc
+        | ErrorType::InferenceVar => {}
     }
 }
