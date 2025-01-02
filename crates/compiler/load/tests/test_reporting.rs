@@ -1519,18 +1519,18 @@ mod test_reporting {
         from_annotation_if,
         indoc!(
             r"
-            x : Num.Int *
+            x : Num.Int _
             x = if Bool.true then 3.14 else 4
 
             x
             "
         ),
-        @r"
+        @r###"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the `then` branch of this `if` expression:
 
-    4│      x : Num.Int *
+    4│      x : Num.Int _
     5│      x = if Bool.true then 3.14 else 4
                                   ^^^^
 
@@ -1544,14 +1544,14 @@ mod test_reporting {
 
     Tip: You can convert between integers and fractions using functions
     like `Num.toFrac` and `Num.round`.
-    "
+    "###
     );
 
     test_report!(
         from_annotation_when,
         indoc!(
             r"
-            x : Num.Int *
+            x : Num.Int _
             x =
                 when True is
                     _ -> 3.14
@@ -1559,12 +1559,12 @@ mod test_reporting {
             x
             "
         ),
-        @r"
+        @r###"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `x` definition:
 
-    4│       x : Num.Int *
+    4│       x : Num.Int _
     5│       x =
     6│>          when True is
     7│>              _ -> 3.14
@@ -1579,7 +1579,7 @@ mod test_reporting {
 
     Tip: You can convert between integers and fractions using functions
     like `Num.toFrac` and `Num.round`.
-    "
+    "###
     );
 
     test_report!(
@@ -1907,7 +1907,7 @@ mod test_reporting {
         from_annotation_complex_pattern,
         indoc!(
             r"
-            { x } : { x : Num.Int * }
+            { x } : { x : Num.Int _ }
             { x } = { x: 4.0 }
 
             x
@@ -1918,7 +1918,7 @@ mod test_reporting {
 
     Something is off with the body of this definition:
 
-    4│      { x } : { x : Num.Int * }
+    4│      { x } : { x : Num.Int _ }
     5│      { x } = { x: 4.0 }
                     ^^^^^^^^^^
 
@@ -2044,18 +2044,18 @@ mod test_reporting {
         missing_fields,
         indoc!(
             r"
-            x : { a : Num.Int *, b : Num.Frac *, c : Str }
+            x : { a : Num.Int _, b : Num.Frac _, c : Str }
             x = { b: 4.0 }
 
             x
             "
         ),
-        @r"
+        @r###"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `x` definition:
 
-    4│      x : { a : Num.Int *, b : Num.Frac *, c : Str }
+    4│      x : { a : Num.Int _, b : Num.Frac _, c : Str }
     5│      x = { b: 4.0 }
                 ^^^^^^^^^^
 
@@ -2072,7 +2072,7 @@ mod test_reporting {
         }
 
     Tip: Looks like the c and a fields are missing.
-    "
+    "###
     );
 
     // this previously reported the message below, not sure which is better
@@ -3445,7 +3445,7 @@ mod test_reporting {
             x : AList Num.I64 Num.I64
             x = ACons 0 (BCons 1 (ACons "foo" BNil ))
 
-            y : BList a a
+            y : BList _ _
             y = BNil
 
             { x, y }
@@ -4186,9 +4186,8 @@ mod test_reporting {
             RBTree k v : [Node NodeColor k v (RBTree k v) (RBTree k v), Empty]
 
             # Create an empty dictionary.
-            empty : RBTree k v
-            empty =
-                Empty
+            empty : {} -> RBTree k v
+            empty = \{} -> Empty
 
             empty
             "
@@ -11129,10 +11128,10 @@ All branches in an `if` must have the same type!
 
             import Decode exposing [decoder]
 
-            main =
-                myDecoder : Decoder (a -> a) fmt where fmt implements DecoderFormatting
-                myDecoder = decoder
+            myDecoder : Decoder (_ -> _) _
+            myDecoder = decoder
 
+            main =
                 myDecoder
             "#
         ),
@@ -11141,12 +11140,12 @@ All branches in an `if` must have the same type!
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    7│      myDecoder = decoder
-                        ^^^^^^^
+    6│  myDecoder = decoder
+                    ^^^^^^^
 
     I can't generate an implementation of the `Decoding` ability for
 
-        a -> a
+        * -> *
 
     Note: `Decoding` cannot be generated for functions.
     "###
@@ -11162,10 +11161,10 @@ All branches in an `if` must have the same type!
 
             A := {}
 
-            main =
-                myDecoder : Decoder {x : A} fmt where fmt implements DecoderFormatting
-                myDecoder = decoder
+            myDecoder : Decoder {x : A} _
+            myDecoder = decoder
 
+            main =
                 myDecoder
             "#
         ),
@@ -11174,8 +11173,8 @@ All branches in an `if` must have the same type!
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    9│      myDecoder = decoder
-                        ^^^^^^^
+    8│  myDecoder = decoder
+                    ^^^^^^^
 
     I can't generate an implementation of the `Decoding` ability for
 
@@ -11425,11 +11424,10 @@ All branches in an `if` must have the same type!
 
              import Decode exposing [decoder]
 
-             main =
-                 myDecoder : Decoder {x : Str, y ? Str} fmt where fmt implements DecoderFormatting
-                 myDecoder = decoder
+             myDecoder : Decoder {x : Str, y ? Str} _
+             myDecoder = decoder
 
-                 myDecoder
+             main = myDecoder
              "#
         ),
         @r###"
@@ -11437,8 +11435,8 @@ All branches in an `if` must have the same type!
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    7│      myDecoder = decoder
-                        ^^^^^^^
+    6│  myDecoder = decoder
+                    ^^^^^^^
 
     I can't generate an implementation of the `Decoding` ability for
 
@@ -14047,11 +14045,10 @@ All branches in an `if` must have the same type!
 
             import Decode exposing [decoder]
 
-            main =
-                myDecoder : Decoder (U32, Str) fmt where fmt implements DecoderFormatting
-                myDecoder = decoder
+            myDecoder : Decoder (U32, Str) _
+            myDecoder = decoder
 
-                myDecoder
+            main = myDecoder
             "#
         )
     );
@@ -14064,11 +14061,10 @@ All branches in an `if` must have the same type!
 
             import Decode exposing [decoder]
 
-            main =
-                myDecoder : Decoder (U32, {} -> {}) fmt where fmt implements DecoderFormatting
-                myDecoder = decoder
+            myDecoder : Decoder (U32, {} -> {}) _
+            myDecoder = decoder
 
-                myDecoder
+            main = myDecoder
             "#
         ),
         @r###"
@@ -14076,8 +14072,8 @@ All branches in an `if` must have the same type!
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    7│      myDecoder = decoder
-                        ^^^^^^^
+    6│  myDecoder = decoder
+                    ^^^^^^^
 
     I can't generate an implementation of the `Decoding` ability for
 
@@ -15932,5 +15928,67 @@ All branches in an `if` must have the same type!
 
         Str -> {}
     "#
+    );
+
+    test_report!(
+        invalid_generic_literal,
+        indoc!(
+            r#"
+            module [v]
+
+            v : *
+            v = 1
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+
+    Something is off with the body of the `v` definition:
+
+    3│  v : *
+    4│  v = 1
+            ^
+
+    The body is a number of type:
+
+        Num *
+
+    But the type annotation on `v` says it should be:
+
+        *
+
+    Tip: The type annotation uses the type variable `*` to say that this
+    definition can produce any type of value. But in the body I see that
+    it will only produce a `Num` value of a single specific type. Maybe
+    change the type annotation to be more specific? Maybe change the code
+    to be more general?
+    "###
+    );
+
+    test_report!(
+        invalid_generic_literal_list,
+        indoc!(
+            r#"
+            module [v]
+
+            v : List *
+            v = []
+            "#
+        ),
+        @r###"
+    ── TYPE VARIABLE IS NOT GENERIC in /code/proj/Main.roc ─────────────────────────
+
+    This type variable has a single type:
+
+    3│  v : List *
+                 ^
+
+    Type variables tell me that they can be used with any type, but they
+    can only be used with functions. All other values have exactly one
+    type.
+
+    Hint: If you would like the type to be inferred for you, use an
+    underscore _ instead.
+    "###
     );
 }

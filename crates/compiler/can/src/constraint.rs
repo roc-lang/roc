@@ -915,7 +915,7 @@ pub struct DefTypes {
     pub loc_symbols: Slice<(Symbol, Region)>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Generalizable(pub bool);
 
 #[derive(Debug, Clone)]
