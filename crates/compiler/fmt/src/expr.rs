@@ -2,8 +2,7 @@ use crate::annotation::{except_last, is_collection_multiline, Formattable, Newli
 use crate::collection::{fmt_collection, Braces};
 use crate::def::{fmt_defs, valdef_lift_spaces_before};
 use crate::pattern::{
-    fmt_pattern, pattern_lift_spaces, pattern_lift_spaces_before, snakify_camel_ident,
-    starts_with_inline_comment,
+    fmt_pattern, pattern_lift_spaces, snakify_camel_ident, starts_with_inline_comment,
 };
 use crate::spaces::{
     count_leading_newlines, fmt_comments_only, fmt_spaces, fmt_spaces_no_blank_lines,
@@ -165,9 +164,6 @@ fn format_expr_only(
         }
         Expr::Closure(loc_patterns, loc_ret) => {
             fmt_closure(buf, loc_patterns, loc_ret, indent);
-        }
-        Expr::Backpassing(loc_patterns, loc_body, loc_ret) => {
-            fmt_backpassing(buf, loc_patterns, loc_body, loc_ret, indent);
         }
         Expr::Defs(defs, ret) => {
             let defs_needs_parens = parens == Parens::InOperator || parens == Parens::InApply;
@@ -562,14 +558,6 @@ pub fn expr_is_multiline(me: &Expr<'_>, comments_only: bool) -> bool {
         Expr::Closure(loc_patterns, loc_body) => {
             // check the body first because it's more likely to be multiline
             expr_is_multiline(&loc_body.value, comments_only)
-                || loc_patterns
-                    .iter()
-                    .any(|loc_pattern| loc_pattern.value.is_multiline())
-        }
-        Expr::Backpassing(loc_patterns, loc_body, loc_ret) => {
-            // check the body first because it's more likely to be multiline
-            expr_is_multiline(&loc_body.value, comments_only)
-                || expr_is_multiline(&loc_ret.value, comments_only)
                 || loc_patterns
                     .iter()
                     .any(|loc_pattern| loc_pattern.value.is_multiline())
@@ -1225,37 +1213,6 @@ pub fn expr_lift_spaces<'a, 'b: 'a>(
                 }
             }
         }
-        Expr::Backpassing(pats, call, continuation) => {
-            let pats = arena.alloc_slice_copy(pats);
-            let before = if let Some(first) = pats.first_mut() {
-                let lifted = pattern_lift_spaces_before(arena, &first.value);
-                *first = Loc::at(first.region, lifted.item);
-                lifted.before
-            } else {
-                &[]
-            };
-            let continuation_lifted =
-                expr_lift_spaces_after(Parens::NotNeeded, arena, &continuation.value);
-
-            let mut res = Spaces {
-                before,
-                item: Expr::Backpassing(
-                    pats,
-                    call,
-                    arena.alloc(Loc::at(continuation.region, continuation_lifted.item)),
-                ),
-                after: continuation_lifted.after,
-            };
-
-            if parens == Parens::InApply || parens == Parens::InApplyLastArg {
-                res = Spaces {
-                    before: &[],
-                    item: Expr::ParensAround(arena.alloc(lower(arena, res))),
-                    after: &[],
-                };
-            }
-            res
-        }
         Expr::SpaceBefore(expr, spaces) => {
             let mut inner = expr_lift_spaces(parens, arena, expr);
             inner.before = merge_spaces_conservative(arena, spaces, inner.before);
@@ -1825,7 +1782,7 @@ fn fmt_return<'a>(
         format_spaces(buf, value.before, newlines, return_indent);
     }
 
-    if matches!(value.item, Expr::Defs(..) | Expr::Backpassing(..)) {
+    if matches!(value.item, Expr::Defs(..)) {
         buf.ensure_ends_with_newline();
     } else {
         buf.spaces(1);
@@ -2025,124 +1982,6 @@ fn fmt_closure<'a>(
     }
 }
 
-fn fmt_backpassing<'a>(
-    buf: &mut Buf,
-    loc_patterns: &'a [Loc<Pattern<'a>>],
-    loc_body: &'a Loc<Expr<'a>>,
-    loc_ret: &'a Loc<Expr<'a>>,
-    outer_indent: u16,
-) {
-    let arguments_are_multiline = loc_patterns
-        .iter()
-        .any(|loc_pattern| loc_pattern.is_multiline());
-
-    // If the arguments are multiline, go down a line and indent.
-    let arg_indent = if arguments_are_multiline {
-        outer_indent + INDENT
-    } else {
-        outer_indent
-    };
-
-    let mut first = true;
-
-    for loc_pattern in loc_patterns.iter() {
-        let needs_parens = if pattern_needs_parens_when_backpassing(&loc_pattern.value) {
-            Parens::InApply
-        } else {
-            Parens::NotNeeded
-        };
-
-        let pat = pattern_lift_spaces(buf.text.bump(), &loc_pattern.value);
-
-        if !first {
-            buf.indent(arg_indent);
-            buf.push(',');
-        }
-
-        fmt_comments_only(buf, pat.before.iter(), NewlineAt::Bottom, arg_indent);
-
-        if !first {
-            if arguments_are_multiline {
-                buf.ensure_ends_with_newline();
-            } else {
-                buf.spaces(1);
-            }
-        }
-
-        pat.item.format_with_options(
-            buf,
-            needs_parens,
-            Newlines::No,
-            if first { outer_indent } else { arg_indent },
-        );
-        fmt_comments_only(buf, pat.after.iter(), NewlineAt::Bottom, arg_indent);
-
-        first = false;
-    }
-
-    if arguments_are_multiline {
-        buf.ensure_ends_with_newline();
-        buf.indent(arg_indent);
-    } else {
-        buf.spaces(1);
-    }
-
-    buf.push_str("<-");
-
-    let is_multiline = loc_ret.value.is_multiline();
-
-    // If the body is multiline, go down a line and indent.
-    let body_indent = if is_multiline {
-        arg_indent + INDENT
-    } else {
-        arg_indent
-    };
-
-    buf.spaces(1);
-    let body_lifted = expr_lift_spaces(Parens::NotNeeded, buf.text.bump(), &loc_body.value);
-    let ret_lifted = expr_lift_spaces(Parens::NotNeeded, buf.text.bump(), &loc_ret.value);
-
-    if !body_lifted.before.is_empty() {
-        format_spaces(buf, body_lifted.before, Newlines::Yes, body_indent);
-    }
-
-    format_expr_only(
-        &body_lifted.item,
-        buf,
-        Parens::NotNeeded,
-        Newlines::Yes,
-        body_indent,
-    );
-
-    let between = merge_spaces(buf.text.bump(), body_lifted.after, ret_lifted.before);
-
-    if !between.is_empty() {
-        format_spaces(buf, between, Newlines::Yes, outer_indent);
-    }
-
-    format_expr_only(
-        &ret_lifted.item,
-        buf,
-        Parens::NotNeeded,
-        Newlines::Yes,
-        outer_indent,
-    );
-
-    if !ret_lifted.after.is_empty() {
-        format_spaces(buf, ret_lifted.after, Newlines::Yes, outer_indent);
-    }
-}
-
-fn pattern_needs_parens_when_backpassing(pat: &Pattern) -> bool {
-    match pat {
-        Pattern::Apply(_, _) => true,
-        Pattern::SpaceBefore(a, _) | Pattern::SpaceAfter(a, _) => {
-            pattern_needs_parens_when_backpassing(a)
-        }
-        _ => false,
-    }
-}
-
 enum RecordPrefix<'a> {
     Update(&'a Loc<Expr<'a>>),
     Mapper(&'a Loc<Expr<'a>>),
@@ -2321,7 +2160,7 @@ pub fn sub_expr_requests_parens(expr: &Expr<'_>) -> bool {
         }
         Expr::If { .. } => true,
         Expr::Defs(_, _) => true,
-        Expr::Return(..) | Expr::Backpassing(..) | Expr::DbgStmt { .. } => {
+        Expr::Return(..) | Expr::DbgStmt { .. } => {
             // This is because e.g. (return x)\nfoo would be de-parenthesized and cause the `after_return` to be `foo`.
             // That _is_ a semantic change technically right now, because that transform is done in the parser.
             // When that's moved to `can`, we can remove this

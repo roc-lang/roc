@@ -734,50 +734,6 @@ pub fn desugar_expr<'a>(
                 desugar_expr(env, scope, loc_ret),
             ),
         }),
-        Backpassing(loc_patterns, loc_body, loc_ret) => {
-            // loc_patterns <- loc_body
-            //
-            // loc_ret
-
-            let problem_region = Region::span_across(
-                &Region::across_all(loc_patterns.iter().map(|loc_pattern| &loc_pattern.region)),
-                &loc_body.region,
-            );
-            env.problem(Problem::DeprecatedBackpassing(problem_region));
-
-            // first desugar the body, because it may contain |>
-            let desugared_body = desugar_expr(env, scope, loc_body);
-
-            let desugared_ret = desugar_expr(env, scope, loc_ret);
-            let desugared_loc_patterns = desugar_loc_patterns(env, scope, loc_patterns);
-            let closure = Expr::Closure(desugared_loc_patterns, desugared_ret);
-            let loc_closure = Loc::at(loc_expr.region, closure);
-
-            match &desugared_body.value {
-                Expr::Apply(function, arguments, called_via) => {
-                    let mut new_arguments: Vec<'a, &'a Loc<Expr<'a>>> =
-                        Vec::with_capacity_in(arguments.len() + 1, env.arena);
-                    new_arguments.extend(arguments.iter());
-                    new_arguments.push(env.arena.alloc(loc_closure));
-
-                    let call = Expr::Apply(function, new_arguments.into_bump_slice(), *called_via);
-                    let loc_call = Loc::at(loc_expr.region, call);
-
-                    env.arena.alloc(loc_call)
-                }
-                _ => {
-                    // e.g. `x <- (if b then (\a -> a) else (\c -> c))`
-                    let call = Expr::Apply(
-                        desugared_body,
-                        env.arena.alloc([&*env.arena.alloc(loc_closure)]),
-                        CalledVia::Space,
-                    );
-                    let loc_call = Loc::at(loc_expr.region, call);
-
-                    env.arena.alloc(loc_call)
-                }
-            }
-        }
         RecordBuilder { mapper, fields } => {
             // NOTE the `mapper` is always a `Var { .. }`, we only desugar it to get rid of
             // any spaces before/after

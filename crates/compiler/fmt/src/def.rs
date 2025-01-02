@@ -1039,7 +1039,6 @@ pub fn fmt_body<'a>(
             && pattern_extracted.after.iter().all(|s| s.is_newline())
             && !matches!(body.extract_spaces().item, Expr::Defs(..))
             && !matches!(body.extract_spaces().item, Expr::Return(..))
-            && !matches!(body.extract_spaces().item, Expr::Backpassing(..))
             && !matches!(body.extract_spaces().item, Expr::DbgStmt { .. })
             && !starts_with_expect_ident(body)
     } else {
@@ -1116,7 +1115,7 @@ pub fn fmt_body<'a>(
                 buf.ensure_ends_with_newline();
                 body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent + INDENT);
             }
-            Expr::Defs(..) | Expr::BinOps(_, _) | Expr::Backpassing(..) => {
+            Expr::Defs(..) | Expr::BinOps(_, _) => {
                 // Binop chains always get a newline. Otherwise you can have things like:
                 //
                 //     something = foo
