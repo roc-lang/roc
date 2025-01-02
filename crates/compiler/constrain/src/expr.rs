@@ -3808,9 +3808,9 @@ fn instantiate_rigids(
         // wildcards are always freshly introduced in this annotation
         new_rigid_variables.extend(introduced_vars.wildcards.iter().copied());
 
-        // lambda set vars are always freshly introduced in this annotation
-        new_rigid_variables.extend(introduced_vars.lambda_sets.iter().map(|&v| Loc::at_zero(v)));
+        let has_explicit_inference_variables = !introduced_vars.inferred.is_empty();
 
+        new_infer_variables.extend(introduced_vars.inferred.iter().copied());
         // ext-infer vars are always freshly introduced in this annotation
         new_infer_variables.extend(
             introduced_vars
@@ -3818,9 +3818,8 @@ fn instantiate_rigids(
                 .iter()
                 .map(|&v| Loc::at_zero(v)),
         );
-
-        let has_explicit_inference_variables = !introduced_vars.inferred.is_empty();
-        new_infer_variables.extend(introduced_vars.inferred.iter().copied());
+        // lambda set vars are always freshly introduced in this annotation
+        new_infer_variables.extend(introduced_vars.lambda_sets.iter().map(|&v| Loc::at_zero(v)));
 
         // Instantiate rigid variables
         if !rigid_substitution.is_empty() {
@@ -3900,12 +3899,8 @@ fn instantiate_rigids_simple(
     // wildcards are always freshly introduced in this annotation
     new_rigid_variables.extend(introduced_vars.wildcards.iter().copied());
 
-    // lambda set vars are always freshly introduced in this annotation
-    new_rigid_variables.extend(introduced_vars.lambda_sets.iter().map(|&v| Loc::at_zero(v)));
-
     let has_explicit_inference_variables = !introduced_vars.inferred.is_empty();
     let mut new_infer_variables: Vec<Loc<Variable>> = introduced_vars.inferred.clone();
-
     // ext-infer vars are always freshly introduced in this annotation
     new_infer_variables.extend(
         introduced_vars
@@ -3913,6 +3908,8 @@ fn instantiate_rigids_simple(
             .iter()
             .map(|&v| Loc::at_zero(v)),
     );
+    // lambda set vars are always freshly introduced in this annotation
+    new_infer_variables.extend(introduced_vars.lambda_sets.iter().map(|&v| Loc::at_zero(v)));
 
     // Instantiate rigid variables
     if !rigid_substitution.is_empty() {
