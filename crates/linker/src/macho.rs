@@ -9,6 +9,7 @@ use object::{
 };
 use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
+use roc_target::Architecture;
 use serde::{Deserialize, Serialize};
 use std::{
     ffi::{c_char, CStr},
@@ -302,6 +303,7 @@ impl<'a> Surgeries<'a> {
 
 /// Constructs a `Metadata` from a host executable binary, and writes it to disk
 pub(crate) fn preprocess_macho_le(
+    arch: Architecture,
     host_exe_path: &Path,
     metadata_path: &Path,
     preprocessed_path: &Path,
@@ -548,7 +550,7 @@ pub(crate) fn preprocess_macho_le(
     // TODO this is correct on modern Macs (they align to the page size)
     // but maybe someone can override the alignment somehow? Maybe in the
     // future this could change? Is there some way to make this more future-proof?
-    md.load_align_constraint = 4096;
+    md.load_align_constraint = page_size(arch);
 
     let out_mmap = gen_macho_le(
         exec_data,
@@ -1729,4 +1731,12 @@ fn format_reloc_type(value: u8) -> impl std::fmt::Display {
     }
 
     Inner(value)
+}
+
+fn page_size(arch: Architecture) -> u64 {
+    match arch {
+        Architecture::X86_64 => 0x1000,
+        Architecture::Aarch64 => 0x4000,
+        _ => unreachable!(),
+    }
 }
