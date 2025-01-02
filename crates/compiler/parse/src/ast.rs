@@ -535,8 +535,6 @@ pub enum Expr<'a> {
     /// Multiple defs in a row
     Defs(&'a Defs<'a>, &'a Loc<Expr<'a>>),
 
-    Backpassing(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
-
     Dbg,
     DbgStmt {
         first: &'a Loc<Expr<'a>>,
@@ -722,7 +720,6 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::Crash => false,
         Expr::Tag(_) => false,
         Expr::OpaqueRef(_) => false,
-        Expr::Backpassing(_, _, _) => false, // TODO: we might want to check this?
         Expr::Dbg => false,
         Expr::DbgStmt {
             first,
@@ -987,11 +984,6 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                     push_stack_from_record_fields!(fields);
                 }
                 Closure(_, body) => expr_stack.push(&body.value),
-                Backpassing(_, a, b) => {
-                    expr_stack.reserve(2);
-                    expr_stack.push(&a.value);
-                    expr_stack.push(&b.value);
-                }
                 DbgStmt {
                     first,
                     extra_args,
@@ -2575,7 +2567,6 @@ impl<'a> Malformed for Expr<'a> {
 
             Closure(args, body) => args.iter().any(|arg| arg.is_malformed()) || body.is_malformed(),
             Defs(defs, body) => defs.is_malformed() || body.is_malformed(),
-            Backpassing(args, call, body) => args.iter().any(|arg| arg.is_malformed()) || call.is_malformed() || body.is_malformed(),
             Dbg => false,
             DbgStmt { first, extra_args, continuation } => first.is_malformed() || extra_args.iter().any(|a| a.is_malformed()) || continuation.is_malformed(),
             LowLevelDbg(_, condition, continuation) => condition.is_malformed() || continuation.is_malformed(),

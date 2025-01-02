@@ -51,7 +51,7 @@ pub fn highlight(code: &str) -> Vec<String> {
             | Token::Backslash
             | Token::Pizza
             | Token::Arrow
-            | Token::Backpass
+            | Token::BackArrow
             | Token::ColonEquals
             | Token::Colon
             | Token::And
