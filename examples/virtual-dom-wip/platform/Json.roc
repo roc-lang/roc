@@ -537,38 +537,39 @@ expect
     expected = Ok Bool.false
     actual.result == expected
 
-decodeTuple = \initialState, stepElem, finalizer -> Decode.custom \initialBytes, @Json {} ->
-    # NB: the stepper function must be passed explicitly until #2894 is resolved.
-    decodeElems = \stepper, state, index, bytes ->
-        (
-            when stepper state index is
-                TooLong ->
-                    bytes
-                    |> anything
-                    |> tryDecode \{ rest: beforeCommaOrBreak } ->
-                        { result: Ok state, rest: beforeCommaOrBreak }
+decodeTuple = \initialState, stepElem, finalizer ->
+    Decode.custom \initialBytes, @Json {} ->
+        # NB: the stepper function must be passed explicitly until #2894 is resolved.
+        decodeElems = \stepper, state, index, bytes ->
+            (
+                when stepper state index is
+                    TooLong ->
+                        bytes
+                        |> anything
+                        |> tryDecode \{ rest: beforeCommaOrBreak } ->
+                            { result: Ok state, rest: beforeCommaOrBreak }
 
-                Next decoder ->
-                    Decode.decodeWith bytes decoder json
-        )
-        |> tryDecode \{ val: newState, rest: beforeCommaOrBreak } ->
-            { result: commaResult, rest: nextBytes } = comma beforeCommaOrBreak
+                    Next decoder ->
+                        Decode.decodeWith bytes decoder json
+            )
+            |> tryDecode \{ val: newState, rest: beforeCommaOrBreak } ->
+                { result: commaResult, rest: nextBytes } = comma beforeCommaOrBreak
 
-            when commaResult is
-                Ok {} -> decodeElems stepElem newState (index + 1) nextBytes
-                Err _ -> { result: Ok newState, rest: nextBytes }
+                when commaResult is
+                    Ok {} -> decodeElems stepElem newState (index + 1) nextBytes
+                    Err _ -> { result: Ok newState, rest: nextBytes }
 
-    initialBytes
-    |> openBracket
-    |> tryDecode \{ rest: afterBracketBytes } ->
-        decodeElems stepElem initialState 0 afterBracketBytes
-        |> tryDecode \{ val: endStateResult, rest: beforeClosingBracketBytes } ->
-            beforeClosingBracketBytes
-            |> closingBracket
-            |> tryDecode \{ rest: afterTupleBytes } ->
-                when finalizer endStateResult is
-                    Ok val -> { result: Ok val, rest: afterTupleBytes }
-                    Err e -> { result: Err e, rest: afterTupleBytes }
+        initialBytes
+        |> openBracket
+        |> tryDecode \{ rest: afterBracketBytes } ->
+            decodeElems stepElem initialState 0 afterBracketBytes
+            |> tryDecode \{ val: endStateResult, rest: beforeClosingBracketBytes } ->
+                beforeClosingBracketBytes
+                |> closingBracket
+                |> tryDecode \{ rest: afterTupleBytes } ->
+                    when finalizer endStateResult is
+                        Ok val -> { result: Ok val, rest: afterTupleBytes }
+                        Err e -> { result: Err e, rest: afterTupleBytes }
 
 # Test decode of tuple
 expect
@@ -1069,19 +1070,20 @@ expect
 
 # JSON ARRAYS ------------------------------------------------------------------
 
-decodeList = \elemDecoder -> Decode.custom \bytes, @Json {} ->
+decodeList = \elemDecoder ->
+    Decode.custom \bytes, @Json {} ->
 
-    decodeElems = arrayElemDecoder elemDecoder
+        decodeElems = arrayElemDecoder elemDecoder
 
-    result =
-        when List.walkUntil bytes (BeforeOpeningBracket 0) arrayOpeningHelp is
-            AfterOpeningBracket n -> Ok (List.dropFirst bytes n)
-            _ -> Err ExpectedOpeningBracket
+        result =
+            when List.walkUntil bytes (BeforeOpeningBracket 0) arrayOpeningHelp is
+                AfterOpeningBracket n -> Ok (List.dropFirst bytes n)
+                _ -> Err ExpectedOpeningBracket
 
-    when result is
-        Ok elemBytes -> decodeElems elemBytes []
-        Err ExpectedOpeningBracket ->
-            crash "expected opening bracket"
+        when result is
+            Ok elemBytes -> decodeElems elemBytes []
+            Err ExpectedOpeningBracket ->
+                crash "expected opening bracket"
 
 arrayElemDecoder = \elemDecoder ->
 
@@ -1203,81 +1205,82 @@ expect
 
 # JSON OBJECTS -----------------------------------------------------------------
 
-decodeRecord = \initialState, stepField, finalizer -> Decode.custom \bytes, @Json {} ->
+decodeRecord = \initialState, stepField, finalizer ->
+    Decode.custom \bytes, @Json {} ->
 
-    # Recursively build up record from object field:value pairs
-    decodeFields = \recordState, bytesBeforeField ->
+        # Recursively build up record from object field:value pairs
+        decodeFields = \recordState, bytesBeforeField ->
 
-        # Decode the json string field name
-        { result: objectNameResult, rest: bytesAfterField } =
-            Decode.decodeWith bytesBeforeField decodeString json
+            # Decode the json string field name
+            { result: objectNameResult, rest: bytesAfterField } =
+                Decode.decodeWith bytesBeforeField decodeString json
 
-        # Count the bytes until the field value
-        countBytesBeforeValue =
-            when List.walkUntil bytesAfterField (BeforeColon 0) objectHelp is
-                AfterColon n -> n
+            # Count the bytes until the field value
+            countBytesBeforeValue =
+                when List.walkUntil bytesAfterField (BeforeColon 0) objectHelp is
+                    AfterColon n -> n
+                    _ -> 0
+
+            valueBytes = List.dropFirst bytesAfterField countBytesBeforeValue
+
+            when objectNameResult is
+                Err TooShort ->
+                    # Invalid object, unable to decode field name or find colon ':'
+                    # after field and before the value
+                    { result: Err TooShort, rest: bytes }
+
+                Ok objectName ->
+                    # Decode the json value
+                    (
+                        fieldName = objectName
+
+                        # Retrieve value decoder for the current field
+                        when stepField recordState fieldName is
+                            Skip ->
+                                # TODO This doesn't seem right, shouldn't we eat
+                                # the remaining json object value bytes if we are skipping this
+                                # field?
+                                { result: Ok recordState, rest: valueBytes }
+
+                            Keep valueDecoder ->
+                                # Decode the value using the decoder from the recordState
+                                # Note we need to pass json config options recursively here
+                                Decode.decodeWith valueBytes valueDecoder (@Json {})
+                    )
+                    |> tryDecode \{ val: updatedRecord, rest: bytesAfterValue } ->
+                        # Check if another field or '}' for end of object
+                        when List.walkUntil bytesAfterValue (AfterObjectValue 0) objectHelp is
+                            ObjectFieldNameStart n ->
+                                rest = List.dropFirst bytesAfterValue n
+
+                                # Decode the next field and value
+                                decodeFields updatedRecord rest
+
+                            AfterClosingBrace n ->
+                                rest = List.dropFirst bytesAfterValue n
+
+                                # Build final record from decoded fields and values
+                                when finalizer updatedRecord json is
+                                    Ok val -> { result: Ok val, rest }
+                                    Err e -> { result: Err e, rest }
+
+                            _ ->
+                                # Invalid object
+                                { result: Err TooShort, rest: bytesAfterValue }
+
+        countBytesBeforeFirstField =
+            when List.walkUntil bytes (BeforeOpeningBrace 0) objectHelp is
+                ObjectFieldNameStart n -> n
                 _ -> 0
 
-        valueBytes = List.dropFirst bytesAfterField countBytesBeforeValue
+        if countBytesBeforeFirstField == 0 then
+            # Invalid object, expected opening brace '{' followed by a field
+            { result: Err TooShort, rest: bytes }
+        else
+            bytesBeforeFirstField = List.dropFirst bytes countBytesBeforeFirstField
 
-        when objectNameResult is
-            Err TooShort ->
-                # Invalid object, unable to decode field name or find colon ':'
-                # after field and before the value
-                { result: Err TooShort, rest: bytes }
-
-            Ok objectName ->
-                # Decode the json value
-                (
-                    fieldName = objectName
-
-                    # Retrieve value decoder for the current field
-                    when stepField recordState fieldName is
-                        Skip ->
-                            # TODO This doesn't seem right, shouldn't we eat
-                            # the remaining json object value bytes if we are skipping this
-                            # field?
-                            { result: Ok recordState, rest: valueBytes }
-
-                        Keep valueDecoder ->
-                            # Decode the value using the decoder from the recordState
-                            # Note we need to pass json config options recursively here
-                            Decode.decodeWith valueBytes valueDecoder (@Json {})
-                )
-                |> tryDecode \{ val: updatedRecord, rest: bytesAfterValue } ->
-                    # Check if another field or '}' for end of object
-                    when List.walkUntil bytesAfterValue (AfterObjectValue 0) objectHelp is
-                        ObjectFieldNameStart n ->
-                            rest = List.dropFirst bytesAfterValue n
-
-                            # Decode the next field and value
-                            decodeFields updatedRecord rest
-
-                        AfterClosingBrace n ->
-                            rest = List.dropFirst bytesAfterValue n
-
-                            # Build final record from decoded fields and values
-                            when finalizer updatedRecord json is
-                                Ok val -> { result: Ok val, rest }
-                                Err e -> { result: Err e, rest }
-
-                        _ ->
-                            # Invalid object
-                            { result: Err TooShort, rest: bytesAfterValue }
-
-    countBytesBeforeFirstField =
-        when List.walkUntil bytes (BeforeOpeningBrace 0) objectHelp is
-            ObjectFieldNameStart n -> n
-            _ -> 0
-
-    if countBytesBeforeFirstField == 0 then
-        # Invalid object, expected opening brace '{' followed by a field
-        { result: Err TooShort, rest: bytes }
-    else
-        bytesBeforeFirstField = List.dropFirst bytes countBytesBeforeFirstField
-
-        # Begin decoding field:value pairs
-        decodeFields initialState bytesBeforeFirstField
+            # Begin decoding field:value pairs
+            decodeFields initialState bytesBeforeFirstField
 
 objectHelp : ObjectState, U8 -> [Break ObjectState, Continue ObjectState]
 objectHelp = \state, byte ->

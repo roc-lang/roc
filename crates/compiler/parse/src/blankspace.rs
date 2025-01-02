@@ -97,7 +97,7 @@ where
     )
 }
 
-fn spaces_around_help<'a, S>(
+pub fn spaces_around_help<'a, S>(
     arena: &'a Bump,
     tuples: (
         &'a [CommentOrNewline<'a>],

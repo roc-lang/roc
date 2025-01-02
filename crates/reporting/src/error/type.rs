@@ -1457,7 +1457,7 @@ fn to_expr_report<'b>(
                                     alloc.concat([
                                         alloc.note(""),
                                         alloc.reflow("Record builders need a mapper function before the "),
-                                        alloc.backpassing_arrow(),
+                                        alloc.backwards_arrow(),
                                         alloc.reflow(" to combine fields together with.")
                                     ])
                                 }

@@ -548,7 +548,7 @@ impl<'a> RocDocAllocator<'a> {
         self.text(name).annotate(Annotation::Shorthand)
     }
 
-    pub fn backpassing_arrow(&'a self) -> DocBuilder<'a, Self, Annotation> {
+    pub fn backwards_arrow(&'a self) -> DocBuilder<'a, Self, Annotation> {
         self.text("<-").annotate(Annotation::BinOp)
     }
 

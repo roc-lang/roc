@@ -1,0 +1,61 @@
+@0-30 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-28,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Annotation(
+                    @0-1 NumLiteral(
+                        "1",
+                    ),
+                    @2-28 Apply(
+                        "",
+                        "A",
+                        [
+                            @4-25 Where(
+                                @4-5 Wildcard,
+                                [
+                                    @11-25 ImplementsClause {
+                                        var: @11-12 "e",
+                                        abilities: [
+                                            @24-25 Apply(
+                                                "",
+                                                "J",
+                                                [],
+                                            ),
+                                        ],
+                                    },
+                                ],
+                            ),
+                            @27-28 Wildcard,
+                        ],
+                    ),
+                ),
+            ],
+        },
+        @29-30 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "l",
+            },
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

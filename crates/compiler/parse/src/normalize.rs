@@ -716,11 +716,6 @@ impl<'a> Normalize<'a> for Expr<'a> {
             ),
             Expr::Crash => Expr::Crash,
             Expr::Defs(a, b) => fold_defs(arena, a.defs(), b.value.normalize(arena)),
-            Expr::Backpassing(a, b, c) => Expr::Backpassing(
-                arena.alloc(a.normalize(arena)),
-                arena.alloc(b.normalize(arena)),
-                arena.alloc(c.normalize(arena)),
-            ),
             Expr::Dbg => Expr::Dbg,
             Expr::DbgStmt {
                 first,
@@ -1083,9 +1078,6 @@ impl<'a> Normalize<'a> for EExpr<'a> {
             }
             EExpr::MalformedPattern(_pos) => EExpr::MalformedPattern(Position::zero()),
             EExpr::QualifiedTag(_pos) => EExpr::QualifiedTag(Position::zero()),
-            EExpr::BackpassComma(_pos) => EExpr::BackpassComma(Position::zero()),
-            EExpr::BackpassArrow(_pos) => EExpr::BackpassArrow(Position::zero()),
-            EExpr::BackpassContinue(_pos) => EExpr::BackpassContinue(Position::zero()),
             EExpr::DbgContinue(_pos) => EExpr::DbgContinue(Position::zero()),
             EExpr::When(inner_err, _pos) => {
                 EExpr::When(inner_err.normalize(arena), Position::zero())

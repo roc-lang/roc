@@ -3002,23 +3002,6 @@ mod test_fmt {
                 "
             ),
         );
-
-        expr_formats_to(
-            indoc!(
-                r"
-                    { } <- f a b
-
-                    {}
-                "
-            ),
-            indoc!(
-                r"
-                    {} <- f a b
-
-                    {}
-                "
-            ),
-        );
     }
 
     #[test]
@@ -5280,113 +5263,6 @@ mod test_fmt {
                     2
 
             y
-            "
-        ));
-    }
-
-    #[test]
-    fn backpassing_simple() {
-        expr_formats_same(indoc!(
-            r"
-                get_char = \ctx ->
-                    x <- Task.await (get_char_scope scope)
-                    42
-
-                42
-            "
-        ));
-    }
-
-    #[test]
-    fn backpassing_apply_tag() {
-        expr_formats_same(indoc!(
-            r"
-                get_char = \ctx ->
-                    (T val new_scope) <- Task.await (get_char_scope scope)
-                    42
-
-                42
-            "
-        ));
-    }
-
-    #[test]
-    fn backpassing_parens_body() {
-        expr_formats_same(indoc!(
-            r"
-            Task.fromResult
-                (
-                    b <- binaryOp ctx
-                    if a == b then
-                        -1
-                    else
-                        0
-                )
-            "
-        ));
-
-        expr_formats_to(
-            indoc!(
-                r"
-                    Task.fromResult
-                        (b <- binaryOp ctx
-                            if a == b then
-                                -1
-                            else
-                                0
-                            )
-                "
-            ),
-            indoc!(
-                r"
-                    Task.fromResult
-                        (
-                            b <- binaryOp ctx
-                            if a == b then
-                                -1
-                            else
-                                0
-                        )
-                "
-            ),
-        );
-
-        expr_formats_to(
-            indoc!(
-                r"
-                    Task.fromResult
-                        (b <- binaryOp ctx
-                            if a == b then
-                                -1
-                            else
-                                0)
-                "
-            ),
-            indoc!(
-                r"
-                    Task.fromResult
-                        (
-                            b <- binaryOp ctx
-                            if a == b then
-                                -1
-                            else
-                                0
-                        )
-                "
-            ),
-        );
-    }
-
-    #[test]
-    fn backpassing_body_on_newline() {
-        expr_formats_same(indoc!(
-            r"
-                get_char = \ctx ->
-                    x <-
-                        Task.await (get_char_scope scope)
-                    42
-
-                42
             "
         ));
     }

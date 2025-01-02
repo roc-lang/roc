@@ -550,24 +550,6 @@ fn to_expr_report<'a>(
             }
         }
 
-        EExpr::BackpassArrow(pos) => {
-            let surroundings = Region::new(start, *pos);
-            let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
-
-            let doc = alloc.stack([
-                alloc.reflow(r"I am partway through parsing an expression, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
-                alloc.concat([alloc.reflow("Looks like you are trying to define a function. ")]),
-            ]);
-
-            Report {
-                filename,
-                doc,
-                title: "BAD BACKPASSING ARROW".to_string(),
-                severity,
-            }
-        }
-
         EExpr::Record(erecord, pos) => {
             to_record_report(alloc, lines, filename, erecord, *pos, start)
         }
@@ -704,8 +686,6 @@ fn to_expr_report<'a>(
         | EExpr::Equals(pos)
         | EExpr::DoubleColon(pos)
         | EExpr::MalformedPattern(pos)
-        | EExpr::BackpassComma(pos)
-        | EExpr::BackpassContinue(pos)
         | EExpr::DbgContinue(pos)
         | EExpr::Underscore(pos)
         | EExpr::Crash(pos)

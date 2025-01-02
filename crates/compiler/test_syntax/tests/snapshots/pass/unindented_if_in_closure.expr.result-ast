@@ -1,0 +1,43 @@
+@0-22 SpaceAfter(
+    Closure(
+        [
+            @1-2 Tag(
+                "A",
+            ),
+        ],
+        @4-22 If {
+            if_thens: [
+                (
+                    @6-9 UnaryOp(
+                        @7-9 Var {
+                            module_name: "",
+                            ident: "s!",
+                        },
+                        @6-7 Not,
+                    ),
+                    @14-15 SpaceBefore(
+                        SpaceAfter(
+                            Var {
+                                module_name: "",
+                                ident: "f",
+                            },
+                            [
+                                Newline,
+                            ],
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ),
+            ],
+            final_else: @20-22 Num(
+                "-9",
+            ),
+            indented_else: false,
+        },
+    ),
+    [
+        Newline,
+    ],
+)
