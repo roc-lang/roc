@@ -53,7 +53,6 @@ pub enum Problem {
         new_symbol: Symbol,
         existing_symbol_region: Region,
     },
-    DeprecatedBackpassing(Region),
     /// First symbol is the name of the closure with that argument
     /// Bool is whether the closure is anonymous
     /// Second symbol is the name of the argument that is unused
@@ -278,7 +277,6 @@ impl Problem {
             Problem::ExplicitBuiltinImport(_, _) => Warning,
             Problem::ExplicitBuiltinTypeImport(_, _) => Warning,
             Problem::ImportShadowsSymbol { .. } => RuntimeError,
-            Problem::DeprecatedBackpassing(_) => Warning,
             Problem::ExposedButNotDefined(_) => RuntimeError,
             Problem::UnusedArgument(_, _, _, _) => Warning,
             Problem::UnusedBranchDef(_, _) => Warning,
@@ -372,7 +370,6 @@ impl Problem {
             | Problem::ExplicitBuiltinImport(_, region)
             | Problem::ExplicitBuiltinTypeImport(_, region)
             | Problem::ImportShadowsSymbol { region, .. }
-            | Problem::DeprecatedBackpassing(region)
             | Problem::UnusedArgument(_, _, _, region)
             | Problem::UnusedBranchDef(_, region)
             | Problem::PrecedenceProblem(PrecedenceProblem::BothNonAssociative(region, _, _))

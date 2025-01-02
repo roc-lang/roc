@@ -4,8 +4,8 @@ use memmap2::MmapMut;
 use object::macho;
 use object::{
     CompressedFileRange, CompressionFormat, LittleEndian as LE, Object, ObjectSection,
-    ObjectSymbol, RelocationKind, RelocationTarget, Section, SectionIndex, SectionKind, Symbol,
-    SymbolIndex, SymbolSection,
+    ObjectSymbol, RelocationFlags, RelocationKind, RelocationTarget, Section, SectionIndex,
+    SectionKind, Symbol, SymbolIndex, SymbolSection,
 };
 use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
@@ -1363,23 +1363,36 @@ fn surgery_macho_help(
                                     println!("\t\tTODO synthesise __got entry for {name}")
                                 }
                             }
-                            RelocationKind::MachO { value, relative: _ } => match value {
-                                macho::ARM64_RELOC_GOT_LOAD_PAGE21
-                                | macho::ARM64_RELOC_GOT_LOAD_PAGEOFF12 => {
-                                    if verbose {
-                                        println!("\t\tTODO synthesise __got entry for {name}")
+                            RelocationKind::Unknown => {
+                                if let RelocationFlags::MachO { r_type, .. } = rel.1.flags() {
+                                    match r_type {
+                                        macho::ARM64_RELOC_GOT_LOAD_PAGE21
+                                        | macho::ARM64_RELOC_GOT_LOAD_PAGEOFF12 => {
+                                            if verbose {
+                                                println!(
+                                                    "\t\tTODO synthesise __got entry for {name}"
+                                                )
+                                            }
+                                        }
+                                        macho::ARM64_RELOC_BRANCH26 => {
+                                            if verbose {
+                                                println!(
+                                                    "\t\tTODO synthesise __stub entry for {name}"
+                                                )
+                                            }
+                                        }
+                                        _ => internal_error!(
+                                            "Invalid relocation for libc symbol, {:+x?}: {name}",
+                                            rel
+                                        ),
                                     }
+                                } else {
+                                    internal_error!(
+                                        "Invalid relocation found for Mach-O: {:?}",
+                                        rel
+                                    );
                                 }
-                                macho::ARM64_RELOC_BRANCH26 => {
-                                    if verbose {
-                                        println!("\t\tTODO synthesise __stub entry for {name}")
-                                    }
-                                }
-                                _ => internal_error!(
-                                    "Invalid relocation for libc symbol, {:+x?}: {name}",
-                                    rel
-                                ),
-                            },
+                            }
                             _ => internal_error!(
                                 "Invalid relocation for libc symbol, {:+x?}: {name}",
                                 rel
@@ -1416,25 +1429,31 @@ fn surgery_macho_help(
                                     })
                                     .unwrap()
                         }
-                        RelocationKind::MachO { value, relative: _ } => match value {
-                            macho::ARM64_RELOC_SUBTRACTOR => {
-                                if subtractor.is_some() {
-                                    internal_error!("Malformed object: SUBTRACTOR must not be followed by SUBTRACTOR");
-                                } else {
-                                    subtractor = Some(index);
+                        RelocationKind::Unknown => {
+                            if let RelocationFlags::MachO { r_type, .. } = rel.1.flags() {
+                                match r_type {
+                                    macho::ARM64_RELOC_SUBTRACTOR => {
+                                        if subtractor.is_some() {
+                                            internal_error!("Malformed object: SUBTRACTOR must not be followed by SUBTRACTOR");
+                                        } else {
+                                            subtractor = Some(index);
+                                        }
+                                        continue;
+                                    }
+                                    _ => {
+                                        if verbose {
+                                            println!(
+                                                "\t\tHandle other MachO relocs: {}",
+                                                format_reloc_type(r_type)
+                                            );
+                                        }
+                                        0
+                                    }
                                 }
-                                continue;
+                            } else {
+                                internal_error!("Invalid relocation found for Mach-O: {:?}", rel);
                             }
-                            _ => {
-                                if verbose {
-                                    println!(
-                                        "\t\tHandle other MachO relocs: {}",
-                                        format_reloc_type(value)
-                                    );
-                                }
-                                0
-                            }
-                        },
+                        }
                         x => {
                             internal_error!("Relocation Kind not yet support: {:?}", x);
                         }
