@@ -419,7 +419,7 @@ fn solve(
 
                 // check that things went well
                 dbg_do!(ROC_VERIFY_RIGID_LET_GENERALIZED, {
-                    let rigid_vars = &env.constraints.variables[let_con.rigid_vars.indices()];
+                    let rigid_vars = &env.constraints[let_con.rigid_vars];
 
                     // NOTE the `subs.redundant` check does not come from elm.
                     // It's unclear whether this is a bug with our implementation
@@ -427,9 +427,9 @@ fn solve(
                     // or that it just never came up in elm.
                     let mut it = rigid_vars
                         .iter()
-                        .filter(|&var| {
-                            !env.subs.redundant(*var)
-                                && env.subs.get_rank(*var) != Rank::GENERALIZED
+                        .filter(|loc_var| {
+                            let var = loc_var.value;
+                            !env.subs.redundant(var) && env.subs.get_rank(var) != Rank::GENERALIZED
                         })
                         .peekable();
 
@@ -1007,11 +1007,11 @@ fn solve(
                 let ret_constraint = &env.constraints.constraints[offset + 1];
 
                 let flex_vars = &env.constraints.variables[let_con.flex_vars.indices()];
-                let rigid_vars = &env.constraints.variables[let_con.rigid_vars.indices()];
+                let rigid_vars = &env.constraints[let_con.rigid_vars];
 
                 let pool_variables = &env.constraints.variables[pool_slice.indices()];
 
-                if matches!(&ret_constraint, True) && let_con.rigid_vars.is_empty() {
+                if matches!(&ret_constraint, True) && rigid_vars.is_empty() {
                     debug_assert!(pool_variables.is_empty());
 
                     env.introduce(rank, flex_vars);
@@ -1025,7 +1025,7 @@ fn solve(
                     });
 
                     state
-                } else if let_con.rigid_vars.is_empty() && let_con.flex_vars.is_empty() {
+                } else if rigid_vars.is_empty() && let_con.flex_vars.is_empty() {
                     // items are popped from the stack in reverse order. That means that we'll
                     // first solve then defs_constraint, and then (eventually) the ret_constraint.
                     //
@@ -1068,11 +1068,11 @@ fn solve(
 
                     // Introduce the variables of this binding, and extend the pool at our binding
                     // rank.
-                    for &var in rigid_vars.iter().chain(flex_vars.iter()) {
+                    for &var in rigid_vars.iter().map(|v| &v.value).chain(flex_vars.iter()) {
                         env.subs.set_rank(var, binding_rank);
                     }
                     pool.reserve(rigid_vars.len() + flex_vars.len());
-                    pool.extend(rigid_vars.iter());
+                    pool.extend(rigid_vars.iter().map(|v| &v.value));
                     pool.extend(flex_vars.iter());
 
                     // Now, run our binding constraint, generalize, then solve the rest of the
