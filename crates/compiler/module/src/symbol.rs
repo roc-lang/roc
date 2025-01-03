@@ -1735,6 +1735,14 @@ define_builtins! {
         14 TASK_FOR_EACH: "forEach"
         15 TASK_RESULT: "result"
     }
+    16 CRYPTO: "Crypto" =>{
+        0 CRYPTO_SHA_256: "Sha256" exposed_type=true
+        1 CRYPTO_DIGEST_256: "Digest256" exposed_type=true
+        2 CRYPTO_EMPTY_SHA_256: "emptySha256"
+        3 CRYPTO_SHA256_ADD_BYTES: "sha256AddBytes"
+        4 CRYPTO_SHA256_DIGEST: "sha256Digest"
+        5 CRYPTO_HASH_SHA_256: "hashSha256"
+    }
 
-    num_modules: 16 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
+    num_modules: 17 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
 }

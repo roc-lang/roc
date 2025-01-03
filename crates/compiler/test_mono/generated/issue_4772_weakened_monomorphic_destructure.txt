@@ -91,8 +91,8 @@ procedure Test.19 ():
             let Test.120 : [C Str, C {List U8, I64}] = TagId(0) Test.122;
             ret Test.120;
     else
-        dec Test.93;
         dec Test.92;
+        dec Test.93;
         let Test.128 : Str = "not a number";
         let Test.126 : [C Str, C {List U8, I64}] = TagId(0) Test.128;
         ret Test.126;
