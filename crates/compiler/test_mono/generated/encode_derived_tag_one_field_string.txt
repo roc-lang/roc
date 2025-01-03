@@ -110,31 +110,31 @@ procedure Num.96 (#Attr.2):
     ret Num.283;
 
 procedure Str.12 (#Attr.2):
-    let Str.255 : List U8 = lowlevel StrToUtf8 #Attr.2;
-    ret Str.255;
-
-procedure Str.36 (#Attr.2):
-    let Str.256 : U64 = lowlevel StrCountUtf8Bytes #Attr.2;
+    let Str.256 : List U8 = lowlevel StrToUtf8 #Attr.2;
     ret Str.256;
 
+procedure Str.36 (#Attr.2):
+    let Str.257 : U64 = lowlevel StrCountUtf8Bytes #Attr.2;
+    ret Str.257;
+
 procedure Str.43 (#Attr.2):
-    let Str.253 : {U64, Str, Int1, U8} = lowlevel StrFromUtf8 #Attr.2;
-    ret Str.253;
+    let Str.254 : {U64, Str, Int1, U8} = lowlevel StrFromUtf8 #Attr.2;
+    ret Str.254;
 
 procedure Str.9 (Str.73):
     let Str.74 : {U64, Str, Int1, U8} = CallByName Str.43 Str.73;
-    let Str.250 : Int1 = StructAtIndex 2 Str.74;
-    if Str.250 then
-        let Str.252 : Str = StructAtIndex 1 Str.74;
-        let Str.251 : [C {U64, U8}, C Str] = TagId(1) Str.252;
-        ret Str.251;
+    let Str.251 : Int1 = StructAtIndex 2 Str.74;
+    if Str.251 then
+        let Str.253 : Str = StructAtIndex 1 Str.74;
+        let Str.252 : [C {U64, U8}, C Str] = TagId(1) Str.253;
+        ret Str.252;
     else
-        let Str.248 : U8 = StructAtIndex 3 Str.74;
         let Str.249 : U64 = StructAtIndex 0 Str.74;
+        let Str.250 : U8 = StructAtIndex 3 Str.74;
         let #Derived_gen.27 : Str = StructAtIndex 1 Str.74;
         dec #Derived_gen.27;
-        let Str.247 : {U64, U8} = Struct {Str.249, Str.248};
-        let Str.246 : [C {U64, U8}, C Str] = TagId(0) Str.247;
+        let Str.248 : {U64, U8} = Struct {Str.249, Str.250};
+        let Str.246 : [C {U64, U8}, C Str] = TagId(0) Str.248;
         ret Str.246;
 
 procedure Test.20 (Test.56):
