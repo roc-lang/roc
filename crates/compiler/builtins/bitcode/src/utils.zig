@@ -179,11 +179,10 @@ pub const IncN = fn (?[*]u8, u64) callconv(.C) void;
 pub const Dec = fn (?[*]u8) callconv(.C) void;
 
 const REFCOUNT_MAX_ISIZE: isize = 0;
-pub const REFCOUNT_ONE_ISIZE: isize = std.math.minInt(isize);
-pub const REFCOUNT_ONE: usize = @as(usize, @bitCast(REFCOUNT_ONE_ISIZE));
 // Only top bit set.
-pub const REFCOUNT_IS_NOT_ATOMIC_MASK: isize = REFCOUNT_ONE_ISIZE;
-pub const REFCOUNT_ONE_ATOMIC_ISIZE: isize = 1;
+const REFCOUNT_IS_ATOMIC_MASK: isize = std.math.minInt(isize);
+// All other bits of the refcount.
+const REFCOUNT_VALUE_MASK = ~REFCOUNT_IS_ATOMIC_MASK;
 
 pub const IntWidth = enum(u8) {
     U8 = 0,
@@ -215,7 +214,7 @@ pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
 
     // Ensure that the refcount is not whole program lifetime.
     const refcount: isize = ptr_to_refcount.*;
-    if (refcount != REFCOUNT_MAX_ISIZE) {
+    if (!rcConstant(refcount)) {
         // Note: we assume that a refcount will never overflow.
         // As such, we do not need to cap incrementing.
         switch (RC_TYPE) {
@@ -224,21 +223,17 @@ pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
                     const old = @as(usize, @bitCast(refcount));
                     const new = old + @as(usize, @intCast(amount));
 
-                    const oldH = old - REFCOUNT_ONE + 1;
-                    const newH = new - REFCOUNT_ONE + 1;
-
-                    std.debug.print("{} + {} = {}!\n", .{ oldH, amount, newH });
+                    std.debug.print("{} + {} = {}!\n", .{ old, amount, new });
                 }
 
-                ptr_to_refcount.* = refcount + amount;
+                ptr_to_refcount.* = refcount +% amount;
             },
             .atomic => {
-                // If the first bit of the refcount is set, this variable is threadlocal.
-                // Use normal refcounting instead of atomic.
-                if (refcount & REFCOUNT_IS_NOT_ATOMIC_MASK != 0) {
-                    ptr_to_refcount.* = refcount + amount;
-                } else {
+                // If the first bit of the refcount is set, this variable is atomic.
+                if (refcount & REFCOUNT_IS_ATOMIC_MASK != 0) {
                     _ = @atomicRmw(isize, ptr_to_refcount, .Add, amount, .monotonic);
+                } else {
+                    ptr_to_refcount.* = refcount +% amount;
                 }
             },
             .none => unreachable,
@@ -382,35 +377,31 @@ inline fn decref_ptr_to_refcount(
 
     // Ensure that the refcount is not whole program lifetime.
     const refcount: isize = refcount_ptr[0];
-    if (refcount != REFCOUNT_MAX_ISIZE) {
+    if (!rcConstant(refcount)) {
         switch (RC_TYPE) {
             .normal => {
-                const old = @as(usize, @bitCast(refcount));
-                refcount_ptr[0] = refcount -% 1;
-                const new = @as(usize, @bitCast(refcount -% 1));
-
                 if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
-                    const oldH = old - REFCOUNT_ONE + 1;
-                    const newH = new - REFCOUNT_ONE + 1;
+                    const old = @as(usize, @bitCast(refcount));
+                    const new = @as(usize, @bitCast(refcount_ptr[0] -% 1));
 
-                    std.debug.print("{} - 1 = {}!\n", .{ oldH, newH });
+                    std.debug.print("{} - 1 = {}!\n", .{ old, new });
                 }
 
-                if (refcount == REFCOUNT_ONE_ISIZE) {
+                refcount_ptr[0] = refcount -% 1;
+                if (refcount == 1) {
                     free_ptr_to_refcount(refcount_ptr, alignment, elements_refcounted);
                 }
             },
             .atomic => {
-                // If the first bit of the refcount is set, this variable is threadlocal.
-                // Use normal refcounting instead of atomic.
-                if (refcount & REFCOUNT_IS_NOT_ATOMIC_MASK != 0) {
-                    refcount_ptr[0] = refcount -% 1;
-                    if (refcount == REFCOUNT_ONE_ISIZE) {
+                // If the first bit of the refcount is set, this variable is atomic.
+                if (refcount_ptr[0] & REFCOUNT_IS_ATOMIC_MASK != 0) {
+                    const last = @atomicRmw(isize, &refcount_ptr[0], .Sub, 1, .monotonic);
+                    if (last & REFCOUNT_VALUE_MASK == 1) {
                         free_ptr_to_refcount(refcount_ptr, alignment, elements_refcounted);
                     }
                 } else {
-                    const last = @atomicRmw(isize, &refcount_ptr[0], .Sub, 1, .monotonic);
-                    if (last == REFCOUNT_ONE_ATOMIC_ISIZE) {
+                    refcount_ptr[0] = refcount -% 1;
+                    if (refcount == 1) {
                         free_ptr_to_refcount(refcount_ptr, alignment, elements_refcounted);
                     }
                 }
@@ -437,15 +428,33 @@ pub fn isUnique(
         std.debug.print("| is unique {*}\n", .{isizes - 1});
     }
 
+    return rcUnique(refcount);
+}
+
+pub inline fn rcUnique(refcount: isize) bool {
     switch (RC_TYPE) {
         .normal => {
-            return refcount == REFCOUNT_ONE_ISIZE;
+            return refcount == 1;
         },
         .atomic => {
-            return refcount == REFCOUNT_ONE_ISIZE or refcount == REFCOUNT_ONE_ATOMIC_ISIZE;
+            return refcount & REFCOUNT_VALUE_MASK == 1;
         },
         .none => {
             return false;
+        },
+    }
+}
+
+pub inline fn rcConstant(refcount: isize) bool {
+    switch (RC_TYPE) {
+        .normal => {
+            return refcount == REFCOUNT_MAX_ISIZE;
+        },
+        .atomic => {
+            return refcount & REFCOUNT_VALUE_MASK == REFCOUNT_MAX_ISIZE & REFCOUNT_VALUE_MASK;
+        },
+        .none => {
+            return true;
         },
     }
 }
@@ -528,7 +537,7 @@ pub fn allocateWithRefcount(
 
     const data_ptr = new_bytes + extra_bytes;
     const refcount_ptr = @as([*]usize, @ptrCast(@as([*]align(ptr_width) u8, @alignCast(data_ptr)) - ptr_width));
-    refcount_ptr[0] = if (RC_TYPE == .none) REFCOUNT_MAX_ISIZE else REFCOUNT_ONE;
+    refcount_ptr[0] = if (RC_TYPE == .none) REFCOUNT_MAX_ISIZE else 1;
 
     return data_ptr;
 }
@@ -578,10 +587,10 @@ pub const UpdateMode = enum(u8) {
 };
 
 test "increfC, refcounted data" {
-    var mock_rc: isize = REFCOUNT_ONE_ISIZE + 17;
+    var mock_rc: isize = 17;
     const ptr_to_refcount: *isize = &mock_rc;
     increfRcPtrC(ptr_to_refcount, 2);
-    try std.testing.expectEqual(mock_rc, REFCOUNT_ONE_ISIZE + 19);
+    try std.testing.expectEqual(mock_rc, 19);
 }
 
 test "increfC, static data" {

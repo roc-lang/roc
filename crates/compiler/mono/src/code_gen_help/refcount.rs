@@ -5,7 +5,6 @@ use bumpalo::collections::CollectIn;
 use roc_error_macros::todo_lambda_erasure;
 use roc_module::low_level::{LowLevel, LowLevel::*};
 use roc_module::symbol::{IdentIds, Symbol};
-use roc_target::PtrWidth;
 
 use crate::code_gen_help::let_lowlevel;
 use crate::ir::{
@@ -386,11 +385,7 @@ pub fn refcount_reset_proc_body<'a>(
     };
 
     // Constant for unique refcount
-    let refcount_1_encoded = match root.target.ptr_width() {
-        PtrWidth::Bytes4 => i32::MIN as i128,
-        PtrWidth::Bytes8 => i64::MIN as i128,
-    }
-    .to_ne_bytes();
+    let refcount_1_encoded = (1i128).to_ne_bytes();
     let refcount_1_expr = Expr::Literal(Literal::Int(refcount_1_encoded));
     let refcount_1_stmt = Stmt::Let(
         refcount_1,
@@ -511,11 +506,7 @@ pub fn refcount_resetref_proc_body<'a>(
     };
 
     // Constant for unique refcount
-    let refcount_1_encoded = match root.target.ptr_width() {
-        PtrWidth::Bytes4 => i32::MIN as i128,
-        PtrWidth::Bytes8 => i64::MIN as i128,
-    }
-    .to_ne_bytes();
+    let refcount_1_encoded = (1i128).to_ne_bytes();
     let refcount_1_expr = Expr::Literal(Literal::Int(refcount_1_encoded));
     let refcount_1_stmt = Stmt::Let(
         refcount_1,

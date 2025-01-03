@@ -19,7 +19,6 @@ use std::{
     sync::Mutex,
 };
 
-const REFCOUNT_ONE: usize = isize::MIN as usize;
 const REFCOUNT_CONSTANT: usize = 0;
 
 /// ThreadSafeRefcountedResourceHeap is a threadsafe version of the refcounted heap that can avoid a wrapping Mutex and RefCell.
@@ -90,7 +89,7 @@ impl<T> RefcountedResourceHeap<T> {
 
     pub fn alloc_for(&mut self, data: T) -> Result<RocBox<()>> {
         self.0.alloc().map(|alloc_ptr| {
-            unsafe { std::ptr::write(alloc_ptr, Refcounted(REFCOUNT_ONE, data)) };
+            unsafe { std::ptr::write(alloc_ptr, Refcounted(1, data)) };
             let box_ptr = alloc_ptr as usize + mem::size_of::<usize>();
             unsafe { std::mem::transmute(box_ptr) }
         })

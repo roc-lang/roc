@@ -39,7 +39,6 @@ void *roc_memset(void *str, int c, size_t n) { return memset(str, c, n); }
 // stored in readonly memory in the binary, and we must not
 // attempt to increment or decrement it; if we do, we'll segfault!
 const ssize_t REFCOUNT_READONLY = 0;
-const ssize_t REFCOUNT_ONE = (ssize_t)PTRDIFF_MIN;
 const size_t MASK = (size_t)PTRDIFF_MIN;
 
 // Increment reference count, given a pointer to the first element in a collection.
@@ -70,7 +69,7 @@ void decref(uint8_t* bytes, uint32_t alignment)
     if (refcount != REFCOUNT_READONLY) {
         *refcount_ptr = refcount - 1;
 
-        if (refcount == REFCOUNT_ONE) {
+        if (refcount == 1) {
             void *original_allocation = (void *)(refcount_ptr - (extra_bytes - sizeof(size_t)));
 
             roc_dealloc(original_allocation, alignment);
