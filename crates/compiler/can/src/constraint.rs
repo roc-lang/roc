@@ -18,6 +18,7 @@ pub struct Constraints {
     pub constraints: Vec<Constraint>,
     pub type_slices: Vec<TypeOrVar>,
     pub variables: Vec<Variable>,
+    loc_variables: Vec<Loc<Variable>>,
     pub loc_symbols: Vec<(Symbol, Region)>,
     pub let_constraints: Vec<LetConstraint>,
     pub categories: Vec<Category>,
@@ -42,6 +43,7 @@ impl std::fmt::Debug for Constraints {
             .field("types", &"<types>")
             .field("type_slices", &self.type_slices)
             .field("variables", &self.variables)
+            .field("loc_variables", &self.loc_variables)
             .field("loc_symbols", &self.loc_symbols)
             .field("let_constraints", &self.let_constraints)
             .field("categories", &self.categories)
@@ -75,6 +77,7 @@ impl Constraints {
         let constraints = Vec::new();
         let type_slices = Vec::with_capacity(16);
         let variables = Vec::new();
+        let loc_variables = Vec::new();
         let loc_symbols = Vec::new();
         let let_constraints = Vec::new();
         let mut categories = Vec::with_capacity(16);
@@ -126,6 +129,7 @@ impl Constraints {
             constraints,
             type_slices,
             variables,
+            loc_variables,
             loc_symbols,
             let_constraints,
             categories,
@@ -377,6 +381,17 @@ impl Constraints {
         Slice::new(start as _, length as _)
     }
 
+    pub fn loc_variable_slice<I>(&mut self, it: I) -> Slice<Loc<Variable>>
+    where
+        I: IntoIterator<Item = Loc<Variable>>,
+    {
+        let start = self.loc_variables.len();
+        self.loc_variables.extend(it);
+        let length = self.loc_variables.len() - start;
+
+        Slice::new(start as _, length as _)
+    }
+
     fn def_types_slice<I>(&mut self, it: I) -> DefTypes
     where
         I: IntoIterator<Item = (Symbol, Loc<TypeOrVar>)>,
@@ -473,8 +488,8 @@ impl Constraints {
         generalizable: Generalizable,
     ) -> Constraint
     where
-        I1: IntoIterator<Item = Variable>,
-        I2: IntoIterator<Item = Variable>,
+        I1: IntoIterator<Item = Loc<Variable>>,
+        I2: IntoIterator<Item = Loc<Variable>>,
         I3: IntoIterator<Item = (Symbol, Loc<TypeOrVar>)>,
         I3::IntoIter: ExactSizeIterator,
     {
@@ -485,8 +500,8 @@ impl Constraints {
         self.constraints.push(ret_constraint);
 
         let let_constraint = LetConstraint {
-            rigid_vars: self.variable_slice(rigid_vars),
-            flex_vars: self.variable_slice(flex_vars),
+            rigid_vars: self.loc_variable_slice(rigid_vars),
+            flex_vars: self.variable_slice(flex_vars.into_iter().map(|v| v.value)),
             def_types: self.def_types_slice(def_types),
             defs_and_ret_constraint,
             generalizable,
@@ -534,7 +549,7 @@ impl Constraints {
         self.constraints.push(module_constraint);
 
         let let_contraint = LetConstraint {
-            rigid_vars: self.variable_slice(rigid_vars),
+            rigid_vars: self.loc_variable_slice(rigid_vars.into_iter().map(Loc::at_zero)),
             flex_vars: self.variable_slice(flex_vars),
             def_types: self.def_types_slice(def_types),
             defs_and_ret_constraint,
@@ -602,23 +617,6 @@ impl Constraints {
         let constraint_index = index_push_new(&mut self.fx_call_constraints, constraint);
 
         Constraint::FxCall(constraint_index)
-    }
-
-    pub fn fx_pattern_suffix(
-        &mut self,
-        symbol: Symbol,
-        type_index: TypeOrVar,
-        region: Region,
-    ) -> Constraint {
-        let constraint = FxSuffixConstraint {
-            kind: FxSuffixKind::Pattern(symbol),
-            type_index,
-            region,
-        };
-
-        let constraint_index = index_push_new(&mut self.fx_suffix_constraints, constraint);
-
-        Constraint::FxSuffix(constraint_index)
     }
 
     pub fn fx_record_field_unsuffixed(&mut self, variable: Variable, region: Region) -> Constraint {
@@ -809,6 +807,14 @@ impl std::ops::Index<PExpectedTypeIndex> for Constraints {
     }
 }
 
+impl std::ops::Index<Slice<Loc<Variable>>> for Constraints {
+    type Output = [Loc<Variable>];
+
+    fn index(&self, slice: Slice<Loc<Variable>>) -> &Self::Output {
+        &self.loc_variables[slice.indices()]
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Eq(
     pub TypeOrVar,
@@ -914,7 +920,7 @@ pub struct Generalizable(pub bool);
 
 #[derive(Debug, Clone)]
 pub struct LetConstraint {
-    pub rigid_vars: Slice<Variable>,
+    pub rigid_vars: Slice<Loc<Variable>>,
     pub flex_vars: Slice<Variable>,
     pub def_types: DefTypes,
     pub defs_and_ret_constraint: Index<(Constraint, Constraint)>,

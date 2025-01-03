@@ -7,7 +7,7 @@ main =
 #   ^^^ a, Bool -[[foo(1)]]-> Str
 
     bar = \_ -> foo {} Bool.true
-#               ^^^ {}, Bool -[[]]-> Str
+#               ^^^ {}, Bool -[[foo(1)]]-> Str
 
     foo "" Bool.false
 #   ^^^{inst} Str, Bool -[[foo(1)]]-> Str
