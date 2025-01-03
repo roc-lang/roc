@@ -17,7 +17,11 @@ use rustyline::highlight::{Highlighter, PromptInfo};
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
 use rustyline::Config;
 use rustyline_derive::{Completer, Helper, Hinter};
+use std::any::Any;
+use std::backtrace::Backtrace;
 use std::borrow::Cow;
+use std::panic::{AssertUnwindSafe, PanicInfo};
+use std::sync::{Arc, Mutex, OnceLock};
 use target_lexicon::Triple;
 
 use crate::cli_gen::eval_llvm;
@@ -37,9 +41,24 @@ pub struct ReplHelper {
     state: ReplState,
 }
 
+static BACKTRACE: OnceLock<Arc<Mutex<Option<String>>>> = OnceLock::new();
+
+fn init_backtrace_storage() {
+    BACKTRACE.get_or_init(|| Arc::new(Mutex::new(None)));
+}
+
+fn panic_hook(_: &PanicInfo) {
+    if let Some(storage) = BACKTRACE.get() {
+        *storage.lock().unwrap() = Some(Backtrace::force_capture().to_string());
+    }
+}
+
 pub fn main(has_color: bool, has_header: bool) -> i32 {
     use rustyline::error::ReadlineError;
     use rustyline::Editor;
+
+    init_backtrace_storage();
+    std::panic::set_hook(Box::new(panic_hook));
 
     let strip_colors_if_necessary = |s: &str| {
         if has_color {
@@ -85,7 +104,13 @@ pub fn main(has_color: bool, has_header: bool) -> i32 {
                     .state;
 
                 arena.reset();
-                match repl_state.step(&arena, line, target, DEFAULT_PALETTE) {
+
+                let action = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                    repl_state.step(&arena, line, target, DEFAULT_PALETTE)
+                }))
+                .unwrap_or_else(|e| notify_repl_panic(target, e));
+
+                match action {
                     ReplAction::Eval { opt_mono, problems } => {
                         let output = evaluate(opt_mono, problems, target);
                         // If there was no output, don't print a blank line!
@@ -127,6 +152,37 @@ pub fn main(has_color: bool, has_header: bool) -> i32 {
             }
         }
     }
+}
+
+fn notify_repl_panic(target: Target, e: Box<dyn Any + Send>) -> ReplAction<'static> {
+    let message = if let Some(s) = e.downcast_ref::<&str>() {
+        s.to_string()
+    } else if let Some(s) = e.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "Unknown error".to_string()
+    };
+
+    let backtrace = BACKTRACE
+        .get()
+        .and_then(|storage| storage.lock().unwrap().take())
+        .unwrap_or_else(|| "<Backtrace not found>".to_string());
+
+    println!(
+        "\
+The Roc compiler had an internal error.
+Please file a bug report at
+    https://github.com/roc-lang/roc/issues/new
+Please include the following data:
+
+Error message: {}
+Stack backtrace:
+{}
+Machine Target: {:#?}
+",
+        message, backtrace, target
+    );
+    ReplAction::Nothing
 }
 
 pub fn evaluate(
