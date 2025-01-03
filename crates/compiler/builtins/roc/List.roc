@@ -74,6 +74,7 @@ module [
     concatUtf8,
     forEach!,
     forEachTry!,
+    walk!,
 ]
 
 import Bool exposing [Bool, Eq]
@@ -1466,3 +1467,20 @@ forEachTry! = \list, func! ->
 
                 Err err ->
                     Err err
+
+## Build a value from the contents of a list, using an effectful function.
+##
+## ```roc
+## now_multiples = List.walk! [1, 2, 3] [] \nums, i ->
+##         now = Utc.now! {} |> Utc.to_millis_since_epoch
+##         List.append nums (now * i)
+## ```
+##
+## This is the same as [walk], except that the step function can have effects.
+walk! : List elem, state, (state, elem => state) => state
+walk! = \list, state, func! ->
+    when list is
+        [] -> state
+        [elem, .. as rest] ->
+            nextState = func! state elem
+            walk! rest nextState func!
