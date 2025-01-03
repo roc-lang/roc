@@ -98,7 +98,10 @@ impl DocInfo {
         let arena = &Bump::new();
 
         let ast = Ast::parse(arena, source).ok()?;
-        let flags = MigrationFlags::new(false);
+        let flags = MigrationFlags {
+            snakify: false,
+            parens_and_commas: false,
+        };
         let fmt = ast.fmt(flags);
 
         if source == fmt.as_str() {

@@ -1066,6 +1066,9 @@ pub enum EPattern<'a> {
     AccessorFunction(Position),
     RecordUpdaterFunction(Position),
     Str(EString<'a>, Position),
+
+    ParenStart(Position),
+    ParenEnd(Position),
 }
 
 impl<'a> EPattern<'a> {
@@ -1090,7 +1093,9 @@ impl<'a> EPattern<'a> {
             | EPattern::IndentEnd(position)
             | EPattern::AsIndentStart(position)
             | EPattern::AccessorFunction(position)
-            | EPattern::RecordUpdaterFunction(position) => Region::from_pos(*position),
+            | EPattern::RecordUpdaterFunction(position)
+            | EPattern::ParenStart(position)
+            | EPattern::ParenEnd(position) => Region::from_pos(*position),
         }
     }
 }

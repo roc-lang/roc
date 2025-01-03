@@ -1,6 +1,7 @@
 use crate::ast;
 use crate::ast::Defs;
 use crate::ast::Header;
+use crate::ast::Pattern;
 use crate::ast::SpacesBefore;
 use crate::header::parse_module_defs;
 use crate::parser::SourceError;
@@ -29,6 +30,18 @@ pub fn parse_loc_with<'a>(
     match crate::expr::test_parse_expr(0, arena, state.clone()) {
         Ok(loc_expr) => Ok(loc_expr),
         Err(fail) => Err(SyntaxError::Expr(fail, Position::default()).into_source_error(&state)),
+    }
+}
+
+pub fn parse_pattern_with<'a>(
+    arena: &'a Bump,
+    input: &'a str,
+) -> Result<Loc<Pattern<'a>>, SourceError<'a, SyntaxError<'a>>> {
+    let state = State::new(input.as_bytes());
+
+    match crate::pattern::test_parse_pattern(0, arena, state.clone()) {
+        Ok(loc_patt) => Ok(loc_patt),
+        Err(fail) => Err(SyntaxError::Pattern(fail).into_source_error(&state)),
     }
 }
 

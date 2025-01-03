@@ -13,14 +13,14 @@ use crate::pattern::{pattern_lift_spaces, pattern_lift_spaces_before};
 use crate::spaces::{
     fmt_comments_only, fmt_default_newline, fmt_default_spaces, fmt_spaces, NewlineAt, INDENT,
 };
-use crate::Buf;
+use crate::{Buf, MigrationFlags};
 use bumpalo::Bump;
 use roc_error_macros::internal_error;
 use roc_parse::ast::{
     AbilityMember, Defs, Expr, ExtractSpaces, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
     ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport,
-    ModuleImportParams, Pattern, Spaceable, Spaces, SpacesAfter, SpacesBefore, StrLiteral,
-    TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    ModuleImportParams, Pattern, PatternApplyStyle, Spaceable, Spaces, SpacesAfter, SpacesBefore,
+    StrLiteral, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use roc_parse::expr::merge_spaces;
 use roc_parse::header::Keyword;
@@ -564,6 +564,11 @@ impl<'a> Formattable for TypeHeader<'a> {
         _newlines: Newlines,
         indent: u16,
     ) {
+        let old_flags = buf.flags;
+        buf.flags = MigrationFlags {
+            parens_and_commas: false,
+            ..old_flags
+        };
         pattern_fmt_apply(
             buf,
             Pattern::Tag(self.name.value),
@@ -571,7 +576,9 @@ impl<'a> Formattable for TypeHeader<'a> {
             Parens::NotNeeded,
             indent,
             self.vars.iter().any(|v| v.is_multiline()),
+            PatternApplyStyle::Whitespace,
         );
+        buf.flags = old_flags;
     }
 }
 
@@ -582,6 +589,7 @@ fn type_head_lift_spaces<'a, 'b: 'a>(
     let pat = Pattern::Apply(
         arena.alloc(Loc::at(head.name.region, Pattern::Tag(head.name.value))),
         head.vars,
+        PatternApplyStyle::Whitespace,
     );
 
     pattern_lift_spaces(arena, &pat)
@@ -903,7 +911,9 @@ impl<'a> Formattable for ValueDef<'a> {
 fn ann_pattern_needs_parens(value: &Pattern<'_>) -> bool {
     match value.extract_spaces().item {
         Pattern::Tag(_) => true,
-        Pattern::Apply(func, _args) if matches!(func.extract_spaces().item, Pattern::Tag(..)) => {
+        Pattern::Apply(func, _args, _style)
+            if matches!(func.extract_spaces().item, Pattern::Tag(..)) =>
+        {
             true
         }
         _ => false,

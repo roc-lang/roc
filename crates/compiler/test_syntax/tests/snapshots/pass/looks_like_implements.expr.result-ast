@@ -1,11 +1,11 @@
-@0-21 SpaceAfter(
+@0-24 SpaceAfter(
     Defs(
         Defs {
             tags: [
                 EitherIndex(0),
             ],
             regions: [
-                @0-19,
+                @0-22,
             ],
             space_before: [
                 Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
@@ -19,18 +19,18 @@
                     header: TypeHeader {
                         name: @0-1 "N",
                         vars: [
-                            @2-12 Identifier {
+                            @3-13 Identifier {
                                 ident: "implements",
                             },
-                            @13-14 Identifier {
+                            @15-16 Identifier {
                                 ident: "h",
                             },
-                            @15-16 NumLiteral(
+                            @18-19 NumLiteral(
                                 "0",
                             ),
                         ],
                     },
-                    ann: @18-19 Apply(
+                    ann: @21-22 Apply(
                         "",
                         "B",
                         [],
@@ -39,7 +39,7 @@
             ],
             value_defs: [],
         },
-        @20-21 SpaceBefore(
+        @23-24 SpaceBefore(
             Tag(
                 "T",
             ),

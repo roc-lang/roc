@@ -122,24 +122,24 @@ sudo apt-get install libz-dev libzstd-dev
 
 ### Zig
 
-**version: 0.11.0**
+**version: 0.13.0**
 
 For any OS, you can use [`zigup`](https://github.com/marler8997/zigup) to manage zig installations.
 
 If you prefer a package manager, you can try the following:
 
-- MacOS: `brew install zig@0.11.0`
+- MacOS: `brew install zig`
 - Systems with snap (such as Ubuntu): `snap install zig --classic --beta`
 - Other systems: refer to the [zig documentation](https://github.com/ziglang/zig/wiki/Install-Zig-from-a-Package-Manager)
 
-If you want to install it manually, you can [download the binary](https://ziglang.org/download/#release-0.11.0) and place it on your PATH.
+If you want to install it manually, you can [download the binary](https://ziglang.org/download/#release-0.13.0) and place it on your PATH.
 Apart from the binary, the archive contains a `lib` folder, which needs to be copied next to the binary.
 
 > WINDOWS NOTE: when you unpack the Zig archive on windows, the result is nested in an extra directory. The instructions on the zig website will seem to not work. So, double-check that the path to zig executable does not include the same directory name twice.
 
 ### LLVM
 
-**version: 16.0.x**
+**version: 18.0.x**
 
 See below for operating system specific installation instructions.
 
@@ -167,10 +167,10 @@ chmod +x llvm.sh
 ```
 
 If you use this script, you'll need to add `clang` to your `PATH`.
-By default, the script installs it as `clang-16`. You can address this with symlinks like so:
+By default, the script installs it as `clang-18`. You can address this with symlinks like so:
 
 ```sh
-sudo ln -s /usr/bin/clang-16 /usr/bin/clang
+sudo ln -s /usr/bin/clang-18 /usr/bin/clang
 ```
 
 There are also alternative installation options at <http://releases.llvm.org/download.html>
@@ -203,7 +203,7 @@ Add `export LLVM_SYS_180_PREFIX=/usr/lib/llvm-18` to your `~/.bashrc` or equival
 
 For macOS, you can install LLVM 18 using `brew install llvm@18` and then adding
 `$(brew --prefix llvm@18)/bin` to your `PATH`. You can confirm this worked by
-running `llc --version` - it should mention "LLVM version 16.0.x" at the top.
+running `llc --version` - it should mention "LLVM version 18.x.x" at the top.
 You may also need to manually specify a prefix env var like so:
 
 ```sh
@@ -261,8 +261,8 @@ Create `~/.cargo/config.toml` if it does not exist and add this to it:
 rustflags = ["-C", "link-arg=-fuse-ld=lld", "-C", "target-cpu=native"]
 ```
 
-Then install `lld` version 16 (e.g. with `$ sudo apt-get install lld-16`)
+Then install `lld` version 18 (e.g. with `$ sudo apt-get install lld-18`)
 and add make sure there's a `ld.lld` executable on your `PATH` which
-is symlinked to `lld-16`.
+is symlinked to `lld-18`.
 
 That's it! Enjoy the faster builds.
