@@ -30,8 +30,10 @@
       supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" "aarch64-linux" ];
 
       templates = import ./nix/templates { };
-    in
-    { inherit templates; } //
+      lib = { buildRocPackage = import ./nix/buildRocPackage.nix; };
+    in {
+      inherit templates lib;
+    } // 
     flake-utils.lib.eachSystem supportedSystems (system:
       let
 
