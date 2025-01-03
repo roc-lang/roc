@@ -1,11 +1,11 @@
-@0-16 SpaceAfter(
+@0-18 SpaceAfter(
     Defs(
         Defs {
             tags: [
                 EitherIndex(2147483648),
             ],
             regions: [
-                @0-14,
+                @0-16,
             ],
             space_before: [
                 Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
@@ -22,27 +22,29 @@
                             ident: "u",
                         },
                         [
-                            @2-11 Apply(
-                                @2-8 StrLiteral(
+                            @3-13 Apply(
+                                @3-9 StrLiteral(
                                     Block(
                                         [],
                                     ),
                                 ),
                                 [
-                                    @9-10 NumLiteral(
+                                    @11-12 NumLiteral(
                                         "0",
                                     ),
                                 ],
+                                Whitespace,
                             ),
                         ],
+                        Whitespace,
                     ),
-                    @13-14 BoundVariable(
+                    @15-16 BoundVariable(
                         "f",
                     ),
                 ),
             ],
         },
-        @15-16 SpaceBefore(
+        @17-18 SpaceBefore(
             Var {
                 module_name: "",
                 ident: "s",

@@ -1,11 +1,11 @@
-@0-15 SpaceAfter(
+@0-16 SpaceAfter(
     Defs(
         Defs {
             tags: [
                 EitherIndex(0),
             ],
             regions: [
-                @0-13,
+                @0-14,
             ],
             space_before: [
                 Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
@@ -19,30 +19,31 @@
                     header: TypeHeader {
                         name: @0-1 "Q",
                         vars: [
-                            @2-10 Apply(
-                                @2-8 StrLiteral(
+                            @3-11 Apply(
+                                @3-9 StrLiteral(
                                     Block(
                                         [],
                                     ),
                                 ),
                                 [
-                                    @8-10 StrLiteral(
+                                    @9-11 StrLiteral(
                                         PlainLine(
                                             "",
                                         ),
                                     ),
                                 ],
+                                Whitespace,
                             ),
                         ],
                     },
-                    ann: @12-13 BoundVariable(
+                    ann: @13-14 BoundVariable(
                         "a",
                     ),
                 },
             ],
             value_defs: [],
         },
-        @14-15 SpaceBefore(
+        @15-16 SpaceBefore(
             Var {
                 module_name: "",
                 ident: "q",
