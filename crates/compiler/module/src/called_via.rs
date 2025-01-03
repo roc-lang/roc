@@ -68,6 +68,9 @@ pub enum CalledVia {
     /// Calling with space, e.g. (foo bar)
     Space,
 
+    /// Calling parens-and-comms style, e.g. foo(bar)
+    ParensAndCommas,
+
     /// Calling with an operator, e.g. (bar |> foo) or (1 + 2)
     BinOp(BinOp),
 

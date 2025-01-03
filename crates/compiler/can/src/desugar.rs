@@ -11,8 +11,9 @@ use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
 use roc_parse::ast::{
-    is_expr_suffixed, AssignedField, Collection, Defs, ModuleImportParams, Pattern, ResultTryKind,
-    StrLiteral, StrSegment, TryTarget, TypeAnnotation, ValueDef, WhenBranch,
+    is_expr_suffixed, AssignedField, Collection, Defs, ModuleImportParams, Pattern,
+    PatternApplyStyle, ResultTryKind, StrLiteral, StrSegment, TryTarget, TypeAnnotation, ValueDef,
+    WhenBranch,
 };
 use roc_problem::can::Problem;
 use roc_region::all::{Loc, Region};
@@ -177,7 +178,11 @@ fn new_op_call_expr<'a>(
                 env.arena.alloc(Loc::at(left.region, Pattern::Tag("Ok")));
             branch_1_patts.push(Loc::at(
                 left.region,
-                Pattern::Apply(branch_1_tag, branch_1_patts_args.into_bump_slice()),
+                Pattern::Apply(
+                    branch_1_tag,
+                    branch_1_patts_args.into_bump_slice(),
+                    PatternApplyStyle::ParensAndCommas,
+                ),
             ));
             let branch_one: &WhenBranch<'_> = env.arena.alloc(WhenBranch {
                 patterns: branch_1_patts.into_bump_slice(),
@@ -198,7 +203,11 @@ fn new_op_call_expr<'a>(
                 env.arena.alloc(Loc::at(left.region, Pattern::Tag("Err")));
             branch_2_patts.push(Loc::at(
                 right.region,
-                Pattern::Apply(branch_2_tag, branch_2_patts_args.into_bump_slice()),
+                Pattern::Apply(
+                    branch_2_tag,
+                    branch_2_patts_args.into_bump_slice(),
+                    PatternApplyStyle::ParensAndCommas,
+                ),
             ));
             let branch_two: &WhenBranch<'_> = env.arena.alloc(WhenBranch {
                 patterns: branch_2_patts.into_bump_slice(),
@@ -1413,7 +1422,7 @@ fn desugar_pattern<'a>(env: &mut Env<'a>, scope: &mut Scope, pattern: Pattern<'a
         | MalformedIdent(_, _)
         | QualifiedIdentifier { .. } => pattern,
 
-        Apply(tag, arg_patterns) => {
+        Apply(tag, arg_patterns, style) => {
             // Skip desugaring the tag, it should either be a Tag or OpaqueRef
             let mut desugared_arg_patterns = Vec::with_capacity_in(arg_patterns.len(), env.arena);
             for arg_pattern in arg_patterns.iter() {
@@ -1423,7 +1432,7 @@ fn desugar_pattern<'a>(env: &mut Env<'a>, scope: &mut Scope, pattern: Pattern<'a
                 });
             }
 
-            Apply(tag, desugared_arg_patterns.into_bump_slice())
+            Apply(tag, desugared_arg_patterns.into_bump_slice(), style)
         }
         RecordDestructure(field_patterns) => {
             RecordDestructure(desugar_record_destructures(env, scope, field_patterns))

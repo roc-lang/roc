@@ -25,6 +25,7 @@
                             ident: "x",
                         },
                     ],
+                    Whitespace,
                 ),
                 @7-8 BoundVariable(
                     "i",

@@ -16,7 +16,7 @@
         type_defs: [],
         value_defs: [
             Annotation(
-                @0-1 Apply(
+                @0-10 Apply(
                     @0-1 NumLiteral(
                         "1",
                     ),
@@ -35,6 +35,7 @@
                             ],
                         ),
                     ],
+                    ParensAndCommas,
                 ),
                 @11-13 BoundVariable(
                     "gi",

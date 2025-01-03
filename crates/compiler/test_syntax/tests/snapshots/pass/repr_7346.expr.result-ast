@@ -1,24 +1,24 @@
-@0-31 SpaceAfter(
+@0-32 SpaceAfter(
     Apply(
         @0-3 Var {
             module_name: "",
             ident: "il3",
         },
         [
-            @3-31 Closure(
+            @3-32 Closure(
                 [
                     @4-5 Identifier {
                         ident: "k",
                     },
                 ],
-                @13-31 SpaceBefore(
+                @13-32 SpaceBefore(
                     Defs(
                         Defs {
                             tags: [
                                 EitherIndex(0),
                             ],
                             regions: [
-                                @13-28,
+                                @13-29,
                             ],
                             space_before: [
                                 Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
@@ -35,16 +35,17 @@
                                             @16-18 OpaqueRef(
                                                 "@C",
                                             ),
-                                            @22-25 SpaceBefore(
+                                            @23-26 SpaceBefore(
                                                 Apply(
-                                                    @22-24 Identifier {
+                                                    @23-25 Identifier {
                                                         ident: "t!",
                                                     },
                                                     [
-                                                        @24-25 Tag(
+                                                        @25-26 Tag(
                                                             "K",
                                                         ),
                                                     ],
+                                                    Whitespace,
                                                 ),
                                                 [
                                                     LineComment(
@@ -54,14 +55,14 @@
                                             ),
                                         ],
                                     },
-                                    ann: @27-28 BoundVariable(
+                                    ann: @28-29 BoundVariable(
                                         "i",
                                     ),
                                 },
                             ],
                             value_defs: [],
                         },
-                        @30-31 SpaceBefore(
+                        @31-32 SpaceBefore(
                             Tag(
                                 "C",
                             ),

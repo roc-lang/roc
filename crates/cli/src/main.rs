@@ -340,7 +340,10 @@ fn main() -> io::Result<()> {
                     false => FormatMode::WriteToFile,
                 }
             };
-            let flags = MigrationFlags::new(migrate);
+            let flags = MigrationFlags {
+                snakify: migrate,
+                parens_and_commas: migrate,
+            };
 
             if from_stdin && matches!(format_mode, FormatMode::WriteToFile) {
                 eprintln!("When using the --stdin flag, either the --check or the --stdout flag must also be specified. (Otherwise, it's unclear what filename to write to!)");

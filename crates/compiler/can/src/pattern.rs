@@ -411,7 +411,7 @@ pub fn canonicalize_pattern<'a>(
             )));
             Pattern::UnsupportedPattern(region)
         }
-        Apply(tag, patterns) => {
+        Apply(tag, patterns, _) => {
             let mut can_patterns = Vec::with_capacity(patterns.len());
             for loc_pattern in *patterns {
                 let can_pattern = canonicalize_pattern(

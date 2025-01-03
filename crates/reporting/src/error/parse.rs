@@ -2281,7 +2281,9 @@ fn to_pattern_report<'a>(
         | EPattern::IndentEnd(pos)
         | EPattern::AsIndentStart(pos)
         | EPattern::AccessorFunction(pos)
-        | EPattern::RecordUpdaterFunction(pos) => to_unhandled_parse_error_report(
+        | EPattern::RecordUpdaterFunction(pos)
+        | EPattern::ParenStart(pos)
+        | EPattern::ParenEnd(pos) => to_unhandled_parse_error_report(
             alloc,
             lines,
             filename,

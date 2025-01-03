@@ -1746,6 +1746,12 @@ impl<'a> PatternAs<'a> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PatternApplyStyle {
+    Whitespace,
+    ParensAndCommas,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Pattern<'a> {
     // Identifier
     Identifier {
@@ -1760,7 +1766,11 @@ pub enum Pattern<'a> {
 
     OpaqueRef(&'a str),
 
-    Apply(&'a Loc<Pattern<'a>>, &'a [Loc<Pattern<'a>>]),
+    Apply(
+        &'a Loc<Pattern<'a>>,
+        &'a [Loc<Pattern<'a>>],
+        PatternApplyStyle,
+    ),
 
     /// This is Located<Pattern> rather than Located<str> so we can record comments
     /// around the destructured names, e.g. { x ### x does stuff ###, y }
@@ -1841,8 +1851,8 @@ impl<'a> Pattern<'a> {
                     false
                 }
             }
-            Apply(constructor_x, args_x) => {
-                if let Apply(constructor_y, args_y) = other {
+            Apply(constructor_x, args_x, _) => {
+                if let Apply(constructor_y, args_y, _) = other {
                     let equivalent_args = args_x
                         .iter()
                         .zip(args_y.iter())
@@ -2670,7 +2680,7 @@ impl<'a> Malformed for Pattern<'a> {
             Identifier{ .. } |
             Tag(_) |
             OpaqueRef(_) => false,
-            Apply(func, args) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
+            Apply(func, args, _) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
             RecordDestructure(items) => items.iter().any(|item| item.is_malformed()),
             RequiredField(_, pat) => pat.is_malformed(),
             OptionalField(_, expr) => expr.is_malformed(),
