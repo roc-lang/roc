@@ -258,7 +258,14 @@ dbgStr = \s ->
     custom \f0 ->
         f0
         |> dbgWrite "\""
-        |> dbgWrite s # TODO: Should we be escaping strings for dbg/logging?
+        |> \f1 ->
+            # escape invisible unicode characters as in fmt_str_body crates/compiler/fmt/src/expr.rs
+            escapeS =
+                Str.replaceEach s "\u(feff)" "\\u(feff)"
+                |> Str.replaceEach "\u(200b)" "\\u(200b)"
+                |> Str.replaceEach "\u(200c)" "\\u(200c)"
+                |> Str.replaceEach "\u(200d)" "\\u(200d)"
+            dbgWrite f1 escapeS
         |> dbgWrite "\""
 
 dbgOpaque : * -> Inspector DbgFormatter
