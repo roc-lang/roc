@@ -4029,20 +4029,24 @@ fn to_exposes_report<'a>(
     let severity = Severity::RuntimeError;
 
     match *parse_problem {
-        EExposes::ListEnd(pos) | // TODO: give this its own error message
-        EExposes::Identifier(pos) => {
+        // TODO: It would be nice to give ListEnd it's own error message.
+        // However with how parsing error are currently reported, ListEnd and
+        // Identifier are tightly coupled and Identifier is basically never
+        // "thrown". Splitting these up to make more specific error messages
+        // would require tweaking how parsing works.
+        EExposes::ListEnd(pos) | EExposes::Identifier(pos) => {
             let surroundings = Region::new(start, pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
             let doc = alloc.stack([
-                alloc.reflow(r"I am partway through parsing an `exposes` list, but I got stuck here:"),
+                alloc.concat([
+                    alloc.reflow("I am partway through parsing an "),
+                    alloc.keyword("exposes"),
+                    alloc.reflow(" list, but I got stuck here:"),
+                ]),
                 alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
-                alloc.concat([alloc.reflow(
-                    "I was expecting a type name, value name or function name next, like",
-                )]),
-                alloc
-                    .parser_suggestion("[Animal, default, tame]")
-                    .indent(4),
+                alloc.reflow("I was expecting a type name, value name or function name next, like"),
+                alloc.parser_suggestion("[Animal, default, tame]").indent(4),
             ]);
 
             Report {
@@ -4065,9 +4069,7 @@ fn to_exposes_report<'a>(
                     alloc.keyword("exposes"),
                     alloc.reflow(" keyword next, like"),
                 ]),
-                alloc
-                    .parser_suggestion("[Animal, default, tame]")
-                    .indent(4),
+                alloc.parser_suggestion("[Animal, default, tame]").indent(4),
             ]);
 
             Report {
@@ -4080,13 +4082,53 @@ fn to_exposes_report<'a>(
 
         EExposes::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
 
+        // TODO: Depending on the type of header we're parsing, it would be
+        // great to add more context to this error message. For example, if
+        // we're parsing a `module` then saying something like:
+        //
+        //     I was expecting an exposes list like
+        //         ...
+        //
+        //     or module params like
+        //         ...
+        //
+        // would be great. But currently we don't capture the type of header in
+        // the parse problem data type, so this isn't possible
+        EExposes::ListStart(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
+                alloc.concat([
+                    alloc.reflow("I was expecting an "),
+                    alloc.keyword("exposes"),
+                    alloc.reflow(" list like"),
+                ]),
+                alloc.parser_suggestion("[Animal, default, tame]").indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD EXPOSES".to_string(),
+                severity,
+            }
+        }
+
         // If you're adding or changing syntax, please handle the case with a
         // good error message above instead of adding more unhandled cases below.
-        EExposes::Open(pos) |
-        EExposes::IndentExposes(pos) |
-        EExposes::IndentListStart(pos) |
-        EExposes::ListStart(pos) =>
-            to_unhandled_parse_error_report(alloc, lines, filename, format!("{:?}", parse_problem), pos, start)
+        EExposes::Open(pos) | EExposes::IndentExposes(pos) | EExposes::IndentListStart(pos) => {
+            to_unhandled_parse_error_report(
+                alloc,
+                lines,
+                filename,
+                format!("{:?}", parse_problem),
+                pos,
+                start,
+            )
+        }
     }
 }
 
