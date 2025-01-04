@@ -488,7 +488,11 @@ impl<'a, 'c, 'd, 'i, 's, 't, 'p, 'w, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, '
 
         match can_pattern {
             Pattern::Identifier(ident) => MonoPattern::Identifier(*ident),
-            Pattern::As(_, _) => todo!(),
+            Pattern::As(loc_pattern, ident) => {
+                let mono_pattern = self.to_mono_pattern(&loc_pattern.value);
+                let pattern_id = self.mono_patterns.add(mono_pattern, loc_pattern.region);
+                MonoPattern::As(pattern_id, *ident)
+            }
             Pattern::AppliedTag { .. } => todo!(),
             Pattern::UnwrappedOpaque { .. } => todo!(),
             Pattern::RecordDestructure { .. } => todo!(),

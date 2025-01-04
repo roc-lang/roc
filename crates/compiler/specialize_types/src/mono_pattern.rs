@@ -30,6 +30,20 @@ impl MonoPatterns {
         }
     }
 
+    pub fn get_pattern(&self, id: &MonoPatternId) -> &MonoPattern {
+        &self.patterns[id.inner.index()]
+    }
+
+    pub fn add(&mut self, pattern: MonoPattern, region: Region) -> MonoPatternId {
+        let index = self.patterns.len() as u32;
+        self.patterns.push(pattern);
+        self.regions.push(region);
+
+        MonoPatternId {
+            inner: Index::new(index),
+        }
+    }
+
     pub fn reserve(&mut self, count: usize) -> Slice<MonoPattern> {
         let start = self.patterns.len();
 

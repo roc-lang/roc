@@ -27,4 +27,9 @@ mod specialize_pattern {
     fn dec_literal() {
         expect_mono_pattern_str(r"120.4", "Number(Dec(120.4))");
     }
+
+    #[test]
+    fn as_pattern() {
+        expect_mono_pattern_str(r"42 as the_answer", "As(Number(I8(42)), #UserApp.1)");
+    }
 }

@@ -424,9 +424,9 @@ fn dbg_mono_pattern<'a>(
 }
 
 fn dbg_mono_pattern_help<'a>(
-    _arena: &'a Bump,
-    _mono_patterns: &MonoPatterns,
-    _interns: &Interns<'a>,
+    arena: &'a Bump,
+    mono_patterns: &MonoPatterns,
+    interns: &Interns<'a>,
     pattern: &MonoPattern,
     buf: &mut impl Write,
 ) -> Result<(), core::fmt::Error> {
@@ -434,8 +434,16 @@ fn dbg_mono_pattern_help<'a>(
         MonoPattern::Identifier(ident) => {
             write!(buf, "Identifier({:?})", ident)
         }
-        MonoPattern::As(_, _) => {
-            todo!()
+        MonoPattern::As(pattern, ident) => {
+            write!(buf, "As(")?;
+            dbg_mono_pattern_help(
+                arena,
+                mono_patterns,
+                interns,
+                mono_patterns.get_pattern(pattern),
+                buf,
+            )?;
+            write!(buf, ", {})", ident)
         }
         MonoPattern::StrLiteral(_) => {
             todo!()
