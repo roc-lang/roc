@@ -1,5 +1,5 @@
-use std::{fmt::Debug, mem::ManuallyDrop};
 use std::borrow::Cow;
+use std::{fmt::Debug, mem::ManuallyDrop};
 
 /// Collection of small (length < u16::MAX) strings, stored compactly.
 #[derive(Clone, Default, PartialEq, Eq)]
@@ -265,7 +265,7 @@ impl SmallStringInterner {
         if s.chars()
             .next()
             .is_some_and(|first_char| first_char.is_ascii_uppercase())
-            || (s.contains('_') && !s.ends_with('_'))
+            || s.contains('_')
         {
             return s.into();
         }
