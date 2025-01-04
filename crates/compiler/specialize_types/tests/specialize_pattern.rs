@@ -14,7 +14,12 @@ mod specialize_pattern {
     }
 
     #[test]
-    fn num_literal() {
+    fn num_literal_i8() {
         expect_mono_pattern_str(r"42", "Number(I8(42))");
+    }
+
+    #[test]
+    fn num_literal_i16() {
+        expect_mono_pattern_str(r"256", "Number(I16(256))");
     }
 }
