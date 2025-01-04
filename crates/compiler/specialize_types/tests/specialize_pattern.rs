@@ -22,4 +22,9 @@ mod specialize_pattern {
     fn num_literal_i16() {
         expect_mono_pattern_str(r"256", "Number(I16(256))");
     }
+
+    #[test]
+    fn dec_literal() {
+        expect_mono_pattern_str(r"120.4", "Number(Dec(120.4))");
+    }
 }

@@ -124,9 +124,10 @@ impl<'a, 'c, 'd, 'i, 's, 't, 'p, 'w, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, '
                     _ => {
                         let mono_type = self.mono_from_var(*var);
                         match self.mono_types.get(mono_type) {
-                            MonoType::Primitive(primitive) => {
-                                to_frac(*primitive, *val, &mut self.problems)
-                            }
+                            MonoType::Primitive(primitive) => match to_frac(*primitive, *val) {
+                                Ok(num) => MonoExpr::Number(num),
+                                Err(problem) => compiler_bug!(problem),
+                            },
                             other => {
                                 compiler_bug!(Problem::NumSpecializedToWrongType(Some(*other)))
                             }
@@ -478,6 +479,13 @@ impl<'a, 'c, 'd, 'i, 's, 't, 'p, 'w, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, '
     }
 
     pub fn to_mono_pattern(&mut self, can_pattern: &Pattern) -> MonoPattern {
+        macro_rules! compiler_bug {
+            ($problem:expr) => {{
+                self.problems.push($problem);
+                MonoPattern::CompilerBug($problem)
+            }};
+        }
+
         match can_pattern {
             Pattern::Identifier(ident) => MonoPattern::Identifier(*ident),
             Pattern::As(_, _) => todo!(),
@@ -496,11 +504,23 @@ impl<'a, 'c, 'd, 'i, 's, 't, 'p, 'w, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, '
                         Err(problem) => MonoPattern::CompilerBug(problem),
                     },
                     other => {
-                        MonoPattern::CompilerBug(Problem::NumSpecializedToWrongType(Some(*other)))
+                        compiler_bug!(Problem::NumSpecializedToWrongType(Some(*other)))
                     }
                 }
             }
-            Pattern::FloatLiteral(_, _, _, _, _) => todo!(),
+            Pattern::FloatLiteral(var, _, _, float_value, _) => {
+                let mono_type = self.mono_from_var(*var);
+
+                match self.mono_types.get(mono_type) {
+                    MonoType::Primitive(primitive) => match to_frac(*primitive, *float_value) {
+                        Ok(num) => MonoPattern::NumberLiteral(num),
+                        Err(problem) => MonoPattern::CompilerBug(problem),
+                    },
+                    other => {
+                        compiler_bug!(Problem::NumSpecializedToWrongType(Some(*other)))
+                    }
+                }
+            }
             Pattern::StrLiteral(_) => todo!(),
             Pattern::SingleQuote(_, _, _, _) => todo!(),
             Pattern::Underscore => MonoPattern::Underscore,
@@ -544,12 +564,12 @@ fn to_num(primitive: Primitive, val: IntValue) -> Result<Number, Problem> {
 
 /// Convert a fractional literal (e.g. `0.5`) to a monomorphized type.
 /// If somehow its type was not a fractional type, that's a compiler bug!
-fn to_frac(primitive: Primitive, val: f64, problems: &mut impl Push<Problem>) -> MonoExpr {
+fn to_frac(primitive: Primitive, val: f64) -> Result<Number, Problem> {
     match primitive {
         // These are ordered roughly by most to least common fractional types
-        Primitive::F32 => MonoExpr::Number(Number::F32(val as f32)),
-        Primitive::F64 => MonoExpr::Number(Number::F64(val)),
-        Primitive::Dec => MonoExpr::Number(Number::Dec(val)),
+        Primitive::F32 => Ok(Number::F32(val as f32)),
+        Primitive::F64 => Ok(Number::F64(val)),
+        Primitive::Dec => Ok(Number::Dec(val)),
         Primitive::U8
         | Primitive::I8
         | Primitive::U16
@@ -562,11 +582,9 @@ fn to_frac(primitive: Primitive, val: f64, problems: &mut impl Push<Problem>) ->
         | Primitive::I128
         | Primitive::Str
         | Primitive::Crash
-        | Primitive::Bool => {
-            let problem = Problem::NumSpecializedToWrongType(Some(MonoType::Primitive(primitive)));
-            problems.push(problem);
-            MonoExpr::CompilerBug(problem)
-        }
+        | Primitive::Bool => Err(Problem::NumSpecializedToWrongType(Some(
+            MonoType::Primitive(primitive),
+        ))),
     }
 }
 
