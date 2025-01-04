@@ -40,7 +40,6 @@ fn specialize_expr<'a>(
     .unwrap();
 
     let mut can_problems = can_problems.remove(&home).unwrap_or_default();
-    let type_problems = type_problems.remove(&home).unwrap_or_default();
 
     // Disregard UnusedDef problems, because those are unavoidable when
     // returning a function from the test expression.
@@ -49,6 +48,16 @@ fn specialize_expr<'a>(
             prob,
             roc_problem::can::Problem::UnusedDef(_, _)
                 | roc_problem::can::Problem::UnusedBranchDef(..)
+        )
+    });
+
+    let mut type_problems = type_problems.remove(&home).unwrap_or_default();
+
+    // Disregard Redundant pattern errors so we can test pattern specialization directly
+    type_problems.retain(|prob| {
+        !matches!(
+            prob,
+            roc_solve_problem::TypeError::Exhaustive(roc_exhaustive::Error::Redundant { .. })
         )
     });
 
@@ -401,6 +410,19 @@ fn dbg_mono_expr_help<'a>(
     }
 }
 
+fn dbg_mono_pattern<'a>(
+    arena: &'a Bump,
+    mono_patterns: &MonoPatterns,
+    interns: &Interns<'a>,
+    pattern: &MonoPattern,
+) -> &'a str {
+    let mut buf = bumpalo::collections::String::new_in(arena);
+
+    dbg_mono_pattern_help(arena, mono_patterns, interns, pattern, &mut buf).unwrap();
+
+    buf.into_bump_str()
+}
+
 fn dbg_mono_pattern_help<'a>(
     _arena: &'a Bump,
     _mono_patterns: &MonoPatterns,
@@ -484,6 +506,62 @@ pub fn expect_mono_expr_custom<T: PartialEq + core::fmt::Debug>(
         &out.when_branches,
         &string_interns,
     );
+
+    assert_eq!(expected, actual);
+}
+
+#[track_caller]
+pub fn expect_mono_pattern_str(input: impl AsRef<str>, expr_str: impl AsRef<str>) {
+    expect_mono_pattern_custom(
+        input,
+        |_, _, _| expr_str.as_ref().to_string(),
+        |arena, mono_patterns, interns, pattern| {
+            dbg_mono_pattern(arena, mono_patterns, interns, pattern).to_string()
+        },
+    );
+}
+
+#[track_caller]
+pub fn expect_mono_pattern_custom<T: PartialEq + core::fmt::Debug>(
+    input: impl AsRef<str>,
+    to_expected: impl for<'a> Fn(&'a Bump, &MonoPatterns, &Interns<'a>) -> T,
+    to_actual: impl for<'a> Fn(&'a Bump, &MonoPatterns, &Interns<'a>, &MonoPattern) -> T,
+) {
+    let arena = Bump::new();
+    let mut string_interns = Interns::new();
+    let input = input.as_ref();
+    let src = format!(
+        r#"
+            when crash("") is
+                {input} -> crash("")
+                _ -> crash("")
+        "#
+    );
+    let out = specialize_expr(&arena, &src, &mut string_interns);
+
+    let expr = out.mono_exprs.get_expr(out.mono_expr_id);
+
+    let MonoExpr::When { branches, .. } = expr else {
+        panic!("Expected a when expression, but found {:?}", expr);
+    };
+
+    let branch = unsafe {
+        out.when_branches
+            .iter_slice(branches.as_slice())
+            .next()
+            .unwrap()
+            .assume_init()
+    };
+
+    let actual_pattern = out
+        .mono_patterns
+        .iter_slice(branch.patterns.as_slice())
+        .next()
+        .unwrap();
+
+    let actual = to_actual(&arena, &out.mono_patterns, &string_interns, actual_pattern);
+
+    let expected = to_expected(&arena, &out.mono_patterns, &string_interns);
 
     assert_eq!(expected, actual);
 }

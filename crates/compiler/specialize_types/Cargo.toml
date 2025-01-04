@@ -31,10 +31,11 @@ roc_derive = { workspace = true, features = ["debug-derived-symbols"] }
 roc_load.workspace = true
 roc_parse.workspace = true
 roc_problem.workspace = true
-roc_reporting.workspace = true
 roc_target.workspace = true
 roc_solve.workspace = true
 test_solve_helpers.workspace = true
+roc_solve_problem.workspace = true
+roc_exhaustive.workspace = true
 
 test_compile.workspace = true
 pretty_assertions.workspace = true
