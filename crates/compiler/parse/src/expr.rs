@@ -3589,7 +3589,7 @@ pub fn record_field<'a>() -> impl Parser<'a, RecordField<'a>, ERecord<'a>> {
                         and(
                             and(
                                 byte(b'?', ERecord::QuestionMark),
-                                optional(byte(b'?', ERecord::QuestionMark)),
+                                optional(byte(b'?', ERecord::SecondQuestionMark)),
                             ),
                             spaces_before(specialize_err_ref(ERecord::Expr, loc_expr(true))),
                         ),

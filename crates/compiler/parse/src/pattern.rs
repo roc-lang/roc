@@ -552,8 +552,8 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
         let (_, opt_loc_val, state) = optional(either(
             byte(b':', PRecord::Colon),
             and(
-                byte(b'?', PRecord::Optional),
-                optional(byte(b'?', PRecord::Optional)),
+                byte(b'?', PRecord::OptionalFirst),
+                optional(byte(b'?', PRecord::OptionalSecond)),
             ),
         ))
         .parse(arena, state, min_indent)?;

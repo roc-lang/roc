@@ -2449,7 +2449,7 @@ fn to_precord_report<'a>(
         PRecord::Colon(_) => {
             unreachable!("because `foo` is a valid field; the colon is not required")
         }
-        PRecord::Optional(_) => {
+        PRecord::OptionalFirst(_) | PRecord::OptionalSecond(_) => {
             unreachable!("because `foo` is a valid field; the question mark is not required")
         }
 
@@ -2976,7 +2976,7 @@ fn to_trecord_report<'a>(
         ETypeRecord::Colon(_) => {
             unreachable!("because `foo` is a valid field; the colon is not required")
         }
-        ETypeRecord::Optional(_) => {
+        ETypeRecord::OptionalFirst(_) | ETypeRecord::OptionalSecond(_) => {
             unreachable!("because `foo` is a valid field; the question mark is not required")
         }
 
