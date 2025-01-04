@@ -847,8 +847,8 @@ fn canonicalize_opaque<'a>(
                     // Did the user claim this implementation for a specialization of a different
                     // type? e.g.
                     //
-                    //   A implements [Hash {hash: myHash}]
-                    //   B implements [Hash {hash: myHash}]
+                    //   A implements [Hash {hash: my_hash}]
+                    //   B implements [Hash {hash: my_hash}]
                     //
                     // If so, that's an error and we drop the impl for this opaque type.
                     let member_impl = match scope.abilities_store.impl_key(impl_symbol) {

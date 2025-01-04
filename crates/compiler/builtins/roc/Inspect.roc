@@ -220,7 +220,7 @@ dbg_tuple = \fields ->
     custom(\f0 ->
         dbg_write(f0, "(")
         |> \f1 ->
-            (List.walk, fields, (f1, Bool.false), (\(f2, prepend_sep), inspector ->
+            List.walk(fields, (f1, Bool.false), (\(f2, prepend_sep), inspector ->
                 f3 =
                     if prepend_sep then
                         dbg_write(f2, ", ")

@@ -130,12 +130,12 @@ hash_dict = \hasher, dict -> Hash.hash_unordered(hasher, to_list(dict), List.wal
 
 to_inspector_dict : Dict k v -> Inspector f where k implements Inspect & Hash & Eq, v implements Inspect, f implements InspectFormatter
 to_inspector_dict = \dict ->
-    Inspect.custom \fmt ->
-        Inspect.apply(Inspect.dict(dict, walk, Inspect.to_inspector, Inspect.to_inspector) fmt)
+    Inspect.custom(\fmt ->
+        Inspect.apply(Inspect.dict(dict, walk, Inspect.to_inspector, Inspect.to_inspector), fmt))
 
 ## Return an empty dictionary.
 ## ```roc
-## emptyDict = Dict.empty({})
+## empty_dict = Dict.empty({})
 ## ```
 empty : {} -> Dict * *
 empty = \{} ->
@@ -376,7 +376,7 @@ keep_if_help : Dict k v, ((k, v) -> Bool), U64, U64 -> Dict k v
 keep_if_help = \@Dict(dict), predicate, index, length ->
     if index < length then
         (key, value) = list_get_unsafe(dict.data, index)
-        if predicate(key, value) then
+        if predicate((key, value)) then
             keep_if_help(@Dict(dict), predicate, Num.add_wrap(index, 1), length)
         else
             keep_if_help(Dict.remove(@Dict(dict), key), predicate, index, Num.sub_wrap(length, 1))
@@ -426,7 +426,7 @@ contains : Dict k v, k -> Bool
 contains = \dict, key ->
     find(dict, key)
     |> .result
-    |> Result.isOk
+    |> Result.is_ok
 
 ## Insert a value into the dictionary at a specified key.
 ## ```roc
@@ -791,7 +791,7 @@ find_helper = \buckets, bucket_index, dist_and_fingerprint, data, key ->
 
 remove_bucket : Dict k v, U64 -> Dict k v
 remove_bucket = \@Dict({ buckets: buckets0, data: data0, max_bucket_capacity, max_load_factor, shifts }), bucket_index0 ->
-    data_index_to_remove = list_get_unsafe(buckets0, bucket_index0).data_index
+    data_index_to_remove = list_get_unsafe(buckets0, bucket_index0) |> .data_index
     data_index_to_remove_u64 = Num.to_u64(data_index_to_remove)
 
     (buckets1, bucket_index1) = remove_bucket_helper(buckets0, bucket_index0)
@@ -859,7 +859,7 @@ increase_size = \@Dict({ data, max_bucket_capacity, max_load_factor, shifts }) -
             shifts: new_shifts,
         })
     else
-        crash("Dict hit limit of $(Num.toStr(max_bucket_count)) elements. Unable to grow more.")
+        crash("Dict hit limit of $(Num.to_str(max_bucket_count)) elements. Unable to grow more.")
 
 alloc_buckets_from_shift : U8, F32 -> (List Bucket, U64)
 alloc_buckets_from_shift = \shifts, max_load_factor ->
@@ -1418,7 +1418,7 @@ wymix = \a, b ->
 
 wymum : U64, U64 -> { lower : U64, upper : U64 }
 wymum = \a, b ->
-    r = Num.mul_wrap(Num.toU128(a), Num.toU128(b))
+    r = Num.mul_wrap(Num.to_u128(a), Num.to_u128(b))
     lower = Num.to_u64(r)
     upper = Num.shift_right_zf_by(r, 64) |> Num.to_u64
 
@@ -1691,7 +1691,7 @@ expect
         |> Dict.insert("Alice", 17)
         |> Dict.insert("Bob", 18)
         |> Dict.insert("Charlie", 19)
-        |> Dict.keep_if(\(k, _v) -> Str.endsWith(k, "e"))
+        |> Dict.keep_if(\(k, _v) -> Str.ends_with(k, "e"))
 
     d2 =
         Dict.empty({})
