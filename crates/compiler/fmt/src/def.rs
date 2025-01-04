@@ -431,6 +431,8 @@ impl<'a> Formattable for TypeDef<'a> {
     fn format_with_options(&self, buf: &mut Buf, _parens: Parens, newlines: Newlines, indent: u16) {
         use roc_parse::ast::TypeDef::*;
 
+        println!("WTF???");
+
         match self {
             Alias { header, ann } => {
                 header.format(buf, indent);
@@ -596,7 +598,7 @@ fn type_head_lift_spaces<'a, 'b: 'a>(
 }
 
 impl<'a> Nodify<'a> for TypeHeader<'a> {
-    fn to_node<'b>(&'a self, arena: &'b Bump) -> NodeInfo<'b>
+    fn to_node<'b>(&'a self, arena: &'b Bump, _flags: MigrationFlags) -> NodeInfo<'b>
     where
         'a: 'b,
     {
@@ -936,7 +938,7 @@ fn fmt_general_def<L: Formattable>(
     buf.push_str(sep);
     buf.spaces(1);
 
-    let rhs = rhs.to_node(buf.text.bump());
+    let rhs = rhs.to_node(buf.text.bump(), buf.flags());
 
     if rhs.node.is_multiline() || !rhs.before.is_empty() || !rhs.after.is_empty() {
         if rhs.node.is_multiline() && !rhs.needs_indent && rhs.before.iter().all(|s| s.is_newline())
