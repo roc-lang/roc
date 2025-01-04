@@ -1,5 +1,5 @@
-module [text, asText]
+module [text, as_text]
 
 text = "Hello, world!"
 
-asText = Num.toStr
+as_text = Num.toStr

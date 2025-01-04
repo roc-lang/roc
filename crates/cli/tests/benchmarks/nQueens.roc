@@ -1,66 +1,66 @@
-app [main] { pf: platform "platform/main.roc" }
+app [main!] { pf: platform "platform/main.roc" }
 
-import pf.PlatformTasks
+import pf.Host
 
-main : Task {} []
-main =
-    { value, isError } = PlatformTasks.getInt!
-    inputResult =
-        if isError then
-            Err GetIntError
+main! : {} => {}
+main! = \{} ->
+    { value, is_error } = Host.get_int!({})
+    input_result =
+        if is_error then
+            Err(GetIntError)
         else
-            Ok value
+            Ok(value)
 
-    when inputResult is
-        Ok n ->
-            queens n # original koka 13
+    when input_result is
+        Ok(n) ->
+            queens(n) # original koka 13
             |> Num.toStr
-            |> PlatformTasks.putLine
+            |> Host.put_line!
 
-        Err GetIntError ->
-            PlatformTasks.putLine "Error: Failed to get Integer from stdin."
+        Err(GetIntError) ->
+            Host.put_line!("Error: Failed to get Integer from stdin.")
 
 ConsList a : [Nil, Cons a (ConsList a)]
 
-queens = \n -> length (findSolutions n n)
+queens = \n -> length(find_solutions(n, n))
 
-findSolutions = \n, k ->
+find_solutions = \n, k ->
     if k <= 0 then
         # should we use U64 as input type here instead?
-        Cons Nil Nil
+        Cons(Nil, Nil)
     else
-        extend n Nil (findSolutions n (k - 1))
+        extend(n, Nil, find_solutions(n, (k - 1)))
 
 extend = \n, acc, solutions ->
     when solutions is
         Nil -> acc
-        Cons soln rest -> extend n (appendSafe n soln acc) rest
+        Cons(soln, rest) -> extend(n, append_safe(n, soln, acc), rest)
 
-appendSafe : I64, ConsList I64, ConsList (ConsList I64) -> ConsList (ConsList I64)
-appendSafe = \k, soln, solns ->
+append_safe : I64, ConsList I64, ConsList (ConsList I64) -> ConsList (ConsList I64)
+append_safe = \k, soln, solns ->
     if k <= 0 then
         solns
-    else if safe k 1 soln then
-        appendSafe (k - 1) soln (Cons (Cons k soln) solns)
+    else if safe(k, 1, soln) then
+        append_safe((k - 1), soln, Cons(Cons(k, soln), solns))
     else
-        appendSafe (k - 1) soln solns
+        append_safe((k - 1), soln, solns)
 
 safe : I64, I64, ConsList I64 -> Bool
 safe = \queen, diagonal, xs ->
     when xs is
         Nil -> Bool.true
-        Cons q t ->
+        Cons(q, t) ->
             if queen != q && queen != q + diagonal && queen != q - diagonal then
-                safe queen (diagonal + 1) t
+                safe(queen, (diagonal + 1), t)
             else
                 Bool.false
 
 length : ConsList a -> I64
 length = \xs ->
-    lengthHelp xs 0
+    length_help(xs, 0)
 
-lengthHelp : ConsList a, I64 -> I64
-lengthHelp = \foobar, acc ->
+length_help : ConsList a, I64 -> I64
+length_help = \foobar, acc ->
     when foobar is
-        Cons _ lrest -> lengthHelp lrest (1 + acc)
+        Cons(_, lrest) -> length_help(lrest, (1 + acc))
         Nil -> acc
