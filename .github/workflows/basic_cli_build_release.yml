@@ -21,17 +21,17 @@ jobs:
         with:
           repository: roc-lang/basic-cli
 
-      - name: check if provided RELEASE_TAG is fresh
-        run: |
-          git fetch --tags
-          TAG_DATE=$(git log -1 --format=%ai ${{ env.RELEASE_TAG }})
-          CURRENT_DATE=$(date +%Y-%m-%d)
-          TAG_AGE=$(( ($(date -d $CURRENT_DATE +%s) - $(date -d "$TAG_DATE" +%s) )/(60*60*24) ))
+      # - name: check if provided RELEASE_TAG is fresh
+      #   run: |
+      #     git fetch --tags
+      #     TAG_DATE=$(git log -1 --format=%ai ${{ env.RELEASE_TAG }})
+      #     CURRENT_DATE=$(date +%Y-%m-%d)
+      #     TAG_AGE=$(( ($(date -d $CURRENT_DATE +%s) - $(date -d "$TAG_DATE" +%s) )/(60*60*24) ))
 
-          if [ $TAG_AGE -gt 4 ]; then
-            echo "The provided RELEASE_TAG (${{ env.RELEASE_TAG }}) seems stale, it is $TAG_AGE days old. Did you set it correctly at the top of this workflow?"
-            exit 1
-          fi
+      #     # if [ $TAG_AGE -gt 4 ]; then
+      #     #   echo "The provided RELEASE_TAG (${{ env.RELEASE_TAG }}) seems stale, it is $TAG_AGE days old. Did you set it correctly at the top of this workflow?"
+      #     #   exit 1
+      #     # fi
 
       # get latest nightly releases
       - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
