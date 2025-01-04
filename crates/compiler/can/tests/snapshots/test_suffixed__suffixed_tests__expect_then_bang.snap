@@ -46,7 +46,7 @@ Defs {
                             condition: @18-24 Apply(
                                 @20-22 Var {
                                     module_name: "Bool",
-                                    ident: "isEq",
+                                    ident: "is_eq",
                                 },
                                 [
                                     @18-19 Num(
