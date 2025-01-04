@@ -2497,13 +2497,13 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r"
-                f : { a ?Str }
+                f : { a ??Str }
 
                 f"
             ),
             indoc!(
                 r"
-                f : { a ? Str }
+                f : { a ?? Str }
 
                 f"
             ),
@@ -2513,7 +2513,7 @@ mod test_fmt {
             indoc!(
                 r"
                 f : {
-                    a ?Str,
+                    a ??Str,
                 }
 
                 f"
@@ -2521,7 +2521,7 @@ mod test_fmt {
             indoc!(
                 r"
                 f : {
-                    a ? Str,
+                    a ?? Str,
                 }
 
                 f"
@@ -2743,7 +2743,7 @@ mod test_fmt {
                 r"
                 f :
                     {
-                        someField ? Int * # comment 1
+                        someField ?? Int * # comment 1
                         ,
                         # comment 2
                     }
@@ -2753,7 +2753,7 @@ mod test_fmt {
             indoc!(
                 r"
                 f : {
-                    some_field ? Int *, # comment 1
+                    some_field ?? Int *, # comment 1
                     # comment 2
                 }
 

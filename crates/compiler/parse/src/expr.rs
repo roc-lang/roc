@@ -2082,6 +2082,7 @@ pub fn merge_spaces<'a>(
 /// If the given Expr would parse the same way as a valid Pattern, convert it.
 /// Example: (foo) could be either an Expr::Var("foo") or Pattern::Identifier("foo")
 fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, ()> {
+    println!("expr_to_pattern_help");
     let mut expr = expr.extract_spaces();
 
     while let Expr::ParensAround(loc_expr) = &expr.item {
@@ -3587,7 +3588,10 @@ pub fn record_field<'a>() -> impl Parser<'a, RecordField<'a>, ERecord<'a>> {
                     optional(either(
                         and(byte(b':', ERecord::Colon), record_field_expr()),
                         and(
-                            byte(b'?', ERecord::QuestionMark),
+                            and(
+                                byte(b'?', ERecord::QuestionMark),
+                                optional(byte(b'?', ERecord::QuestionMark)),
+                            ),
                             spaces_before(specialize_err_ref(ERecord::Expr, loc_expr(true))),
                         ),
                     )),

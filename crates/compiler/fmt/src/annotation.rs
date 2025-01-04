@@ -386,7 +386,7 @@ impl<'a> Nodify<'a> for AssignedField<'a, TypeAnnotation<'a>> {
                 assigned_field_value_to_node(n.into_bump_str(), arena, sp, &value.value, ":", flags)
             }
             AssignedField::OptionalValue(name, sp, value) => {
-                assigned_field_value_to_node(name.value, arena, sp, &value.value, "?", flags)
+                assigned_field_value_to_node(name.value, arena, sp, &value.value, "??", flags)
             }
             AssignedField::LabelOnly(name) => NodeInfo {
                 before: &[],
@@ -512,7 +512,7 @@ fn format_assigned_field_help<T>(
 
             buf.spaces(separator_spaces);
             buf.indent(indent);
-            buf.push('?');
+            buf.push_str("??");
             buf.spaces(1);
             ann.value.format(buf, indent);
         }

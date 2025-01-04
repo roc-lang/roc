@@ -4538,8 +4538,8 @@ mod test_reporting {
     4│      f : { foo  bar }
                        ^
 
-    I was expecting to see a colon, question mark, comma or closing curly
-    brace.
+    I was expecting to see a colon, two question marks (??), comma or
+    closing curly brace.
     "
     );
 

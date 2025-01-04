@@ -2889,7 +2889,7 @@ fn to_trecord_report<'a>(
                         alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                         alloc.concat([
                             alloc.reflow(
-                                r"I was expecting to see a colon, question mark, comma or closing curly brace.",
+                                r"I was expecting to see a colon, two question marks (??), comma or closing curly brace.",
                             ),
                         ]),
                     ]);

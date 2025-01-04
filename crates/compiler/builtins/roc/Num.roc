@@ -618,8 +618,8 @@ isGte : Num a, Num a -> Bool
 ##
 ## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
-isApproxEq : Frac a, Frac a, { rtol ? Frac a, atol ? Frac a } -> Bool
-isApproxEq = \x, y, { rtol ? 0.00001, atol ? 0.00000001 } ->
+isApproxEq : Frac a, Frac a, { rtol ?? Frac a, atol ?? Frac a } -> Bool
+isApproxEq = \x, y, { rtol ?? 0.00001, atol ?? 0.00000001 } ->
     eq = x <= y && x >= y
     meetsTolerance = Num.absDiff x y <= Num.max atol (rtol * Num.max (Num.abs x) (Num.abs y))
     eq || meetsTolerance
