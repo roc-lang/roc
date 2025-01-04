@@ -29,6 +29,15 @@ mod test_fmt {
         )
     }
 
+    fn expr_formats_to_with_flags(input: &str, expected: &str, flags: MigrationFlags) {
+        Input::Expr(input.trim()).check_invariants_with_flags(
+            check_formatting(expected.trim()),
+            true,
+            Some(false),
+            flags,
+        )
+    }
+
     fn expr_formats_same(input: &str) {
         Input::Expr(input.trim()).check_invariants(
             check_formatting(input.trim()),
@@ -43,6 +52,15 @@ mod test_fmt {
             true,
             Some(false),
         );
+    }
+
+    fn expr_formats_same_with_flags(input: &str, flags: MigrationFlags) {
+        Input::Expr(input.trim()).check_invariants_with_flags(
+            check_formatting(input.trim()),
+            true,
+            Some(false),
+            flags,
+        )
     }
 
     fn fmt_module_and_defs<'a>(
@@ -81,7 +99,7 @@ mod test_fmt {
             Ok((actual, state)) => {
                 use roc_parse::normalize::Normalize;
 
-                let flags = MigrationFlags{ snakify: false, parens_and_commas: false };
+                let flags = MigrationFlags { snakify: false, parens_and_commas: false };
                 let mut buf = Buf::new_in(&arena, flags);
 
                 fmt_module_and_defs(&arena, src, &actual, state, &mut buf);
@@ -352,6 +370,65 @@ mod test_fmt {
                 "
         ));
 
+        expr_formats_to_with_flags(
+            indoc!(
+                r"
+                person : {
+                    firstName : Str,
+                    # comment
+                    lastName : Str,
+                }
+
+                person
+                ",
+            ),
+            indoc!(
+                r"
+                person : {
+                    first_name : Str,
+                    # comment
+                    last_name : Str,
+                }
+
+                person
+                ",
+            ),
+            MigrationFlags {
+                snakify: true,
+                parens_and_commas: false,
+            },
+        );
+
+        expr_formats_same(indoc!(
+            r"
+                person : {
+                    first_name : Str,
+                    # comment
+                    last_name : Str,
+                }
+
+                person
+                ",
+        ));
+
+        expr_formats_same_with_flags(
+            indoc!(
+                r"
+                person : {
+                    first_name : Str,
+                    # comment
+                    last_name : Str,
+                }
+
+                person
+                ",
+            ),
+            MigrationFlags {
+                snakify: true,
+                parens_and_commas: false,
+            },
+        );
+
         expr_formats_same(indoc!(
             r"
                 person : {
@@ -577,6 +654,65 @@ mod test_fmt {
                     firstName: "first",
                     # comment 1
                     lastName: "last",
+                }
+
+                person
+                "#
+        ));
+
+        expr_formats_to_with_flags(
+            indoc!(
+                r#"
+                person = {
+                    firstName: "first",
+                    # comment 1
+                    lastName: "last",
+                }
+
+                person
+                "#
+            ),
+            indoc!(
+                r#"
+                person = {
+                    first_name: "first",
+                    # comment 1
+                    last_name: "last",
+                }
+
+                person
+                "#
+            ),
+            MigrationFlags {
+                snakify: true,
+                parens_and_commas: false,
+            },
+        );
+
+        expr_formats_same_with_flags(
+            indoc!(
+                r#"
+                person = {
+                    first_name: "first",
+                    # comment 1
+                    last_name: "last",
+                }
+
+                person
+                "#
+            ),
+            MigrationFlags {
+                snakify: true,
+                parens_and_commas: false,
+            },
+        );
+
+        expr_formats_same(indoc!(
+            r#"
+                person = {
+                    first_name: "first",
+                    # comment 1
+                    last_name: "last",
                 }
 
                 person
@@ -1284,6 +1420,29 @@ mod test_fmt {
             \Foo a -> Foo a
             "
         ));
+
+        expr_formats_same(indoc!(
+            r"
+            \Foo someVar -> Foo someVar
+            "
+        ));
+
+        expr_formats_to_with_flags(
+            indoc!(
+                r"
+            \Foo someVar -> Foo someVar
+            "
+            ),
+            indoc!(
+                r"
+            \Foo some_var -> Foo some_var
+            "
+            ),
+            MigrationFlags {
+                snakify: true,
+                parens_and_commas: false,
+            },
+        );
     }
 
     #[test]
@@ -1947,6 +2106,27 @@ mod test_fmt {
             { shoes & leftShoe: nothing }
             "
         ));
+        expr_formats_to_with_flags(
+            indoc!(
+                r"
+            { shoes & leftShoe: nothing }
+            "
+            ),
+            indoc!(
+                r"
+            { shoes & left_shoe: nothing }
+            "
+            ),
+            MigrationFlags {
+                snakify: true,
+                parens_and_commas: false,
+            },
+        );
+        expr_formats_same(indoc!(
+            r"
+            { shoes & left_shoe: nothing }
+            "
+        ));
 
         expr_formats_to(
             indoc!(
@@ -1961,7 +2141,7 @@ mod test_fmt {
             ),
         );
 
-        expr_formats_to(
+        expr_formats_to_with_flags(
             indoc!(
                 r"
                 {   shoes  &  rightShoe : nothing }
@@ -1969,9 +2149,13 @@ mod test_fmt {
             ),
             indoc!(
                 r"
-                { shoes & rightShoe: nothing }
+                { shoes & right_shoe: nothing }
                 "
             ),
+            MigrationFlags {
+                snakify: true,
+                parens_and_commas: false,
+            },
         );
 
         expr_formats_same(indoc!(
@@ -2525,6 +2709,60 @@ mod test_fmt {
 
                 f"
             ),
+        );
+
+        expr_formats_to_with_flags(
+            indoc!(
+                r"
+                f :
+                    {
+                        someField: Int * # comment 1
+                        ,
+                        # comment 2
+                    }
+
+                f"
+            ),
+            indoc!(
+                r"
+                f : {
+                    some_field : Int *, # comment 1
+                    # comment 2
+                }
+
+                f"
+            ),
+            MigrationFlags {
+                snakify: true,
+                parens_and_commas: false,
+            },
+        );
+
+        expr_formats_to_with_flags(
+            indoc!(
+                r"
+                f :
+                    {
+                        someField ? Int * # comment 1
+                        ,
+                        # comment 2
+                    }
+
+                f"
+            ),
+            indoc!(
+                r"
+                f : {
+                    some_field ? Int *, # comment 1
+                    # comment 2
+                }
+
+                f"
+            ),
+            MigrationFlags {
+                snakify: true,
+                parens_and_commas: false,
+            },
         );
     }
 
@@ -3503,6 +3741,37 @@ mod test_fmt {
                 chocolate
             "
         ));
+
+        expr_formats_same(indoc!(
+            r"
+            combine(
+                peanutButter,
+                chocolate,
+            )
+            "
+        ));
+
+        expr_formats_to_with_flags(
+            indoc!(
+                r"
+            combine
+                peanutButter
+                chocolate
+            "
+            ),
+            indoc!(
+                r"
+            combine(
+                peanut_butter,
+                chocolate,
+            )
+            "
+            ),
+            MigrationFlags {
+                snakify: true,
+                parens_and_commas: true,
+            },
+        );
     }
 
     #[test]
@@ -5316,6 +5585,40 @@ mod test_fmt {
             f
             "
         ));
+        expr_formats_to_with_flags(
+            indoc!(
+                r"
+            f : [Cons aVar (ConsList aVar), Nil] as ConsList aVar -> [Just aVar, Nothing]
+            f = \list ->
+                when list is
+                    Nil ->
+                        Nothing
+
+                    Cons first _ ->
+                        Just first
+
+            f
+            "
+            ),
+            indoc!(
+                r"
+            f : [Cons a_var (ConsList a_var), Nil] as ConsList a_var -> [Just a_var, Nothing]
+            f = \list ->
+                when list is
+                    Nil ->
+                        Nothing
+
+                    Cons first _ ->
+                        Just first
+
+            f
+            "
+            ),
+            MigrationFlags {
+                snakify: true,
+                parens_and_commas: false,
+            },
+        );
     }
 
     #[test]
@@ -5351,6 +5654,27 @@ mod test_fmt {
                     4
             "
         ));
+
+        expr_formats_to_with_flags(
+            indoc!(
+                r"
+            when { x: 1 } is
+                { x: Just 4 } ->
+                    4
+            "
+            ),
+            indoc!(
+                r"
+            when { x: 1 } is
+                { x: Just(4) } ->
+                    4
+            "
+            ),
+            MigrationFlags {
+                snakify: false,
+                parens_and_commas: true,
+            },
+        );
     }
 
     #[test]
@@ -5487,6 +5811,27 @@ mod test_fmt {
             ),
         );
 
+        expr_formats_to_with_flags(
+            indoc!(
+                r"
+                A := aVar where aVar implements Hash implements [ Eq, Hash ]
+
+                0
+                "
+            ),
+            indoc!(
+                r"
+                A := a_var where a_var implements Hash
+                    implements [Eq, Hash]
+
+                0
+                "
+            ),
+            MigrationFlags {
+                snakify: true,
+                parens_and_commas: false,
+            },
+        );
         expr_formats_to(
             indoc!(
                 r"

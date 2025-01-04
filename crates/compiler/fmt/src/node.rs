@@ -6,7 +6,7 @@ use crate::{
     collection::Braces,
     expr::merge_spaces_conservative,
     spaces::{fmt_comments_only, fmt_spaces, fmt_spaces_no_blank_lines, NewlineAt, INDENT},
-    Buf,
+    Buf, MigrationFlags,
 };
 
 #[derive(Copy, Clone, Debug)]
@@ -305,7 +305,7 @@ impl<'b> NodeInfo<'b> {
 }
 
 pub trait Nodify<'a> {
-    fn to_node<'b>(&'a self, arena: &'b Bump) -> NodeInfo<'b>
+    fn to_node<'b>(&'a self, arena: &'b Bump, flags: MigrationFlags) -> NodeInfo<'b>
     where
         'a: 'b;
 }
