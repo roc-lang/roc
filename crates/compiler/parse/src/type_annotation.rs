@@ -4,8 +4,8 @@ use crate::ast::{
     TypeAnnotation, TypeHeader,
 };
 use crate::blankspace::{
-    self, space0_around_ee, space0_before_e, space0_before_optional_after, space0_e,
-    spaces_before_optional_after,
+    self, plain_spaces_before, space0_around_ee, space0_before_e, space0_before_optional_after,
+    space0_e, spaces_before_optional_after,
 };
 use crate::expr::record_field;
 use crate::ident::{lowercase_ident, lowercase_ident_keyword_e};
@@ -784,25 +784,39 @@ fn parse_implements_clause_chain_after_where<'a>(
 }
 
 /// Parse a implements-abilities clause, e.g. `implements [Eq, Hash]`.
-pub fn implements_abilities<'a>() -> impl Parser<'a, Loc<ImplementsAbilities<'a>>, EType<'a>> {
-    increment_min_indent(skip_first(
-        // Parse "implements"; we don't care about this keyword
-        crate::parser::keyword(crate::keyword::IMPLEMENTS, EType::TImplementsClause),
-        // Parse "Hash"; this may be qualified from another module like "Hash.Hash"
-        space0_before_e(
-            loc(map(
-                collection_trailing_sep_e(
-                    byte(b'[', EType::TStart),
-                    loc(parse_implements_ability()),
-                    byte(b',', EType::TEnd),
-                    byte(b']', EType::TEnd),
-                    ImplementsAbility::SpaceBefore,
+pub fn implements_abilities<'a>() -> impl Parser<'a, ImplementsAbilities<'a>, EType<'a>> {
+    map(
+        plain_spaces_before(
+            increment_min_indent(and(
+                // Parse "implements"; we don't care about this keyword
+                map(
+                    loc(crate::parser::keyword(
+                        crate::keyword::IMPLEMENTS,
+                        EType::TImplementsClause,
+                    )),
+                    |item| item.region,
                 ),
-                ImplementsAbilities::Implements,
+                // Parse "Hash"; this may be qualified from another module like "Hash.Hash"
+                plain_spaces_before(
+                    loc(collection_trailing_sep_e(
+                        byte(b'[', EType::TStart),
+                        loc(parse_implements_ability()),
+                        byte(b',', EType::TEnd),
+                        byte(b']', EType::TEnd),
+                        ImplementsAbility::SpaceBefore,
+                    )),
+                    EType::TIndentEnd,
+                ),
             )),
-            EType::TIndentEnd,
+            EType::TIndentStart,
         ),
-    ))
+        |item| ImplementsAbilities {
+            before_implements_kw: item.before,
+            implements: item.item.0,
+            after_implements_kw: item.item.1.before,
+            item: item.item.1.item,
+        },
+    )
 }
 
 fn parse_implements_ability<'a>() -> impl Parser<'a, ImplementsAbility<'a>, EType<'a>> {

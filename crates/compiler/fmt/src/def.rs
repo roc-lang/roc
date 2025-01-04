@@ -94,13 +94,14 @@ pub fn def_lift_spaces<'a, 'b: 'a>(
     }
 }
 
-fn lift_spaces_after<'a, 'b: 'a, T: 'b + ExtractSpaces<'a> + Spaceable<'a>>(
+fn lift_spaces_after<'a, 'b: 'a, T: 'b + ExtractSpaces<'a> + Spaceable<'a> + std::fmt::Debug>(
     arena: &'a Bump,
     item: T,
 ) -> SpacesAfter<'a, <T as ExtractSpaces<'a>>::Item>
 where
     <T as ExtractSpaces<'a>>::Item: Spaceable<'a>,
 {
+    dbg!(item);
     let spaces = item.extract_spaces();
 
     SpacesAfter {
@@ -128,17 +129,12 @@ pub fn tydef_lift_spaces<'a, 'b: 'a>(arena: &'a Bump, def: TypeDef<'b>) -> Space
             typ,
             derived,
         } => {
-            if let Some(derived) = derived {
-                let derived_lifted = lift_spaces_after(arena, derived.value);
-
+            if derived.is_some() {
+                // It's structurally impossible for a derived clause to have spaces after
                 Spaces {
                     before: &[],
-                    item: TypeDef::Opaque {
-                        header,
-                        typ,
-                        derived: Some(Loc::at(derived.region, derived_lifted.item)),
-                    },
-                    after: derived_lifted.after,
+                    item: def,
+                    after: &[],
                 }
             } else {
                 let typ_lifted = ann_lift_spaces_after(arena, &typ.value);
@@ -461,7 +457,7 @@ impl<'a> Formattable for TypeDef<'a> {
                 // Always put the has-abilities clause on a newline if the opaque annotation
                 // contains a where-has clause.
                 let has_abilities_multiline = if let Some(has_abilities) = has_abilities {
-                    !has_abilities.value.is_empty() && ann_is_where_clause
+                    !has_abilities.item.value.is_empty() && ann_is_where_clause
                 } else {
                     false
                 };

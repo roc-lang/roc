@@ -1,11 +1,11 @@
-@0-22 SpaceAfter(
+@0-25 SpaceAfter(
     Defs(
         Defs {
             tags: [
                 EitherIndex(0),
             ],
             regions: [
-                @0-20,
+                @0-23,
             ],
             space_before: [
                 Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
@@ -20,29 +20,31 @@
                         name: @0-1 "P",
                         vars: [],
                     },
-                    typ: @3-4 BoundVariable(
-                        "p",
+                    typ: @3-4 Apply(
+                        "",
+                        "W",
+                        [],
                     ),
                     derived: Some(
                         ImplementsAbilities {
                             before_implements_kw: [
-                                LineComment(
-                                    "",
-                                ),
+                                Newline,
                             ],
-                            implements: @8-18,
-                            after_implements_kw: [],
-                            item: @18-20 [],
+                            implements: @7-17,
+                            after_implements_kw: [
+                                Newline,
+                            ],
+                            item: @21-23 [],
                         },
                     ),
                 },
             ],
             value_defs: [],
         },
-        @21-22 SpaceBefore(
+        @24-25 SpaceBefore(
             Var {
                 module_name: "",
-                ident: "n",
+                ident: "t",
             },
             [
                 Newline,

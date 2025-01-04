@@ -535,12 +535,7 @@ impl IterTokens for Loc<ImplementsAbilities<'_>> {
 
 impl IterTokens for ImplementsAbilities<'_> {
     fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
-        match self {
-            ImplementsAbilities::Implements(impls) => impls.iter_tokens(arena),
-            ImplementsAbilities::SpaceBefore(i, _) | ImplementsAbilities::SpaceAfter(i, _) => {
-                i.iter_tokens(arena)
-            }
-        }
+        self.item.value.iter_tokens(arena)
     }
 }
 

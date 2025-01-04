@@ -841,7 +841,7 @@ pub enum TypeDef<'a> {
     Opaque {
         header: TypeHeader<'a>,
         typ: Loc<TypeAnnotation<'a>>,
-        derived: Option<Loc<ImplementsAbilities<'a>>>,
+        derived: Option<&'a ImplementsAbilities<'a>>,
     },
 
     /// An ability definition. E.g.
@@ -1552,31 +1552,11 @@ pub enum ImplementsAbility<'a> {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub enum ImplementsAbilities<'a> {
-    /// `implements [Eq { eq: myEq }, Hash]`
-    Implements(Collection<'a, Loc<ImplementsAbility<'a>>>),
-
-    // We preserve this for the formatter; canonicalization ignores it.
-    SpaceBefore(&'a ImplementsAbilities<'a>, &'a [CommentOrNewline<'a>]),
-    SpaceAfter(&'a ImplementsAbilities<'a>, &'a [CommentOrNewline<'a>]),
-}
-
-impl ImplementsAbilities<'_> {
-    pub fn collection(&self) -> &Collection<Loc<ImplementsAbility>> {
-        let mut it = self;
-        loop {
-            match it {
-                Self::SpaceBefore(inner, _) | Self::SpaceAfter(inner, _) => {
-                    it = inner;
-                }
-                Self::Implements(collection) => return collection,
-            }
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.collection().is_empty()
-    }
+pub struct ImplementsAbilities<'a> {
+    pub before_implements_kw: &'a [CommentOrNewline<'a>],
+    pub implements: Region,
+    pub after_implements_kw: &'a [CommentOrNewline<'a>],
+    pub item: Loc<Collection<'a, Loc<ImplementsAbility<'a>>>>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -2278,15 +2258,6 @@ impl<'a> Spaceable<'a> for ImplementsAbility<'a> {
     }
 }
 
-impl<'a> Spaceable<'a> for ImplementsAbilities<'a> {
-    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        ImplementsAbilities::SpaceBefore(self, spaces)
-    }
-    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        ImplementsAbilities::SpaceAfter(self, spaces)
-    }
-}
-
 impl<'a> Expr<'a> {
     pub const REPL_OPAQUE_FUNCTION: Self = Expr::Var {
         module_name: "",
@@ -2396,7 +2367,6 @@ impl_extract_spaces!(Tag);
 impl_extract_spaces!(AssignedField<T>);
 impl_extract_spaces!(TypeAnnotation);
 impl_extract_spaces!(ImplementsAbility);
-impl_extract_spaces!(ImplementsAbilities);
 impl_extract_spaces!(Implements);
 
 impl<'a, T: Copy> ExtractSpaces<'a> for Spaced<'a, T> {
@@ -2720,7 +2690,11 @@ impl<'a> Malformed for TypeDef<'a> {
                 header,
                 typ,
                 derived,
-            } => header.is_malformed() || typ.is_malformed() || derived.is_malformed(),
+            } => {
+                header.is_malformed()
+                    || typ.is_malformed()
+                    || derived.map(|d| d.item.is_malformed()).unwrap_or_default()
+            }
             TypeDef::Ability {
                 header,
                 loc_implements,
@@ -2756,19 +2730,6 @@ impl<'a> Malformed for ImplementsAbility<'a> {
                 ability.is_malformed() || impls.iter().any(|impl_| impl_.is_malformed())
             }
             ImplementsAbility::SpaceBefore(has, _) | ImplementsAbility::SpaceAfter(has, _) => {
-                has.is_malformed()
-            }
-        }
-    }
-}
-
-impl<'a> Malformed for ImplementsAbilities<'a> {
-    fn is_malformed(&self) -> bool {
-        match self {
-            ImplementsAbilities::Implements(abilities) => {
-                abilities.iter().any(|ability| ability.is_malformed())
-            }
-            ImplementsAbilities::SpaceBefore(has, _) | ImplementsAbilities::SpaceAfter(has, _) => {
                 has.is_malformed()
             }
         }

@@ -553,6 +553,7 @@ mod test_snapshots {
         pass/newline_after_sub.expr,
         pass/newline_and_spaces_before_less_than.expr,
         pass/newline_before_add.expr,
+        pass/newline_before_and_after_implements_opaque.expr,
         pass/newline_before_import_curlies.expr,
         pass/newline_before_sub.expr,
         pass/newline_in_packages.full,
