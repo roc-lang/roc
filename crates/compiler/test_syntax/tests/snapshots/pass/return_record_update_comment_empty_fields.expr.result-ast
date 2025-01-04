@@ -1,0 +1,36 @@
+@0-15 SpaceAfter(
+    Return(
+        @0-15 SpaceBefore(
+            Apply(
+                @8-14 RecordUpdate {
+                    update: @11-12 SpaceBefore(
+                        Var {
+                            module_name: "",
+                            ident: "g",
+                        },
+                        [
+                            LineComment(
+                                "",
+                            ),
+                        ],
+                    ),
+                    fields: [],
+                },
+                [
+                    @14-15 Var {
+                        module_name: "",
+                        ident: "e",
+                    },
+                ],
+                Space,
+            ),
+            [
+                Newline,
+            ],
+        ),
+        None,
+    ),
+    [
+        Newline,
+    ],
+)

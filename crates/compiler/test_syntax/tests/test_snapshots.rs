@@ -667,6 +667,7 @@ mod test_snapshots {
         pass/return_multiline.expr,
         pass/return_only_statement.expr,
         pass/return_parens_comments.expr,
+        pass/return_record_update_comment_empty_fields.expr,
         pass/return_then_nested_parens.expr,
         pass/return_with_after.expr,
         pass/separate_defs.moduledefs,

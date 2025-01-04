@@ -1822,13 +1822,16 @@ fn fmt_return<'a>(
     buf.indent(indent);
     buf.push_str(keyword::RETURN);
 
-    let return_indent = if return_value.is_multiline() {
+    let value = expr_lift_spaces(parens, buf.text.bump(), &return_value.value);
+
+    let return_indent = if value.item.is_multiline()
+        || (newlines == Newlines::Yes && !value.before.is_empty())
+        || value.before.iter().any(|s| s.is_comment())
+    {
         indent + INDENT
     } else {
         indent
     };
-
-    let value = expr_lift_spaces(parens, buf.text.bump(), &return_value.value);
 
     if !value.before.is_empty() {
         format_spaces(buf, value.before, newlines, return_indent);
@@ -2065,15 +2068,17 @@ fn fmt_record_like<'a, 'b: 'a, Field, ToSpacesAround>(
             // doesnt make sense.
             Some(RecordPrefix::Update(record_var)) => {
                 buf.spaces(1);
-                record_var.format(buf, indent);
-                buf.indent(indent);
-                buf.push_str(" &");
+                record_var.format(buf, indent + INDENT);
+                buf.indent(indent + INDENT);
+                buf.ensure_ends_with_whitespace();
+                buf.push_str("&");
             }
             Some(RecordPrefix::Mapper(mapper_var)) => {
                 buf.spaces(1);
-                mapper_var.format(buf, indent);
-                buf.indent(indent);
-                buf.push_str(" <-");
+                mapper_var.format(buf, indent + INDENT);
+                buf.indent(indent + INDENT);
+                buf.ensure_ends_with_whitespace();
+                buf.push_str("<-");
             }
         }
 
