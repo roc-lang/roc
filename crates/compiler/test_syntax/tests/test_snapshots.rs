@@ -301,6 +301,7 @@ mod test_snapshots {
         pass/ann_effectful_fn.expr,
         pass/ann_open_union.expr,
         pass/ann_parens_comments.expr,
+        pass/ann_parens_where_implements_func.expr,
         pass/ann_pattern_comment_before_body.expr,
         pass/ann_record_pat_with_comment.expr,
         pass/ann_tag_union_newline_comment.expr,

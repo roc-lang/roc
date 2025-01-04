@@ -1217,7 +1217,7 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                     },
                     after: last_after,
                     needs_indent,
-                    prec: Prec::AsType,
+                    prec: Prec::FunctionType,
                 }
             }
         }
