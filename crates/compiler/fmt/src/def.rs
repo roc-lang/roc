@@ -19,8 +19,8 @@ use roc_error_macros::internal_error;
 use roc_parse::ast::{
     AbilityMember, Defs, Expr, ExtractSpaces, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
     ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport,
-    ModuleImportParams, Pattern, PatternApplyStyle, Spaceable, Spaces, SpacesAfter, SpacesBefore,
-    StrLiteral, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    ModuleImportParams, Pattern, PatternApplyStyle, Spaces, SpacesBefore, StrLiteral,
+    TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use roc_parse::expr::merge_spaces;
 use roc_parse::header::Keyword;
@@ -91,22 +91,6 @@ pub fn def_lift_spaces<'a, 'b: 'a>(
                 after: vd.after,
             }
         }
-    }
-}
-
-fn lift_spaces_after<'a, 'b: 'a, T: 'b + ExtractSpaces<'a> + Spaceable<'a> + std::fmt::Debug>(
-    arena: &'a Bump,
-    item: T,
-) -> SpacesAfter<'a, <T as ExtractSpaces<'a>>::Item>
-where
-    <T as ExtractSpaces<'a>>::Item: Spaceable<'a>,
-{
-    dbg!(item);
-    let spaces = item.extract_spaces();
-
-    SpacesAfter {
-        item: spaces.item.maybe_before(arena, spaces.before),
-        after: spaces.after,
     }
 }
 
@@ -477,7 +461,7 @@ impl<'a> Formattable for TypeDef<'a> {
                 if let Some(has_abilities) = has_abilities {
                     buf.spaces(1);
 
-                    has_abilities.format_with_options(
+                    (*has_abilities).format_with_options(
                         buf,
                         Parens::NotNeeded,
                         Newlines::from_bool(make_multiline),

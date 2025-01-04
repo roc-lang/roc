@@ -1163,10 +1163,7 @@ fn opaque_signature<'a>(
     and(
         specialize_err(EExpr::Type, type_annotation::located_opaque_signature(true)),
         optional(map_with_arena(
-            backtrackable(specialize_err(
-                EExpr::Type,
-                type_annotation::implements_abilities(),
-            )),
+            specialize_err(EExpr::Type, type_annotation::implements_abilities()),
             |arena, item| &*arena.alloc(item),
         )),
     )

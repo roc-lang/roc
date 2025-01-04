@@ -186,7 +186,7 @@ where
     E: 'a + SpaceProblem,
 {
     parser::map(
-        and(space0_e(indent_problem), parser),
+        and(backtrackable(space0_e(indent_problem)), parser),
         |(space_list, item): (&'a [CommentOrNewline<'a>], S)| SpacesBefore {
             before: space_list,
             item,

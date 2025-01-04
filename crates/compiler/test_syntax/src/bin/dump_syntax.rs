@@ -28,5 +28,6 @@ fn main() {
     let input = kind.with_text(&text);
     let arena = Bump::new();
     let output = input.parse_in(&arena);
+    eprintln!("memory used: {}", arena.allocated_bytes());
     println!("{:#?}", output);
 }
