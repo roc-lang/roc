@@ -29,6 +29,8 @@ const MODULES: &[(ModuleId, &str)] = &[
 ];
 
 fn main() {
+    panic!("Fail now to avoid infinite loading.");
+
     for (module_id, filename) in MODULES {
         write_subs_for_module(*module_id, filename);
     }

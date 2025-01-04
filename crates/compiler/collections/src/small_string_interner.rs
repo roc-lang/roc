@@ -1,4 +1,5 @@
 use std::{fmt::Debug, mem::ManuallyDrop};
+use std::borrow::Cow;
 
 /// Collection of small (length < u16::MAX) strings, stored compactly.
 #[derive(Clone, Default, PartialEq, Eq)]
@@ -113,6 +114,7 @@ impl SmallStringInterner {
 
     /// Insert without deduplicating
     pub fn insert(&mut self, string: &str) -> usize {
+        let string = Self::snakify_ident(string);
         let bytes = string.as_bytes();
 
         assert!(bytes.len() < (1 << 15));
@@ -175,6 +177,7 @@ impl SmallStringInterner {
     pub fn find_indices<'a>(&'a self, string: &'a str) -> impl Iterator<Item = usize> + 'a {
         use std::slice::from_raw_parts;
 
+        let string = Self::snakify_ident(string);
         let target_length = string.len();
 
         let lengths: &[i16] =
@@ -226,6 +229,7 @@ impl SmallStringInterner {
     }
 
     pub fn update(&mut self, index: usize, new_string: &str) {
+        let new_string = Self::snakify_ident(new_string);
         let length = new_string.len();
         let offset = self.buffer.len();
 
@@ -240,7 +244,8 @@ impl SmallStringInterner {
     pub fn find_and_update(&mut self, old_string: &str, new_string: &str) -> Option<usize> {
         match self.find_index(old_string) {
             Some(index) => {
-                self.update(index, new_string);
+                let new_string = Self::snakify_ident(new_string);
+                self.update(index, &new_string);
 
                 Some(index)
             }
@@ -254,6 +259,52 @@ impl SmallStringInterner {
 
     pub fn is_empty(&self) -> bool {
         self.lengths.is_empty()
+    }
+
+    fn snakify_ident(s: &str) -> Cow<'_, str> {
+        if s.chars()
+            .next()
+            .is_some_and(|first_char| first_char.is_ascii_uppercase())
+            || (s.contains('_') && !s.ends_with('_'))
+        {
+            return s.into();
+        }
+
+        let chars: Vec<char> = s.chars().collect();
+        let mut index = 0;
+        let len = chars.len();
+        let mut out = String::new();
+
+        while index < len {
+            let prev = if index == 0 {
+                None
+            } else {
+                Some(chars[index - 1])
+            };
+            let c = chars[index];
+            let next = chars.get(index + 1);
+            let boundary = match (prev, c, next) {
+                // LUU, LUN, and LUL (simplified to LU_)
+                (Some(p), curr, _) if !p.is_ascii_uppercase() && curr.is_ascii_uppercase() => true,
+                // UUL
+                (Some(p), curr, Some(n))
+                    if p.is_ascii_uppercase()
+                        && curr.is_ascii_uppercase()
+                        && n.is_ascii_lowercase() =>
+                {
+                    true
+                }
+                _ => false,
+            };
+            // those are boundary transitions - should push _ and curr
+            if boundary {
+                out.push('_');
+            }
+            out.push(c.to_ascii_lowercase());
+            index += 1;
+        }
+
+        out.into()
     }
 }
 
