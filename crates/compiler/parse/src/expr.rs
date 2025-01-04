@@ -2082,7 +2082,6 @@ pub fn merge_spaces<'a>(
 /// If the given Expr would parse the same way as a valid Pattern, convert it.
 /// Example: (foo) could be either an Expr::Var("foo") or Pattern::Identifier("foo")
 fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, ()> {
-    println!("expr_to_pattern_help");
     let mut expr = expr.extract_spaces();
 
     while let Expr::ParensAround(loc_expr) = &expr.item {
