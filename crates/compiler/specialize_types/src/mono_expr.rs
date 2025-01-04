@@ -298,6 +298,14 @@ impl<'a, 'c, 'd, 'i, 's, 't, 'p, 'w, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, '
                     branches: branches_slice,
                 }
             }
+            Expr::Crash { msg, ret_var } => {
+                let mono_msg = self.to_mono_expr(&msg.value);
+
+                MonoExpr::Crash {
+                    msg: self.mono_exprs.add(mono_msg, msg.region),
+                    ret_type: self.mono_from_var(*ret_var),
+                }
+            }
             // Expr::Call((fn_var, fn_expr, capture_var, ret_var), args, called_via) => {
             //     let opt_ret_type = self.mono_from_var(*var);
 

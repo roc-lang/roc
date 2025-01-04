@@ -238,6 +238,10 @@ pub enum MonoExpr {
         args: Slice<(MonoTypeId, MonoExprId)>,
         ret_type: MonoTypeId,
     },
+    Crash {
+        msg: MonoExprId,
+        ret_type: MonoTypeId,
+    },
 
     Lambda {
         fn_type: MonoTypeId,
