@@ -525,7 +525,13 @@ impl<'a, 'c, 'd, 'i, 's, 't, 'p, 'w, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, '
                     }
                 }
             }
-            Pattern::StrLiteral(_) => todo!(),
+            Pattern::StrLiteral(contents) => {
+                MonoPattern::StrLiteral(self.string_interns.get_id(
+                    self.arena,
+                    // TODO [mono2]: remove by making can store arena-allocated strings.
+                    self.arena.alloc_str(contents),
+                ))
+            }
             Pattern::SingleQuote(_, _, _, _) => todo!(),
             Pattern::Underscore => MonoPattern::Underscore,
             Pattern::AbilityMemberSpecialization { .. } => todo!(),

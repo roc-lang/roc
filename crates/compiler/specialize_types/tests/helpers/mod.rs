@@ -445,8 +445,8 @@ fn dbg_mono_pattern_help<'a>(
             )?;
             write!(buf, ", {})", ident)
         }
-        MonoPattern::StrLiteral(_) => {
-            todo!()
+        MonoPattern::StrLiteral(str_id) => {
+            write!(buf, "StrLiteral({:?})", interns.get_str(arena, *str_id))
         }
         MonoPattern::NumberLiteral(number) => {
             write!(buf, "Number({:?})", number)

@@ -32,4 +32,9 @@ mod specialize_pattern {
     fn as_pattern() {
         expect_mono_pattern_str(r"42 as the_answer", "As(Number(I8(42)), #UserApp.1)");
     }
+
+    #[test]
+    fn str_literal() {
+        expect_mono_pattern_str(r#""hello""#, "StrLiteral(\"hello\")");
+    }
 }

@@ -106,21 +106,22 @@ impl<'a, 'c, 'd, 'e, 'f, 'm, 'p, P: Push<Problem>> Env<'a, 'c, 'd, 'e, 'f, 'm, '
         symbol: Symbol,
         args: SubsSlice<Variable>,
     ) -> MonoTypeId {
-        if symbol == Symbol::NUM_NUM {
-            number_args_to_mono_id(args, subs, self.problems)
-        } else if symbol == Symbol::NUM_FLOATINGPOINT {
-            num_num_args_to_mono_id(symbol, args, subs, self.problems)
-        } else if symbol == Symbol::LIST_LIST {
-            todo!();
-            // let mut new_args = args
-            //     .into_iter()
-            //     .flat_map(|var_index| self.lower_var( subs, subs[var_index]));
+        match symbol {
+            Symbol::NUM_NUM => number_args_to_mono_id(args, subs, self.problems),
+            Symbol::NUM_FLOATINGPOINT => num_num_args_to_mono_id(symbol, args, subs, self.problems),
+            Symbol::LIST_LIST => {
+                todo!();
+                // let mut new_args = args
+                //     .into_iter()
+                //     .flat_map(|var_index| self.lower_var( subs, subs[var_index]));
 
-            // let arg = new_args.next();
-        } else if symbol == Symbol::BOOL_BOOL {
-            MonoTypeId::BOOL
-        } else {
-            todo!("implement lower_builtin for symbol {symbol:?} - or, if all the builtins are already in here, report a compiler bug instead of panicking like this.");
+                // let arg = new_args.next();
+            }
+            Symbol::BOOL_BOOL => MonoTypeId::BOOL,
+            Symbol::STR_STR => MonoTypeId::STR,
+            _ => {
+                todo!("implement lower_builtin for symbol {symbol:?} - or, if all the builtins are already in here, report a compiler bug instead of panicking like this.");
+            }
         }
     }
 
