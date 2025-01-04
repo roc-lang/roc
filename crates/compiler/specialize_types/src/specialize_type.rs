@@ -108,6 +108,7 @@ impl<'a, 'c, 'd, 'e, 'f, 'm, 'p, P: Push<Problem>> Env<'a, 'c, 'd, 'e, 'f, 'm, '
     ) -> MonoTypeId {
         match symbol {
             Symbol::NUM_NUM => number_args_to_mono_id(args, subs, self.problems),
+            Symbol::NUM_INTEGER => num_num_args_to_mono_id(symbol, args, subs, self.problems),
             Symbol::NUM_FLOATINGPOINT => num_num_args_to_mono_id(symbol, args, subs, self.problems),
             Symbol::LIST_LIST => {
                 todo!();
@@ -274,20 +275,7 @@ impl<'a, 'c, 'd, 'e, 'f, 'm, 'p, P: Push<Problem>> Env<'a, 'c, 'd, 'e, 'f, 'm, '
                   Content::Error => Content::Error,
                    */
             },
-            Content::RangedNumber(range) => {
-                use roc_types::num::NumericRange::*;
-
-                match range {
-                    IntAtLeastSigned(int_lit_width) => int_lit_width_to_mono_type_id(int_lit_width),
-                    IntAtLeastEitherSign(int_lit_width) => {
-                        int_lit_width_to_mono_type_id(int_lit_width)
-                    }
-                    NumAtLeastSigned(int_lit_width) => int_lit_width_to_mono_type_id(int_lit_width),
-                    NumAtLeastEitherSign(int_lit_width) => {
-                        int_lit_width_to_mono_type_id(int_lit_width)
-                    }
-                }
-            }
+            Content::RangedNumber(range) => num_range_to_mono_id(&range),
             Content::Alias(symbol, args, real, kind) => {
                 match kind {
                     AliasKind::Opaque if symbol.is_builtin() => {
@@ -422,7 +410,9 @@ fn num_num_args_to_mono_id(
                             }
                         }
                     }
-                    Content::RangedNumber(_numeric_range) => todo!(),
+                    Content::RangedNumber(range) => {
+                        return num_range_to_mono_id(range);
+                    }
                     _ => {
                         // This is an invalid number type, so break out of
                         // the alias-unrolling loop in order to return an error.
@@ -441,6 +431,17 @@ fn num_num_args_to_mono_id(
     problems.push(Problem::BadNumTypeParam);
 
     MonoTypeId::CRASH
+}
+
+fn num_range_to_mono_id(range: &roc_types::num::NumericRange) -> MonoTypeId {
+    use roc_types::num::NumericRange::*;
+
+    match *range {
+        IntAtLeastSigned(int_lit_width) => int_lit_width_to_mono_type_id(int_lit_width),
+        IntAtLeastEitherSign(int_lit_width) => int_lit_width_to_mono_type_id(int_lit_width),
+        NumAtLeastSigned(int_lit_width) => int_lit_width_to_mono_type_id(int_lit_width),
+        NumAtLeastEitherSign(int_lit_width) => int_lit_width_to_mono_type_id(int_lit_width),
+    }
 }
 
 fn number_args_to_mono_id(
@@ -483,22 +484,7 @@ fn number_args_to_mono_id(
                         }
                     }
                     Content::RangedNumber(range) => {
-                        use roc_types::num::NumericRange::*;
-
-                        return match *range {
-                            IntAtLeastSigned(int_lit_width) => {
-                                int_lit_width_to_mono_type_id(int_lit_width)
-                            }
-                            IntAtLeastEitherSign(int_lit_width) => {
-                                int_lit_width_to_mono_type_id(int_lit_width)
-                            }
-                            NumAtLeastSigned(int_lit_width) => {
-                                int_lit_width_to_mono_type_id(int_lit_width)
-                            }
-                            NumAtLeastEitherSign(int_lit_width) => {
-                                int_lit_width_to_mono_type_id(int_lit_width)
-                            }
-                        };
+                        return num_range_to_mono_id(range);
                     }
                     _ => {
                         // This is an invalid number type, so break out of

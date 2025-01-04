@@ -505,7 +505,7 @@ impl<'a, 'c, 'd, 'i, 's, 't, 'p, 'w, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, '
                 match self.mono_types.get(mono_type) {
                     MonoType::Primitive(primitive) => match to_num(*primitive, *int_value) {
                         Ok(num) => MonoPattern::NumberLiteral(num),
-                        Err(problem) => MonoPattern::CompilerBug(problem),
+                        Err(problem) => compiler_bug!(problem),
                     },
                     other => {
                         compiler_bug!(Problem::NumSpecializedToWrongType(Some(*other)))
@@ -518,7 +518,7 @@ impl<'a, 'c, 'd, 'i, 's, 't, 'p, 'w, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, '
                 match self.mono_types.get(mono_type) {
                     MonoType::Primitive(primitive) => match to_frac(*primitive, *float_value) {
                         Ok(num) => MonoPattern::NumberLiteral(num),
-                        Err(problem) => MonoPattern::CompilerBug(problem),
+                        Err(problem) => compiler_bug!(problem),
                     },
                     other => {
                         compiler_bug!(Problem::NumSpecializedToWrongType(Some(*other)))
@@ -532,7 +532,24 @@ impl<'a, 'c, 'd, 'i, 's, 't, 'p, 'w, P: Push<Problem>> Env<'a, 'c, 'd, 'i, 's, '
                     self.arena.alloc_str(contents),
                 ))
             }
-            Pattern::SingleQuote(_, _, _, _) => todo!(),
+            Pattern::SingleQuote(var, _, val, _) => {
+                let mono_type = self.mono_from_var(*var);
+
+                match self.mono_types.get(mono_type) {
+                    MonoType::Primitive(Primitive::U8) => {
+                        MonoPattern::NumberLiteral(Number::U8(*val as u8))
+                    }
+                    MonoType::Primitive(Primitive::U16) => {
+                        MonoPattern::NumberLiteral(Number::U16(*val as u16))
+                    }
+                    MonoType::Primitive(Primitive::U32) => {
+                        MonoPattern::NumberLiteral(Number::U32(*val as u32))
+                    }
+                    other => {
+                        compiler_bug!(Problem::NumSpecializedToWrongType(Some(*other)))
+                    }
+                }
+            }
             Pattern::Underscore => MonoPattern::Underscore,
             Pattern::AbilityMemberSpecialization { .. } => todo!(),
             Pattern::Shadowed(_, _, _) => todo!(),

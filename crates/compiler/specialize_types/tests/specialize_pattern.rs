@@ -37,4 +37,14 @@ mod specialize_pattern {
     fn str_literal() {
         expect_mono_pattern_str(r#""hello""#, "StrLiteral(\"hello\")");
     }
+
+    #[test]
+    fn char_literal_ascii() {
+        expect_mono_pattern_str(r"'a'", "Number(U8(97))");
+    }
+
+    #[test]
+    fn char_literal_unicode() {
+        expect_mono_pattern_str(r"'🎸'", "Number(U32(127928))");
+    }
 }
