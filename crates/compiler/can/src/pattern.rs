@@ -856,7 +856,7 @@ pub fn canonicalize_record_destructs<'a>(
     let mut opt_erroneous = None;
 
     for loc_pattern in patterns.iter() {
-        match loc_pattern.value.extract_spaces().item {
+        match loc_pattern.value.extract_spaces(env.arena).item {
             Identifier { ident: label } => {
                 match scope.introduce(label.into(), region) {
                     Ok(symbol) => {

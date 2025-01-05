@@ -542,7 +542,7 @@ fn canonicalize_claimed_ability_impl<'a>(
 ) -> Result<(Symbol, Symbol), ()> {
     let ability_home = ability.module_id();
 
-    match loc_impl.extract_spaces().item {
+    match loc_impl.extract_spaces(env.arena).item {
         AssignedField::LabelOnly(label) => {
             let label_str = label.value;
             let region = label.region;
@@ -788,7 +788,7 @@ fn canonicalize_opaque<'a>(
 
         for has_ability in has_abilities.value.items {
             let region = has_ability.region;
-            let (ability, opt_impls) = match has_ability.value.extract_spaces().item {
+            let (ability, opt_impls) = match has_ability.value.extract_spaces(env.arena).item {
                 ast::ImplementsAbility::ImplementsAbility { ability, impls } => (ability, impls),
                 _ => internal_error!("spaces not extracted"),
             };
@@ -835,7 +835,7 @@ fn canonicalize_opaque<'a>(
 
                 // First up canonicalize all the claimed implementations, building a map of ability
                 // member -> implementation.
-                for loc_impl in impls.extract_spaces().item.items {
+                for loc_impl in impls.extract_spaces(env.arena).item.items {
                     let (member, impl_symbol) =
                         match canonicalize_claimed_ability_impl(env, scope, ability, loc_impl) {
                             Ok((member, impl_symbol)) => (member, impl_symbol),
@@ -3005,7 +3005,7 @@ fn to_pending_type_def<'a>(
 
             for member in *members {
                 let name_region = member.name.region;
-                let member_name = member.name.extract_spaces().item;
+                let member_name = member.name.extract_spaces(env.arena).item;
 
                 let member_sym = match scope.introduce(member_name.into(), name_region) {
                     Ok(sym) => sym,

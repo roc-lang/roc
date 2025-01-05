@@ -7,9 +7,9 @@ use crate::spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT};
 use crate::Buf;
 use bumpalo::Bump;
 use roc_parse::ast::{
-    Base, CommentOrNewline, Pattern, PatternAs, Spaceable, Spaces, SpacesAfter, SpacesBefore,
+    merge_spaces, Base, CommentOrNewline, Pattern, PatternAs, Spaceable, Spaces, SpacesAfter,
+    SpacesBefore,
 };
-use roc_parse::expr::merge_spaces;
 use roc_region::all::Loc;
 
 pub fn fmt_pattern<'a>(buf: &mut Buf, pattern: &'a Pattern<'a>, indent: u16, parens: Parens) {

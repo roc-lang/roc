@@ -13,15 +13,12 @@ use bumpalo::{
     collections::{String, Vec},
     Bump,
 };
-use roc_parse::{ast::Spaced, ident::UppercaseIdent};
-use roc_parse::{
-    ast::{
-        AbilityImpls, AssignedField, Collection, CommentOrNewline, Expr, ExtractSpaces,
-        FunctionArrow, ImplementsAbilities, ImplementsAbility, ImplementsClause, Spaceable, Spaces,
-        SpacesAfter, SpacesBefore, Tag, TypeAnnotation, TypeHeader,
-    },
-    expr::merge_spaces,
+use roc_parse::ast::{
+    merge_spaces, AbilityImpls, AssignedField, Collection, CommentOrNewline, Expr, ExtractSpaces,
+    FunctionArrow, ImplementsAbilities, ImplementsAbility, ImplementsClause, Spaceable, Spaces,
+    SpacesAfter, SpacesBefore, Tag, TypeAnnotation, TypeHeader,
 };
+use roc_parse::{ast::Spaced, ident::UppercaseIdent};
 use roc_region::all::Loc;
 
 /// Does an AST node need parens around it?
@@ -618,7 +615,7 @@ impl<'a> Formattable for ImplementsClause<'a> {
     }
 
     fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
-        buf.push_str(self.var.value.extract_spaces().item);
+        buf.push_str(self.var.value.extract_spaces(buf.bump()).item);
         buf.spaces(1);
         buf.push_str(roc_parse::keyword::IMPLEMENTS);
         buf.spaces(1);
@@ -1447,7 +1444,7 @@ pub struct NodeSpaces<'a, T> {
 impl<'a, T: Copy> ExtractSpaces<'a> for NodeSpaces<'a, T> {
     type Item = T;
 
-    fn extract_spaces(&self) -> Spaces<'a, T> {
+    fn extract_spaces(&self, _arena: &'a Bump) -> Spaces<'a, T> {
         Spaces {
             before: self.before,
             item: self.item,

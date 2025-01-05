@@ -4977,7 +4977,7 @@ fn unspace<'a, T: Copy>(arena: &'a Bump, items: &[Loc<Spaced<'a, T>>]) -> &'a [L
     bumpalo::collections::Vec::from_iter_in(
         items
             .iter()
-            .map(|item| Loc::at(item.region, item.value.extract_spaces().item)),
+            .map(|item| Loc::at(item.region, item.value.extract_spaces(arena).item)),
         arena,
     )
     .into_bump_slice()
@@ -5044,7 +5044,7 @@ fn build_platform_header<'a>(
         .item
         .signatures
         .map_items(arena, |item| {
-            Loc::at(item.region, item.extract_spaces().item)
+            Loc::at(item.region, item.extract_spaces(arena).item)
         })
         .items;
     let provides = bumpalo::collections::Vec::from_iter_in(
@@ -5165,6 +5165,7 @@ fn canonicalize_and_constrain<'a>(
             let mut scope = module_output.scope.clone();
             scope.add_docs_imports();
             crate::docs::generate_module_docs(
+                arena,
                 scope,
                 module_id,
                 arena.alloc(qualified_module_ids.clone().into_module_ids()),

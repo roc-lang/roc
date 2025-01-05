@@ -1,5 +1,6 @@
 use crate::docs::DocEntry::DetachedDoc;
 use crate::docs::TypeAnnotation::{Apply, BoundVariable, Function, NoTypeAnn, Record, TagUnion};
+use bumpalo::Bump;
 use roc_can::scope::Scope;
 use roc_collections::VecSet;
 use roc_module::ident::ModuleName;
@@ -124,6 +125,7 @@ pub struct Tag {
 
 #[allow(clippy::too_many_arguments)]
 pub fn generate_module_docs(
+    arena: &'_ Bump,
     scope: Scope,
     home: ModuleId,
     module_ids: &ModuleIds,
@@ -134,6 +136,7 @@ pub fn generate_module_docs(
     header_comments: &[CommentOrNewline<'_>],
 ) -> ModuleDocumentation {
     let entries = generate_entry_docs(
+        arena,
         home,
         &scope.locals.ident_ids,
         module_ids,
@@ -178,6 +181,7 @@ fn detached_docs_from_comments_and_new_lines<'a>(
 }
 
 fn generate_entry_docs(
+    arena: &'_ Bump,
     home: ModuleId,
     ident_ids: &IdentIds,
     module_ids: &ModuleIds,
@@ -378,9 +382,9 @@ fn generate_entry_docs(
                     let members = members
                         .iter()
                         .map(|mem| {
-                            let extracted = mem.name.value.extract_spaces();
+                            let extracted = mem.name.value.extract_spaces(arena);
                             let (type_annotation, able_variables) =
-                                ability_member_type_to_docs(mem.typ.value);
+                                ability_member_type_to_docs(arena, mem.typ.value);
 
                             AbilityMember {
                                 name: extracted.item.to_string(),
@@ -679,6 +683,7 @@ fn type_to_docs(in_func_type_ann: bool, type_annotation: ast::TypeAnnotation) ->
 }
 
 fn ability_member_type_to_docs(
+    arena: &'_ Bump,
     type_annotation: ast::TypeAnnotation,
 ) -> (TypeAnnotation, Vec<(String, Vec<TypeAnnotation>)>) {
     match type_annotation {
@@ -689,7 +694,7 @@ fn ability_member_type_to_docs(
                 .map(|hc| {
                     let ast::ImplementsClause { var, abilities } = hc.value;
                     (
-                        var.value.extract_spaces().item.to_string(),
+                        var.value.extract_spaces(arena).item.to_string(),
                         abilities
                             .iter()
                             .map(|ability| type_to_docs(false, ability.value))

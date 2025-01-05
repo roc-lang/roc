@@ -20,5 +20,5 @@ fuzz_target!(|data: &[u8]| {
                 input.check_invariants(|_| (), true, canonicalize_fuzz_config);
             }
         }
-    }
+    };
 });

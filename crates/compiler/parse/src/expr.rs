@@ -1,8 +1,9 @@
 use crate::ast::{
-    AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces, Implements,
-    ImplementsAbilities, ImportAlias, ImportAsKeyword, ImportExposingKeyword, ImportedModuleName,
-    IngestedFileAnnotation, IngestedFileImport, ModuleImport, ModuleImportParams, Pattern,
-    Spaceable, Spaced, Spaces, SpacesBefore, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    merge_spaces, AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces,
+    Implements, ImplementsAbilities, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
+    ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport,
+    ModuleImportParams, Pattern, Spaceable, Spaced, Spaces, SpacesBefore, TypeAnnotation, TypeDef,
+    TypeHeader, ValueDef,
 };
 use crate::blankspace::{
     loc_space0_e, require_newline_or_eof, space0_after_e, space0_around_ee, space0_before_e,
@@ -919,7 +920,7 @@ fn to_call<'a>(
         let region = Region::span_across(&loc_expr1.region, &last);
 
         let spaces = if let Some(last) = arguments.last_mut() {
-            let spaces = last.value.extract_spaces();
+            let spaces = last.value.extract_spaces(arena);
 
             if spaces.after.is_empty() {
                 &[]
@@ -1200,12 +1201,12 @@ enum AliasOrOpaque {
 }
 
 fn extract_tag_and_spaces<'a>(arena: &'a Bump, expr: Expr<'a>) -> Option<Spaces<'a, &'a str>> {
-    let mut expr = expr.extract_spaces();
+    let mut expr = expr.extract_spaces(arena);
 
     loop {
         match &expr.item {
             Expr::ParensAround(inner_expr) => {
-                let inner_expr = inner_expr.extract_spaces();
+                let inner_expr = inner_expr.extract_spaces(arena);
                 expr.item = inner_expr.item;
                 expr.before = merge_spaces(arena, expr.before, inner_expr.before);
                 expr.after = merge_spaces(arena, inner_expr.after, expr.after);
@@ -2088,30 +2089,13 @@ pub fn loc_expr<'a>(allow_any_indent: bool) -> impl Parser<'a, Loc<Expr<'a>>, EE
     )
 }
 
-pub fn merge_spaces<'a>(
-    arena: &'a Bump,
-    a: &'a [CommentOrNewline<'a>],
-    b: &'a [CommentOrNewline<'a>],
-) -> &'a [CommentOrNewline<'a>] {
-    if a.is_empty() {
-        b
-    } else if b.is_empty() {
-        a
-    } else {
-        let mut merged = Vec::with_capacity_in(a.len() + b.len(), arena);
-        merged.extend_from_slice(a);
-        merged.extend_from_slice(b);
-        merged.into_bump_slice()
-    }
-}
-
 /// If the given Expr would parse the same way as a valid Pattern, convert it.
 /// Example: (foo) could be either an Expr::Var("foo") or Pattern::Identifier("foo")
 fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, ()> {
-    let mut expr = expr.extract_spaces();
+    let mut expr = expr.extract_spaces(arena);
 
     while let Expr::ParensAround(loc_expr) = &expr.item {
-        let expr_inner = loc_expr.extract_spaces();
+        let expr_inner = loc_expr.extract_spaces(arena);
 
         expr.before = merge_spaces(arena, expr.before, expr_inner.before);
         expr.after = merge_spaces(arena, expr_inner.after, expr.after);
@@ -2162,7 +2146,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
 
         Expr::Try => Pattern::Identifier { ident: "try" },
 
-        Expr::SpaceBefore(..) | Expr::SpaceAfter(..) | Expr::ParensAround(..) => unreachable!(),
+        Expr::SpaceBefore(..) | Expr::SpaceAfter(..) | Expr::ParensAround(..) => return Err(()),
 
         Expr::Record(fields) => {
             let patterns = fields.map_items_result(arena, |loc_assigned_field| {
@@ -3146,7 +3130,7 @@ fn stmts_to_defs<'a>(
                             value: Expr::Dbg, ..
                         },
                         args,
-                        _,
+                        ..,
                     ) = e
                     {
                         if let Some((first, extra_args)) = args.split_first() {
