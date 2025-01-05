@@ -1,12 +1,16 @@
 use crate::docs::DocEntry::DetachedDoc;
 use crate::docs::TypeAnnotation::{Apply, BoundVariable, Function, NoTypeAnn, Record, TagUnion};
+use roc_can::expr::Declarations;
+use roc_can::module::RigidVariables;
 use roc_can::scope::Scope;
-use roc_collections::VecSet;
+use roc_collections::{MutMap, VecSet};
 use roc_module::ident::ModuleName;
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use roc_parse::ast::{self, ExtractSpaces, TypeHeader};
 use roc_parse::ast::{AssignedField, FunctionArrow};
 use roc_parse::ast::{CommentOrNewline, TypeDef, ValueDef};
+use roc_region::all::Region;
+use roc_types::types::Alias;
 
 // Documentation generation requirements
 
@@ -58,11 +62,9 @@ pub enum TypeAnnotation {
         arrow: FunctionArrow,
         output: Box<TypeAnnotation>,
     },
-    ObscuredTagUnion,
-    ObscuredRecord,
     BoundVariable(String),
     Apply {
-        name: String,
+        symbol: Symbol,
         parts: Vec<TypeAnnotation>,
     },
     Record {
@@ -84,7 +86,7 @@ pub enum TypeAnnotation {
     },
     As {
         ann: Box<TypeAnnotation>,
-        name: String,
+        symbol: Symbol,
         vars: Vec<String>,
     },
 }
@@ -130,7 +132,10 @@ pub fn generate_module_docs(
     home: ModuleId,
     module_ids: &ModuleIds,
     module_name: ModuleName,
-    parsed_defs: &roc_parse::ast::Defs,
+    aliases: MutMap<Symbol, Alias>,
+    rigid_variables: RigidVariables,
+    declarations: Declarations,
+    exposed_imports: MutMap<Symbol, Region>,
     exposed_module_ids: &[ModuleId],
     exposed_symbols: VecSet<Symbol>,
     header_doc_comment: String,
@@ -187,6 +192,8 @@ fn generate_entry_docs(
     exposed_module_ids: &[ModuleId],
 ) -> Vec<DocEntry> {
     use roc_parse::ast::Pattern;
+
+    // TODO need to have this take canonical defs instead of parse defs, and use the docs in there.
 
     let mut doc_entries = Vec::with_capacity(defs.tags.len() + 1);
     let mut before_comments_or_new_lines: Option<&[CommentOrNewline]> = None;

@@ -351,22 +351,22 @@ impl Declaration {
     pub fn def_count(&self) -> usize {
         use Declaration::*;
         match self {
-            Declare(_) => 1,
+            Declare(_, _) => 1,
             DeclareRec(defs, _) => defs.len(),
             InvalidCycle { .. } => 0,
-            Builtin(_) => 0,
+            Builtin(_, _) => 0,
             Expects(_) => 0,
         }
     }
 
     pub fn region(&self) -> Region {
         match self {
-            Declaration::Declare(def) => def.region(),
+            Declaration::Declare(def, _) => def.region(),
             Declaration::DeclareRec(defs, _) => Region::span_across(
-                &defs.first().unwrap().region(),
-                &defs.last().unwrap().region(),
+                &defs.first().unwrap().0.region(),
+                &defs.last().unwrap().0.region(),
             ),
-            Declaration::Builtin(def) => def.region(),
+            Declaration::Builtin(def, _) => def.region(),
             Declaration::InvalidCycle(cycles) => Region::span_across(
                 &cycles.first().unwrap().expr_region,
                 &cycles.last().unwrap().expr_region,

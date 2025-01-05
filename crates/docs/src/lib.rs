@@ -5,6 +5,7 @@ mod problem;
 mod render_markdown;
 mod render_package;
 mod render_type;
+mod type_ann;
 
 pub use generate::generate_docs_html;
 pub use problem::Problem;

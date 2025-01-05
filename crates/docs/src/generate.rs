@@ -722,7 +722,8 @@ impl<'a> Docs<'a> {
 }
 
 /// After generating a type annotation, clean up its generated variables -
-/// e.g. if we have a tag union with a variable in it, drop that from the annotation.
+/// e.g. if we have a tag union with a visible unbound variable for its ext var,
+/// drop that from the annotation so we render it as [Foo] instead of [Foo]*
 fn clean_annotation(mut ann: TypeAnnotation) -> TypeAnnotation {
     let mut var_counts = MutMap::default();
 
@@ -769,7 +770,11 @@ fn clean_annotation_help(ann: &mut TypeAnnotation, var_counts: &MutMap<std::stri
                 *var_name = "*".to_string();
             }
         }
-        TypeAnnotation::Apply { name: _, parts } => {
+        TypeAnnotation::Apply {
+            name: _,
+            parts,
+            symbol: _,
+        } => {
             for part in parts.iter_mut() {
                 clean_annotation_help(part, var_counts);
             }
@@ -840,7 +845,7 @@ fn clean_annotation_help(ann: &mut TypeAnnotation, var_counts: &MutMap<std::stri
         }
         TypeAnnotation::As {
             ann,
-            name: _,
+            symbol: _,
             vars: _,
         } => {
             clean_annotation_help(ann, var_counts);
@@ -874,7 +879,7 @@ fn count_var_names(ann: &TypeAnnotation, var_counts: &mut MutMap<std::string::St
                 .and_modify(|count| *count += 1)
                 .or_insert(1);
         }
-        TypeAnnotation::Apply { name: _, parts } => {
+        TypeAnnotation::Apply { parts, symbol: _ } => {
             for part in parts {
                 count_var_names(part, var_counts);
             }
@@ -924,7 +929,7 @@ fn count_var_names(ann: &TypeAnnotation, var_counts: &mut MutMap<std::string::St
         }
         TypeAnnotation::As {
             ann,
-            name: _,
+            symbol: _,
             vars: _,
         } => {
             count_var_names(ann, var_counts);
@@ -1027,7 +1032,7 @@ fn type_to_ann(
             }),
         },
         Type::ClosureTag { name, captures, .. } => TypeAnnotation::Apply {
-            name: name.as_str(interns).to_string(),
+            symbol: name,
             parts: captures
                 .iter()
                 .map(|t| type_to_ann(t, interns, aliases, var_names))
@@ -1068,7 +1073,7 @@ fn type_to_ann(
             }),
         },
         Type::Apply(symbol, args, _) => TypeAnnotation::Apply {
-            name: symbol.as_str(interns).to_string(),
+            symbol,
             parts: args
                 .iter()
                 .map(|arg| type_to_ann(&arg.value, interns, aliases, var_names))
@@ -1094,8 +1099,8 @@ fn type_to_ann(
                 .clone()
         }),
         Type::RangedNumber(_) => TypeAnnotation::Apply {
-            name: "Num".to_string(),
-            parts: Vec::new(),
+            symbol: Symbol::NUM_NUM,
+            parts: vec![TypeAnnotation::Variable("*")],
         },
         Type::Error => TypeAnnotation::NoTypeAnn,
         Type::Pure => TypeAnnotation::NoTypeAnn,
