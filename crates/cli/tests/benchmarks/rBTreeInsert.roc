@@ -1,15 +1,15 @@
-app [main] { pf: platform "platform/main.roc" }
+app [main!] { pf: platform "platform/main.roc" }
 
-import pf.PlatformTasks
+import pf.Host
 
-main : Task {} []
-main =
+main! : {} => {}
+main! = \{} ->
     tree : RedBlackTree I64 {}
     tree = insert(0, {}, Empty)
 
     tree
     |> show
-    |> PlatformTasks.put_line
+    |> Host.put_line!
 
 show : RedBlackTree I64 {} -> Str
 show = \tree -> show_rb_tree(tree, Num.to_str, \{} -> "{}")

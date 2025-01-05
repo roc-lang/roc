@@ -1,13 +1,11 @@
-app [main] { pf: platform "platform/main.roc" }
+app [main!] { pf: platform "platform/main.roc" }
 
-import pf.PlatformTasks
+import pf.Host
 
 # based on: https://github.com/koka-lang/koka/blob/master/test/bench/haskell/deriv.hs
-IO a : Task a []
-
-main : Task {} []
-main =
-    { value, is_error } = PlatformTasks.get_int!
+main! : {} => {}
+main! = \{} ->
+    { value, is_error } = Host.get_int!({})
     input_result =
         if is_error then
             Err(GetIntError)
@@ -22,22 +20,22 @@ main =
             f : Expr
             f = pow(x, x)
 
-            nest(deriv, n, f) # original koka n = 10
-            |> Task.map(\_ -> {})
+            _ = nest!(deriv!, n, f) # original koka n = 10
+            {}
 
         Err(GetIntError) ->
-            PlatformTasks.put_line("Error: Failed to get Integer from stdin.")
+            Host.put_line!("Error: Failed to get Integer from stdin.")
 
-nest_help : I64, (I64, Expr -> IO Expr), I64, Expr -> IO Expr
-nest_help = \s, f, m, x ->
+nest_help! : I64, (I64, Expr => Expr), I64, Expr => Expr
+nest_help! = \s, f!, m, x ->
     when m is
-        0 -> Task.ok(x)
+        0 -> x
         _ ->
             w = f!((s - m), x)
-            nest_help(s, f, (m - 1), w)
+            nest_help!(s, f!, (m - 1), w)
 
-nest : (I64, Expr -> IO Expr), I64, Expr -> IO Expr
-nest = \f, n, e -> nest_help(n, f, n, e)
+nest! : (I64, Expr => Expr), I64, Expr => Expr
+nest! = \f!, n, e -> nest_help!(n, f!, n, e)
 
 Expr : [Val I64, Var Str, Add Expr Expr, Mul Expr Expr, Pow Expr Expr, Ln Expr]
 
@@ -160,12 +158,12 @@ count = \expr ->
         Pow(f, g) -> count(f) + count(g)
         Ln(f) -> count(f)
 
-deriv : I64, Expr -> IO Expr
-deriv = \i, f ->
+deriv! : I64, Expr => Expr
+deriv! = \i, f ->
     fprime = d("x", f)
     line =
         Num.to_str((i + 1))
         |> Str.concat(" count: ")
         |> Str.concat(Num.to_str(count(fprime)))
-    PlatformTasks.put_line!(line)
-    Task.ok(fprime)
+    Host.put_line!(line)
+    fprime

@@ -1,9 +1,9 @@
 platform "benchmarks"
-    requires {} { main : Task {} [] }
+    requires {} { main! : {} => {} }
     exposes []
     packages {}
     imports []
-    provides [main_for_host]
+    provides [main_for_host!]
 
-main_for_host : Task {} []
-main_for_host = main
+main_for_host! : {} => {}
+main_for_host! = \{} -> main! {}

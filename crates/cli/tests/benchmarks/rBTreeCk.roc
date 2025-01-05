@@ -1,6 +1,6 @@
-app [main] { pf: platform "platform/main.roc" }
+app [main!] { pf: platform "platform/main.roc" }
 
-import pf.PlatformTasks
+import pf.Host
 
 Color : [Red, Black]
 
@@ -37,9 +37,9 @@ fold = \f, tree, b ->
         Leaf -> b
         Node(_, l, k, v, r) -> fold(f, r, f(k, v, fold(f, l, b)))
 
-main : Task {} []
-main =
-    { value, is_error } = PlatformTasks.get_int!
+main! : {} => {}
+main! = \{} ->
+    { value, is_error } = Host.get_int!({})
     input_result =
         if is_error then
             Err(GetIntError)
@@ -58,13 +58,13 @@ main =
 
                     val
                     |> Num.to_str
-                    |> PlatformTasks.put_line
+                    |> Host.put_line!
 
                 Nil ->
-                    PlatformTasks.put_line("fail")
+                    Host.put_line!("fail")
 
         Err(GetIntError) ->
-            PlatformTasks.put_line("Error: Failed to get Integer from stdin.")
+            Host.put_line!("Error: Failed to get Integer from stdin.")
 
 insert : Tree (Num k) v, Num k, v -> Tree (Num k) v
 insert = \t, k, v -> if is_red(t) then set_black(ins(t, k, v)) else ins(t, k, v)

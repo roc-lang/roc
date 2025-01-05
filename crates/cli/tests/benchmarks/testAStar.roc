@@ -1,10 +1,10 @@
-app [main] { pf: platform "platform/main.roc" }
+app [main!] { pf: platform "platform/main.roc" }
 
-import pf.PlatformTasks
+import pf.Host
 import AStar
 
-main =
-    PlatformTasks.put_line!(show_bool(test1))
+main! = \{} ->
+    Host.put_line!(show_bool(test1))
 
 show_bool : Bool -> Str
 show_bool = \b ->

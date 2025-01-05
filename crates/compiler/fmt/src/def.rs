@@ -431,8 +431,6 @@ impl<'a> Formattable for TypeDef<'a> {
     fn format_with_options(&self, buf: &mut Buf, _parens: Parens, newlines: Newlines, indent: u16) {
         use roc_parse::ast::TypeDef::*;
 
-        println!("WTF???");
-
         match self {
             Alias { header, ann } => {
                 header.format(buf, indent);
