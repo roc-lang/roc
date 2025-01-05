@@ -1,13 +1,13 @@
-app [main] { pf: platform "platform/main.roc" }
+app [main!] { pf: platform "platform/main.roc" }
 
-import pf.PlatformTasks
+import pf.Host
 import AStar
 
-main =
-    PlatformTasks.putLine! (showBool test1)
+main! = \{} ->
+    Host.put_line!(show_bool(test1))
 
-showBool : Bool -> Str
-showBool = \b ->
+show_bool : Bool -> Str
+show_bool = \b ->
     if
         b
     then
@@ -24,14 +24,14 @@ example1 =
     step : I64 -> Set I64
     step = \n ->
         when n is
-            1 -> Set.fromList [2, 3]
-            2 -> Set.fromList [4]
-            3 -> Set.fromList [4]
-            _ -> Set.fromList []
+            1 -> Set.fromList([2, 3])
+            2 -> Set.fromList([4])
+            3 -> Set.fromList([4])
+            _ -> Set.fromList([])
 
     cost : I64, I64 -> F64
     cost = \_, _ -> 1
 
-    when AStar.findPath cost step 1 4 is
-        Ok path -> path
-        Err _ -> []
+    when AStar.find_path(cost, step, 1, 4) is
+        Ok(path) -> path
+        Err(_) -> []
