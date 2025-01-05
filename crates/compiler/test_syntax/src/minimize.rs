@@ -102,10 +102,7 @@ fn round_trip_once(input: Input<'_>, options: Options) -> Option<String> {
     let arena = Bump::new();
 
     let actual = match input.parse_in(&arena) {
-        Ok(a) => {
-            println!("actual {a:#?}");
-            a
-        }
+        Ok(a) => a,
         Err(e) => {
             if options.minimize_initial_parse_error {
                 return Some(format!("Initial parse failed: {:?}", e.normalize(&arena)));

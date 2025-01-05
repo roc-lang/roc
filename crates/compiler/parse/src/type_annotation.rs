@@ -588,7 +588,10 @@ fn record_type_field<'a>() -> impl Parser<'a, AssignedField<'a, TypeAnnotation<'
         // (This is true in both literals and types.)
         let (_, opt_loc_val, state) = optional(either(
             byte(b':', ETypeRecord::Colon),
-            byte(b'?', ETypeRecord::Optional),
+            and(
+                byte(b'?', ETypeRecord::OptionalFirst),
+                optional(byte(b'?', ETypeRecord::OptionalSecond)),
+            ),
         ))
         .parse(arena, state, min_indent)?;
 
