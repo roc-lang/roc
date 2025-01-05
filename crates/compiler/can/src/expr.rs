@@ -1148,9 +1148,6 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::RecordBuilder { .. } => {
             internal_error!("Record builder should have been desugared by now")
         }
-        ast::Expr::Backpassing(_, _, _) => {
-            internal_error!("Backpassing should have been desugared by now")
-        }
         ast::Expr::RecordUpdater(_) => {
             internal_error!("Record updater should have been desugared by now")
         }
@@ -2219,7 +2216,6 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         | ast::Expr::LowLevelDbg(_, _, _)
         | ast::Expr::Return(_, _)
         | ast::Expr::When(_, _)
-        | ast::Expr::Backpassing(_, _, _)
         | ast::Expr::SpaceBefore(_, _)
         | ast::Expr::Str(StrLiteral::Block(_))
         | ast::Expr::SpaceAfter(_, _) => false,

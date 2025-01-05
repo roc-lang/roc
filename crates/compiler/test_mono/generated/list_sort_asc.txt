@@ -1,15 +1,15 @@
 procedure List.28 (#Attr.2, #Attr.3):
-    let List.661 : List I64 = lowlevel ListSortWith { xs: `#Attr.#arg1` } #Attr.2 Num.46 #Attr.3;
-    ret List.661;
+    let List.667 : List I64 = lowlevel ListSortWith { xs: `#Attr.#arg1` } #Attr.2 Num.46 #Attr.3;
+    ret List.667;
 
 procedure List.59 (List.386):
-    let List.660 : {} = Struct {};
-    let List.659 : List I64 = CallByName List.28 List.386 List.660;
-    ret List.659;
+    let List.666 : {} = Struct {};
+    let List.665 : List I64 = CallByName List.28 List.386 List.666;
+    ret List.665;
 
 procedure Num.46 (#Attr.2, #Attr.3):
-    let Num.281 : U8 = lowlevel NumCompare #Attr.2 #Attr.3;
-    ret Num.281;
+    let Num.283 : U8 = lowlevel NumCompare #Attr.2 #Attr.3;
+    ret Num.283;
 
 procedure Test.0 ():
     let Test.2 : List I64 = Array [4i64, 3i64, 2i64, 1i64];

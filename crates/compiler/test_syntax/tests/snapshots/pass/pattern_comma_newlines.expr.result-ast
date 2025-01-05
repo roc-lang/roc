@@ -16,29 +16,26 @@
         type_defs: [],
         value_defs: [
             Annotation(
-                @0-1 Apply(
+                @0-8 Apply(
                     @0-1 NumLiteral(
                         "1",
                     ),
                     [
-                        @1-8 Tuple(
+                        @2-3 Identifier {
+                            ident: "i",
+                        },
+                        @4-5 SpaceAfter(
+                            Identifier {
+                                ident: "p",
+                            },
                             [
-                                @2-3 Identifier {
-                                    ident: "i",
-                                },
-                                @4-5 SpaceAfter(
-                                    Identifier {
-                                        ident: "p",
-                                    },
-                                    [
-                                        LineComment(
-                                            "",
-                                        ),
-                                    ],
+                                LineComment(
+                                    "",
                                 ),
                             ],
                         ),
                     ],
+                    ParensAndCommas,
                 ),
                 @9-10 BoundVariable(
                     "f",

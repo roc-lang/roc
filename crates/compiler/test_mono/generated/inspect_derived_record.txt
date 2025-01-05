@@ -162,51 +162,51 @@ procedure Inspect.64 (Inspect.302):
     ret Inspect.302;
 
 procedure List.100 (#Derived_gen.22, #Derived_gen.23, #Derived_gen.24, #Derived_gen.25, #Derived_gen.26):
-    joinpoint List.662 List.174 List.175 List.176 List.177 List.178:
-        let List.664 : Int1 = CallByName Num.22 List.177 List.178;
-        if List.664 then
-            let List.668 : {[C I64, C Decimal], Str} = CallByName List.66 List.174 List.177;
-            inc List.668;
-            let List.179 : {Str, Int1} = CallByName Inspect.233 List.175 List.668;
-            let List.667 : U64 = 1i64;
-            let List.666 : U64 = CallByName Num.51 List.177 List.667;
-            jump List.662 List.174 List.179 List.176 List.666 List.178;
+    joinpoint List.668 List.174 List.175 List.176 List.177 List.178:
+        let List.670 : Int1 = CallByName Num.22 List.177 List.178;
+        if List.670 then
+            let List.674 : {[C I64, C Decimal], Str} = CallByName List.66 List.174 List.177;
+            inc List.674;
+            let List.179 : {Str, Int1} = CallByName Inspect.233 List.175 List.674;
+            let List.673 : U64 = 1i64;
+            let List.672 : U64 = CallByName Num.51 List.177 List.673;
+            jump List.668 List.174 List.179 List.176 List.672 List.178;
         else
             dec List.174;
             ret List.175;
     in
     inc #Derived_gen.22;
-    jump List.662 #Derived_gen.22 #Derived_gen.23 #Derived_gen.24 #Derived_gen.25 #Derived_gen.26;
+    jump List.668 #Derived_gen.22 #Derived_gen.23 #Derived_gen.24 #Derived_gen.25 #Derived_gen.26;
 
 procedure List.18 (List.171, List.172, List.173):
-    let List.660 : U64 = 0i64;
-    let List.661 : U64 = CallByName List.6 List.171;
-    let List.659 : {Str, Int1} = CallByName List.100 List.171 List.172 List.173 List.660 List.661;
-    ret List.659;
+    let List.666 : U64 = 0i64;
+    let List.667 : U64 = CallByName List.6 List.171;
+    let List.665 : {Str, Int1} = CallByName List.100 List.171 List.172 List.173 List.666 List.667;
+    ret List.665;
 
 procedure List.6 (#Attr.2):
-    let List.670 : U64 = lowlevel ListLenU64 #Attr.2;
-    ret List.670;
+    let List.676 : U64 = lowlevel ListLenU64 #Attr.2;
+    ret List.676;
 
 procedure List.66 (#Attr.2, #Attr.3):
-    let List.669 : {[C I64, C Decimal], Str} = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-    ret List.669;
+    let List.675 : {[C I64, C Decimal], Str} = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret List.675;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.284 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.284;
+    let Num.286 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.286;
 
 procedure Num.51 (#Attr.2, #Attr.3):
-    let Num.283 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    let Num.285 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    ret Num.285;
+
+procedure Num.96 (#Attr.2):
+    let Num.283 : Str = lowlevel NumToStr #Attr.2;
     ret Num.283;
 
 procedure Num.96 (#Attr.2):
-    let Num.281 : Str = lowlevel NumToStr #Attr.2;
-    ret Num.281;
-
-procedure Num.96 (#Attr.2):
-    let Num.282 : Str = lowlevel NumToStr #Attr.2;
-    ret Num.282;
+    let Num.284 : Str = lowlevel NumToStr #Attr.2;
+    ret Num.284;
 
 procedure Str.3 (#Attr.2, #Attr.3):
     let Str.246 : Str = lowlevel StrConcat #Attr.2 #Attr.3;

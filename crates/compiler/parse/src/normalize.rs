@@ -716,11 +716,6 @@ impl<'a> Normalize<'a> for Expr<'a> {
             ),
             Expr::Crash => Expr::Crash,
             Expr::Defs(a, b) => fold_defs(arena, a.defs(), b.value.normalize(arena)),
-            Expr::Backpassing(a, b, c) => Expr::Backpassing(
-                arena.alloc(a.normalize(arena)),
-                arena.alloc(b.normalize(arena)),
-                arena.alloc(c.normalize(arena)),
-            ),
             Expr::Dbg => Expr::Dbg,
             Expr::DbgStmt {
                 first,
@@ -884,9 +879,10 @@ impl<'a> Normalize<'a> for Pattern<'a> {
             Pattern::Identifier { ident } => Pattern::Identifier { ident },
             Pattern::Tag(a) => Pattern::Tag(a),
             Pattern::OpaqueRef(a) => Pattern::OpaqueRef(a),
-            Pattern::Apply(a, b) => Pattern::Apply(
+            Pattern::Apply(a, b, c) => Pattern::Apply(
                 arena.alloc(a.normalize(arena)),
                 arena.alloc(b.normalize(arena)),
+                c,
             ),
             Pattern::RecordDestructure(a) => Pattern::RecordDestructure(a.normalize(arena)),
             Pattern::RequiredField(a, b) => {
@@ -1083,9 +1079,6 @@ impl<'a> Normalize<'a> for EExpr<'a> {
             }
             EExpr::MalformedPattern(_pos) => EExpr::MalformedPattern(Position::zero()),
             EExpr::QualifiedTag(_pos) => EExpr::QualifiedTag(Position::zero()),
-            EExpr::BackpassComma(_pos) => EExpr::BackpassComma(Position::zero()),
-            EExpr::BackpassArrow(_pos) => EExpr::BackpassArrow(Position::zero()),
-            EExpr::BackpassContinue(_pos) => EExpr::BackpassContinue(Position::zero()),
             EExpr::DbgContinue(_pos) => EExpr::DbgContinue(Position::zero()),
             EExpr::When(inner_err, _pos) => {
                 EExpr::When(inner_err.normalize(arena), Position::zero())
@@ -1265,6 +1258,8 @@ impl<'a> Normalize<'a> for EPattern<'a> {
             EPattern::AccessorFunction(_) => EPattern::AccessorFunction(Position::zero()),
             EPattern::RecordUpdaterFunction(_) => EPattern::RecordUpdaterFunction(Position::zero()),
             EPattern::Str(e, _) => EPattern::Str(e.normalize(arena), Position::zero()),
+            EPattern::ParenStart(_) => EPattern::ParenStart(Position::zero()),
+            EPattern::ParenEnd(_) => EPattern::ParenEnd(Position::zero()),
         }
     }
 }

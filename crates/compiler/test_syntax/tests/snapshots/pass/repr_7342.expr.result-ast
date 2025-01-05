@@ -37,6 +37,7 @@
                                     ident: "a",
                                 },
                             ],
+                            Whitespace,
                         ),
                         @10-11 BoundVariable(
                             "t",

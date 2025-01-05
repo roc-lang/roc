@@ -7,6 +7,7 @@
 
 use crate::test_helpers::{Input, InputKind};
 use bumpalo::Bump;
+use roc_fmt::MigrationFlags;
 use roc_parse::{ast::Malformed, normalize::Normalize};
 
 #[derive(Copy, Clone, Debug)]
@@ -101,7 +102,10 @@ fn round_trip_once(input: Input<'_>, options: Options) -> Option<String> {
     let arena = Bump::new();
 
     let actual = match input.parse_in(&arena) {
-        Ok(a) => a,
+        Ok(a) => {
+            println!("actual {a:#?}");
+            a
+        }
         Err(e) => {
             if options.minimize_initial_parse_error {
                 return Some(format!("Initial parse failed: {:?}", e.normalize(&arena)));
@@ -119,7 +123,12 @@ fn round_trip_once(input: Input<'_>, options: Options) -> Option<String> {
         }
     }
 
-    let output = actual.format();
+    let flags = MigrationFlags {
+        snakify: false,
+        parens_and_commas: false,
+    };
+
+    let output = actual.format(flags);
 
     let reparsed_ast = match output.as_ref().parse_in(&arena) {
         Ok(r) => r,
@@ -139,7 +148,7 @@ fn round_trip_once(input: Input<'_>, options: Options) -> Option<String> {
         return Some("Different ast".to_string());
     }
 
-    let reformatted = reparsed_ast.format();
+    let reformatted = reparsed_ast.format(flags);
 
     if output != reformatted {
         return Some("Formatting not stable".to_string());

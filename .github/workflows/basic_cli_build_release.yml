@@ -1,5 +1,5 @@
 on:
-  #  pull_request:
+#  pull_request:
   workflow_dispatch:
 
 # this cancels workflows currently in progress if you start a new one
@@ -11,7 +11,7 @@ env:
   # use .tar.gz for quick testing
   ARCHIVE_FORMAT: .tar.br
   # Make a new basic-cli git tag and set it here before starting this workflow
-  RELEASE_TAG: 0.17.0
+  RELEASE_TAG: 0.18.0
 
 jobs:
   prepare:
@@ -34,14 +34,14 @@ jobs:
           fi
 
       # get latest nightly releases
-      #- run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
-      #- run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_arm64-latest.tar.gz
-      #- run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_x86_64-latest.tar.gz
-      #- run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_apple_silicon-latest.tar.gz
-      - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-TESTING.tar.gz
-      - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_arm64-TESTING.tar.gz
-      - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_x86_64-TESTING.tar.gz
-      - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_apple_silicon-TESTING.tar.gz
+      - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
+      - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_arm64-latest.tar.gz
+      - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_x86_64-latest.tar.gz
+      - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_apple_silicon-latest.tar.gz
+      #- run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-TESTING.tar.gz
+      #- run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_arm64-TESTING.tar.gz
+      #- run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_x86_64-TESTING.tar.gz
+      #- run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_apple_silicon-TESTING.tar.gz
 
       - name: Save roc_nightly archives
         uses: actions/upload-artifact@v4
@@ -96,13 +96,15 @@ jobs:
             basic-cli/platform/linux-arm64.a
 
   build-macos-x86_64-files:
-    runs-on: [macos-12] # I expect the generated files to work on macOS 12 and up
+    runs-on: [macos-13] # I expect the generated files to work on macOS 13 and up
     needs: [prepare]
     steps:
       - uses: actions/checkout@v4
 
       - name: Download the previously uploaded roc_nightly archives
         uses: actions/download-artifact@v4
+
+      - run: brew install z3
 
       - run: ./ci/build_basic_cli.sh macos_x86_64
 
@@ -203,15 +205,29 @@ jobs:
           path: |
             docs.tar.gz
 
-  test-release-ubuntu:
+  test-release:
     needs: [create-release-archive]
-    runs-on: [ubuntu-20.04]
+    strategy:
+      matrix:
+        os: [ubuntu-20.04, macos-13, macos-14]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Download the previously uploaded files
         uses: actions/download-artifact@v4
 
+      - name: Set OS-specific variables
+        id: vars
+        run: |
+          if [[ "${{ matrix.os }}" =~ ^ubuntu- ]]; then
+            echo "os_pattern=linux_x86_64" >> $GITHUB_OUTPUT
+          elif [ "${{ matrix.os }}" = "macos-13" ]; then
+            echo "os_pattern=macos_x86_64" >> $GITHUB_OUTPUT
+          else
+            echo "os_pattern=macos_apple_silicon" >> $GITHUB_OUTPUT
+          fi
+
       - name: mv roc nightly and simplify name
-        run: mv $(ls -d artifact/* | grep "roc_nightly.*tar\.gz" | grep "linux_x86_64") ./roc_nightly.tar.gz
+        run: mv $(ls -d artifact/* | grep "roc_nightly.*tar\.gz" | grep "${{ steps.vars.outputs.os_pattern }}") ./roc_nightly.tar.gz
 
       - name: decompress the tar
         run: tar -xzvf roc_nightly.tar.gz
@@ -231,11 +247,18 @@ jobs:
           cd basic-cli-platform && ls | grep "tar" | xargs brotli -d
           ls | grep "tar$" | xargs tar -xf
 
-      - name: Install expect for tests if we dont have it yet
-        run: if ! dpkg -l | grep -qw expect; then sudo apt install -y expect; fi
+      - name: Install dependencies (Ubuntu)
+        if: startsWith(matrix.os, 'ubuntu-')
+        run: |
+          if ! dpkg -l | grep -qw expect; then sudo apt install -y expect; fi
+          if ! dpkg -l | grep -qw ncat; then sudo apt install -y ncat; fi
 
-      - name: Install ncat for tests if we dont have it yet
-        run: if ! dpkg -l | grep -qw ncat; then sudo apt install -y ncat; fi
+      - name: Install dependencies (macOS)
+        if: startsWith(matrix.os, 'macos-')
+        run: |
+          brew install expect
+          brew install nmap  # includes ncat
+          brew install z3
 
       - name: prepare testing
         run: |

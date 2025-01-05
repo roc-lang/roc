@@ -6433,6 +6433,82 @@ All branches in an `if` must have the same type!
     }
 
     #[test]
+    fn exposes_start() {
+        report_header_problem_as(
+            indoc!(
+                r"
+                module foobar []
+                "
+            ),
+            indoc!(
+                r#"
+                ── WEIRD EXPOSES in /code/proj/Main.roc ────────────────────────────────────────
+
+                I am partway through parsing a header, but I got stuck here:
+
+                1│  module foobar []
+                           ^
+
+                I was expecting an `exposes` list like
+
+                    [Animal, default, tame]
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn exposes_missing_comma() {
+        report_header_problem_as(
+            indoc!(
+                r"
+                module [value func]
+                "
+            ),
+            indoc!(
+                r#"
+                ── WEIRD EXPOSES in /code/proj/Main.roc ────────────────────────────────────────
+
+                I am partway through parsing an `exposes` list, but I got stuck here:
+
+                1│  module [value func]
+                                  ^
+
+                I was expecting a type name, value name or function name next, like
+
+                    [Animal, default, tame]
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn exposes_end() {
+        report_header_problem_as(
+            indoc!(
+                r"
+                module [value
+                "
+            ),
+            indoc!(
+                r#"
+                ── WEIRD EXPOSES in /code/proj/Main.roc ────────────────────────────────────────
+
+                I am partway through parsing an `exposes` list, but I got stuck here:
+
+                1│  module [value
+                2│
+                    ^
+
+                I was expecting a type name, value name or function name next, like
+
+                    [Animal, default, tame]
+            "#
+            ),
+        )
+    }
+
+    #[test]
     fn invalid_app_name() {
         report_header_problem_as(
             indoc!(
@@ -11683,31 +11759,6 @@ All branches in an `if` must have the same type!
         ),
     @r"
     "
-    );
-
-    test_report!(
-        deprecated_backpassing,
-        indoc!(
-            r#"
-            foo = \bar ->
-                baz <- Result.try bar
-
-                Ok (baz * 3)
-
-            foo (Ok 123)
-            "#
-        ),
-        @r###"
-    ── BACKPASSING DEPRECATED in /code/proj/Main.roc ───────────────────────────────
-
-    Backpassing (<-) like this will soon be deprecated:
-
-    5│          baz <- Result.try bar
-                ^^^^^^^^^^^^^^^^^^^^^
-
-    You should use a ! for awaiting tasks or a ? for trying results, and
-    functions everywhere else.
-    "###
     );
 
     test_report!(

@@ -1,0 +1,33 @@
+@0-13 SpaceAfter(
+    Closure(
+        [
+            @1-5 Apply(
+                @1-2 Tag(
+                    "L",
+                ),
+                [
+                    @4-5 SpaceAfter(
+                        SpaceAfter(
+                            Identifier {
+                                ident: "z",
+                            },
+                            [
+                                Newline,
+                            ],
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                ParensAndCommas,
+            ),
+        ],
+        @11-13 Num(
+            "42",
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

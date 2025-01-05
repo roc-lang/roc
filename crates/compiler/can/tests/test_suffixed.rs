@@ -151,6 +151,28 @@ mod suffixed_tests {
     }
 
     /**
+     * Example of unwrapping a Result with ?? operator
+     *
+     * Note that ?? is desugared into a when expression,
+     * however this also tests the parser.
+     *
+     */
+    #[test]
+    fn simple_double_question() {
+        run_test!(
+            r#"
+            main =
+                "123"
+                |> Str.toU8 ?? 255
+                |> Num.toStr
+                |> line!
+
+                Task.ok {}
+            "#
+        );
+    }
+
+    /**
      * Example with a parens suffixed sub-expression
      * in the function part of an Apply.
      *

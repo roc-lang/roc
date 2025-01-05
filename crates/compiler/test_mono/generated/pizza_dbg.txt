@@ -35,12 +35,12 @@ procedure Inspect.64 (Inspect.302):
     ret Inspect.302;
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.281 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.281;
+    let Num.283 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.283;
 
 procedure Num.96 (#Attr.2):
-    let Num.282 : Str = lowlevel NumToStr #Attr.2;
-    ret Num.282;
+    let Num.284 : Str = lowlevel NumToStr #Attr.2;
+    ret Num.284;
 
 procedure Str.3 (#Attr.2, #Attr.3):
     let Str.246 : Str = lowlevel StrConcat #Attr.2 #Attr.3;

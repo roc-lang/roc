@@ -29,6 +29,7 @@
                                 ident: "code",
                             },
                         ],
+                        Whitespace,
                     ),
                     @29-32 Var {
                         module_name: "",

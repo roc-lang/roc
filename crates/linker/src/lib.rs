@@ -28,17 +28,25 @@ pub enum LinkType {
     None = 2,
 }
 
-pub fn supported(link_type: LinkType, target: Target) -> bool {
+#[derive(Debug, PartialEq, Eq)]
+pub enum SupportLevel {
+    Full,
+    Wip,
+    None,
+}
+
+pub fn support_level(link_type: LinkType, target: Target) -> SupportLevel {
     if let LinkType::Executable = link_type {
         match target {
-            Target::LinuxX64 => true,
-            Target::WinX64 => true,
+            Target::LinuxX64 => SupportLevel::Full,
+            Target::WinX64 => SupportLevel::Full,
             // macho support is incomplete
-            Target::MacX64 => false,
-            _ => false,
+            Target::MacX64 => SupportLevel::None,
+            Target::MacArm64 => SupportLevel::Wip,
+            _ => SupportLevel::None,
         }
     } else {
-        false
+        SupportLevel::None
     }
 }
 
@@ -47,8 +55,16 @@ pub fn link_preprocessed_host(
     roc_app_bytes: &[u8],
     binary_path: &Path,
     metadata: PathBuf,
+    verbose: bool,
 ) {
-    surgery(roc_app_bytes, &metadata, binary_path, false, false, target)
+    surgery(
+        roc_app_bytes,
+        &metadata,
+        binary_path,
+        verbose,
+        false,
+        target,
+    )
 }
 
 pub fn generate_stub_lib_from_loaded(
@@ -309,6 +325,7 @@ pub fn preprocess_host(
 
         (_, OperatingSystem::Mac) => {
             crate::macho::preprocess_macho_le(
+                target.architecture(),
                 host_exe_path,
                 metadata_path,
                 preprocessed_path,

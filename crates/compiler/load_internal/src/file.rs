@@ -1317,8 +1317,13 @@ fn handle_root_type<'a>(
 
         use HeaderType::*;
 
+        let use_main = match header_type {
+            Package { .. } | App { .. } | Platform { .. } => true,
+            Module { .. } | Builtin { .. } | Hosted { .. } => false,
+        };
+
         match header_type {
-            Module { .. } | Builtin { .. } | Hosted { .. } => {
+            Module { .. } | Builtin { .. } | Hosted { .. } | Package { .. } => {
                 let main_path = opt_main_path.or_else(|| find_main_roc_recursively(src_dir));
 
                 let cache_dir = roc_cache_dir.as_persistent_path();
@@ -1340,9 +1345,15 @@ fn handle_root_type<'a>(
                     header_output.msg = Msg::Many(messages);
                 }
 
-                Ok((header_output, RootType::Module { main_path }))
+                let root_type = if use_main {
+                    RootType::Main
+                } else {
+                    RootType::Module { main_path }
+                };
+
+                Ok((header_output, root_type))
             }
-            App { .. } | Package { .. } | Platform { .. } => Ok((header_output, RootType::Main)),
+            App { .. } | Platform { .. } => Ok((header_output, RootType::Main)),
         }
     } else {
         Ok((header_output, RootType::Main))

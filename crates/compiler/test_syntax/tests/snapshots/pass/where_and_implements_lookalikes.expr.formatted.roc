@@ -1,6 +1,5 @@
 (
-    i :
-        a #
-        where w implements I
+    i : a #
+    wherew implementsI
     e
 )

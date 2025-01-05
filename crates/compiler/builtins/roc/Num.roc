@@ -155,6 +155,7 @@ module [
     f64ToParts,
     f32FromParts,
     f64FromParts,
+    fromBool,
     nanF32,
     nanF64,
     infinityF32,
@@ -1458,6 +1459,18 @@ f32FromParts : { sign : Bool, exponent : U8, fraction : U32 } -> F32
 ## The exponent should not be bigger than 0x07FF, any bigger value will be truncated.
 f64FromParts : { sign : Bool, exponent : U16, fraction : U64 } -> F64
 
+## Convert a `Bool` to a `Num`
+## ```roc
+## expect (Num.fromBool Bool.true) == 1
+## expect (Num.fromBool Bool.false) == 0
+## ```
+fromBool : Bool -> Num *
+fromBool = \bool ->
+    if bool then
+        1
+    else
+        0
+
 ## The value for not-a-number for a [F32] according to the IEEE 754 standard.
 nanF32 : F32
 nanF32 = 0.0f32 / 0.0
@@ -1473,3 +1486,4 @@ infinityF32 = 1.0f32 / 0.0
 ## The value for infinity for a [F64] according to the IEEE 754 standard.
 infinityF64 : F64
 infinityF64 = 1.0f64 / 0.0
+

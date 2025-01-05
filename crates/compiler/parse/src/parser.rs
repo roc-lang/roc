@@ -519,9 +519,6 @@ pub enum EExpr<'a> {
     ElmStyleFunction(Region, Position),
     MalformedPattern(Position),
     QualifiedTag(Position),
-    BackpassComma(Position),
-    BackpassArrow(Position),
-    BackpassContinue(Position),
     DbgContinue(Position),
 
     When(EWhen<'a>, Position),
@@ -603,9 +600,6 @@ impl<'a> EExpr<'a> {
             | EExpr::ElmStyleFunction(_, p)
             | EExpr::MalformedPattern(p)
             | EExpr::QualifiedTag(p)
-            | EExpr::BackpassComma(p)
-            | EExpr::BackpassArrow(p)
-            | EExpr::BackpassContinue(p)
             | EExpr::DbgContinue(p)
             | EExpr::Underscore(p)
             | EExpr::Crash(p)
@@ -1072,6 +1066,9 @@ pub enum EPattern<'a> {
     AccessorFunction(Position),
     RecordUpdaterFunction(Position),
     Str(EString<'a>, Position),
+
+    ParenStart(Position),
+    ParenEnd(Position),
 }
 
 impl<'a> EPattern<'a> {
@@ -1096,7 +1093,9 @@ impl<'a> EPattern<'a> {
             | EPattern::IndentEnd(position)
             | EPattern::AsIndentStart(position)
             | EPattern::AccessorFunction(position)
-            | EPattern::RecordUpdaterFunction(position) => Region::from_pos(*position),
+            | EPattern::RecordUpdaterFunction(position)
+            | EPattern::ParenStart(position)
+            | EPattern::ParenEnd(position) => Region::from_pos(*position),
         }
     }
 }
