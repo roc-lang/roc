@@ -79,9 +79,12 @@ hash_str_bytes = \hasher, s ->
 
 ## Adds a list of [Hash]able elements to a [Hasher] by hashing each element.
 hash_list = \hasher, lst ->
-    List.walk(lst, hasher, (\accum_hasher, elem ->
-        hash(accum_hasher, elem)
-    ))
+    List.walk(
+        lst,
+        hasher,
+        \accum_hasher, elem ->
+            hash(accum_hasher, elem),
+    )
 
 ## Adds a single [Bool] to a hasher.
 hash_bool : a, Bool -> a where a implements Hasher
@@ -120,7 +123,7 @@ hash_unordered = \hasher, container, walk ->
     walk(
         container,
         0,
-        (\accum, elem ->
+        \accum, elem ->
             x =
                 # Note, we intentionally copy the hasher in every iteration.
                 # Having the same base state is required for unordered hashing.
@@ -133,7 +136,6 @@ hash_unordered = \hasher, container, walk ->
                 # we don't want to lose a bit of entropy on overflow, so add it back in.
                 Num.add_wrap(next_accum, 1)
             else
-                next_accum
-        )
+                next_accum,
     )
     |> \accum -> add_u64(hasher, accum)
