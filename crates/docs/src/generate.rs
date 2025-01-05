@@ -80,6 +80,7 @@ pub fn generate_docs_html<'a>(
     // under the shell.
     file::populate_build_dir(arena, out_dir.as_ref(), &assets)?;
 
+<<<<<<< HEAD
     let loaded_module = load_module_for_docs(root_file.as_ref().to_path_buf());
     let mut paths_by_shorthand = Vec::from_iter_in(iter::once((PathBuf::new(), root_file)), arena);
 
@@ -98,6 +99,35 @@ pub fn generate_docs_html<'a>(
     }
 
     Ok(())
+||||||| parent of 7d06960495 (Sketch out doing package shorthands in docs)
+    Docs::new(
+        arena,
+        loaded_module,
+        assets.raw_template_html.as_ref(),
+        pkg_name,
+        opt_user_specified_base_url,
+    )
+    .generate(out_dir)
+=======
+    let loaded_module = load_module_for_docs(root_file.as_ref().to_path_buf());
+    let mut paths_by_shorthand = Vec::from_iter_in(iter::once((PathBuf::new(), root_file)), arena);
+
+    // TODO add the other shorthands to paths_by_shorthand
+
+    while let Some((path_prefix, path)) = paths_by_shorthand.pop() {
+        Docs::new(
+            arena,
+            &loaded_module,
+            assets.raw_template_html.as_ref(),
+            pkg_name,
+            &path_prefix,
+            opt_user_specified_base_url,
+        )
+        .generate(&out_dir)?;
+    }
+
+    Ok(())
+>>>>>>> 7d06960495 (Sketch out doing package shorthands in docs)
 }
 
 struct Ability<'a> {
@@ -108,7 +138,8 @@ struct Ability<'a> {
 struct BodyEntry<'a> {
     pub name: &'a str,
     pub type_vars_names: &'a [&'a str],
-    pub type_annotation: TypeAnnotation,
+    pub type_annotation: Cow<'a, TypeAnnotation>,
+    pub symbol: Symbol,
     pub docs: Option<&'a str>,
 }
 
@@ -120,15 +151,15 @@ struct Docs<'a> {
     opt_user_specified_base_url: Option<&'a str>,
     sb_entries: Vec<'a, SBEntry<'a>>,
     body_entries_by_module: Vec<'a, (ModuleId, &'a [BodyEntry<'a>])>,
-    scopes_by_module: Vec<'a, (ModuleId, Scope)>,
-    interns: Interns,
+    scopes_by_module: Vec<'a, (ModuleId, &'a Scope)>,
+    interns: &'a Interns,
     module_names: Vec<'a, (ModuleId, &'a str)>,
 }
 
 impl<'a> Docs<'a> {
     pub fn new(
         arena: &'a Bump,
-        loaded_module: LoadedModule,
+        loaded_module: &'a LoadedModule,
         raw_template_html: &'a str,
         pkg_name: &'a str,
         path_prefix: &'a Path,
@@ -143,13 +174,13 @@ impl<'a> Docs<'a> {
             Vec::with_capacity_in(loaded_module.exposed_modules.len(), arena);
         let header_doc_comment = arena.alloc_str(&loaded_module.header_doc_comment);
 
-        for (module_id, docs) in loaded_module.exposed_module_docs.into_iter() {
+        for (module_id, docs) in loaded_module.exposed_module_docs.iter() {
             let opt_decls = loaded_module
                 .typechecked
                 .get(&module_id)
                 .map(|checked| &checked.decls);
 
-            module_names.push((module_id, &*arena.alloc_str(&docs.name)));
+            module_names.push((*module_id, &*arena.alloc_str(&docs.name)));
 
             let mut exposed = Vec::with_capacity_in(docs.exposed_symbols.len(), arena);
             for symbol in docs.exposed_symbols.iter() {
@@ -176,13 +207,13 @@ impl<'a> Docs<'a> {
 
             let mut body_entries = Vec::with_capacity_in(docs.entries.len(), arena);
 
-            for entry in docs.entries.into_iter() {
+            for entry in docs.entries.iter() {
                 if let DocEntry::DocDef(def) = entry {
                     if docs.exposed_symbols.contains(&def.symbol) {
                         let type_annotation = if let TypeAnnotation::NoTypeAnn = def.type_annotation
                         {
                             // If the user didn't specify a type annotation, infer it!
-                            opt_decls
+                            let ann = opt_decls
                                 .and_then(|decls| {
                                     decls
                                         .ann_from_symbol(def.symbol)
@@ -227,9 +258,11 @@ impl<'a> Docs<'a> {
                                             })
                                         })
                                         .unwrap_or(TypeAnnotation::NoTypeAnn)
-                                })
+                                });
+
+                            Cow::Owned(ann)
                         } else {
-                            def.type_annotation
+                            Cow::Borrowed(&def.type_annotation)
                         };
 
                         let type_vars_names = Vec::from_iter_in(
@@ -240,7 +273,8 @@ impl<'a> Docs<'a> {
 
                         body_entries.push(BodyEntry {
                             name: &*arena.alloc_str(&def.name),
-                            docs: def.docs.map(|str| &*arena.alloc_str(&str)),
+                            docs: def.docs.as_ref().map(|str| &*arena.alloc_str(&str)),
+                            symbol: def.symbol,
                             type_annotation,
                             type_vars_names,
                         });
@@ -248,12 +282,12 @@ impl<'a> Docs<'a> {
                 }
             }
 
-            body_entries_by_module.push((module_id, body_entries.into_bump_slice()));
-            scopes_by_module.push((module_id, docs.scope));
+            body_entries_by_module.push((*module_id, body_entries.into_bump_slice()));
+            scopes_by_module.push((*module_id, &docs.scope));
         }
 
         Self {
-            interns: loaded_module.interns,
+            interns: &loaded_module.interns,
             header_doc_comment,
             sb_entries,
             body_entries_by_module,
