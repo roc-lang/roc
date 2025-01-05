@@ -1494,7 +1494,7 @@ pub fn desugar_record_destructures<'a>(
 /// value produced by `expr`. Essentially:
 /// (
 ///     tmpVar = expr
-///     LowLevelDbg (Inspect.toStr tmpVar)
+///     LowLevelDbg (Inspect.to_str tmpVar)
 ///     tmpVar
 /// )
 fn desugar_dbg_expr<'a>(
@@ -1552,7 +1552,7 @@ pub fn desugar_invalid_dbg_expr<'a>(
     desugar_dbg_expr(env, scope, placeholder_expr, outer_region)
 }
 
-/// Desugars a `dbg x` statement into essentially `Inspect.toStr x |> LowLevelDbg`
+/// Desugars a `dbg x` statement into essentially `Inspect.to_str x |> LowLevelDbg`
 fn desugar_dbg_stmt<'a>(
     env: &mut Env<'a>,
     condition: &'a Loc<Expr<'a>>,
@@ -1562,7 +1562,7 @@ fn desugar_dbg_stmt<'a>(
 
     let inspect_fn = Var {
         module_name: ModuleName::INSPECT,
-        ident: "toStr",
+        ident: "to_str",
     };
     let loc_inspect_fn_var = env.arena.alloc(Loc {
         value: inspect_fn,

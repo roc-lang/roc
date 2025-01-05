@@ -6353,7 +6353,7 @@ All branches in an `if` must have the same type!
                     exposes []
                     packages {}
                     imports []
-                    provides [mainForHost]
+                    provides [main_for_host]
                     effects fx.Effect
                          {
                              putChar : I64 -> Effect {},
@@ -14638,7 +14638,7 @@ All branches in an `if` must have the same type!
         indoc!(
             r#"
             myFunction = \x ->
-                y = Num.toStr x
+                y = Num.to_str x
 
                 return y
 
@@ -14927,7 +14927,7 @@ All branches in an `if` must have the same type!
             main! = \{} ->
                 Effect.putLine! "hello"
 
-                Num.toStr 123
+                Num.to_str 123
 
                 Ok {}
             "#
@@ -14935,9 +14935,9 @@ All branches in an `if` must have the same type!
         @r#"
     ── IGNORED RESULT in /code/proj/Main.roc ───────────────────────────────────────
 
-    The result of this call to `Num.toStr` is ignored:
+    The result of this call to `Num.to_str` is ignored:
 
-    8│      Num.toStr 123
+    8│      Num.to_str 123
             ^^^^^^^^^
 
     Standalone statements are required to produce an empty record, but the
@@ -14953,7 +14953,7 @@ All branches in an `if` must have the same type!
 
     This statement does not produce any effects:
 
-    8│      Num.toStr 123
+    8│      Num.to_str 123
             ^^^^^^^^^^^^^
 
     Standalone statements are only useful if they call effectful
@@ -14974,7 +14974,7 @@ All branches in an `if` must have the same type!
             main! = \{} ->
                 Effect.putLine! "hello"
 
-                _ignored = Num.toStr 123
+                _ignored = Num.to_str 123
 
                 Ok {}
             "#
@@ -14984,7 +14984,7 @@ All branches in an `if` must have the same type!
 
     This assignment doesn't introduce any new variables:
 
-    8│      _ignored = Num.toStr 123
+    8│      _ignored = Num.to_str 123
             ^^^^^^^^
 
     Since it doesn't call any effectful functions, this assignment cannot
@@ -15042,7 +15042,7 @@ All branches in an `if` must have the same type!
             u64Nums = parseItemsWith Str.toU64
             u8Nums = parseItemsWith Str.toU8
 
-            "$(Inspect.toStr u64Nums) $(Inspect.toStr u8Nums)"
+            "$(Inspect.to_str u64Nums) $(Inspect.to_str u8Nums)"
             "#
         ),
         @"" // no errors

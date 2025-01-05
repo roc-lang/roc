@@ -150,7 +150,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                Num.toStr
+                Num.to_str
                 "
             ),
             "Num * -> Str",
@@ -4584,8 +4584,8 @@ mod solve_expr {
                                 |> Str.concat ") ("
                                 |> Str.concat (printExpr b)
                                 |> Str.concat ")"
-                        Val v -> Num.toStr v
-                        Var v -> "Var " |> Str.concat (Num.toStr v)
+                        Val v -> Num.to_str v
+                        Var v -> "Var " |> Str.concat (Num.to_str v)
 
                 main : Str
                 main = printExpr (Var 3)

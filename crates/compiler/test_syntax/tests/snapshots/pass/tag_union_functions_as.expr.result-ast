@@ -18,7 +18,7 @@
             value_defs: [
                 AnnotatedBody {
                     ann_pattern: @0-11 Identifier {
-                        ident: "mainForHost",
+                        ident: "main_for_host",
                     },
                     ann_type: @14-0 As(
                         @14-76 TagUnion {
@@ -88,7 +88,7 @@
                         Newline,
                     ],
                     body_pattern: @83-94 Identifier {
-                        ident: "mainForHost",
+                        ident: "main_for_host",
                     },
                     body_expr: @97-101 Var {
                         module_name: "",

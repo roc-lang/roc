@@ -5799,8 +5799,8 @@ fn expose_alias_to_host<'a>(
         RawFunctionLayout::Function(arguments, closure, result) => {
             // define closure size and return value size, e.g.
             //
-            // * roc__mainForHost_1_Update_size() -> i64
-            // * roc__mainForHost_1_Update_result_size() -> i64
+            // * roc__main_for_host_1_Update_size() -> i64
+            // * roc__main_for_host_1_Update_result_size() -> i64
 
             let it = hels.proc_layout.arguments.iter().copied();
             let bytes = roc_alias_analysis::func_name_bytes_help(
@@ -5847,7 +5847,7 @@ fn expose_alias_to_host<'a>(
         RawFunctionLayout::ZeroArgumentThunk(result) => {
             // Define only the return value size, since this is a thunk
             //
-            // * roc__mainForHost_1_Update_result_size() -> i64
+            // * roc__main_for_host_1_Update_result_size() -> i64
 
             let result_type =
                 basic_type_from_layout(env, layout_interner, layout_interner.get_repr(result));
@@ -5894,7 +5894,7 @@ fn build_closure_caller<'a, 'ctx>(
 
     // STEP 1: build function header
 
-    // e.g. `roc__mainForHost_0_caller` (def_name is `mainForHost_0`)
+    // e.g. `roc__main_for_host_0_caller` (def_name is `main_for_host_0`)
     let function_name = format!("roc__{def_name}_caller");
 
     let function_spec = FunctionSpec::cconv(env, CCReturn::Void, None, &argument_types);

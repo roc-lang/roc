@@ -3,19 +3,19 @@ app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/downlo
 import pf.Stdout
 
 main =
-    multipleIn =
+    multiple_in =
         { sequential <-
-            a: Task.ok 123,
-            b: Task.ok "abc",
-            c: Task.ok [123],
-            _d: Task.ok ["abc"],
-            _: Task.ok (Dict.single "a" "b"),
+            a: Task.ok(123),
+            b: Task.ok("abc"),
+            c: Task.ok([123]),
+            _d: Task.ok(["abc"]),
+            _: Task.ok(Dict.single("a", "b")),
         }!
 
-    Stdout.line! "For multiple tasks: $(Inspect.toStr multipleIn)"
+    Stdout.line!("For multiple tasks: $(Inspect.to_str(multiple_in))")
 
 sequential : Task a err, Task b err, (a, b -> c) -> Task c err
-sequential = \firstTask, secondTask, mapper ->
-    first = firstTask!
-    second = secondTask!
-    Task.ok (mapper first second)
+sequential = \first_task, second_task, mapper ->
+    first = first_task!
+    second = second_task!
+    Task.ok(mapper(first, second))

@@ -199,8 +199,8 @@ import Result exposing [Result]
 ## ends up having the type `U64`.
 ##
 ## Sometimes number literals don't become more specific. For example,
-## the `Num.toStr` function has the type `Num * -> Str`. This means that
-## when calling `Num.toStr(5 + 6)`, the expression `5 + 6`
+## the `Num.to_str` function has the type `Num * -> Str`. This means that
+## when calling `Num.to_str(5 + 6)`, the expression `5 + 6`
 ## still has the type `Num *`. When this happens, `Num *` defaults to
 ## being an [I64] - so this addition expression would overflow
 ## if either 5 or 6 were replaced with a number big enough to cause
@@ -209,7 +209,7 @@ import Result exposing [Result]
 ## If this default of [I64] is not big enough for your purposes,
 ## you can add an `i128` to the end of the number literal, like so:
 ## ```roc
-## Num.toStr(5_000_000_000i128)
+## Num.to_str(5_000_000_000i128)
 ## ```
 ## This `i128` suffix specifies that you want this number literal to be
 ## an [I128] instead of a `Num *`. All the other numeric types have

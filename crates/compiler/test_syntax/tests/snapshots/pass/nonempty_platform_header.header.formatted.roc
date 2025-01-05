@@ -3,4 +3,4 @@ platform "foo/barbaz"
     exposes []
     packages { foo: "./foo" }
     imports []
-    provides [mainForHost]
+    provides [main_for_host]

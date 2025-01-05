@@ -3,7 +3,7 @@ platform "benchmarks"
     exposes []
     packages {}
     imports []
-    provides [mainForHost]
+    provides [main_for_host]
 
-mainForHost : Task {} []
-mainForHost = main
+main_for_host : Task {} []
+main_for_host = main

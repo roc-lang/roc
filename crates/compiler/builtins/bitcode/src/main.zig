@@ -50,7 +50,7 @@ comptime {
     exportDecFn(dec.toF64, "to_f64");
     exportDecFn(dec.toI128, "to_i128");
     exportDecFn(dec.fromI128, "from_i128");
-    exportDecFn(dec.toStr, "to_str");
+    exportDecFn(dec.to_str, "to_str");
 
     for (INTEGERS) |T| {
         dec.exportFromInt(T, ROC_BUILTINS ++ ".dec.from_int.");

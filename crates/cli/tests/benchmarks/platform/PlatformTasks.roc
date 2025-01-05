@@ -1,9 +1,9 @@
 hosted PlatformTasks
-    exposes [putLine, putInt, getInt]
+    exposes [put_line, put_int, get_int]
     imports []
 
-putLine : Str -> Task {} *
+put_line : Str -> Task {} *
 
-putInt : I64 -> Task {} *
+put_int : I64 -> Task {} *
 
-getInt : Task { value : I64, isError : Bool } *
+get_int : Task { value : I64, is_error : Bool } *

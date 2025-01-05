@@ -5,10 +5,10 @@ use roc_std::RocStr;
 pub extern "C" fn rust_main() {
     init();
 
-    let string = roc_app::mainForHost(true);
+    let string = roc_app::main_for_host(true);
     println!("Answer was: {:?}", string.unwrap_Some()); // Debug
                                                         //
-    let integer = roc_app::mainForHost(false);
+    let integer = roc_app::main_for_host(false);
     println!("Answer was: {:?}", integer.discriminant()); // Debug
 }
 

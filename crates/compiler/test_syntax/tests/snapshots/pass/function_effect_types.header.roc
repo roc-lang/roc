@@ -3,4 +3,4 @@ platform "cli"
     exposes []
     packages {}
     imports [ Task.{ Task } ]
-    provides [ mainForHost ]
+    provides [ main_for_host ]

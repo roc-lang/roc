@@ -66,7 +66,7 @@ struct PeMetadata {
     file_alignment: u32,
     section_alignment: u32,
 
-    /// Symbols that the host imports, like roc__mainForHost_1_exposed_generic
+    /// Symbols that the host imports, like roc__main_for_host_1_exposed_generic
     imports: Vec<String>,
 
     /// Symbols that the host exports, like roc_alloc
@@ -625,7 +625,7 @@ impl DynamicRelocationsPe {
         Ok(None)
     }
 
-    /// Append metadata for the functions (e.g. mainForHost) that the host needs from the app
+    /// Append metadata for the functions (e.g. main_for_host) that the host needs from the app
     fn append_roc_imports(
         &mut self,
         import_table: &ImportTable,
@@ -1462,25 +1462,25 @@ mod test {
         //
         // DynamicRelocationsPe {
         //     name_by_virtual_address: {
-        //         0xaf4e0: "roc__mainForHost_size",
-        //         0xaf4c8: "roc__mainForHost_1__Fx_caller",
-        //         0xaf4d0: "roc__mainForHost_1__Fx_result_size",
-        //         0xaf4d8: "roc__mainForHost_1_exposed_generic",
+        //         0xaf4e0: "roc__main_for_host_size",
+        //         0xaf4c8: "roc__main_for_host_1__Fx_caller",
+        //         0xaf4d0: "roc__main_for_host_1__Fx_result_size",
+        //         0xaf4d8: "roc__main_for_host_1_exposed_generic",
         //     },
         //     address_and_offset: {
-        //         "roc__mainForHost_1__Fx_result_size": (
+        //         "roc__main_for_host_1__Fx_result_size": (
         //             0xaf4d0,
         //             0xae4d0,
         //         ),
-        //         "roc__mainForHost_1__Fx_caller": (
+        //         "roc__main_for_host_1__Fx_caller": (
         //             0xaf4c8,
         //             0xae4c8,
         //         ),
-        //         "roc__mainForHost_1_exposed_generic": (
+        //         "roc__main_for_host_1_exposed_generic": (
         //             0xaf4d8,
         //             0xae4d8,
         //         ),
-        //         "roc__mainForHost_size": (
+        //         "roc__main_for_host_size": (
         //             0xaf4e0,
         //             0xae4e0,
         //         ),
@@ -1564,10 +1564,10 @@ mod test {
 
         assert_eq!(
             [
-                "roc__mainForHost_1__Fx_caller",
-                "roc__mainForHost_1__Fx_result_size",
-                "roc__mainForHost_1_exposed_generic",
-                "roc__mainForHost_size"
+                "roc__main_for_host_1__Fx_caller",
+                "roc__main_for_host_1__Fx_result_size",
+                "roc__main_for_host_1_exposed_generic",
+                "roc__main_for_host_size"
             ],
             imports.as_slice(),
         )

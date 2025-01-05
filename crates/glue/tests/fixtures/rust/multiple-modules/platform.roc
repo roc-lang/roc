@@ -3,9 +3,9 @@ platform "test-platform"
     exposes []
     packages {}
     imports [Dep1, Dep2]
-    provides [mainForHost]
+    provides [main_for_host]
 
 Combined : { s1 : Dep1.DepStr1, s2 : Dep2.DepStr2 }
 
-mainForHost : Combined
-mainForHost = main
+main_for_host : Combined
+main_for_host = main

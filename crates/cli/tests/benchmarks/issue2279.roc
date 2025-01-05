@@ -8,6 +8,6 @@ main =
         if Bool.true then
             Issue2279Help.text
         else
-            Issue2279Help.asText 42
+            Issue2279Help.as_text(42)
 
-    PlatformTasks.putLine text
+    PlatformTasks.put_line(text)

@@ -3,8 +3,8 @@ app [main] {
 }
 
 import MultilineParams {
-    sendHttpReq: \_ -> crash "todo",
-    getEnvVar: \_ -> crash "todo",
+    send_http_req: \_ -> crash("todo"),
+    get_env_var: \_ -> crash("todo"),
 }
 
 main =

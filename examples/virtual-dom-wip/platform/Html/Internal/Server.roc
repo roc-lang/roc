@@ -1,121 +1,122 @@
 module [
-    appendRenderedStatic,
-    initServerApp,
+    append_rendered_static,
+    init_server_app,
 ]
 
-import Html.Internal.Shared exposing [Html, Attribute, App, translateStatic, text, element]
+import Html.Internal.Shared exposing [Html, Attribute, App, translate_static, text, element]
 import Json
 
 # -------------------------------
 #   STATIC HTML
 # -------------------------------
-appendRenderedStatic : Str, Html [] -> Str
-appendRenderedStatic = \buffer, node ->
+append_rendered_static : Str, Html [] -> Str
+append_rendered_static = \buffer, node ->
     when node is
-        Text content ->
-            Str.concat buffer content
+        Text(content) ->
+            Str.concat(buffer, content)
 
-        Element name _ attrs children ->
-            withTagName = "$(buffer)<$(name)"
-            withAttrs =
-                if List.isEmpty attrs then
-                    withTagName
+        Element(name, _, attrs, children) ->
+            with_tag_name = "$(buffer)<$(name)"
+            with_attrs =
+                if List.is_empty(attrs) then
+                    with_tag_name
                 else
-                    init = { buffer: Str.concat withTagName " ", styles: "" }
-                    { buffer: attrBuffer, styles } =
-                        List.walk attrs init appendRenderedStaticAttr
+                    init = { buffer: Str.concat(with_tag_name, " "), styles: "" }
+                    { buffer: attr_buffer, styles } =
+                        List.walk(attrs, init, append_rendered_static_attr)
 
-                    if Str.isEmpty styles then
-                        attrBuffer
+                    if Str.is_empty(styles) then
+                        attr_buffer
                     else
-                        "$(attrBuffer) style=\"$(styles)\""
+                        "$(attr_buffer) style=\"$(styles)\""
 
-            withTag = Str.concat withAttrs ">"
-            withChildren = List.walk children withTag appendRenderedStatic
+            with_tag = Str.concat(with_attrs, ">")
+            with_children = List.walk(children, with_tag, append_rendered_static)
 
-            "$(withChildren)</$(name)>"
+            "$(with_children)</$(name)>"
 
         None -> buffer
 
-appendRenderedStaticAttr : { buffer : Str, styles : Str }, Attribute [] -> { buffer : Str, styles : Str }
-appendRenderedStaticAttr = \{ buffer, styles }, attr ->
+append_rendered_static_attr : { buffer : Str, styles : Str }, Attribute [] -> { buffer : Str, styles : Str }
+append_rendered_static_attr = \{ buffer, styles }, attr ->
     when attr is
-        HtmlAttr key value ->
-            newBuffer = "$(buffer) $(key)=\"$(value)\""
+        HtmlAttr(key, value) ->
+            new_buffer = "$(buffer) $(key)=\"$(value)\""
 
-            { buffer: newBuffer, styles }
+            { buffer: new_buffer, styles }
 
-        Style key value ->
-            newStyles = "$(styles) $(key): $(value);"
+        Style(key, value) ->
+            new_styles = "$(styles) $(key): $(value);"
 
-            { buffer, styles: newStyles }
+            { buffer, styles: new_styles }
 
-        DomProp _ _ -> { buffer, styles }
+        DomProp(_, _) -> { buffer, styles }
 
 # -------------------------------
 #   INITIALISATION
 # -------------------------------
-initServerApp : App state initData, initData, Str -> Result (Html []) [InvalidDocument] where initData implements Encoding
-initServerApp = \app, initData, hostJavaScript ->
-    initData
+init_server_app : App state init_data, init_data, Str -> Result (Html []) [InvalidDocument] where init_data implements Encoding
+init_server_app = \app, init_data, host_java_script ->
+    init_data
     |> Ok
     |> app.init
     |> app.render
-    |> translateStatic
-    |> insertRocScript initData app.wasmUrl hostJavaScript
+    |> translate_static
+    |> insert_roc_script(init_data, app.wasm_url, host_java_script)
 
-insertRocScript : Html [], initData, Str, Str -> Result (Html []) [InvalidDocument] where initData implements Encoding
-insertRocScript = \document, initData, wasmUrl, hostJavaScript ->
+insert_roc_script : Html [], init_data, Str, Str -> Result (Html []) [InvalidDocument] where init_data implements Encoding
+insert_roc_script = \document, init_data, wasm_url, host_java_script ->
     encode =
         \value ->
             value
-            |> Encode.toBytes Json.json
-            |> Str.fromUtf8
-            |> Result.withDefault ""
+            |> Encode.to_bytes(Json.json)
+            |> Str.from_utf8
+            |> Result.with_default("")
 
     # Convert initData to JSON as a Roc Str, then convert the Roc Str to a JS string.
     # JSON won't have invalid UTF-8 in it, since it would be escaped as part of JSON encoding.
-    jsInitData =
-        initData |> encode |> encode
+    js_init_data =
+        init_data |> encode |> encode
 
-    jsWasmUrl =
-        encode wasmUrl
+    js_wasm_url =
+        encode(wasm_url)
 
     script : Html []
-    script = (element "script") [] [
-        text
+    script = element("script")([], [
+        text(
             """
-            $(hostJavaScript)
+            $(host_java_script)
             (function(){
-            const initData = $(jsInitData);
-            const wasmUrl = $(jsWasmUrl);
+            const initData = $(js_init_data);
+            const wasmUrl = $(js_wasm_url);
             window.roc = roc_init(initData, wasmUrl);
             })();
             """,
-    ]
+        ),
+    ])
 
     # append the <script> to the end of the <body>
     when document is
-        Element "html" hSize hAttrs hChildren ->
-            empty = List.withCapacity (List.len hChildren)
-            walkResult =
-                List.walk hChildren { newHtmlChildren: empty, foundBody: Bool.false } \{ newHtmlChildren, foundBody }, hChild ->
-                    when hChild is
-                        Element "body" bSize bAttrs bChildren ->
+        Element("html", h_size, h_attrs, h_children) ->
+            empty = List.with_capacity(List.len(h_children))
+            walk_result =
+                List.walk(h_children, { new_html_children: empty, found_body: Bool.false }, \{ new_html_children, found_body }, h_child ->
+                    when h_child is
+                        Element("body", b_size, b_attrs, b_children) ->
                             {
-                                newHtmlChildren: List.append newHtmlChildren (Element "body" bSize bAttrs (List.append bChildren script)),
-                                foundBody: Bool.true,
+                                new_html_children: List.append(new_html_children, Element("body", b_size, b_attrs, List.append(b_children, script))),
+                                found_body: Bool.true,
                             }
 
                         _ ->
                             {
-                                newHtmlChildren: List.append newHtmlChildren hChild,
-                                foundBody,
-                            }
+                                new_html_children: List.append(new_html_children, h_child),
+                                found_body,
+                            })
 
-            if walkResult.foundBody then
-                Ok (Element "html" hSize hAttrs walkResult.newHtmlChildren)
+            if walk_result.found_body then
+                Ok(Element("html", h_size, h_attrs, walk_result.new_html_children))
             else
-                Err InvalidDocument
+                Err(InvalidDocument)
 
-        _ -> Err InvalidDocument
+        _ -> Err(InvalidDocument)

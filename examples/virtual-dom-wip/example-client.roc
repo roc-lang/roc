@@ -1,5 +1,5 @@
 app [app] { pf: platform "platform/client-side.roc" }
 
-import ExampleApp exposing [exampleApp]
+import ExampleApp exposing [example_app]
 
-app = exampleApp
+app = example_app

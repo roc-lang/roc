@@ -5270,7 +5270,7 @@ mod test_fmt {
             exposes [] \
             packages {} \
             imports [] \
-            provides [mainForHost]",
+            provides [main_for_host]",
         );
     }
 
@@ -6233,7 +6233,7 @@ mod test_fmt {
                 exposes []
                 packages {}
                 imports []
-                provides [mainForHost]
+                provides [main_for_host]
             "#
         ));
     }

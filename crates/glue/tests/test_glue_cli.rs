@@ -167,7 +167,7 @@ mod glue_cli_tests {
             Answer was: discriminant_U1::None
         "#),
         c_hello_world:"c/hello-world" => indoc!(r#"
-            mainForHost = 42
+            main_for_host = 42
         "#),
     }
 
@@ -233,6 +233,7 @@ mod glue_cli_tests {
         if glue_dir.exists() {
             std::fs::remove_dir_all(&glue_dir)
                 .expect("Unable to remove test_glue dir in order to regenerate it in the test");
+            // std::fs::create_dir(&glue_dir)
         }
 
         let glue_spec_filename = match fixtures_subfolder_name.to_str().unwrap() {
@@ -241,6 +242,8 @@ mod glue_cli_tests {
             "c" => "CGlue.roc",
             unknown_subfolder => panic!("I don't know which glue file to use for tests in the `{}` subfolder! Please add one here!", unknown_subfolder),
         };
+
+        println!("here");
 
         let rust_glue_spec = tests_dir
             .parent()

@@ -93,9 +93,9 @@ fn fn_tuple() {
     assert_evals_to!(
         indoc!(
             r#"
-                    getRec = \x -> ("foo", x, 19)
+                    get_rec = \x -> ("foo", x, 19)
 
-                    (getRec 15).1
+                    (get_rec 15).1
                 "#
         ),
         15,

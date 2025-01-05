@@ -120,7 +120,7 @@ Defs {
                                                     @130-145 Apply(
                                                         @130-139 Var {
                                                             module_name: "Num",
-                                                            ident: "toStr",
+                                                            ident: "to_str",
                                                         },
                                                         [
                                                             @140-145 Var {

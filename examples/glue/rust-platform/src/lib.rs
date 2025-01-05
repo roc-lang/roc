@@ -7,7 +7,7 @@ use std::ffi::CStr;
 use std::io::Write;
 use std::os::raw::c_char;
 
-use roc_app::mainForHost as roc_main;
+use roc_app::main_for_host as roc_main;
 
 #[no_mangle]
 pub unsafe extern "C" fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {

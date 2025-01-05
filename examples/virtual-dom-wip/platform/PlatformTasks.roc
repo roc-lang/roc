@@ -5,21 +5,21 @@ hosted PlatformTasks
         TagName,
         AttrType,
         EventType,
-        createElement,
-        createTextNode,
-        updateTextNode,
-        appendChild,
-        removeNode,
-        replaceNode,
-        setAttribute,
-        removeAttribute,
-        setProperty,
-        removeProperty,
-        setStyle,
-        setListener,
-        removeListener,
-        enableVdomAllocator,
-        disableVdomAllocator,
+        create_element,
+        create_text_node,
+        update_text_node,
+        append_child,
+        remove_node,
+        replace_node,
+        set_attribute,
+        remove_attribute,
+        set_property,
+        remove_property,
+        set_style,
+        set_listener,
+        remove_listener,
+        enable_vdom_allocator,
+        disable_vdom_allocator,
     ]
     imports []
 
@@ -34,43 +34,43 @@ AttrType : Str
 EventType : Str
 
 ## createElement tagName
-createElement : NodeId, TagName -> Task {} *
+create_element : NodeId, TagName -> Task {} *
 
 ## createTextNode content
-createTextNode : NodeId, Str -> Task {} *
+create_text_node : NodeId, Str -> Task {} *
 
 ## updateTextNode content
-updateTextNode : NodeId, Str -> Task {} *
+update_text_node : NodeId, Str -> Task {} *
 
 ## appendChild parentId childId
-appendChild : NodeId, NodeId -> Task {} *
+append_child : NodeId, NodeId -> Task {} *
 
 ## removeNode id
-removeNode : NodeId -> Task {} *
+remove_node : NodeId -> Task {} *
 
 ## replaceNode oldId newId
-replaceNode : NodeId, NodeId -> Task {} *
+replace_node : NodeId, NodeId -> Task {} *
 
 ## setAttribute nodeId attrName value
-setAttribute : NodeId, AttrType, Str -> Task {} *
+set_attribute : NodeId, AttrType, Str -> Task {} *
 
 ## removeAttribute nodeId attrName
-removeAttribute : NodeId, AttrType -> Task {} *
+remove_attribute : NodeId, AttrType -> Task {} *
 
 ## setProperty nodeId propName json
-setProperty : NodeId, Str, List U8 -> Task {} *
+set_property : NodeId, Str, List U8 -> Task {} *
 
 ## removeProperty nodeId propName
-removeProperty : NodeId, Str -> Task {} *
+remove_property : NodeId, Str -> Task {} *
 
 ## setStyle nodeId key value
-setStyle : NodeId, Str, Str -> Task {} *
+set_style : NodeId, Str, Str -> Task {} *
 
 ## setListener nodeId eventType accessorsJson handlerId
-setListener : NodeId, EventType, List U8, HandlerId -> Task {} *
+set_listener : NodeId, EventType, List U8, HandlerId -> Task {} *
 
 ## removeListener nodeId handlerId
-removeListener : NodeId, HandlerId -> Task {} *
+remove_listener : NodeId, HandlerId -> Task {} *
 
 # Enable a special memory allocator for virtual DOM
 # This consists of two arenas, "even" and "odd", which alternately hold the "old" and "new" VDOM.
@@ -78,9 +78,9 @@ removeListener : NodeId, HandlerId -> Task {} *
 # Danger: Could cause memory unsafety bugs if used incorrectly! Do not expose!
 # Not suitable for values that have a different lifetime from the virtual DOM!
 # TODO: actually implement this for real! LOL
-enableVdomAllocator : Bool -> Task {} *
+enable_vdom_allocator : Bool -> Task {} *
 
 # Switch back from the virtual DOM allocator to the "normal"
 # allocator that is safe to use with long-lived values.
 # At the same time, drop the entire "old" virtual DOM arena.
-disableVdomAllocator : Task {} *
+disable_vdom_allocator : Task {} *

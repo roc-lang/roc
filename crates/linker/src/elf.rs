@@ -1759,10 +1759,10 @@ mod tests {
 
         assert_eq!(
             [
-                "roc__mainForHost_1__Fx_caller",
-                "roc__mainForHost_1__Fx_result_size",
-                "roc__mainForHost_1_exposed_generic",
-                "roc__mainForHost_size"
+                "roc__main_for_host_1__Fx_caller",
+                "roc__main_for_host_1__Fx_result_size",
+                "roc__main_for_host_1_exposed_generic",
+                "roc__main_for_host_size"
             ],
             keys.as_slice()
         )

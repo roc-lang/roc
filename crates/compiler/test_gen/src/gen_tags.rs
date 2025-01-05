@@ -349,14 +349,14 @@ fn maybe_is_just_not_nested() {
 
                 Maybe a : [Just a, Nothing]
 
-                isJust : Maybe a -> Bool
-                isJust = \list ->
+                is_just : Maybe a -> Bool
+                is_just = \list ->
                     when list is
                         Nothing -> Bool.false
                         Just _ -> Bool.true
 
                 main =
-                    isJust (Just 42)
+                    is_just (Just 42)
                 "#
         ),
         true,
@@ -372,13 +372,13 @@ fn maybe_is_just_nested() {
             r"
                 Maybe a : [Just a, Nothing]
 
-                isJust : Maybe a -> Bool
-                isJust = \list ->
+                is_just : Maybe a -> Bool
+                is_just = \list ->
                     when list is
                         Nothing -> Bool.false
                         Just _ -> Bool.true
 
-                isJust (Just 42)
+                is_just (Just 42)
                 "
         ),
         true,
@@ -415,7 +415,7 @@ fn if_guard_vanilla() {
             r#"
                 when "fooz" is
                     s if s == "foo" -> []
-                    s -> Str.toUtf8 s
+                    s -> Str.to_utf8 s
                 "#
         ),
         RocList::from_slice(b"fooz"),
@@ -1078,7 +1078,7 @@ fn applied_tag_function_result() {
             x : List (Result Str *)
             x = List.map ["a", "b"] Ok
 
-            List.keepOks x (\y -> y)
+            List.keep_oks x (\y -> y)
             "#
         ),
         RocList::from_slice(&[(RocStr::from("a")), (RocStr::from("b"))]),
@@ -1217,19 +1217,19 @@ fn monomorphized_tag_with_polymorphic_arg() {
                 a = \{} -> A
                 wrap = \{} -> Wrapped (a {})
 
-                useWrap1 : [Wrapped [A], Other] -> U8
-                useWrap1 =
+                use_wrap1 : [Wrapped [A], Other] -> U8
+                use_wrap1 =
                     \w -> when w is
                         Wrapped A -> 2
                         Other -> 3
 
-                useWrap2 : [Wrapped [A, B]] -> U8
-                useWrap2 =
+                use_wrap2 : [Wrapped [A, B]] -> U8
+                use_wrap2 =
                     \w -> when w is
                         Wrapped A -> 5
                         Wrapped B -> 7
 
-                if Bool.true then useWrap1 (wrap {}) else useWrap2 (wrap {})
+                if Bool.true then use_wrap1 (wrap {}) else use_wrap2 (wrap {})
             "#
         ),
         2,
@@ -1251,19 +1251,19 @@ fn monomorphized_tag_with_polymorphic_and_monomorphic_arg() {
                 poly = \{} -> A
                 wrap = \{} -> Wrapped (poly {}) mono
 
-                useWrap1 : [Wrapped [A] U8, Other] -> U8
-                useWrap1 =
+                use_wrap1 : [Wrapped [A] U8, Other] -> U8
+                use_wrap1 =
                     \w -> when w is
                         Wrapped A n -> n
                         Other -> 0
 
-                useWrap2 : [Wrapped [A, B] U8] -> U8
-                useWrap2 =
+                use_wrap2 : [Wrapped [A, B] U8] -> U8
+                use_wrap2 =
                     \w -> when w is
                         Wrapped A n -> n
                         Wrapped B _ -> 0
 
-                useWrap1 (wrap {}) * useWrap2 (wrap {})
+                use_wrap1 (wrap {}) * use_wrap2 (wrap {})
             "#
         ),
         225,
@@ -1443,8 +1443,8 @@ fn issue_1162() {
             balance : a, RBTree a -> RBTree a
             balance = \key, left ->
                   when left is
-                    Node _ _ lRight ->
-                        Node key lRight Empty
+                    Node _ _ l_right ->
+                        Node key l_right Empty
 
                     _ ->
                         Empty
@@ -1489,8 +1489,8 @@ fn issue_2725_alias_polymorphic_lambda() {
         indoc!(
             r"
             wrap = \value -> Tag value
-            wrapIt = wrap
-            wrapIt 42
+            wrap_it = wrap
+            wrap_it 42
             "
         ),
         42, // Tag is a newtype, it gets unwrapped
@@ -1508,12 +1508,12 @@ fn opaque_assign_to_symbol() {
 
             Variable := U8
 
-            fromUtf8 : U8 -> Result Variable [InvalidVariableUtf8]
-            fromUtf8 = \char ->
+            from_utf8 : U8 -> Result Variable [InvalidVariableUtf8]
+            from_utf8 = \char ->
                 Ok (@Variable char)
 
             out =
-                when fromUtf8 98 is
+                when from_utf8 98 is
                     Ok (@Variable n) -> n
                     _ -> 1
             "#
@@ -1616,9 +1616,9 @@ fn issue_3261_non_nullable_unwrapped_recursive_union_at_index() {
             foo : Named
             foo = Named "outer" [Named "inner" []]
 
-            Named name outerList = foo
+            Named name outer_list = foo
 
-            {name, outerList}.name
+            {name, outer_list}.name
             "#
         ),
         RocStr::from("outer"),
@@ -1888,7 +1888,7 @@ fn issue_2165_recursive_tag_destructure() {
             x = Ctor { rec: [] }
 
             when x is
-              Ctor { rec } -> Num.toStr (List.len rec)
+              Ctor { rec } -> Num.to_str (List.len rec)
             "
         ),
         RocStr::from("0"),
@@ -1902,13 +1902,13 @@ fn tag_union_let_generalization() {
     assert_evals_to!(
         indoc!(
             r#"
-            manyAux : {} -> [ Loop, Done ]
-            manyAux = \_ ->
+            many_aux : {} -> [ Loop, Done ]
+            many_aux = \_ ->
                 output = Done
 
                 output
 
-            when manyAux {} is
+            when many_aux {} is
                 Loop -> "loop"
                 Done -> "done"
             "#
@@ -1929,13 +1929,13 @@ fn fit_recursive_union_in_struct_into_recursive_pointer() {
                 Next { item: Str, rest: NonEmpty },
             ]
 
-            nonEmpty =
+            non_empty =
                 a = "abcdefgh"
                 b = @NonEmpty (First "ijkl")
                 c = Next { item: a, rest: b }
                 @NonEmpty c
 
-            when nonEmpty is
+            when non_empty is
                 @NonEmpty (Next r) -> r.item
                 _ -> "<bad>"
             "#
@@ -2026,15 +2026,15 @@ fn unify_types_with_fixed_fixpoints_outside_fixing_region() {
             job = \inputs ->
                 @Job (Job inputs)
 
-            helloWorld : Job
-            helloWorld =
+            hello_world : Job
+            hello_world =
                 @Job ( Job [ @Input (FromJob greeting []) ] )
 
             greeting : Job
             greeting =
                 job []
 
-            main = (\_ -> "OKAY") helloWorld
+            main = (\_ -> "OKAY") hello_world
             "#
         ),
         RocStr::from("OKAY"),
@@ -2137,17 +2137,17 @@ fn nullable_wrapped_with_nullable_not_last_index() {
                 OneOrMore Parser,
             ]
 
-            toIdParser : Parser -> Str
-            toIdParser = \parser ->
+            to_id_parser : Parser -> Str
+            to_id_parser = \parser ->
                 when parser is
                     OneOrMore _ -> "a"
                     Keyword _ -> "b"
                     CharLiteral -> "c"
 
             main =
-                toIdParser (OneOrMore CharLiteral)
-                |> Str.concat (toIdParser (Keyword "try"))
-                |> Str.concat (toIdParser CharLiteral)
+                to_id_parser (OneOrMore CharLiteral)
+                |> Str.concat (to_id_parser (Keyword "try"))
+                |> Str.concat (to_id_parser CharLiteral)
             "#
         ),
         RocStr::from("abc"),
@@ -2165,9 +2165,9 @@ fn refcount_nullable_unwrapped_needing_no_refcount_issue_5027() {
 
             Effect : {} -> Str
 
-            after = \effect, buildNext ->
+            after = \effect, build_next ->
                 \{} ->
-                    when buildNext (effect {}) is
+                    when build_next (effect {}) is
                         thunk -> thunk {}
 
             line : Effect

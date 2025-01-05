@@ -3,7 +3,7 @@ platform "wasm-nodejs-example-platform"
     exposes []
     packages {}
     imports []
-    provides [mainForHost]
+    provides [main_for_host]
 
-mainForHost : Str
-mainForHost = main
+main_for_host : Str
+main_for_host = main

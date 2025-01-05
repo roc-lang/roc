@@ -5,10 +5,10 @@ platform "test"
         foo: "../foo/main.roc",
     }
     imports []
-    provides [mainForHost]
+    provides [main_for_host]
 
 import foo.Foo
 
-mainForHost : Str
-mainForHost =
+main_for_host : Str
+main_for_host =
     "$(main) $(Foo.foo)"

@@ -4,24 +4,24 @@ import pf.Effect
 
 main! : {} => {}
 main! = \{} ->
-    first = ask! "What's your first name?"
-    last = ask! "What's your last name?"
+    first = ask!("What's your first name?")
+    last = ask!("What's your last name?")
 
-    Effect.putLine! "\nHi, $(first) $(last)!\n"
+    Effect.put_line!("\nHi, $(first) $(last)!\n")
 
-    when Str.toU8 (ask! "How old are you?") is
-        Err InvalidNumStr ->
-            Effect.putLine! "Enter a valid number"
+    when Str.to_u8(ask!("How old are you?")) is
+        Err(InvalidNumStr) ->
+            Effect.put_line!("Enter a valid number")
 
-        Ok age if age >= 18 ->
-            Effect.putLine! "\nNice! You can vote!"
+        Ok(age) if age >= 18 ->
+            Effect.put_line!("\nNice! You can vote!")
 
-        Ok age ->
-            Effect.putLine! "\nYou'll be able to vote in $(Num.toStr (18 - age)) years"
+        Ok(age) ->
+            Effect.put_line!("\nYou'll be able to vote in $(Num.to_str((18 - age))) years")
 
-    Effect.putLine! "\nBye! 👋"
+    Effect.put_line!("\nBye! 👋")
 
 ask! : Str => Str
 ask! = \question ->
-    Effect.putLine! question
-    Effect.getLine! {}
+    Effect.put_line!(question)
+    Effect.get_line!({})

@@ -24,7 +24,7 @@ fn build_host() {
     }
 
     let stub_dll_symbols = roc_linker::ExposedSymbols {
-        top_level_values: vec![String::from("mainForHost")],
+        top_level_values: vec![String::from("main_for_host")],
         exported_closure_types: vec![],
     }
     .stub_dll_symbols();

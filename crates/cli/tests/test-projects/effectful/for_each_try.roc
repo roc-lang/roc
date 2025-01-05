@@ -4,20 +4,19 @@ import pf.Effect
 
 main! : {} => {}
 main! = \{} ->
-    good = [0, 2, 4] |> List.forEachTry! validate!
-    expect good == Ok {}
+    good = [0, 2, 4] |> List.for_each_try!(validate!)
+    expect good == Ok({})
 
-    bad = [6, 8, 9, 10] |> List.forEachTry! validate!
-    expect bad == Err 9
+    bad = [6, 8, 9, 10] |> List.for_each_try!(validate!)
+    expect bad == Err(9)
 
     {}
 
 validate! : U32 => Result {} U32
 validate! = \x ->
-    if Num.isEven x then
-        Effect.putLine! "✅ $(Num.toStr x)"
-        Ok {}
-
+    if Num.is_even(x) then
+        Effect.put_line!("✅ $(Num.to_str(x))")
+        Ok({})
     else
-        Effect.putLine! "$(Num.toStr x) is not even! ABORT!"
-        Err x
+        Effect.put_line!("$(Num.to_str(x)) is not even! ABORT!")
+        Err(x)

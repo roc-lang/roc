@@ -1,3 +1,3 @@
 app [main] { pf: platform "main.roc" }
 
-main = Task.ok {}
+main = Task.ok({})

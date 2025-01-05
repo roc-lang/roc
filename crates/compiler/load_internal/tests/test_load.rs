@@ -855,10 +855,10 @@ fn platform_exposes_main_return_by_pointer_issue() {
                         exposes []
                         packages {}
                         imports []
-                        provides [mainForHost]
+                        provides [main_for_host]
 
-                    mainForHost : { content: Str, other: Str }
-                    mainForHost = main
+                    main_for_host : { content: Str, other: Str }
+                    main_for_host = main
                     "#
             ),
         ),
@@ -1839,7 +1839,7 @@ fn module_params_missing() {
                 r#"
             module { key, exp } -> [url]
 
-            url = "example.com/$(key)?exp=$(Num.toStr exp)"
+            url = "example.com/$(key)?exp=$(Num.to_str exp)"
             "#
             ),
         ),
@@ -1896,10 +1896,10 @@ fn issue_2863_module_type_does_not_exist() {
                         exposes []
                         packages {}
                         imports []
-                        provides [mainForHost]
+                        provides [main_for_host]
 
-                    mainForHost : Str
-                    mainForHost = main
+                    main_for_host : Str
+                    main_for_host = main
                     "#
             ),
         ),
@@ -1957,12 +1957,12 @@ fn import_builtin_in_platform_and_check_app() {
                         exposes []
                         packages {}
                         imports []
-                        provides [mainForHost]
+                        provides [main_for_host]
 
                     import Str
 
-                    mainForHost : Str
-                    mainForHost = main
+                    main_for_host : Str
+                    main_for_host = main
                     "#
             ),
         ),

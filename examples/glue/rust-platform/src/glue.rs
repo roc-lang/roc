@@ -101,12 +101,12 @@ pub struct RocFunction_66 {
 impl RocFunction_66 {
     pub fn force_thunk(mut self, arg_0: ()) -> Op {
         extern "C" {
-            fn roc__mainForHost_0_caller(arg_0: &(), closure_data: *mut u8, output: *mut Op);
+            fn roc__main_for_host_0_caller(arg_0: &(), closure_data: *mut u8, output: *mut Op);
         }
 
         let mut output = std::mem::MaybeUninit::uninit();
         let ptr = self.closure_data.as_mut_ptr();
-        unsafe { roc__mainForHost_0_caller(&arg_0, ptr, output.as_mut_ptr()) };
+        unsafe { roc__main_for_host_0_caller(&arg_0, ptr, output.as_mut_ptr()) };
         unsafe { output.assume_init() }
     }
 }
@@ -126,12 +126,12 @@ pub struct RocFunction_67 {
 impl RocFunction_67 {
     pub fn force_thunk(mut self, arg_0: ()) -> Op {
         extern "C" {
-            fn roc__mainForHost_1_caller(arg_0: &(), closure_data: *mut u8, output: *mut Op);
+            fn roc__main_for_host_1_caller(arg_0: &(), closure_data: *mut u8, output: *mut Op);
         }
 
         let mut output = std::mem::MaybeUninit::uninit();
         let ptr = self.closure_data.as_mut_ptr();
-        unsafe { roc__mainForHost_1_caller(&arg_0, ptr, output.as_mut_ptr()) };
+        unsafe { roc__main_for_host_1_caller(&arg_0, ptr, output.as_mut_ptr()) };
         unsafe { output.assume_init() }
     }
 }

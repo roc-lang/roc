@@ -118,7 +118,7 @@
                                     Apply(
                                         @116-125 Var {
                                             module_name: "Num",
-                                            ident: "toStr",
+                                            ident: "to_str",
                                         },
                                         [
                                             @126-127 Var {
