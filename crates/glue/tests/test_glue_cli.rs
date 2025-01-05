@@ -140,10 +140,10 @@ mod glue_cli_tests {
             `String "this is a test"` is: Expr::String("this is a test")
         "#),
         rust_advanced_recursive_union:"rust/advanced-recursive-union" => indoc!(r#"
-            rbt was: Rbt { default: Job::Job(R1 { command: Command::Command(R2 { tool: Tool::SystemTool(R4 { name: "test", num: 42 }) }), inputFiles: ["foo"] }) }
+            rbt was: Rbt { default: Job::Job(R1 { command: Command::Command(R2 { tool: Tool::SystemTool(R4 { name: "test", num: 42 }) }), input_files: ["foo"] }) }
         "#),
         rust_list_recursive_union:"rust/list-recursive-union" => indoc!(r#"
-            rbt was: Rbt { default: Job::Job(R1 { command: Command::Command(R2 { args: [], tool: Tool::SystemTool(R3 { name: "test" }) }), inputFiles: ["foo"], job: [] }) }
+            rbt was: Rbt { default: Job::Job(R1 { command: Command::Command(R2 { args: [], tool: Tool::SystemTool(R3 { name: "test" }) }), input_files: ["foo"], job: [] }) }
         "#),
         rust_multiple_modules:"rust/multiple-modules" => indoc!(r#"
             combined was: Combined { s1: DepStr1::S("hello"), s2: DepStr2::R("world") }
