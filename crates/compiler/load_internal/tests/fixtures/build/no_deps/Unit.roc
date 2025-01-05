@@ -1,6 +1,4 @@
-interface Unit
-    exposes [unit]
-    imports []
+module [unit]
 
 Unit : [Unit]
 

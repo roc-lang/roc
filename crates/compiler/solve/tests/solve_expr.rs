@@ -138,7 +138,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                Str.startsWith
+                Str.starts_with
                 "
             ),
             "Str, Str -> Bool",
@@ -162,7 +162,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                Str.fromUtf8
+                Str.from_utf8
                 "
             ),
             "List U8 -> Result Str [BadUtf8 Utf8ByteProblem U64]",
@@ -174,7 +174,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                List.concatUtf8
+                List.concat_utf8
                 "
             ),
             "List U8, Str -> List U8",
@@ -322,9 +322,9 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                whatItIs = "great"
+                what_it_is = "great"
 
-                "type inference is $(whatItIs)!"
+                "type inference is $(what_it_is)!"
             "#
             ),
             "Str",
@@ -336,11 +336,11 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                whatItIs = "great"
+                what_it_is = "great"
 
-                str = "type inference is $(whatItIs)!"
+                str = "type inference is $(what_it_is)!"
 
-                whatItIs
+                what_it_is
             "#
             ),
             "Str",
@@ -352,14 +352,14 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                rec = { whatItIs: "great" }
+                rec = { what_it_is: "great" }
 
-                str = "type inference is $(rec.whatItIs)!"
+                str = "type inference is $(rec.what_it_is)!"
 
                 rec
             "#
             ),
-            "{ whatItIs : Str }",
+            "{ what_it_is : Str }",
         );
     }
 
@@ -690,9 +690,9 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    alwaysFive = \_ -> 5
+                    always_five = \_ -> 5
 
-                    alwaysFive "stuff"
+                    always_five "stuff"
                 "#
             ),
             "Num *",
@@ -766,9 +766,9 @@ mod solve_expr {
             indoc!(
                 r#"
                     always = \val -> (\_ -> val)
-                    alwaysFoo = always "foo"
+                    always_foo = always "foo"
 
-                    alwaysFoo 42
+                    always_foo 42
                 "#
             ),
             "Str",
@@ -1005,7 +1005,7 @@ mod solve_expr {
 
     // #[test]
     // fn no_higher_ranked_types() {
-    //     // This should error because it can't type of alwaysFive
+    //     // This should error because it can't type of always_five
     //     infer_eq(
     //         indoc!(
     //             r#"
@@ -1021,9 +1021,9 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    alwaysFive = \_ -> 5
+                    always_five = \_ -> 5
 
-                    [alwaysFive "foo", alwaysFive []]
+                    [always_five "foo", always_five []]
                 "#
             ),
             "List (Num *)",
@@ -1215,9 +1215,9 @@ mod solve_expr {
                 # technically, an empty record can be destructured
                 thunk = \{} -> 42
 
-                xEmpty = if thunk {} == 42 then { x: {} } else { x: {} }
+                x_empty = if thunk {} == 42 then { x: {} } else { x: {} }
 
-                when xEmpty is
+                when x_empty is
                     { x: {} } -> {}
                 "
             ),
@@ -2250,15 +2250,15 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                    numIdentity : Num.Num a -> Num.Num a
-                    numIdentity = \x -> x
+                    num_identity : Num.Num a -> Num.Num a
+                    num_identity = \x -> x
 
-                    y = numIdentity 3.14
+                    y = num_identity 3.14
 
-                    { numIdentity, x : numIdentity 42, y }
+                    { num_identity, x : num_identity 42, y }
                 "
             ),
-            "{ numIdentity : Num a -> Num a, x : Num *, y : Frac * }",
+            "{ num_identity : Num a -> Num a, x : Num *, y : Frac * }",
         );
     }
 
@@ -2319,12 +2319,12 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                   toBit = \bool ->
+                   to_bit = \bool ->
                        when bool is
                            True -> 1
                            False -> 0
 
-                   toBit
+                   to_bit
                 "
             ),
             "[False, True] -> Num *",
@@ -2355,12 +2355,12 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                   fromBit = \int ->
+                   from_bit = \int ->
                        when int is
                            0 -> False
                            _ -> True
 
-                   fromBit
+                   from_bit
                 "
             ),
             "Num * -> [False, True]",
@@ -2424,15 +2424,15 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                    alwaysThreePointZero = \_ -> 3.0
+                    always_three_point_zero = \_ -> 3.0
 
                     answer = 42
 
                     identity = \a -> a
 
-                    threePointZero = identity (alwaysThreePointZero {})
+                    three_point_zero = identity (always_three_point_zero {})
 
-                    threePointZero
+                    three_point_zero
                 "
             ),
             "Frac *",
@@ -2741,14 +2741,14 @@ mod solve_expr {
                 r"
                     ConsList a : [Cons a (ConsList a), Nil]
 
-                    toEmpty : ConsList a -> ConsList a
-                    toEmpty = \_ ->
+                    to_empty : ConsList a -> ConsList a
+                    to_empty = \_ ->
                         result : ConsList a
                         result = Nil
 
                         result
 
-                    toEmpty
+                    to_empty
                 "
             ),
             "ConsList a -> ConsList a",
@@ -2762,14 +2762,14 @@ mod solve_expr {
                 r"
                     ConsList a : [Cons a (ConsList a), Nil]
 
-                    toEmpty : ConsList a -> ConsList a
-                    toEmpty = \_ ->
+                    to_empty : ConsList a -> ConsList a
+                    to_empty = \_ ->
                         result : ConsList _   # TODO to enable using `a` we need scoped variables
                         result = Nil
 
-                        toEmpty result
+                        to_empty result
 
-                    toEmpty
+                    to_empty
                 "
             ),
             "ConsList a -> ConsList a",
@@ -2785,15 +2785,15 @@ mod solve_expr {
 
                 ConsList a : [Cons a (ConsList a), Nil]
 
-                toEmpty : ConsList a -> ConsList a
-                toEmpty = \_ ->
+                to_empty : ConsList a -> ConsList a
+                to_empty = \_ ->
                     result : ConsList _   # TODO to enable using `a` we need scoped variables
                     result = Nil
 
-                    toEmpty result
+                    to_empty result
 
                 main =
-                    toEmpty
+                    to_empty
                 "#
             ),
             "ConsList a -> ConsList a",
@@ -2961,8 +2961,8 @@ mod solve_expr {
                             Cons a listb ->
                                 when listb is
                                     Nil -> Nil
-                                    Cons b newLista ->
-                                        Cons a (Cons (f b) (toAs f newLista))
+                                    Cons b new_lista ->
+                                        Cons a (Cons (f b) (toAs f new_lista))
 
                     toAs
                 "
@@ -3001,8 +3001,8 @@ mod solve_expr {
                             Cons a listb ->
                                 when listb is
                                     Nil -> Nil
-                                    Cons b newLista ->
-                                        Cons a (Cons (f b) (toAs f newLista))
+                                    Cons b new_lista ->
+                                        Cons a (Cons (f b) (toAs f new_lista))
 
                    toAs
                 "
@@ -3029,13 +3029,13 @@ mod solve_expr {
             indoc!(
                 r"
                 partition : U64, U64, List (Int a) -> [Pair U64 (List (Int a))]
-                partition = \low, high, initialList ->
-                    when List.get initialList high is
+                partition = \low, high, initial_list ->
+                    when List.get initial_list high is
                         Ok _ ->
                             Pair 0 []
 
                         Err _ ->
-                            Pair (low - 1) initialList
+                            Pair (low - 1) initial_list
 
                 partition
                             "
@@ -3052,17 +3052,17 @@ mod solve_expr {
             swap : U64, U64, List a -> List a
             swap = \i, j, list ->
                 when Pair (List.get list i) (List.get list j) is
-                    Pair (Ok atI) (Ok atJ) ->
+                    Pair (Ok at_i) (Ok at_j) ->
                         list
-                            |> List.set i atJ
-                            |> List.set j atI
+                            |> List.set i at_j
+                            |> List.set j at_i
 
                     _ ->
                         list
 
             partition : U64, U64, List (Int a) -> [Pair U64 (List (Int a))]
-            partition = \low, high, initialList ->
-                when List.get initialList high is
+            partition = \low, high, initial_list ->
+                when List.get initial_list high is
                     Ok pivot ->
                         go = \i, j, list ->
                             if j < high then
@@ -3078,12 +3078,12 @@ mod solve_expr {
                             else
                                 Pair i list
 
-                        when go (low - 1) low initialList is
-                            Pair newI newList ->
-                                Pair (newI + 1) (swap (newI + 1) high newList)
+                        when go (low - 1) low initial_list is
+                            Pair new_i new_list ->
+                                Pair (new_i + 1) (swap (new_i + 1) high new_list)
 
                     Err _ ->
-                        Pair (low - 1) initialList
+                        Pair (low - 1) initial_list
 
             partition
         "
@@ -3097,11 +3097,11 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                idList : List a -> List a
-                idList = \list -> list
+                id_list : List a -> List a
+                id_list = \list -> list
 
                 foo : List I64 -> List I64
-                foo = \initialList -> idList initialList
+                foo = \initial_list -> id_list initial_list
 
 
                 foo
@@ -3167,7 +3167,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                Num.toFrac
+                Num.to_frac
                 "
             ),
             "Num * -> Frac a",
@@ -3227,7 +3227,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                Num.divChecked
+                Num.div_checked
                 "
             ),
             "Frac a, Frac a -> Result (Frac a) [DivByZero]",
@@ -3239,7 +3239,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                Num.divCeil
+                Num.div_ceil
                 "
             ),
             "Int a, Int a -> Int a",
@@ -3251,7 +3251,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                Num.divCeilChecked
+                Num.div_ceil_checked
                 "
             ),
             "Int a, Int a -> Result (Int a) [DivByZero]",
@@ -3263,7 +3263,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                Num.divTrunc
+                Num.div_trunc
                 "
             ),
             "Int a, Int a -> Int a",
@@ -3275,7 +3275,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                Num.divTruncChecked
+                Num.div_trunc_checked
                 "
             ),
             "Int a, Int a -> Result (Int a) [DivByZero]",
@@ -3299,7 +3299,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                Num.minI128
+                Num.min_i128
                 "
             ),
             "I128",
@@ -3311,7 +3311,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                Num.maxI128
+                Num.max_i128
                 "
             ),
             "I128",
@@ -3323,7 +3323,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                Num.minI64
+                Num.min_i64
                 "
             ),
             "I64",
@@ -3335,7 +3335,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                Num.maxI64
+                Num.max_i64
                 "
             ),
             "I64",
@@ -3347,7 +3347,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                Num.minU64
+                Num.min_u64
                 "
             ),
             "U64",
@@ -3359,7 +3359,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                Num.maxU64
+                Num.max_u64
                 "
             ),
             "U64",
@@ -3371,7 +3371,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                Num.minI32
+                Num.min_i32
                 "
             ),
             "I32",
@@ -3383,7 +3383,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                Num.maxI32
+                Num.max_i32
                 "
             ),
             "I32",
@@ -3395,7 +3395,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                Num.minU32
+                Num.min_u32
                 "
             ),
             "U32",
@@ -3407,7 +3407,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                Num.maxU32
+                Num.max_u32
                 "
             ),
             "U32",
@@ -3419,16 +3419,16 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                reconstructPath : Dict position position, position -> List position where position implements Hash & Eq
-                reconstructPath = \cameFrom, goal ->
-                    when Dict.get cameFrom goal is
+                reconstruct_path : Dict position position, position -> List position where position implements Hash & Eq
+                reconstruct_path = \came_from, goal ->
+                    when Dict.get came_from goal is
                         Err KeyNotFound ->
                             []
 
                         Ok next ->
-                            List.append (reconstructPath cameFrom next) goal
+                            List.append (reconstruct_path came_from next) goal
 
-                reconstructPath
+                reconstruct_path
                 "
             ),
             "Dict position position, position -> List position where position implements Hash & Eq",
@@ -3464,25 +3464,25 @@ mod solve_expr {
 
                 boom = \_ -> boom {}
 
-                Model position : { openSet : Set position }
+                Model position : { open_set : Set position }
 
-                cheapestOpen : Model position -> Result position [KeyNotFound] where position implements Hash & Eq
-                cheapestOpen = \model ->
+                cheapest_open : Model position -> Result position [KeyNotFound] where position implements Hash & Eq
+                cheapest_open = \model ->
 
-                    folder = \resSmallestSoFar, position ->
-                                    when resSmallestSoFar is
-                                        Err _ -> resSmallestSoFar
-                                        Ok smallestSoFar ->
-                                            if position == smallestSoFar.position then resSmallestSoFar
+                    folder = \res_smallest_so_far, position ->
+                        when res_smallest_so_far is
+                            Err _ -> res_smallest_so_far
+                            Ok smallest_so_far ->
+                                if position == smallest_so_far.position then res_smallest_so_far
 
-                                            else
-                                                Ok { position, cost: 0.0 }
+                                else
+                                    Ok { position, cost: 0.0 }
 
-                    Set.walk model.openSet (Ok { position: boom {}, cost: 0.0 }) folder
+                    Set.walk model.open_set (Ok { position: boom {}, cost: 0.0 }) folder
                         |> Result.map (\x -> x.position)
 
                 astar : Model position -> Result position [KeyNotFound] where position implements Hash & Eq
-                astar = \model -> cheapestOpen model
+                astar = \model -> cheapest_open model
 
                 main =
                     astar
@@ -3522,7 +3522,7 @@ mod solve_expr {
                         f : cm, cm -> Order
                         f = \_, _ -> LT
 
-                        sortWith f xs
+                        sort_with f xs
 
                 sortBy : (x -> cmpl), ConsList x -> ConsList x
                 sortBy =
@@ -3530,12 +3530,12 @@ mod solve_expr {
                         cmp : x, x -> Order
                         cmp = \_, _ -> LT
 
-                        sortWith cmp list
+                        sort_with cmp list
 
                 always = \x, _ -> x
 
-                sortWith : (foobar, foobar -> Order), ConsList foobar -> ConsList foobar
-                sortWith =
+                sort_with : (foobar, foobar -> Order), ConsList foobar -> ConsList foobar
+                sort_with =
                     \_, list ->
                         f = \arg ->
                             g arg
@@ -3549,7 +3549,7 @@ mod solve_expr {
                 Order : [LT, GT, EQ]
                 ConsList a : [Nil, Cons a (ConsList a)]
 
-                { x: sortWith, y: sort, z: sortBy }
+                { x: sort_with, y: sort, z: sortBy }
                 "
             ),
             "{ x : (foobar, foobar -> Order), ConsList foobar -> ConsList foobar, y : ConsList cm -> ConsList cm, z : (x -> cmpl), ConsList x -> ConsList x }"
@@ -3639,9 +3639,9 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                    negatePoint : { x : I64, y : I64, z ? Num c } -> { x : I64, y : I64, z : Num c }
+                    negate_point : { x : I64, y : I64, z ? Num c } -> { x : I64, y : I64, z : Num c }
 
-                    negatePoint { x: 1, y: 2 }
+                    negate_point { x: 1, y: 2 }
                 "
             ),
             "{ x : I64, y : I64, z : Num c }",
@@ -3653,10 +3653,10 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    negatePoint : { x : I64, y : I64, z ? Num c }r -> { x : I64, y : I64, z : Num c }r
+                    negate_point : { x : I64, y : I64, z ? Num c }r -> { x : I64, y : I64, z : Num c }r
 
-                    a = negatePoint { x: 1, y: 2 }
-                    b = negatePoint { x: 1, y: 2, blah : "hi" }
+                    a = negate_point { x: 1, y: 2 }
+                    b = negate_point { x: 1, y: 2, blah : "hi" }
 
                     { a, b }
                 "#
@@ -3670,9 +3670,9 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                    negatePoint : { x : Num a, y : Num b, z ? c } -> { x : Num a, y : Num b, z : c }
+                    negate_point : { x : Num a, y : Num b, z ? c } -> { x : Num a, y : Num b, z : c }
 
-                    negatePoint { x: 1, y: 2.1, z: 0x3 }
+                    negate_point { x: 1, y: 2.1, z: 0x3 }
                 "
             ),
             "{ x : Num *, y : Frac *, z : Int * }",
@@ -3684,10 +3684,10 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    negatePoint : { x : Num a, y : Num b, z ? c }r -> { x : Num a, y : Num b, z : c }r
+                    negate_point : { x : Num a, y : Num b, z ? c }r -> { x : Num a, y : Num b, z : c }r
 
-                    a = negatePoint { x: 1, y: 2.1 }
-                    b = negatePoint { x: 1, y: 2.1, blah : "hi" }
+                    a = negate_point { x: 1, y: 2.1 }
+                    b = negate_point { x: 1, y: 2.1, blah : "hi" }
 
                     { a, b }
                 "#
@@ -3757,7 +3757,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                List.walkBackwards
+                List.walk_backwards
                 "
             ),
             "List elem, state, (state, elem -> state) -> state",
@@ -3773,7 +3773,7 @@ mod solve_expr {
                 empty =
                     []
 
-                List.walkBackwards empty 0 (\a, b -> a + b)
+                List.walk_backwards empty 0 (\a, b -> a + b)
                 "
             ),
             "I64",
@@ -3783,7 +3783,7 @@ mod solve_expr {
     #[test]
     fn list_walk_with_index_until() {
         infer_eq_without_problem(
-            indoc!(r"List.walkWithIndexUntil"),
+            indoc!(r"List.walk_with_index_until"),
             "List elem, state, (state, elem, U64 -> [Break state, Continue state]) -> state",
         );
     }
@@ -3793,7 +3793,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                List.dropAt
+                List.drop_at
                 "
             ),
             "List elem, U64 -> List elem",
@@ -3817,7 +3817,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                Str.trimStart
+                Str.trim_start
                 "
             ),
             "Str -> Str",
@@ -3829,7 +3829,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                List.takeFirst
+                List.take_first
                 "
             ),
             "List elem, U64 -> List elem",
@@ -3841,7 +3841,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                List.takeLast
+                List.take_last
                 "
             ),
             "List elem, U64 -> List elem",
@@ -3863,7 +3863,7 @@ mod solve_expr {
     #[test]
     fn list_split() {
         infer_eq_without_problem(
-            indoc!("List.splitAt"),
+            indoc!("List.split_at"),
             "List elem, U64 -> { before : List elem, others : List elem }",
         );
     }
@@ -3873,7 +3873,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                List.dropLast
+                List.drop_last
                 "
             ),
             "List elem, U64 -> List elem",
@@ -4070,20 +4070,20 @@ mod solve_expr {
 
                 RBTree k v : [Node NodeColor k v (RBTree k v) (RBTree k v), Empty]
 
-                moveRedLeft : RBTree k v -> RBTree k v
-                moveRedLeft = \dict ->
+                move_red_left : RBTree k v -> RBTree k v
+                move_red_left = \dict ->
                   when dict is
-                    # Node clr k v (Node lClr lK lV lLeft lRight) (Node rClr rK rV ((Node Red rlK rlV rlL rlR) as rLeft) rRight) ->
-                    # Node clr k v (Node lClr lK lV lLeft lRight) (Node rClr rK rV rLeft rRight) ->
-                    Node clr k v (Node _ lK lV lLeft lRight) (Node _ rK rV rLeft rRight) ->
-                        when rLeft is
-                            Node Red rlK rlV rlL rlR ->
+                    # Node clr k v (Node l_clr l_k l_v l_left l_right) (Node r_clr r_k r_v ((Node Red rl_k rl_v rl_l rl_r) as r_left) r_right) ->
+                    # Node clr k v (Node l_clr l_k l_v l_left l_right) (Node r_clr r_k r_v r_left r_right) ->
+                    Node clr k v (Node _ l_k l_v l_left l_right) (Node _ r_k r_v r_left r_right) ->
+                        when r_left is
+                            Node Red rl_k rl_v rl_l rl_r ->
                               Node
                                 Red
-                                rlK
-                                rlV
-                                (Node Black k v (Node Red lK lV lLeft lRight) rlL)
-                                (Node Black rK rV rlR rRight)
+                                rl_k
+                                rl_v
+                                (Node Black k v (Node Red l_k l_v l_left l_right) rl_l)
+                                (Node Black r_k r_v rl_r r_right)
 
                             _ ->
                               when clr is
@@ -4092,16 +4092,16 @@ mod solve_expr {
                                     Black
                                     k
                                     v
-                                    (Node Red lK lV lLeft lRight)
-                                    (Node Red rK rV rLeft rRight)
+                                    (Node Red l_k l_v l_left l_right)
+                                    (Node Red r_k r_v r_left r_right)
 
                                 Red ->
                                   Node
                                     Black
                                     k
                                     v
-                                    (Node Red lK lV lLeft lRight)
-                                    (Node Red rK rV rLeft rRight)
+                                    (Node Red l_k l_v l_left l_right)
+                                    (Node Red r_k r_v r_left r_right)
 
                     _ ->
                       dict
@@ -4109,28 +4109,28 @@ mod solve_expr {
                 balance : NodeColor, k, v, RBTree k v, RBTree k v -> RBTree k v
                 balance = \color, key, value, left, right ->
                   when right is
-                    Node Red rK rV rLeft rRight ->
+                    Node Red r_k r_v r_left r_right ->
                       when left is
-                        Node Red lK lV lLeft lRight ->
+                        Node Red l_k l_v l_left l_right ->
                           Node
                             Red
                             key
                             value
-                            (Node Black lK lV lLeft lRight)
-                            (Node Black rK rV rLeft rRight)
+                            (Node Black l_k l_v l_left l_right)
+                            (Node Black r_k r_v r_left r_right)
 
                         _ ->
-                          Node color rK rV (Node Red key value left rLeft) rRight
+                          Node color r_k r_v (Node Red key value left r_left) r_right
 
                     _ ->
                       when left is
-                        Node Red lK lV (Node Red llK llV llLeft llRight) lRight ->
+                        Node Red l_k l_v (Node Red ll_k ll_v ll_left ll_right) l_right ->
                           Node
                             Red
-                            lK
-                            lV
-                            (Node Black llK llV llLeft llRight)
-                            (Node Black key value lRight right)
+                            l_k
+                            l_v
+                            (Node Black ll_k ll_v ll_left ll_right)
+                            (Node Black key value l_right right)
 
                         _ ->
                           Node color key value left right
@@ -4138,151 +4138,151 @@ mod solve_expr {
 
                 Key k : Num k
 
-                removeHelpEQGT : Key k, RBTree (Key k) v -> RBTree (Key k) v where k implements Hash & Eq
-                removeHelpEQGT = \targetKey, dict ->
+                remove_help_eq_gt : Key k, RBTree (Key k) v -> RBTree (Key k) v where k implements Hash & Eq
+                remove_help_eq_gt = \target_key, dict ->
                   when dict is
                     Node color key value left right ->
-                      if targetKey == key then
-                        when getMin right is
-                          Node _ minKey minValue _ _ ->
-                            balance color minKey minValue left (removeMin right)
+                      if target_key == key then
+                        when get_min right is
+                          Node _ min_key min_value _ _ ->
+                            balance color min_key min_value left (remove_min right)
 
                           Empty ->
                             Empty
                       else
-                        balance color key value left (removeHelp targetKey right)
+                        balance color key value left (remove_help target_key right)
 
                     Empty ->
                       Empty
 
-                getMin : RBTree k v -> RBTree k v
-                getMin = \dict ->
+                get_min : RBTree k v -> RBTree k v
+                get_min = \dict ->
                   when dict is
                     # Node _ _ _ ((Node _ _ _ _ _) as left) _ ->
                     Node _ _ _ left _ ->
                         when left is
-                            Node _ _ _ _ _ -> getMin left
+                            Node _ _ _ _ _ -> get_min left
                             _ -> dict
 
                     _ ->
                       dict
 
 
-                moveRedRight : RBTree k v -> RBTree k v
-                moveRedRight = \dict ->
+                move_red_right : RBTree k v -> RBTree k v
+                move_red_right = \dict ->
                   when dict is
-                    Node clr k v (Node lClr lK lV (Node Red llK llV llLeft llRight) lRight) (Node rClr rK rV rLeft rRight) ->
+                    Node clr k v (Node l_clr l_k l_v (Node Red ll_k ll_v ll_left ll_right) l_right) (Node r_clr r_k r_v r_left r_right) ->
                       Node
                         Red
-                        lK
-                        lV
-                        (Node Black llK llV llLeft llRight)
-                        (Node Black k v lRight (Node Red rK rV rLeft rRight))
+                        l_k
+                        l_v
+                        (Node Black ll_k ll_v ll_left ll_right)
+                        (Node Black k v l_right (Node Red r_k r_v r_left r_right))
 
-                    Node clr k v (Node lClr lK lV lLeft lRight) (Node rClr rK rV rLeft rRight) ->
+                    Node clr k v (Node l_clr l_k l_v l_left l_right) (Node r_clr r_k r_v r_left r_right) ->
                       when clr is
                         Black ->
                           Node
                             Black
                             k
                             v
-                            (Node Red lK lV lLeft lRight)
-                            (Node Red rK rV rLeft rRight)
+                            (Node Red l_k l_v l_left l_right)
+                            (Node Red r_k r_v r_left r_right)
 
                         Red ->
                           Node
                             Black
                             k
                             v
-                            (Node Red lK lV lLeft lRight)
-                            (Node Red rK rV rLeft rRight)
+                            (Node Red l_k l_v l_left l_right)
+                            (Node Red r_k r_v r_left r_right)
 
                     _ ->
                       dict
 
 
-                removeHelpPrepEQGT : Key k, RBTree (Key k) v, NodeColor, (Key k), v, RBTree (Key k) v, RBTree (Key k) v -> RBTree (Key k) v
-                removeHelpPrepEQGT = \_, dict, color, key, value, left, right ->
+                remove_help_prep_eq_gt : Key k, RBTree (Key k) v, NodeColor, (Key k), v, RBTree (Key k) v, RBTree (Key k) v -> RBTree (Key k) v
+                remove_help_prep_eq_gt = \_, dict, color, key, value, left, right ->
                   when left is
-                    Node Red lK lV lLeft lRight ->
+                    Node Red l_k l_v l_left l_right ->
                       Node
                         color
-                        lK
-                        lV
-                        lLeft
-                        (Node Red key value lRight right)
+                        l_k
+                        l_v
+                        l_left
+                        (Node Red key value l_right right)
 
                     _ ->
                       when right is
                         Node Black _ _ (Node Black _ _ _ _) _ ->
-                          moveRedRight dict
+                          move_red_right dict
 
                         Node Black _ _ Empty _ ->
-                          moveRedRight dict
+                          move_red_right dict
 
                         _ ->
                           dict
 
 
-                removeMin : RBTree k v -> RBTree k v
-                removeMin = \dict ->
+                remove_min : RBTree k v -> RBTree k v
+                remove_min = \dict ->
                   when dict is
                     Node color key value left right ->
                         when left is
-                            Node lColor _ _ lLeft _ ->
+                            Node lColor _ _ l_left _ ->
                               when lColor is
                                 Black ->
-                                  when lLeft is
+                                  when l_left is
                                     Node Red _ _ _ _ ->
-                                      Node color key value (removeMin left) right
+                                      Node color key value (remove_min left) right
 
                                     _ ->
-                                      when moveRedLeft dict is # here 1
-                                        Node nColor nKey nValue nLeft nRight ->
-                                          balance nColor nKey nValue (removeMin nLeft) nRight
+                                      when move_red_left dict is # here 1
+                                        Node n_color n_key n_value n_left n_right ->
+                                          balance n_color n_key n_value (remove_min n_left) n_right
 
                                         Empty ->
                                           Empty
 
                                 _ ->
-                                  Node color key value (removeMin left) right
+                                  Node color key value (remove_min left) right
 
                             _ ->
                                 Empty
                     _ ->
                       Empty
 
-                removeHelp : Key k, RBTree (Key k) v -> RBTree (Key k) v where k implements Hash & Eq
-                removeHelp = \targetKey, dict ->
+                remove_help : Key k, RBTree (Key k) v -> RBTree (Key k) v where k implements Hash & Eq
+                remove_help = \target_key, dict ->
                   when dict is
                     Empty ->
                       Empty
 
                     Node color key value left right ->
-                      if targetKey < key then
+                      if target_key < key then
                         when left is
-                          Node Black _ _ lLeft _ ->
-                            when lLeft is
+                          Node Black _ _ l_left _ ->
+                            when l_left is
                               Node Red _ _ _ _ ->
-                                Node color key value (removeHelp targetKey left) right
+                                Node color key value (remove_help target_key left) right
 
                               _ ->
-                                when moveRedLeft dict is # here 2
-                                  Node nColor nKey nValue nLeft nRight ->
-                                    balance nColor nKey nValue (removeHelp targetKey nLeft) nRight
+                                when move_red_left dict is # here 2
+                                  Node n_color n_key n_value n_left n_right ->
+                                    balance n_color n_key n_value (remove_help target_key n_left) n_right
 
                                   Empty ->
                                     Empty
 
                           _ ->
-                            Node color key value (removeHelp targetKey left) right
+                            Node color key value (remove_help target_key left) right
                       else
-                        removeHelpEQGT targetKey (removeHelpPrepEQGT targetKey dict color key value left right)
+                        remove_help_eq_gt target_key (remove_help_prep_eq_gt target_key dict color key value left right)
 
 
                 main : RBTree I64 I64
                 main =
-                    removeHelp 1i64 Empty
+                    remove_help 1i64 Empty
                 "#
             ),
             "RBTree (Key (Integer Signed64)) I64",
@@ -4298,31 +4298,31 @@ mod solve_expr {
 
                 RBTree k : [Node k (RBTree k) (RBTree k), Empty]
 
-                removeHelp : Num k, RBTree (Num k) -> RBTree (Num k)
-                removeHelp = \targetKey, dict ->
+                remove_help : Num k, RBTree (Num k) -> RBTree (Num k)
+                remove_help = \target_key, dict ->
                   when dict is
                     Empty ->
                       Empty
 
                     Node key left right ->
-                      if targetKey < key then
+                      if target_key < key then
                         when left is
-                          Node _ lLeft _ ->
-                            when lLeft is
+                          Node _ l_left _ ->
+                            when l_left is
                               Node _ _ _ ->
                                 Empty
 
                               _ -> Empty
 
                           _ ->
-                            Node key (removeHelp targetKey left) right
+                            Node key (remove_help target_key left) right
                       else
                         Empty
 
 
                 main : RBTree I64
                 main =
-                    removeHelp 1 Empty
+                    remove_help 1 Empty
                 "#
             ),
             "RBTree I64",
@@ -4340,65 +4340,65 @@ mod solve_expr {
 
                 RBTree k v : [Node NodeColor k v (RBTree k v) (RBTree k v), Empty]
 
-                removeHelp : Num k, RBTree (Num k) v -> RBTree (Num k) v where k implements Hash & Eq
-                removeHelp = \targetKey, dict ->
+                remove_help : Num k, RBTree (Num k) v -> RBTree (Num k) v where k implements Hash & Eq
+                remove_help = \target_key, dict ->
                   when dict is
                     Empty ->
                       Empty
 
                     Node color key value left right ->
-                      if targetKey < key then
+                      if target_key < key then
                         when left is
-                          Node Black _ _ lLeft _ ->
-                            when lLeft is
+                          Node Black _ _ l_left _ ->
+                            when l_left is
                               Node Red _ _ _ _ ->
-                                Node color key value (removeHelp targetKey left) right
+                                Node color key value (remove_help target_key left) right
 
                               _ ->
-                                when moveRedLeft dict is # here 2
-                                  Node nColor nKey nValue nLeft nRight ->
-                                    balance nColor nKey nValue (removeHelp targetKey nLeft) nRight
+                                when move_red_left dict is # here 2
+                                  Node n_color n_key n_value n_left n_right ->
+                                    balance n_color n_key n_value (remove_help target_key n_left) n_right
 
                                   Empty ->
                                     Empty
 
                           _ ->
-                            Node color key value (removeHelp targetKey left) right
+                            Node color key value (remove_help target_key left) right
                       else
-                        removeHelpEQGT targetKey (removeHelpPrepEQGT targetKey dict color key value left right)
+                        remove_help_eq_gt target_key (remove_help_prep_eq_gt target_key dict color key value left right)
 
                 Key k : Num k
 
                 balance : NodeColor, k, v, RBTree k v, RBTree k v -> RBTree k v
 
-                moveRedLeft : RBTree k v -> RBTree k v
+                move_red_left : RBTree k v -> RBTree k v
 
-                removeHelpPrepEQGT : Key k, RBTree (Key k) v, NodeColor, (Key k), v, RBTree (Key k) v, RBTree (Key k) v -> RBTree (Key k) v
+                remove_help_prep_eq_gt : Key k, RBTree (Key k) v, NodeColor, (Key k), v, RBTree (Key k) v, RBTree (Key k) v -> RBTree (Key k) v
 
-                removeHelpEQGT : Key k, RBTree (Key k) v -> RBTree (Key k) v where k implements Hash & Eq
-                removeHelpEQGT = \targetKey, dict ->
+                remove_help_eq_gt : Key k, RBTree (Key k) v -> RBTree (Key k) v where k implements Hash & Eq
+                remove_help_eq_gt = \target_key, dict ->
                   when dict is
                     Node color key value left right ->
-                      if targetKey == key then
-                        when getMin right is
-                          Node _ minKey minValue _ _ ->
-                            balance color minKey minValue left (removeMin right)
+                      if target_key == key then
+                        when get_min right is
+                          Node _ min_key min_value _ _ ->
+                            balance color min_key min_value left (remove_min right)
 
                           Empty ->
                             Empty
                       else
-                        balance color key value left (removeHelp targetKey right)
+                        balance color key value left (remove_help target_key right)
 
                     Empty ->
                       Empty
 
-                getMin : RBTree k v -> RBTree k v
+                get_min : RBTree k v -> RBTree k v
 
-                removeMin : RBTree k v -> RBTree k v
+                remove_min : RBTree k v -> RBTree k v
 
                 main : RBTree I64 I64
                 main =
-                    removeHelp 1i64 Empty
+                    remove_help 1i64 Empty
                 "#
             ),
             "RBTree I64 I64",
@@ -4410,28 +4410,28 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [partitionHelp] to "./platform"
+                app "test" provides [partition_help] to "./platform"
 
                 swap : U64, U64, List a -> List a
                 swap = \i, j, list ->
                     when Pair (List.get list i) (List.get list j) is
-                        Pair (Ok atI) (Ok atJ) ->
+                        Pair (Ok at_i) (Ok at_j) ->
                             list
-                                |> List.set i atJ
-                                |> List.set j atI
+                                |> List.set i at_j
+                                |> List.set j at_i
 
                         _ ->
                             []
 
-                partitionHelp : U64, U64, List (Num a), U64, (Num a) -> [Pair U64 (List (Num a))]
-                partitionHelp = \i, j, list, high, pivot ->
+                partition_help : U64, U64, List (Num a), U64, (Num a) -> [Pair U64 (List (Num a))]
+                partition_help = \i, j, list, high, pivot ->
                     if j < high then
                         when List.get list j is
                             Ok value ->
                                 if value <= pivot then
-                                    partitionHelp (i + 1) (j + 1) (swap (i + 1) j list) high pivot
+                                    partition_help (i + 1) (j + 1) (swap (i + 1) j list) high pivot
                                 else
-                                    partitionHelp i (j + 1) list high pivot
+                                    partition_help i (j + 1) list high pivot
 
                             Err _ ->
                                 Pair i list
@@ -4503,28 +4503,28 @@ mod solve_expr {
                 balance : NodeColor, k, v, RBTree k v, RBTree k v -> RBTree k v
                 balance = \color, key, value, left, right ->
                   when right is
-                    Node Red rK rV rLeft rRight ->
+                    Node Red r_k r_v r_left r_right ->
                       when left is
-                        Node Red lK lV lLeft lRight ->
+                        Node Red l_k l_v l_left l_right ->
                           Node
                             Red
                             key
                             value
-                            (Node Black lK lV lLeft lRight)
-                            (Node Black rK rV rLeft rRight)
+                            (Node Black l_k l_v l_left l_right)
+                            (Node Black r_k r_v r_left r_right)
 
                         _ ->
-                          Node color rK rV (Node Red key value left rLeft) rRight
+                          Node color r_k r_v (Node Red key value left r_left) r_right
 
                     _ ->
                       when left is
-                        Node Red lK lV (Node Red llK llV llLeft llRight) lRight ->
+                        Node Red l_k l_v (Node Red ll_k ll_v ll_left ll_right) l_right ->
                           Node
                             Red
-                            lK
-                            lV
-                            (Node Black llK llV llLeft llRight)
-                            (Node Black key value lRight right)
+                            l_k
+                            l_v
+                            (Node Black ll_k ll_v ll_left ll_right)
+                            (Node Black key value l_right right)
 
                         _ ->
                           Node color key value left right
@@ -4550,8 +4550,8 @@ mod solve_expr {
                 balance : k, RBTree k -> RBTree k
                 balance = \key, left ->
                       when left is
-                        Node _ _ lRight ->
-                            Node key lRight Empty
+                        Node _ _ l_right ->
+                            Node key l_right Empty
 
                         _ ->
                             Empty
@@ -4575,20 +4575,20 @@ mod solve_expr {
 
                 Expr : [Add Expr Expr, Val I64, Var I64]
 
-                printExpr : Expr -> Str
-                printExpr = \e ->
+                print_expr : Expr -> Str
+                print_expr = \e ->
                     when e is
                         Add a b ->
                             "Add ("
-                                |> Str.concat (printExpr a)
+                                |> Str.concat (print_expr a)
                                 |> Str.concat ") ("
-                                |> Str.concat (printExpr b)
+                                |> Str.concat (print_expr b)
                                 |> Str.concat ")"
                         Val v -> Num.to_str v
                         Var v -> "Var " |> Str.concat (Num.to_str v)
 
                 main : Str
-                main = printExpr (Var 3)
+                main = print_expr (Var 3)
                 "#
             ),
             "Str",
@@ -4605,7 +4605,7 @@ mod solve_expr {
                 x = 4
 
                 f : U8 -> U32
-                f = \z -> Num.intCast z
+                f = \z -> Num.int_cast z
 
                 y = f x
 
@@ -4630,8 +4630,8 @@ mod solve_expr {
         balance : a, RBTree a -> RBTree a
         balance = \key, left ->
               when left is
-                Node _ _ lRight ->
-                    Node key lRight Empty
+                Node _ _ l_right ->
+                    Node key l_right Empty
 
                 _ ->
                     Empty
@@ -4665,14 +4665,14 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                canIGo : _ -> Result.Result _ _
-                canIGo = \color ->
+                can_i_go : _ -> Result.Result _ _
+                can_i_go = \color ->
                     when color is
                         "green" -> Ok "go!"
                         "yellow" -> Err (SlowIt "whoa, let's slow down!")
                         "red" -> Err (StopIt "absolutely not")
                         _ -> Err (UnknownColor "this is a weird stoplight")
-                canIGo
+                can_i_go
                 "#
             ),
             "Str -> Result Str [SlowIt Str, StopIt Str, UnknownColor Str]",
@@ -4684,9 +4684,9 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                swapRcd: {x: _, y: _} -> {x: _, y: _}
-                swapRcd = \{x, y} -> {x: y, y: x}
-                swapRcd
+                swap_rcd: {x: _, y: _} -> {x: _, y: _}
+                swap_rcd = \{x, y} -> {x: y, y: x}
+                swap_rcd
                 "
             ),
             "{ x : a, y : b } -> { x : b, y : a }",
@@ -4698,9 +4698,9 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                swapRcd: {x: tx, y: ty} -> {x: _, y: _}
-                swapRcd = \{x, y} -> {x: y, y: x}
-                swapRcd
+                swap_rcd: {x: tx, y: ty} -> {x: _, y: _}
+                swap_rcd = \{x, y} -> {x: y, y: x}
+                swap_rcd
                 "
             ),
             "{ x : tx, y : ty } -> { x : ty, y : tx }",
@@ -4712,12 +4712,12 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                badComics: [True, False] -> [CowTools _, Thagomizer _]
-                badComics = \c ->
+                bad_comics: [True, False] -> [CowTools _, Thagomizer _]
+                bad_comics = \c ->
                     when c is
                         True -> CowTools "The Far Side"
                         False ->  Thagomizer "The Far Side"
-                badComics
+                bad_comics
                 "#
             ),
             "[False, True] -> [CowTools Str, Thagomizer Str]",
@@ -4749,10 +4749,10 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                setRocEmail : _ -> { name: Str, email: Str }_
-                setRocEmail = \person ->
+                set_roc_email : _ -> { name: Str, email: Str }_
+                set_roc_email = \person ->
                     { person & email: "$(person.name)@roclang.com" }
-                setRocEmail
+                set_roc_email
                 "#
             ),
             "{ email : Str, name : Str }a -> { email : Str, name : Str }a",
@@ -4766,10 +4766,10 @@ mod solve_expr {
                 r"
                 LinkedList elem : [Empty, Prepend (LinkedList elem) elem]
 
-                fromList : List elem -> LinkedList elem
-                fromList = \elems -> List.walk elems Empty Prepend
+                from_list : List elem -> LinkedList elem
+                from_list = \elems -> List.walk elems Empty Prepend
 
-                fromList
+                from_list
                 "
             ),
             "List elem -> LinkedList elem",
@@ -4781,10 +4781,10 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                fromList : List elem -> [Empty, Prepend (LinkedList elem) elem] as LinkedList elem
-                fromList = \elems -> List.walk elems Empty Prepend
+                from_list : List elem -> [Empty, Prepend (LinkedList elem) elem] as LinkedList elem
+                from_list = \elems -> List.walk elems Empty Prepend
 
-                fromList
+                from_list
                 "
             ),
             "List elem -> LinkedList elem",
@@ -4968,7 +4968,7 @@ mod solve_expr {
                 r"
                  \email ->
                     Email str = email
-                    Str.isEmpty str
+                    Str.is_empty str
                  "
             ),
             "[Email Str] -> Bool",

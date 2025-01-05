@@ -1,6 +1,4 @@
-interface Dep3Blah
-    exposes [one, two, foo, bar]
-    imports []
+module [one, two, foo, bar]
 
 import Dep3Other
 

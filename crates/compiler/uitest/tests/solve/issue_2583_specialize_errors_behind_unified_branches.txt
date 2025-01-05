@@ -1,7 +1,7 @@
 app "test" provides [main] to "./platform"
 
 entry =
-    if Bool.true then List.first [] else Str.toI64 ""
+    if Bool.true then List.first [] else Str.to_i64 ""
 
 main = entry
 #      ^^^^^ Result I64 [InvalidNumStr, ListWasEmpty]w_a

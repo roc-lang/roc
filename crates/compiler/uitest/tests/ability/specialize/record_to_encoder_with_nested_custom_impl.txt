@@ -1,9 +1,9 @@
 app "test"
-    imports [Encode.{ toEncoder, custom }]
+    imports [Encode.{ to_encoder, custom }]
     provides [main] to "./platform"
 
-A := {} implements [Encoding {toEncoder}]
-toEncoder = \@A _ -> custom \b, _ -> b
+A := {} implements [Encoding {to_encoder}]
+to_encoder = \@A _ -> custom \b, _ -> b
 
-main = toEncoder { a: @A {} }
-     # ^^^^^^^^^ Encoding#toEncoder(2): { a : A } -[[#Derived.toEncoder_{a}(0)]]-> Encoder fmt where fmt implements EncoderFormatting
+main = to_encoder { a: @A {} }
+     # ^^^^^^^^^^ Encoding#to_encoder(2): { a : A } -[[#Derived.to_encoder_{a}(0)]]-> Encoder fmt where fmt implements EncoderFormatting

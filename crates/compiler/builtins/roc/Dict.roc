@@ -116,14 +116,17 @@ is_eq = \xs, ys ->
     if len(xs) != len(ys) then
         Bool.false
     else
-        walk_until(xs, Bool.true, (\_, k, x_val ->
-            when get(ys, k) is
-                Ok y_val if y_val == x_val ->
-                    Continue Bool.true
+        walk_until(
+            xs,
+            Bool.true,
+            \_, k, x_val ->
+                when get(ys, k) is
+                    Ok(y_val) if y_val == x_val ->
+                        Continue(Bool.true)
 
-                _ ->
-                    Break Bool.false
-        ))
+                    _ ->
+                        Break(Bool.false),
+        )
 
 hash_dict : hasher, Dict k v -> hasher where v implements Hash, hasher implements Hasher
 hash_dict = \hasher, dict -> Hash.hash_unordered(hasher, to_list(dict), List.walk)
@@ -157,7 +160,7 @@ with_capacity = \requested ->
 
 ## Enlarge the dictionary for at least capacity additional elements
 reserve : Dict k v, U64 -> Dict k v
-reserve = \@Dict { buckets, data, max_bucket_capacity: original_max_bucket_capacity, max_load_factor, shifts }, requested ->
+reserve = \@Dict({ buckets, data, max_bucket_capacity: original_max_bucket_capacity, max_load_factor, shifts }), requested ->
     current_size = List.len(data)
     requested_size = Num.add_wrap(current_size, requested)
     size = Num.min(requested_size, max_size)
@@ -180,7 +183,7 @@ reserve = \@Dict { buckets, data, max_bucket_capacity: original_max_bucket_capac
 ## This function will require regenerating the metadata if the size changes.
 ## There will still be some overhead due to dictionary metadata always being a power of 2.
 release_excess_capacity : Dict k v -> Dict k v
-release_excess_capacity = \@Dict { buckets, data, max_bucket_capacity: original_max_bucket_capacity, max_load_factor, shifts } ->
+release_excess_capacity = \@Dict({ buckets, data, max_bucket_capacity: original_max_bucket_capacity, max_load_factor, shifts }) ->
     size = List.len(data)
 
     # NOTE: If we want, we technically could increase the load factor here to potentially minimize size more.
@@ -237,7 +240,7 @@ single = \k, v ->
 ## with the same capacity of the list and walk it calling [Dict.insert]
 from_list : List (k, v) -> Dict k v
 from_list = \data ->
-    List.walk(data, empty({}), (\dict, (k, v) -> insert(dict, k, v)))
+    List.walk(data, empty({}), \dict, (k, v) -> insert(dict, k, v))
 
 ## Returns the number of values in the dictionary.
 ## ```roc
@@ -250,7 +253,7 @@ from_list = \data ->
 ##     |> Bool.is_eq(3)
 ## ```
 len : Dict * * -> U64
-len = \@Dict { data } ->
+len = \@Dict({ data }) ->
     List.len(data)
 
 ## Check if the dictionary is empty.
@@ -278,7 +281,7 @@ is_empty = \@Dict({ data }) ->
 clear : Dict k v -> Dict k v
 clear = \@Dict({ buckets, data, max_bucket_capacity, max_load_factor, shifts }) ->
     @Dict({
-        buckets: List.map(buckets, (\_ -> empty_bucket)),
+        buckets: List.map(buckets, \_ -> empty_bucket),
         # use take_first to keep around the capacity
         data: List.take_first(data, 0),
         max_bucket_capacity,
@@ -293,9 +296,12 @@ map : Dict k a, (k, a -> b) -> Dict k b
 map = \dict, transform ->
     init = with_capacity(capacity(dict))
 
-    walk(dict, init, (\answer, k, v ->
-        insert(answer, k, transform(k, v))
-    ))
+    walk(
+        dict,
+        init,
+        \answer, k, v ->
+            insert(answer, k, transform(k, v)),
+    )
 
 ## Like [Dict.map], except the transformation function wraps the return value
 ## in a dictionary. At the end, all the dictionaries get joined together
@@ -306,9 +312,12 @@ join_map : Dict a b, (a, b -> Dict x y) -> Dict x y
 join_map = \dict, transform ->
     init = with_capacity(capacity(dict)) # Might be a pessimization
 
-    walk(dict, init, (\answer, k, v ->
-        insert_all(answer, transform(k, v))
-    ))
+    walk(
+        dict,
+        init,
+        \answer, k, v ->
+            insert_all(answer, transform(k, v)),
+    )
 
 ## Iterate through the keys and values in the dictionary and call the provided
 ## function with signature `state, k, v -> state` for each value, with an
@@ -323,7 +332,7 @@ join_map = \dict, transform ->
 ## ```
 walk : Dict k v, state, (state, k, v -> state) -> state
 walk = \@Dict({ data }), initial_state, transform ->
-    List.walk(data, initial_state, (\state, (k, v) -> transform(state, k, v)))
+    List.walk(data, initial_state, \state, (k, v) -> transform(state, k, v))
 
 ## Same as [Dict.walk], except you can stop walking early.
 ##
@@ -355,7 +364,7 @@ walk = \@Dict({ data }), initial_state, transform ->
 ## ```
 walk_until : Dict k v, state, (state, k, v -> [Continue state, Break state]) -> state
 walk_until = \@Dict({ data }), initial_state, transform ->
-    List.walk_until(data, initial_state, (\state, (k, v) -> transform(state, k, v)))
+    List.walk_until(data, initial_state, \state, (k, v) -> transform(state, k, v))
 
 ## Run the given function on each key-value pair of a dictionary, and return
 ## a dictionary with just the pairs for which the function returned `Bool.true`.
@@ -396,7 +405,7 @@ keep_if_help = \@Dict(dict), predicate, index, length ->
 ## ```
 drop_if : Dict k v, ((k, v) -> Bool) -> Dict k v
 drop_if = \dict, predicate ->
-    Dict.keep_if(dict, (\e -> Bool.not(predicate(e))))
+    Dict.keep_if(dict, \e -> Bool.not(predicate(e)))
 
 ## Get the value for a given key. If there is a value for the specified key it
 ## will return [Ok value], otherwise return [Err KeyNotFound].
@@ -527,7 +536,7 @@ update : Dict k v, k, (Result v [Missing] -> Result v [Missing]) -> Dict k v
 update = \@Dict({ buckets, data, max_bucket_capacity, max_load_factor, shifts }), key, alter ->
     { bucket_index, result } = find(@Dict({ buckets, data, max_bucket_capacity, max_load_factor, shifts }), key)
     when result is
-        Ok value ->
+        Ok(value) ->
             when alter(Ok(value)) is
                 Ok(new_value) ->
                     bucket = list_get_unsafe(buckets, bucket_index)
@@ -537,7 +546,7 @@ update = \@Dict({ buckets, data, max_bucket_capacity, max_load_factor, shifts })
                 Err(Missing) ->
                     remove_bucket(@Dict({ buckets, data, max_bucket_capacity, max_load_factor, shifts }), bucket_index)
 
-        Err KeyNotFound ->
+        Err(KeyNotFound) ->
             when alter(Err(Missing)) is
                 Ok(new_value) ->
                     if List.len(data) >= max_bucket_capacity then
@@ -601,7 +610,7 @@ to_list = \@Dict({ data }) ->
 ## ```
 keys : Dict k v -> List k
 keys = \@Dict({ data }) ->
-    List.map(data, (\(k, _) -> k))
+    List.map(data, \(k, _) -> k)
 
 ## Returns the values of a dictionary as a [List].
 ## This requires allocating a temporary [List], prefer using [Dict.to_list] or [Dict.walk] instead.
@@ -616,7 +625,7 @@ keys = \@Dict({ data }) ->
 ## ```
 values : Dict k v -> List v
 values = \@Dict({ data }) ->
-    List.map(data, (\(_, v) -> v))
+    List.map(data, \(_, v) -> v)
 
 ## Combine two dictionaries by keeping the [union](https://en.wikipedia.org/wiki/Union_(set_theory))
 ## of all the key-value pairs. This means that all the key-value pairs in
@@ -678,14 +687,17 @@ keep_shared = \xs0, ys0 ->
         else
             (xs0, ys0)
 
-    walk(xs1, with_capacity(len(xs1)), (\state, k, v ->
-        when get(ys1, k) is
-            Ok(yv) if v == yv ->
-                insert(state, k, v)
+    walk(
+        xs1,
+        with_capacity(len(xs1)),
+        \state, k, v ->
+            when get(ys1, k) is
+                Ok(yv) if v == yv ->
+                    insert(state, k, v)
 
-            _ ->
-                state
-    ))
+                _ ->
+                    state,
+    )
 
 ## Remove the key-value pairs in the first input that are also in the second
 ## using the [set difference](https://en.wikipedia.org/wiki/Complement_(set_theory)#Relative_complement)
@@ -709,7 +721,7 @@ keep_shared = \xs0, ys0 ->
 ## ```
 remove_all : Dict k v, Dict k v -> Dict k v
 remove_all = \xs, ys ->
-    walk(ys, xs, (\state, k, _ -> remove(state, k)))
+    walk(ys, xs, \state, k, _ -> remove(state, k))
 
 # Below here is a list of generic helpers and internal data types for Dict
 Bucket : {
@@ -896,10 +908,13 @@ calc_num_buckets = \shifts ->
     Num.min(Num.shift_left_by(1, Num.sub_wrap(64, shifts)), max_bucket_count)
 
 fill_buckets_from_data = \buckets0, data, shifts ->
-    List.walk_with_index(data, buckets0, (\buckets1, (key, _), data_index ->
-        (bucket_index, dist_and_fingerprint) = next_while_less(buckets1, key, shifts)
-        place_and_shift_up(buckets1, { dist_and_fingerprint, data_index: Num.to_u32(data_index) }, bucket_index)
-    ))
+    List.walk_with_index(
+        data,
+        buckets0,
+        \buckets1, (key, _), data_index ->
+            (bucket_index, dist_and_fingerprint) = next_while_less(buckets1, key, shifts)
+            place_and_shift_up(buckets1, { dist_and_fingerprint, data_index: Num.to_u32(data_index) }, bucket_index),
+    )
 
 next_while_less : List Bucket, k, U8 -> (U64, U32) where k implements Hash & Eq
 next_while_less = \buckets, key, shifts ->
@@ -1056,7 +1071,7 @@ expect
         |> insert("bar", {})
         |> insert("baz", {})
 
-    contains(dict, "baz") && !contains(dict, "other")
+    contains(dict, "baz") && !(contains(dict, "other"))
 
 expect
     dict =
@@ -1216,18 +1231,27 @@ expect
     ]
 
     dict =
-        List.walk(bad_keys, Dict.empty({}), (\acc, k ->
-            Dict.update(acc, k, (\val ->
-                when val is
-                    Ok(p) -> Ok(Num.add_wrap(p, 1))
-                    Err(Missing) -> Ok(0)
-            ))
-        ))
+        List.walk(
+            bad_keys,
+            Dict.empty({}),
+            \acc, k ->
+                Dict.update(
+                    acc,
+                    k,
+                    \val ->
+                        when val is
+                            Ok(p) -> Ok(Num.add_wrap(p, 1))
+                            Err(Missing) -> Ok(0),
+                ),
+        )
 
     all_inserted_correctly =
-        List.walk(bad_keys, Bool.true, (\acc, k ->
-            acc && Dict.contains(dict, k)
-        ))
+        List.walk(
+            bad_keys,
+            Bool.true,
+            \acc, k ->
+                acc && Dict.contains(dict, k),
+        )
 
     all_inserted_correctly
 
@@ -1324,10 +1348,10 @@ add_u32 = \@LowLevelHasher({ initialized_seed, state }), u32 ->
     combine_state(@LowLevelHasher({ initialized_seed, state }), { a, b: a, seed: initialized_seed, length: 4 })
 
 add_u64 = \@LowLevelHasher({ initialized_seed, state }), u64 ->
-    p0 = Num.bitwise_and 0xFFFF_FFFF u64
-    p1 = Num.shift_right_zf_by u64 32
-    a = Num.shift_left_by p0 32 |> Num.bitwise_or p1
-    b = Num.shift_left_by p1 32 |> Num.bitwise_or p0
+    p0 = Num.bitwise_and(0xFFFF_FFFF, u64)
+    p1 = Num.shift_right_zf_by(u64, 32)
+    a = Num.shift_left_by(p0, 32) |> Num.bitwise_or(p1)
+    b = Num.shift_left_by(p1, 32) |> Num.bitwise_or(p0)
 
     combine_state(@LowLevelHasher({ initialized_seed, state }), { a, b, seed: initialized_seed, length: 8 })
 
@@ -1370,36 +1394,33 @@ add_bytes = \@LowLevelHasher({ initialized_seed, state }), list ->
 
 hash_bytes_helper48 : U64, U64, U64, List U8, U64, U64 -> { a : U64, b : U64, seed : U64 }
 hash_bytes_helper48 = \seed, see1, see2, list, index, remaining ->
-    # TODO: update!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    new_seed = wymix (Num.bitwise_xor (wyr8 list index) wyp1) (Num.bitwise_xor (wyr8 list (Num.add_wrap index 8)) seed)
-    new_see1 = wymix (Num.bitwise_xor (wyr8 list (Num.add_wrap index 16)) wyp2) (Num.bitwise_xor (wyr8 list (Num.add_wrap index 24)) see1)
-    new_see2 = wymix (Num.bitwise_xor (wyr8 list (Num.add_wrap index 32)) wyp3) (Num.bitwise_xor (wyr8 list (Num.add_wrap index 40)) see2)
-    new_remaining = Num.sub_wrap remaining 48
-    new_index = Num.add_wrap index 48
+    new_seed = wymix(Num.bitwise_xor(wyr8(list, index), wyp1), Num.bitwise_xor(wyr8(list, Num.add_wrap(index, 8)), seed))
+    new_see1 = wymix(Num.bitwise_xor(wyr8(list, Num.add_wrap(index, 16)), wyp2), Num.bitwise_xor(wyr8(list, Num.add_wrap(index, 24)), see1))
+    new_see2 = wymix(Num.bitwise_xor(wyr8(list, Num.add_wrap(index, 32)), wyp3), Num.bitwise_xor(wyr8(list, Num.add_wrap(index, 40)), see2))
+    new_remaining = Num.sub_wrap(remaining, 48)
+    new_index = Num.add_wrap(index, 48)
 
     if new_remaining > 48 then
-        hash_bytes_helper48 new_seed new_see1 new_see2 list new_index new_remaining
+        hash_bytes_helper48(new_seed, new_see1, new_see2, list, new_index, new_remaining)
     else if new_remaining > 16 then
-        final_seed = Num.bitwise_xor new_see2 (Num.bitwise_xor new_see1 new_seed)
+        final_seed = Num.bitwise_xor(new_see2, Num.bitwise_xor(new_see1, new_seed))
 
-        hash_bytes_helper16 final_seed list new_index new_remaining
+        hash_bytes_helper16(final_seed, list, new_index, new_remaining)
     else
-        final_seed = Num.bitwise_xor new_see2 (Num.bitwise_xor new_see1 new_seed)
+        final_seed = Num.bitwise_xor(new_see2, Num.bitwise_xor(new_see1, new_seed))
 
-        { a: wyr8 list (Num.sub_wrap new_remaining 16 |> Num.add_wrap new_index), b: wyr8 list (Num.sub_wrap new_remaining 8 |> Num.add_wrap new_index), seed: final_seed }
+        { a: wyr8(list, (Num.sub_wrap(new_remaining, 16) |> Num.add_wrap(new_index))), b: wyr8(list, (Num.sub_wrap(new_remaining, 8) |> Num.add_wrap(new_index))), seed: final_seed }
 
 hash_bytes_helper16 : U64, List U8, U64, U64 -> { a : U64, b : U64, seed : U64 }
 hash_bytes_helper16 = \seed, list, index, remaining ->
-    new_seed = wymix (Num.bitwise_xor (wyr8 list index) wyp1) (Num.bitwise_xor (wyr8 list (Num.add_wrap index 8)) seed)
-    new_remaining = Num.sub_wrap remaining 16
-    new_index = Num.add_wrap index 16
+    new_seed = wymix(Num.bitwise_xor(wyr8(list, index), wyp1), Num.bitwise_xor(wyr8(list, Num.add_wrap(index, 8)), seed))
+    new_remaining = Num.sub_wrap(remaining, 16)
+    new_index = Num.add_wrap(index, 16)
 
     if new_remaining <= 16 then
-        { a: wyr8 list (Num.sub_wrap new_remaining 16 |> Num.add_wrap new_index), b: wyr8 list (Num.sub_wrap new_remaining 8 |> Num.add_wrap new_index), seed: new_seed }
+        { a: wyr8(list, (Num.sub_wrap(new_remaining, 16) |> Num.add_wrap(new_index))), b: wyr8(list, (Num.sub_wrap(new_remaining, 8) |> Num.add_wrap(new_index))), seed: new_seed }
     else
-        hash_bytes_helper16 new_seed list new_index new_remaining
-
-# !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        hash_bytes_helper16(new_seed, list, new_index, new_remaining)
 
 wyp0 : U64
 wyp0 = 0xa0761d6478bd642f
@@ -1667,7 +1688,7 @@ expect
     |> Dict.insert("Alice", 17)
     |> Dict.insert("Bob", 18)
     |> Dict.insert("Charlie", 19)
-    |> Dict.walk_until(Bool.false, (\_, _, age -> if age >= 18 then Break(Bool.true) else Continue(Bool.false)))
+    |> Dict.walk_until(Bool.false, \_, _, age -> if age >= 18 then Break(Bool.true) else Continue(Bool.false))
     |> Bool.is_eq(Bool.true)
 
 expect
@@ -1709,7 +1730,7 @@ expect
         |> Dict.insert(2, 2)
         |> Dict.insert(3, 3)
         |> Dict.insert(4, 4)
-        |> Dict.keep_if(\(k, _v) -> !List.contains(keys_to_delete, k))
+        |> Dict.keep_if(\(k, _v) -> !(List.contains(keys_to_delete, k)))
 
     d2 =
         Dict.empty({})
@@ -1728,7 +1749,7 @@ expect
         |> Dict.insert(2, 2)
         |> Dict.insert(3, 3)
         |> Dict.insert(4, 4)
-        |> Dict.keep_if(\(k, _v) -> !List.contains(keys_to_delete, k))
+        |> Dict.keep_if(\(k, _v) -> !(List.contains(keys_to_delete, k)))
 
     d2 =
         Dict.empty({})

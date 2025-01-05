@@ -20,6 +20,6 @@ main =
                         printed = printCombinatorParser f.parser
                         if Bool.false then printed else "foo"
                     |> List.first
-                    |> Result.withDefault ("foo")
+                    |> Result.with_default ("foo")
 
     printCombinatorParser (Record [])

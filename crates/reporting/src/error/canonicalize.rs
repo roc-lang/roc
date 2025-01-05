@@ -1405,7 +1405,7 @@ pub fn can_problem<'b>(
                 )]),
                 alloc.tip().append(
                     alloc.reflow(
-                        "An expression like `4`, `\"hello\"`, or `functionCall MyThing` is like `return 4` in other programming languages. To me, it seems like you did `return 4` followed by more code in the lines after, that code would never be executed!"
+                        "An expression like `4`, `\"hello\"`, or `function_call(MyThing)` is like `return 4` in other programming languages. To me, it seems like you did `return 4` followed by more code in the lines after, that code would never be executed!"
                     )
                 ),
                 alloc.tip().append(
@@ -1426,7 +1426,7 @@ pub fn can_problem<'b>(
                 alloc.region(lines.convert_region(region), severity),
                 alloc.reflow("Add an exclamation mark at the end, like:"),
                 alloc
-                    .parser_suggestion("{ readFile!: Str => Str }")
+                    .parser_suggestion("{ read_file!: Str => Str }")
                     .indent(4),
                 alloc.reflow("This will help readers identify it as a source of effects."),
             ]);
