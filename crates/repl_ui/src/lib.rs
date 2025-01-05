@@ -76,7 +76,7 @@ pub fn is_incomplete(input: &str) -> bool {
             }
         }
         ParseOutcome::DefsAndExpr(_, Some(expr)) => {
-            if matches!(expr.extract_spaces().item, Expr::When(..)) {
+            if matches!(expr.extract_spaces(&arena).item, Expr::When(..)) {
                 // There might be lots of `when` branches, so don't assume the user is done entering
                 // them until they enter a blank line!
                 !input.ends_with('\n')

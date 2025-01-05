@@ -1,0 +1,29 @@
+@0-9 SpaceAfter(
+    Apply(
+        @0-1 Underscore(
+            "",
+        ),
+        [
+            @2-7 SpaceAfter(
+                Tuple(
+                    [
+                        @3-4 Underscore(
+                            "",
+                        ),
+                        @5-6 Var {
+                            module_name: "",
+                            ident: "o",
+                        },
+                    ],
+                ),
+                [
+                    Newline,
+                ],
+            ),
+        ],
+        ParensAndCommas,
+    ),
+    [
+        Newline,
+    ],
+)

@@ -12,12 +12,11 @@ use crate::Buf;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_module::called_via::{self, BinOp, CalledVia, UnaryOp};
+use roc_parse::ast::{merge_spaces, StrLiteral, StrSegment};
 use roc_parse::ast::{
     AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces, Pattern, Spaceable,
     Spaces, SpacesAfter, SpacesBefore, TryTarget, WhenBranch,
 };
-use roc_parse::ast::{StrLiteral, StrSegment};
-use roc_parse::expr::merge_spaces;
 use roc_parse::ident::Accessor;
 use roc_parse::keyword;
 use roc_region::all::Loc;
@@ -665,28 +664,30 @@ fn fmt_apply(
     //   2,
     // ]
     // ```
+    let arena = buf.bump();
     let use_commas_and_parens = expr_used_commas_and_parens || buf.flags().parens_and_commas;
-    let should_reflow_outdentable = loc_expr.extract_spaces().after.is_empty()
+    let should_reflow_outdentable = loc_expr.extract_spaces(arena).after.is_empty()
         && except_last(loc_args).all(|a| !a.is_multiline())
         && loc_args
             .last()
             .map(|a| {
-                a.extract_spaces().item.is_multiline()
-                    && is_outdentable_collection(&a.value.extract_spaces().item)
-                    && (a.extract_spaces().before == [CommentOrNewline::Newline]
-                        || a.extract_spaces().before.is_empty())
+                a.extract_spaces(arena).item.is_multiline()
+                    && is_outdentable_collection(&a.value.extract_spaces(arena).item)
+                    && (a.extract_spaces(arena).before == [CommentOrNewline::Newline]
+                        || a.extract_spaces(arena).before.is_empty())
             })
             .unwrap_or_default();
 
     let needs_indent = !should_reflow_outdentable
-        && (!loc_expr.extract_spaces().after.is_empty()
+        && (!loc_expr.extract_spaces(arena).after.is_empty()
             || except_last(loc_args).any(|a| a.is_multiline())
             || loc_expr.is_multiline()
             || loc_args
                 .last()
                 .map(|a| {
                     a.is_multiline()
-                        && (!a.extract_spaces().before.is_empty() || !is_outdentable(&a.value))
+                        && (!a.extract_spaces(arena).before.is_empty()
+                            || !is_outdentable(arena, &a.value))
                 })
                 .unwrap_or_default());
 
@@ -778,6 +779,9 @@ fn fmt_apply(
     if use_commas_and_parens {
         if needs_indent {
             buf.ensure_ends_with_newline();
+            buf.indent(indent);
+        }
+        if buf.ends_with_newline() {
             buf.indent(indent);
         }
         buf.push(')');
@@ -876,9 +880,9 @@ pub(crate) fn format_sq_literal(buf: &mut Buf, s: &str) {
     buf.push('\'');
 }
 
-fn is_outdentable(expr: &Expr) -> bool {
+fn is_outdentable(arena: &'_ Bump, expr: &Expr) -> bool {
     matches!(
-        expr.extract_spaces().item,
+        expr.extract_spaces(arena).item,
         Expr::Tuple(_) | Expr::List(_) | Expr::Record(_) | Expr::Closure(..)
     )
 }
@@ -1561,15 +1565,15 @@ pub fn format_spaces(buf: &mut Buf, spaces: &[CommentOrNewline], newlines: Newli
     }
 }
 
-fn is_when_patterns_multiline(when_branch: &WhenBranch) -> bool {
+fn is_when_patterns_multiline(arena: &'_ Bump, when_branch: &WhenBranch) -> bool {
     let patterns = when_branch.patterns;
     let (first_pattern, rest) = patterns.split_first().unwrap();
 
     let is_multiline_patterns = if let Some((last_pattern, inner_patterns)) = rest.split_last() {
-        !first_pattern.value.extract_spaces().after.is_empty()
-            || !last_pattern.value.extract_spaces().before.is_empty()
+        !first_pattern.value.extract_spaces(arena).after.is_empty()
+            || !last_pattern.value.extract_spaces(arena).before.is_empty()
             || inner_patterns.iter().any(|p| {
-                let spaces = p.value.extract_spaces();
+                let spaces = p.value.extract_spaces(arena);
                 !spaces.before.is_empty() || !spaces.after.is_empty()
             })
     } else {
@@ -1631,7 +1635,7 @@ fn fmt_when<'a>(
         let expr = &branch.value;
         let patterns = &branch.patterns;
         let is_multiline_expr = expr.is_multiline();
-        let is_multiline_patterns = is_when_patterns_multiline(branch);
+        let is_multiline_patterns = is_when_patterns_multiline(buf.bump(), branch);
 
         for (pattern_index, pattern) in patterns.iter().enumerate() {
             if pattern_index == 0 {
