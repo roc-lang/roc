@@ -49,7 +49,9 @@ fn init_backtrace_storage() {
 
 fn panic_hook(_: &PanicInfo) {
     if let Some(storage) = BACKTRACE.get() {
-        *storage.lock().unwrap() = Some(Backtrace::force_capture().to_string());
+        let _ = storage.lock().map(|ref mut storage| {
+            **storage = Some(Backtrace::force_capture().to_string());
+        });
     }
 }
 
@@ -165,7 +167,7 @@ fn notify_repl_panic(target: Target, e: Box<dyn Any + Send>) -> ReplAction<'stat
 
     let backtrace = BACKTRACE
         .get()
-        .and_then(|storage| storage.lock().unwrap().take())
+        .and_then(|storage| storage.lock().ok().as_deref_mut().and_then(Option::take))
         .unwrap_or_else(|| "<Backtrace not found>".to_string());
 
     println!(
