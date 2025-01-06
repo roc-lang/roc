@@ -268,7 +268,7 @@ fn fmt_pattern_only(
         Pattern::OptionalField(name, loc_pattern) => {
             buf.indent(indent);
             snakify_camel_ident(buf, name);
-            buf.push_str(" ?");
+            buf.push_str(" ??");
             buf.spaces(1);
             loc_pattern.format(buf, indent);
         }

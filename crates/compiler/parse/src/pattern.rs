@@ -5,7 +5,7 @@ use crate::blankspace::{space0_before_optional_after, space0_e, spaces, spaces_b
 use crate::ident::{lowercase_ident, parse_ident, Accessor, Ident};
 use crate::keyword;
 use crate::parser::{
-    self, backtrackable, byte, collection_trailing_sep_e, fail_when, loc, map, map_with_arena,
+    self, and, backtrackable, byte, collection_trailing_sep_e, fail_when, loc, map, map_with_arena,
     optional, skip_first, skip_second, specialize_err, specialize_err_ref, then, three_bytes,
     two_bytes, zero_or_more, EPattern, PInParens, PList, PRecord, Parser,
 };
@@ -551,7 +551,10 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
         // (This is true in both literals and types.)
         let (_, opt_loc_val, state) = optional(either(
             byte(b':', PRecord::Colon),
-            byte(b'?', PRecord::Optional),
+            and(
+                byte(b'?', PRecord::OptionalFirst),
+                optional(byte(b'?', PRecord::OptionalSecond)),
+            ),
         ))
         .parse(arena, state, min_indent)?;
 

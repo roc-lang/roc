@@ -2449,7 +2449,7 @@ fn to_precord_report<'a>(
         PRecord::Colon(_) => {
             unreachable!("because `foo` is a valid field; the colon is not required")
         }
-        PRecord::Optional(_) => {
+        PRecord::OptionalFirst(_) | PRecord::OptionalSecond(_) => {
             unreachable!("because `foo` is a valid field; the question mark is not required")
         }
 
@@ -2889,7 +2889,7 @@ fn to_trecord_report<'a>(
                         alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                         alloc.concat([
                             alloc.reflow(
-                                r"I was expecting to see a colon, question mark, comma or closing curly brace.",
+                                r"I was expecting to see a colon, two question marks (??), comma or closing curly brace.",
                             ),
                         ]),
                     ]);
@@ -2976,7 +2976,7 @@ fn to_trecord_report<'a>(
         ETypeRecord::Colon(_) => {
             unreachable!("because `foo` is a valid field; the colon is not required")
         }
-        ETypeRecord::Optional(_) => {
+        ETypeRecord::OptionalFirst(_) | ETypeRecord::OptionalSecond(_) => {
             unreachable!("because `foo` is a valid field; the question mark is not required")
         }
 
