@@ -701,16 +701,8 @@ fn fmt_apply(
     if !expr.before.is_empty() {
         format_spaces(buf, expr.before, Newlines::Yes, indent);
     }
-    expr.item.format_with_options(
-        buf,
-        if use_commas_and_parens {
-            Parens::NotNeeded
-        } else {
-            Parens::InApply
-        },
-        Newlines::Yes,
-        indent,
-    );
+    expr.item
+        .format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
 
     if use_commas_and_parens {
         buf.push('(');

@@ -1219,6 +1219,7 @@ impl<'a> Normalize<'a> for ERecord<'a> {
             ERecord::UnderscoreField(_pos) => ERecord::Field(Position::zero()),
             ERecord::Colon(_) => ERecord::Colon(Position::zero()),
             ERecord::QuestionMark(_) => ERecord::QuestionMark(Position::zero()),
+            ERecord::SecondQuestionMark(_) => ERecord::SecondQuestionMark(Position::zero()),
             ERecord::Arrow(_) => ERecord::Arrow(Position::zero()),
             ERecord::Ampersand(_) => ERecord::Ampersand(Position::zero()),
             ERecord::Expr(inner_err, _) => {
@@ -1393,6 +1394,9 @@ impl<'a> Normalize<'a> for ETypeAbilityImpl<'a> {
                 ETypeAbilityImpl::Space(*inner_err, Position::zero())
             }
             ETypeAbilityImpl::QuestionMark(_) => ETypeAbilityImpl::QuestionMark(Position::zero()),
+            ETypeAbilityImpl::SecondQuestionMark(_) => {
+                ETypeAbilityImpl::SecondQuestionMark(Position::zero())
+            }
             ETypeAbilityImpl::Ampersand(_) => ETypeAbilityImpl::Ampersand(Position::zero()),
             ETypeAbilityImpl::Expr(inner_err, _) => {
                 ETypeAbilityImpl::Expr(arena.alloc(inner_err.normalize(arena)), Position::zero())
@@ -1471,7 +1475,8 @@ impl<'a> Normalize<'a> for ETypeRecord<'a> {
             ETypeRecord::Open(_) => ETypeRecord::Open(Position::zero()),
             ETypeRecord::Field(_) => ETypeRecord::Field(Position::zero()),
             ETypeRecord::Colon(_) => ETypeRecord::Colon(Position::zero()),
-            ETypeRecord::Optional(_) => ETypeRecord::Optional(Position::zero()),
+            ETypeRecord::OptionalFirst(_) => ETypeRecord::OptionalFirst(Position::zero()),
+            ETypeRecord::OptionalSecond(_) => ETypeRecord::OptionalSecond(Position::zero()),
             ETypeRecord::Type(inner_err, _) => {
                 ETypeRecord::Type(arena.alloc(inner_err.normalize(arena)), Position::zero())
             }
@@ -1491,7 +1496,8 @@ impl<'a> Normalize<'a> for PRecord<'a> {
             PRecord::Open(_) => PRecord::Open(Position::zero()),
             PRecord::Field(_) => PRecord::Field(Position::zero()),
             PRecord::Colon(_) => PRecord::Colon(Position::zero()),
-            PRecord::Optional(_) => PRecord::Optional(Position::zero()),
+            PRecord::OptionalFirst(_) => PRecord::OptionalFirst(Position::zero()),
+            PRecord::OptionalSecond(_) => PRecord::OptionalSecond(Position::zero()),
             PRecord::Pattern(inner_err, _) => {
                 PRecord::Pattern(arena.alloc(inner_err.normalize(arena)), Position::zero())
             }

@@ -617,8 +617,8 @@ is_gte : Num a, Num a -> Bool
 ##
 ## If either argument is [*NaN*](Num.is_nan), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
-is_approx_eq : Frac a, Frac a, { rtol ? Frac a, atol ? Frac a } -> Bool
-is_approx_eq = \x, y, { rtol ? 0.00001, atol ? 0.00000001 } ->
+is_approx_eq : Frac a, Frac a, { rtol ?? Frac a, atol ?? Frac a } -> Bool
+is_approx_eq = \x, y, { rtol ?? 0.00001, atol ?? 0.00000001 } ->
     eq = x <= y && x >= y
     meets_tolerance = Num.abs_diff(x, y) <= Num.max(atol, (rtol * Num.max(Num.abs(x), Num.abs(y))))
     eq || meets_tolerance
