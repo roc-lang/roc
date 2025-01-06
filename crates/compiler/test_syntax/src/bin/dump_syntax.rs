@@ -3,6 +3,8 @@
 //! Typical usage:
 //! `cargo run --bin dump_syntax -- full file.roc`
 
+use std::process::exit;
+
 use bumpalo::Bump;
 use test_syntax::test_helpers::InputKind;
 
@@ -24,7 +26,10 @@ fn main() {
         }
     };
 
-    let text = std::fs::read_to_string(&args[2]).unwrap();
+    let text = std::fs::read_to_string(&args[2]).unwrap_or_else(|e| {
+        eprintln!("Error reading file: {}", e);
+        exit(1);
+    });
     let input = kind.with_text(&text);
     let arena = Bump::new();
     let output = input.parse_in(&arena);
