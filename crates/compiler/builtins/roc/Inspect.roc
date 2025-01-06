@@ -84,7 +84,7 @@ custom : (f -> f) -> Inspector f where f implements InspectFormatter
 custom = \fn -> @Inspector(fn)
 
 apply : Inspector f, f -> f where f implements InspectFormatter
-apply = \@Inspector fn, fmt -> fn(fmt)
+apply = \@Inspector(fn), fmt -> fn(fmt)
 
 Inspect implements
     to_inspector : val -> Inspector f where val implements Inspect, f implements InspectFormatter
@@ -138,140 +138,143 @@ dbg_init = \{} -> @DbgFormatter({ data: "" })
 
 dbg_list : list, ElemWalker (DbgFormatter, Bool) list elem, (elem -> Inspector DbgFormatter) -> Inspector DbgFormatter
 dbg_list = \content, walk_fn, to_dbg_inspector ->
-    custom(\f0 ->
-        dbg_write(f0, "[")
-        |> \f1 ->
-            walk_fn(
-                content,
-                (f1, Bool.false),
-                \(f2, prepend_sep), elem ->
-                    f3 =
-                        if prepend_sep then
-                            dbg_write(f2, ", ")
-                        else
-                            f2
+    custom_list_dbg = \f0 ->
+        f1 = dbg_write(f0, "[")
+        (f5, _) = walk_fn(
+            content,
+            (f1, Bool.false),
+            \(f2, prepend_sep), elem ->
+                f3 =
+                    if prepend_sep then
+                        dbg_write(f2, ", ")
+                    else
+                        f2
 
-                    elem
-                    |> to_dbg_inspector
-                    |> apply(f3)
-                    |> \f4 -> (f4, Bool.true),
-            )
-        |> .0
-        |> dbg_write("]")
-)
+                elem
+                |> to_dbg_inspector
+                |> apply(f3)
+                |> \f4 -> (f4, Bool.true),
+        )
+
+        dbg_write(f5, "]")
+
+    custom(custom_list_dbg)
 
 dbg_set : set, ElemWalker (DbgFormatter, Bool) set elem, (elem -> Inspector DbgFormatter) -> Inspector DbgFormatter
 dbg_set = \content, walk_fn, to_dbg_inspector ->
-    custom(\f0 ->
-        dbg_write(f0, "{")
-        |> \f1 ->
-            walk_fn(
-                content,
-                (f1, Bool.false),
-                \(f2, prepend_sep), elem ->
-                    f3 =
-                        if prepend_sep then
-                            dbg_write(f2, ", ")
-                        else
-                            f2
+    custom_dbg_set = \f0 ->
+        f1 = dbg_write(f0, "{")
+        (f5, _) = walk_fn(
+            content,
+            (f1, Bool.false),
+            \(f2, prepend_sep), elem ->
+                f3 =
+                    if prepend_sep then
+                        dbg_write(f2, ", ")
+                    else
+                        f2
 
-                    elem
-                    |> to_dbg_inspector
-                    |> apply(f3)
-                    |> \f4 -> (f4, Bool.true),
-            )
-        |> .0
-        |> dbg_write("}")
-)
+                elem
+                |> to_dbg_inspector
+                |> apply(f3)
+                |> \f4 -> (f4, Bool.true),
+        )
+
+        dbg_write(f5, "}")
+
+    custom(custom_dbg_set)
 
 dbg_dict : dict, KeyValWalker (DbgFormatter, Bool) dict key value, (key -> Inspector DbgFormatter), (value -> Inspector DbgFormatter) -> Inspector DbgFormatter
 dbg_dict = \d, walk_fn, key_to_inspector, value_to_inspector ->
-    custom(\f0 ->
-        dbg_write(f0, "{")
-        |> \f1 ->
-            walk_fn(
-                d,
-                (f1, Bool.false),
-                \(f2, prepend_sep), key, value ->
-                    f3 =
-                        if prepend_sep then
-                            dbg_write(f2, ", ")
-                        else
-                            f2
+    custom_dbg_dict = \f0 ->
+        f1 = dbg_write(f0, "{")
+        (f5, _) = walk_fn(
+            d,
+            (f1, Bool.false),
+            \(f2, prepend_sep), key, value ->
+                f3 =
+                    if prepend_sep then
+                        dbg_write(f2, ", ")
+                    else
+                        f2
 
-                    apply(key_to_inspector(key), f3)
-                    |> dbg_write(": ")
-                    |> \x -> apply(value_to_inspector(value), x)
-                    |> \f4 -> (f4, Bool.true),
-            )
-        |> .0
-        |> dbg_write("}")
-)
+                apply(key_to_inspector(key), f3)
+                |> dbg_write(": ")
+                |> \x -> apply(value_to_inspector(value), x)
+                |> \f4 -> (f4, Bool.true),
+        )
+
+        dbg_write(f5, "}")
+
+    custom(custom_dbg_dict)
 
 dbg_tag : Str, List (Inspector DbgFormatter) -> Inspector DbgFormatter
 dbg_tag = \name, fields ->
     if List.is_empty(fields) then
         custom(\f0 -> dbg_write(f0, name))
     else
-        custom(\f0 ->
-            dbg_write(f0, "(")
-            |> dbg_write(name)
-            |> \f1 ->
-                List.walk(
-                    fields,
-                    f1,
-                    \f2, inspector ->
-                        dbg_write(f2, " ")
-                        |> \x -> apply(inspector, x),
-                )
-            |> dbg_write(")")
-)
+        custom_dbg_tag = \f0 ->
+            f1 =
+                dbg_write(f0, "(")
+                |> dbg_write(name)
+
+            f3 = List.walk(
+                fields,
+                f1,
+                \f2, inspector ->
+                    dbg_write(f2, " ")
+                    |> \x -> apply(inspector, x),
+            )
+
+            dbg_write(f3, ")")
+
+        custom(custom_dbg_tag)
 
 dbg_tuple : List (Inspector DbgFormatter) -> Inspector DbgFormatter
 dbg_tuple = \fields ->
-    custom(\f0 ->
-        dbg_write(f0, "(")
-        |> \f1 ->
-            List.walk(
-                fields,
-                (f1, Bool.false),
-                \(f2, prepend_sep), inspector ->
-                    f3 =
-                        if prepend_sep then
-                            dbg_write(f2, ", ")
-                        else
-                            f2
+    custom_dbg_tuple = \f0 ->
+        f1 = dbg_write(f0, "(")
+        (f5, _) = List.walk(
+            fields,
+            (f1, Bool.false),
+            \(f2, prepend_sep), inspector ->
+                f3 =
+                    if prepend_sep then
+                        dbg_write(f2, ", ")
+                    else
+                        f2
 
-                    apply(inspector, f3)
-                    |> \f4 -> (f4, Bool.true),
-            )
-        |> .0
-        |> dbg_write(")")
-)
+                apply(inspector, f3)
+                |> \f4 -> (f4, Bool.true),
+        )
+
+        dbg_write(f5, ")")
+
+    custom(custom_dbg_tuple)
 
 dbg_record : List { key : Str, value : Inspector DbgFormatter } -> Inspector DbgFormatter
 dbg_record = \fields ->
-    custom(\f0 ->
-        dbg_write(f0, "{")
-        |> \f1 ->
-            List.walk(
-                fields,
-                (f1, Bool.false),
-                \(f2, prepend_sep), { key, value } ->
-                    f3 =
-                        if prepend_sep then
-                            dbg_write(f2, ", ")
-                        else
-                            f2
+    custom_dbg_record = \f0 ->
+        f1 = dbg_write(f0, "{")
+        (f5, _) = List.walk(
+            fields,
+            (f1, Bool.false),
+            \(f2, prepend_sep), { key, value } ->
+                f3 =
+                    if prepend_sep then
+                        dbg_write(f2, ", ")
+                    else
+                        f2
 
-                    dbg_write(f3, key)
-                    |> dbg_write(": ")
-                    |> \x -> apply(value, x)
-                    |> \f4 -> (f4, Bool.true),
-            )
-        |> .0
-        |> dbg_write("}")
-)
+                dbg_write(f3, key)
+                |> dbg_write(": ")
+                |> \x -> apply(value, x)
+                |> \f4 -> (f4, Bool.true),
+        )
+
+        dbg_write(f5, "}")
+
+    custom(custom_dbg_record)
 
 dbg_bool : Bool -> Inspector DbgFormatter
 dbg_bool = \b ->
@@ -280,12 +283,13 @@ dbg_bool = \b ->
 
 dbg_str : Str -> Inspector DbgFormatter
 dbg_str = \s ->
-    custom(\f0 ->
+    custom_dbg_str = \f0 ->
         f0
         |> dbg_write("\"")
         |> dbg_write(s) # TODO: Should we be escaping strings for dbg/logging?
         |> dbg_write("\"")
-)
+
+    custom(custom_dbg_str)
 
 dbg_opaque : * -> Inspector DbgFormatter
 dbg_opaque = \_ ->

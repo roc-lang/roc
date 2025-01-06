@@ -158,10 +158,10 @@ from_bytes = \bytes, fmt ->
         { result, rest } ->
             if List.is_empty(rest) then
                 when result is
-                    Ok val -> Ok (val)
-                    Err TooShort -> Err (TooShort)
+                    Ok(val) -> Ok(val)
+                    Err(TooShort) -> Err(TooShort)
             else
-                Err (Leftover (rest))
+                Err(Leftover(rest))
 
 ## Transform the `val` of a [DecodeResult]
 map_result : DecodeResult a, (a -> b) -> DecodeResult b

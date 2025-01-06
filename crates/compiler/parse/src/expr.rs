@@ -208,7 +208,7 @@ fn loc_term_or_closure<'a>(
         )),
         loc_term(),
     )
-    .trace("term_or_underscore")
+    .trace("term_or_closure")
 }
 
 fn loc_term<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
@@ -718,7 +718,19 @@ fn parse_stmt_operator_chain<'a>(
                     ..
                 },
                 state,
-            )) if matches!(expr_state.expr.value, Expr::Tag(..)) => {
+            )) if matches!(
+                expr_state.expr.value,
+                Expr::Tag(..)
+                    | Expr::Apply(
+                        Loc {
+                            region: _,
+                            value: Expr::Tag(..)
+                        },
+                        &[],
+                        _
+                    )
+            ) =>
+            {
                 return parse_ability_def(expr_state, state, arena, implements, call_min_indent)
                     .map(|(td, s)| (MadeProgress, Stmt::TypeDef(td), s));
             }
@@ -1997,6 +2009,14 @@ fn parse_ability_def<'a>(
 
     let name = expr_state.expr.map_owned(|e| match e {
         Expr::Tag(name) => name,
+        Expr::Apply(
+            Loc {
+                region: _,
+                value: Expr::Tag(name),
+            },
+            &[],
+            _,
+        ) => name,
         _ => unreachable!(),
     });
 

@@ -34,15 +34,15 @@ Eq implements
 ## `Bool` implements the `Eq` ability.
 Bool := [True, False] implements [Eq { is_eq: bool_is_eq }]
 
-bool_is_eq = \@Bool b1, @Bool b2 -> structural_eq b1 b2
+bool_is_eq = \@Bool(b1), @Bool(b2) -> structural_eq(b1, b2)
 
 ## The boolean true value.
 true : Bool
-true = @Bool (True)
+true = @Bool(True)
 
 ## The boolean false value.
 false : Bool
-false = @Bool (False)
+false = @Bool(False)
 
 ## Returns `Bool.true` when both inputs are `Bool.true`. This is equivalent to
 ## the logic [AND](https://en.wikipedia.org/wiki/Logical_conjunction)
