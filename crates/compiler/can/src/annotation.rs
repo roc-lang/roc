@@ -1086,7 +1086,7 @@ fn canonicalize_has_clause(
     } = clause;
     let region = *region;
 
-    let var_name = var.extract_spaces().item;
+    let var_name = var.extract_spaces(env.arena).item;
     debug_assert!(
         var_name.starts_with(char::is_lowercase),
         "Vars should have been parsed as lowercase"
@@ -1192,8 +1192,10 @@ fn can_extension_type(
             );
 
             if valid_extension_type(shallow_dealias_with_scope(scope, &ext_type)) {
-                if matches!(loc_ann.extract_spaces().item, TypeAnnotation::Wildcard)
-                    && matches!(ext_problem_kind, ExtensionTypeKind::TagUnion)
+                if matches!(
+                    loc_ann.extract_spaces(env.arena).item,
+                    TypeAnnotation::Wildcard
+                ) && matches!(ext_problem_kind, ExtensionTypeKind::TagUnion)
                     && pol == CanPolarity::Pos
                 {
                     // Wildcards are redundant in positive positions, since they will always be
