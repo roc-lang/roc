@@ -1,11 +1,11 @@
-@0-148 SpaceAfter(
+@0-149 SpaceAfter(
     Defs(
         Defs {
             tags: [
                 EitherIndex(2147483648),
             ],
             regions: [
-                @0-127,
+                @0-128,
             ],
             space_before: [
                 Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
@@ -20,13 +20,13 @@
                     @0-16 Identifier {
                         ident: "maybeEarlyReturn",
                     },
-                    @19-127 Closure(
+                    @19-128 Closure(
                         [
                             @20-21 Identifier {
                                 ident: "x",
                             },
                         ],
-                        @29-127 SpaceBefore(
+                        @29-128 SpaceBefore(
                             Defs(
                                 Defs {
                                     tags: [
@@ -114,14 +114,14 @@
                                         ),
                                     ],
                                 },
-                                @116-127 SpaceBefore(
+                                @116-128 SpaceBefore(
                                     Apply(
-                                        @116-125 Var {
+                                        @116-126 Var {
                                             module_name: "Num",
                                             ident: "to_str",
                                         },
                                         [
-                                            @126-127 Var {
+                                            @127-128 Var {
                                                 module_name: "",
                                                 ident: "y",
                                             },
@@ -142,14 +142,14 @@
                 ),
             ],
         },
-        @129-148 SpaceBefore(
+        @130-149 SpaceBefore(
             Apply(
-                @129-145 Var {
+                @130-146 Var {
                     module_name: "",
                     ident: "maybeEarlyReturn",
                 },
                 [
-                    @146-148 Num(
+                    @147-149 Num(
                         "10",
                     ),
                 ],
