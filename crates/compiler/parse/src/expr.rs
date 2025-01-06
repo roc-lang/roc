@@ -1158,20 +1158,14 @@ fn alias_signature<'a>() -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EExpr<'a>> 
     increment_min_indent(specialize_err(EExpr::Type, type_annotation::located(false)))
 }
 
-fn opaque_signature<'a>() -> impl Parser<
-    'a,
-    (
-        Loc<TypeAnnotation<'a>>,
-        Option<Loc<ImplementsAbilities<'a>>>,
-    ),
-    EExpr<'a>,
-> {
+fn opaque_signature<'a>(
+) -> impl Parser<'a, (Loc<TypeAnnotation<'a>>, Option<&'a ImplementsAbilities<'a>>), EExpr<'a>> {
     and(
         specialize_err(EExpr::Type, type_annotation::located_opaque_signature(true)),
-        optional(backtrackable(specialize_err(
-            EExpr::Type,
-            space0_before_e(type_annotation::implements_abilities(), EType::TIndentStart),
-        ))),
+        optional(map_with_arena(
+            specialize_err(EExpr::Type, type_annotation::implements_abilities()),
+            |arena, item| &*arena.alloc(item),
+        )),
     )
 }
 
