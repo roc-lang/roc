@@ -1321,59 +1321,9 @@ fn surgery_macho_help(
                         continue;
                     } else if matches!(app_obj.symbol_by_index(index), Ok(sym) if ["_longjmp", "_setjmp"].contains(&sym.name().unwrap_or_default()))
                     {
-                        // These symbols have to stay undefined as we dynamically link them from libSystem.dylib at runtime.
-                        // TODO have a table of all known symbols; perhaps parse and use an Apple provided libSystem.tbd stub file?
-                        let name = app_obj
-                            .symbol_by_index(index)
-                            .and_then(|sym| sym.name())
-                            .ok()
-                            .unwrap();
-                        match rel.1.kind() {
-                            RelocationKind::PltRelative => {
-                                if verbose {
-                                    println!("\t\tTODO synthesise __stub entry for {name}")
-                                }
-                            }
-                            RelocationKind::Got => {
-                                if verbose {
-                                    println!("\t\tTODO synthesise __got entry for {name}")
-                                }
-                            }
-                            RelocationKind::Unknown => {
-                                if let RelocationFlags::MachO { r_type, .. } = rel.1.flags() {
-                                    match r_type {
-                                        macho::ARM64_RELOC_GOT_LOAD_PAGE21
-                                        | macho::ARM64_RELOC_GOT_LOAD_PAGEOFF12 => {
-                                            if verbose {
-                                                println!(
-                                                    "\t\tTODO synthesise __got entry for {name}"
-                                                )
-                                            }
-                                        }
-                                        macho::ARM64_RELOC_BRANCH26 => {
-                                            if verbose {
-                                                println!(
-                                                    "\t\tTODO synthesise __stub entry for {name}"
-                                                )
-                                            }
-                                        }
-                                        _ => internal_error!(
-                                            "Invalid relocation for libc symbol, {:+x?}: {name}",
-                                            rel
-                                        ),
-                                    }
-                                } else {
-                                    internal_error!(
-                                        "Invalid relocation found for Mach-O: {:?}",
-                                        rel
-                                    );
-                                }
-                            }
-                            _ => internal_error!(
-                                "Invalid relocation for libc symbol, {:+x?}: {name}",
-                                rel
-                            ),
-                        }
+                        // Explicitly ignore `longjmp` and `setjmp` which are used only in `roc test` mode and thus are unreferenced
+                        // by the app and can be safely skipped.
+                        // In the future, `longjmp` and `setjmp` will be obsoleted and thus this prong can be safely deleted.
                         continue;
                     } else {
                         internal_error!(
