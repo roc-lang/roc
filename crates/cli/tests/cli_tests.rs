@@ -962,7 +962,7 @@ mod cli_tests {
         fn effectful_ignore_result() {
             build_platform_host();
 
-            let dli_dev = ExecCli::new(
+            let cli_dev = ExecCli::new(
                 roc_cli::CMD_DEV,
                 file_from_root(
                     "crates/cli/tests/test-projects/effectful/",
@@ -972,7 +972,7 @@ mod cli_tests {
 
             let expected_out = "I asked for input and I ignored it. Deal with it! 😎\n";
 
-            dli_dev.run().assert_clean_stdout(expected_out);
+            cli_dev.run().assert_clean_stdout(expected_out);
         }
 
         #[test]
