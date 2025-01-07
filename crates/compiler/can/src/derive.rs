@@ -8,7 +8,7 @@
 
 use roc_error_macros::internal_error;
 use roc_module::{called_via::CalledVia, symbol::Symbol};
-use roc_parse::ast::{self, Collection, PatternApplyStyle};
+use roc_parse::ast::{self, Collection};
 use roc_region::all::{Loc, Region};
 
 use crate::{env::Env, pattern::Pattern, scope::Scope};
@@ -27,7 +27,6 @@ fn to_encoder<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
             DERIVED_REGION,
             ast::Pattern::Identifier { ident: payload },
         )]),
-        ast::PatternApplyStyle::Whitespace,
     );
 
     // Encode.to_encoder(payload)
@@ -40,7 +39,7 @@ fn to_encoder<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
             module_name: "",
             ident: payload,
         })]),
-        roc_module::called_via::CalledVia::Space,
+        CalledVia::Space,
     ));
 
     // \@Opaq payload -> Encode.to_encoder(payload)
@@ -133,7 +132,6 @@ fn hash<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
             DERIVED_REGION,
             ast::Pattern::Identifier { ident: payload },
         )]),
-        PatternApplyStyle::Whitespace,
     );
 
     // Hash.hash(hasher, payload)
@@ -152,7 +150,7 @@ fn hash<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
                 ident: payload,
             }),
         ]),
-        roc_module::called_via::CalledVia::Space,
+        CalledVia::Space,
     ));
 
     // \hasher, @Opaq payload -> Hash.hash(hasher, payload)
@@ -180,7 +178,6 @@ fn is_eq<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
             DERIVED_REGION,
             ast::Pattern::Identifier { ident: payload1 },
         )]),
-        PatternApplyStyle::Whitespace,
     );
     // \@Opaq payload2
     let opaque2 = ast::Pattern::Apply(
@@ -189,7 +186,6 @@ fn is_eq<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
             DERIVED_REGION,
             ast::Pattern::Identifier { ident: payload2 },
         )]),
-        PatternApplyStyle::Whitespace,
     );
 
     // Bool.is_eq(payload1, payload2)
@@ -208,7 +204,7 @@ fn is_eq<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
                 ident: payload2,
             }),
         ]),
-        roc_module::called_via::CalledVia::Space,
+        CalledVia::Space,
     ));
 
     // \@Opaq payload1, @Opaq payload2 -> Bool.is_eq(payload1, payload2)
@@ -236,7 +232,6 @@ fn to_inspector<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
             DERIVED_REGION,
             ast::Pattern::Identifier { ident: payload },
         )]),
-        PatternApplyStyle::Whitespace,
     );
 
     // Inspect.to_inspector(payload)
@@ -249,7 +244,7 @@ fn to_inspector<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
             module_name: "",
             ident: payload,
         })]),
-        roc_module::called_via::CalledVia::Space,
+        CalledVia::Space,
     ));
 
     // Inspect.tag("@opaque", [Inspect.to_inspector(payload)])
@@ -264,7 +259,7 @@ fn to_inspector<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
             ident: "tag",
         }),
         &*env.arena.alloc([&*opaque_name, &*to_inspector_list]),
-        roc_module::called_via::CalledVia::Space,
+        CalledVia::Space,
     ));
 
     let fmt = "#fmt";
@@ -282,7 +277,7 @@ fn to_inspector<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
                 ident: fmt,
             }),
         ]),
-        roc_module::called_via::CalledVia::Space,
+        CalledVia::Space,
     ));
 
     let custom_closure = alloc_expr(ast::Expr::Closure(

@@ -1,6 +1,4 @@
-use crate::ast::{
-    Collection, ExtractSpaces, Implements, Pattern, PatternApplyStyle, PatternAs, Spaceable,
-};
+use crate::ast::{Collection, ExtractSpaces, Implements, Pattern, PatternAs, Spaceable};
 use crate::blankspace::{space0_before_optional_after, space0_e, spaces, spaces_before};
 use crate::ident::{lowercase_ident, parse_ident, Accessor, Ident};
 use crate::keyword;
@@ -337,35 +335,30 @@ fn loc_ident_pattern_help<'a>(
         let (_, loc_ident, state) = specialize_err(|_, pos| EPattern::Start(pos), loc(parse_ident))
             .parse(arena, state, min_indent)?;
 
-        let commas_and_paren_args_help = map_with_arena(
-            collection_trailing_sep_e(
+        enum ArgType<'a> {
+            PncArgs(Loc<Collection<'a, Loc<Pattern<'a>>>>),
+            WhitespaceArgs(&'a [Loc<Pattern<'a>>]),
+        }
+
+        let commas_and_paren_args_help = map(
+            loc(collection_trailing_sep_e(
                 byte(b'(', EPattern::ParenStart),
                 loc_tag_pattern_arg(false),
                 byte(b',', EPattern::NotAPattern),
                 byte(b')', EPattern::ParenEnd),
                 Pattern::SpaceBefore,
-            ),
-            |arena, args| {
-                let mut args_vec = Vec::new_in(arena);
-                for arg in args.iter() {
-                    let a: &Loc<Pattern<'a>> = arena.alloc(arg);
-                    args_vec.push(*a);
-                }
-                (
-                    args_vec.into_bump_slice(),
-                    PatternApplyStyle::ParensAndCommas,
-                )
-            },
+            )),
+            |args| ArgType::PncArgs(args),
         );
 
         let whitespace_args =
             map_with_arena(loc_type_def_tag_pattern_args_help(), |arena, args| {
-                let mut args_vec = Vec::new_in(arena);
+                let mut args_vec = Vec::with_capacity_in(args.len(), arena);
                 for arg in args.iter() {
                     let a: &Loc<Pattern<'a>> = arena.alloc(arg);
                     args_vec.push(*a);
                 }
-                (args_vec.into_bump_slice(), PatternApplyStyle::Whitespace)
+                ArgType::WhitespaceArgs(args_vec.into_bump_slice())
             });
 
         match loc_ident.value {
@@ -376,7 +369,7 @@ fn loc_ident_pattern_help<'a>(
                 };
 
                 // Make sure `Foo Bar 1` is parsed as `Foo (Bar) 1`, and not `Foo (Bar 1)`
-                let (_, (args, style), state) = if can_have_arguments {
+                let (_, arg_type, state) = if can_have_arguments {
                     one_of!(commas_and_paren_args_help, whitespace_args)
                         .parse(arena, state, min_indent)?
                 } else {
@@ -386,19 +379,27 @@ fn loc_ident_pattern_help<'a>(
                         Err((MadeProgress, e)) => return Err((MadeProgress, e)),
                     }
                 };
+                match arg_type {
+                    ArgType::PncArgs(args) => {
+                        let pnc_args = args.value;
+                        let value = Pattern::PncApply(&*arena.alloc(loc_tag), pnc_args);
+                        let region = Region::span_across(&loc_ident.region, &args.region);
+                        Ok((MadeProgress, Loc { region, value }, state))
+                    }
+                    ArgType::WhitespaceArgs(args) => {
+                        let loc_args: &[Loc<Pattern<'_>>] = { args };
+                        if loc_args.is_empty() {
+                            Ok((MadeProgress, loc_tag, state))
+                        } else {
+                            let region = Region::across_all(
+                                std::iter::once(&loc_ident.region)
+                                    .chain(loc_args.iter().map(|loc_arg| &loc_arg.region)),
+                            );
+                            let value = Pattern::Apply(&*arena.alloc(loc_tag), loc_args);
 
-                let loc_args: &[Loc<Pattern<'_>>] = { args };
-
-                if loc_args.is_empty() {
-                    Ok((MadeProgress, loc_tag, state))
-                } else {
-                    let region = Region::across_all(
-                        std::iter::once(&loc_ident.region)
-                            .chain(loc_args.iter().map(|loc_arg| &loc_arg.region)),
-                    );
-                    let value = Pattern::Apply(&*arena.alloc(loc_tag), loc_args, style);
-
-                    Ok((MadeProgress, Loc { region, value }, state))
+                            Ok((MadeProgress, Loc { region, value }, state))
+                        }
+                    }
                 }
             }
             Ident::OpaqueRef(name) => {
@@ -408,25 +409,37 @@ fn loc_ident_pattern_help<'a>(
                 };
 
                 // Make sure `@Foo Bar 1` is parsed as `@Foo (Bar) 1`, and not `@Foo (Bar 1)`
-                let (_, (args, style), state) = if can_have_arguments {
+                let (_, arg_type, state) = if can_have_arguments {
                     one_of!(commas_and_paren_args_help, whitespace_args)
                         .parse(arena, state, min_indent)?
                 } else {
-                    commas_and_paren_args_help.parse(arena, state, min_indent)?
+                    match commas_and_paren_args_help.parse(arena, state.clone(), min_indent) {
+                        Ok((_, res, new_state)) => (MadeProgress, res, new_state),
+                        Err((NoProgress, _)) => return Ok((MadeProgress, loc_pat, state)),
+                        Err((MadeProgress, e)) => return Err((MadeProgress, e)),
+                    }
                 };
+                match arg_type {
+                    ArgType::PncArgs(args) => {
+                        let pnc_args = args.value;
+                        let value = Pattern::PncApply(&*arena.alloc(loc_pat), pnc_args);
+                        let region = Region::span_across(&loc_ident.region, &args.region);
+                        Ok((MadeProgress, Loc { region, value }, state))
+                    }
+                    ArgType::WhitespaceArgs(args) => {
+                        let loc_args: &[Loc<Pattern<'_>>] = { args };
+                        if loc_args.is_empty() {
+                            Ok((MadeProgress, loc_pat, state))
+                        } else {
+                            let region = Region::across_all(
+                                std::iter::once(&loc_ident.region)
+                                    .chain(loc_args.iter().map(|loc_arg| &loc_arg.region)),
+                            );
+                            let value = Pattern::Apply(&*arena.alloc(loc_pat), loc_args);
 
-                let loc_args: &[Loc<Pattern<'_>>] = { args };
-
-                if loc_args.is_empty() {
-                    Ok((MadeProgress, loc_pat, state))
-                } else {
-                    let region = Region::across_all(
-                        std::iter::once(&loc_ident.region)
-                            .chain(loc_args.iter().map(|loc_arg| &loc_arg.region)),
-                    );
-                    let value = Pattern::Apply(&*arena.alloc(loc_pat), loc_args, style);
-
-                    Ok((MadeProgress, Loc { region, value }, state))
+                            Ok((MadeProgress, Loc { region, value }, state))
+                        }
+                    }
                 }
             }
             Ident::Access {
@@ -683,7 +696,7 @@ mod test_parse_pattern {
             region: new_region(3, 4),
         }];
         let expected = Loc {
-            value: Pattern::Apply(&expected_tag, &expected_args, PatternApplyStyle::Whitespace),
+            value: Pattern::Apply(&expected_tag, &expected_args),
             region: new_region(0, 4),
         };
         assert_eq!(format!("{res:#?}"), format!("{expected:#?}"));
@@ -699,17 +712,13 @@ mod test_parse_pattern {
             value: Pattern::Tag("Ok"),
             region: new_region(0, 2),
         };
-        let expected_args = [Loc {
+        let expected_args = Collection::with_items(arena.alloc([Loc {
             value: Pattern::Identifier { ident: "a" },
             region: new_region(3, 4),
-        }];
+        }]));
         let expected = Loc {
-            value: Pattern::Apply(
-                &expected_tag,
-                &expected_args,
-                PatternApplyStyle::ParensAndCommas,
-            ),
-            region: new_region(0, 4),
+            value: Pattern::PncApply(&expected_tag, expected_args),
+            region: new_region(0, 5),
         };
         assert_eq!(format!("{res:#?}"), format!("{expected:#?}"));
     }

@@ -11,9 +11,8 @@ use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
 use roc_parse::ast::{
-    is_expr_suffixed, AssignedField, Collection, Defs, ModuleImportParams, Pattern,
-    PatternApplyStyle, ResultTryKind, StrLiteral, StrSegment, TryTarget, TypeAnnotation, ValueDef,
-    WhenBranch,
+    is_expr_suffixed, AssignedField, Collection, Defs, ModuleImportParams, Pattern, ResultTryKind,
+    StrLiteral, StrSegment, TryTarget, TypeAnnotation, ValueDef, WhenBranch,
 };
 use roc_problem::can::Problem;
 use roc_region::all::{Loc, Region};
@@ -178,10 +177,9 @@ fn new_op_call_expr<'a>(
                 env.arena.alloc(Loc::at(left.region, Pattern::Tag("Ok")));
             branch_1_patts.push(Loc::at(
                 left.region,
-                Pattern::Apply(
+                Pattern::PncApply(
                     branch_1_tag,
-                    branch_1_patts_args.into_bump_slice(),
-                    PatternApplyStyle::ParensAndCommas,
+                    Collection::with_items(branch_1_patts_args.into_bump_slice()),
                 ),
             ));
             let branch_one: &WhenBranch<'_> = env.arena.alloc(WhenBranch {
@@ -203,10 +201,9 @@ fn new_op_call_expr<'a>(
                 env.arena.alloc(Loc::at(left.region, Pattern::Tag("Err")));
             branch_2_patts.push(Loc::at(
                 right.region,
-                Pattern::Apply(
+                Pattern::PncApply(
                     branch_2_tag,
-                    branch_2_patts_args.into_bump_slice(),
-                    PatternApplyStyle::ParensAndCommas,
+                    Collection::with_items(branch_2_patts_args.into_bump_slice()),
                 ),
             ));
             let branch_two: &WhenBranch<'_> = env.arena.alloc(WhenBranch {
@@ -1126,6 +1123,94 @@ pub fn desugar_expr<'a>(
                 region: loc_expr.region,
             })
         }
+        PncApply(Loc { value: Dbg, .. }, loc_args) => {
+            if loc_args.is_empty() {
+                env.problem(Problem::UnappliedDbg {
+                    region: loc_expr.region,
+                });
+                env.arena.alloc(Loc {
+                    value: *desugar_invalid_dbg_expr(env, scope, loc_expr.region),
+                    region: loc_expr.region,
+                })
+            } else if loc_args.len() > 1 {
+                let args_region = Region::span_across(
+                    &loc_args.items.first().unwrap().region,
+                    &loc_args.items.last().unwrap().region,
+                );
+                env.problem(Problem::OverAppliedDbg {
+                    region: args_region,
+                });
+
+                env.arena.alloc(Loc {
+                    value: *desugar_invalid_dbg_expr(env, scope, loc_expr.region),
+                    region: loc_expr.region,
+                })
+            } else {
+                let desugared_arg = desugar_expr(env, scope, loc_args.items.first().unwrap());
+
+                env.arena.alloc(Loc {
+                    value: *desugar_dbg_expr(env, scope, desugared_arg, loc_expr.region),
+                    region: loc_expr.region,
+                })
+            }
+        }
+        PncApply(
+            Loc {
+                value: Try,
+                region: _,
+            },
+            loc_args,
+        ) => {
+            let result_expr = if loc_args.len() == 1 {
+                desugar_expr(env, scope, loc_args.items[0])
+            } else {
+                let function = desugar_expr(env, scope, loc_args.items.first().unwrap());
+                let mut desugared_args = Vec::with_capacity_in(loc_args.len() - 1, env.arena);
+                for loc_arg in &loc_args.items[1..] {
+                    desugared_args.push(desugar_expr(env, scope, loc_arg));
+                }
+
+                let args_region = Region::span_across(
+                    &loc_args.items[0].region,
+                    &loc_args.items[loc_args.items.len() - 1].region,
+                );
+
+                env.arena.alloc(Loc::at(
+                    args_region,
+                    Expr::Apply(function, desugared_args.into_bump_slice(), CalledVia::Try),
+                ))
+            };
+
+            env.arena.alloc(Loc::at(
+                loc_expr.region,
+                Expr::LowLevelTry(result_expr, ResultTryKind::KeywordPrefix),
+            ))
+        }
+        PncApply(loc_fn, loc_args) => {
+            let mut desugared_args = Vec::with_capacity_in(loc_args.len(), env.arena);
+
+            for loc_arg in loc_args.iter() {
+                let mut current = loc_arg.value;
+                let arg = loop {
+                    match current {
+                        SpaceBefore(expr, _) | SpaceAfter(expr, _) => {
+                            current = *expr;
+                        }
+                        _ => break loc_arg,
+                    }
+                };
+
+                desugared_args.push(desugar_expr(env, scope, arg));
+            }
+
+            let desugared_args = Collection::with_items(desugared_args.into_bump_slice());
+
+            env.arena.alloc(Loc {
+                value: PncApply(desugar_expr(env, scope, loc_fn), desugared_args),
+                region: loc_expr.region,
+            })
+        }
+
         When(loc_cond_expr, branches) => {
             let loc_desugared_cond = &*env.arena.alloc(desugar_expr(env, scope, loc_cond_expr));
             let mut desugared_branches = Vec::with_capacity_in(branches.len(), env.arena);
@@ -1422,7 +1507,7 @@ fn desugar_pattern<'a>(env: &mut Env<'a>, scope: &mut Scope, pattern: Pattern<'a
         | MalformedIdent(_, _)
         | QualifiedIdentifier { .. } => pattern,
 
-        Apply(tag, arg_patterns, style) => {
+        Apply(tag, arg_patterns) => {
             // Skip desugaring the tag, it should either be a Tag or OpaqueRef
             let mut desugared_arg_patterns = Vec::with_capacity_in(arg_patterns.len(), env.arena);
             for arg_pattern in arg_patterns.iter() {
@@ -1432,7 +1517,22 @@ fn desugar_pattern<'a>(env: &mut Env<'a>, scope: &mut Scope, pattern: Pattern<'a
                 });
             }
 
-            Apply(tag, desugared_arg_patterns.into_bump_slice(), style)
+            Apply(tag, desugared_arg_patterns.into_bump_slice())
+        }
+        PncApply(tag, arg_patterns) => {
+            // Skip desugaring the tag, it should either be a Tag or OpaqueRef
+            let mut desugared_arg_patterns = Vec::with_capacity_in(arg_patterns.len(), env.arena);
+            for arg_pattern in arg_patterns.iter() {
+                desugared_arg_patterns.push(Loc {
+                    region: arg_pattern.region,
+                    value: desugar_pattern(env, scope, arg_pattern.value),
+                });
+            }
+
+            PncApply(
+                tag,
+                Collection::with_items(desugared_arg_patterns.into_bump_slice()),
+            )
         }
         RecordDestructure(field_patterns) => {
             RecordDestructure(desugar_record_destructures(env, scope, field_patterns))

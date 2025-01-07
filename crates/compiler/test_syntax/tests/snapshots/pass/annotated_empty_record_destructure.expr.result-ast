@@ -21,7 +21,6 @@
                         "E",
                     ),
                     [],
-                    Whitespace,
                 ),
                 ann_type: @2-3 Apply(
                     "",

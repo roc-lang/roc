@@ -554,6 +554,7 @@ pub enum Expr<'a> {
     /// To apply by name, do Apply(Var(...), ...)
     /// To apply a tag by name, do Apply(Tag(...), ...)
     Apply(&'a Loc<Expr<'a>>, &'a [&'a Loc<Expr<'a>>], CalledVia),
+    PncApply(&'a Loc<Expr<'a>>, Collection<'a, &'a Loc<Expr<'a>>>),
     BinOps(&'a [(Loc<Expr<'a>>, Loc<BinOp>)], &'a Loc<Expr<'a>>),
     UnaryOp(&'a Loc<Expr<'a>>, Loc<UnaryOp>),
 
@@ -631,6 +632,7 @@ pub fn is_top_level_suffixed(expr: &Expr) -> bool {
     match expr {
         Expr::TrySuffix { .. } => true,
         Expr::Apply(a, _, _) => is_top_level_suffixed(&a.value),
+        Expr::PncApply(a, _) => is_top_level_suffixed(&a.value),
         Expr::SpaceBefore(a, _) => is_top_level_suffixed(a),
         Expr::SpaceAfter(a, _) => is_top_level_suffixed(a),
         _ => false,
@@ -649,6 +651,15 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::Apply(sub_loc_expr, apply_args, _) => {
             let is_function_suffixed = is_expr_suffixed(&sub_loc_expr.value);
             let any_args_suffixed = apply_args.iter().any(|arg| is_expr_suffixed(&arg.value));
+
+            any_args_suffixed || is_function_suffixed
+        }
+
+        Expr::PncApply(sub_loc_expr, apply_arg_collection) => {
+            let is_function_suffixed = is_expr_suffixed(&sub_loc_expr.value);
+            let any_args_suffixed = apply_arg_collection
+                .iter()
+                .any(|arg| is_expr_suffixed(&arg.value));
 
             any_args_suffixed || is_function_suffixed
         }
@@ -1014,6 +1025,14 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                     }
                 }
                 Apply(fun, args, _) => {
+                    expr_stack.reserve(args.len() + 1);
+                    expr_stack.push(&fun.value);
+
+                    for loc_expr in args.iter() {
+                        expr_stack.push(&loc_expr.value);
+                    }
+                }
+                PncApply(fun, args) => {
                     expr_stack.reserve(args.len() + 1);
                     expr_stack.push(&fun.value);
 
@@ -1726,12 +1745,6 @@ impl<'a> PatternAs<'a> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum PatternApplyStyle {
-    Whitespace,
-    ParensAndCommas,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Pattern<'a> {
     // Identifier
     Identifier {
@@ -1746,11 +1759,9 @@ pub enum Pattern<'a> {
 
     OpaqueRef(&'a str),
 
-    Apply(
-        &'a Loc<Pattern<'a>>,
-        &'a [Loc<Pattern<'a>>],
-        PatternApplyStyle,
-    ),
+    Apply(&'a Loc<Pattern<'a>>, &'a [Loc<Pattern<'a>>]),
+
+    PncApply(&'a Loc<Pattern<'a>>, Collection<'a, Loc<Pattern<'a>>>),
 
     /// This is Located<Pattern> rather than Located<str> so we can record comments
     /// around the destructured names, e.g. { x ### x does stuff ###, y }
@@ -1831,8 +1842,34 @@ impl<'a> Pattern<'a> {
                     false
                 }
             }
-            Apply(constructor_x, args_x, _) => {
-                if let Apply(constructor_y, args_y, _) = other {
+            Apply(constructor_x, args_x) => {
+                if let Apply(constructor_y, args_y) = other {
+                    let equivalent_args = args_x
+                        .iter()
+                        .zip(args_y.iter())
+                        .all(|(p, q)| p.value.equivalent(&q.value));
+
+                    constructor_x.value.equivalent(&constructor_y.value) && equivalent_args
+                } else if let PncApply(constructor_y, args_y) = other {
+                    let equivalent_args = args_x
+                        .iter()
+                        .zip(args_y.iter())
+                        .all(|(p, q)| p.value.equivalent(&q.value));
+
+                    constructor_x.value.equivalent(&constructor_y.value) && equivalent_args
+                } else {
+                    false
+                }
+            }
+            PncApply(constructor_x, args_x) => {
+                if let PncApply(constructor_y, args_y) = other {
+                    let equivalent_args = args_x
+                        .iter()
+                        .zip(args_y.iter())
+                        .all(|(p, q)| p.value.equivalent(&q.value));
+
+                    constructor_x.value.equivalent(&constructor_y.value) && equivalent_args
+                } else if let Apply(constructor_y, args_y) = other {
                     let equivalent_args = args_x
                         .iter()
                         .zip(args_y.iter())
@@ -2554,6 +2591,7 @@ impl<'a> Malformed for Expr<'a> {
             LowLevelTry(loc_expr, _) => loc_expr.is_malformed(),
             Return(return_value, after_return) => return_value.is_malformed() || after_return.is_some_and(|ar| ar.is_malformed()),
             Apply(func, args, _) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
+            PncApply(func, args) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
             BinOps(firsts, last) => firsts.iter().any(|(expr, _)| expr.is_malformed()) || last.is_malformed(),
             UnaryOp(expr, _) => expr.is_malformed(),
             If { if_thens, final_else, ..} => if_thens.iter().any(|(cond, body)| cond.is_malformed() || body.is_malformed()) || final_else.is_malformed(),
@@ -2650,7 +2688,8 @@ impl<'a> Malformed for Pattern<'a> {
             Identifier{ .. } |
             Tag(_) |
             OpaqueRef(_) => false,
-            Apply(func, args, _) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
+            Apply(func, args) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
+            PncApply(func, args) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
             RecordDestructure(items) => items.iter().any(|item| item.is_malformed()),
             RequiredField(_, pat) => pat.is_malformed(),
             OptionalField(_, expr) => expr.is_malformed(),

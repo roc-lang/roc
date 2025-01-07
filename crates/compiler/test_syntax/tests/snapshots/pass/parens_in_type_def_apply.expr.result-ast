@@ -28,7 +28,6 @@
                                         ident: "a",
                                     },
                                 ],
-                                Whitespace,
                             ),
                         ],
                     },

@@ -34,7 +34,6 @@
                                 ident: "f",
                             },
                         ],
-                        Whitespace,
                     ),
                     @14-15 BoundVariable(
                         "f",

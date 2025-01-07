@@ -8,7 +8,6 @@
                 ident: "a",
             },
         ],
-        Whitespace,
     ),
     [
         Newline,

@@ -512,13 +512,14 @@ impl Problem {
             | Problem::ReturnAtEndOfFunction { region }
             | Problem::UnboundTypeVarsInAs(region)
             | Problem::UnsuffixedEffectfulRecordField(region)
-            | Problem::SuffixedPureRecordField(region) => Some(*region),
+            | Problem::SuffixedPureRecordField(region)
+            | Problem::StmtAfterExpr(region) => Some(*region),
+
             Problem::RuntimeError(RuntimeError::CircularDef(cycle_entries))
             | Problem::BadRecursion(cycle_entries) => {
                 cycle_entries.first().map(|entry| entry.expr_region)
             }
 
-            Problem::StmtAfterExpr(region) => Some(*region),
             Problem::RuntimeError(RuntimeError::UnresolvedTypeVar)
             | Problem::RuntimeError(RuntimeError::ErroneousType)
             | Problem::RuntimeError(RuntimeError::NonExhaustivePattern)

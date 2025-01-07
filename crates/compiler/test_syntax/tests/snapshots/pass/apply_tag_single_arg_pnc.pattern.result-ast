@@ -1,5 +1,5 @@
-@0-4 SpaceAfter(
-    Apply(
+@0-5 SpaceAfter(
+    PncApply(
         @0-2 Tag(
             "Ok",
         ),
@@ -8,7 +8,6 @@
                 ident: "a",
             },
         ],
-        ParensAndCommas,
     ),
     [
         Newline,
