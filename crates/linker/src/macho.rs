@@ -61,7 +61,6 @@ struct Metadata {
     roc_symbol_vaddresses: MutMap<String, u64>,
     exec_len: u64,
     load_align_constraint: u64,
-    added_byte_count: u64,
     last_vaddr: u64,
     macho_cmd_loc: u64,
     start_of_first_section: u64,
@@ -624,25 +623,7 @@ fn gen_macho_le(
         internal_error!("Not enough free space between end of load commands and start of first section\nConsider recompiling the host with -headerpad <size> linker flag");
     }
 
-    // ======================== Important TODO ==========================
-    // TODO: we accidentally instroduced a big change here.
-    // We use a mix of added_bytes and md.added_byte_count.
-    // Theses should proabably be the same variable.
-    // Also, I just realized that I have been shifting a lot of virtual offsets.
-    // This should not be necessary. If we add a fully 4k of buffer to the file, all of the virtual offsets will still stay aligned.
-    // So a lot of the following work can probably be commented out if we fix that.
-    // Of coruse, it will cost about 4k bytes to a final executable.
-    // This is what the elf version currently does.
-    // Theoretically it is not needed (if we update all virtual addresses in the binary),
-    // but I definitely ran into problems with elf when not adding this extra buffering.
-
-    // Copy header and shift everything to enable more program sections.
-    let added_byte_count = ((2 * segment_cmd_size) + (2 * section_size) - total_cmd_size) as u64;
-    md.added_byte_count = added_byte_count
-        // add some alignment padding
-        + (MIN_SECTION_ALIGNMENT as u64 - added_byte_count % MIN_SECTION_ALIGNMENT as u64);
-
-    md.exec_len = exec_data.len() as u64 + md.added_byte_count;
+    md.exec_len = exec_data.len() as u64;
 
     let mut out_mmap = open_mmap_mut(out_filename, md.exec_len as usize);
     let end_of_cmds = size_of_cmds + mem::size_of_val(exec_header);
@@ -660,7 +641,7 @@ fn gen_macho_le(
     // (which happens after preprocessing), and some zero padding at the end for alignemnt.
     // (It seems to cause bugs if that padding isn't there!)
     let rest_of_data = &exec_data[end_of_cmds..];
-    let start_index = end_of_cmds + md.added_byte_count as usize;
+    let start_index = end_of_cmds as usize;
 
     out_mmap[start_index..start_index + rest_of_data.len()].copy_from_slice(rest_of_data);
 
@@ -700,12 +681,11 @@ fn gen_macho_le(
                 // As such, its file offset does not change.
                 // Instead, its file size should be increased.
                 if old_file_offest > 0 {
-                    cmd.fileoff.set(LE, old_file_offest + md.added_byte_count);
-                    cmd.vmaddr.set(LE, cmd.vmaddr.get(LE) + md.added_byte_count);
+                    cmd.fileoff.set(LE, old_file_offest);
+                    cmd.vmaddr.set(LE, cmd.vmaddr.get(LE));
                 } else {
-                    cmd.filesize
-                        .set(LE, cmd.filesize.get(LE) + md.added_byte_count);
-                    cmd.vmsize.set(LE, cmd.vmsize.get(LE) + md.added_byte_count);
+                    cmd.filesize.set(LE, cmd.filesize.get(LE));
+                    cmd.vmsize.set(LE, cmd.vmsize.get(LE));
                 }
             }
             macho::LC_SYMTAB => {
@@ -716,26 +696,23 @@ fn gen_macho_le(
                 let num_syms = cmd.nsyms.get(LE);
 
                 if num_syms > 0 {
-                    cmd.symoff.set(LE, sym_offset + md.added_byte_count as u32);
+                    cmd.symoff.set(LE, sym_offset);
                 }
 
                 if cmd.strsize.get(LE) > 0 {
-                    cmd.stroff
-                        .set(LE, cmd.stroff.get(LE) + md.added_byte_count as u32);
+                    cmd.stroff.set(LE, cmd.stroff.get(LE));
                 }
 
                 let table = load_structs_inplace_mut::<macho::Nlist64<LE>>(
                     &mut out_mmap,
-                    sym_offset as usize + md.added_byte_count as usize,
+                    sym_offset as usize,
                     num_syms as usize,
                 );
 
                 for entry in table {
                     let entry_type = entry.n_type & macho::N_TYPE;
                     if entry_type == macho::N_ABS || entry_type == macho::N_SECT {
-                        entry
-                            .n_value
-                            .set(LE, entry.n_value.get(LE) + md.added_byte_count);
+                        entry.n_value.set(LE, entry.n_value.get(LE));
                     }
                 }
             }
@@ -744,33 +721,27 @@ fn gen_macho_le(
                     load_struct_inplace_mut::<macho::DysymtabCommand<LE>>(&mut out_mmap, offset);
 
                 if cmd.ntoc.get(LE) > 0 {
-                    cmd.tocoff
-                        .set(LE, cmd.tocoff.get(LE) + md.added_byte_count as u32);
+                    cmd.tocoff.set(LE, cmd.tocoff.get(LE));
                 }
 
                 if cmd.nmodtab.get(LE) > 0 {
-                    cmd.modtaboff
-                        .set(LE, cmd.modtaboff.get(LE) + md.added_byte_count as u32);
+                    cmd.modtaboff.set(LE, cmd.modtaboff.get(LE));
                 }
 
                 if cmd.nextrefsyms.get(LE) > 0 {
-                    cmd.extrefsymoff
-                        .set(LE, cmd.extrefsymoff.get(LE) + md.added_byte_count as u32);
+                    cmd.extrefsymoff.set(LE, cmd.extrefsymoff.get(LE));
                 }
 
                 if cmd.nindirectsyms.get(LE) > 0 {
-                    cmd.indirectsymoff
-                        .set(LE, cmd.indirectsymoff.get(LE) + md.added_byte_count as u32);
+                    cmd.indirectsymoff.set(LE, cmd.indirectsymoff.get(LE));
                 }
 
                 if cmd.nextrel.get(LE) > 0 {
-                    cmd.extreloff
-                        .set(LE, cmd.extreloff.get(LE) + md.added_byte_count as u32);
+                    cmd.extreloff.set(LE, cmd.extreloff.get(LE));
                 }
 
                 if cmd.nlocrel.get(LE) > 0 {
-                    cmd.locreloff
-                        .set(LE, cmd.locreloff.get(LE) + md.added_byte_count as u32);
+                    cmd.locreloff.set(LE, cmd.locreloff.get(LE));
                 }
 
                 // TODO maybe we need to update something else too - relocations maybe?
@@ -784,8 +755,7 @@ fn gen_macho_le(
                 );
 
                 if cmd.nhints.get(LE) > 0 {
-                    cmd.offset
-                        .set(LE, cmd.offset.get(LE) + md.added_byte_count as u32);
+                    cmd.offset.set(LE, cmd.offset.get(LE));
                 }
             }
             macho::LC_FUNCTION_STARTS => {
@@ -795,8 +765,7 @@ fn gen_macho_le(
                 );
 
                 if cmd.datasize.get(LE) > 0 {
-                    cmd.dataoff
-                        .set(LE, cmd.dataoff.get(LE) + md.added_byte_count as u32);
+                    cmd.dataoff.set(LE, cmd.dataoff.get(LE));
                     // TODO: This lists the start of every function. Which, of course, have moved.
                     // That being said, to my understanding this section is optional and may just be debug information.
                     // As such, updating it should not be required.
@@ -811,8 +780,7 @@ fn gen_macho_le(
                     );
 
                     if cmd.datasize.get(LE) > 0 {
-                        cmd.dataoff
-                            .set(LE, cmd.dataoff.get(LE) + md.added_byte_count as u32);
+                        cmd.dataoff.set(LE, cmd.dataoff.get(LE));
                     }
                     (cmd.dataoff.get(LE), cmd.datasize.get(LE))
                 };
@@ -826,9 +794,7 @@ fn gen_macho_le(
                         size as usize / entry_size,
                     );
                     for entry in entries.iter_mut() {
-                        entry
-                            .offset
-                            .set(LE, entry.offset.get(LE) + md.added_byte_count as u32)
+                        entry.offset.set(LE, entry.offset.get(LE))
                     }
                 }
             }
@@ -844,8 +810,7 @@ fn gen_macho_le(
                 );
 
                 if cmd.datasize.get(LE) > 0 {
-                    cmd.dataoff
-                        .set(LE, cmd.dataoff.get(LE) + md.added_byte_count as u32);
+                    cmd.dataoff.set(LE, cmd.dataoff.get(LE));
                 }
             }
             macho::LC_ENCRYPTION_INFO_64 => {
@@ -855,8 +820,7 @@ fn gen_macho_le(
                 );
 
                 if cmd.cryptsize.get(LE) > 0 {
-                    cmd.cryptoff
-                        .set(LE, cmd.cryptoff.get(LE) + md.added_byte_count as u32);
+                    cmd.cryptoff.set(LE, cmd.cryptoff.get(LE));
                 }
             }
             macho::LC_DYLD_INFO | macho::LC_DYLD_INFO_ONLY => {
@@ -864,23 +828,19 @@ fn gen_macho_le(
                     load_struct_inplace_mut::<macho::DyldInfoCommand<LE>>(&mut out_mmap, offset);
 
                 if cmd.rebase_size.get(LE) > 0 {
-                    cmd.rebase_off
-                        .set(LE, cmd.rebase_off.get(LE) + md.added_byte_count as u32);
+                    cmd.rebase_off.set(LE, cmd.rebase_off.get(LE));
                 }
 
                 if cmd.bind_size.get(LE) > 0 {
-                    cmd.bind_off
-                        .set(LE, cmd.bind_off.get(LE) + md.added_byte_count as u32);
+                    cmd.bind_off.set(LE, cmd.bind_off.get(LE));
                 }
 
                 if cmd.weak_bind_size.get(LE) > 0 {
-                    cmd.weak_bind_off
-                        .set(LE, cmd.weak_bind_off.get(LE) + md.added_byte_count as u32);
+                    cmd.weak_bind_off.set(LE, cmd.weak_bind_off.get(LE));
                 }
 
                 if cmd.lazy_bind_size.get(LE) > 0 {
-                    cmd.lazy_bind_off
-                        .set(LE, cmd.lazy_bind_off.get(LE) + md.added_byte_count as u32);
+                    cmd.lazy_bind_off.set(LE, cmd.lazy_bind_off.get(LE));
                 }
 
                 // TODO: Parse and update the related tables here.
@@ -895,22 +855,20 @@ fn gen_macho_le(
                     load_struct_inplace_mut::<macho::SymsegCommand<LE>>(&mut out_mmap, offset);
 
                 if cmd.size.get(LE) > 0 {
-                    cmd.offset
-                        .set(LE, cmd.offset.get(LE) + md.added_byte_count as u32);
+                    cmd.offset.set(LE, cmd.offset.get(LE));
                 }
             }
             macho::LC_MAIN => {
                 let cmd =
                     load_struct_inplace_mut::<macho::EntryPointCommand<LE>>(&mut out_mmap, offset);
 
-                cmd.entryoff
-                    .set(LE, cmd.entryoff.get(LE) + md.added_byte_count);
+                cmd.entryoff.set(LE, cmd.entryoff.get(LE));
             }
             macho::LC_NOTE => {
                 let cmd = load_struct_inplace_mut::<macho::NoteCommand<LE>>(&mut out_mmap, offset);
 
                 if cmd.size.get(LE) > 0 {
-                    cmd.offset.set(LE, cmd.offset.get(LE) + md.added_byte_count);
+                    cmd.offset.set(LE, cmd.offset.get(LE));
                 }
             }
             macho::LC_ID_DYLIB
@@ -1454,7 +1412,7 @@ fn surgery_macho_help(
                 println!("\tPerforming surgery: {s:+x?}");
             }
             let surgery_virt_offset = match s.virtual_offset {
-                VirtualOffset::Relative(vs) => (vs + md.added_byte_count) as i64,
+                VirtualOffset::Relative(vs) => vs as i64,
                 VirtualOffset::Absolute => 0,
             };
             match s.size {
@@ -1464,8 +1422,7 @@ fn surgery_macho_help(
                         println!("\tTarget Jump: {target:+x}");
                     }
                     let data = target.to_le_bytes();
-                    exec_mmap[(s.file_offset + md.added_byte_count) as usize
-                        ..(s.file_offset + md.added_byte_count) as usize + 4]
+                    exec_mmap[s.file_offset as usize..s.file_offset as usize + 4]
                         .copy_from_slice(&data);
                 }
                 8 => {
@@ -1474,8 +1431,7 @@ fn surgery_macho_help(
                         println!("\tTarget Jump: {target:+x}");
                     }
                     let data = target.to_le_bytes();
-                    exec_mmap[(s.file_offset + md.added_byte_count) as usize
-                        ..(s.file_offset + md.added_byte_count) as usize + 8]
+                    exec_mmap[s.file_offset as usize..s.file_offset as usize + 8]
                         .copy_from_slice(&data);
                 }
                 x => {
@@ -1487,8 +1443,8 @@ fn surgery_macho_help(
         // Replace plt call code with just a jump.
         // This is a backup incase we missed a call to the plt.
         if let Some((plt_off, plt_vaddr)) = md.plt_addresses.get(func_name) {
-            let plt_off = (*plt_off + md.added_byte_count) as usize;
-            let plt_vaddr = *plt_vaddr + md.added_byte_count;
+            let plt_off = *plt_off as usize;
+            let plt_vaddr = *plt_vaddr;
             let jmp_inst_len = 5;
             let target =
                 (func_virt_offset as i64 - (plt_vaddr as i64 + jmp_inst_len as i64)) as i32;
@@ -1545,7 +1501,7 @@ fn get_target_offset(
             .ok()
             .and_then(|name| {
                 md.roc_symbol_vaddresses.get(name).map(|address| {
-                    let vaddr = (*address + md.added_byte_count) as i64;
+                    let vaddr = *address as i64;
                     if verbose {
                         println!("\t\tRelocation targets symbol in host: {name} @ {vaddr:+x}");
                     }
