@@ -328,7 +328,7 @@ Num range := range
 ## | ` 340_282_366_920_938_463_463_374_607_431_768_211_455` |       |          |
 ##
 ## If any operation would result in an [Int] that is either too big
-## or too small to fit in that range (e.g. calling `Num.maxI32 + 1`),
+## or too small to fit in that range (e.g. calling `Num.max_i32 + 1`),
 ## then the operation will *overflow*. When an overflow occurs, the program will crash.
 ##
 ## As such, it's very important to design your code not to exceed these bounds!
@@ -1062,7 +1062,7 @@ ceiling : Frac * -> Int *
 
 ## Raises a [Frac] to the power of another [Frac].
 ##
-## For an [Int] alternative to this function, see [Num.powInt]
+## For an [Int] alternative to this function, see [Num.pow_int]
 pow : Frac a, Frac a -> Frac a
 
 ## Raises an integer to the power of another, by multiplying the integer by
@@ -1199,7 +1199,7 @@ mul_checked_lowlevel : Num a, Num a -> { b : Bool, a : Num a }
 ##
 ## For reference, this number is `-128`.
 ##
-## Note that the positive version of this number is larger than [Num.maxI8],
+## Note that the positive version of this number is larger than [Num.max_i8],
 ## which means if you call [Num.abs] on [Num.min_i8], it will overflow and crash!
 min_i8 : I8
 min_i8 = -128i8
@@ -1236,7 +1236,7 @@ max_u8 = 255u8
 ##
 ## For reference, this number is `-32_768`.
 ##
-## Note that the positive version of this number is larger than [Num.maxI16],
+## Note that the positive version of this number is larger than [Num.max_i16],
 ## which means if you call [Num.abs] on [Num.min_i16], it will overflow and crash!
 min_i16 : I16
 min_i16 = -32768i16
@@ -1273,7 +1273,7 @@ max_u16 = 65535u16
 ##
 ## For reference, this number is `-2_147_483_648`.
 ##
-## Note that the positive version of this number is larger than [Num.maxI32],
+## Note that the positive version of this number is larger than [Num.max_i32],
 ## which means if you call [Num.abs] on [Num.min_i32], it will overflow and crash!
 min_i32 : I32
 min_i32 = -2147483648
@@ -1312,7 +1312,7 @@ max_u32 = 4294967295
 ## For reference, this number is `-9_223_372_036_854_775_808`,
 ## which is under 9 quintillion.
 ##
-## Note that the positive version of this number is larger than [Num.maxI64],
+## Note that the positive version of this number is larger than [Num.max_i64],
 ## which means if you call [Num.abs] on [Num.min_i64], it will overflow and crash!
 min_i64 : I64
 min_i64 = -9223372036854775808
@@ -1352,7 +1352,7 @@ max_u64 = 18446744073709551615
 ## For reference, this number is `-170_141_183_460_469_231_731_687_303_715_884_105_728`.
 ## which is under 170 undecillion.
 ##
-## Note that the positive version of this number is larger than [Num.maxI128],
+## Note that the positive version of this number is larger than [Num.max_i128],
 ## which means if you call [Num.abs] on [Num.min_i128], it will overflow and crash!
 min_i128 : I128
 min_i128 = -170141183460469231731687303715884105728
