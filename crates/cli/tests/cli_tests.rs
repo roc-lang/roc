@@ -894,7 +894,7 @@ mod cli_tests {
             build_platform_host();
 
             let cli_build = ExecCli::new(
-                roc_cli::CMD_DEV,
+                roc_cli::CMD_BUILD,
                 file_from_root("crates/cli/tests/test-projects/effectful", "form.roc"),
             );
 
@@ -914,14 +914,14 @@ mod cli_tests {
         fn effectful_hello() {
             build_platform_host();
 
-            let cli_build = ExecCli::new(
+            let cli_dev = ExecCli::new(
                 roc_cli::CMD_DEV,
                 file_from_root("crates/cli/tests/test-projects/effectful/", "hello.roc"),
             );
 
             let expected_out = "I'm an effect 👻\n";
 
-            cli_build.run().assert_clean_stdout(expected_out);
+            cli_dev.run().assert_clean_stdout(expected_out);
         }
 
         #[test]
@@ -929,14 +929,14 @@ mod cli_tests {
         fn effectful_loops() {
             build_platform_host();
 
-            let cli_build = ExecCli::new(
+            let cli_dev = ExecCli::new(
                 roc_cli::CMD_DEV,
                 file_from_root("crates/cli/tests/test-projects/effectful/", "loops.roc"),
             );
 
             let expected_out = "Lu\nMarce\nJoaquin\nChloé\nMati\nPedro\n";
 
-            cli_build.run().assert_clean_stdout(expected_out);
+            cli_dev.run().assert_clean_stdout(expected_out);
         }
 
         #[test]
@@ -944,7 +944,7 @@ mod cli_tests {
         fn effectful_untyped_passed_fx() {
             build_platform_host();
 
-            let cli_build = ExecCli::new(
+            let cli_dev = ExecCli::new(
                 roc_cli::CMD_DEV,
                 file_from_root(
                     "crates/cli/tests/test-projects/effectful/",
@@ -954,7 +954,7 @@ mod cli_tests {
 
             let expected_out = "Before hello\nHello, World!\nAfter hello\n";
 
-            cli_build.run().assert_clean_stdout(expected_out);
+            cli_dev.run().assert_clean_stdout(expected_out);
         }
 
         #[test]
@@ -962,7 +962,7 @@ mod cli_tests {
         fn effectful_ignore_result() {
             build_platform_host();
 
-            let cli_build = ExecCli::new(
+            let cli_dev = ExecCli::new(
                 roc_cli::CMD_DEV,
                 file_from_root(
                     "crates/cli/tests/test-projects/effectful/",
@@ -972,7 +972,7 @@ mod cli_tests {
 
             let expected_out = "I asked for input and I ignored it. Deal with it! 😎\n";
 
-            cli_build.run().assert_clean_stdout(expected_out);
+            cli_dev.run().assert_clean_stdout(expected_out);
         }
 
         #[test]
@@ -981,7 +981,7 @@ mod cli_tests {
             build_platform_host();
 
             let cli_build = ExecCli::new(
-                roc_cli::CMD_DEV,
+                roc_cli::CMD_BUILD,
                 file_from_root(
                     "crates/cli/tests/test-projects/effectful",
                     "suffixed_record_field.roc",
@@ -1004,7 +1004,7 @@ mod cli_tests {
             build_platform_host();
 
             let cli_build = ExecCli::new(
-                roc_cli::CMD_DEV,
+                roc_cli::CMD_BUILD,
                 file_from_root("crates/cli/tests/test-projects/effectful", "on_err.roc"),
             );
 
@@ -1019,7 +1019,7 @@ mod cli_tests {
             build_platform_host();
 
             let cli_build = ExecCli::new(
-                roc_cli::CMD_DEV,
+                roc_cli::CMD_BUILD,
                 file_from_root(
                     "crates/cli/tests/test-projects/effectful",
                     "for_each_try.roc",
