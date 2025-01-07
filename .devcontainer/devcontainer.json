@@ -1,9 +1,9 @@
 // For format details, see https://aka.ms/devcontainer.json. For config options, see the
 // README at: https://github.com/devcontainers/templates/tree/main/src/rust
 {
-	"name": "Rust",
+	"name": "roc-devcontainer",
 	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
-	"image": "mcr.microsoft.com/devcontainers/rust:1-1-bullseye",
+	"image": "roclang/devcontainer:latest",
 
 	// Use 'mounts' to make the cargo cache persistent in a Docker Volume.
 	// "mounts": [
@@ -15,20 +15,20 @@
 	// ]
 
 	// Features to add to the dev container. More info: https://containers.dev/features.
-	"features": {
-		"ghcr.io/devcontainers-contrib/features/zig:1": {
-			"version": "0.13.0"
-		},
-		"ghcr.io/devcontainers-community/features/llvm:3": {
-			"version": 18
-		}
-	},
+	// "features": {
+	// 	"ghcr.io/devcontainers-contrib/features/zig:1": {
+	// 		"version": "0.13.0"
+	// 	},
+	// 	"ghcr.io/devcontainers-community/features/llvm:3": {
+	// 		"version": 18
+	// 	}
+	// },
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
 	// "forwardPorts": [],
 
 	// Use 'postCreateCommand' to run commands after the container is created.
 	// "postCreateCommand": "rustc --version",
-	"onCreateCommand": "sudo apt-get update && sudo apt-get install -y pkg-config libz-dev libzstd-dev valgrind"  
+	// "onCreateCommand": "sudo apt-get update && sudo apt-get install -y pkg-config libz-dev libzstd-dev valgrind"  
 
 	// Configure tool-specific properties.
 	// "customizations": {},
