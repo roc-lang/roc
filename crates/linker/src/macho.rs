@@ -600,17 +600,29 @@ fn gen_macho_le(
     use macho::{Section64, SegmentCommand64};
 
     let exec_header = load_struct_inplace::<macho::MachHeader64<LE>>(exec_data, 0);
+    let size_of_header = mem::size_of::<macho::MachHeader64<LE>>();
     let num_load_cmds = exec_header.ncmds.get(LE);
     let size_of_cmds = exec_header.sizeofcmds.get(LE) as usize;
 
-    // Add a new text segment and data segment
+    // Add a new text segment and data segment load commands.
+    // TODO: For the time being, assume there will be a single section per segment but we can
+    // come up with some worst case upper bound and use that instead to preallocate too many
+    // and then trim.
     let segment_cmd_size = mem::size_of::<SegmentCommand64<LE>>();
     let section_size = mem::size_of::<Section64<LE>>();
+    let required_size = segment_cmd_size * 2 + section_size * 2;
 
     // We need the full command size, including the dynamic-length string at the end.
     // To get that, we need to load the command.
     let info = load_struct_inplace::<macho::LoadCommand<LE>>(exec_data, macho_load_so_offset);
     let total_cmd_size = info.cmdsize.get(LE) as usize;
+
+    let available_size =
+        md.start_of_first_section as usize - (size_of_cmds + size_of_header - total_cmd_size);
+
+    if available_size < required_size {
+        internal_error!("Not enough free space between end of load commands and start of first section\nConsider recompiling the host with -headerpad <size> linker flag");
+    }
 
     // ======================== Important TODO ==========================
     // TODO: we accidentally instroduced a big change here.
