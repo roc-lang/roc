@@ -51,11 +51,6 @@ struct SurgeryEntry {
     size: u8,
 }
 
-// TODO: Reanalyze each piece of data in this struct.
-// I think a number of them can be combined to reduce string duplication.
-// Also I think a few of them aren't need.
-// For example, I think preprocessing can deal with all shifting and remove the need for added_byte_count.
-// TODO: we probably should be storing numbers in an endian neutral way.
 #[derive(Default, Serialize, Deserialize, PartialEq, Eq, Debug)]
 struct Metadata {
     app_functions: Vec<String>,
@@ -63,17 +58,13 @@ struct Metadata {
     plt_addresses: MutMap<String, (u64, u64)>,
     surgeries: MutMap<String, Vec<SurgeryEntry>>,
     dynamic_symbol_indices: MutMap<String, u64>,
-    _static_symbol_indices: MutMap<String, u64>,
     roc_symbol_vaddresses: MutMap<String, u64>,
     exec_len: u64,
     load_align_constraint: u64,
     added_byte_count: u64,
     last_vaddr: u64,
-    _dynamic_section_offset: u64,
-    _dynamic_symbol_table_section_offset: u64,
-    _symbol_table_section_offset: u64,
-    _symbol_table_size: u64,
     macho_cmd_loc: u64,
+    start_of_first_section: u64,
 }
 
 impl Metadata {
@@ -357,8 +348,9 @@ pub(crate) fn preprocess_macho_le(
 
         let mut stubs_symbol_index = None;
         let mut stubs_symbol_count = None;
+        let mut start_of_first_section = None;
 
-        'cmds: for _ in 0..num_load_cmds {
+        for _ in 0..num_load_cmds {
             let info = load_struct_inplace::<macho::LoadCommand<LE>>(exec_data, offset);
             let cmd = info.cmd.get(LE);
             let cmdsize = info.cmdsize.get(LE);
@@ -380,14 +372,27 @@ pub(crate) fn preprocess_macho_le(
                             stubs_symbol_index = Some(section_info.reserved1.get(LE));
                             stubs_symbol_count =
                                 Some(section_info.size.get(LE) / STUB_ADDRESS_OFFSET);
-
-                            break 'cmds;
+                        }
+                        if section_info.size.get(LE) > 0 {
+                            let offset = section_info.offset.get(LE) as u64;
+                            let inner = start_of_first_section.get_or_insert(offset);
+                            *inner = std::cmp::min(*inner, offset);
                         }
                     }
                 }
             }
 
             offset += cmdsize as usize;
+        }
+
+        md.start_of_first_section = start_of_first_section.unwrap_or_else(|| {
+            internal_error!("Could not establish offset of first section following load commands");
+        });
+        if verbose {
+            println!(
+                "Found start of first section following load commands: {}",
+                md.start_of_first_section
+            );
         }
 
         let stubs_symbol_index = stubs_symbol_index.unwrap_or_else(|| {
@@ -502,15 +507,6 @@ pub(crate) fn preprocess_macho_le(
     let text_disassembly_duration = text_disassembly_start.elapsed();
 
     let scanning_dynamic_deps_start = Instant::now();
-
-    // let ElfDynamicDeps {
-    //     got_app_syms,
-    //     got_sections,
-    //     dynamic_lib_count,
-    //     shared_lib_index,
-    // } = scan_elf_dynamic_deps(
-    //     &exec_obj, &mut md, &app_syms, shared_lib, exec_data, verbose,
-    // );
 
     let scanning_dynamic_deps_duration = scanning_dynamic_deps_start.elapsed();
 
@@ -671,16 +667,6 @@ fn gen_macho_le(
     // Go through every command and shift it by added_bytes if it's absolute, unless it's inside the command header
     let mut offset = mem::size_of_val(exec_header);
 
-    // TODO: Add this back in the future when needed.
-    // let cpu_type = match target.architecture {
-    //     target_lexicon::Architecture::X86_64 => macho::CPU_TYPE_X86_64,
-    //     target_lexicon::Architecture::Aarch64(_) => macho::CPU_TYPE_ARM64,
-    //     _ => {
-    //         // We should have verified this via supported() before calling this function
-    //         unreachable!()
-    //     }
-    // };
-
     // minus one because we "deleted" a load command
     for _ in 0..(num_load_cmds - 1) {
         let info = load_struct_inplace::<macho::LoadCommand<LE>>(&out_mmap, offset);
@@ -709,79 +695,6 @@ fn gen_macho_le(
                         .set(LE, cmd.filesize.get(LE) + md.added_byte_count);
                     cmd.vmsize.set(LE, cmd.vmsize.get(LE) + md.added_byte_count);
                 }
-
-                // let num_sections = cmd.nsects.get(LE);
-                // let sections = load_structs_inplace_mut::<macho::Section64<LE >>(
-                //     &mut out_mmap,
-                //     offset + mem::size_of::<macho::SegmentCommand64<LE >>(),
-                //     num_sections as usize,
-                // );
-                // struct Relocation {
-                //     offset: u32,
-                //     num_relocations: u32,
-                // }
-
-                // let mut relocation_offsets = Vec::with_capacity(sections.len());
-
-                // for section in sections {
-                //     section.addr.set(
-                //         LE ,
-                //         section.addr.get(LE) + md.added_byte_count as u64,
-                //     );
-
-                //     // If offset is zero, don't update it.
-                //     // Zero is used for things like BSS that don't exist in the file.
-                //     let old_offset = section.offset.get(LE);
-                //     if old_offset > 0 {
-                //         section
-                //             .offset
-                //             .set(LE , old_offset + md.added_byte_count as u32);
-                //     }
-
-                //     if section.nreloc.get(LE) > 0 {
-                //         section.reloff.set(
-                //             LE ,
-                //             section.reloff.get(LE) + md.added_byte_count as u32,
-                //         );
-                //     }
-
-                //     relocation_offsets.push(Relocation {
-                //         offset: section.reloff.get(LE),
-                //         num_relocations: section.nreloc.get(LE),
-                //     });
-                // }
-
-                // TODO FIXME this is necessary for ARM, but seems to be broken. Skipping for now since we're just targeting x86
-                // for Relocation {
-                //     offset,
-                //     num_relocations,
-                // } in relocation_offsets
-                // {
-                //     let relos = load_structs_inplace_mut::<macho::Relocation<LE >>(
-                //         &mut out_mmap,
-                //         offset as usize,
-                //         num_relocations as usize,
-                //     );
-
-                //     // TODO this has never been tested, because scattered relocations only come up on ARM!
-                //     for relo in relos.iter_mut() {
-                //         if relo.r_scattered(LE , cpu_type) {
-                //             let mut scattered_info = relo.scattered_info(LE);
-
-                //             if !scattered_info.r_pcrel {
-                //                 scattered_info.r_value += md.added_byte_count as u32;
-
-                //                 let new_info = scattered_info.relocation(LE );
-
-                //                 relo.r_word0 = new_info.r_word0;
-                //                 relo.r_word1 = new_info.r_word1;
-                //             }
-                //         }
-                //     }
-                // }
-
-                // TODO this seems to be wrong and unnecessary, and should probably be deleted.
-                // offset += num_sections as usize * mem::size_of::<macho::Section64<LE >>();
             }
             macho::LC_SYMTAB => {
                 let cmd =
