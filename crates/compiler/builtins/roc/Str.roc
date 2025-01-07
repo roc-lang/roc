@@ -538,14 +538,14 @@ to_utf8 : Str -> List U8
 ## expect Str.from_utf8([]) == Ok("")
 ## expect Str.from_utf8([255]) |> Result.is_err
 ## ```
-from_utf8 : List U8 -> Result Str [BadUtf8 Utf8ByteProblem U64]
+from_utf8 : List U8 -> Result Str [BadUtf8 { problem : Utf8ByteProblem, index : U64 }]
 from_utf8 = \bytes ->
-    result = from_utf8_lowlevel(bytes)
+    result = from_utf8_lowlevel bytes
 
     if result.c_is_ok then
         Ok(result.b_string)
     else
-        Err(BadUtf8(result.d_problem_code, result.a_byte_index))
+        Err (BadUtf8 { problem: result.d_problem_code, index: result.a_byte_index })
 
 expect (Str.from_utf8([82, 111, 99])) == Ok("Roc")
 expect (Str.from_utf8([224, 174, 154, 224, 174, 191])) == Ok("சி")

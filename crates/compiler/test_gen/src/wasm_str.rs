@@ -522,7 +522,7 @@ fn str_from_utf8_fail_invalid_start_byte() {
         indoc!(
             r#"
                     when Str.from_utf8 [97, 98, 0x80, 99] is
-                        Err (BadUtf8 InvalidStartByte byte_index) ->
+                        Err (BadUtf8 {problem: InvalidStartByte, index: byte_index}) ->
                             if byte_index == 2 then
                                 "a"
                             else
@@ -541,7 +541,7 @@ fn str_from_utf8_fail_unexpected_end_of_sequence() {
         indoc!(
             r#"
                     when Str.from_utf8 [97, 98, 99, 0xC2] is
-                        Err (BadUtf8 UnexpectedEndOfSequence byte_index) ->
+                        Err (BadUtf8 {problem: UnexpectedEndOfSequence, index: byte_index}) ->
                             if byte_index == 3 then
                                 "a"
                             else
@@ -560,7 +560,7 @@ fn str_from_utf8_fail_expected_continuation() {
         indoc!(
             r#"
                     when Str.from_utf8 [97, 98, 99, 0xC2, 0x00] is
-                        Err (BadUtf8 ExpectedContinuation byte_index) ->
+                        Err (BadUtf8 {problem: ExpectedContinuation, index: byte_index}) ->
                             if byte_index == 3 then
                                 "a"
                             else
@@ -579,7 +579,7 @@ fn str_from_utf8_fail_overlong_encoding() {
         indoc!(
             r#"
                     when Str.from_utf8 [97, 0xF0, 0x80, 0x80, 0x80] is
-                        Err (BadUtf8 OverlongEncoding byte_index) ->
+                        Err (BadUtf8 {problem: OverlongEncoding, index: byte_index}) ->
                             if byte_index == 1 then
                                 "a"
                             else
@@ -598,7 +598,7 @@ fn str_from_utf8_fail_codepoint_too_large() {
         indoc!(
             r#"
                     when Str.from_utf8 [97, 0xF4, 0x90, 0x80, 0x80] is
-                        Err (BadUtf8 CodepointTooLarge byte_index) ->
+                        Err (BadUtf8 {problem: CodepointTooLarge, index: byte_index}) ->
                             if byte_index == 1 then
                                 "a"
                             else
@@ -617,7 +617,7 @@ fn str_from_utf8_fail_surrogate_half() {
         indoc!(
             r#"
                     when Str.from_utf8 [97, 98, 0xED, 0xA0, 0x80] is
-                        Err (BadUtf8 EncodesSurrogateHalf byte_index) ->
+                        Err (BadUtf8 {problem: EncodesSurrogateHalf, index: byte_index}) ->
                             if byte_index == 2 then
                                 "a"
                             else

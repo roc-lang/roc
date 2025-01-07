@@ -19,8 +19,8 @@ use roc_error_macros::internal_error;
 use roc_parse::ast::{
     AbilityMember, Defs, Expr, ExtractSpaces, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
     ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport,
-    ModuleImportParams, Pattern, PatternApplyStyle, Spaceable, Spaces, SpacesAfter, SpacesBefore,
-    StrLiteral, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    ModuleImportParams, Pattern, PatternApplyStyle, Spaces, SpacesBefore, StrLiteral,
+    TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use roc_parse::expr::merge_spaces;
 use roc_parse::header::Keyword;
@@ -94,21 +94,6 @@ pub fn def_lift_spaces<'a, 'b: 'a>(
     }
 }
 
-fn lift_spaces_after<'a, 'b: 'a, T: 'b + ExtractSpaces<'a> + Spaceable<'a>>(
-    arena: &'a Bump,
-    item: T,
-) -> SpacesAfter<'a, <T as ExtractSpaces<'a>>::Item>
-where
-    <T as ExtractSpaces<'a>>::Item: Spaceable<'a>,
-{
-    let spaces = item.extract_spaces();
-
-    SpacesAfter {
-        item: spaces.item.maybe_before(arena, spaces.before),
-        after: spaces.after,
-    }
-}
-
 pub fn tydef_lift_spaces<'a, 'b: 'a>(arena: &'a Bump, def: TypeDef<'b>) -> Spaces<'a, TypeDef<'a>> {
     match def {
         TypeDef::Alias { header, ann } => {
@@ -128,17 +113,12 @@ pub fn tydef_lift_spaces<'a, 'b: 'a>(arena: &'a Bump, def: TypeDef<'b>) -> Space
             typ,
             derived,
         } => {
-            if let Some(derived) = derived {
-                let derived_lifted = lift_spaces_after(arena, derived.value);
-
+            if derived.is_some() {
+                // It's structurally impossible for a derived clause to have spaces after
                 Spaces {
                     before: &[],
-                    item: TypeDef::Opaque {
-                        header,
-                        typ,
-                        derived: Some(Loc::at(derived.region, derived_lifted.item)),
-                    },
-                    after: derived_lifted.after,
+                    item: def,
+                    after: &[],
                 }
             } else {
                 let typ_lifted = ann_lift_spaces_after(arena, &typ.value);
@@ -461,7 +441,7 @@ impl<'a> Formattable for TypeDef<'a> {
                 // Always put the has-abilities clause on a newline if the opaque annotation
                 // contains a where-has clause.
                 let has_abilities_multiline = if let Some(has_abilities) = has_abilities {
-                    !has_abilities.value.is_empty() && ann_is_where_clause
+                    !has_abilities.item.value.is_empty() && ann_is_where_clause
                 } else {
                     false
                 };
@@ -481,7 +461,7 @@ impl<'a> Formattable for TypeDef<'a> {
                 if let Some(has_abilities) = has_abilities {
                     buf.spaces(1);
 
-                    has_abilities.format_with_options(
+                    (*has_abilities).format_with_options(
                         buf,
                         Parens::NotNeeded,
                         Newlines::from_bool(make_multiline),

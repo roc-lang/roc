@@ -59,6 +59,7 @@
             xorg.libXi
             xorg.libxcb
             cargo-llvm-cov # to visualize code coverage
+            
           ];
 
         # DevInputs are not necessary to build roc as a user
@@ -75,6 +76,8 @@
           cmake
           # provides llvm
           llvmPkgs.dev
+          # for debugging:
+          # lldb
           # faster builds - see https://github.com/roc-lang/roc/blob/main/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
           # provides lld
           pkgs.lld_18

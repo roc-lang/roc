@@ -3,14 +3,14 @@ use bumpalo::Bump;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
 
+use crate::ast::ImplementsAbilities;
 use crate::{
     ast::{
         AbilityImpls, AbilityMember, AssignedField, Collection, Defs, Expr, FullAst, Header,
-        Implements, ImplementsAbilities, ImplementsAbility, ImplementsClause, ImportAlias,
-        ImportAsKeyword, ImportExposingKeyword, ImportedModuleName, IngestedFileAnnotation,
-        IngestedFileImport, ModuleImport, ModuleImportParams, Pattern, PatternAs, Spaced, Spaces,
-        SpacesBefore, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
-        WhenBranch,
+        Implements, ImplementsAbility, ImplementsClause, ImportAlias, ImportAsKeyword,
+        ImportExposingKeyword, ImportedModuleName, IngestedFileAnnotation, IngestedFileImport,
+        ModuleImport, ModuleImportParams, Pattern, PatternAs, Spaced, Spaces, SpacesBefore,
+        StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef, WhenBranch,
     },
     header::{
         AppHeader, ExposedName, ExposesKeyword, HostedHeader, ImportsEntry, ImportsKeyword,
@@ -372,7 +372,7 @@ impl<'a> Normalize<'a> for TypeDef<'a> {
                     vars: vars.normalize(arena),
                 },
                 typ: typ.normalize(arena),
-                derived: derived.normalize(arena),
+                derived: derived.map(|item| &*arena.alloc(item.normalize(arena))),
             },
             Ability {
                 header: TypeHeader { name, vars },
@@ -1001,6 +1001,17 @@ impl<'a> Normalize<'a> for AbilityImpls<'a> {
     }
 }
 
+impl<'a> Normalize<'a> for ImplementsAbilities<'a> {
+    fn normalize(&self, arena: &'a Bump) -> Self {
+        ImplementsAbilities {
+            before_implements_kw: &[],
+            implements: Region::zero(),
+            after_implements_kw: &[],
+            item: self.item.normalize(arena),
+        }
+    }
+}
+
 impl<'a> Normalize<'a> for ImplementsAbility<'a> {
     fn normalize(&self, arena: &'a Bump) -> Self {
         match *self {
@@ -1013,18 +1024,6 @@ impl<'a> Normalize<'a> for ImplementsAbility<'a> {
             ImplementsAbility::SpaceBefore(has, _) | ImplementsAbility::SpaceAfter(has, _) => {
                 has.normalize(arena)
             }
-        }
-    }
-}
-
-impl<'a> Normalize<'a> for ImplementsAbilities<'a> {
-    fn normalize(&self, arena: &'a Bump) -> Self {
-        match *self {
-            ImplementsAbilities::Implements(derived) => {
-                ImplementsAbilities::Implements(derived.normalize(arena))
-            }
-            ImplementsAbilities::SpaceBefore(derived, _)
-            | ImplementsAbilities::SpaceAfter(derived, _) => derived.normalize(arena),
         }
     }
 }

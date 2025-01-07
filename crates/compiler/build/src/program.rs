@@ -456,7 +456,7 @@ fn gen_from_mono_module_dev<'a>(
 
             #[cfg(feature = "target-wasm32")]
             {
-                internal_error!("Compiler was not built with feature 'target-wasm32'.")
+                internal_error!("Compiler was built with feature 'target-wasm32'.")
             }
         }
         (_, Architecture::Aarch32) => {

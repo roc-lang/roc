@@ -283,10 +283,16 @@ dbg_bool = \b ->
 
 dbg_str : Str -> Inspector DbgFormatter
 dbg_str = \s ->
+    # escape invisible unicode characters as in fmt_str_body crates/compiler/fmt/src/expr.rs
+    escape_s =
+        Str.replace_each(s, "\u(feff)", "\\u(feff)")
+        |> Str.replace_each("\u(200b)", "\\u(200b)")
+        |> Str.replace_each("\u(200c)", "\\u(200c)")
+        |> Str.replace_each("\u(200d)", "\\u(200d)")
+
     custom_dbg_str = \f0 ->
-        f0
-        |> dbg_write("\"")
-        |> dbg_write(s) # TODO: Should we be escaping strings for dbg/logging?
+        dbg_write(f0, "\"")
+        |> dbg_write(escape_s)
         |> dbg_write("\"")
 
     custom(custom_dbg_str)
