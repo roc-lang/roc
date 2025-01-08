@@ -868,7 +868,7 @@ Here's what this does:
   - If the `Str.toU64` function returns an `Err` value, then the `try` keyword immediately interrupts the `get_letter` function and makes it return this error.
   - For example, if we call `get_letter "abc"`, then the call to `Str.toU64` returns `Err InvalidNumStr`, and the `try` keyword ensures that the `get_letter` function returns this error immediately, without executing the rest of the function.
 
-Thanks to the `try` keyword, your code can focus on the "happy path" (where nothing fails) and simply bubble up to the caller any error that might occur. Your error handling code can be neatly separated, and you can rest assured that you won't forget to handle any errors, since the compiler will let you know. See this [code example](https://github.com/roc-lang/examples/blob/main/examples/Results/main.roc) for more details on error handling.
+Thanks to the `try` keyword, your code can focus on the "happy path" (where nothing fails) and simply bubble up to the caller any error that might occur. Your error handling code can be neatly separated, and you can rest assured that you won't forget to handle any errors, since the compiler will let you know. See this [code example](https://www.roc-lang.org/examples/Results/README.html) for more details on error handling.
 
 Now let's get back to lists!
 
