@@ -1669,7 +1669,7 @@ This code prints "Hi there, from inside a Roc app. 🎉" to the [standard output
 Stdout.line! : Str => Result {} [StdoutErr IOErr]
 ```
 
-An effectulful function is capable of interacting with state outside your Roc program, such as the terminal's standard output, or a file.
+An effectful function is capable of interacting with state outside your Roc program, such as the terminal's standard output, or a file.
 
 When we call `main!`, the host will provide the arguments passed from the cli `_args` (here we're just ignoring these), and then run. Here, we've set `main!` to be an effectful function that writes `"Hi there, from inside a Roc app. 🎉"` to `stdout` when it gets run, so that's what our program does!
 
