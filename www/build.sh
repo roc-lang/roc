@@ -26,7 +26,7 @@ rm -rf examples-main/
 unzip -o -q examples-main.zip
 cp -R examples-main/examples/ content/examples/
 
-# relace links in content/examples/index.md to work on the WIP site
+# replace links in content/examples/index.md to work on the WIP site
 perl -pi -e 's|\]\(/|\]\(/examples/|g' content/examples/index.md
 
 # clean up examples artifacts
