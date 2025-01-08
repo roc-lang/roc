@@ -122,7 +122,7 @@
       in
       {
 
-        devShells.default = pkgs.mkShell {
+        devShell = pkgs.mkShell {
           buildInputs = sharedInputs ++ sharedDevInputs ++ darwinInputs ++ darwinDevInputs ++ linuxDevInputs
           ++ (if system == "x86_64-linux" then
             [ pkgs.nixgl.nixVulkanIntel ]
