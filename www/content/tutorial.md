@@ -10,7 +10,6 @@
     <li><a href="#crashing">Crashing</a></li>
     <li><a href="#testing">Testing</a></li>
     <li><a href="#modules">Modules</a></li>
-    <li><a href="#tasks">Tasks</a></li>
     <li><a href="#advanced-concepts">Advanced Concepts</a></li>
     </ol>
 </nav>
@@ -200,13 +199,12 @@ You should see this:
 
 <samp>There are 5 animals.</samp>
 
-`main.roc` now has four definitions (_defs_ for short) `birds`, <span class="nowrap">`iguanas`,</span> `total`, and `main`.
+`main.roc` now has four definitions (_defs_ for short) `birds`, <span class="nowrap">`iguanas`,</span> `total`, and `main!`.
 
 A definition names an expression.
 
 - The first two defs assign the names `birds` and `iguanas` to the expressions `3` and `2`.
 - The next def assigns the name `total` to the expression `Num.toStr (birds + iguanas)`.
-- The last def assigns the name `main` to an expression which returns a `Task`. We'll [discuss tasks later](#tasks).
 
 Once we have a def, we can use its name in other expressions. For example, the `total` expression refers to `birds` and `iguanas`, and `Stdout.line! "There are $(total) animals."` refers to `total`.
 
@@ -929,7 +927,12 @@ Note that the state doesn't have to be a record; it can be anything you want. Fo
 
 A helpful way to remember the argument order for `List.walk` is that that its arguments follow the same pattern as what we've seen with `List.map`, `List.any`, `List.keepIf`, and `List.dropIf`: the first argument is a list, and the last argument is a function. The difference here is that `List.walk` has one more argument than those other functions; the only place it could go while preserving that pattern is in the middle!
 
-> **Note:** Other languages give this operation different names, such as `fold`, `reduce`, `accumulate`, `aggregate`, `compress`, and `inject`. Some languages also have operations like `forEach` or `for...in` syntax, which walk across every element and perform potentially side-effecting operations on them; `List.walk` can be used to replace these too, if you include a `Task` in the state. We'll talk about tasks, and how to use them with `List.walk`, later on.
+> **Note:** Other languages give this operation different names, such as `fold`, `reduce`, `accumulate`, `aggregate`, `compress`, and `inject`. Consider using one of the following if you would like to call an effectful function on a list of
+
+```roc
+List.forEach! : List a, (a => {}) => {}
+List.forEachTry! : List a, (a => Result {} err) => Result {} err
+```
 
 ### [Pattern Matching on Lists](#pattern-matching-on-lists) {#pattern-matching-on-lists}
 
@@ -1501,7 +1504,6 @@ There are several modules that are built into the Roc compiler, which are import
 10. [Hash](https://www.roc-lang.org/builtins/Hash)
 11. [Box](https://www.roc-lang.org/builtins/Box)
 12. [Inspect](https://www.roc-lang.org/builtins/Inspect)
-13. [Task](https://www.roc-lang.org/builtins/Task) (deprecated and will be remove soon)
 
 You may have noticed that we already used the first five. For example, when we wrote `Str.concat` and `Num.isEven`, we were referencing functions stored in the `Str` and `Num` modules.
 
@@ -1669,7 +1671,7 @@ Stdout.line! : Str => Result {} [StdoutErr IOErr]
 
 An effectulful function is capable of interacting with state outside your Roc program, such as the terminal's standard output, or a file.
 
-When we call `main!`, the host will provide the arguments passed from the cli `_args` (here we're just ignoring these), and then run. Here, we've set `main!` to be a task that writes `"Hi there, from inside a Roc app. 🎉"` to `stdout` when it gets run, so that's what our program does!
+When we call `main!`, the host will provide the arguments passed from the cli `_args` (here we're just ignoring these), and then run. Here, we've set `main!` to be an effectful function that writes `"Hi there, from inside a Roc app. 🎉"` to `stdout` when it gets run, so that's what our program does!
 
 The `Stdout.line!` function here returns a `Result` when called. If it succeeds it returns the unit value `{}`, or if it fails it returns the tag `StdoutErr` with an `IOErr` payload.
 
@@ -1704,7 +1706,7 @@ it should print back out what you entered.
 Sometimes, effects can fail. For example, reading from a file might fail if the file is not found.
 Even reading from stdin and writing to stdout can fail!
 
-For example, the `Stdin.line!` task can fail if stdin is closed before it receives a line. You can try this out
+For example, the `Stdin.line!` function can fail if stdin is closed before it receives a line. You can try this out
 by running the program and pressing Ctrl+Z on Windows, or Ctrl+D on macOS or Linux. (Press that key rather than
 typing in text and pressing Enter.) You'll see a default error message, which the `basic-cli` platform provides
 in case an error occurs that we didn't handle.
@@ -1725,9 +1727,9 @@ main = #...
 
 Let's break down what this type is saying:
 
-- Both the `!` suffix in the name, and the `=>` in the type, tell us this is an effectful function. Its two type parameters are just like the ones we saw in `Result` earlier: the first type tells us what this task will produce if it succeeds, and the other one tells us what it will produce if it fails.
-- `{}` tells us that this function always produces an empty record when it succeeds. (That is, it doesn't produce anything useful. Empty records don't have any information in them!) This is because the last task in `main!` comes from `Stdout.line!`, which doesn't produce anything. (In contrast, the `Stdin` task's first type parameter is a `Str`, because it produces a `Str` if it succeeds.)
-- `[EndOfFile, StdinErr Stdin.IOErr, StdoutErr Stdout.IOErr]` tells us the different ways this task can fail. The `StdoutErr` and `StdinErr` tags are there because we used `Stdout.line!` and `Stdin.line!`.
+- Both the `!` suffix in the name, and the `=>` in the type, tell us this is an effectful function. Its two type parameters are just like the ones we saw in `Result` earlier: the first type tells us what this function will produce if it succeeds, and the other one tells us what it will produce if it fails.
+- `{}` tells us that this function always produces an empty record when it succeeds. (That is, it doesn't produce anything useful. Empty records don't have any information in them!) This is because the last expression in `main!` comes from `Stdout.line!`, which doesn't produce anything. (In contrast, the `Stdin` function's first type parameter is a `Str`, because it produces a `Str` if it succeeds.)
+- `[EndOfFile, StdinErr Stdin.IOErr, StdoutErr Stdout.IOErr]` tells us the different ways this function can fail. The `StdoutErr` and `StdinErr` tags are there because we used `Stdout.line!` and `Stdin.line!`.
 
 To understand the error a little more, let's try temporarily commenting out our current `main!` and replacing
 it with this one:
@@ -1750,10 +1752,10 @@ This program won't print anything at all, but it will exit with a status code of
 
 In summary:
 
-- If the `main!` task ends in a `Ok {}`, then it means the final task succeeded and the program will exit with status code 0.
-- If the `main!` task ends in a `Err (Exit 42 "…")`, then it means it failed, and the only information we got about the failure was that the program should exit with code 42 instead of 0, and that it should print a particular string to stderr to inform the user about what happened.
+- If the `main!` function ends in a `Ok {}`, then it means the final expression succeeded and the program will exit with status code 0.
+- If the `main!` function ends in a `Err (Exit 42 "…")`, then it means it failed, and the only information we got about the failure was that the program should exit with code 42 instead of 0, and that it should print a particular string to stderr to inform the user about what happened.
 
-### [Handling task failures](#handling-failures) {#handling-failures}
+### [Handling failure](#handling-failures) {#handling-failures}
 
 If `main!` ends up failing with any other errors besides `Exit` (such as `StdoutErr` or `StdinErr`), then the `basic-cli` platform's automatic error handling will handle them by printing out words taken from the source code (such as "StdoutErr" and "StdinErr"), which could lead to a bad experience for people using this program!
 
@@ -1773,9 +1775,9 @@ main! = \_args ->
 
 Adding this type annotation will give us a type mismatch - which is exactly what we want in this case!
 
-The type mismatch is telling us that we're claiming the `main!` task will only ever fail with an `Exit` tag, but this implementation can _also_ fail with `EndOfFile`, `StdoutErr` and `StdinErr` tags we saw earlier.
+The type mismatch is telling us that we're claiming the `main!` function will only ever fail with an `Exit` tag, but this implementation can _also_ fail with `EndOfFile`, `StdoutErr` and `StdinErr` tags we saw earlier.
 
-In other words, adding this annotation effectively opted us out of `basic-cli`'s default error handling. Now any potential task failures (now and in the future) will have to be handled somehow; if we forget to handle any, we'll get a type mismatch like this! For that reason, `basic-cli` applications that are intended to be high-quality (so, not things like quick scripts) will generally benefit from applying this type annotation to `main!`.
+In other words, adding this annotation effectively opted us out of `basic-cli`'s default error handling. Now any potential failures (now and in the future) will have to be handled somehow; if we forget to handle any, we'll get a type mismatch like this! For that reason, `basic-cli` applications that are intended to be high-quality (so, not things like quick scripts) will generally benefit from applying this type annotation to `main!`.
 
 Here's one way we can handle those errors:
 
@@ -1788,14 +1790,14 @@ import pf.Arg exposing [Arg]
 
 main! : List Arg => Result {} [Exit I32 Str]
 main! = \_args ->
-    Result.mapErr (my_task! {}) \err ->
+    Result.mapErr (my_function! {}) \err ->
         when err is
             StdoutErr _ -> Exit 1i32 "Error writing to stdout."
             StdinErr _ -> Exit 2i32 "Error writing to stdin."
             EndOfFile -> Exit 3i32 "End of file reached."
 
-my_task! : {} => Result {} [EndOfFile, StdinErr _, StdoutErr _]
-my_task! = \{} ->
+my_function! : {} => Result {} [EndOfFile, StdinErr _, StdoutErr _]
+my_function! = \{} ->
     try Stdout.line! "Type in something and press Enter:"
     input = try Stdin.line! {}
     try Stdout.line! "Your input was: $(input)"
@@ -1918,7 +1920,7 @@ This code is doing three things:
 2. Transform that `Result` value into another `Result` value using `|> Result.mapErr`
 3. Unwrap that final `Result` value (returned by `mapErr`) using `try` and return early if it's an error
 
-See the [Task & Error Handling example](https://www.roc-lang.org/examples/ErrorHandling/README.html) for a more detailed explanation of how to use tasks to help with error handling in a larger program.
+See the [Error Handling example](https://www.roc-lang.org/examples/ErrorHandling/README.html) for a more detailed explanation of error handling in a larger program.
 
 ### [Displaying Roc values with `Inspect.toStr`](#inspect) {#inspect}
 
