@@ -1878,7 +1878,7 @@ main! = \_args ->
 
 (In this particular example, it's very unlikely that this would come up at all, and even if it did, we might not care which one caused the problem. But you can imagine having multiple HTTP requests, or file writes, and wanting to know which of them was the one that failed.)
 
-If an error happended here, we wouldn't know which effectul function was the cause of the failure.
+If an error happended here, we wouldn't know which effectful function was the cause of the failure.
 
 One option is to "tag the error" using `Result.mapErr` to wrap the error in a [tag](#tags) like so:
 
