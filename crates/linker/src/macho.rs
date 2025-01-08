@@ -62,7 +62,9 @@ struct Metadata {
     exec_len: u64,
     load_align_constraint: u64,
     last_vaddr: u64,
-    macho_cmd_loc: u64,
+    // Offset just after the last load command.
+    // TODO: this is easy to re-calculate on the fly from just the header.
+    end_of_load_commands: usize,
     // Offset of the first section following the load commands.
     start_of_first_section: u64,
     // List of all __LINKEDIT load commands and their offset in file.
@@ -739,7 +741,7 @@ fn gen_macho_le(
     }
 
     // cmd_loc should be where the last offset ended
-    md.macho_cmd_loc = offset as u64;
+    md.end_of_load_commands = offset;
 
     out_mmap
 }
