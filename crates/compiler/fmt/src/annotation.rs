@@ -386,7 +386,7 @@ impl<'a> Nodify<'a> for AssignedField<'a, TypeAnnotation<'a>> {
                 assigned_field_value_to_node(n.into_bump_str(), arena, sp, &value.value, ":", flags)
             }
             AssignedField::OptionalValue(name, sp, value) => {
-                assigned_field_value_to_node(name.value, arena, sp, &value.value, "?", flags)
+                assigned_field_value_to_node(name.value, arena, sp, &value.value, "??", flags)
             }
             AssignedField::LabelOnly(name) => NodeInfo {
                 before: &[],
@@ -512,7 +512,7 @@ fn format_assigned_field_help<T>(
 
             buf.spaces(separator_spaces);
             buf.indent(indent);
-            buf.push('?');
+            buf.push_str("??");
             buf.spaces(1);
             ann.value.format(buf, indent);
         }
@@ -703,36 +703,37 @@ impl<'a> Formattable for ImplementsAbility<'a> {
 
 impl<'a> Formattable for ImplementsAbilities<'a> {
     fn is_multiline(&self) -> bool {
-        match self {
-            ImplementsAbilities::SpaceAfter(..) | ImplementsAbilities::SpaceBefore(..) => true,
-            ImplementsAbilities::Implements(has_abilities) => {
-                is_collection_multiline(has_abilities)
-            }
-        }
+        self.before_implements_kw.iter().any(|s| s.is_comment())
+            || self.after_implements_kw.iter().any(|s| s.is_comment())
+            || is_collection_multiline(&self.item.value)
     }
 
-    fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
-        match self {
-            ImplementsAbilities::Implements(has_abilities) => {
-                if newlines == Newlines::Yes {
-                    buf.newline();
-                }
-                buf.indent(indent);
-                buf.push_str(roc_parse::keyword::IMPLEMENTS);
-                buf.spaces(1);
-                fmt_collection(buf, indent, Braces::Square, *has_abilities, Newlines::No);
-            }
-            ImplementsAbilities::SpaceBefore(has_abilities, spaces) => {
-                buf.newline();
-                buf.indent(indent);
-                fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
-                has_abilities.format_with_options(buf, parens, Newlines::No, indent)
-            }
-            ImplementsAbilities::SpaceAfter(has_abilities, spaces) => {
-                has_abilities.format_with_options(buf, parens, newlines, indent);
-                fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
-            }
+    fn format_with_options(&self, buf: &mut Buf, _parens: Parens, newlines: Newlines, indent: u16) {
+        if !self.before_implements_kw.is_empty() {
+            buf.newline();
+            buf.indent(indent);
+            fmt_comments_only(
+                buf,
+                self.before_implements_kw.iter(),
+                NewlineAt::Bottom,
+                indent,
+            );
         }
+        if newlines == Newlines::Yes {
+            buf.ensure_ends_with_newline();
+        }
+        buf.indent(indent);
+        buf.push_str(roc_parse::keyword::IMPLEMENTS);
+        if !self.after_implements_kw.is_empty() {
+            fmt_comments_only(
+                buf,
+                self.after_implements_kw.iter(),
+                NewlineAt::Bottom,
+                indent,
+            );
+        }
+        buf.ensure_ends_with_whitespace();
+        fmt_collection(buf, indent, Braces::Square, self.item.value, Newlines::No);
     }
 }
 
@@ -1217,7 +1218,7 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                     },
                     after: last_after,
                     needs_indent,
-                    prec: Prec::AsType,
+                    prec: Prec::FunctionType,
                 }
             }
         }

@@ -683,6 +683,7 @@ pub enum ERecord<'a> {
     UnderscoreField(Position),
     Colon(Position),
     QuestionMark(Position),
+    SecondQuestionMark(Position),
     Arrow(Position),
     Ampersand(Position),
 
@@ -706,6 +707,7 @@ impl<'a> ERecord<'a> {
             | ERecord::UnderscoreField(p)
             | ERecord::Colon(p)
             | ERecord::QuestionMark(p)
+            | ERecord::SecondQuestionMark(p)
             | ERecord::Arrow(p)
             | ERecord::Ampersand(p)
             | ERecord::Space(_, p) => Region::from_pos(*p),
@@ -1107,7 +1109,8 @@ pub enum PRecord<'a> {
 
     Field(Position),
     Colon(Position),
-    Optional(Position),
+    OptionalFirst(Position),
+    OptionalSecond(Position),
 
     Pattern(&'a EPattern<'a>, Position),
     Expr(&'a EExpr<'a>, Position),
@@ -1127,7 +1130,8 @@ impl<'a> PRecord<'a> {
             | PRecord::Open(p)
             | PRecord::Field(p)
             | PRecord::Colon(p)
-            | PRecord::Optional(p)
+            | PRecord::OptionalFirst(p)
+            | PRecord::OptionalSecond(p)
             | PRecord::Space(_, p) => Region::from_pos(*p),
         }
     }
@@ -1244,7 +1248,8 @@ pub enum ETypeRecord<'a> {
 
     Field(Position),
     Colon(Position),
-    Optional(Position),
+    OptionalFirst(Position),
+    OptionalSecond(Position),
     Type(&'a EType<'a>, Position),
 
     Space(BadInputError, Position),
@@ -1266,7 +1271,8 @@ impl<'a> ETypeRecord<'a> {
             | ETypeRecord::Open(p)
             | ETypeRecord::Field(p)
             | ETypeRecord::Colon(p)
-            | ETypeRecord::Optional(p)
+            | ETypeRecord::OptionalFirst(p)
+            | ETypeRecord::OptionalSecond(p)
             | ETypeRecord::Space(_, p)
             | ETypeRecord::IndentOpen(p)
             | ETypeRecord::IndentColon(p)
@@ -1394,6 +1400,7 @@ pub enum ETypeAbilityImpl<'a> {
 
     Prefix(Position),
     QuestionMark(Position),
+    SecondQuestionMark(Position),
     Ampersand(Position),
     Expr(&'a EExpr<'a>, Position),
     IndentBar(Position),
@@ -1416,6 +1423,7 @@ impl<'a> ETypeAbilityImpl<'a> {
             | ETypeAbilityImpl::Space(_, p)
             | ETypeAbilityImpl::Prefix(p)
             | ETypeAbilityImpl::QuestionMark(p)
+            | ETypeAbilityImpl::SecondQuestionMark(p)
             | ETypeAbilityImpl::Ampersand(p)
             | ETypeAbilityImpl::IndentBar(p)
             | ETypeAbilityImpl::IndentAmpersand(p) => Region::from_pos(*p),
@@ -1435,6 +1443,7 @@ impl<'a> From<ERecord<'a>> for ETypeAbilityImpl<'a> {
             ERecord::Space(s, p) => ETypeAbilityImpl::Space(s, p),
             ERecord::Prefix(p) => ETypeAbilityImpl::Prefix(p),
             ERecord::QuestionMark(p) => ETypeAbilityImpl::QuestionMark(p),
+            ERecord::SecondQuestionMark(p) => ETypeAbilityImpl::SecondQuestionMark(p),
             ERecord::Ampersand(p) => ETypeAbilityImpl::Ampersand(p),
             ERecord::Expr(e, p) => ETypeAbilityImpl::Expr(e, p),
         }

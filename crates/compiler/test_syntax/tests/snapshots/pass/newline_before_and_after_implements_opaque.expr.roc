@@ -1,0 +1,4 @@
+P:=W
+  implements
+   []
+t
