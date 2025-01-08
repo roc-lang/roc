@@ -130,6 +130,7 @@ map_symbol_to_lowlevel_and_arity! {
     StrToNum; STR_TO_NUM; 1,
     StrWithCapacity; STR_WITH_CAPACITY; 1,
     StrReleaseExcessCapacity; STR_RELEASE_EXCESS_CAPACITY; 1,
+    StrWithAsciiLowercased; STR_WITH_ASCII_LOWERCASED; 1,
 
     ListLenUsize; LIST_LEN_USIZE; 1,
     ListLenU64; LIST_LEN_U64; 1,
