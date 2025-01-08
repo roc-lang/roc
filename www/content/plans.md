@@ -26,7 +26,7 @@ This is a significant upgrade to the language and will take some time for the ec
 
 ### [Static Dispatch](#static-dispatch) {#static-dispatch}
 
-There are significant changes outlined in the [static dispatch design proposal](https://docs.google.com/document/d/1OUd0f4PQjH8jb6i1vEJ5DOnfpVBJbGTjnCakpXAYeT8/edit?usp=sharing). These are being discussed and worked on, but likely to affect other features like abilities, record default fields, and potentiall module params.
+There are significant changes outlined in the [static dispatch design proposal](https://docs.google.com/document/d/1OUd0f4PQjH8jb6i1vEJ5DOnfpVBJbGTjnCakpXAYeT8/edit?usp=sharing). These are being discussed and worked on, but likely to affect other features like abilities, record default fields, and potentially module params.
 
 ### [Syntax changes](#syntax-changes) {#syntax-changes}
 

@@ -868,7 +868,7 @@ Here's what this does:
   - If the `Str.toU64` function returns an `Err` value, then the `try` keyword immediately interrupts the `get_letter` function and makes it return this error.
   - For example, if we call `get_letter "abc"`, then the call to `Str.toU64` returns `Err InvalidNumStr`, and the `try` keyword ensures that the `get_letter` function returns this error immediately, without executing the rest of the function.
 
-Thanks to the `try` keyword, your code can focus on the "happy path" (where nothing fails) and simply bubble up to the caller any error that might occur. Your error handling code can be neatly separated, and you can rest assured that you won't forget to handle any errors, since the compiler will let you know. See this [code example](https://github.com/roc-lang/examples/blob/main/examples/Results/main.roc) for more details on error handling.
+Thanks to the `try` keyword, your code can focus on the "happy path" (where nothing fails) and simply bubble up to the caller any error that might occur. Your error handling code can be neatly separated, and you can rest assured that you won't forget to handle any errors, since the compiler will let you know. See this [code example](https://www.roc-lang.org/examples/Results/README.html) for more details on error handling.
 
 Now let's get back to lists!
 
@@ -1667,7 +1667,7 @@ This code prints "Hi there, from inside a Roc app. 🎉" to the [standard output
 Stdout.line! : Str => Result {} [StdoutErr IOErr]
 ```
 
-An effectulful function is capable of interacting with state outside your Roc program, such as the terminal's standard output, or a file.
+An effectful function is capable of interacting with state outside your Roc program, such as the terminal's standard output, or a file.
 
 When we call `main!`, the host will provide the arguments passed from the cli `_args` (here we're just ignoring these), and then run. Here, we've set `main!` to be an effectful function that writes `"Hi there, from inside a Roc app. 🎉"` to `stdout` when it gets run, so that's what our program does!
 
@@ -1699,7 +1699,7 @@ If you run this program, it will print "Type in something and press Enter:" and 
 That's because it's waiting for you to type something in and press Enter! Once you do,
 it should print back out what you entered.
 
-### [Effectul failure](#failure) {#failure}
+### [Effectful failure](#failure) {#failure}
 
 Sometimes, effects can fail. For example, reading from a file might fail if the file is not found.
 Even reading from stdin and writing to stdout can fail!
@@ -1876,7 +1876,7 @@ main! = \_args ->
 
 (In this particular example, it's very unlikely that this would come up at all, and even if it did, we might not care which one caused the problem. But you can imagine having multiple HTTP requests, or file writes, and wanting to know which of them was the one that failed.)
 
-If an error happended here, we wouldn't know which effectul function was the cause of the failure.
+If an error happended here, we wouldn't know which effectful function was the cause of the failure.
 
 One option is to "tag the error" using `Result.mapErr` to wrap the error in a [tag](#tags) like so:
 
@@ -1910,7 +1910,7 @@ The `mapErr` function has this type:
 Result.mapErr : Result ok a, (a -> b) -> Result ok b
 ```
 
-Here we're passing in "tagging functions"—namely, `UnableToPrintPrompt` and `UnableToReadInput`. (See [Using tags as functions](#using-tags-as-functions) for how this works.)
+Here we're passing in "tagging functions" — namely, `UnableToPrintPrompt` and `UnableToReadInput`. (See [Using tags as functions](#using-tags-as-functions) for how this works.)
 
 This code is doing three things:
 
