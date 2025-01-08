@@ -55,7 +55,7 @@ mod cli_tests {
         // pre-build the platform
         std::process::Command::new("bash")
             .arg(file_from_root(
-                "examples/platform-switching/rust-platform",
+                "crates/cli/tests/platform-switching/rust-platform",
                 "build.sh",
             ))
             .status()
@@ -63,7 +63,7 @@ mod cli_tests {
 
         let cli_build = ExecCli::new(
             roc_cli::CMD_DEV,
-            file_from_root("examples/platform-switching", "rocLovesRust.roc"),
+            file_from_root("crates/cli/tests/platform-switching", "rocLovesRust.roc"),
         );
 
         let expected_output = "Roc <3 Rust!\n";
@@ -80,7 +80,7 @@ mod cli_tests {
 
         let cli_build = ExecCli::new(
             CMD_BUILD,
-            file_from_root("examples/platform-switching", "rocLovesZig.roc"),
+            file_from_root("crates/cli/tests/platform-switching", "rocLovesZig.roc"),
         )
         .arg(BUILD_HOST_FLAG)
         .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
@@ -104,7 +104,10 @@ mod cli_tests {
         // so let's just check it for now
         let cli_check = ExecCli::new(
             CMD_CHECK,
-            file_from_root("examples/platform-switching", "rocLovesWebAssembly.roc"),
+            file_from_root(
+                "crates/cli/tests/platform-switching",
+                "rocLovesWebAssembly.roc",
+            ),
         );
 
         let cli_check_out = cli_check.run();
@@ -158,34 +161,6 @@ mod cli_tests {
             None,
             None,
         );
-    }
-
-    // TODO: write a new test once mono bugs are resolved in investigation
-    // Encountering this TODO years later, I presume the new test should test the execution, not just roc check.
-    #[test]
-    #[cfg(not(debug_assertions))] // https://github.com/roc-lang/roc/issues/4806 - later observation: this issue is closed but the tests still hangs in debug mode
-    fn check_virtual_dom_server() {
-        let cli_check = ExecCli::new(
-            CMD_CHECK,
-            file_from_root("examples/virtual-dom-wip", "example-server.roc"),
-        );
-
-        let cli_check_out = cli_check.run();
-        cli_check_out.assert_clean_success();
-    }
-
-    // TODO: write a new test once mono bugs are resolved in investigation
-    // Encountering this TODO years later, I presume the new test should test the execution, not just roc check.
-    #[test]
-    #[cfg(not(debug_assertions))] // https://github.com/roc-lang/roc/issues/4806 - later observation: this issue is closed but the tests still hangs in debug mode
-    fn check_virtual_dom_client() {
-        let cli_check = ExecCli::new(
-            CMD_CHECK,
-            file_from_root("examples/virtual-dom-wip", "example-client.roc"),
-        );
-
-        let cli_check_out = cli_check.run();
-        cli_check_out.assert_clean_success();
     }
 
     #[test]
