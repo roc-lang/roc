@@ -333,7 +333,7 @@ fn main() -> io::Result<()> {
                 } else {
                     matches
                         .get_one::<Option<String>>(FLAG_DOCS_ROOT)
-                        .unwrap()
+                        .unwrap_or(&None)
                         .clone()
                 }
             };
