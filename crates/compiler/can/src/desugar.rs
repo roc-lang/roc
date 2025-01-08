@@ -49,6 +49,29 @@ fn new_op_call_expr<'a>(
                         Expr::LowLevelTry(desugared_left, ResultTryKind::KeywordPrefix),
                     );
                 }
+                PncApply(&Loc { value: Try, .. }, arguments) => {
+                    let try_fn = desugar_expr(env, scope, arguments.items.first().unwrap());
+
+                    let mut args = Vec::with_capacity_in(arguments.len(), env.arena);
+                    args.push(desugar_expr(env, scope, left));
+                    args.extend(
+                        arguments
+                            .iter()
+                            .skip(1)
+                            .map(|a| desugar_expr(env, scope, a)),
+                    );
+
+                    return Loc::at(
+                        region,
+                        Expr::LowLevelTry(
+                            env.arena.alloc(Loc::at(
+                                region,
+                                Expr::Apply(try_fn, args.into_bump_slice(), CalledVia::Try),
+                            )),
+                            ResultTryKind::KeywordPrefix,
+                        ),
+                    );
+                }
                 Apply(&Loc { value: Try, .. }, arguments, _called_via) => {
                     let try_fn = desugar_expr(env, scope, arguments.first().unwrap());
 
@@ -87,6 +110,41 @@ fn new_op_call_expr<'a>(
                                 Expr::Apply(
                                     function,
                                     env.arena.alloc([desugar_expr(env, scope, left)]),
+                                    CalledVia::Try,
+                                ),
+                            )),
+                            ResultTryKind::OperatorSuffix,
+                        ),
+                    );
+                }
+                PncApply(
+                    &Loc {
+                        value:
+                            TrySuffix {
+                                target: TryTarget::Result,
+                                expr: fn_expr,
+                            },
+                        region: fn_region,
+                    },
+                    loc_args,
+                ) => {
+                    let loc_fn = env.arena.alloc(Loc::at(fn_region, *fn_expr));
+                    let function = desugar_expr(env, scope, loc_fn);
+
+                    let mut desugared_args = Vec::with_capacity_in(loc_args.len() + 1, env.arena);
+                    desugared_args.push(desugar_expr(env, scope, left));
+                    for loc_arg in &loc_args.items[..] {
+                        desugared_args.push(desugar_expr(env, scope, loc_arg));
+                    }
+
+                    return Loc::at(
+                        region,
+                        LowLevelTry(
+                            env.arena.alloc(Loc::at(
+                                region,
+                                Expr::Apply(
+                                    function,
+                                    desugared_args.into_bump_slice(),
                                     CalledVia::Try,
                                 ),
                             )),
@@ -138,6 +196,16 @@ fn new_op_call_expr<'a>(
 
             match right.value {
                 Apply(function, arguments, _called_via) => {
+                    let mut args = Vec::with_capacity_in(1 + arguments.len(), env.arena);
+
+                    args.push(left);
+                    args.extend(arguments.iter());
+
+                    let args = args.into_bump_slice();
+
+                    Apply(function, args, CalledVia::BinOp(Pizza))
+                }
+                PncApply(function, arguments) => {
                     let mut args = Vec::with_capacity_in(1 + arguments.len(), env.arena);
 
                     args.push(left);
