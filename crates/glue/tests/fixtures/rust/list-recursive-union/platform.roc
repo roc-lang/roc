@@ -3,15 +3,15 @@ platform "test-platform"
     exposes []
     packages {}
     imports []
-    provides [mainForHost]
+    provides [main_for_host]
 
 Tool : [SystemTool { name : Str }]
 
 Command : [Command { tool : Tool, args : List Str }]
 
-Job : [Job { command : Command, job : List Job, inputFiles : List Str }, Blah Str]
+Job : [Job { command : Command, job : List Job, input_files : List Str }, Blah Str]
 
 Rbt : { default : Job }
 
-mainForHost : Rbt
-mainForHost = main
+main_for_host : Rbt
+main_for_host = main

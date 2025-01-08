@@ -3,7 +3,7 @@ platform "test/types"
     exposes []
     packages {}
     imports []
-    provides [ mainForHost ]
+    provides [ main_for_host ]
 
-mainForHost : App Flags Model
-mainForHost = main
+main_for_host : App Flags Model
+main_for_host = main

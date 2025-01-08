@@ -1,1 +1,1 @@
-Expr(Pattern(NotAPattern(@3), @3), @0)
+Expr(BadExprEnd(@2), @0)

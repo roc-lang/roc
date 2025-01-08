@@ -49,7 +49,7 @@ Defs {
                             @15-16 Apply(
                                 @15-16 Var {
                                     module_name: "Inspect",
-                                    ident: "toStr",
+                                    ident: "to_str",
                                 },
                                 [
                                     @15-16 Var {

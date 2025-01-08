@@ -3,8 +3,8 @@ platform "nodejs-interop"
     exposes []
     packages {}
     imports []
-    provides [mainForHost]
+    provides [main_for_host]
 
-mainForHost : Str -> Str
-mainForHost = \message ->
-    main message
+main_for_host : Str -> Str
+main_for_host = \message ->
+    main(message)

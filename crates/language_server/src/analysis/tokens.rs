@@ -535,12 +535,7 @@ impl IterTokens for Loc<ImplementsAbilities<'_>> {
 
 impl IterTokens for ImplementsAbilities<'_> {
     fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
-        match self {
-            ImplementsAbilities::Implements(impls) => impls.iter_tokens(arena),
-            ImplementsAbilities::SpaceBefore(i, _) | ImplementsAbilities::SpaceAfter(i, _) => {
-                i.iter_tokens(arena)
-            }
-        }
+        self.item.value.iter_tokens(arena)
     }
 }
 
@@ -682,10 +677,6 @@ impl IterTokens for Loc<Expr<'_>> {
             Expr::Defs(defs, exprs) => (defs.iter_tokens(arena).into_iter())
                 .chain(exprs.iter_tokens(arena))
                 .collect_in(arena),
-            Expr::Backpassing(patterns, e1, e2) => (patterns.iter_tokens(arena).into_iter())
-                .chain(e1.iter_tokens(arena))
-                .chain(e2.iter_tokens(arena))
-                .collect_in(arena),
             Expr::Dbg => onetoken(Token::Keyword, region, arena),
             Expr::DbgStmt {
                 first,
@@ -701,6 +692,9 @@ impl IterTokens for Loc<Expr<'_>> {
             Expr::Try => onetoken(Token::Keyword, region, arena),
             Expr::LowLevelTry(e1, _) => e1.iter_tokens(arena),
             Expr::Apply(e1, e2, _called_via) => (e1.iter_tokens(arena).into_iter())
+                .chain(e2.iter_tokens(arena))
+                .collect_in(arena),
+            Expr::PncApply(e1, e2) => (e1.iter_tokens(arena).into_iter())
                 .chain(e2.iter_tokens(arena))
                 .collect_in(arena),
             Expr::BinOps(e1, e2) => (e1.iter_tokens(arena).into_iter())
@@ -772,6 +766,9 @@ impl IterTokens for Loc<Pattern<'_>> {
             Pattern::Tag(_) => onetoken(Token::Tag, region, arena),
             Pattern::OpaqueRef(_) => onetoken(Token::Type, region, arena),
             Pattern::Apply(p1, p2) => (p1.iter_tokens(arena).into_iter())
+                .chain(p2.iter_tokens(arena))
+                .collect_in(arena),
+            Pattern::PncApply(p1, p2) => (p1.iter_tokens(arena).into_iter())
                 .chain(p2.iter_tokens(arena))
                 .collect_in(arena),
             Pattern::RecordDestructure(ps) => ps.iter_tokens(arena),

@@ -11,6 +11,7 @@ use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern, PermitS
 use crate::procedure::{QualifiedReference, References};
 use crate::scope::{Scope, SymbolLookup};
 use crate::traverse::{walk_expr, Visitor};
+use bumpalo::collections::Vec as BumpVec;
 use roc_collections::soa::index_push_new;
 use roc_collections::{SendMap, VecMap, VecSet};
 use roc_error_macros::internal_error;
@@ -760,6 +761,166 @@ pub struct WhenBranch {
     pub redundant: RedundantMark,
 }
 
+#[allow(clippy::too_many_arguments)]
+fn canonicalize_expr_apply<'a>(
+    env: &mut Env<'a>,
+    var_store: &mut VarStore,
+    scope: &mut Scope,
+    loc_fn: &&'a Loc<ast::Expr>,
+    args: BumpVec<'a, (Variable, Loc<Expr>)>,
+    output: &mut Output,
+    region: Region,
+    application_style: CalledVia,
+) -> Expr {
+    use Expr::*;
+
+    let fn_region = loc_fn.region;
+    if let ast::Expr::OpaqueRef(name) = loc_fn.value {
+        // We treat opaques specially, since an opaque can wrap exactly one argument.
+
+        if args.is_empty() {
+            let loc_name = Loc::at(region, (*name).into());
+            let problem = roc_problem::can::RuntimeError::OpaqueNotApplied(loc_name);
+            env.problem(Problem::RuntimeError(problem.clone()));
+            RuntimeError(problem)
+        } else if args.len() > 1 {
+            let problem = roc_problem::can::RuntimeError::OpaqueAppliedToMultipleArgs(region);
+            env.problem(Problem::RuntimeError(problem.clone()));
+            RuntimeError(problem)
+        } else {
+            match scope.lookup_opaque_ref(name, loc_fn.region) {
+                Err(runtime_error) => {
+                    env.problem(Problem::RuntimeError(runtime_error.clone()));
+                    RuntimeError(runtime_error)
+                }
+                Ok((name, opaque_def)) => {
+                    let argument = Box::new(args.first().unwrap().clone());
+                    output
+                        .references
+                        .insert_type_lookup(name, QualifiedReference::Unqualified);
+
+                    let (type_arguments, lambda_set_variables, specialized_def_type) =
+                        freshen_opaque_def(var_store, opaque_def);
+
+                    OpaqueRef {
+                        opaque_var: var_store.fresh(),
+                        name,
+                        argument,
+                        specialized_def_type: Box::new(specialized_def_type),
+                        type_arguments,
+                        lambda_set_variables,
+                    }
+                }
+            }
+        }
+    } else if let ast::Expr::Crash = loc_fn.value {
+        // We treat crash specially, since crashing must be applied with one argument.
+
+        debug_assert!(!args.is_empty());
+
+        let crash = if args.len() > 1 {
+            let args_region = Region::span_across(
+                &args.first().unwrap().1.region,
+                &args.last().unwrap().1.region,
+            );
+            env.problem(Problem::OverAppliedCrash {
+                region: args_region,
+            });
+            // Still crash, just with our own message, and drop the references.
+            Crash {
+                msg: Box::new(Loc::at(
+                    region,
+                    Expr::Str(String::from("hit a crash!").into_boxed_str()),
+                )),
+                ret_var: var_store.fresh(),
+            }
+        } else {
+            let msg = args.first().unwrap();
+            Crash {
+                msg: Box::new(msg.1.clone()),
+                ret_var: var_store.fresh(),
+            }
+        };
+
+        crash
+    } else {
+        // Canonicalize the function expression and its arguments
+        let (fn_expr, fn_expr_output) =
+            canonicalize_expr(env, var_store, scope, fn_region, &loc_fn.value);
+
+        output.union(fn_expr_output);
+
+        // Default: We're not tail-calling a symbol (by name), we're tail-calling a function value.
+        output.tail_calls = vec![];
+
+        match fn_expr.value {
+            Var(symbol, _) => {
+                output.references.insert_call(symbol);
+
+                // we're tail-calling a symbol by name, check if it's the tail-callable symbol
+                if env
+                    .tailcallable_symbol
+                    .is_some_and(|tc_sym| tc_sym == symbol)
+                {
+                    output.tail_calls.push(symbol);
+                }
+
+                Call(
+                    Box::new((
+                        var_store.fresh(),
+                        fn_expr,
+                        var_store.fresh(),
+                        var_store.fresh(),
+                        var_store.fresh(),
+                    )),
+                    args.to_vec(),
+                    application_style,
+                )
+            }
+            RuntimeError(_) => {
+                // We can't call a runtime error; bail out by propagating it!
+                return fn_expr.value;
+            }
+            Tag {
+                tag_union_var: variant_var,
+                ext_var,
+                name,
+                ..
+            } => Tag {
+                tag_union_var: variant_var,
+                ext_var,
+                name,
+                arguments: args.to_vec(),
+            },
+            ZeroArgumentTag {
+                variant_var,
+                ext_var,
+                name,
+                ..
+            } => Tag {
+                tag_union_var: variant_var,
+                ext_var,
+                name,
+                arguments: args.to_vec(),
+            },
+            _ => {
+                // This could be something like ((if True then fn1 else fn2) arg1 arg2).
+                Call(
+                    Box::new((
+                        var_store.fresh(),
+                        fn_expr,
+                        var_store.fresh(),
+                        var_store.fresh(),
+                        var_store.fresh(),
+                    )),
+                    args.to_vec(),
+                    application_style,
+                )
+            }
+        }
+    }
+}
+
 pub fn canonicalize_expr<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
@@ -923,13 +1084,36 @@ pub fn canonicalize_expr<'a>(
                 )
             }
         }
+        ast::Expr::PncApply(loc_fn, loc_args) => {
+            // The function's return type
+            let mut args = BumpVec::with_capacity_in(loc_args.items.len(), env.arena);
+            let mut output = Output::default();
+
+            for loc_arg in loc_args.items.iter() {
+                let (arg_expr, arg_out) =
+                    canonicalize_expr(env, var_store, scope, loc_arg.region, &loc_arg.value);
+
+                args.push((var_store.fresh(), arg_expr));
+                output.references.union_mut(&arg_out.references);
+            }
+            let value = canonicalize_expr_apply(
+                env,
+                var_store,
+                scope,
+                loc_fn,
+                args,
+                &mut output,
+                region,
+                CalledVia::Space,
+            );
+            (value, output)
+        }
         ast::Expr::Apply(loc_fn, loc_args, application_style) => {
             // The expression that evaluates to the function being called, e.g. `foo` in
             // (foo) bar baz
-            let fn_region = loc_fn.region;
 
             // The function's return type
-            let mut args = Vec::new();
+            let mut args = BumpVec::with_capacity_in(loc_args.len(), env.arena);
             let mut output = Output::default();
 
             for loc_arg in loc_args.iter() {
@@ -939,164 +1123,17 @@ pub fn canonicalize_expr<'a>(
                 args.push((var_store.fresh(), arg_expr));
                 output.references.union_mut(&arg_out.references);
             }
-
-            if let ast::Expr::OpaqueRef(name) = loc_fn.value {
-                // We treat opaques specially, since an opaque can wrap exactly one argument.
-
-                debug_assert!(!args.is_empty());
-
-                if args.len() > 1 {
-                    let problem =
-                        roc_problem::can::RuntimeError::OpaqueAppliedToMultipleArgs(region);
-                    env.problem(Problem::RuntimeError(problem.clone()));
-                    (RuntimeError(problem), output)
-                } else {
-                    match scope.lookup_opaque_ref(name, loc_fn.region) {
-                        Err(runtime_error) => {
-                            env.problem(Problem::RuntimeError(runtime_error.clone()));
-                            (RuntimeError(runtime_error), output)
-                        }
-                        Ok((name, opaque_def)) => {
-                            let argument = Box::new(args.pop().unwrap());
-                            output
-                                .references
-                                .insert_type_lookup(name, QualifiedReference::Unqualified);
-
-                            let (type_arguments, lambda_set_variables, specialized_def_type) =
-                                freshen_opaque_def(var_store, opaque_def);
-
-                            let opaque_ref = OpaqueRef {
-                                opaque_var: var_store.fresh(),
-                                name,
-                                argument,
-                                specialized_def_type: Box::new(specialized_def_type),
-                                type_arguments,
-                                lambda_set_variables,
-                            };
-
-                            (opaque_ref, output)
-                        }
-                    }
-                }
-            } else if let ast::Expr::Crash = loc_fn.value {
-                // We treat crash specially, since crashing must be applied with one argument.
-
-                debug_assert!(!args.is_empty());
-
-                let mut args = Vec::new();
-                let mut output = Output::default();
-
-                for loc_arg in loc_args.iter() {
-                    let (arg_expr, arg_out) =
-                        canonicalize_expr(env, var_store, scope, loc_arg.region, &loc_arg.value);
-
-                    args.push(arg_expr);
-                    output.references.union_mut(&arg_out.references);
-                }
-
-                let crash = if args.len() > 1 {
-                    let args_region = Region::span_across(
-                        &loc_args.first().unwrap().region,
-                        &loc_args.last().unwrap().region,
-                    );
-                    env.problem(Problem::OverAppliedCrash {
-                        region: args_region,
-                    });
-                    // Still crash, just with our own message, and drop the references.
-                    Crash {
-                        msg: Box::new(Loc::at(
-                            region,
-                            Expr::Str(String::from("hit a crash!").into_boxed_str()),
-                        )),
-                        ret_var: var_store.fresh(),
-                    }
-                } else {
-                    let msg = args.pop().unwrap();
-                    Crash {
-                        msg: Box::new(msg),
-                        ret_var: var_store.fresh(),
-                    }
-                };
-
-                (crash, output)
-            } else {
-                // Canonicalize the function expression and its arguments
-                let (fn_expr, fn_expr_output) =
-                    canonicalize_expr(env, var_store, scope, fn_region, &loc_fn.value);
-
-                output.union(fn_expr_output);
-
-                // Default: We're not tail-calling a symbol (by name), we're tail-calling a function value.
-                output.tail_calls = vec![];
-
-                let expr = match fn_expr.value {
-                    Var(symbol, _) => {
-                        output.references.insert_call(symbol);
-
-                        // we're tail-calling a symbol by name, check if it's the tail-callable symbol
-                        if env
-                            .tailcallable_symbol
-                            .is_some_and(|tc_sym| tc_sym == symbol)
-                        {
-                            output.tail_calls.push(symbol);
-                        }
-
-                        Call(
-                            Box::new((
-                                var_store.fresh(),
-                                fn_expr,
-                                var_store.fresh(),
-                                var_store.fresh(),
-                                var_store.fresh(),
-                            )),
-                            args,
-                            *application_style,
-                        )
-                    }
-                    RuntimeError(_) => {
-                        // We can't call a runtime error; bail out by propagating it!
-                        return (fn_expr, output);
-                    }
-                    Tag {
-                        tag_union_var: variant_var,
-                        ext_var,
-                        name,
-                        ..
-                    } => Tag {
-                        tag_union_var: variant_var,
-                        ext_var,
-                        name,
-                        arguments: args,
-                    },
-                    ZeroArgumentTag {
-                        variant_var,
-                        ext_var,
-                        name,
-                        ..
-                    } => Tag {
-                        tag_union_var: variant_var,
-                        ext_var,
-                        name,
-                        arguments: args,
-                    },
-                    _ => {
-                        // This could be something like ((if True then fn1 else fn2) arg1 arg2).
-                        Call(
-                            Box::new((
-                                var_store.fresh(),
-                                fn_expr,
-                                var_store.fresh(),
-                                var_store.fresh(),
-                                var_store.fresh(),
-                            )),
-                            args,
-                            *application_style,
-                        )
-                    }
-                };
-
-                (expr, output)
-            }
+            let value = canonicalize_expr_apply(
+                env,
+                var_store,
+                scope,
+                loc_fn,
+                args,
+                &mut output,
+                region,
+                *application_style,
+            );
+            (value, output)
         }
         ast::Expr::Var { module_name, ident } => {
             canonicalize_var_lookup(env, var_store, scope, module_name, ident, region)
@@ -1147,9 +1184,6 @@ pub fn canonicalize_expr<'a>(
         }
         ast::Expr::RecordBuilder { .. } => {
             internal_error!("Record builder should have been desugared by now")
-        }
-        ast::Expr::Backpassing(_, _, _) => {
-            internal_error!("Backpassing should have been desugared by now")
         }
         ast::Expr::RecordUpdater(_) => {
             internal_error!("Record updater should have been desugared by now")
@@ -2219,7 +2253,6 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         | ast::Expr::LowLevelDbg(_, _, _)
         | ast::Expr::Return(_, _)
         | ast::Expr::When(_, _)
-        | ast::Expr::Backpassing(_, _, _)
         | ast::Expr::SpaceBefore(_, _)
         | ast::Expr::Str(StrLiteral::Block(_))
         | ast::Expr::SpaceAfter(_, _) => false,
@@ -2265,6 +2298,12 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         | ast::Expr::RecordAccess(sub_expr, _)
         | ast::Expr::TrySuffix { expr: sub_expr, .. } => is_valid_interpolation(sub_expr),
         ast::Expr::Apply(loc_expr, args, _called_via) => {
+            is_valid_interpolation(&loc_expr.value)
+                && args
+                    .iter()
+                    .all(|loc_arg| is_valid_interpolation(&loc_arg.value))
+        }
+        ast::Expr::PncApply(loc_expr, args) => {
             is_valid_interpolation(&loc_expr.value)
                 && args
                     .iter()

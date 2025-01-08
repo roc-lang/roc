@@ -5,6 +5,6 @@ main = \num ->
     if num == 0 then
         "I need a positive number here!"
     else
-        str = Num.toStr num
+        str = Num.to_str(num)
 
         "The number was $(str), OH YEAH!!! 🤘🤘"

@@ -98,7 +98,7 @@ Defs {
                                         @21-26 Apply(
                                             @21-26 Var {
                                                 module_name: "Inspect",
-                                                ident: "toStr",
+                                                ident: "to_str",
                                             },
                                             [
                                                 @21-26 Var {
@@ -126,7 +126,7 @@ Defs {
                     @16-27 Apply(
                         @16-27 Var {
                             module_name: "Inspect",
-                            ident: "toStr",
+                            ident: "to_str",
                         },
                         [
                             @16-27 Var {

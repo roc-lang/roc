@@ -1,4 +1,4 @@
 app "test" provides [main] to "./platform"
 
-main = Bool.isEq Bool.true Bool.false
-#      ^^^^^^^^^ Eq#Bool.isEq(9): Bool, Bool -[[Bool.structuralEq(11)]]-> Bool
+main = Bool.is_eq Bool.true Bool.false
+#      ^^^^^^^^^^ Eq#Bool.is_eq(9): Bool, Bool -[[Bool.structural_eq(11)]]-> Bool

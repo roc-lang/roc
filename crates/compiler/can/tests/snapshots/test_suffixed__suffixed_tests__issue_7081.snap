@@ -49,7 +49,7 @@ Defs {
                             @19-24 Apply(
                                 @21-22 Var {
                                     module_name: "Num",
-                                    ident: "isGt",
+                                    ident: "is_gt",
                                 },
                                 [
                                     @19-20 Var {
@@ -232,7 +232,7 @@ Defs {
                 @213-227 Apply(
                     @220-222 Var {
                         module_name: "Bool",
-                        ident: "isEq",
+                        ident: "is_eq",
                     },
                     [
                         @213-219 Var {

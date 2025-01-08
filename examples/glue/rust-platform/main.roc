@@ -3,14 +3,14 @@ platform "echo-in-rust"
     exposes []
     packages {}
     imports []
-    provides [mainForHost]
+    provides [main_for_host]
 
-# mainForHost : [StdoutWrite Str (({} -> Op) as Fx0), StderrWrite Str (({} -> Op) as Fx1), Done] as Op
-mainForHost : [StdoutWrite Str ({} -> Op), StderrWrite Str ({} -> Op), Done] as Op
-mainForHost = main
+# main_for_host : [StdoutWrite Str (({} -> Op) as Fx0), StderrWrite Str (({} -> Op) as Fx1), Done] as Op
+main_for_host : [StdoutWrite Str ({} -> Op), StderrWrite Str ({} -> Op), Done] as Op
+main_for_host = main
 
-# mainForHost : { x: Str, y: {} -> Str }
-# mainForHost =
+# main_for_host : { x: Str, y: {} -> Str }
+# main_for_host =
 #     y = "foo"
 #
 #     when main is

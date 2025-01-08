@@ -3,9 +3,9 @@ platform "test-platform"
     exposes []
     packages {}
     imports []
-    provides [mainForHost]
+    provides [main_for_host]
 
 MyRcd : { a : U64, b : U128 }
 
-mainForHost : MyRcd
-mainForHost = main
+main_for_host : MyRcd
+main_for_host = main

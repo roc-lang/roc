@@ -34,132 +34,132 @@ module [
     pi,
     tau,
     abs,
-    absDiff,
+    abs_diff,
     neg,
     add,
     sub,
     mul,
     min,
     max,
-    isLt,
-    isLte,
-    isGt,
-    isGte,
-    isApproxEq,
+    is_lt,
+    is_lte,
+    is_gt,
+    is_gte,
+    is_approx_eq,
     sin,
     cos,
     tan,
     atan,
     acos,
     asin,
-    isZero,
-    isEven,
-    isOdd,
-    toFrac,
-    isPositive,
-    isNegative,
-    isNaN,
-    isInfinite,
-    isFinite,
+    is_zero,
+    is_even,
+    is_odd,
+    to_frac,
+    is_positive,
+    is_negative,
+    is_nan,
+    is_infinite,
+    is_finite,
     rem,
-    remChecked,
+    rem_checked,
     div,
-    divChecked,
+    div_checked,
     sqrt,
-    sqrtChecked,
+    sqrt_checked,
     log,
-    logChecked,
+    log_checked,
     round,
     ceiling,
     floor,
     compare,
     pow,
-    powInt,
-    countLeadingZeroBits,
-    countTrailingZeroBits,
-    countOneBits,
-    addWrap,
-    addChecked,
-    addSaturated,
-    bitwiseAnd,
-    bitwiseXor,
-    bitwiseOr,
-    bitwiseNot,
-    shiftLeftBy,
-    shiftRightBy,
-    shiftRightZfBy,
-    subWrap,
-    subChecked,
-    subSaturated,
-    mulWrap,
-    mulSaturated,
-    mulChecked,
-    intCast,
-    divCeil,
-    divCeilChecked,
-    divTrunc,
-    divTruncChecked,
-    toStr,
-    isMultipleOf,
-    minI8,
-    maxI8,
-    minU8,
-    maxU8,
-    minI16,
-    maxI16,
-    minU16,
-    maxU16,
-    minI32,
-    maxI32,
-    minU32,
-    maxU32,
-    minI64,
-    maxI64,
-    minU64,
-    maxU64,
-    minI128,
-    maxI128,
-    minU128,
-    maxU128,
-    minF32,
-    maxF32,
-    minF64,
-    maxF64,
-    toI8,
-    toI8Checked,
-    toI16,
-    toI16Checked,
-    toI32,
-    toI32Checked,
-    toI64,
-    toI64Checked,
-    toI128,
-    toI128Checked,
-    toU8,
-    toU8Checked,
-    toU16,
-    toU16Checked,
-    toU32,
-    toU32Checked,
-    toU64,
-    toU64Checked,
-    toU128,
-    toU128Checked,
-    toF32,
-    toF32Checked,
-    toF64,
-    toF64Checked,
-    withoutDecimalPoint,
-    withDecimalPoint,
-    f32ToParts,
-    f64ToParts,
-    f32FromParts,
-    f64FromParts,
-    fromBool,
-    nanF32,
-    nanF64,
-    infinityF32,
-    infinityF64,
+    pow_int,
+    count_leading_zero_bits,
+    count_trailing_zero_bits,
+    count_one_bits,
+    add_wrap,
+    add_checked,
+    add_saturated,
+    bitwise_and,
+    bitwise_xor,
+    bitwise_or,
+    bitwise_not,
+    shift_left_by,
+    shift_right_by,
+    shift_right_zf_by,
+    sub_wrap,
+    sub_checked,
+    sub_saturated,
+    mul_wrap,
+    mul_saturated,
+    mul_checked,
+    int_cast,
+    div_ceil,
+    div_ceil_checked,
+    div_trunc,
+    div_trunc_checked,
+    to_str,
+    is_multiple_of,
+    min_i8,
+    max_i8,
+    min_u8,
+    max_u8,
+    min_i16,
+    max_i16,
+    min_u16,
+    max_u16,
+    min_i32,
+    max_i32,
+    min_u32,
+    max_u32,
+    min_i64,
+    max_i64,
+    min_u64,
+    max_u64,
+    min_i128,
+    max_i128,
+    min_u128,
+    max_u128,
+    min_f32,
+    max_f32,
+    min_f64,
+    max_f64,
+    to_i8,
+    to_i8_checked,
+    to_i16,
+    to_i16_checked,
+    to_i32,
+    to_i32_checked,
+    to_i64,
+    to_i64_checked,
+    to_i128,
+    to_i128_checked,
+    to_u8,
+    to_u8_checked,
+    to_u16,
+    to_u16_checked,
+    to_u32,
+    to_u32_checked,
+    to_u64,
+    to_u64_checked,
+    to_u128,
+    to_u128_checked,
+    to_f32,
+    to_f32_checked,
+    to_f64,
+    to_f64_checked,
+    without_decimal_point,
+    with_decimal_point,
+    f32_to_parts,
+    f64_to_parts,
+    f32_from_parts,
+    f64_from_parts,
+    from_bool,
+    nan_f32,
+    nan_f64,
+    infinity_f32,
+    infinity_f64,
 ]
 
 import Bool exposing [Bool]
@@ -193,14 +193,14 @@ import Result exposing [Result]
 ## have the type `Num *` at first, but usually end up taking on
 ## a more specific type based on how they're used.
 ##
-## For example, in `(1 + List.len myList)`, the `1` has the type `Num *` at first,
+## For example, in `1 + List.len(myList)`, the `1` has the type `Num *` at first,
 ## but because `List.len` returns a `U64`, the `1` ends up changing from
 ## `Num *` to the more specific `U64`, and the expression as a whole
 ## ends up having the type `U64`.
 ##
 ## Sometimes number literals don't become more specific. For example,
-## the `Num.toStr` function has the type `Num * -> Str`. This means that
-## when calling `Num.toStr (5 + 6)`, the expression `(5 + 6)`
+## the `Num.to_str` function has the type `Num * -> Str`. This means that
+## when calling `Num.to_str(5 + 6)`, the expression `5 + 6`
 ## still has the type `Num *`. When this happens, `Num *` defaults to
 ## being an [I64] - so this addition expression would overflow
 ## if either 5 or 6 were replaced with a number big enough to cause
@@ -209,7 +209,7 @@ import Result exposing [Result]
 ## If this default of [I64] is not big enough for your purposes,
 ## you can add an `i128` to the end of the number literal, like so:
 ## ```roc
-## Num.toStr 5_000_000_000i128
+## Num.to_str(5_000_000_000i128)
 ## ```
 ## This `i128` suffix specifies that you want this number literal to be
 ## an [I128] instead of a `Num *`. All the other numeric types have
@@ -328,7 +328,7 @@ Num range := range
 ## | ` 340_282_366_920_938_463_463_374_607_431_768_211_455` |       |          |
 ##
 ## If any operation would result in an [Int] that is either too big
-## or too small to fit in that range (e.g. calling `Num.maxI32 + 1`),
+## or too small to fit in that range (e.g. calling `Num.max_i32 + 1`),
 ## then the operation will *overflow*. When an overflow occurs, the program will crash.
 ##
 ## As such, it's very important to design your code not to exceed these bounds!
@@ -369,7 +369,7 @@ Int range : Num (Integer range)
 ## when a floating-point calculation encounters an error. For example:
 ## * Dividing a positive [F64] by `0.0` returns ∞.
 ## * Dividing a negative [F64] by `0.0` returns -∞.
-## * Dividing a [F64] of `0.0` by `0.0` returns [*NaN*](Num.isNaN).
+## * Dividing a [F64] of `0.0` by `0.0` returns [*NaN*](Num.is_nan).
 ##
 ## These rules come from the [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
 ## floating point standard. Because almost all modern processors are built to
@@ -378,7 +378,7 @@ Int range : Num (Integer range)
 ## access to hardware-accelerated performance, Roc follows these rules exactly.
 ##
 ## There's no literal syntax for these error values, but you can check to see if
-## you ended up with one of them by using #isNaN, #isFinite, and #isInfinite.
+## you ended up with one of them by using #is_nan, #is_finite, and #is_infinite.
 ## Whenever a function in this module could return one of these values, that
 ## possibility is noted in the function's documentation.
 ##
@@ -538,24 +538,24 @@ tau = 2 * pi
 ## Convert a number to a [Str].
 ##
 ## ```roc
-## Num.toStr 42
+## Num.to_str(42)
 ## ```
 ## Only [Frac] values will include a decimal point, and they will always include one.
 ## ```roc
-## Num.toStr 4.2
-## Num.toStr 4.0
+## Num.to_str(4.2)
+## Num.to_str(4.0)
 ## ```
-## When this function is given a non-[finite](Num.isFinite)
+## When this function is given a non-[finite](Num.is_finite)
 ## [F64] or [F32] value, the returned string will be `"NaN"`, `"∞"`, or `"-∞"`.
 ##
-toStr : Num * -> Str
+to_str : Num * -> Str
 
 ## Convert an [Int] to a new [Int] of the expected type:
 ##
 ## ```roc
 ## # Casts a U8 to a U16
 ## x : U16
-## x = Num.intCast 255u8
+## x = Num.int_cast(255u8)
 ## ```
 ##
 ## In the case of downsizing, information is lost:
@@ -563,114 +563,113 @@ toStr : Num * -> Str
 ## ```roc
 ## # returns 0, as the bits were truncated.
 ## x : U8
-## x = Num.intCast 256u16
+## x = Num.int_cast(256u16)
 ## ```
 ##
-intCast : Int a -> Int b
+int_cast : Int a -> Int b
 
 compare : Num a, Num a -> [LT, EQ, GT]
 
 ## Returns `Bool.true` if the first number is less than the second.
 ##
-## `a < b` is shorthand for `Num.isLt a b`.
+## `a < b` is shorthand for `Num.is_lt(a, b)`.
 ##
-## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
+## If either argument is [*NaN*](Num.is_nan), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
 ## ```roc
 ## 5
-##     |> Num.isLt 6
+##     |> Num.is_lt 6
 ## ```
-isLt : Num a, Num a -> Bool
+is_lt : Num a, Num a -> Bool
 
 ## Returns `Bool.true` if the first number is greater than the second.
 ##
-## `a > b` is shorthand for `Num.isGt a b`.
+## `a > b` is shorthand for `Num.is_gt a b`.
 ##
-## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
+## If either argument is [*NaN*](Num.is_nan), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
 ## ```roc
-## 6
-##     |> Num.isGt 5
+## Num.is_gt(6, 5)
 ## ```
-isGt : Num a, Num a -> Bool
+is_gt : Num a, Num a -> Bool
 
 ## Returns `Bool.true` if the first number is less than or equal to the second.
 ##
-## `a <= b` is shorthand for `Num.isLte a b`.
+## `a <= b` is shorthand for `Num.is_lte(a, b)`.
 ##
-## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
+## If either argument is [*NaN*](Num.is_nan), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
-isLte : Num a, Num a -> Bool
+is_lte : Num a, Num a -> Bool
 
 ## Returns `Bool.true` if the first number is greater than or equal to the second.
 ##
-## `a >= b` is shorthand for `Num.isGte a b`.
+## `a >= b` is shorthand for `Num.is_gte(a, b)`.
 ##
-## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
+## If either argument is [*NaN*](Num.is_nan), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
-isGte : Num a, Num a -> Bool
+is_gte : Num a, Num a -> Bool
 
 ## Returns `Bool.true` if the first number and second number are within a specific threshold
 ##
 ## A specific relative and absolute tolerance can be provided to change the threshold
 ##
-## This function is symmetric: `Num.isApproxEq a b == Num.isApproxEq b a`
+## This function is symmetric: `Num.is_approx_eq(a, b) == Num.is_approx_eq(b, a)`
 ##
-## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
+## If either argument is [*NaN*](Num.is_nan), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
-isApproxEq : Frac a, Frac a, { rtol ? Frac a, atol ? Frac a } -> Bool
-isApproxEq = \x, y, { rtol ? 0.00001, atol ? 0.00000001 } ->
+is_approx_eq : Frac a, Frac a, { rtol ?? Frac a, atol ?? Frac a } -> Bool
+is_approx_eq = \x, y, { rtol ?? 0.00001, atol ?? 0.00000001 } ->
     eq = x <= y && x >= y
-    meetsTolerance = Num.absDiff x y <= Num.max atol (rtol * Num.max (Num.abs x) (Num.abs y))
-    eq || meetsTolerance
+    meets_tolerance = Num.abs_diff(x, y) <= Num.max(atol, (rtol * Num.max(Num.abs(x), Num.abs(y))))
+    eq || meets_tolerance
 
 ## Returns `Bool.true` if the number is `0`, and `Bool.false` otherwise.
-isZero : Num a -> Bool
+is_zero : Num a -> Bool
 
 ## A number is even if dividing it by 2 gives a remainder of 0.
 ##
 ## Examples of even numbers: 0, 2, 4, 6, 8, -2, -4, -6, -8
-isEven : Int a -> Bool
-isEven = \x -> Num.isMultipleOf x 2
+is_even : Int a -> Bool
+is_even = \x -> Num.is_multiple_of(x, 2)
 
 ## A number is odd if dividing it by 2 gives a remainder of 1.
 ##
 ## Examples of odd numbers: 1, 3, 5, 7, -1, -3, -5, -7
-isOdd : Int a -> Bool
-isOdd = \x -> Bool.not (Num.isMultipleOf x 2)
+is_odd : Int a -> Bool
+is_odd = \x -> Bool.not(Num.is_multiple_of(x, 2))
 
 ## Positive numbers are greater than `0`.
-isPositive : Num a -> Bool
-isPositive = \x -> x > 0
+is_positive : Num a -> Bool
+is_positive = \x -> x > 0
 
 ## Negative numbers are less than `0`.
-isNegative : Num a -> Bool
-isNegative = \x -> x < 0
+is_negative : Num a -> Bool
+is_negative = \x -> x < 0
 
-toFrac : Num * -> Frac *
+to_frac : Num * -> Frac *
 
 ## Returns `Bool.true` if the [Frac] is not a number as defined by [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
 ##
 ## ```roc
-## Num.isNaN (0 / 0)
+## Num.is_nan(0 / 0)
 ## ```
-isNaN : Frac * -> Bool
+is_nan : Frac * -> Bool
 
 ## Returns `Bool.true` if the [Frac] is positive or negative infinity as defined by [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
 ##
 ## ```roc
-## Num.isInfinite (1 / 0)
+## Num.is_infinite(1 / 0)
 ##
-## Num.isInfinite (-1 / 0)
+## Num.is_infinite(-1 / 0)
 ## ```
-isInfinite : Frac * -> Bool
+is_infinite : Frac * -> Bool
 
 ## Returns `Bool.true` if the [Frac] is not an infinity as defined by [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
 ##
 ## ```roc
-## Num.isFinite 42
+## Num.is_finite(42)
 ## ```
-isFinite : Frac * -> Bool
+is_finite : Frac * -> Bool
 
 ## Returns the absolute value of the number.
 ##
@@ -678,17 +677,17 @@ isFinite : Frac * -> Bool
 ## * For a negative number, returns the same number except positive.
 ## * For zero, returns zero.
 ## ```roc
-## Num.abs 4
+## Num.abs(4)
 ##
-## Num.abs -2.5
+## Num.abs(-2.5)
 ##
-## Num.abs 0
+## Num.abs(0)
 ##
-## Num.abs 0.0
+## Num.abs(0.0)
 ## ```
 ## This is safe to use with any [Frac], but it can cause overflow when used with certain [Int] values.
 ##
-## For example, calling #Num.abs on the lowest value of a signed integer (such as [Num.minI64] or [Num.minI32]) will cause overflow.
+## For example, calling #Num.abs on the lowest value of a signed integer (such as [Num.min_i64] or [Num.min_i32]) will cause overflow.
 ## This is because, for any given size of signed integer (32-bit, 64-bit, etc.) its negated lowest value turns out to be 1 higher than
 ## the highest value it can represent. (For this reason, calling [Num.neg] on the lowest signed value will also cause overflow.)
 ##
@@ -698,19 +697,19 @@ abs : Num a -> Num a
 ## Returns the absolute difference between two numbers.
 ##
 ## ```roc
-## Num.absDiff 5 3
+## Num.abs_diff(5, 3)
 ##
-## Num.absDiff -3 5
+## Num.abs_diff(-3, 5)
 ##
-## Num.absDiff 3.0 5.0
+## Num.abs_diff(3.0, 5.0)
 ## ```
 ##
 ## If the answer to this operation can't fit in the return value (e.g. an
 ## [I8] answer that's higher than 127 or lower than -128), the result is an
 ## *overflow*. For [F64] and [F32], overflow results in an answer of either
 ## ∞ or -∞. For all other number types, overflow results in a panic.
-absDiff : Num a, Num a -> Num a
-absDiff = \a, b ->
+abs_diff : Num a, Num a -> Num a
+abs_diff = \a, b ->
     if a > b then
         a - b
     else
@@ -718,20 +717,20 @@ absDiff = \a, b ->
 
 ## Returns a negative number when given a positive one, and vice versa.
 ## ```roc
-## Num.neg 5
+## Num.neg(5)
 ##
-## Num.neg -2.5
+## Num.neg(-2.5)
 ##
-## Num.neg 0
+## Num.neg(0)
 ##
-## Num.neg 0.0
+## Num.neg(0.0)
 ## ```
 ## !! Num.neg is not completely implemented for all types in all contexts, see github.com/roc-lang/roc/issues/6959
 ## You can use `\someNum -> 0 - someNum` as a workaround.
 ##
 ## This is safe to use with any [Frac], but it can cause overflow when used with certain [Int] values.
 ##
-## For example, calling #Num.neg on the lowest value of a signed integer (such as [Num.minI64] or [Num.minI32]) will cause overflow.
+## For example, calling #Num.neg on the lowest value of a signed integer (such as [Num.min_i64] or [Num.min_i32]) will cause overflow.
 ## This is because, for any given size of signed integer (32-bit, 64-bit, etc.) its negated lowest value turns out to be 1 higher than
 ## the highest value it can represent. (For this reason, calling #Num.abs on the lowest signed value will also cause overflow.)
 ##
@@ -744,16 +743,16 @@ neg : Num a -> Num a
 ##
 ## (To add an [Int] and a [Frac], first convert one so that they both have the same type. There are functions in this module that can convert both [Int] to [Frac] and the other way around.)
 ##
-## `a + b` is shorthand for `Num.add a b`.
+## `a + b` is shorthand for `Num.add(a, b)`.
 ## ```roc
 ## 5 + 7
 ##
-## Num.add 5 7
+## Num.add(5, 7)
 ## ```
 ## `Num.add` can be convenient in pipelines.
 ## ```roc
 ## Frac.pi
-##     |> Num.add 1.0
+##     |> Num.add(1.0)
 ## ```
 ## If the answer to this operation can't fit in the return value (e.g. an
 ## [I8] answer that's higher than 127 or lower than -128), the result is an
@@ -765,16 +764,16 @@ add : Num a, Num a -> Num a
 ##
 ## (To subtract an [Int] and a [Frac], first convert one so that they both have the same type. There are functions in this module that can convert both [Int] to [Frac] and the other way around.)
 ##
-## `a - b` is shorthand for `Num.sub a b`.
+## `a - b` is shorthand for `Num.sub(a, b)`.
 ## ```roc
 ## 7 - 5
 ##
-## Num.sub 7 5
+## Num.sub(7, 5)
 ## ```
 ## `Num.sub` can be convenient in pipelines.
 ## ```roc
 ## Frac.pi
-##     |> Num.sub 2.0
+##     |> Num.sub(2.0)
 ## ```
 ## If the answer to this operation can't fit in the return value (e.g. an
 ## [I8] answer that's higher than 127 or lower than -128), the result is an
@@ -786,18 +785,18 @@ sub : Num a, Num a -> Num a
 ##
 ## (To multiply an [Int] and a [Frac], first convert one so that they both have the same type. There are functions in this module that can convert both [Int] to [Frac] and the other way around.)
 ##
-## `a * b` is shorthand for `Num.mul a b`.
+## `a * b` is shorthand for `Num.mul(a, b)`.
 ## ```roc
 ## 5 * 7
 ##
-## Num.mul 5 7
+## Num.mul(5, 7)
 ## ```
 ##
 ## `Num.mul` can be convenient in pipelines.
 ##
 ## ```roc
 ## Frac.pi
-##     |> Num.mul 2.0
+##     |> Num.mul(2.0)
 ## ```
 ## If the answer to this operation can't fit in the return value (e.g. an
 ## [I8] answer that's higher than 127 or lower than -128), the result is an
@@ -808,9 +807,9 @@ mul : Num a, Num a -> Num a
 ## Obtains the smaller between two numbers of the same type.
 ##
 ## ```roc
-## Num.min 100 0
+## Num.min(100, 0)
 ##
-## Num.min 3.0 -3.0
+## Num.min(3.0, -3.0)
 ## ```
 min : Num a, Num a -> Num a
 min = \a, b ->
@@ -822,9 +821,9 @@ min = \a, b ->
 ## Obtains the greater between two numbers of the same type.
 ##
 ## ```roc
-## Num.max 100 0
+## Num.max(100, 0)
 ##
-## Num.max 3.0 -3.0
+## Num.max(3.0, -3.0)
 ## ```
 max : Num a, Num a -> Num a
 max = \a, b ->
@@ -848,8 +847,8 @@ atan : Frac a -> Frac a
 ## function a negative number! Calling [sqrt] on a negative [Dec] will cause a panic.
 ##
 ## Calling [sqrt] on [F32] and [F64] values follows these rules:
-## * Passing a negative [F64] or [F32] returns [*NaN*](Num.isNaN).
-## * Passing [*NaN*](Num.isNaN) or -∞ also returns [*NaN*](Num.isNaN).
+## * Passing a negative [F64] or [F32] returns [*NaN*](Num.is_nan).
+## * Passing [*NaN*](Num.is_nan) or -∞ also returns [*NaN*](Num.is_nan).
 ## * Passing ∞ returns ∞.
 ##
 ## > These rules come from the [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
@@ -858,36 +857,36 @@ atan : Frac a -> Frac a
 ## > cost! Since the most common reason to choose [F64] or [F32] over [Dec] is
 ## > access to hardware-accelerated performance, Roc follows these rules exactly.
 ## ```roc
-## Num.sqrt 4.0
+## Num.sqrt(4.0)
 ##
-## Num.sqrt 1.5
+## Num.sqrt(1.5)
 ##
-## Num.sqrt 0.0
+## Num.sqrt(0.0)
 ##
-## Num.sqrt -4.0f64
+## Num.sqrt(-4.0f64)
 ## ```
 sqrt : Frac a -> Frac a
 
-sqrtChecked : Frac a -> Result (Frac a) [SqrtOfNegative]
-sqrtChecked = \x ->
+sqrt_checked : Frac a -> Result (Frac a) [SqrtOfNegative]
+sqrt_checked = \x ->
     if x < 0.0 then
-        Err SqrtOfNegative
+        Err(SqrtOfNegative)
     else
-        Ok (Num.sqrt x)
+        Ok(Num.sqrt(x))
 
 ## Natural logarithm
 log : Frac a -> Frac a
 
-logChecked : Frac a -> Result (Frac a) [LogNeedsPositive]
-logChecked = \x ->
+log_checked : Frac a -> Result (Frac a) [LogNeedsPositive]
+log_checked = \x ->
     if x <= 0.0 then
-        Err LogNeedsPositive
+        Err(LogNeedsPositive)
     else
-        Ok (Num.log x)
+        Ok(Num.log(x))
 
 ## Divides one [Frac] by another.
 ##
-## `a / b` is shorthand for `Num.div a b`.
+## `a / b` is shorthand for `Num.div(a, b)`.
 ##
 ## [Division by zero is undefined in mathematics](https://en.wikipedia.org/wiki/Division_by_zero).
 ## As such, you should make sure never to pass zero as the denominator to this function!
@@ -896,7 +895,7 @@ logChecked = \x ->
 ## Calling [div] on [F32] and [F64] values follows these rules:
 ## * Dividing a positive [F64] or [F32] by zero returns ∞.
 ## * Dividing a negative [F64] or [F32] by zero returns -∞.
-## * Dividing a zero [F64] or [F32] by zero returns [*NaN*](Num.isNaN).
+## * Dividing a zero [F64] or [F32] by zero returns [*NaN*](Num.is_nan).
 ##
 ## > These rules come from the [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
 ## > floating point standard. Because almost all modern processors are built to
@@ -909,34 +908,34 @@ logChecked = \x ->
 ## ```roc
 ## 5.0 / 7.0
 ##
-## Num.div 5 7
+## Num.div(5, 7)
 ## ```
 ## `Num.div` can be convenient in pipelines.
 ## ```roc
 ## Num.pi
-##     |> Num.div 2.0
+##     |> Num.div (2.0)
 ## ```
 div : Frac a, Frac a -> Frac a
 
-divChecked : Frac a, Frac a -> Result (Frac a) [DivByZero]
-divChecked = \a, b ->
-    if Num.isZero b then
-        Err DivByZero
+div_checked : Frac a, Frac a -> Result (Frac a) [DivByZero]
+div_checked = \a, b ->
+    if Num.is_zero(b) then
+        Err(DivByZero)
     else
-        Ok (Num.div a b)
+        Ok(Num.div(a, b))
 
-divCeil : Int a, Int a -> Int a
+div_ceil : Int a, Int a -> Int a
 
-divCeilChecked : Int a, Int a -> Result (Int a) [DivByZero]
-divCeilChecked = \a, b ->
-    if Num.isZero b then
-        Err DivByZero
+div_ceil_checked : Int a, Int a -> Result (Int a) [DivByZero]
+div_ceil_checked = \a, b ->
+    if Num.is_zero(b) then
+        Err(DivByZero)
     else
-        Ok (Num.divCeil a b)
+        Ok(Num.div_ceil(a, b))
 
 ## Divides two integers, truncating the result towards zero.
 ##
-## `a // b` is shorthand for `Num.divTrunc a b`.
+## `a // b` is shorthand for `Num.div_trunc(a, b)`.
 ##
 ## Division by zero is undefined in mathematics. As such, you should make
 ## sure never to pass zero as the denominator to this function! If you do,
@@ -944,117 +943,117 @@ divCeilChecked = \a, b ->
 ## ```roc
 ## 5 // 7
 ##
-## Num.divTrunc 5 7
+## Num.div_trunc(5, 7)
 ##
 ## 8 // -3
 ##
-## Num.divTrunc 8 -3
+## Num.div_trunc(8, -3)
 ## ```
-divTrunc : Int a, Int a -> Int a
-divTrunc = \a, b ->
-    if Num.isZero b then
-        crash "Integer division by 0!"
+div_trunc : Int a, Int a -> Int a
+div_trunc = \a, b ->
+    if Num.is_zero(b) then
+        crash("Integer division by 0!")
     else
-        Num.divTruncUnchecked a b
+        Num.div_trunc_unchecked(a, b)
 
-divTruncChecked : Int a, Int a -> Result (Int a) [DivByZero]
-divTruncChecked = \a, b ->
-    if Num.isZero b then
-        Err DivByZero
+div_trunc_checked : Int a, Int a -> Result (Int a) [DivByZero]
+div_trunc_checked = \a, b ->
+    if Num.is_zero(b) then
+        Err(DivByZero)
     else
-        Ok (Num.divTruncUnchecked a b)
+        Ok(Num.div_trunc_unchecked(a, b))
 
 ## traps (hardware fault) when given zero as the second argument.
-divTruncUnchecked : Int a, Int a -> Int a
+div_trunc_unchecked : Int a, Int a -> Int a
 
 ## Obtains the remainder (truncating modulo) from the division of two integers.
 ##
-## `a % b` is shorthand for `Num.rem a b`.
+## `a % b` is shorthand for `Num.rem(a, b)`.
 ## ```roc
 ## 5 % 7
 ##
-## Num.rem 5 7
+## Num.rem(5, 7)
 ##
 ## -8 % -3
 ##
-## Num.rem -8 -3
+## Num.rem(-8, -3)
 ## ```
 rem : Int a, Int a -> Int a
 rem = \a, b ->
-    if Num.isZero b then
-        crash "Integer division by 0!"
+    if Num.is_zero(b) then
+        crash("Integer division by 0!")
     else
-        Num.remUnchecked a b
+        Num.rem_unchecked(a, b)
 
-remChecked : Int a, Int a -> Result (Int a) [DivByZero]
-remChecked = \a, b ->
-    if Num.isZero b then
-        Err DivByZero
+rem_checked : Int a, Int a -> Result (Int a) [DivByZero]
+rem_checked = \a, b ->
+    if Num.is_zero(b) then
+        Err(DivByZero)
     else
-        Ok (Num.remUnchecked a b)
+        Ok(Num.rem_unchecked(a, b))
 
 ## traps (hardware fault) when given zero as the second argument.
-remUnchecked : Int a, Int a -> Int a
+rem_unchecked : Int a, Int a -> Int a
 
-isMultipleOf : Int a, Int a -> Bool
+is_multiple_of : Int a, Int a -> Bool
 
 ## Does a "bitwise and". Each bit of the output is 1 if the corresponding bit
 ## of x AND of y is 1, otherwise it's 0.
-bitwiseAnd : Int a, Int a -> Int a
+bitwise_and : Int a, Int a -> Int a
 
 ## Does a "bitwise exclusive or". Each bit of the output is the same as the
 ## corresponding bit in x if that bit in y is 0, and it's the complement of
 ## the bit in x if that bit in y is 1.
-bitwiseXor : Int a, Int a -> Int a
+bitwise_xor : Int a, Int a -> Int a
 
 ## Does a "bitwise or". Each bit of the output is 0 if the corresponding bit
 ## of x OR of y is 0, otherwise it's 1.
-bitwiseOr : Int a, Int a -> Int a
+bitwise_or : Int a, Int a -> Int a
 
 ## Returns the complement of x - the number you get by switching each 1 for a
 ## 0 and each 0 for a 1. This is the same as -x - 1.
-bitwiseNot : Int a -> Int a
-bitwiseNot = \n ->
-    bitwiseXor n (subWrap 0 1)
+bitwise_not : Int a -> Int a
+bitwise_not = \n ->
+    bitwise_xor(n, sub_wrap(0, 1))
 
 ## Bitwise left shift of a number by another
 ##
 ## The least significant bits always become 0. This means that shifting left is
 ## like multiplying by factors of two for unsigned integers.
 ## ```roc
-## shiftLeftBy 0b0000_0011 2 == 0b0000_1100
+## shift_left_by(0b0000_0011, 2) == 0b0000_1100
 ##
-## 0b0000_0101 |> shiftLeftBy 2 == 0b0001_0100
+## 0b0000_0101 |> shift_left_by(2) == 0b0001_0100
 ## ```
-## In some languages `shiftLeftBy` is implemented as a binary operator `<<`.
-shiftLeftBy : Int a, U8 -> Int a
+## In some languages `shift_left_by` is implemented as a binary operator `<<`.
+shift_left_by : Int a, U8 -> Int a
 
 ## Bitwise arithmetic shift of a number by another
 ##
 ## The most significant bits are copied from the current.
 ## ```roc
-## shiftRightBy 0b0000_1100 2 == 0b0000_0011
+## shift_right_by(0b0000_1100, 2) == 0b0000_0011
 ##
-## 0b0001_0100 |> shiftRightBy 2 == 0b0000_0101
+## 0b0001_0100 |> shift_right_by(2) == 0b0000_0101
 ##
-## 0b1001_0000 |> shiftRightBy 2 == 0b1110_0100
+## 0b1001_0000 |> shift_right_by(2) == 0b1110_0100
 ## ```
-## In some languages `shiftRightBy` is implemented as a binary operator `>>>`.
-shiftRightBy : Int a, U8 -> Int a
+## In some languages `shift_right_by` is implemented as a binary operator `>>>`.
+shift_right_by : Int a, U8 -> Int a
 
 ## Bitwise logical right shift of a number by another
 ##
 ## The most significant bits always become 0. This means that shifting right is
 ## like dividing by factors of two for unsigned integers.
 ## ```roc
-## shiftRightZfBy 0b0010_1000 2 == 0b0000_1010
+## shift_right_zf_by(0b0010_1000, 2) == 0b0000_1010
 ##
-## 0b0010_1000 |> shiftRightZfBy 2 == 0b0000_1010
+## 0b0010_1000 |> shift_right_zf_by(2) == 0b0000_1010
 ##
-## 0b1001_0000 |> shiftRightZfBy 2 == 0b0010_0100
+## 0b1001_0000 |> shift_right_zf_by(2) == 0b0010_0100
 ## ```
-## In some languages `shiftRightZfBy` is implemented as a binary operator `>>`.
-shiftRightZfBy : Int a, U8 -> Int a
+## In some languages `shift_right_zf_by` is implemented as a binary operator `>>`.
+shift_right_zf_by : Int a, U8 -> Int a
 
 ## Round off the given fraction to the nearest integer.
 round : Frac * -> Int *
@@ -1063,7 +1062,7 @@ ceiling : Frac * -> Int *
 
 ## Raises a [Frac] to the power of another [Frac].
 ##
-## For an [Int] alternative to this function, see [Num.powInt]
+## For an [Int] alternative to this function, see [Num.pow_int]
 pow : Frac a, Frac a -> Frac a
 
 ## Raises an integer to the power of another, by multiplying the integer by
@@ -1078,48 +1077,48 @@ pow : Frac a, Frac a -> Frac a
 ##
 ## It is very easy for this function to produce an answer
 ## so large it causes an overflow.
-powInt : Int a, Int a -> Int a
+pow_int : Int a, Int a -> Int a
 
 ## Counts the number of most-significant (leading in a big-Endian sense) zeroes in an integer.
 ##
 ## ```roc
-## Num.countLeadingZeroBits 0b0001_1100u8
+## Num.count_leading_zero_bits(0b0001_1100u8)
 ##
 ## 3
 ##
-## Num.countLeadingZeroBits 0b0000_0000u8
+## Num.count_leading_zero_bits(0b0000_0000u8)
 ##
 ## 8
 ## ```
-countLeadingZeroBits : Int a -> U8
+count_leading_zero_bits : Int a -> U8
 
 ## Counts the number of least-significant (trailing in a big-Endian sense) zeroes in an integer.
 ##
 ## ```roc
-## Num.countTrailingZeroBits 0b0001_1100u8
+## Num.count_trailing_zero_bits(0b0001_1100u8)
 ##
 ## 2
 ##
-## Num.countTrailingZeroBits 0b0000_0000u8
+## Num.count_trailing_zero_bits(0b0000_0000u8)
 ##
 ## 8
 ## ```
-countTrailingZeroBits : Int a -> U8
+count_trailing_zero_bits : Int a -> U8
 
 ## Counts the number of set bits in an integer.
 ##
 ## ```roc
-## Num.countOneBits 0b0001_1100u8
+## Num.count_one_bits(0b0001_1100u8)
 ##
 ## 3
 ##
-## Num.countOneBits 0b0000_0000u8
+## Num.count_one_bits(0b0000_0000u8)
 ##
 ## 0
 ## ```
-countOneBits : Int a -> U8
+count_one_bits : Int a -> U8
 
-addWrap : Int range, Int range -> Int range
+add_wrap : Int range, Int range -> Int range
 
 ## Adds two numbers, clamping on the maximum representable number rather than
 ## overflowing.
@@ -1128,92 +1127,92 @@ addWrap : Int range, Int range -> Int range
 ## addition is to overflow.
 ## For example, if `x : U8` is 200 and `y : U8` is 100, `addSaturated x y` will
 ## yield 255, the maximum value of a `U8`.
-addSaturated : Num a, Num a -> Num a
+add_saturated : Num a, Num a -> Num a
 
 ## Adds two numbers and checks for overflow.
 ##
 ## This is the same as [Num.add] except if the operation overflows, instead of
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
-addChecked : Num a, Num a -> Result (Num a) [Overflow]
-addChecked = \a, b ->
-    result = addCheckedLowlevel a b
+add_checked : Num a, Num a -> Result (Num a) [Overflow]
+add_checked = \a, b ->
+    result = add_checked_lowlevel(a, b)
 
     if result.b then
-        Err Overflow
+        Err(Overflow)
     else
-        Ok result.a
+        Ok(result.a)
 
-addCheckedLowlevel : Num a, Num a -> { b : Bool, a : Num a }
+add_checked_lowlevel : Num a, Num a -> { b : Bool, a : Num a }
 
-subWrap : Int range, Int range -> Int range
+sub_wrap : Int range, Int range -> Int range
 
 ## Subtracts two numbers, clamping on the minimum representable number rather
 ## than overflowing.
 ##
 ## This is the same as [Num.sub] except for the saturating behavior if the
 ## subtraction is to overflow.
-## For example, if `x : U8` is 10 and `y : U8` is 20, `subSaturated x y` will
+## For example, if `x : U8` is 10 and `y : U8` is 20, `sub_saturated x y` will
 ## yield 0, the minimum value of a `U8`.
-subSaturated : Num a, Num a -> Num a
+sub_saturated : Num a, Num a -> Num a
 
 ## Subtracts two numbers and checks for overflow.
 ##
 ## This is the same as [Num.sub] except if the operation overflows, instead of
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
-subChecked : Num a, Num a -> Result (Num a) [Overflow]
-subChecked = \a, b ->
-    result = subCheckedLowlevel a b
+sub_checked : Num a, Num a -> Result (Num a) [Overflow]
+sub_checked = \a, b ->
+    result = sub_checked_lowlevel(a, b)
 
     if result.b then
-        Err Overflow
+        Err(Overflow)
     else
-        Ok result.a
+        Ok(result.a)
 
-subCheckedLowlevel : Num a, Num a -> { b : Bool, a : Num a }
+sub_checked_lowlevel : Num a, Num a -> { b : Bool, a : Num a }
 
-mulWrap : Int range, Int range -> Int range
+mul_wrap : Int range, Int range -> Int range
 
 ## Multiplies two numbers, clamping on the maximum representable number rather than
 ## overflowing.
 ##
 ## This is the same as [Num.mul] except for the saturating behavior if the
 ## addition is to overflow.
-mulSaturated : Num a, Num a -> Num a
+mul_saturated : Num a, Num a -> Num a
 
 ## Multiplies two numbers and checks for overflow.
 ##
 ## This is the same as [Num.mul] except if the operation overflows, instead of
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
-mulChecked : Num a, Num a -> Result (Num a) [Overflow]
-mulChecked = \a, b ->
-    result = mulCheckedLowlevel a b
+mul_checked : Num a, Num a -> Result (Num a) [Overflow]
+mul_checked = \a, b ->
+    result = mul_checked_lowlevel(a, b)
 
     if result.b then
-        Err Overflow
+        Err(Overflow)
     else
-        Ok result.a
+        Ok(result.a)
 
-mulCheckedLowlevel : Num a, Num a -> { b : Bool, a : Num a }
+mul_checked_lowlevel : Num a, Num a -> { b : Bool, a : Num a }
 
 ## Returns the lowest number that can be stored in an [I8] without underflowing
 ## its available memory and crashing.
 ##
 ## For reference, this number is `-128`.
 ##
-## Note that the positive version of this number is larger than [Num.maxI8],
-## which means if you call [Num.abs] on [Num.minI8], it will overflow and crash!
-minI8 : I8
-minI8 = -128i8
+## Note that the positive version of this number is larger than [Num.max_i8],
+## which means if you call [Num.abs] on [Num.min_i8], it will overflow and crash!
+min_i8 : I8
+min_i8 = -128i8
 
 ## Returns the highest number that can be stored in an [I8] without overflowing
 ## its available memory and crashing.
 ##
 ## For reference, this number is `127`.
 ##
-## Note that this is smaller than the positive version of [Num.minI8],
-## which means if you call [Num.abs] on [Num.minI8], it will overflow and crash!
-maxI8 : I8
-maxI8 = 127i8
+## Note that this is smaller than the positive version of [Num.min_i8],
+## which means if you call [Num.abs] on [Num.min_i8], it will overflow and crash!
+max_i8 : I8
+max_i8 = 127i8
 
 ## Returns the lowest number that can be stored in a [U8] without underflowing
 ## its available memory and crashing.
@@ -1222,35 +1221,35 @@ maxI8 = 127i8
 ## [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
 ## and zero is the lowest unsigned number.
 ## Unsigned numbers cannot be negative.
-minU8 : U8
-minU8 = 0u8
+min_u8 : U8
+min_u8 = 0u8
 
 ## Returns the highest number that can be stored in a [U8] without overflowing
 ## its available memory and crashing.
 ##
 ## For reference, this number is `255`.
-maxU8 : U8
-maxU8 = 255u8
+max_u8 : U8
+max_u8 = 255u8
 
 ## Returns the lowest number that can be stored in an [I16] without underflowing
 ## its available memory and crashing.
 ##
 ## For reference, this number is `-32_768`.
 ##
-## Note that the positive version of this number is larger than [Num.maxI16],
-## which means if you call [Num.abs] on [Num.minI16], it will overflow and crash!
-minI16 : I16
-minI16 = -32768i16
+## Note that the positive version of this number is larger than [Num.max_i16],
+## which means if you call [Num.abs] on [Num.min_i16], it will overflow and crash!
+min_i16 : I16
+min_i16 = -32768i16
 
 ## Returns the highest number that can be stored in an [I16] without overflowing
 ## its available memory and crashing.
 ##
 ## For reference, this number is `32_767`.
 ##
-## Note that this is smaller than the positive version of [Num.minI16],
-## which means if you call [Num.abs] on [Num.minI16], it will overflow and crash!
-maxI16 : I16
-maxI16 = 32767i16
+## Note that this is smaller than the positive version of [Num.min_i16],
+## which means if you call [Num.abs] on [Num.min_i16], it will overflow and crash!
+max_i16 : I16
+max_i16 = 32767i16
 
 ## Returns the lowest number that can be stored in a [U16] without underflowing
 ## its available memory and crashing.
@@ -1259,25 +1258,25 @@ maxI16 = 32767i16
 ## [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
 ## and zero is the lowest unsigned number.
 ## Unsigned numbers cannot be negative.
-minU16 : U16
-minU16 = 0u16
+min_u16 : U16
+min_u16 = 0u16
 
 ## Returns the highest number that can be stored in a [U16] without overflowing
 ## its available memory and crashing.
 ##
 ## For reference, this number is `65_535`.
-maxU16 : U16
-maxU16 = 65535u16
+max_u16 : U16
+max_u16 = 65535u16
 
 ## Returns the lowest number that can be stored in an [I32] without underflowing
 ## its available memory and crashing.
 ##
 ## For reference, this number is `-2_147_483_648`.
 ##
-## Note that the positive version of this number is larger than [Num.maxI32],
-## which means if you call [Num.abs] on [Num.minI32], it will overflow and crash!
-minI32 : I32
-minI32 = -2147483648
+## Note that the positive version of this number is larger than [Num.max_i32],
+## which means if you call [Num.abs] on [Num.min_i32], it will overflow and crash!
+min_i32 : I32
+min_i32 = -2147483648
 
 ## Returns the highest number that can be stored in an [I32] without overflowing
 ## its available memory and crashing.
@@ -1285,10 +1284,10 @@ minI32 = -2147483648
 ## For reference, this number is `2_147_483_647`,
 ## which is over 2 million.
 ##
-## Note that this is smaller than the positive version of [Num.minI32],
-## which means if you call [Num.abs] on [Num.minI32], it will overflow and crash!
-maxI32 : I32
-maxI32 = 2147483647
+## Note that this is smaller than the positive version of [Num.min_i32],
+## which means if you call [Num.abs] on [Num.min_i32], it will overflow and crash!
+max_i32 : I32
+max_i32 = 2147483647
 
 ## Returns the lowest number that can be stored in a [U32] without underflowing
 ## its available memory and crashing.
@@ -1297,15 +1296,15 @@ maxI32 = 2147483647
 ## [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
 ## and zero is the lowest unsigned number.
 ## Unsigned numbers cannot be negative.
-minU32 : U32
-minU32 = 0
+min_u32 : U32
+min_u32 = 0
 
 ## Returns the highest number that can be stored in a [U32] without overflowing
 ## its available memory and crashing.
 ##
 ## For reference, this number is `4_294_967_295`.
-maxU32 : U32
-maxU32 = 4294967295
+max_u32 : U32
+max_u32 = 4294967295
 
 ## Returns the lowest number that can be stored in an [I64] without underflowing
 ## its available memory and crashing.
@@ -1313,10 +1312,10 @@ maxU32 = 4294967295
 ## For reference, this number is `-9_223_372_036_854_775_808`,
 ## which is under 9 quintillion.
 ##
-## Note that the positive version of this number is larger than [Num.maxI64],
-## which means if you call [Num.abs] on [Num.minI64], it will overflow and crash!
-minI64 : I64
-minI64 = -9223372036854775808
+## Note that the positive version of this number is larger than [Num.max_i64],
+## which means if you call [Num.abs] on [Num.min_i64], it will overflow and crash!
+min_i64 : I64
+min_i64 = -9223372036854775808
 
 ## Returns the highest number that can be stored in an [I64] without overflowing
 ## its available memory and crashing.
@@ -1324,10 +1323,10 @@ minI64 = -9223372036854775808
 ## For reference, this number is `9_223_372_036_854_775_807`,
 ## which is over 9 quintillion.
 ##
-## Note that this is smaller than the positive version of [Num.minI64],
-## which means if you call [Num.abs] on [Num.minI64], it will overflow and crash!
-maxI64 : I64
-maxI64 = 9223372036854775807
+## Note that this is smaller than the positive version of [Num.min_i64],
+## which means if you call [Num.abs] on [Num.min_i64], it will overflow and crash!
+max_i64 : I64
+max_i64 = 9223372036854775807
 
 ## Returns the lowest number that can be stored in a [U64] without underflowing
 ## its available memory and crashing.
@@ -1336,16 +1335,16 @@ maxI64 = 9223372036854775807
 ## [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
 ## and zero is the lowest unsigned number.
 ## Unsigned numbers cannot be negative.
-minU64 : U64
-minU64 = 0
+min_u64 : U64
+min_u64 = 0
 
 ## Returns the highest number that can be stored in a [U64] without overflowing
 ## its available memory and crashing.
 ##
 ## For reference, this number is `18_446_744_073_709_551_615`,
 ## which is over 18 quintillion.
-maxU64 : U64
-maxU64 = 18446744073709551615
+max_u64 : U64
+max_u64 = 18446744073709551615
 
 ## Returns the lowest number that can be stored in an [I128] without underflowing
 ## its available memory and crashing.
@@ -1353,10 +1352,10 @@ maxU64 = 18446744073709551615
 ## For reference, this number is `-170_141_183_460_469_231_731_687_303_715_884_105_728`.
 ## which is under 170 undecillion.
 ##
-## Note that the positive version of this number is larger than [Num.maxI128],
-## which means if you call [Num.abs] on [Num.minI128], it will overflow and crash!
-minI128 : I128
-minI128 = -170141183460469231731687303715884105728
+## Note that the positive version of this number is larger than [Num.max_i128],
+## which means if you call [Num.abs] on [Num.min_i128], it will overflow and crash!
+min_i128 : I128
+min_i128 = -170141183460469231731687303715884105728
 
 ## Returns the highest number that can be stored in an [I128] without overflowing
 ## its available memory and crashing.
@@ -1364,10 +1363,10 @@ minI128 = -170141183460469231731687303715884105728
 ## For reference, this number is `170_141_183_460_469_231_731_687_303_715_884_105_727`,
 ## which is over 170 undecillion.
 ##
-## Note that this is smaller than the positive version of [Num.minI128],
-## which means if you call [Num.abs] on [Num.minI128], it will overflow and crash!
-maxI128 : I128
-maxI128 = 170141183460469231731687303715884105727
+## Note that this is smaller than the positive version of [Num.min_i128],
+## which means if you call [Num.abs] on [Num.min_i128], it will overflow and crash!
+max_i128 : I128
+max_i128 = 170141183460469231731687303715884105727
 
 ## Returns the lowest number that can be stored in a [U128] without underflowing
 ## its available memory and crashing.
@@ -1376,114 +1375,114 @@ maxI128 = 170141183460469231731687303715884105727
 ## [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
 ## and zero is the lowest unsigned number.
 ## Unsigned numbers cannot be negative.
-minU128 : U128
-minU128 = 0
+min_u128 : U128
+min_u128 = 0
 
 ## Returns the highest number that can be stored in a [U128] without overflowing
 ## its available memory and crashing.
 ##
 ## For reference, this number is `340_282_366_920_938_463_463_374_607_431_768_211_455`,
 ## which is over 340 undecillion.
-maxU128 : U128
-maxU128 = 340282366920938463463374607431768211455
+max_u128 : U128
+max_u128 = 340282366920938463463374607431768211455
 
-minF32 : F32
-minF32 = -3.40282347e38
+min_f32 : F32
+min_f32 = -3.40282347e38
 
-maxF32 : F32
-maxF32 = 3.40282347e38
+max_f32 : F32
+max_f32 = 3.40282347e38
 
-minF64 : F64
-minF64 = -1.7976931348623157e308
+min_f64 : F64
+min_f64 = -1.7976931348623157e308
 
-maxF64 : F64
-maxF64 = 1.7976931348623157e308
+max_f64 : F64
+max_f64 = 1.7976931348623157e308
 
 ## Converts an [Int] to an [I8]. If the given number can't be precisely represented in an [I8],
 ## the returned number may be different from the given number.
-toI8 : Int * -> I8
-toI16 : Int * -> I16
-toI32 : Int * -> I32
-toI64 : Int * -> I64
-toI128 : Int * -> I128
-toU8 : Int * -> U8
-toU16 : Int * -> U16
-toU32 : Int * -> U32
-toU64 : Int * -> U64
-toU128 : Int * -> U128
+to_i8 : Int * -> I8
+to_i16 : Int * -> I16
+to_i32 : Int * -> I32
+to_i64 : Int * -> I64
+to_i128 : Int * -> I128
+to_u8 : Int * -> U8
+to_u16 : Int * -> U16
+to_u32 : Int * -> U32
+to_u64 : Int * -> U64
+to_u128 : Int * -> U128
 
 ## Converts a [Num] to an [F32]. If the given number can't be precisely represented in an [F32],
 ## the returned number may be different from the given number.
-toF32 : Num * -> F32
+to_f32 : Num * -> F32
 
 ## Converts a [Num] to an [F64]. If the given number can't be precisely represented in an [F64],
 ## the returned number may be different from the given number.
-toF64 : Num * -> F64
+to_f64 : Num * -> F64
 
 ## Converts a [Int] to an [I8].
 ## If the given integer can't be precisely represented in an [I8], returns
 ## `Err OutOfBounds`.
-toI8Checked : Int * -> Result I8 [OutOfBounds]
-toI16Checked : Int * -> Result I16 [OutOfBounds]
-toI32Checked : Int * -> Result I32 [OutOfBounds]
-toI64Checked : Int * -> Result I64 [OutOfBounds]
-toI128Checked : Int * -> Result I128 [OutOfBounds]
-toU8Checked : Int * -> Result U8 [OutOfBounds]
-toU16Checked : Int * -> Result U16 [OutOfBounds]
-toU32Checked : Int * -> Result U32 [OutOfBounds]
-toU64Checked : Int * -> Result U64 [OutOfBounds]
-toU128Checked : Int * -> Result U128 [OutOfBounds]
-toF32Checked : Num * -> Result F32 [OutOfBounds]
-toF64Checked : Num * -> Result F64 [OutOfBounds]
+to_i8_checked : Int * -> Result I8 [OutOfBounds]
+to_i16_checked : Int * -> Result I16 [OutOfBounds]
+to_i32_checked : Int * -> Result I32 [OutOfBounds]
+to_i64_checked : Int * -> Result I64 [OutOfBounds]
+to_i128_checked : Int * -> Result I128 [OutOfBounds]
+to_u8_checked : Int * -> Result U8 [OutOfBounds]
+to_u16_checked : Int * -> Result U16 [OutOfBounds]
+to_u32_checked : Int * -> Result U32 [OutOfBounds]
+to_u64_checked : Int * -> Result U64 [OutOfBounds]
+to_u128_checked : Int * -> Result U128 [OutOfBounds]
+to_f32_checked : Num * -> Result F32 [OutOfBounds]
+to_f64_checked : Num * -> Result F64 [OutOfBounds]
 
 ## Turns a [Dec] into its [I128] representation by removing the decimal point.
 ## This is equivalent to multiplying the [Dec] by 10^18.
-withoutDecimalPoint : Dec -> I128
+without_decimal_point : Dec -> I128
 
 ## Turns a [I128] into the coresponding [Dec] by adding the decimal point.
 ## This is equivalent to dividing the [I128] by 10^18.
-withDecimalPoint : I128 -> Dec
+with_decimal_point : I128 -> Dec
 
 ## Splits a [F32] into its components according to IEEE 754 standard.
-f32ToParts : F32 -> { sign : Bool, exponent : U8, fraction : U32 }
+f32_to_parts : F32 -> { sign : Bool, exponent : U8, fraction : U32 }
 
 ## Splits a [F64] into its components according to IEEE 754 standard.
-f64ToParts : F64 -> { sign : Bool, exponent : U16, fraction : U64 }
+f64_to_parts : F64 -> { sign : Bool, exponent : U16, fraction : U64 }
 
 ## Combine parts of a [F32] according to IEEE 754 standard.
 ## The fraction should not be bigger than 0x007F_FFFF, any bigger value will be truncated.
-f32FromParts : { sign : Bool, exponent : U8, fraction : U32 } -> F32
+f32_from_parts : { sign : Bool, exponent : U8, fraction : U32 } -> F32
 
 ## Combine parts of a [F64] according to IEEE 754 standard.
 ## The fraction should not be bigger than 0x000F_FFFF_FFFF_FFFF, any bigger value will be truncated.
 ## The exponent should not be bigger than 0x07FF, any bigger value will be truncated.
-f64FromParts : { sign : Bool, exponent : U16, fraction : U64 } -> F64
+f64_from_parts : { sign : Bool, exponent : U16, fraction : U64 } -> F64
 
 ## Convert a `Bool` to a `Num`
 ## ```roc
-## expect (Num.fromBool Bool.true) == 1
-## expect (Num.fromBool Bool.false) == 0
+## expect Num.from_bool(Bool.true) == 1
+## expect Num.from_bool(Bool.false) == 0
 ## ```
-fromBool : Bool -> Num *
-fromBool = \bool ->
+from_bool : Bool -> Num *
+from_bool = \bool ->
     if bool then
         1
     else
         0
 
 ## The value for not-a-number for a [F32] according to the IEEE 754 standard.
-nanF32 : F32
-nanF32 = 0.0f32 / 0.0
+nan_f32 : F32
+nan_f32 = 0.0f32 / 0.0
 
 ## The value for not-a-number for a [F64] according to the IEEE 754 standard.
-nanF64 : F64
-nanF64 = 0.0f64 / 0.0
+nan_f64 : F64
+nan_f64 = 0.0f64 / 0.0
 
 ## The value for infinity for a [F32] according to the IEEE 754 standard.
-infinityF32 : F32
-infinityF32 = 1.0f32 / 0.0
+infinity_f32 : F32
+infinity_f32 = 1.0f32 / 0.0
 
 ## The value for infinity for a [F64] according to the IEEE 754 standard.
-infinityF64 : F64
-infinityF64 = 1.0f64 / 0.0
+infinity_f64 : F64
+infinity_f64 = 1.0f64 / 0.0
 

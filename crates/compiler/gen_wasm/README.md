@@ -186,7 +186,7 @@ The [official spec](https://webassembly.github.io/spec/core/binary/modules.html#
 
 We implement a few linking operations in the Wasm backend. The most important are host-to-app calls.
 
-In the host .wasm file, `roc__mainForHost_1_exposed` is defined as a Wasm Import, as if it were an external JavaScript function. But when we link the host and app, we need to make it an internal function instead.
+In the host .wasm file, `roc__main_for_host_1_exposed` is defined as a Wasm Import, as if it were an external JavaScript function. But when we link the host and app, we need to make it an internal function instead.
 
 There are a few important facts to note about the Wasm binary format:
 
@@ -197,8 +197,8 @@ There are a few important facts to note about the Wasm binary format:
 
 With that background, here are the linking steps for a single app function that gets called by the host:
 
-- Remove `roc__mainForHost_1_exposed` from the imports, updating all call sites to the new index, which is somewhere in the app.
-- Swap the _last_ JavaScript import into the slot where `roc__mainForHost_1_exposed` was, updating all of its call sites in the host.
+- Remove `roc__main_for_host_1_exposed` from the imports, updating all call sites to the new index, which is somewhere in the app.
+- Swap the _last_ JavaScript import into the slot where `roc__main_for_host_1_exposed` was, updating all of its call sites in the host.
 - Insert an internally-defined dummy function at the index where the last JavaScript import used to be.
 
 The diagram below illustrates this process.

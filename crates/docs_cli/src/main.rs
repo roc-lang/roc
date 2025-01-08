@@ -19,10 +19,10 @@ fn main() -> io::Result<()> {
         )
         .get_matches();
 
-    // Populate roc_files
     generate_docs_html(
         matches.get_one::<PathBuf>(ROC_FILE).unwrap().to_owned(),
         &PathBuf::from("./generated-docs"),
+        std::env::var("ROC_DOCS_URL_ROOT").ok(),
     );
 
     Ok(())

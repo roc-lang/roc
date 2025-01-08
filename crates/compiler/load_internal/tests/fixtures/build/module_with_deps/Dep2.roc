@@ -1,6 +1,4 @@
-interface Dep2
-    exposes [one, two, blah]
-    imports []
+module [one, two, blah]
 
 import Dep3 exposing [foo, bar]
 

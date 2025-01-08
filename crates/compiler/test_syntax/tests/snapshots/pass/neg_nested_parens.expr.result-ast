@@ -1,35 +1,15 @@
 @0-9 UnaryOp(
     @2-8 ParensAround(
-        Apply(
+        PncApply(
             @2-3 Num(
                 "0",
             ),
             [
-                @4-7 ParensAround(
-                    Defs(
-                        Defs {
-                            tags: [
-                                EitherIndex(2147483648),
-                            ],
-                            regions: [
-                                @4-5,
-                            ],
-                            space_before: [
-                                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
-                            ],
-                            space_after: [
-                                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
-                            ],
-                            spaces: [],
-                            type_defs: [],
-                            value_defs: [
-                                Stmt(
-                                    @4-5 Num(
-                                        "1",
-                                    ),
-                                ),
-                            ],
-                        },
+                @4-7 Apply(
+                    @4-5 Num(
+                        "1",
+                    ),
+                    [
                         @6-7 SpaceBefore(
                             Var {
                                 module_name: "",
@@ -39,10 +19,10 @@
                                 Newline,
                             ],
                         ),
-                    ),
+                    ],
+                    Space,
                 ),
             ],
-            Space,
         ),
     ),
     @0-1 Negate,

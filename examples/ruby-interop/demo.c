@@ -191,7 +191,7 @@ size_t roc_str_len(struct RocStr str)
     }
 }
 
-extern void roc__mainForHost_1_exposed_generic(struct RocBytes *ret, struct RocBytes *arg);
+extern void roc__main_for_host_1_exposed_generic(struct RocBytes *ret, struct RocBytes *arg);
 
 // Receive a value from Ruby, serialize it and pass it to Roc as a List U8
 // (at which point the Roc platform will decode it and crash if it's invalid,
@@ -206,7 +206,7 @@ VALUE call_roc(VALUE self, VALUE rb_arg)
     struct RocBytes ret;
 
     // Call the Roc function to populate `ret`'s bytes.
-    roc__mainForHost_1_exposed_generic(&ret, &arg);
+    roc__main_for_host_1_exposed_generic(&ret, &arg);
 
     // Create a rb_utf8_str from the heap-allocated utf-8 bytes the Roc function returned.
     VALUE returned_str = rb_utf8_str_new((char *)ret.bytes, ret.len);

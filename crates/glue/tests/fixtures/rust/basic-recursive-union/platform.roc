@@ -3,9 +3,9 @@ platform "test-platform"
     exposes []
     packages {}
     imports []
-    provides [mainForHost]
+    provides [main_for_host]
 
 Expr : [String Str, Concat Expr Expr]
 
-mainForHost : {} -> Expr
-mainForHost = \{} -> main
+main_for_host : {} -> Expr
+main_for_host = \{} -> main

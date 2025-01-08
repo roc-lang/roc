@@ -24,7 +24,13 @@ pub fn format_answer<'a>(arena: &'a Bump, answer: Expr<'_>) -> &'a str {
     match answer {
         Expr::Closure(_, _) => "<function>",
         _ => {
-            let mut expr = roc_fmt::Buf::new_in(arena, roc_fmt::MigrationFlags::new(false));
+            let mut expr = roc_fmt::Buf::new_in(
+                arena,
+                roc_fmt::MigrationFlags {
+                    snakify: false,
+                    parens_and_commas: false,
+                },
+            );
 
             answer.format_with_options(&mut expr, Parens::NotNeeded, Newlines::Yes, 0);
 
@@ -173,8 +179,8 @@ fn promote_expr_to_module<'a, 'i, I: Iterator<Item = &'i str>>(
     defs: I,
     expr: &str,
 ) -> (usize, &'a str) {
-    const REPL_MODULE_HEADER: &str = "app \"app\" provides [replOutput] to \"./platform\"\n\n";
-    const REPL_MODULE_MAIN_DEF: &str = "replOutput =\n";
+    const REPL_MODULE_HEADER: &str = "app \"app\" provides [repl_output] to \"./platform\"\n\n";
+    const REPL_MODULE_MAIN_DEF: &str = "repl_output =\n";
     const INDENT: &str = "    ";
 
     let mut buffer = bumpalo::collections::string::String::from_str_in(REPL_MODULE_HEADER, arena);

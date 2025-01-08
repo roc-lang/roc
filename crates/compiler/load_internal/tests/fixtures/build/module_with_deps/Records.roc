@@ -1,8 +1,6 @@
-interface Records
-    exposes [intVal]
-    imports []
+module [int_val]
 
-intVal =
+int_val =
     foo = \{ x } -> x
 
-    foo { x: 5 }
+    foo({ x: 5 })

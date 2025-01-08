@@ -83,7 +83,7 @@ fn constrain_params(
 
     let cons = constraints.let_constraint(
         [],
-        state.vars,
+        state.vars.into_iter().map(Loc::at_zero),
         state.headers,
         pattern_constraints,
         constraint,
@@ -199,8 +199,12 @@ pub fn frontload_ability_constraints(
 
             def_pattern_state.vars.push(signature_var);
 
-            let rigid_variables = vars.rigid_vars.iter().chain(vars.able_vars.iter()).copied();
-            let infer_variables = vars.flex_vars.iter().copied();
+            let rigid_variables = (vars.rigid_vars.iter())
+                .chain(vars.able_vars.iter())
+                .copied()
+                .map(Loc::at_zero);
+
+            let infer_variables = vars.flex_vars.iter().copied().map(Loc::at_zero);
 
             let signature_expectation =
                 constraints.push_expected_type(Expected::NoExpectation(signature_index));

@@ -1,0 +1,93 @@
+@0-109 SpaceAfter(
+    PncApply(
+        @0-7 Var {
+            module_name: "",
+            ident: "combine",
+        },
+        [
+            @8-23 PncApply(
+                @8-11 Var {
+                    module_name: "",
+                    ident: "mix",
+                },
+                [
+                    @12-17 Var {
+                        module_name: "",
+                        ident: "vodka",
+                    },
+                    @19-22 Var {
+                        module_name: "",
+                        ident: "gin",
+                    },
+                ],
+            ),
+            @25-108 PncApply(
+                @25-31 Tag(
+                    "Juices",
+                ),
+                [
+                    @32-107 Record(
+                        [
+                            @38-58 SpaceBefore(
+                                RequiredValue(
+                                    @38-43 "color",
+                                    [],
+                                    @45-58 Var {
+                                        module_name: "Colors",
+                                        ident: "orange",
+                                    },
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
+                            @64-86 SpaceBefore(
+                                RequiredValue(
+                                    @64-70 "flavor",
+                                    [],
+                                    @72-86 Var {
+                                        module_name: "Flavors",
+                                        ident: "orange",
+                                    },
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
+                            @92-105 SpaceBefore(
+                                SpaceAfter(
+                                    RequiredValue(
+                                        @92-98 "amount",
+                                        [],
+                                        @100-105 BinOps(
+                                            [
+                                                (
+                                                    @100-101 Num(
+                                                        "1",
+                                                    ),
+                                                    @102-103 Plus,
+                                                ),
+                                            ],
+                                            @104-105 Num(
+                                                "2",
+                                            ),
+                                        ),
+                                    ),
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    ),
+    [
+        Newline,
+    ],
+)

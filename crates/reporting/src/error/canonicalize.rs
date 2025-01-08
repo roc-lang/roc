@@ -1,5 +1,4 @@
 use roc_collections::all::MutSet;
-use roc_module::called_via::Suffix;
 use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_module::symbol::DERIVABLE_ABILITIES;
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
@@ -249,26 +248,6 @@ pub fn can_problem<'b>(
             ]);
 
             title = DUPLICATE_NAME.to_string();
-        }
-
-        Problem::DeprecatedBackpassing(region) => {
-            doc = alloc.stack([
-                alloc.concat([
-                    alloc.reflow("Backpassing ("),
-                    alloc.backpassing_arrow(),
-                    alloc.reflow(") like this will soon be deprecated:"),
-                ]),
-                alloc.region(lines.convert_region(region), severity),
-                alloc.concat([
-                    alloc.reflow("You should use a "),
-                    alloc.suffix(Suffix::Bang),
-                    alloc.reflow(" for awaiting tasks or a "),
-                    alloc.suffix(Suffix::Question),
-                    alloc.reflow(" for trying results, and functions everywhere else."),
-                ]),
-            ]);
-
-            title = "BACKPASSING DEPRECATED".to_string();
         }
 
         Problem::DefsOnlyUsedInRecursion(1, region) => {
@@ -1426,7 +1405,7 @@ pub fn can_problem<'b>(
                 )]),
                 alloc.tip().append(
                     alloc.reflow(
-                        "An expression like `4`, `\"hello\"`, or `functionCall MyThing` is like `return 4` in other programming languages. To me, it seems like you did `return 4` followed by more code in the lines after, that code would never be executed!"
+                        "An expression like `4`, `\"hello\"`, or `function_call(MyThing)` is like `return 4` in other programming languages. To me, it seems like you did `return 4` followed by more code in the lines after, that code would never be executed!"
                     )
                 ),
                 alloc.tip().append(
@@ -1447,7 +1426,7 @@ pub fn can_problem<'b>(
                 alloc.region(lines.convert_region(region), severity),
                 alloc.reflow("Add an exclamation mark at the end, like:"),
                 alloc
-                    .parser_suggestion("{ readFile!: Str => Str }")
+                    .parser_suggestion("{ read_file!: Str => Str }")
                     .indent(4),
                 alloc.reflow("This will help readers identify it as a source of effects."),
             ]);

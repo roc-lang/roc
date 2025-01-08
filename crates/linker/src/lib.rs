@@ -325,6 +325,7 @@ pub fn preprocess_host(
 
         (_, OperatingSystem::Mac) => {
             crate::macho::preprocess_macho_le(
+                target.architecture(),
                 host_exe_path,
                 metadata_path,
                 preprocessed_path,

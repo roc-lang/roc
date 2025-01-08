@@ -3,7 +3,7 @@ platform "test-platform"
     exposes []
     packages {}
     imports []
-    provides [mainForHost]
+    provides [main_for_host]
 
-mainForHost : Bool -> Result Str I32
-mainForHost = \u -> main u
+main_for_host : Bool -> Result Str I32
+main_for_host = \u -> main(u)

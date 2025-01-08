@@ -59,7 +59,7 @@ pub enum Token {
     Paren,
     Arrow,
     Pipe,
-    Backpass,
+    BackArrow,
     Decimal,
     Multiply,
     Underscore,
@@ -257,7 +257,7 @@ fn highlight_inner<'a>(
                         Token::LessThanEquals
                     } else if state.bytes().first() == Some(&b'-') {
                         state.advance_mut(1);
-                        Token::Backpass
+                        Token::BackArrow
                     } else {
                         Token::LessThan
                     };
@@ -556,7 +556,7 @@ mod tests {
             ),
             Loc::at(
                 Region::between(Position::new(6), Position::new(8)),
-                Token::Backpass,
+                Token::BackArrow,
             ),
             Loc::at(
                 Region::between(Position::new(9), Position::new(11)),

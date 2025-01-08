@@ -535,8 +535,6 @@ pub enum Expr<'a> {
     /// Multiple defs in a row
     Defs(&'a Defs<'a>, &'a Loc<Expr<'a>>),
 
-    Backpassing(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
-
     Dbg,
     DbgStmt {
         first: &'a Loc<Expr<'a>>,
@@ -556,6 +554,7 @@ pub enum Expr<'a> {
     /// To apply by name, do Apply(Var(...), ...)
     /// To apply a tag by name, do Apply(Tag(...), ...)
     Apply(&'a Loc<Expr<'a>>, &'a [&'a Loc<Expr<'a>>], CalledVia),
+    PncApply(&'a Loc<Expr<'a>>, Collection<'a, &'a Loc<Expr<'a>>>),
     BinOps(&'a [(Loc<Expr<'a>>, Loc<BinOp>)], &'a Loc<Expr<'a>>),
     UnaryOp(&'a Loc<Expr<'a>>, Loc<UnaryOp>),
 
@@ -633,6 +632,7 @@ pub fn is_top_level_suffixed(expr: &Expr) -> bool {
     match expr {
         Expr::TrySuffix { .. } => true,
         Expr::Apply(a, _, _) => is_top_level_suffixed(&a.value),
+        Expr::PncApply(a, _) => is_top_level_suffixed(&a.value),
         Expr::SpaceBefore(a, _) => is_top_level_suffixed(a),
         Expr::SpaceAfter(a, _) => is_top_level_suffixed(a),
         _ => false,
@@ -651,6 +651,15 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::Apply(sub_loc_expr, apply_args, _) => {
             let is_function_suffixed = is_expr_suffixed(&sub_loc_expr.value);
             let any_args_suffixed = apply_args.iter().any(|arg| is_expr_suffixed(&arg.value));
+
+            any_args_suffixed || is_function_suffixed
+        }
+
+        Expr::PncApply(sub_loc_expr, apply_arg_collection) => {
+            let is_function_suffixed = is_expr_suffixed(&sub_loc_expr.value);
+            let any_args_suffixed = apply_arg_collection
+                .iter()
+                .any(|arg| is_expr_suffixed(&arg.value));
 
             any_args_suffixed || is_function_suffixed
         }
@@ -722,7 +731,6 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::Crash => false,
         Expr::Tag(_) => false,
         Expr::OpaqueRef(_) => false,
-        Expr::Backpassing(_, _, _) => false, // TODO: we might want to check this?
         Expr::Dbg => false,
         Expr::DbgStmt {
             first,
@@ -844,7 +852,7 @@ pub enum TypeDef<'a> {
     Opaque {
         header: TypeHeader<'a>,
         typ: Loc<TypeAnnotation<'a>>,
-        derived: Option<Loc<ImplementsAbilities<'a>>>,
+        derived: Option<&'a ImplementsAbilities<'a>>,
     },
 
     /// An ability definition. E.g.
@@ -987,11 +995,6 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                     push_stack_from_record_fields!(fields);
                 }
                 Closure(_, body) => expr_stack.push(&body.value),
-                Backpassing(_, a, b) => {
-                    expr_stack.reserve(2);
-                    expr_stack.push(&a.value);
-                    expr_stack.push(&b.value);
-                }
                 DbgStmt {
                     first,
                     extra_args,
@@ -1022,6 +1025,14 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                     }
                 }
                 Apply(fun, args, _) => {
+                    expr_stack.reserve(args.len() + 1);
+                    expr_stack.push(&fun.value);
+
+                    for loc_expr in args.iter() {
+                        expr_stack.push(&loc_expr.value);
+                    }
+                }
+                PncApply(fun, args) => {
                     expr_stack.reserve(args.len() + 1);
                     expr_stack.push(&fun.value);
 
@@ -1560,31 +1571,11 @@ pub enum ImplementsAbility<'a> {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub enum ImplementsAbilities<'a> {
-    /// `implements [Eq { eq: myEq }, Hash]`
-    Implements(Collection<'a, Loc<ImplementsAbility<'a>>>),
-
-    // We preserve this for the formatter; canonicalization ignores it.
-    SpaceBefore(&'a ImplementsAbilities<'a>, &'a [CommentOrNewline<'a>]),
-    SpaceAfter(&'a ImplementsAbilities<'a>, &'a [CommentOrNewline<'a>]),
-}
-
-impl ImplementsAbilities<'_> {
-    pub fn collection(&self) -> &Collection<Loc<ImplementsAbility>> {
-        let mut it = self;
-        loop {
-            match it {
-                Self::SpaceBefore(inner, _) | Self::SpaceAfter(inner, _) => {
-                    it = inner;
-                }
-                Self::Implements(collection) => return collection,
-            }
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.collection().is_empty()
-    }
+pub struct ImplementsAbilities<'a> {
+    pub before_implements_kw: &'a [CommentOrNewline<'a>],
+    pub implements: Region,
+    pub after_implements_kw: &'a [CommentOrNewline<'a>],
+    pub item: Loc<Collection<'a, Loc<ImplementsAbility<'a>>>>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -1770,6 +1761,8 @@ pub enum Pattern<'a> {
 
     Apply(&'a Loc<Pattern<'a>>, &'a [Loc<Pattern<'a>>]),
 
+    PncApply(&'a Loc<Pattern<'a>>, Collection<'a, Loc<Pattern<'a>>>),
+
     /// This is Located<Pattern> rather than Located<str> so we can record comments
     /// around the destructured names, e.g. { x ### x does stuff ###, y }
     /// In practice, these patterns will always be Identifier
@@ -1851,6 +1844,32 @@ impl<'a> Pattern<'a> {
             }
             Apply(constructor_x, args_x) => {
                 if let Apply(constructor_y, args_y) = other {
+                    let equivalent_args = args_x
+                        .iter()
+                        .zip(args_y.iter())
+                        .all(|(p, q)| p.value.equivalent(&q.value));
+
+                    constructor_x.value.equivalent(&constructor_y.value) && equivalent_args
+                } else if let PncApply(constructor_y, args_y) = other {
+                    let equivalent_args = args_x
+                        .iter()
+                        .zip(args_y.iter())
+                        .all(|(p, q)| p.value.equivalent(&q.value));
+
+                    constructor_x.value.equivalent(&constructor_y.value) && equivalent_args
+                } else {
+                    false
+                }
+            }
+            PncApply(constructor_x, args_x) => {
+                if let PncApply(constructor_y, args_y) = other {
+                    let equivalent_args = args_x
+                        .iter()
+                        .zip(args_y.iter())
+                        .all(|(p, q)| p.value.equivalent(&q.value));
+
+                    constructor_x.value.equivalent(&constructor_y.value) && equivalent_args
+                } else if let Apply(constructor_y, args_y) = other {
                     let equivalent_args = args_x
                         .iter()
                         .zip(args_y.iter())
@@ -2276,15 +2295,6 @@ impl<'a> Spaceable<'a> for ImplementsAbility<'a> {
     }
 }
 
-impl<'a> Spaceable<'a> for ImplementsAbilities<'a> {
-    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        ImplementsAbilities::SpaceBefore(self, spaces)
-    }
-    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        ImplementsAbilities::SpaceAfter(self, spaces)
-    }
-}
-
 impl<'a> Expr<'a> {
     pub const REPL_OPAQUE_FUNCTION: Self = Expr::Var {
         module_name: "",
@@ -2394,7 +2404,7 @@ impl_extract_spaces!(Tag);
 impl_extract_spaces!(AssignedField<T>);
 impl_extract_spaces!(TypeAnnotation);
 impl_extract_spaces!(ImplementsAbility);
-impl_extract_spaces!(ImplementsAbilities);
+impl_extract_spaces!(Implements);
 
 impl<'a, T: Copy> ExtractSpaces<'a> for Spaced<'a, T> {
     type Item = T;
@@ -2574,7 +2584,6 @@ impl<'a> Malformed for Expr<'a> {
 
             Closure(args, body) => args.iter().any(|arg| arg.is_malformed()) || body.is_malformed(),
             Defs(defs, body) => defs.is_malformed() || body.is_malformed(),
-            Backpassing(args, call, body) => args.iter().any(|arg| arg.is_malformed()) || call.is_malformed() || body.is_malformed(),
             Dbg => false,
             DbgStmt { first, extra_args, continuation } => first.is_malformed() || extra_args.iter().any(|a| a.is_malformed()) || continuation.is_malformed(),
             LowLevelDbg(_, condition, continuation) => condition.is_malformed() || continuation.is_malformed(),
@@ -2582,6 +2591,7 @@ impl<'a> Malformed for Expr<'a> {
             LowLevelTry(loc_expr, _) => loc_expr.is_malformed(),
             Return(return_value, after_return) => return_value.is_malformed() || after_return.is_some_and(|ar| ar.is_malformed()),
             Apply(func, args, _) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
+            PncApply(func, args) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
             BinOps(firsts, last) => firsts.iter().any(|(expr, _)| expr.is_malformed()) || last.is_malformed(),
             UnaryOp(expr, _) => expr.is_malformed(),
             If { if_thens, final_else, ..} => if_thens.iter().any(|(cond, body)| cond.is_malformed() || body.is_malformed()) || final_else.is_malformed(),
@@ -2679,6 +2689,7 @@ impl<'a> Malformed for Pattern<'a> {
             Tag(_) |
             OpaqueRef(_) => false,
             Apply(func, args) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
+            PncApply(func, args) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
             RecordDestructure(items) => items.iter().any(|item| item.is_malformed()),
             RequiredField(_, pat) => pat.is_malformed(),
             OptionalField(_, expr) => expr.is_malformed(),
@@ -2718,7 +2729,11 @@ impl<'a> Malformed for TypeDef<'a> {
                 header,
                 typ,
                 derived,
-            } => header.is_malformed() || typ.is_malformed() || derived.is_malformed(),
+            } => {
+                header.is_malformed()
+                    || typ.is_malformed()
+                    || derived.map(|d| d.item.is_malformed()).unwrap_or_default()
+            }
             TypeDef::Ability {
                 header,
                 loc_implements,
@@ -2754,19 +2769,6 @@ impl<'a> Malformed for ImplementsAbility<'a> {
                 ability.is_malformed() || impls.iter().any(|impl_| impl_.is_malformed())
             }
             ImplementsAbility::SpaceBefore(has, _) | ImplementsAbility::SpaceAfter(has, _) => {
-                has.is_malformed()
-            }
-        }
-    }
-}
-
-impl<'a> Malformed for ImplementsAbilities<'a> {
-    fn is_malformed(&self) -> bool {
-        match self {
-            ImplementsAbilities::Implements(abilities) => {
-                abilities.iter().any(|ability| ability.is_malformed())
-            }
-            ImplementsAbilities::SpaceBefore(has, _) | ImplementsAbilities::SpaceAfter(has, _) => {
                 has.is_malformed()
             }
         }

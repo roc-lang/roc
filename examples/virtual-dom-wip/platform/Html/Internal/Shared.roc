@@ -9,16 +9,16 @@ module [
     text,
     none,
     translate,
-    translateStatic,
-    nodeSize,
+    translate_static,
+    node_size,
 ]
 
 import Action exposing [Action]
 
-App state initData : {
-    init : DecodingResult initData -> state,
+App state init_data : {
+    init : DecodingResult init_data -> state,
     render : state -> Html state,
-    wasmUrl : Str,
+    wasm_url : Str,
 }
 
 DecodingResult a : Result a [Leftover (List U8), TooShort]
@@ -49,7 +49,7 @@ CyclicStructureAccessor : [
 # At some point we need a common format anyway. Wrapper lambda is irrelevant for perf in context of an event.
 Handler state : [
     Normal (state, List (List U8) -> Action state),
-    Custom (state, List (List U8) -> { action : Action state, stopPropagation : Bool, preventDefault : Bool }),
+    Custom (state, List (List U8) -> { action : Action state, stop_propagation : Bool, prevent_default : Bool }),
 ]
 
 # -------------------------------
@@ -57,98 +57,98 @@ Handler state : [
 # -------------------------------
 ## Define an HTML Element
 element : Str -> (List (Attribute state), List (Html state) -> Html state)
-element = \tagName ->
+element = \tag_name ->
     \attrs, children ->
         # While building the node nodes, calculate the size of Str it will render to
-        withTag = 2 * (3 + Str.countUtf8Bytes tagName)
-        withAttrs = List.walk attrs withTag \acc, attr -> acc + attrSize attr
-        totalSize = List.walk children withAttrs \acc, child -> acc + nodeSize child
+        with_tag = 2 * (3 + Str.count_utf8_bytes(tag_name))
+        with_attrs = List.walk(attrs, with_tag, \acc, attr -> acc + attr_size(attr))
+        total_size = List.walk(children, with_attrs, \acc, child -> acc + node_size(child))
 
-        Element tagName totalSize attrs children
+        Element(tag_name, total_size, attrs, children)
 
 text : Str -> Html state
-text = \content -> Text content
+text = \content -> Text(content)
 
 none : Html state
 none = None
 
-nodeSize : Html state -> U64
-nodeSize = \node ->
+node_size : Html state -> U64
+node_size = \node ->
     when node is
-        Text content -> Str.countUtf8Bytes content
-        Element _ size _ _ -> size
+        Text(content) -> Str.count_utf8_bytes(content)
+        Element(_, size, _, _) -> size
         None -> 0
 
-attrSize : Attribute state -> U64
-attrSize = \attr ->
+attr_size : Attribute state -> U64
+attr_size = \attr ->
     when attr is
-        EventListener _ _ _ -> 0
-        HtmlAttr key value -> 4 + Str.countUtf8Bytes key + Str.countUtf8Bytes value
-        DomProp _ _ -> 0
-        Style key value -> 4 + Str.countUtf8Bytes key + Str.countUtf8Bytes value
+        EventListener(_, _, _) -> 0
+        HtmlAttr(key, value) -> 4 + Str.count_utf8_bytes(key) + Str.count_utf8_bytes(value)
+        DomProp(_, _) -> 0
+        Style(key, value) -> 4 + Str.count_utf8_bytes(key) + Str.count_utf8_bytes(value)
 
 # -------------------------------
 #   TRANSLATE STATE TYPE
 # -------------------------------
 translate : Html c, (p -> c), (c -> p) -> Html p
-translate = \node, parentToChild, childToParent ->
+translate = \node, parent_to_child, child_to_parent ->
     when node is
-        Text content ->
-            Text content
+        Text(content) ->
+            Text(content)
 
-        Element name size attrs children ->
-            newAttrs = List.map attrs \a -> translateAttr a parentToChild childToParent
-            newChildren = List.map children \c -> translate c parentToChild childToParent
+        Element(name, size, attrs, children) ->
+            new_attrs = List.map(attrs, \a -> translate_attr(a, parent_to_child, child_to_parent))
+            new_children = List.map(children, \c -> translate(c, parent_to_child, child_to_parent))
 
-            Element name size newAttrs newChildren
+            Element(name, size, new_attrs, new_children)
 
         None -> None
 
-translateAttr : Attribute c, (p -> c), (c -> p) -> Attribute p
-translateAttr = \attr, parentToChild, childToParent ->
+translate_attr : Attribute c, (p -> c), (c -> p) -> Attribute p
+translate_attr = \attr, parent_to_child, child_to_parent ->
     when attr is
-        EventListener eventName accessors childHandler ->
-            EventListener eventName accessors (translateHandler childHandler parentToChild childToParent)
+        EventListener(event_name, accessors, child_handler) ->
+            EventListener(event_name, accessors, translate_handler(child_handler, parent_to_child, child_to_parent))
 
-        HtmlAttr k v -> HtmlAttr k v
-        DomProp k v -> DomProp k v
-        Style k v -> Style k v
+        HtmlAttr(k, v) -> HtmlAttr(k, v)
+        DomProp(k, v) -> DomProp(k, v)
+        Style(k, v) -> Style(k, v)
 
-translateHandler : Handler c, (p -> c), (c -> p) -> Handler p
-translateHandler = \childHandler, parentToChild, childToParent ->
-    when childHandler is
-        Normal childFn ->
-            parentFn = \parentState, jsons ->
-                parentState |> parentToChild |> childFn jsons |> Action.map childToParent
+translate_handler : Handler c, (p -> c), (c -> p) -> Handler p
+translate_handler = \child_handler, parent_to_child, child_to_parent ->
+    when child_handler is
+        Normal(child_fn) ->
+            parent_fn = \parent_state, jsons ->
+                parent_state |> parent_to_child |> child_fn(jsons) |> Action.map(child_to_parent)
 
-            Normal parentFn
+            Normal(parent_fn)
 
-        Custom childFn ->
-            parentFn = \parentState, jsons ->
-                { action, stopPropagation, preventDefault } = childFn (parentToChild parentState) jsons
+        Custom(child_fn) ->
+            parent_fn = \parent_state, jsons ->
+                { action, stop_propagation, prevent_default } = child_fn(parent_to_child(parent_state), jsons)
 
-                { action: action |> Action.map childToParent, stopPropagation, preventDefault }
+                { action: action |> Action.map(child_to_parent), stop_propagation, prevent_default }
 
-            Custom parentFn
+            Custom(parent_fn)
 
-translateStatic : Html state -> Html *
-translateStatic = \node ->
+translate_static : Html state -> Html *
+translate_static = \node ->
     when node is
-        Text content ->
-            Text content
+        Text(content) ->
+            Text(content)
 
-        Element name size attrs children ->
-            newAttrs = List.keepOks attrs keepStaticAttr
-            newChildren = List.map children translateStatic
+        Element(name, size, attrs, children) ->
+            new_attrs = List.keep_oks(attrs, keep_static_attr)
+            new_children = List.map(children, translate_static)
 
-            Element name size newAttrs newChildren
+            Element(name, size, new_attrs, new_children)
 
         None -> None
 
-keepStaticAttr : Attribute _ -> Result (Attribute *) {}
-keepStaticAttr = \attr ->
+keep_static_attr : Attribute _ -> Result (Attribute *) {}
+keep_static_attr = \attr ->
     when attr is
-        EventListener _ _ _ -> Err {}
-        HtmlAttr k v -> Ok (HtmlAttr k v)
-        DomProp _ _ -> Err {}
-        Style k v -> Ok (Style k v)
+        EventListener(_, _, _) -> Err({})
+        HtmlAttr(k, v) -> Ok(HtmlAttr(k, v))
+        DomProp(_, _) -> Err({})
+        Style(k, v) -> Ok(Style(k, v))

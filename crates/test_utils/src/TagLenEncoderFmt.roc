@@ -9,252 +9,252 @@
 #
 # module [
 #     TagLenFmt,
-#     tagLenFmt,
+#     tag_len_fmt,
 # ]
 
 TagLenFmt := {}
     implements [
         EncoderFormatting {
-            u8: encodeU8,
-            u16: encodeU16,
-            u32: encodeU32,
-            u64: encodeU64,
-            u128: encodeU128,
-            i8: encodeI8,
-            i16: encodeI16,
-            i32: encodeI32,
-            i64: encodeI64,
-            i128: encodeI128,
-            f32: encodeF32,
-            f64: encodeF64,
-            dec: encodeDec,
-            bool: encodeBool,
-            string: encodeString,
-            list: encodeList,
-            record: encodeRecord,
-            tuple: encodeTuple,
-            tag: encodeTag,
+            u8: encode_u8,
+            u16: encode_u16,
+            u32: encode_u32,
+            u64: encode_u64,
+            u128: encode_u128,
+            i8: encode_i8,
+            i16: encode_i16,
+            i32: encode_i32,
+            i64: encode_i64,
+            i128: encode_i128,
+            f32: encode_f32,
+            f64: encode_f64,
+            dec: encode_dec,
+            bool: encode_bool,
+            string: encode_string,
+            list: encode_list,
+            record: encode_record,
+            tuple: encode_tuple,
+            tag: encode_tag,
         },
         DecoderFormatting {
-            u8: decodeU8,
-            u16: decodeU16,
-            u32: decodeU32,
-            u64: decodeU64,
-            u128: decodeU128,
-            i8: decodeI8,
-            i16: decodeI16,
-            i32: decodeI32,
-            i64: decodeI64,
-            i128: decodeI128,
-            f32: decodeF32,
-            f64: decodeF64,
-            dec: decodeDec,
-            bool: decodeBool,
-            string: decodeString,
-            list: decodeList,
-            record: decodeRecord,
-            tuple: decodeTuple,
+            u8: decode_u8,
+            u16: decode_u16,
+            u32: decode_u32,
+            u64: decode_u64,
+            u128: decode_u128,
+            i8: decode_i8,
+            i16: decode_i16,
+            i32: decode_i32,
+            i64: decode_i64,
+            i128: decode_i128,
+            f32: decode_f32,
+            f64: decode_f64,
+            dec: decode_dec,
+            bool: decode_bool,
+            string: decode_string,
+            list: decode_list,
+            record: decode_record,
+            tuple: decode_tuple,
         },
     ]
 
-tagLenFmt = @TagLenFmt {}
+tag_len_fmt = @TagLenFmt {}
 
 # ENCODE
 
-appendPreLen = \bytes, pre, len ->
-    List.append bytes (Num.toU8 pre)
-    |> List.concat (Num.toStr len |> Str.toUtf8)
+append_pre_len = \bytes, pre, len ->
+    List.append bytes (Num.to_u8 pre)
+    |> List.concat (Num.to_str len |> Str.to_utf8)
     |> List.append ' '
-encodeNum = \n -> Encode.custom \bytes, @TagLenFmt {} -> appendPreLen bytes 'n' n
+encode_num = \n -> Encode.custom \bytes, @TagLenFmt {} -> append_pre_len bytes 'n' n
 
-encodeU8 = encodeNum
-encodeU16 = encodeNum
-encodeU32 = encodeNum
-encodeU64 = encodeNum
-encodeU128 = encodeNum
-encodeI8 = encodeNum
-encodeI16 = encodeNum
-encodeI32 = encodeNum
-encodeI64 = encodeNum
-encodeI128 = encodeNum
-encodeF32 = encodeNum
-encodeF64 = encodeNum
-encodeDec = encodeNum
-encodeBool = \b -> encodeU8 (if b then 1 else 0)
+encode_u8 = encode_num
+encode_u16 = encode_num
+encode_u32 = encode_num
+encode_u64 = encode_num
+encode_u128 = encode_num
+encode_i8 = encode_num
+encode_i16 = encode_num
+encode_i32 = encode_num
+encode_i64 = encode_num
+encode_i128 = encode_num
+encode_f32 = encode_num
+encode_f64 = encode_num
+encode_dec = encode_num
+encode_bool = \b -> encode_u8 (if b then 1 else 0)
 
 expect
-    actual = Encode.toBytes 1 tagLenFmt
-    actual == (Str.toUtf8 "n1 ")
+    actual = Encode.to_bytes 1 tag_len_fmt
+    actual == (Str.to_utf8 "n1 ")
 expect
-    actual = Encode.toBytes 1.3dec tagLenFmt
-    actual == (Str.toUtf8 "n1.3 ")
+    actual = Encode.to_bytes 1.3dec tag_len_fmt
+    actual == (Str.to_utf8 "n1.3 ")
 expect
-    actual = Encode.toBytes Bool.true tagLenFmt
-    actual == (Str.toUtf8 "n1 ")
+    actual = Encode.to_bytes Bool.true tag_len_fmt
+    actual == (Str.to_utf8 "n1 ")
 
-encodeString = \str -> Encode.custom \bytes, @TagLenFmt {} ->
-        appendPreLen bytes 's' (Str.countUtf8Bytes str)
-        |> List.concat (Str.toUtf8 str)
+encode_string = \str -> Encode.custom \bytes, @TagLenFmt {} ->
+        append_pre_len bytes 's' (Str.count_utf8_bytes str)
+        |> List.concat (Str.to_utf8 str)
         |> List.append ' '
 
 expect
-    actual = Encode.toBytes "hey" tagLenFmt
-    actual == (Str.toUtf8 "s3 hey ")
+    actual = Encode.to_bytes "hey" tag_len_fmt
+    actual == (Str.to_utf8 "s3 hey ")
 
-encodeList = \lst, encodeElem -> Encode.custom \bytes, @TagLenFmt {} ->
-        bytesPre = appendPreLen bytes 'l' (List.len lst)
-        List.walk lst bytesPre \buf, elem ->
-            Encode.appendWith buf (encodeElem elem) (@TagLenFmt {})
-
-expect
-    actual = Encode.toBytes [1, 2, 3] tagLenFmt
-    actual == (Str.toUtf8 "l3 n1 n2 n3 ")
-
-encodeRecord = \fields -> Encode.custom \bytes, @TagLenFmt {} ->
-        bytesPre =
-            appendPreLen bytes 'r' (List.len fields)
-        List.walk fields bytesPre \buf, { key, value } ->
-            Encode.appendWith buf (encodeString key) (@TagLenFmt {})
-            |> Encode.appendWith value (@TagLenFmt {})
+encode_list = \lst, encode_elem -> Encode.custom \bytes, @TagLenFmt {} ->
+        bytes_pre = append_pre_len bytes 'l' (List.len lst)
+        List.walk lst bytes_pre \buf, elem ->
+            Encode.append_with buf (encode_elem elem) (@TagLenFmt {})
 
 expect
-    actual = Encode.toBytes { foo: "foo", bar: Bool.true } tagLenFmt
-    actual == Str.toUtf8 "r2 s3 bar n1 s3 foo s3 foo "
+    actual = Encode.to_bytes [1, 2, 3] tag_len_fmt
+    actual == (Str.to_utf8 "l3 n1 n2 n3 ")
 
-encodeTuple = \elems -> encodeList elems (\e -> e)
-encodeTag = \name, payload -> encodeTuple (List.prepend payload (encodeString name))
+encode_record = \fields -> Encode.custom \bytes, @TagLenFmt {} ->
+        bytes_pre =
+            append_pre_len bytes 'r' (List.len fields)
+        List.walk fields bytes_pre \buf, { key, value } ->
+            Encode.append_with buf (encode_string key) (@TagLenFmt {})
+            |> Encode.append_with value (@TagLenFmt {})
 
 expect
-    actual = Encode.toBytes (1, "foo", {}) tagLenFmt
-    actual == (Str.toUtf8 "l3 n1 s3 foo r0 ")
+    actual = Encode.to_bytes { foo: "foo", bar: Bool.true } tag_len_fmt
+    actual == Str.to_utf8 "r2 s3 bar n1 s3 foo s3 foo "
+
+encode_tuple = \elems -> encode_list elems (\e -> e)
+encode_tag = \name, payload -> encode_tuple (List.prepend payload (encode_string name))
+
+expect
+    actual = Encode.to_bytes (1, "foo", {}) tag_len_fmt
+    actual == (Str.to_utf8 "l3 n1 s3 foo r0 ")
 
 # DECODE
 
-splitAtSpace = \bytes ->
-    when List.splitFirst bytes ' ' is
+split_at_space = \bytes ->
+    when List.split_first bytes ' ' is
         Ok { before, after } -> { taken: before, rest: after }
         Err _ -> { taken: [], rest: bytes }
 
-decodeNumPre = \bytes, pre, toNum ->
-    when List.splitAt bytes 1 is
+decode_num_pre = \bytes, pre, to_num ->
+    when List.split_at bytes 1 is
         { before: [b], others } if b == pre ->
-            { taken, rest } = splitAtSpace others
-            str = taken |> Str.fromUtf8 |> Result.mapErr \_ -> TooShort
-            result = Result.try str \s -> (toNum s |> Result.mapErr \_ -> TooShort)
+            { taken, rest } = split_at_space others
+            str = taken |> Str.from_utf8 |> Result.map_err \_ -> TooShort
+            result = Result.try str \s -> (to_num s |> Result.map_err \_ -> TooShort)
             when result is
                 Ok _ -> { result, rest }
                 Err _ -> { result, rest: others }
 
         _ -> { result: Err TooShort, rest: bytes }
 
-decodeNum = \toNum -> Decode.custom \bytes, @TagLenFmt {} -> decodeNumPre bytes 'n' toNum
+decode_num = \to_num -> Decode.custom \bytes, @TagLenFmt {} -> decode_num_pre bytes 'n' to_num
 
-decodeU8 = decodeNum Str.toU8
-decodeU16 = decodeNum Str.toU16
-decodeU32 = decodeNum Str.toU32
-decodeU64 = decodeNum Str.toU64
-decodeU128 = decodeNum Str.toU128
-decodeI8 = decodeNum Str.toI8
-decodeI16 = decodeNum Str.toI16
-decodeI32 = decodeNum Str.toI32
-decodeI64 = decodeNum Str.toI64
-decodeI128 = decodeNum Str.toI128
-decodeF32 = decodeNum Str.toF32
-decodeF64 = decodeNum Str.toF64
-decodeDec = decodeNum Str.toDec
-decodeBool = Decode.custom \bytes, @TagLenFmt {} ->
-    { result: numResult, rest } = Decode.decodeWith bytes decodeU8 (@TagLenFmt {})
-    when numResult is
+decode_u8 = decode_num Str.to_u8
+decode_u16 = decode_num Str.to_u16
+decode_u32 = decode_num Str.to_u32
+decode_u64 = decode_num Str.to_u64
+decode_u128 = decode_num Str.to_u128
+decode_i8 = decode_num Str.to_i8
+decode_i16 = decode_num Str.to_i16
+decode_i32 = decode_num Str.to_i32
+decode_i64 = decode_num Str.to_i64
+decode_i128 = decode_num Str.to_i128
+decode_f32 = decode_num Str.to_f32
+decode_f64 = decode_num Str.to_f64
+decode_dec = decode_num Str.to_dec
+decode_bool = Decode.custom \bytes, @TagLenFmt {} ->
+    { result: num_result, rest } = Decode.decode_with bytes decode_u8 (@TagLenFmt {})
+    when num_result is
         Ok 1 -> { result: Ok Bool.true, rest }
         Ok 0 -> { result: Ok Bool.false, rest }
         _ -> { result: Err TooShort, rest: bytes }
 
 expect
-    actual = Decode.fromBytes (Str.toUtf8 "n1 ") tagLenFmt
-    actual == Ok (Num.toU8 1)
+    actual = Decode.from_bytes (Str.to_utf8 "n1 ") tag_len_fmt
+    actual == Ok (Num.to_u8 1)
 expect
-    actual = Decode.fromBytes (Str.toUtf8 "n1 ") tagLenFmt
+    actual = Decode.from_bytes (Str.to_utf8 "n1 ") tag_len_fmt
     actual == Ok Bool.true
 
-decodeLenPre = \bytes, pre -> decodeNumPre bytes pre Str.toU64
+decode_len_pre = \bytes, pre -> decode_num_pre bytes pre Str.to_u64
 
-decodeTry = \{ result, rest }, map ->
+decode_try = \{ result, rest }, map ->
     when result is
         Ok a -> map a rest
         Err e -> { result: Err e, rest }
 
-decodeString = Decode.custom \bytes, @TagLenFmt {} ->
-    decodeLenPre bytes 's'
-    |> decodeTry \len, lenRest ->
-        { before, others } = List.splitAt lenRest len
-        result = Str.fromUtf8 before |> Result.mapErr \_ -> TooShort
-        when List.splitAt others 1 is
+decode_string = Decode.custom \bytes, @TagLenFmt {} ->
+    decode_len_pre bytes 's'
+    |> decode_try \len, len_rest ->
+        { before, others } = List.split_at len_rest len
+        result = Str.from_utf8 before |> Result.map_err \_ -> TooShort
+        when List.split_at others 1 is
             { before: [' '], others: rest } -> { result, rest }
             _ -> { result: Err TooShort, rest: others }
 
 expect
-    actual = Decode.fromBytes (Str.toUtf8 "s3 foo ") tagLenFmt
+    actual = Decode.from_bytes (Str.to_utf8 "s3 foo ") tag_len_fmt
     actual == Ok "foo"
 
-repeatDecode : U8, List U8, state, (state -> Decode.Decoder state TagLenFmt) -> DecodeResult state
-repeatDecode = \pre, bytes, state, stepState ->
+repeat_decode : U8, List U8, state, (state -> Decode.Decoder state TagLenFmt) -> DecodeResult state
+repeat_decode = \pre, bytes, state, step_state ->
     run = \end, bs ->
         List.range { start: At 0, end: Before end }
         |> List.walk { result: Ok state, rest: bs } \res, _i ->
-            decodeTry res \s, rest ->
-                Decode.decodeWith rest (stepState s) (@TagLenFmt {})
+            decode_try res \s, rest ->
+                Decode.decode_with rest (step_state s) (@TagLenFmt {})
 
-    decodeLenPre bytes pre |> decodeTry run
+    decode_len_pre bytes pre |> decode_try run
 
-decodeList = \elemDecoder -> Decode.custom \bytes, @TagLenFmt {} ->
+decode_list = \elem_decoder -> Decode.custom \bytes, @TagLenFmt {} ->
         step = \lst -> Decode.custom \sbytes, @TagLenFmt {} ->
-                Decode.decodeWith sbytes elemDecoder (@TagLenFmt {})
-                |> Decode.mapResult \elem -> List.append lst elem
-        repeatDecode 'l' bytes [] step
+                Decode.decode_with sbytes elem_decoder (@TagLenFmt {})
+                |> Decode.map_result \elem -> List.append lst elem
+        repeat_decode 'l' bytes [] step
 
 expect
-    actual = Decode.fromBytes (Str.toUtf8 "l3 n1 n2 n3 ") tagLenFmt
+    actual = Decode.from_bytes (Str.to_utf8 "l3 n1 n2 n3 ") tag_len_fmt
     actual == Ok [1, 2, 3]
 
-decodeRecord = \initState, stepField, finalizer -> Decode.custom \bytes, @TagLenFmt {} ->
-        flattenFieldRes = \next, rest ->
+decode_record = \init_state, step_field, finalizer -> Decode.custom \bytes, @TagLenFmt {} ->
+        flatten_field_res = \next, rest ->
             when next is
-                Keep valueDecoder -> { result: Ok valueDecoder, rest }
+                Keep value_decoder -> { result: Ok value_decoder, rest }
                 Skip -> { result: Err TooShort, rest }
 
         step = \state -> Decode.custom \sbytes, @TagLenFmt {} ->
-                Decode.decodeWith sbytes decodeString (@TagLenFmt {})
-                |> decodeTry \key, bs ->
-                    flattenFieldRes (stepField state key) bs
-                |> decodeTry \valueDecoder, bs ->
-                    Decode.decodeWith bs valueDecoder (@TagLenFmt {})
+                Decode.decode_with sbytes decode_string (@TagLenFmt {})
+                |> decode_try \key, bs ->
+                    flatten_field_res (step_field state key) bs
+                |> decode_try \value_decoder, bs ->
+                    Decode.decode_with bs value_decoder (@TagLenFmt {})
 
-        repeatDecode 'r' bytes initState step
-        |> decodeTry \state, rest -> { result: finalizer state (@TagLenFmt {}), rest }
+        repeat_decode 'r' bytes init_state step
+        |> decode_try \state, rest -> { result: finalizer state (@TagLenFmt {}), rest }
 
 expect
-    actual = Decode.fromBytes (Str.toUtf8 "r2 s3 bar n1 s3 foo s3 foo ") tagLenFmt
+    actual = Decode.from_bytes (Str.to_utf8 "r2 s3 bar n1 s3 foo s3 foo ") tag_len_fmt
     actual == Ok ({ foo: "foo", bar: Bool.true })
 
-decodeTuple = \initialState, stepElem, finalizer -> Decode.custom \bytes, @TagLenFmt {} ->
-        flattenFieldRes = \next, rest ->
+decode_tuple = \initial_state, step_elem, finalizer -> Decode.custom \bytes, @TagLenFmt {} ->
+        flatten_field_res = \next, rest ->
             when next is
                 Next dec -> { result: Ok dec, rest }
                 TooLong -> { result: Err TooShort, rest }
         step = \{ state, i } -> Decode.custom \sbytes, @TagLenFmt {} ->
-                flattenFieldRes (stepElem state i) sbytes
-                |> decodeTry \dec, rest -> Decode.decodeWith rest dec (@TagLenFmt {})
-                |> Decode.mapResult \s -> { state: s, i: i + 1 }
+                flatten_field_res (step_elem state i) sbytes
+                |> decode_try \dec, rest -> Decode.decode_with rest dec (@TagLenFmt {})
+                |> Decode.map_result \s -> { state: s, i: i + 1 }
 
-        repeatDecode 'l' bytes { state: initialState, i: 0 } step
-        |> decodeTry \s, rest -> { result: finalizer s.state, rest }
+        repeat_decode 'l' bytes { state: initial_state, i: 0 } step
+        |> decode_try \s, rest -> { result: finalizer s.state, rest }
 
 expect
-    actual = Decode.fromBytes (Str.toUtf8 "l3 n1 s3 abc l1 n0 ") tagLenFmt
+    actual = Decode.from_bytes (Str.to_utf8 "l3 n1 s3 abc l1 n0 ") tag_len_fmt
     actual == Ok (1, "abc", [Bool.false])
 
 expect
     input = { foo: (1, "abc", [Bool.false, Bool.true]), bar: { baz: 0.32 } }
-    encoded = Encode.toBytes input tagLenFmt
-    decoded = Decode.fromBytes encoded tagLenFmt
+    encoded = Encode.to_bytes input tag_len_fmt
+    decoded = Decode.from_bytes encoded tag_len_fmt
     decoded == Ok input

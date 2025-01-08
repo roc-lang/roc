@@ -76,7 +76,7 @@ We have:
 The first three are basically the backbone of any C-API extension.\
 In addition, a couple more functions and notes you may want to pay attention to:
 - [`void roc_panic`] - When creating such interpreter-dependent code, it is reasonable to make the implementation of this function fire up an interpreter Exception (e.g `RuntimeError` or whatever suits).
-- When I first came across another implementation, I was a bit confused about `extern void roc__mainForHost_1_exposed_generic`, so let me clarify - this is an external function, implemented by the application, that goes (on the application side-) by the name `mainForHost`.
+- When I first came across another implementation, I was a bit confused about `extern void roc__main_for_host_1_exposed_generic`, so let me clarify - this is an external function, implemented by the application, that goes (on the application side-) by the name `main_for_host`.
 
 And one last thing -
 - When writing such the C glue (here, `demo.c`), you need to pay attention to not only Python's reference counting, but also Roc's, so remember to wear seatbelts and decrement your ref counts.

@@ -4,8 +4,8 @@ import pf.Host
 
 line! : Str => {}
 line! = \text ->
-    Host.putLine! text
+    Host.put_line!(text)
 
 raw! : Str => {}
 raw! = \text ->
-    Host.putRaw! text
+    Host.put_raw!(text)

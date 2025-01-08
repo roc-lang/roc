@@ -25,13 +25,13 @@ fn early_return_nested_ifs() {
             r#"
             app "test" provides [main] to "./platform"
 
-            displayN = \n ->
-                first = Num.toStr n
+            display_n = \n ->
+                first = Num.to_str n
                 second =
                     if n == 1 then
                         return "early 1"
                     else
-                        third = Num.toStr (n + 1)
+                        third = Num.to_str (n + 1)
                         if n == 2 then
                             return "early 2"
                         else
@@ -40,7 +40,7 @@ fn early_return_nested_ifs() {
                 "$(first), $(second)"
 
             main : List Str
-            main = List.map [1, 2, 3] displayN
+            main = List.map [1, 2, 3] display_n
             "#
         ),
         RocList::from_slice(&[
@@ -60,15 +60,15 @@ fn early_return_nested_whens() {
             r#"
             app "test" provides [main] to "./platform"
 
-            displayN = \n ->
-                first = Num.toStr n
+            display_n = \n ->
+                first = Num.to_str n
                 second =
                     when n is
                         1 ->
                             return "early 1"
 
                         _ ->
-                            third = Num.toStr (n + 1)
+                            third = Num.to_str (n + 1)
                             when n is
                                 2 ->
                                     return "early 2"
@@ -79,7 +79,7 @@ fn early_return_nested_whens() {
                 "$(first), $(second)"
 
             main : List Str
-            main = List.map [1, 2, 3] displayN
+            main = List.map [1, 2, 3] display_n
             "#
         ),
         RocList::from_slice(&[
@@ -134,18 +134,18 @@ fn early_return_annotated_function() {
             r#"
             app "test" provides [main] to "./platform"
 
-            failIfLessThanFive : U64 -> Result {} [LessThanFive]
-            failIfLessThanFive = \n ->
+            fail_if_less_than_five : U64 -> Result {} [LessThanFive]
+            fail_if_less_than_five = \n ->
                 if n < 5 then
                     Err LessThanFive
                 else
                     Ok {}
 
-            validateInput : Str -> Result U64 [InvalidNumStr, LessThanFive]
-            validateInput = \str ->
-                num = try Str.toU64 str
+            validate_input : Str -> Result U64 [InvalidNumStr, LessThanFive]
+            validate_input = \str ->
+                num = try Str.to_u64 str
 
-                when failIfLessThanFive num is
+                when fail_if_less_than_five num is
                     Err err ->
                         return Err err
 
@@ -155,8 +155,8 @@ fn early_return_annotated_function() {
             main : List Str
             main =
                 ["abc", "3", "7"]
-                |> List.map validateInput
-                |> List.map Inspect.toStr
+                |> List.map validate_input
+                |> List.map Inspect.to_str
             "#
         ),
         RocList::from_slice(&[
@@ -176,18 +176,18 @@ fn early_return_nested_annotated_function() {
             r#"
             app "test" provides [main] to "./platform"
 
-            validateInput : Str -> Result U64 [InvalidNumStr, LessThanFive]
-            validateInput = \str ->
-                failIfLessThanFive : U64 -> Result {} [LessThanFive]
-                failIfLessThanFive = \n ->
+            validate_input : Str -> Result U64 [InvalidNumStr, LessThanFive]
+            validate_input = \str ->
+                fail_if_less_than_five : U64 -> Result {} [LessThanFive]
+                fail_if_less_than_five = \n ->
                     if n < 5 then
                         Err LessThanFive
                     else
                         Ok {}
 
-                num = try Str.toU64 str
+                num = try Str.to_u64 str
 
-                when failIfLessThanFive num is
+                when fail_if_less_than_five num is
                     Err err ->
                         return Err err
 
@@ -197,8 +197,8 @@ fn early_return_nested_annotated_function() {
             main : List Str
             main =
                 ["abc", "3", "7"]
-                |> List.map validateInput
-                |> List.map Inspect.toStr
+                |> List.map validate_input
+                |> List.map Inspect.to_str
             "#
         ),
         RocList::from_slice(&[
@@ -218,39 +218,39 @@ fn early_return_annotated_recursive_function() {
             r#"
             app "test" provides [main] to "./platform"
 
-            mightCallSecond : U64 -> Result U64 _
-            mightCallSecond = \num ->
-                nextNum =
+            might_call_second : U64 -> Result U64 _
+            might_call_second = \num ->
+                next_num =
                     if num < 5 then
                         return Err LessThanFive
                     else
                         num - 1
 
-                mightCallFirst nextNum
+                might_call_first next_num
 
-            mightCallFirst : U64 -> Result U64 _
-            mightCallFirst = \num ->
-                nextNum =
+            might_call_first : U64 -> Result U64 _
+            might_call_first = \num ->
+                next_num =
                     if num < 10 then
                         return Err LessThanTen
                     else
                         num * 2
 
-                if nextNum > 25 then
-                    Ok nextNum
+                if next_num > 25 then
+                    Ok next_num
                 else
-                    mightCallSecond nextNum
+                    might_call_second next_num
 
             main : List Str
             main =
                 [
-                    mightCallSecond 3,
-                    mightCallSecond 7,
-                    mightCallSecond 20,
-                    mightCallFirst 7,
-                    mightCallFirst 15,
+                    might_call_second 3,
+                    might_call_second 7,
+                    might_call_second 20,
+                    might_call_first 7,
+                    might_call_first 15,
                 ]
-                |> List.map Inspect.toStr
+                |> List.map Inspect.to_str
             "#
         ),
         RocList::from_slice(&[

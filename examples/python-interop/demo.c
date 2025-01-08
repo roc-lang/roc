@@ -195,7 +195,7 @@ size_t roc_str_len(struct RocStr str)
     }
 }
 
-extern void roc__mainForHost_1_exposed_generic(struct RocBytes *ret, struct RocBytes *arg);
+extern void roc__main_for_host_1_exposed_generic(struct RocBytes *ret, struct RocBytes *arg);
 
 // Receive a value from Python, JSON serialized it and pass it to Roc as a List U8
 // (at which point the Roc platform will decode it and crash if it's invalid,
@@ -223,7 +223,7 @@ PyObject * call_roc(PyObject *self, PyObject *args)
     struct RocBytes ret;
 
     // Call the Roc function to populate `ret`'s bytes.
-    roc__mainForHost_1_exposed_generic(&ret, &arg);
+    roc__main_for_host_1_exposed_generic(&ret, &arg);
 
     // Create a Python string from the heap-allocated JSON bytes the Roc function returned.
     PyObject* py_obj = PyUnicode_FromStringAndSize((char*)ret.bytes, ret.len);

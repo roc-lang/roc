@@ -346,7 +346,7 @@ napi_value roc_str_as_node_string(napi_env env, struct RocStr roc_str) {
     return answer;
 }
 
-extern void roc__mainForHost_1_exposed_generic(struct RocStr *ret, struct RocStr *arg);
+extern void roc__main_for_host_1_exposed_generic(struct RocStr *ret, struct RocStr *arg);
 
 // Receive a string value from Node and pass it to Roc as a RocStr, then get a RocStr
 // back from Roc and convert it into a Node string.
@@ -387,7 +387,7 @@ napi_value call_roc(napi_env env, napi_callback_info info) {
 
     struct RocStr roc_ret;
     // Call the Roc function to populate `roc_ret`'s bytes.
-    roc__mainForHost_1_exposed_generic(&roc_ret, &roc_arg);
+    roc__main_for_host_1_exposed_generic(&roc_ret, &roc_arg);
 
     // Consume the RocStr to create the Node string.
     return roc_str_into_node_string(env, roc_ret);

@@ -62,8 +62,8 @@ RocTagUnion : [
         {
             name : Str,
             tags : List { name : Str, payload : [Some TypeId, None] },
-            discriminantSize : U32,
-            discriminantOffset : U32,
+            discriminant_size : U32,
+            discriminant_offset : U32,
         },
     ## A recursive tag union (general case)
     ## e.g. `Expr : [Sym Str, Add Expr Expr]`
@@ -71,8 +71,8 @@ RocTagUnion : [
         {
             name : Str,
             tags : List { name : Str, payload : [Some TypeId, None] },
-            discriminantSize : U32,
-            discriminantOffset : U32,
+            discriminant_size : U32,
+            discriminant_offset : U32,
         },
     ## A recursive tag union that has an empty variant
     ## Optimization: Represent the empty variant as null pointer => no memory usage & fast comparison
@@ -82,17 +82,17 @@ RocTagUnion : [
     NullableWrapped
         {
             name : Str,
-            indexOfNullTag : U16,
+            index_of_null_tag : U16,
             tags : List { name : Str, payload : [Some TypeId, None] },
-            discriminantSize : U32,
-            discriminantOffset : U32,
+            discriminant_size : U32,
+            discriminant_offset : U32,
         },
     ## Optimization: No need to store a tag ID (the payload is "unwrapped")
     ## e.g. `RoseTree a : [Tree a (List (RoseTree a))]`
     NonNullableUnwrapped
         {
             name : Str,
-            tagName : Str,
+            tag_name : Str,
             payload : TypeId, # These always have a payload.
         },
     ## Optimization: No need to store a tag ID (the payload is "unwrapped")
@@ -100,7 +100,7 @@ RocTagUnion : [
     SingleTagStruct
         {
             name : Str,
-            tagName : Str,
+            tag_name : Str,
             payload : RocSingleTagPayload,
         },
     ## A recursive tag union with only two variants, where one is empty.
@@ -109,10 +109,10 @@ RocTagUnion : [
     NullableUnwrapped
         {
             name : Str,
-            nullTag : Str,
-            nonNullTag : Str,
-            nonNullPayload : TypeId,
-            whichTagIsNull : [FirstTagIsNull, SecondTagIsNull],
+            null_tag : Str,
+            non_null_tag : Str,
+            non_null_payload : TypeId,
+            which_tag_is_null : [FirstTagIsNull, SecondTagIsNull],
         },
 ]
 
@@ -127,10 +127,10 @@ RocSingleTagPayload : [
 ]
 
 RocFn : {
-    functionName : Str,
-    externName : Str,
+    function_name : Str,
+    extern_name : Str,
     args : List TypeId,
-    lambdaSet : TypeId,
+    lambda_set : TypeId,
     ret : TypeId,
-    isToplevel : Bool,
+    is_toplevel : Bool,
 }

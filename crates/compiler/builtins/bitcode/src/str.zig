@@ -2053,7 +2053,7 @@ test "strTrim: null byte" {
     defer original_with_capacity.decref();
 
     try expectEqual(@as(usize, 1), original_with_capacity.len());
-    try expectEqual(@as(usize, 64), original_with_capacity.getCapacity());
+    try expectEqual(@as(usize, 41), original_with_capacity.getCapacity());
 
     const trimmed = strTrim(original.clone());
     defer trimmed.decref();

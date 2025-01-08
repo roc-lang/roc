@@ -1,7 +1,7 @@
 @0-13 SpaceAfter(
     Closure(
         [
-            @1-5 Apply(
+            @1-9 PncApply(
                 @1-2 Tag(
                     "L",
                 ),

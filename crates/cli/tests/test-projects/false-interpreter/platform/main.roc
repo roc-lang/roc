@@ -3,7 +3,7 @@ platform "false-interpreter"
     exposes []
     packages {}
     imports []
-    provides [mainForHost!]
+    provides [main_for_host!]
 
-mainForHost! : Str => {}
-mainForHost! = \file -> main! file
+main_for_host! : Str => {}
+main_for_host! = \file -> main!(file)

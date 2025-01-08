@@ -1,0 +1,18 @@
+@0-12 SpaceAfter(
+    PncApply(
+        @0-4 Tag(
+            "Whee",
+        ),
+        [
+            @5-7 Num(
+                "12",
+            ),
+            @9-11 Num(
+                "34",
+            ),
+        ],
+    ),
+    [
+        Newline,
+    ],
+)

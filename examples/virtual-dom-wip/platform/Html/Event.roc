@@ -3,19 +3,19 @@ module [
     CyclicStructureAccessor,
     on,
     custom,
-    onClick,
-    onDoubleClick,
-    onMouseDown,
-    onMouseUp,
-    onMouseEnter,
-    onMouseLeave,
-    onMouseOver,
-    onMouseOut,
-    onCheck,
-    onBlur,
-    onFocus,
-    onInput,
-    onSubmit,
+    on_click,
+    on_double_click,
+    on_mouse_down,
+    on_mouse_up,
+    on_mouse_enter,
+    on_mouse_leave,
+    on_mouse_over,
+    on_mouse_out,
+    on_check,
+    on_blur,
+    on_focus,
+    on_input,
+    on_submit,
 ]
 
 import Action exposing [Action]
@@ -24,52 +24,52 @@ import Html.Internal.Shared exposing [Attribute]
 Handler state : Html.Internal.Shared.Handler state
 CyclicStructureAccessor : Html.Internal.Shared.CyclicStructureAccessor
 
-custom : Str, List CyclicStructureAccessor, (state, List (List U8) -> { action : Action state, stopPropagation : Bool, preventDefault : Bool }) -> Attribute state
-custom = \eventName, accessors, callback ->
-    EventListener eventName accessors (Custom callback)
+custom : Str, List CyclicStructureAccessor, (state, List (List U8) -> { action : Action state, stop_propagation : Bool, prevent_default : Bool }) -> Attribute state
+custom = \event_name, accessors, callback ->
+    EventListener(event_name, accessors, Custom(callback))
 
 on : Str, List CyclicStructureAccessor, (state, List (List U8) -> Action state) -> Attribute state
-on = \eventName, accessors, callback ->
-    EventListener eventName accessors (Normal callback)
+on = \event_name, accessors, callback ->
+    EventListener(event_name, accessors, Normal(callback))
 
 # Internal helper
-curriedOn : Str -> (List CyclicStructureAccessor, (state, List (List U8) -> Action state) -> Attribute state)
-curriedOn = \eventName ->
+curried_on : Str -> (List CyclicStructureAccessor, (state, List (List U8) -> Action state) -> Attribute state)
+curried_on = \event_name ->
     \accessors, callback ->
-        EventListener eventName accessors (Normal callback)
+        EventListener(event_name, accessors, Normal(callback))
 
-onClick = curriedOn "click"
-onDoubleClick = curriedOn "dblclick"
-onMouseDown = curriedOn "mousedown"
-onMouseUp = curriedOn "mouseup"
-onMouseEnter = curriedOn "mouseenter"
-onMouseLeave = curriedOn "mouseleave"
-onMouseOver = curriedOn "mouseover"
-onMouseOut = curriedOn "mouseout"
-onCheck = curriedOn "check"
-onBlur = curriedOn "blur"
-onFocus = curriedOn "focus"
+on_click = curried_on("click")
+on_double_click = curried_on("dblclick")
+on_mouse_down = curried_on("mousedown")
+on_mouse_up = curried_on("mouseup")
+on_mouse_enter = curried_on("mouseenter")
+on_mouse_leave = curried_on("mouseleave")
+on_mouse_over = curried_on("mouseover")
+on_mouse_out = curried_on("mouseout")
+on_check = curried_on("check")
+on_blur = curried_on("blur")
+on_focus = curried_on("focus")
 
-onInput : List CyclicStructureAccessor, (state, List (List U8) -> Action state) -> Attribute state
-onInput = \accessors, callback ->
-    customCallback : state, List (List U8) -> { action : Action state, stopPropagation : Bool, preventDefault : Bool }
-    customCallback = \state, jsons -> {
-        action: callback state jsons,
-        stopPropagation: Bool.true,
-        preventDefault: Bool.false,
+on_input : List CyclicStructureAccessor, (state, List (List U8) -> Action state) -> Attribute state
+on_input = \accessors, callback ->
+    custom_callback : state, List (List U8) -> { action : Action state, stop_propagation : Bool, prevent_default : Bool }
+    custom_callback = \state, jsons -> {
+        action: callback(state, jsons),
+        stop_propagation: Bool.true,
+        prevent_default: Bool.false,
     }
 
-    EventListener "input" accessors (Custom customCallback)
+    EventListener("input", accessors, Custom(custom_callback))
 
-onSubmit : List CyclicStructureAccessor, (state, List (List U8) -> Action state) -> Attribute state
-onSubmit = \accessors, callback ->
-    customCallback = \state, jsons -> {
-        action: callback state jsons,
-        stopPropagation: Bool.false,
-        preventDefault: Bool.true,
+on_submit : List CyclicStructureAccessor, (state, List (List U8) -> Action state) -> Attribute state
+on_submit = \accessors, callback ->
+    custom_callback = \state, jsons -> {
+        action: callback(state, jsons),
+        stop_propagation: Bool.false,
+        prevent_default: Bool.true,
     }
 
-    EventListener "submit" accessors (Custom customCallback)
+    EventListener("submit", accessors, Custom(custom_callback))
 
 # Notes from Elm:
 #  - stopPropagation causes immediate view update, without waiting for animationFrame,

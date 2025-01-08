@@ -2,4 +2,4 @@ app "test" provides [main] to "./platform"
 
 main =
     \h -> Hash.hash h Bool.true
-    #     ^^^^^^^^^ Hash#Hash.hash(1): a, Bool -[[Hash.hashBool(9)]]-> a where a implements Hasher
+    #     ^^^^^^^^^ Hash#Hash.hash(1): a, Bool -[[Hash.hash_bool(9)]]-> a where a implements Hasher

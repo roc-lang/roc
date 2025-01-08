@@ -1383,7 +1383,7 @@ impl DerivableVisitor for DeriveEq {
     #[inline(always)]
     fn visit_ranged_number(_var: Variable, _range: NumericRange) -> Result<(), NotDerivable> {
         // Ranged numbers are allowed, because they are always possibly ints - floats can not have
-        // `isEq` derived, but if something were to be a float, we'd see it exactly as a float.
+        // `is_eq` derived, but if something were to be a float, we'd see it exactly as a float.
         Ok(())
     }
 }

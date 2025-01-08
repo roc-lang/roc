@@ -329,10 +329,6 @@ fn deep_copy_var_help(
                 }
 
                 let new_ambient_function_var = work!(ambient_function_var);
-                debug_assert_ne!(
-                    ambient_function_var, new_ambient_function_var,
-                    "lambda set cloned but its ambient function wasn't?"
-                );
 
                 subs.set_content_unchecked(
                     lambda_set_var,

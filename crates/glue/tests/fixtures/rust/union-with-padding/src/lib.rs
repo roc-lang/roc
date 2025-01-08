@@ -4,7 +4,7 @@ use roc_app::NonRecursive;
 use roc_std::RocStr;
 
 extern "C" {
-    #[link_name = "roc__mainForHost_1_exposed_generic"]
+    #[link_name = "roc__main_for_host_1_exposed_generic"]
     fn roc_main(_: *mut NonRecursive);
 }
 
@@ -15,7 +15,7 @@ pub extern "C" fn rust_main() {
 
     init();
 
-    let tag_union = roc_app::mainForHost();
+    let tag_union = roc_app::main_for_host();
 
     // Verify that it has all the expected traits.
 

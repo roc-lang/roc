@@ -49,6 +49,29 @@ fn new_op_call_expr<'a>(
                         Expr::LowLevelTry(desugared_left, ResultTryKind::KeywordPrefix),
                     );
                 }
+                PncApply(&Loc { value: Try, .. }, arguments) => {
+                    let try_fn = desugar_expr(env, scope, arguments.items.first().unwrap());
+
+                    let mut args = Vec::with_capacity_in(arguments.len(), env.arena);
+                    args.push(desugar_expr(env, scope, left));
+                    args.extend(
+                        arguments
+                            .iter()
+                            .skip(1)
+                            .map(|a| desugar_expr(env, scope, a)),
+                    );
+
+                    return Loc::at(
+                        region,
+                        Expr::LowLevelTry(
+                            env.arena.alloc(Loc::at(
+                                region,
+                                Expr::Apply(try_fn, args.into_bump_slice(), CalledVia::Try),
+                            )),
+                            ResultTryKind::KeywordPrefix,
+                        ),
+                    );
+                }
                 Apply(&Loc { value: Try, .. }, arguments, _called_via) => {
                     let try_fn = desugar_expr(env, scope, arguments.first().unwrap());
 
@@ -87,6 +110,41 @@ fn new_op_call_expr<'a>(
                                 Expr::Apply(
                                     function,
                                     env.arena.alloc([desugar_expr(env, scope, left)]),
+                                    CalledVia::Try,
+                                ),
+                            )),
+                            ResultTryKind::OperatorSuffix,
+                        ),
+                    );
+                }
+                PncApply(
+                    &Loc {
+                        value:
+                            TrySuffix {
+                                target: TryTarget::Result,
+                                expr: fn_expr,
+                            },
+                        region: fn_region,
+                    },
+                    loc_args,
+                ) => {
+                    let loc_fn = env.arena.alloc(Loc::at(fn_region, *fn_expr));
+                    let function = desugar_expr(env, scope, loc_fn);
+
+                    let mut desugared_args = Vec::with_capacity_in(loc_args.len() + 1, env.arena);
+                    desugared_args.push(desugar_expr(env, scope, left));
+                    for loc_arg in loc_args.items {
+                        desugared_args.push(desugar_expr(env, scope, loc_arg));
+                    }
+
+                    return Loc::at(
+                        region,
+                        LowLevelTry(
+                            env.arena.alloc(Loc::at(
+                                region,
+                                Expr::Apply(
+                                    function,
+                                    desugared_args.into_bump_slice(),
                                     CalledVia::Try,
                                 ),
                             )),
@@ -147,6 +205,16 @@ fn new_op_call_expr<'a>(
 
                     Apply(function, args, CalledVia::BinOp(Pizza))
                 }
+                PncApply(function, arguments) => {
+                    let mut args = Vec::with_capacity_in(1 + arguments.len(), env.arena);
+
+                    args.push(left);
+                    args.extend(arguments.iter());
+
+                    let args = args.into_bump_slice();
+
+                    Apply(function, args, CalledVia::BinOp(Pizza))
+                }
                 Dbg => *desugar_dbg_expr(env, scope, left, region),
                 _ => {
                     // e.g. `1 |> (if b then (\a -> a) else (\c -> c))`
@@ -177,7 +245,10 @@ fn new_op_call_expr<'a>(
                 env.arena.alloc(Loc::at(left.region, Pattern::Tag("Ok")));
             branch_1_patts.push(Loc::at(
                 left.region,
-                Pattern::Apply(branch_1_tag, branch_1_patts_args.into_bump_slice()),
+                Pattern::PncApply(
+                    branch_1_tag,
+                    Collection::with_items(branch_1_patts_args.into_bump_slice()),
+                ),
             ));
             let branch_one: &WhenBranch<'_> = env.arena.alloc(WhenBranch {
                 patterns: branch_1_patts.into_bump_slice(),
@@ -198,7 +269,10 @@ fn new_op_call_expr<'a>(
                 env.arena.alloc(Loc::at(left.region, Pattern::Tag("Err")));
             branch_2_patts.push(Loc::at(
                 right.region,
-                Pattern::Apply(branch_2_tag, branch_2_patts_args.into_bump_slice()),
+                Pattern::PncApply(
+                    branch_2_tag,
+                    Collection::with_items(branch_2_patts_args.into_bump_slice()),
+                ),
             ));
             let branch_two: &WhenBranch<'_> = env.arena.alloc(WhenBranch {
                 patterns: branch_2_patts.into_bump_slice(),
@@ -734,50 +808,6 @@ pub fn desugar_expr<'a>(
                 desugar_expr(env, scope, loc_ret),
             ),
         }),
-        Backpassing(loc_patterns, loc_body, loc_ret) => {
-            // loc_patterns <- loc_body
-            //
-            // loc_ret
-
-            let problem_region = Region::span_across(
-                &Region::across_all(loc_patterns.iter().map(|loc_pattern| &loc_pattern.region)),
-                &loc_body.region,
-            );
-            env.problem(Problem::DeprecatedBackpassing(problem_region));
-
-            // first desugar the body, because it may contain |>
-            let desugared_body = desugar_expr(env, scope, loc_body);
-
-            let desugared_ret = desugar_expr(env, scope, loc_ret);
-            let desugared_loc_patterns = desugar_loc_patterns(env, scope, loc_patterns);
-            let closure = Expr::Closure(desugared_loc_patterns, desugared_ret);
-            let loc_closure = Loc::at(loc_expr.region, closure);
-
-            match &desugared_body.value {
-                Expr::Apply(function, arguments, called_via) => {
-                    let mut new_arguments: Vec<'a, &'a Loc<Expr<'a>>> =
-                        Vec::with_capacity_in(arguments.len() + 1, env.arena);
-                    new_arguments.extend(arguments.iter());
-                    new_arguments.push(env.arena.alloc(loc_closure));
-
-                    let call = Expr::Apply(function, new_arguments.into_bump_slice(), *called_via);
-                    let loc_call = Loc::at(loc_expr.region, call);
-
-                    env.arena.alloc(loc_call)
-                }
-                _ => {
-                    // e.g. `x <- (if b then (\a -> a) else (\c -> c))`
-                    let call = Expr::Apply(
-                        desugared_body,
-                        env.arena.alloc([&*env.arena.alloc(loc_closure)]),
-                        CalledVia::Space,
-                    );
-                    let loc_call = Loc::at(loc_expr.region, call);
-
-                    env.arena.alloc(loc_call)
-                }
-            }
-        }
         RecordBuilder { mapper, fields } => {
             // NOTE the `mapper` is always a `Var { .. }`, we only desugar it to get rid of
             // any spaces before/after
@@ -1161,6 +1191,94 @@ pub fn desugar_expr<'a>(
                 region: loc_expr.region,
             })
         }
+        PncApply(Loc { value: Dbg, .. }, loc_args) => {
+            if loc_args.is_empty() {
+                env.problem(Problem::UnappliedDbg {
+                    region: loc_expr.region,
+                });
+                env.arena.alloc(Loc {
+                    value: *desugar_invalid_dbg_expr(env, scope, loc_expr.region),
+                    region: loc_expr.region,
+                })
+            } else if loc_args.len() > 1 {
+                let args_region = Region::span_across(
+                    &loc_args.items.first().unwrap().region,
+                    &loc_args.items.last().unwrap().region,
+                );
+                env.problem(Problem::OverAppliedDbg {
+                    region: args_region,
+                });
+
+                env.arena.alloc(Loc {
+                    value: *desugar_invalid_dbg_expr(env, scope, loc_expr.region),
+                    region: loc_expr.region,
+                })
+            } else {
+                let desugared_arg = desugar_expr(env, scope, loc_args.items.first().unwrap());
+
+                env.arena.alloc(Loc {
+                    value: *desugar_dbg_expr(env, scope, desugared_arg, loc_expr.region),
+                    region: loc_expr.region,
+                })
+            }
+        }
+        PncApply(
+            Loc {
+                value: Try,
+                region: _,
+            },
+            loc_args,
+        ) => {
+            let result_expr = if loc_args.len() == 1 {
+                desugar_expr(env, scope, loc_args.items[0])
+            } else {
+                let function = desugar_expr(env, scope, loc_args.items.first().unwrap());
+                let mut desugared_args = Vec::with_capacity_in(loc_args.len() - 1, env.arena);
+                for loc_arg in &loc_args.items[1..] {
+                    desugared_args.push(desugar_expr(env, scope, loc_arg));
+                }
+
+                let args_region = Region::span_across(
+                    &loc_args.items[0].region,
+                    &loc_args.items[loc_args.items.len() - 1].region,
+                );
+
+                env.arena.alloc(Loc::at(
+                    args_region,
+                    Expr::Apply(function, desugared_args.into_bump_slice(), CalledVia::Try),
+                ))
+            };
+
+            env.arena.alloc(Loc::at(
+                loc_expr.region,
+                Expr::LowLevelTry(result_expr, ResultTryKind::KeywordPrefix),
+            ))
+        }
+        PncApply(loc_fn, loc_args) => {
+            let mut desugared_args = Vec::with_capacity_in(loc_args.len(), env.arena);
+
+            for loc_arg in loc_args.iter() {
+                let mut current = loc_arg.value;
+                let arg = loop {
+                    match current {
+                        SpaceBefore(expr, _) | SpaceAfter(expr, _) => {
+                            current = *expr;
+                        }
+                        _ => break loc_arg,
+                    }
+                };
+
+                desugared_args.push(desugar_expr(env, scope, arg));
+            }
+
+            let desugared_args = Collection::with_items(desugared_args.into_bump_slice());
+
+            env.arena.alloc(Loc {
+                value: PncApply(desugar_expr(env, scope, loc_fn), desugared_args),
+                region: loc_expr.region,
+            })
+        }
+
         When(loc_cond_expr, branches) => {
             let loc_desugared_cond = &*env.arena.alloc(desugar_expr(env, scope, loc_cond_expr));
             let mut desugared_branches = Vec::with_capacity_in(branches.len(), env.arena);
@@ -1469,6 +1587,21 @@ fn desugar_pattern<'a>(env: &mut Env<'a>, scope: &mut Scope, pattern: Pattern<'a
 
             Apply(tag, desugared_arg_patterns.into_bump_slice())
         }
+        PncApply(tag, arg_patterns) => {
+            // Skip desugaring the tag, it should either be a Tag or OpaqueRef
+            let mut desugared_arg_patterns = Vec::with_capacity_in(arg_patterns.len(), env.arena);
+            for arg_pattern in arg_patterns.iter() {
+                desugared_arg_patterns.push(Loc {
+                    region: arg_pattern.region,
+                    value: desugar_pattern(env, scope, arg_pattern.value),
+                });
+            }
+
+            PncApply(
+                tag,
+                Collection::with_items(desugared_arg_patterns.into_bump_slice()),
+            )
+        }
         RecordDestructure(field_patterns) => {
             RecordDestructure(desugar_record_destructures(env, scope, field_patterns))
         }
@@ -1529,7 +1662,7 @@ pub fn desugar_record_destructures<'a>(
 /// value produced by `expr`. Essentially:
 /// (
 ///     tmpVar = expr
-///     LowLevelDbg (Inspect.toStr tmpVar)
+///     LowLevelDbg (Inspect.to_str tmpVar)
 ///     tmpVar
 /// )
 fn desugar_dbg_expr<'a>(
@@ -1587,7 +1720,7 @@ pub fn desugar_invalid_dbg_expr<'a>(
     desugar_dbg_expr(env, scope, placeholder_expr, outer_region)
 }
 
-/// Desugars a `dbg x` statement into essentially `Inspect.toStr x |> LowLevelDbg`
+/// Desugars a `dbg x` statement into essentially `Inspect.to_str x |> LowLevelDbg`
 fn desugar_dbg_stmt<'a>(
     env: &mut Env<'a>,
     condition: &'a Loc<Expr<'a>>,
@@ -1597,7 +1730,7 @@ fn desugar_dbg_stmt<'a>(
 
     let inspect_fn = Var {
         module_name: ModuleName::INSPECT,
-        ident: "toStr",
+        ident: "to_str",
     };
     let loc_inspect_fn_var = env.arena.alloc(Loc {
         value: inspect_fn,
@@ -1643,16 +1776,16 @@ fn binop_to_function(binop: BinOp) -> (&'static str, &'static str) {
         Caret => (ModuleName::NUM, "pow"),
         Star => (ModuleName::NUM, "mul"),
         Slash => (ModuleName::NUM, "div"),
-        DoubleSlash => (ModuleName::NUM, "divTrunc"),
+        DoubleSlash => (ModuleName::NUM, "div_trunc"),
         Percent => (ModuleName::NUM, "rem"),
         Plus => (ModuleName::NUM, "add"),
         Minus => (ModuleName::NUM, "sub"),
-        Equals => (ModuleName::BOOL, "isEq"),
-        NotEquals => (ModuleName::BOOL, "isNotEq"),
-        LessThan => (ModuleName::NUM, "isLt"),
-        GreaterThan => (ModuleName::NUM, "isGt"),
-        LessThanOrEq => (ModuleName::NUM, "isLte"),
-        GreaterThanOrEq => (ModuleName::NUM, "isGte"),
+        Equals => (ModuleName::BOOL, "is_eq"),
+        NotEquals => (ModuleName::BOOL, "is_not_eq"),
+        LessThan => (ModuleName::NUM, "is_lt"),
+        GreaterThan => (ModuleName::NUM, "is_gt"),
+        LessThanOrEq => (ModuleName::NUM, "is_lte"),
+        GreaterThanOrEq => (ModuleName::NUM, "is_gte"),
         And => (ModuleName::BOOL, "and"),
         Or => (ModuleName::BOOL, "or"),
         Pizza => unreachable!("Cannot desugar the |> operator"),

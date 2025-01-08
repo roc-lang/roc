@@ -1,19 +1,19 @@
 hosted Host
-    exposes [openFile!, closeFile!, getFileLine!, getFileBytes!, putLine!, putRaw!, getLine!, getChar!]
+    exposes [open_file!, close_file!, get_file_line!, get_file_bytes!, put_line!, put_raw!, get_line!, get_char!]
     imports []
 
-openFile! : Str => U64
+open_file! : Str => U64
 
-closeFile! : U64 => {}
+close_file! : U64 => {}
 
-getFileLine! : U64 => Str
+get_file_line! : U64 => Str
 
-getFileBytes! : U64 => List U8
+get_file_bytes! : U64 => List U8
 
-putLine! : Str => {}
+put_line! : Str => {}
 
-putRaw! : Str => {}
+put_raw! : Str => {}
 
-getLine! : {} => Str
+get_line! : {} => Str
 
-getChar! : {} => U8
+get_char! : {} => U8

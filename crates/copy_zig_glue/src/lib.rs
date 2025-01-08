@@ -31,9 +31,9 @@ pub fn copy_zig_glue() {
         workspace_dir.join("crates/valgrind_tests/zig-platform/glue"),
         workspace_dir.join("crates/cli/tests/test-projects/test-platform-effects-zig/glue"),
         workspace_dir.join("crates/cli/tests/test-projects/test-platform-simple-zig/glue"),
-        workspace_dir.join("examples/platform-switching/zig-platform/glue"),
         workspace_dir.join("crates/cli/tests/test-projects/multiple_exposed/platform/glue"),
         workspace_dir.join("crates/cli/tests/test-projects/tui/platform/glue"),
+        workspace_dir.join("crates/cli/tests/platform-switching/zig-platform/glue"),
     ];
 
     for target_dir in zig_test_platforms_dirs {

@@ -5,20 +5,20 @@ import pf.Effect
 main! : {} => {}
 main! = \{} ->
     _ =
-        authenticate! {}
-        |> Result.onErr! \BadPass ->
-            Effect.putLine! "LOG: Failed login attempt"
-            Ok "Bad password"
+        authenticate!({})
+        |> Result.on_err!(\BadPass ->
+            Effect.put_line!("LOG: Failed login attempt")
+            Ok("Bad password"))
 
     {}
 
 authenticate! : {} => Result Str [BadPass]
 authenticate! = \{} ->
-    Effect.putLine! "Enter your password:"
+    Effect.put_line!("Enter your password:")
 
-    password = Effect.getLine! {}
+    password = Effect.get_line!({})
 
     if password == "password" then
-        Ok "You are in"
+        Ok("You are in")
     else
-        Err BadPass
+        Err(BadPass)

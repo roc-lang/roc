@@ -1,9 +1,9 @@
-app "test" provides [isEqQ] to "./platform"
+app "test" provides [is_eq_q] to "./platform"
 
-Q := [ F (Str -> Str), G ] implements [Eq { isEq: isEqQ }]
+Q := [ F (Str -> Str), G ] implements [Eq { is_eq: is_eq_q }]
 
-isEqQ = \@Q q1, @Q q2 -> when T q1 q2 is
-#^^^^^{-1} Q, Q -[[isEqQ(0)]]-> Bool
+is_eq_q = \@Q q1, @Q q2 -> when T q1 q2 is
+#^^^^^^^{-1} Q, Q -[[is_eq_q(0)]]-> Bool
     T (F _) (F _) -> Bool.true
     T G G -> Bool.true
     _ -> Bool.false

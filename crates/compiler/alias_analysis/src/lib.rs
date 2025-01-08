@@ -28,7 +28,7 @@ pub const MOD_APP: ModName = ModName(b"UserApp");
 pub const STATIC_STR_NAME: ConstName = ConstName(&Symbol::STR_ALIAS_ANALYSIS_STATIC.to_ne_bytes());
 pub const STATIC_LIST_NAME: ConstName = ConstName(b"THIS IS A STATIC LIST");
 
-const DEFAULT_ENTRY_POINT_NAME: &[u8] = b"mainForHost";
+const DEFAULT_ENTRY_POINT_NAME: &[u8] = b"main_for_host";
 
 pub fn func_name_bytes(proc: &Proc) -> [u8; SIZE] {
     let bytes = func_name_bytes_help(

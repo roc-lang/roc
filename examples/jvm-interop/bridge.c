@@ -281,11 +281,11 @@ void roc_dbg(struct RocStr *loc, struct RocStr *msg, struct RocStr *src) {
     fprintf(stderr, "[%s] %s = %s\n", loc_bytes, src_bytes, msg_bytes);
 }
 
-extern void roc__programForHost_1__InterpolateString_caller(struct RocStr *name, char *closure_data, struct RocStr *ret);
+extern void roc__program_for_host_1__InterpolateString_caller(struct RocStr *name, char *closure_data, struct RocStr *ret);
 
-extern void roc__programForHost_1__MulArrByScalar_caller(struct RocListI32 *arr, int32_t *scalar, char *closure_data, struct RocListI32 *ret);
+extern void roc__program_for_host_1__MulArrByScalar_caller(struct RocListI32 *arr, int32_t *scalar, char *closure_data, struct RocListI32 *ret);
 
-extern void roc__programForHost_1__Factorial_caller(int64_t *scalar, char *closure_data, int64_t *ret);
+extern void roc__program_for_host_1__Factorial_caller(int64_t *scalar, char *closure_data, int64_t *ret);
 
 
 JNIEXPORT jstring JNICALL Java_javaSource_Demo_sayHello
@@ -302,7 +302,7 @@ JNIEXPORT jstring JNICALL Java_javaSource_Demo_sayHello
     struct RocStr ret = {0};
 
     // Call the Roc function to populate `ret`'s bytes.
-    roc__programForHost_1__InterpolateString_caller(&rocName, 0, &ret);
+    roc__program_for_host_1__InterpolateString_caller(&rocName, 0, &ret);
     jbyte *bytes = (jbyte*)(is_small_str(ret) ? (uint8_t*)&ret : ret.bytes);
 
     // java being java making this a lot harder than it needs to be
@@ -345,7 +345,7 @@ JNIEXPORT jintArray JNICALL Java_javaSource_Demo_mulArrByScalar
     incref((void *)&originalArray, alignof(int32_t*));
     struct RocListI32 ret = {0};
 
-    roc__programForHost_1__MulArrByScalar_caller(&originalArray, &scalar, 0, &ret);
+    roc__program_for_host_1__MulArrByScalar_caller(&originalArray, &scalar, 0, &ret);
 
     // create jvm constructs
     jintArray multiplied = (*env)->NewIntArray(env, ret.len);
@@ -377,7 +377,7 @@ JNIEXPORT jlong JNICALL Java_javaSource_Demo_factorial
     }
     else {
         int64_t n = (int64_t)num;
-        roc__programForHost_1__Factorial_caller(&n, 0, &ret);
+        roc__program_for_host_1__Factorial_caller(&n, 0, &ret);
         return ret;
     }
 }

@@ -1,6 +1,4 @@
-interface OneDep
-    exposes [str]
-    imports []
+module [str]
 
 import Dep3Blah exposing [foo]
 

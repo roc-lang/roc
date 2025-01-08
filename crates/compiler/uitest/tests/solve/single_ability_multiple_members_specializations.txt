@@ -9,5 +9,5 @@ Id := U64 implements [MHash {hash, hash32}]
 hash = \@Id n -> n
 #^^^^{-1} Id#hash(4): Id -[[hash(4)]]-> U64
 
-hash32 = \@Id n -> Num.toU32 n
+hash32 = \@Id n -> Num.to_u32 n
 #^^^^^^{-1} Id#hash32(5): Id -[[hash32(5)]]-> U32
