@@ -89,6 +89,7 @@ pub const FLAG_PP_HOST: &str = "host";
 pub const FLAG_PP_PLATFORM: &str = "platform";
 pub const FLAG_PP_DYLIB: &str = "lib";
 pub const FLAG_MIGRATE: &str = "migrate";
+pub const FLAG_DOCS_ROOT: &str = "root-dir";
 
 pub const VERSION: &str = env!("ROC_VERSION");
 const DEFAULT_GENERATED_DOCS_DIR: &str = "generated-docs";
@@ -183,6 +184,12 @@ pub fn build_app() -> Command {
         .value_parser(value_parser!(OsString))
         .num_args(0..)
         .allow_hyphen_values(true);
+
+    let flag_docs_root_dir = Arg::new(FLAG_DOCS_ROOT)
+        .long(FLAG_DOCS_ROOT)
+        .help("Set a root directory path to be used as a prefix for URL links in the generated documentation files.")
+        .value_parser(value_parser!(Option<String>))
+        .required(false);
 
     let build_target_values_parser =
         PossibleValuesParser::new(Target::iter().map(Into::<&'static str>::into));
@@ -405,6 +412,7 @@ pub fn build_app() -> Command {
                     .required(false)
                     .default_value(DEFAULT_ROC_FILENAME),
                 )
+                .arg(flag_docs_root_dir)
         )
         .subcommand(Command::new(CMD_GLUE)
             .about("Generate glue code between a platform's Roc API and its host language")
