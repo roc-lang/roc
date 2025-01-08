@@ -1,11 +1,11 @@
-@0-173 SpaceAfter(
+@0-174 SpaceAfter(
     Defs(
         Defs {
             tags: [
                 EitherIndex(2147483648),
             ],
             regions: [
-                @0-154,
+                @0-155,
             ],
             space_before: [
                 Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
@@ -20,13 +20,13 @@
                     @0-16 Identifier {
                         ident: "maybeEarlyReturn",
                     },
-                    @19-154 Closure(
+                    @19-155 Closure(
                         [
                             @20-21 Identifier {
                                 ident: "x",
                             },
                         ],
-                        @29-154 SpaceBefore(
+                        @29-155 SpaceBefore(
                             Defs(
                                 Defs {
                                     tags: [
@@ -123,14 +123,14 @@
                                         ),
                                     ],
                                 },
-                                @143-154 SpaceBefore(
+                                @143-155 SpaceBefore(
                                     Apply(
-                                        @143-152 Var {
+                                        @143-153 Var {
                                             module_name: "Num",
-                                            ident: "toStr",
+                                            ident: "to_str",
                                         },
                                         [
-                                            @153-154 Var {
+                                            @154-155 Var {
                                                 module_name: "",
                                                 ident: "y",
                                             },
@@ -152,14 +152,14 @@
                 ),
             ],
         },
-        @156-173 SpaceBefore(
+        @157-174 SpaceBefore(
             Apply(
-                @156-171 Var {
+                @157-172 Var {
                     module_name: "",
                     ident: "maybeEarlyRetun",
                 },
                 [
-                    @172-173 Num(
+                    @173-174 Num(
                         "3",
                     ),
                 ],

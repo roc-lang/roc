@@ -1,8 +1,8 @@
 app [main] { pf: platform "platform.roc" }
 
 main : Bool -> Result Str I32
-main = \returnStr ->
-    if returnStr then
-        Ok "Hello World!"
+main = \return_str ->
+    if return_str then
+        Ok("Hello World!")
     else
-        Err 42
+        Err(42)

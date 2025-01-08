@@ -1,7 +1,5 @@
-interface IngestedFileBytes
-    exposes [str]
-    imports []
+module [str]
 
 import "IngestedFileBytes.roc" as foo : List U8
 
-str = Str.fromUtf8 foo |> Result.withDefault ""
+str = Str.from_utf8(foo) |> Result.with_default("")

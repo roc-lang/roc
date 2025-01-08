@@ -6,7 +6,7 @@ use roc_std::RocStr;
 use std::io::Write;
 
 extern "C" {
-    #[link_name = "roc__mainForHost_1_exposed_generic"]
+    #[link_name = "roc__main_for_host_1_exposed_generic"]
     fn roc_main(_: &mut RocStr);
 }
 

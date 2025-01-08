@@ -418,7 +418,7 @@ pub(crate) fn preprocess_macho_le(
                 );
 
                 // Find all the lazily-bound roc symbols
-                // (e.g. "_roc__mainForHost_1_exposed")
+                // (e.g. "_roc__main_for_host_1_exposed")
                 // For Macho, we may need to deal with some GOT stuff here as well.
                 for (i, symbol) in lazy_bind_symbols
                     .skip(stubs_symbol_index as usize)

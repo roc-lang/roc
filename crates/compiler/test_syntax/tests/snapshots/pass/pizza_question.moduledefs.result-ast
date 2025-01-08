@@ -3,7 +3,7 @@ Defs {
         EitherIndex(2147483648),
     ],
     regions: [
-        @0-166,
+        @0-167,
     ],
     space_before: [
         Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
@@ -20,7 +20,7 @@ Defs {
             @0-4 Identifier {
                 ident: "main",
             },
-            @11-166 SpaceBefore(
+            @11-167 SpaceBefore(
                 BinOps(
                     [
                         (
@@ -103,27 +103,27 @@ Defs {
                             @98-100 Pizza,
                         ),
                         (
-                            @101-147 SpaceAfter(
+                            @101-148 SpaceAfter(
                                 Closure(
                                     [
                                         @102-107 Identifier {
                                             ident: "total",
                                         },
                                     ],
-                                    @111-147 Str(
+                                    @111-148 Str(
                                         Line(
                                             [
                                                 Plaintext(
                                                     "Sum of numbers: ",
                                                 ),
                                                 Interpolated(
-                                                    @130-145 Apply(
-                                                        @130-139 Var {
+                                                    @130-146 Apply(
+                                                        @130-140 Var {
                                                             module_name: "Num",
-                                                            ident: "toStr",
+                                                            ident: "to_str",
                                                         },
                                                         [
-                                                            @140-145 Var {
+                                                            @141-146 Var {
                                                                 module_name: "",
                                                                 ident: "total",
                                                             },
@@ -139,10 +139,10 @@ Defs {
                                     Newline,
                                 ],
                             ),
-                            @152-154 Pizza,
+                            @153-155 Pizza,
                         ),
                     ],
-                    @155-166 Var {
+                    @156-167 Var {
                         module_name: "Str",
                         ident: "toUpper",
                     },

@@ -7,7 +7,7 @@ pub extern "C" fn rust_main() {
 
     init();
 
-    let outer = roc_app::mainForHost();
+    let outer = roc_app::main_for_host();
 
     // Verify that `inner` has all the expected traits.
     {

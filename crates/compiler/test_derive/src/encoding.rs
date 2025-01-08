@@ -186,19 +186,19 @@ fn derivable_tag_with_tag_ext() {
 #[test]
 fn empty_record() {
     derive_test(ToEncoder, v!(EMPTY_RECORD), |golden| {
-        assert_snapshot!(golden, @r###"
+        assert_snapshot!(golden, @r"
         # derived for {}
-        # {} -[[toEncoder_{}(0)]]-> Encoder fmt where fmt implements EncoderFormatting
-        # {} -[[toEncoder_{}(0)]]-> (List U8, fmt -[[custom(2) {}]]-> List U8) where fmt implements EncoderFormatting
+        # {} -[[to_encoder_{}(0)]]-> Encoder fmt where fmt implements EncoderFormatting
+        # {} -[[to_encoder_{}(0)]]-> (List U8, fmt -[[custom(2) {}]]-> List U8) where fmt implements EncoderFormatting
         # Specialization lambda sets:
-        #   @<1>: [[toEncoder_{}(0)]]
+        #   @<1>: [[to_encoder_{}(0)]]
         #   @<2>: [[custom(2) {}]]
-        #Derived.toEncoder_{} =
+        #Derived.to_encoder_{} =
           \#Derived.rcd ->
             custom
               \#Derived.bytes, #Derived.fmt ->
-                appendWith #Derived.bytes (record []) #Derived.fmt
-        "###
+                append_with #Derived.bytes (record []) #Derived.fmt
+        "
         )
     })
 }
@@ -206,19 +206,19 @@ fn empty_record() {
 #[test]
 fn zero_field_record() {
     derive_test(ToEncoder, v!({}), |golden| {
-        assert_snapshot!(golden, @r###"
+        assert_snapshot!(golden, @r"
         # derived for {}
-        # {} -[[toEncoder_{}(0)]]-> Encoder fmt where fmt implements EncoderFormatting
-        # {} -[[toEncoder_{}(0)]]-> (List U8, fmt -[[custom(2) {}]]-> List U8) where fmt implements EncoderFormatting
+        # {} -[[to_encoder_{}(0)]]-> Encoder fmt where fmt implements EncoderFormatting
+        # {} -[[to_encoder_{}(0)]]-> (List U8, fmt -[[custom(2) {}]]-> List U8) where fmt implements EncoderFormatting
         # Specialization lambda sets:
-        #   @<1>: [[toEncoder_{}(0)]]
+        #   @<1>: [[to_encoder_{}(0)]]
         #   @<2>: [[custom(2) {}]]
-        #Derived.toEncoder_{} =
+        #Derived.to_encoder_{} =
           \#Derived.rcd ->
             custom
               \#Derived.bytes, #Derived.fmt ->
-                appendWith #Derived.bytes (record []) #Derived.fmt
-        "###
+                append_with #Derived.bytes (record []) #Derived.fmt
+        "
         )
     })
 }
@@ -226,22 +226,22 @@ fn zero_field_record() {
 #[test]
 fn one_field_record() {
     derive_test(ToEncoder, v!({ a: v!(U8), }), |golden| {
-        assert_snapshot!(golden, @r###"
+        assert_snapshot!(golden, @r##"
         # derived for { a : U8 }
-        # { a : val } -[[toEncoder_{a}(0)]]-> Encoder fmt where fmt implements EncoderFormatting, val implements Encoding
-        # { a : val } -[[toEncoder_{a}(0)]]-> (List U8, fmt -[[custom(2) { a : val }]]-> List U8) where fmt implements EncoderFormatting, val implements Encoding
+        # { a : val } -[[to_encoder_{a}(0)]]-> Encoder fmt where fmt implements EncoderFormatting, val implements Encoding
+        # { a : val } -[[to_encoder_{a}(0)]]-> (List U8, fmt -[[custom(2) { a : val }]]-> List U8) where fmt implements EncoderFormatting, val implements Encoding
         # Specialization lambda sets:
-        #   @<1>: [[toEncoder_{a}(0)]]
+        #   @<1>: [[to_encoder_{a}(0)]]
         #   @<2>: [[custom(2) { a : val }]] where val implements Encoding
-        #Derived.toEncoder_{a} =
+        #Derived.to_encoder_{a} =
           \#Derived.rcd ->
             custom
               \#Derived.bytes, #Derived.fmt ->
-                appendWith
+                append_with
                   #Derived.bytes
-                  (record [{ value: toEncoder #Derived.rcd.a, key: "a" }])
+                  (record [{ value: to_encoder #Derived.rcd.a, key: "a" }])
                   #Derived.fmt
-        "###
+        "##
         )
     })
 }
@@ -249,26 +249,26 @@ fn one_field_record() {
 #[test]
 fn two_field_record() {
     derive_test(ToEncoder, v!({ a: v!(U8), b: v!(STR), }), |golden| {
-        assert_snapshot!(golden, @r###"
+        assert_snapshot!(golden, @r##"
         # derived for { a : U8, b : Str }
-        # { a : val, b : val1 } -[[toEncoder_{a,b}(0)]]-> Encoder fmt where fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
-        # { a : val, b : val1 } -[[toEncoder_{a,b}(0)]]-> (List U8, fmt -[[custom(2) { a : val, b : val1 }]]-> List U8) where fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
+        # { a : val, b : val1 } -[[to_encoder_{a,b}(0)]]-> Encoder fmt where fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
+        # { a : val, b : val1 } -[[to_encoder_{a,b}(0)]]-> (List U8, fmt -[[custom(2) { a : val, b : val1 }]]-> List U8) where fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
         # Specialization lambda sets:
-        #   @<1>: [[toEncoder_{a,b}(0)]]
+        #   @<1>: [[to_encoder_{a,b}(0)]]
         #   @<2>: [[custom(2) { a : val, b : val1 }]] where val implements Encoding, val1 implements Encoding
-        #Derived.toEncoder_{a,b} =
+        #Derived.to_encoder_{a,b} =
           \#Derived.rcd ->
             custom
               \#Derived.bytes, #Derived.fmt ->
-                appendWith
+                append_with
                   #Derived.bytes
                   (record
                     [
-                      { value: toEncoder #Derived.rcd.a, key: "a" },
-                      { value: toEncoder #Derived.rcd.b, key: "b" },
+                      { value: to_encoder #Derived.rcd.a, key: "a" },
+                      { value: to_encoder #Derived.rcd.b, key: "b" },
                     ])
                   #Derived.fmt
-        "###
+        "##
         )
     })
 }
@@ -276,22 +276,22 @@ fn two_field_record() {
 #[test]
 fn two_field_tuple() {
     derive_test(ToEncoder, v!((v!(U8), v!(STR),)), |golden| {
-        assert_snapshot!(golden, @r###"
+        assert_snapshot!(golden, @r"
         # derived for ( U8, Str )*
-        # ( val, val1 )* -[[toEncoder_(arity:2)(0)]]-> Encoder fmt where fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
-        # ( val, val1 )a -[[toEncoder_(arity:2)(0)]]-> (List U8, fmt -[[custom(2) ( val, val1 )a]]-> List U8) where fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
+        # ( val, val1 )* -[[to_encoder_(arity:2)(0)]]-> Encoder fmt where fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
+        # ( val, val1 )a -[[to_encoder_(arity:2)(0)]]-> (List U8, fmt -[[custom(2) ( val, val1 )a]]-> List U8) where fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
         # Specialization lambda sets:
-        #   @<1>: [[toEncoder_(arity:2)(0)]]
+        #   @<1>: [[to_encoder_(arity:2)(0)]]
         #   @<2>: [[custom(2) ( val, val1 )*]] where val implements Encoding, val1 implements Encoding
-        #Derived.toEncoder_(arity:2) =
+        #Derived.to_encoder_(arity:2) =
           \#Derived.tup ->
             custom
               \#Derived.bytes, #Derived.fmt ->
-                appendWith
+                append_with
                   #Derived.bytes
-                  (tuple [toEncoder #Derived.tup.0, toEncoder #Derived.tup.1])
+                  (tuple [to_encoder #Derived.tup.0, to_encoder #Derived.tup.1])
                   #Derived.fmt
-        "###
+        "
         )
     })
 }
@@ -312,23 +312,23 @@ fn empty_tag_union() {
 #[test]
 fn tag_one_label_zero_args() {
     derive_test(ToEncoder, v!([A]), |golden| {
-        assert_snapshot!(golden, @r###"
+        assert_snapshot!(golden, @r##"
         # derived for [A]
-        # [A] -[[toEncoder_[A 0](0)]]-> Encoder fmt where fmt implements EncoderFormatting
-        # [A] -[[toEncoder_[A 0](0)]]-> (List U8, fmt -[[custom(2) [A]]]-> List U8) where fmt implements EncoderFormatting
+        # [A] -[[to_encoder_[A 0](0)]]-> Encoder fmt where fmt implements EncoderFormatting
+        # [A] -[[to_encoder_[A 0](0)]]-> (List U8, fmt -[[custom(2) [A]]]-> List U8) where fmt implements EncoderFormatting
         # Specialization lambda sets:
-        #   @<1>: [[toEncoder_[A 0](0)]]
+        #   @<1>: [[to_encoder_[A 0](0)]]
         #   @<2>: [[custom(2) [A]]]
-        #Derived.toEncoder_[A 0] =
+        #Derived.to_encoder_[A 0] =
           \#Derived.tag ->
             custom
               \#Derived.bytes, #Derived.fmt ->
-                appendWith
+                append_with
                   #Derived.bytes
                   (when #Derived.tag is
                     A -> tag "A" [])
                   #Derived.fmt
-        "###
+        "##
         )
     })
 }
@@ -336,24 +336,24 @@ fn tag_one_label_zero_args() {
 #[test]
 fn tag_one_label_two_args() {
     derive_test(ToEncoder, v!([A v!(U8) v!(STR)]), |golden| {
-        assert_snapshot!(golden, @r###"
+        assert_snapshot!(golden, @r##"
         # derived for [A U8 Str]
-        # [A val val1] -[[toEncoder_[A 2](0)]]-> Encoder fmt where fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
-        # [A val val1] -[[toEncoder_[A 2](0)]]-> (List U8, fmt -[[custom(4) [A val val1]]]-> List U8) where fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
+        # [A val val1] -[[to_encoder_[A 2](0)]]-> Encoder fmt where fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
+        # [A val val1] -[[to_encoder_[A 2](0)]]-> (List U8, fmt -[[custom(4) [A val val1]]]-> List U8) where fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
         # Specialization lambda sets:
-        #   @<1>: [[toEncoder_[A 2](0)]]
+        #   @<1>: [[to_encoder_[A 2](0)]]
         #   @<2>: [[custom(4) [A val val1]]] where val implements Encoding, val1 implements Encoding
-        #Derived.toEncoder_[A 2] =
+        #Derived.to_encoder_[A 2] =
           \#Derived.tag ->
             custom
               \#Derived.bytes, #Derived.fmt ->
-                appendWith
+                append_with
                   #Derived.bytes
                   (when #Derived.tag is
                     A #Derived.2 #Derived.3 ->
-                      tag "A" [toEncoder #Derived.2, toEncoder #Derived.3])
+                      tag "A" [to_encoder #Derived.2, to_encoder #Derived.3])
                   #Derived.fmt
-        "###
+        "##
         )
     })
 }
@@ -364,31 +364,31 @@ fn tag_two_labels() {
         ToEncoder,
         v!([A v!(U8) v!(STR) v!(U16), B v!(STR)]),
         |golden| {
-            assert_snapshot!(golden, @r###"
+            assert_snapshot!(golden, @r##"
             # derived for [A U8 Str U16, B Str]
-            # [A val val1 val1, B val1] -[[toEncoder_[A 3,B 1](0)]]-> Encoder fmt where fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
-            # [A val val1 val1, B val1] -[[toEncoder_[A 3,B 1](0)]]-> (List U8, fmt -[[custom(6) [A val val1 val1, B val1]]]-> List U8) where fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
+            # [A val val1 val1, B val1] -[[to_encoder_[A 3,B 1](0)]]-> Encoder fmt where fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
+            # [A val val1 val1, B val1] -[[to_encoder_[A 3,B 1](0)]]-> (List U8, fmt -[[custom(6) [A val val1 val1, B val1]]]-> List U8) where fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
             # Specialization lambda sets:
-            #   @<1>: [[toEncoder_[A 3,B 1](0)]]
+            #   @<1>: [[to_encoder_[A 3,B 1](0)]]
             #   @<2>: [[custom(6) [A val val1 val1, B val1]]] where val implements Encoding, val1 implements Encoding
-            #Derived.toEncoder_[A 3,B 1] =
+            #Derived.to_encoder_[A 3,B 1] =
               \#Derived.tag ->
                 custom
                   \#Derived.bytes, #Derived.fmt ->
-                    appendWith
+                    append_with
                       #Derived.bytes
                       (when #Derived.tag is
                         A #Derived.2 #Derived.3 #Derived.4 ->
                           tag
                             "A"
                             [
-                              toEncoder #Derived.2,
-                              toEncoder #Derived.3,
-                              toEncoder #Derived.4,
+                              to_encoder #Derived.2,
+                              to_encoder #Derived.3,
+                              to_encoder #Derived.4,
                             ]
-                        B #Derived.5 -> tag "B" [toEncoder #Derived.5])
+                        B #Derived.5 -> tag "B" [to_encoder #Derived.5])
                       #Derived.fmt
-            "###
+            "##
             )
         },
     )
@@ -400,25 +400,25 @@ fn recursive_tag_union() {
         ToEncoder,
         v!([Nil, Cons v!(U8) v!(^lst) ] as lst),
         |golden| {
-            assert_snapshot!(golden, @r###"
+            assert_snapshot!(golden, @r##"
             # derived for [Cons U8 $rec, Nil] as $rec
-            # [Cons val val1, Nil] -[[toEncoder_[Cons 2,Nil 0](0)]]-> Encoder fmt where fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
-            # [Cons val val1, Nil] -[[toEncoder_[Cons 2,Nil 0](0)]]-> (List U8, fmt -[[custom(4) [Cons val val1, Nil]]]-> List U8) where fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
+            # [Cons val val1, Nil] -[[to_encoder_[Cons 2,Nil 0](0)]]-> Encoder fmt where fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
+            # [Cons val val1, Nil] -[[to_encoder_[Cons 2,Nil 0](0)]]-> (List U8, fmt -[[custom(4) [Cons val val1, Nil]]]-> List U8) where fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
             # Specialization lambda sets:
-            #   @<1>: [[toEncoder_[Cons 2,Nil 0](0)]]
+            #   @<1>: [[to_encoder_[Cons 2,Nil 0](0)]]
             #   @<2>: [[custom(4) [Cons val val1, Nil]]] where val implements Encoding, val1 implements Encoding
-            #Derived.toEncoder_[Cons 2,Nil 0] =
+            #Derived.to_encoder_[Cons 2,Nil 0] =
               \#Derived.tag ->
                 custom
                   \#Derived.bytes, #Derived.fmt ->
-                    appendWith
+                    append_with
                       #Derived.bytes
                       (when #Derived.tag is
                         Cons #Derived.2 #Derived.3 ->
-                          tag "Cons" [toEncoder #Derived.2, toEncoder #Derived.3]
+                          tag "Cons" [to_encoder #Derived.2, to_encoder #Derived.3]
                         Nil -> tag "Nil" [])
                       #Derived.fmt
-            "###
+            "##
             )
         },
     )
@@ -427,22 +427,22 @@ fn recursive_tag_union() {
 #[test]
 fn list() {
     derive_test(ToEncoder, v!(Symbol::LIST_LIST v!(STR)), |golden| {
-        assert_snapshot!(golden, @r###"
+        assert_snapshot!(golden, @r"
         # derived for List Str
-        # List val -[[toEncoder_list(0)]]-> Encoder fmt where fmt implements EncoderFormatting, val implements Encoding
-        # List val -[[toEncoder_list(0)]]-> (List U8, fmt -[[custom(4) (List val)]]-> List U8) where fmt implements EncoderFormatting, val implements Encoding
+        # List val -[[to_encoder_list(0)]]-> Encoder fmt where fmt implements EncoderFormatting, val implements Encoding
+        # List val -[[to_encoder_list(0)]]-> (List U8, fmt -[[custom(4) (List val)]]-> List U8) where fmt implements EncoderFormatting, val implements Encoding
         # Specialization lambda sets:
-        #   @<1>: [[toEncoder_list(0)]]
+        #   @<1>: [[to_encoder_list(0)]]
         #   @<2>: [[custom(4) (List val)]] where val implements Encoding
-        #Derived.toEncoder_list =
+        #Derived.to_encoder_list =
           \#Derived.lst ->
             custom
               \#Derived.bytes, #Derived.fmt ->
-                appendWith
+                append_with
                   #Derived.bytes
-                  (list #Derived.lst \#Derived.elem -> toEncoder #Derived.elem)
+                  (list #Derived.lst \#Derived.elem -> to_encoder #Derived.elem)
                   #Derived.fmt
-        "###
+        "
         )
     })
 }

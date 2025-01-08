@@ -6,10 +6,10 @@ snapshot_kind: text
 
 ── TOO MANY ARGS in tests/test-projects/module_params/arity_mismatch.roc ───────
 
-The getUser function expects 1 argument, but it got 2 instead:
+The get_user function expects 1 argument, but it got 2 instead:
 
-12│      $(Api.getUser 1 2)
-           ^^^^^^^^^^^
+12│      $(Api.get_user(1, 2))
+           ^^^^^^^^^^^^
 
 Are there any missing commas? Or missing parentheses?
 
@@ -18,18 +18,18 @@ Are there any missing commas? Or missing parentheses?
 
 This value is not a function, but it was given 1 argument:
 
-13│      $(Api.baseUrl 1)
-           ^^^^^^^^^^^
+13│      $(Api.base_url(1))
+           ^^^^^^^^^^^^
 
 Are there any missing commas? Or missing parentheses?
 
 
 ── TOO FEW ARGS in tests/test-projects/module_params/arity_mismatch.roc ────────
 
-The getPostComment function expects 2 arguments, but it got only 1:
+The get_post_comment function expects 2 arguments, but it got only 1:
 
-16│      $(Api.getPostComment 1)
-           ^^^^^^^^^^^^^^^^^^
+16│      $(Api.get_post_comment(1))
+           ^^^^^^^^^^^^^^^^^^^^
 
 Roc does not allow functions to be partially applied. Use a closure to
 make partial application explicit.

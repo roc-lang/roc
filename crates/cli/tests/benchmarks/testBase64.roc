@@ -5,7 +5,7 @@ import pf.Host
 
 main! : {} => {}
 main! = \{} ->
-    when Base64.from_bytes(Str.toUtf8("Hello World")) is
+    when Base64.from_bytes(Str.to_utf8("Hello World")) is
         Err(_) -> Host.put_line!("sadness")
         Ok(encoded) ->
             Host.put_line!(Str.concat("encoded: ", encoded))

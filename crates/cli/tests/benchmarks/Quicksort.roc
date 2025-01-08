@@ -2,13 +2,13 @@ module [sort_by, sort_with, show]
 
 show : List I64 -> Str
 show = \list ->
-    if List.isEmpty(list) then
+    if List.is_empty(list) then
         "[]"
     else
         content =
             list
-            |> List.map(Num.toStr)
-            |> Str.joinWith(", ")
+            |> List.map(Num.to_str)
+            |> Str.join_with(", ")
 
         "[$(content)]"
 
@@ -30,7 +30,7 @@ quicksort_help = \list, order, low, high ->
         when partition(low, high, list, order) is
             Pair(partition_index, partitioned) ->
                 partitioned
-                |> quicksort_help(order, low, Num.subSaturated(partition_index, 1))
+                |> quicksort_help(order, low, Num.sub_saturated(partition_index, 1))
                 |> quicksort_help(order, (partition_index + 1), high)
     else
         list

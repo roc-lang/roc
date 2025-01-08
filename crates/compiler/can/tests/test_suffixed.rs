@@ -164,7 +164,7 @@ mod suffixed_tests {
             main =
                 "123"
                 |> Str.toU8 ?? 255
-                |> Num.toStr
+                |> Num.to_str
                 |> line!
 
                 Task.ok {}

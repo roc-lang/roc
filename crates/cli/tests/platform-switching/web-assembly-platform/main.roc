@@ -3,7 +3,7 @@ platform "echo-in-web-assembly"
     exposes []
     packages {}
     imports []
-    provides [mainForHost]
+    provides [main_for_host]
 
-mainForHost : Str
-mainForHost = main
+main_for_host : Str
+main_for_host = main

@@ -3,7 +3,7 @@ platform "test-platform"
     exposes []
     packages {}
     imports []
-    provides [mainForHost]
+    provides [main_for_host]
 
 # This case is important to test because there's no padding
 # after the largest variant, so the compiler adds an extra u8
@@ -11,5 +11,5 @@ platform "test-platform"
 # to store the discriminant. We have to generate glue code accordingly!
 NonRecursive : [Foo Str, Bar I64, Blah I32, Baz]
 
-mainForHost : {} -> NonRecursive
-mainForHost = \{} -> main
+main_for_host : {} -> NonRecursive
+main_for_host = \{} -> main

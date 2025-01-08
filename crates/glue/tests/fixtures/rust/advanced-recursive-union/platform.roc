@@ -3,7 +3,7 @@ platform "test-platform"
     exposes []
     packages {}
     imports []
-    provides [mainForHost]
+    provides [main_for_host]
 
 Tool : [
     SystemTool { name : Str, num : U32 },
@@ -13,7 +13,7 @@ Tool : [
 Command : [Command { tool : Tool }]
 
 Job : [
-    Job { command : Command, inputFiles : List Str },
+    Job { command : Command, input_files : List Str },
     Foo Str,
     # TODO make a recursive tag union test that doesn't try to do mutual recursion,
     # just so I can get a PR up.
@@ -22,5 +22,5 @@ Job : [
 
 Rbt : { default : Job }
 
-mainForHost : {} -> Rbt
-mainForHost = \{} -> main
+main_for_host : {} -> Rbt
+main_for_host = \{} -> main

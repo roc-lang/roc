@@ -5,6 +5,6 @@ import pf.Effect
 # just a stubbed app for building the test platform
 main! = \{} ->
 
-    Effect.putLine! ""
+    Effect.put_line!("")
 
     {}

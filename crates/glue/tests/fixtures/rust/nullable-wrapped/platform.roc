@@ -3,9 +3,9 @@ platform "test-platform"
     exposes []
     packages {}
     imports []
-    provides [mainForHost]
+    provides [main_for_host]
 
 StrFingerTree : [Empty, Single Str, More Str StrFingerTree]
 
-mainForHost : {} -> StrFingerTree
-mainForHost = \{} -> main
+main_for_host : {} -> StrFingerTree
+main_for_host = \{} -> main

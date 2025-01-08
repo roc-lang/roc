@@ -1,7 +1,7 @@
 module [
     Encoder,
     Encoding,
-    toEncoder,
+    to_encoder,
     EncoderFormatting,
     u8,
     u16,
@@ -23,9 +23,9 @@ module [
     tag,
     tuple,
     custom,
-    appendWith,
+    append_with,
     append,
-    toBytes,
+    to_bytes,
 ]
 
 import Num exposing [
@@ -48,7 +48,7 @@ import Bool exposing [Bool]
 Encoder fmt := List U8, fmt -> List U8 where fmt implements EncoderFormatting
 
 Encoding implements
-    toEncoder : val -> Encoder fmt where val implements Encoding, fmt implements EncoderFormatting
+    to_encoder : val -> Encoder fmt where val implements Encoding, fmt implements EncoderFormatting
 
 EncoderFormatting implements
     u8 : U8 -> Encoder fmt where fmt implements EncoderFormatting
@@ -76,41 +76,41 @@ EncoderFormatting implements
 ## ```roc
 ## expect
 ##     # Appends the byte 42
-##     customEncoder = Encode.custom (\bytes, _fmt -> List.append bytes 42)
+##     custom_encoder = Encode.custom(\bytes, _fmt -> List.append(bytes, 42))
 ##
-##     actual = Encode.appendWith [] customEncoder Core.json
+##     actual = Encode.append_with([], custom_encoder, Core.json)
 ##     expected = [42] # Expected result is a list with a single byte, 42
 ##
 ##     actual == expected
 ## ```
 custom : (List U8, fmt -> List U8) -> Encoder fmt where fmt implements EncoderFormatting
-custom = \encoder -> @Encoder encoder
+custom = \encoder -> @Encoder(encoder)
 
-appendWith : List U8, Encoder fmt, fmt -> List U8 where fmt implements EncoderFormatting
-appendWith = \lst, @Encoder doEncoding, fmt -> doEncoding lst fmt
+append_with : List U8, Encoder fmt, fmt -> List U8 where fmt implements EncoderFormatting
+append_with = \lst, @Encoder(do_encoding), fmt -> do_encoding(lst, fmt)
 
 ## Appends the encoded representation of a value to an existing list of bytes.
 ##
 ## ```roc
 ## expect
-##     actual = Encode.append [] { foo: 43 } Core.json
-##     expected = Str.toUtf8 """{"foo":43}"""
+##     actual = Encode.append([], { foo: 43 }, Core.json)
+##     expected = Str.to_utf8("""{"foo":43}""")
 ##
 ##     actual == expected
 ## ```
 append : List U8, val, fmt -> List U8 where val implements Encoding, fmt implements EncoderFormatting
-append = \lst, val, fmt -> appendWith lst (toEncoder val) fmt
+append = \lst, val, fmt -> append_with(lst, to_encoder(val), fmt)
 
 ## Encodes a value to a list of bytes (`List U8`) according to the specified format.
 ##
 ## ```roc
 ## expect
-##     fooRec = { foo: 42 }
+##     foo_rec = { foo: 42 }
 ##
-##     actual = Encode.toBytes fooRec Core.json
-##     expected = Str.toUtf8 """{"foo":42}"""
+##     actual = Encode.to_bytes(foo_rec, Core.json)
+##     expected = Str.to_utf8("""{"foo":42}""")
 ##
 ##     actual == expected
 ## ```
-toBytes : val, fmt -> List U8 where val implements Encoding, fmt implements EncoderFormatting
-toBytes = \val, fmt -> appendWith [] (toEncoder val) fmt
+to_bytes : val, fmt -> List U8 where val implements Encoding, fmt implements EncoderFormatting
+to_bytes = \val, fmt -> append_with([], to_encoder(val), fmt)

@@ -12,7 +12,7 @@ main! = \{} ->
     |> Host.put_line!
 
 show : RedBlackTree I64 {} -> Str
-show = \tree -> show_rb_tree(tree, Num.toStr, \{} -> "{}")
+show = \tree -> show_rb_tree(tree, Num.to_str, \{} -> "{}")
 
 show_rb_tree : RedBlackTree k v, (k -> Str), (v -> Str) -> Str
 show_rb_tree = \tree, show_key, show_value ->

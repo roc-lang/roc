@@ -24,10 +24,10 @@ example1 =
     step : I64 -> Set I64
     step = \n ->
         when n is
-            1 -> Set.fromList([2, 3])
-            2 -> Set.fromList([4])
-            3 -> Set.fromList([4])
-            _ -> Set.fromList([])
+            1 -> Set.from_list([2, 3])
+            2 -> Set.from_list([4])
+            3 -> Set.from_list([4])
+            _ -> Set.from_list([])
 
     cost : I64, I64 -> F64
     cost = \_, _ -> 1

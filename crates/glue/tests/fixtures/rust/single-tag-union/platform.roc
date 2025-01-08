@@ -3,9 +3,9 @@ platform "test-platform"
     exposes []
     packages {}
     imports []
-    provides [mainForHost]
+    provides [main_for_host]
 
 SingleTagUnion : [OneTag]
 
-mainForHost : SingleTagUnion
-mainForHost = main
+main_for_host : SingleTagUnion
+main_for_host = main

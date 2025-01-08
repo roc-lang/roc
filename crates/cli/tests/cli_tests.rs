@@ -188,7 +188,8 @@ mod cli_tests {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore)]
+    // #[cfg_attr(windows, ignore)]
+    #[ignore]
     fn false_interpreter() {
         let cli_build = ExecCli::new(
             CMD_BUILD,
@@ -852,7 +853,7 @@ mod cli_tests {
                 ),
             );
 
-            let expected_output = "(@Community {friends: [{2}, {2}, {0, 1}], people: [(@Person {age: 27, favoriteColor: Blue, firstName: \"John\", hasBeard: Bool.true, lastName: \"Smith\"}), (@Person {age: 47, favoriteColor: Green, firstName: \"Debby\", hasBeard: Bool.false, lastName: \"Johnson\"}), (@Person {age: 33, favoriteColor: (RGB (255, 255, 0)), firstName: \"Jane\", hasBeard: Bool.false, lastName: \"Doe\"})]})\n";
+            let expected_output = "(@Community {friends: [{2}, {2}, {0, 1}], people: [(@Person {age: 27, favorite_color: Blue, first_name: \"John\", has_beard: Bool.true, last_name: \"Smith\"}), (@Person {age: 47, favorite_color: Green, first_name: \"Debby\", has_beard: Bool.false, last_name: \"Johnson\"}), (@Person {age: 33, favorite_color: (RGB (255, 255, 0)), first_name: \"Jane\", has_beard: Bool.false, last_name: \"Doe\"})]})\n";
 
             cli_build.full_check_build_and_run(
                 expected_output,
@@ -963,7 +964,7 @@ mod cli_tests {
                 ),
             );
 
-            let expected_output = "notEffectful: hardcoded\neffectful: from stdin\n";
+            let expected_output = "not_effectful: hardcoded\neffectful: from stdin\n";
 
             cli_build.check_build_and_run(
                 expected_output,

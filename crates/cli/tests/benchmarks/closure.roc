@@ -6,7 +6,7 @@ main! = \{} ->
     |> Result.try(closure2)
     |> Result.try(closure3)
     |> Result.try(closure4)
-    |> Result.withDefault({})
+    |> Result.with_default({})
 
 # ---
 closure1 : {} -> Result {} []
@@ -14,7 +14,7 @@ closure1 = \_ ->
     Ok(foo(to_unit_borrowed, "a long string such that it's malloced"))
     |> Result.map(\_ -> {})
 
-to_unit_borrowed = \x -> Str.countUtf8Bytes(x)
+to_unit_borrowed = \x -> Str.count_utf8_bytes(x)
 
 foo = \f, x -> f(x)
 

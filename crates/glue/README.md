@@ -21,13 +21,13 @@ platform "glue-types"
     exposes []
     packages {}
     imports []
-    provides [mainForHost]
+    provides [main_for_host]
 
 GlueTypes : {
     a : SomeType,
     b : AnotherType,
 }
 
-mainForHost : GlueTypes
-mainForHost = main
+main_for_host : GlueTypes
+main_for_host = main
 ```

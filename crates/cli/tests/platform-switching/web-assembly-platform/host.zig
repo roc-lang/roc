@@ -35,14 +35,14 @@ export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
 
 // NOTE roc_panic and roc_dbg is provided in the JS file, so it can throw an exception
 
-extern fn roc__mainForHost_1_exposed(*RocStr) void;
+extern fn roc__main_for_host_1_exposed(*RocStr) void;
 
 extern fn js_display_roc_string(str_bytes: ?[*]u8, str_len: usize) void;
 
 pub export fn main() u8 {
     // actually call roc to populate the callresult
     var callresult = RocStr.empty();
-    roc__mainForHost_1_exposed(&callresult);
+    roc__main_for_host_1_exposed(&callresult);
 
     // display the result using JavaScript
     js_display_roc_string(callresult.asU8ptrMut(), callresult.len());

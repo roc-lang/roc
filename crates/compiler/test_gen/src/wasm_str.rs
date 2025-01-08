@@ -19,7 +19,7 @@ fn str_split_on_empty_delimiter() {
     assert_evals_to!(
         indoc!(
             r#"
-                List.len (Str.splitOn "hello" "")
+                List.len (Str.split_on "hello" "")
             "#
         ),
         1,
@@ -32,7 +32,7 @@ fn str_split_on_bigger_delimiter_small_str() {
     assert_evals_to!(
         indoc!(
             r#"
-                List.len (Str.splitOn "hello" "JJJJ there")
+                List.len (Str.split_on "hello" "JJJJ there")
             "#
         ),
         1,
@@ -45,7 +45,7 @@ fn str_split_on_str_concat_repeated() {
     assert_evals_to!(
         indoc!(
             r#"
-                when List.first (Str.splitOn "JJJJJ" "JJJJ there") is
+                when List.first (Str.split_on "JJJJJ" "JJJJ there") is
                     Ok str ->
                         str
                             |> Str.concat str
@@ -70,7 +70,7 @@ fn str_split_on_small_str_bigger_delimiter() {
             r#"
                 when
                     List.first
-                        (Str.splitOn "JJJ" "0123456789abcdefghi")
+                        (Str.split_on "JJJ" "0123456789abcdefghi")
                 is
                     Ok str -> str
                     _ -> ""
@@ -86,7 +86,7 @@ fn str_split_on_big_str_small_delimiter() {
     assert_evals_to!(
         indoc!(
             r#"
-                Str.splitOn "01234567789abcdefghi?01234567789abcdefghi" "?"
+                Str.split_on "01234567789abcdefghi?01234567789abcdefghi" "?"
             "#
         ),
         RocList::from_slice(&[
@@ -99,7 +99,7 @@ fn str_split_on_big_str_small_delimiter() {
     assert_evals_to!(
         indoc!(
             r#"
-                Str.splitOn "01234567789abcdefghi 3ch 01234567789abcdefghi" "3ch"
+                Str.split_on "01234567789abcdefghi 3ch 01234567789abcdefghi" "3ch"
             "#
         ),
         RocList::from_slice(&[
@@ -115,7 +115,7 @@ fn str_split_on_small_str_small_delimiter() {
     assert_evals_to!(
         indoc!(
             r#"
-                Str.splitOn "J!J!J" "!"
+                Str.split_on "J!J!J" "!"
             "#
         ),
         RocList::from_slice(&[RocStr::from("J"), RocStr::from("J"), RocStr::from("J")]),
@@ -128,7 +128,7 @@ fn str_split_on_bigger_delimiter_big_strs() {
     assert_evals_to!(
         indoc!(
             r#"
-                Str.splitOn
+                Str.split_on
                     "string to split is shorter"
                     "than the delimiter which happens to be very very long"
             "#
@@ -143,7 +143,7 @@ fn str_split_on_empty_strs() {
     assert_evals_to!(
         indoc!(
             r#"
-                    Str.splitOn "" ""
+                    Str.split_on "" ""
                 "#
         ),
         RocList::from_slice(&[RocStr::from("")]),
@@ -156,7 +156,7 @@ fn str_split_on_minimal_example() {
     assert_evals_to!(
         indoc!(
             r#"
-                    Str.splitOn "a," ","
+                    Str.split_on "a," ","
                 "#
         ),
         RocList::from_slice(&[RocStr::from("a"), RocStr::from("")]),
@@ -169,7 +169,7 @@ fn str_split_on_small_str_big_delimiter() {
     assert_evals_to!(
         indoc!(
             r#"
-                    Str.splitOn
+                    Str.split_on
                         "1---- ---- ---- ---- ----2---- ---- ---- ---- ----"
                         "---- ---- ---- ---- ----"
                         |> List.len
@@ -182,7 +182,7 @@ fn str_split_on_small_str_big_delimiter() {
     assert_evals_to!(
         indoc!(
             r#"
-                    Str.splitOn
+                    Str.split_on
                         "1---- ---- ---- ---- ----2---- ---- ---- ---- ----"
                         "---- ---- ---- ---- ----"
                 "#
@@ -197,7 +197,7 @@ fn str_split_on_small_str_20_char_delimiter() {
     assert_evals_to!(
         indoc!(
             r#"
-                    Str.splitOn
+                    Str.split_on
                         "3|-- -- -- -- -- -- |4|-- -- -- -- -- -- |"
                         "|-- -- -- -- -- -- |"
                 "#
@@ -245,26 +245,26 @@ fn small_str_zeroed_literal() {
             r#"
                 app "test" provides [main] to "./platform"
 
-                createStr = \isForRealThisTime ->
-                    if isForRealThisTime then
+                create_str = \is_for_real_this_time ->
+                    if is_for_real_this_time then
                         "J"
                     else
                         "xxxxxxx"
 
-                functionWithReusedSpace = \isForRealThisTime ->
+                function_with_reused_space = \is_for_real_this_time ->
                     # Different string value on each call, at the same memory location
-                    # (Can't inline createStr without refcounting, which isn't implemented)
-                    reusedSpace = createStr isForRealThisTime
+                    # (Can't inline create_str without refcounting, which isn't implemented)
+                    reused_space = create_str is_for_real_this_time
 
                     # Unoptimised 'if' ensures that we don't just allocate in the caller's frame
                     if Bool.true then
-                        reusedSpace
+                        reused_space
                     else
-                        reusedSpace
+                        reused_space
 
                 main =
-                    garbage = functionWithReusedSpace Bool.false
-                    functionWithReusedSpace Bool.true
+                    garbage = function_with_reused_space Bool.false
+                    function_with_reused_space Bool.true
                  "#
         ),
         [
@@ -346,13 +346,13 @@ fn str_concat_empty() {
 
 #[test]
 fn small_str_is_empty() {
-    assert_evals_to!(r#"Str.isEmpty "abc""#, false, bool);
+    assert_evals_to!(r#"Str.is_empty "abc""#, false, bool);
 }
 
 #[test]
 fn big_str_is_empty() {
     assert_evals_to!(
-        r#"Str.isEmpty "this is more than 15 chars long""#,
+        r#"Str.is_empty "this is more than 15 chars long""#,
         false,
         bool
     );
@@ -360,29 +360,29 @@ fn big_str_is_empty() {
 
 #[test]
 fn empty_str_is_empty() {
-    assert_evals_to!(r#"Str.isEmpty """#, true, bool);
+    assert_evals_to!(r#"Str.is_empty """#, true, bool);
 }
 
 #[test]
 fn str_starts_with() {
-    assert_evals_to!(r#"Str.startsWith "hello world" "hell""#, true, bool);
-    assert_evals_to!(r#"Str.startsWith "hello world" """#, true, bool);
-    assert_evals_to!(r#"Str.startsWith "nope" "hello world""#, false, bool);
-    assert_evals_to!(r#"Str.startsWith "hell" "hello world""#, false, bool);
-    assert_evals_to!(r#"Str.startsWith "" "hello world""#, false, bool);
+    assert_evals_to!(r#"Str.starts_with "hello world" "hell""#, true, bool);
+    assert_evals_to!(r#"Str.starts_with "hello world" """#, true, bool);
+    assert_evals_to!(r#"Str.starts_with "nope" "hello world""#, false, bool);
+    assert_evals_to!(r#"Str.starts_with "hell" "hello world""#, false, bool);
+    assert_evals_to!(r#"Str.starts_with "" "hello world""#, false, bool);
 }
 
 #[test]
 fn str_ends_with() {
-    assert_evals_to!(r#"Str.endsWith "hello world" "world""#, true, bool);
-    assert_evals_to!(r#"Str.endsWith "nope" "hello world""#, false, bool);
-    assert_evals_to!(r#"Str.endsWith "" "hello world""#, false, bool);
+    assert_evals_to!(r#"Str.ends_with "hello world" "world""#, true, bool);
+    assert_evals_to!(r#"Str.ends_with "nope" "hello world""#, false, bool);
+    assert_evals_to!(r#"Str.ends_with "" "hello world""#, false, bool);
 }
 
 #[test]
 fn str_starts_with_same_big_str() {
     assert_evals_to!(
-        r#"Str.startsWith "123456789123456789" "123456789123456789""#,
+        r#"Str.starts_with "123456789123456789" "123456789123456789""#,
         true,
         bool
     );
@@ -391,7 +391,7 @@ fn str_starts_with_same_big_str() {
 #[test]
 fn str_starts_with_different_big_str() {
     assert_evals_to!(
-        r#"Str.startsWith "12345678912345678910" "123456789123456789""#,
+        r#"Str.starts_with "12345678912345678910" "123456789123456789""#,
         true,
         bool
     );
@@ -399,16 +399,16 @@ fn str_starts_with_different_big_str() {
 
 #[test]
 fn str_starts_with_same_small_str() {
-    assert_evals_to!(r#"Str.startsWith "1234" "1234""#, true, bool);
+    assert_evals_to!(r#"Str.starts_with "1234" "1234""#, true, bool);
 }
 
 #[test]
 fn str_starts_with_different_small_str() {
-    assert_evals_to!(r#"Str.startsWith "1234" "12""#, true, bool);
+    assert_evals_to!(r#"Str.starts_with "1234" "12""#, true, bool);
 }
 #[test]
 fn str_starts_with_false_small_str() {
-    assert_evals_to!(r#"Str.startsWith "1234" "23""#, false, bool);
+    assert_evals_to!(r#"Str.starts_with "1234" "23""#, false, bool);
 }
 
 #[test]
@@ -416,7 +416,7 @@ fn str_from_utf8_pass_single_ascii() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Str.fromUtf8 [97] is
+                    when Str.from_utf8 [97] is
                         Ok val -> val
                         Err _ -> ""
                 "#
@@ -431,7 +431,7 @@ fn str_from_utf8_pass_many_ascii() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Str.fromUtf8 [97, 98, 99, 0x7E] is
+                    when Str.from_utf8 [97, 98, 99, 0x7E] is
                         Ok val -> val
                         Err _ -> ""
                 "#
@@ -446,7 +446,7 @@ fn str_from_utf8_pass_single_unicode() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Str.fromUtf8 [0xE2, 0x88, 0x86] is
+                    when Str.from_utf8 [0xE2, 0x88, 0x86] is
                         Ok val -> val
                         Err _ -> ""
                 "#
@@ -461,7 +461,7 @@ fn str_from_utf8_pass_many_unicode() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Str.fromUtf8 [0xE2, 0x88, 0x86, 0xC5, 0x93, 0xC2, 0xAC] is
+                    when Str.from_utf8 [0xE2, 0x88, 0x86, 0xC5, 0x93, 0xC2, 0xAC] is
                         Ok val -> val
                         Err _ -> ""
                 "#
@@ -476,7 +476,7 @@ fn str_from_utf8_pass_single_grapheme() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Str.fromUtf8 [0xF0, 0x9F, 0x92, 0x96] is
+                    when Str.from_utf8 [0xF0, 0x9F, 0x92, 0x96] is
                         Ok val -> val
                         Err _ -> ""
                 "#
@@ -491,7 +491,7 @@ fn str_from_utf8_pass_many_grapheme() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Str.fromUtf8 [0xF0, 0x9F, 0x92, 0x96, 0xF0, 0x9F, 0xA4, 0xA0, 0xF0, 0x9F, 0x9A, 0x80] is
+                    when Str.from_utf8 [0xF0, 0x9F, 0x92, 0x96, 0xF0, 0x9F, 0xA4, 0xA0, 0xF0, 0x9F, 0x9A, 0x80] is
                         Ok val -> val
                         Err _ -> ""
                 "#
@@ -506,7 +506,7 @@ fn str_from_utf8_pass_all() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Str.fromUtf8 [0xF0, 0x9F, 0x92, 0x96, 98, 0xE2, 0x88, 0x86] is
+                    when Str.from_utf8 [0xF0, 0x9F, 0x92, 0x96, 98, 0xE2, 0x88, 0x86] is
                         Ok val -> val
                         Err _ -> ""
                 "#
@@ -521,9 +521,9 @@ fn str_from_utf8_fail_invalid_start_byte() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Str.fromUtf8 [97, 98, 0x80, 99] is
-                        Err (BadUtf8 {problem: InvalidStartByte, index: byteIndex}) ->
-                            if byteIndex == 2 then
+                    when Str.from_utf8 [97, 98, 0x80, 99] is
+                        Err (BadUtf8 {problem: InvalidStartByte, index: byte_index}) ->
+                            if byte_index == 2 then
                                 "a"
                             else
                                 "b"
@@ -540,9 +540,9 @@ fn str_from_utf8_fail_unexpected_end_of_sequence() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Str.fromUtf8 [97, 98, 99, 0xC2] is
-                        Err (BadUtf8 {problem: UnexpectedEndOfSequence, index: byteIndex}) ->
-                            if byteIndex == 3 then
+                    when Str.from_utf8 [97, 98, 99, 0xC2] is
+                        Err (BadUtf8 {problem: UnexpectedEndOfSequence, index: byte_index}) ->
+                            if byte_index == 3 then
                                 "a"
                             else
                                 "b"
@@ -559,9 +559,9 @@ fn str_from_utf8_fail_expected_continuation() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Str.fromUtf8 [97, 98, 99, 0xC2, 0x00] is
-                        Err (BadUtf8 {problem: ExpectedContinuation, index: byteIndex}) ->
-                            if byteIndex == 3 then
+                    when Str.from_utf8 [97, 98, 99, 0xC2, 0x00] is
+                        Err (BadUtf8 {problem: ExpectedContinuation, index: byte_index}) ->
+                            if byte_index == 3 then
                                 "a"
                             else
                                 "b"
@@ -578,9 +578,9 @@ fn str_from_utf8_fail_overlong_encoding() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Str.fromUtf8 [97, 0xF0, 0x80, 0x80, 0x80] is
-                        Err (BadUtf8 {problem: OverlongEncoding, index: byteIndex}) ->
-                            if byteIndex == 1 then
+                    when Str.from_utf8 [97, 0xF0, 0x80, 0x80, 0x80] is
+                        Err (BadUtf8 {problem: OverlongEncoding, index: byte_index}) ->
+                            if byte_index == 1 then
                                 "a"
                             else
                                 "b"
@@ -597,9 +597,9 @@ fn str_from_utf8_fail_codepoint_too_large() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Str.fromUtf8 [97, 0xF4, 0x90, 0x80, 0x80] is
-                        Err (BadUtf8 {problem: CodepointTooLarge, index: byteIndex}) ->
-                            if byteIndex == 1 then
+                    when Str.from_utf8 [97, 0xF4, 0x90, 0x80, 0x80] is
+                        Err (BadUtf8 {problem: CodepointTooLarge, index: byte_index}) ->
+                            if byte_index == 1 then
                                 "a"
                             else
                                 "b"
@@ -616,9 +616,9 @@ fn str_from_utf8_fail_surrogate_half() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Str.fromUtf8 [97, 98, 0xED, 0xA0, 0x80] is
-                        Err (BadUtf8 {problem: EncodesSurrogateHalf, index: byteIndex}) ->
-                            if byteIndex == 2 then
+                    when Str.from_utf8 [97, 98, 0xED, 0xA0, 0x80] is
+                        Err (BadUtf8 {problem: EncodesSurrogateHalf, index: byte_index}) ->
+                            if byte_index == 2 then
                                 "a"
                             else
                                 "b"
@@ -645,7 +645,7 @@ fn str_equality() {
 #[test]
 fn str_join_comma_small() {
     assert_evals_to!(
-        r#"Str.joinWith ["1", "2"] ", " "#,
+        r#"Str.join_with ["1", "2"] ", " "#,
         RocStr::from("1, 2"),
         RocStr
     );
@@ -654,7 +654,7 @@ fn str_join_comma_small() {
 #[test]
 fn str_join_comma_big() {
     assert_evals_to!(
-        r#"Str.joinWith ["10000000", "2000000", "30000000"] ", " "#,
+        r#"Str.join_with ["10000000", "2000000", "30000000"] ", " "#,
         RocStr::from("10000000, 2000000, 30000000"),
         RocStr
     );
@@ -662,18 +662,18 @@ fn str_join_comma_big() {
 
 #[test]
 fn str_join_comma_single() {
-    assert_evals_to!(r#"Str.joinWith ["1"] ", " "#, RocStr::from("1"), RocStr);
+    assert_evals_to!(r#"Str.join_with ["1"] ", " "#, RocStr::from("1"), RocStr);
 }
 
 #[test]
 fn str_to_utf8() {
     assert_evals_to!(
-        r#"Str.toUtf8 "hello""#,
+        r#"Str.to_utf8 "hello""#,
         RocList::from_slice(&[104, 101, 108, 108, 111]),
         RocList<u8>
     );
     assert_evals_to!(
-        r#"Str.toUtf8 "this is a long string""#,
+        r#"Str.to_utf8 "this is a long string""#,
         RocList::from_slice(&[
             116, 104, 105, 115, 32, 105, 115, 32, 97, 32, 108, 111, 110, 103, 32, 115, 116, 114,
             105, 110, 103
@@ -688,10 +688,10 @@ fn str_from_utf8() {
         indoc!(
             r#"
             bytes =
-                Str.toUtf8 "hello"
+                Str.to_utf8 "hello"
 
-            when Str.fromUtf8 bytes is
-                   Ok utf8String -> utf8String
+            when Str.from_utf8 bytes is
+                   Ok utf8_string -> utf8_string
                    _ -> ""
             "#
         ),
@@ -706,11 +706,11 @@ fn str_from_utf8_slice() {
         indoc!(
             r#"
             bytes =
-                Str.toUtf8 "hello"
+                Str.to_utf8 "hello"
                 |> List.sublist { start: 1, len: 4 }
 
-            when Str.fromUtf8 bytes is
-                   Ok utf8String -> utf8String
+            when Str.from_utf8 bytes is
+                   Ok utf8_string -> utf8_string
                    _ -> ""
             "#
         ),
@@ -725,11 +725,11 @@ fn str_from_utf8_slice_not_end() {
         indoc!(
             r#"
             bytes =
-                Str.toUtf8 "hello"
+                Str.to_utf8 "hello"
                 |> List.sublist { start: 1, len: 3 }
 
-            when Str.fromUtf8 bytes is
-                   Ok utf8String -> utf8String
+            when Str.from_utf8 bytes is
+                   Ok utf8_string -> utf8_string
                    _ -> ""
             "#
         ),
@@ -744,11 +744,11 @@ fn str_from_utf8_order_does_not_matter() {
         indoc!(
             r#"
             bytes =
-                Str.toUtf8 "hello"
+                Str.to_utf8 "hello"
                 |> List.sublist { start: 1, len: 3 }
 
-            when Str.fromUtf8 bytes is
-                   Ok utf8String -> utf8String
+            when Str.from_utf8 bytes is
+                   Ok utf8_string -> utf8_string
                    _ -> ""
             "#
         ),
@@ -875,13 +875,13 @@ fn str_trim_small_to_small_shared() {
 
 #[test]
 fn str_trim_start_small_blank_string() {
-    assert_evals_to!(indoc!(r#"Str.trimStart " ""#), RocStr::from(""), RocStr);
+    assert_evals_to!(indoc!(r#"Str.trim_start " ""#), RocStr::from(""), RocStr);
 }
 
 #[test]
 fn str_trim_start_small_to_small() {
     assert_evals_to!(
-        indoc!(r#"Str.trimStart "  hello  ""#),
+        indoc!(r#"Str.trim_start "  hello  ""#),
         RocStr::from("hello  "),
         RocStr
     );
@@ -890,7 +890,7 @@ fn str_trim_start_small_to_small() {
 #[test]
 fn str_trim_start_large_to_large_unique() {
     assert_evals_to!(
-        indoc!(r#"Str.trimStart (Str.concat "    " "hello world from a large string ")"#),
+        indoc!(r#"Str.trim_start (Str.concat "    " "hello world from a large string ")"#),
         RocStr::from("hello world from a large string "),
         RocStr
     );
@@ -899,7 +899,7 @@ fn str_trim_start_large_to_large_unique() {
 #[test]
 fn str_trim_start_large_to_small_unique() {
     assert_evals_to!(
-        indoc!(r#"Str.trimStart (Str.concat "  " "hello  ")"#),
+        indoc!(r#"Str.trim_start (Str.concat "  " "hello  ")"#),
         RocStr::from("hello  "),
         RocStr
     );
@@ -907,13 +907,13 @@ fn str_trim_start_large_to_small_unique() {
 
 #[test]
 fn str_trim_end_small_blank_string() {
-    assert_evals_to!(indoc!(r#"Str.trimEnd " ""#), RocStr::from(""), RocStr);
+    assert_evals_to!(indoc!(r#"Str.trim_end " ""#), RocStr::from(""), RocStr);
 }
 
 #[test]
 fn str_trim_end_small_to_small() {
     assert_evals_to!(
-        indoc!(r#"Str.trimEnd " hello ""#),
+        indoc!(r#"Str.trim_end " hello ""#),
         RocStr::from(" hello"),
         RocStr
     );
@@ -922,7 +922,7 @@ fn str_trim_end_small_to_small() {
 #[test]
 fn str_trim_end_large_to_large_unique() {
     assert_evals_to!(
-        indoc!(r#"Str.trimEnd (Str.concat " hello world from a large string" "    ")"#),
+        indoc!(r#"Str.trim_end (Str.concat " hello world from a large string" "    ")"#),
         RocStr::from(" hello world from a large string"),
         RocStr
     );
@@ -931,7 +931,7 @@ fn str_trim_end_large_to_large_unique() {
 #[test]
 fn str_trim_end_large_to_small_unique() {
     assert_evals_to!(
-        indoc!(r#"Str.trimEnd (Str.concat "  hello" "  ")"#),
+        indoc!(r#"Str.trim_end (Str.concat "  hello" "  ")"#),
         RocStr::from("  hello"),
         RocStr
     );
@@ -945,7 +945,7 @@ fn str_trim_end_large_to_large_shared() {
                original : Str
                original = " hello world world "
 
-               { trimmed: Str.trimEnd original, original: original }
+               { trimmed: Str.trim_end original, original: original }
                "#
         ),
         (
@@ -964,7 +964,7 @@ fn str_trim_end_large_to_small_shared() {
                original : Str
                original = "  hello "
 
-               { trimmed: Str.trimEnd original, original: original }
+               { trimmed: Str.trim_end original, original: original }
                "#
         ),
         (RocStr::from("  hello "), RocStr::from("  hello"),),
@@ -980,7 +980,7 @@ fn str_trim_end_small_to_small_shared() {
                original : Str
                original = " hello "
 
-               { trimmed: Str.trimEnd original, original: original }
+               { trimmed: Str.trim_end original, original: original }
                "#
         ),
         (RocStr::from(" hello "), RocStr::from(" hello"),),
@@ -993,7 +993,7 @@ fn str_to_i128() {
     assert_evals_to!(
         indoc!(
             r#"
-             when Str.toI128 "1" is
+             when Str.to_i128 "1" is
                  Ok n -> n
                  Err _ -> 0
                 "#
@@ -1008,7 +1008,7 @@ fn str_to_u128() {
     assert_evals_to!(
         indoc!(
             r#"
-             when Str.toU128 "1" is
+             when Str.to_u128 "1" is
                  Ok n -> n
                  Err _ -> 0
                 "#
@@ -1023,7 +1023,7 @@ fn str_to_i64() {
     assert_evals_to!(
         indoc!(
             r#"
-             when Str.toI64 "1" is
+             when Str.to_i64 "1" is
                  Ok n -> n
                  Err _ -> 0
                 "#
@@ -1038,7 +1038,7 @@ fn str_to_u64() {
     assert_evals_to!(
         indoc!(
             r#"
-             when Str.toU64 "1" is
+             when Str.to_u64 "1" is
                  Ok n -> n
                  Err _ -> 0
                 "#
@@ -1053,7 +1053,7 @@ fn str_to_i32() {
     assert_evals_to!(
         indoc!(
             r#"
-             when Str.toI32 "1" is
+             when Str.to_i32 "1" is
                  Ok n -> n
                  Err _ -> 0
                 "#
@@ -1068,7 +1068,7 @@ fn str_to_u32() {
     assert_evals_to!(
         indoc!(
             r#"
-             when Str.toU32 "1" is
+             when Str.to_u32 "1" is
                  Ok n -> n
                  Err _ -> 0
                 "#
@@ -1083,7 +1083,7 @@ fn str_to_i16() {
     assert_evals_to!(
         indoc!(
             r#"
-             when Str.toI16 "1" is
+             when Str.to_i16 "1" is
                  Ok n -> n
                  Err _ -> 0
                 "#
@@ -1098,7 +1098,7 @@ fn str_to_u16() {
     assert_evals_to!(
         indoc!(
             r#"
-             when Str.toU16 "1" is
+             when Str.to_u16 "1" is
                  Ok n -> n
                  Err _ -> 0
                 "#
@@ -1113,7 +1113,7 @@ fn str_to_i8() {
     assert_evals_to!(
         indoc!(
             r#"
-             when Str.toI8 "1" is
+             when Str.to_i8 "1" is
                  Ok n -> n
                  Err _ -> 0
                 "#
@@ -1128,7 +1128,7 @@ fn str_to_u8() {
     assert_evals_to!(
         indoc!(
             r#"
-             when Str.toU8 "1" is
+             when Str.to_u8 "1" is
                  Ok n -> n
                  Err _ -> 0
                 "#
@@ -1143,7 +1143,7 @@ fn str_to_f64() {
     assert_evals_to!(
         indoc!(
             r#"
-             when Str.toF64 "1.0" is
+             when Str.to_f64 "1.0" is
                  Ok n -> n
                  Err _ -> 0
              "#
@@ -1158,7 +1158,7 @@ fn str_to_f32() {
     assert_evals_to!(
         indoc!(
             r#"
-             when Str.toF32 "1.0" is
+             when Str.to_f32 "1.0" is
                  Ok n -> n
                  Err _ -> 0
              "#
@@ -1175,7 +1175,7 @@ fn str_to_dec() {
     assert_evals_to!(
         indoc!(
             r#"
-             when Str.toDec "1.0" is
+             when Str.to_dec "1.0" is
                  Ok n -> n
                  Err _ -> 0
              "#

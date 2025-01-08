@@ -3,7 +3,7 @@ platform "test-platform"
     exposes []
     packages {}
     imports []
-    provides [mainForHost]
+    provides [main_for_host]
 
 # This case is important to test because the U128
 # gives the whole struct an alignment of 16, but the
@@ -13,5 +13,5 @@ platform "test-platform"
 # that all variants have.
 NonRecursive : [Foo Str, Bar U128, Blah I32, Baz]
 
-mainForHost : {} -> NonRecursive
-mainForHost = \{} -> main
+main_for_host : {} -> NonRecursive
+main_for_host = \{} -> main

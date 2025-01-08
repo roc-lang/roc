@@ -6,9 +6,9 @@
 
 int main(void)
 {
-    uint8_t mainForHost = roc_mainForHost();
+    uint8_t main_for_host = roc_main_for_host();
 
-    printf("mainForHost = %i\n", mainForHost);
+    printf("main_for_host = %i\n", main_for_host);
 
-    assert(mainForHost == 42);
+    assert(main_for_host == 42);
 }

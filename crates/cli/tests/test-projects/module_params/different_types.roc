@@ -9,6 +9,6 @@ import Alias { passed: Stdin.line } as In
 import Alias { passed: Stdout.line } as Out
 
 main =
-    Out.exposed! "Write something:"
+    Out.exposed!("Write something:")
     input = In.exposed!
-    Out.exposed! input
+    Out.exposed!(input)

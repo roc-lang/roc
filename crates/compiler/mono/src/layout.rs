@@ -1290,7 +1290,7 @@ enum NichePriv<'a> {
 /// ```roc
 /// capture : _ -> ({} -> Str)
 /// capture = \val ->
-///     forcer = \{} -> Num.toStr val
+///     forcer = \{} -> Num.to_str val
 ///     forcer
 ///
 /// fun = \x ->

@@ -1,4 +1,4 @@
 app "test" provides [main] to "./platform"
 
-main = Encode.toEncoder Bool.true
-#      ^^^^^^^^^^^^^^^^ Encoding#Encode.toEncoder(2): Bool -[[] + fmt:Encode.bool(17):1]-> Encoder fmt where fmt implements EncoderFormatting
+main = Encode.to_encoder Bool.true
+#      ^^^^^^^^^^^^^^^^^ Encoding#Encode.to_encoder(2): Bool -[[] + fmt:Encode.bool(17):1]-> Encoder fmt where fmt implements EncoderFormatting

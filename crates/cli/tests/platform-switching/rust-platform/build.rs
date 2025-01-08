@@ -2,7 +2,7 @@
 //
 // ```
 // = note: Undefined symbols for architecture arm64:
-//           "_roc__mainForHost_1_exposed_generic", referenced from:
+//           "_roc__main_for_host_1_exposed_generic", referenced from:
 //               _main in rustplatform-df9e357e0cc989a6.rustplatform.863be87f3956573-cgu.0.rcgu.o
 //         ld: symbol(s) not found for architecture arm64
 //         clang-16: error: linker command failed with exit code 1 (use -v to see invocation)
