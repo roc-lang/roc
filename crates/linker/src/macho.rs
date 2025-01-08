@@ -63,7 +63,10 @@ struct Metadata {
     load_align_constraint: u64,
     last_vaddr: u64,
     macho_cmd_loc: u64,
+    // Offset of the first section following the load commands.
     start_of_first_section: u64,
+    // List of all __LINKEDIT load commands and their offset in file.
+    linkedit_offsets: Vec<(u32, usize)>,
 }
 
 impl Metadata {
@@ -663,262 +666,72 @@ fn gen_macho_le(
     // minus one because we "deleted" a load command
     for _ in 0..(num_load_cmds - 1) {
         let info = load_struct_inplace::<macho::LoadCommand<LE>>(&out_mmap, offset);
+        let cmd = info.cmd.get(LE);
         let cmd_size = info.cmdsize.get(LE) as usize;
 
-        match info.cmd.get(LE) {
-            macho::LC_SEGMENT_64 => {
-                let cmd =
-                    load_struct_inplace_mut::<macho::SegmentCommand64<LE>>(&mut out_mmap, offset);
-
-                // Ignore page zero, it never moves.
-                if cmd.segname == "__PAGEZERO\0\0\0\0\0\0".as_bytes() || cmd.vmaddr.get(LE) == 0 {
-                    offset += cmd_size;
-                    continue;
-                }
-
-                let old_file_offest = cmd.fileoff.get(LE);
-                // The segment with file offset zero also includes the header.
-                // As such, its file offset does not change.
-                // Instead, its file size should be increased.
-                if old_file_offest > 0 {
-                    cmd.fileoff.set(LE, old_file_offest);
-                    cmd.vmaddr.set(LE, cmd.vmaddr.get(LE));
-                } else {
-                    cmd.filesize.set(LE, cmd.filesize.get(LE));
-                    cmd.vmsize.set(LE, cmd.vmsize.get(LE));
-                }
-            }
-            macho::LC_SYMTAB => {
-                let cmd =
-                    load_struct_inplace_mut::<macho::SymtabCommand<LE>>(&mut out_mmap, offset);
-
-                let sym_offset = cmd.symoff.get(LE);
-                let num_syms = cmd.nsyms.get(LE);
-
-                if num_syms > 0 {
-                    cmd.symoff.set(LE, sym_offset);
-                }
-
-                if cmd.strsize.get(LE) > 0 {
-                    cmd.stroff.set(LE, cmd.stroff.get(LE));
-                }
-
-                let table = load_structs_inplace_mut::<macho::Nlist64<LE>>(
-                    &mut out_mmap,
-                    sym_offset as usize,
-                    num_syms as usize,
-                );
-
-                for entry in table {
-                    let entry_type = entry.n_type & macho::N_TYPE;
-                    if entry_type == macho::N_ABS || entry_type == macho::N_SECT {
-                        entry.n_value.set(LE, entry.n_value.get(LE));
-                    }
-                }
-            }
-            macho::LC_DYSYMTAB => {
-                let cmd =
-                    load_struct_inplace_mut::<macho::DysymtabCommand<LE>>(&mut out_mmap, offset);
-
-                if cmd.ntoc.get(LE) > 0 {
-                    cmd.tocoff.set(LE, cmd.tocoff.get(LE));
-                }
-
-                if cmd.nmodtab.get(LE) > 0 {
-                    cmd.modtaboff.set(LE, cmd.modtaboff.get(LE));
-                }
-
-                if cmd.nextrefsyms.get(LE) > 0 {
-                    cmd.extrefsymoff.set(LE, cmd.extrefsymoff.get(LE));
-                }
-
-                if cmd.nindirectsyms.get(LE) > 0 {
-                    cmd.indirectsymoff.set(LE, cmd.indirectsymoff.get(LE));
-                }
-
-                if cmd.nextrel.get(LE) > 0 {
-                    cmd.extreloff.set(LE, cmd.extreloff.get(LE));
-                }
-
-                if cmd.nlocrel.get(LE) > 0 {
-                    cmd.locreloff.set(LE, cmd.locreloff.get(LE));
-                }
-
-                // TODO maybe we need to update something else too - relocations maybe?
-                // I think this also has symbols that need to get moved around.
-                // Look at otool -I at least for the indirect symbols.
-            }
-            macho::LC_TWOLEVEL_HINTS => {
-                let cmd = load_struct_inplace_mut::<macho::TwolevelHintsCommand<LE>>(
-                    &mut out_mmap,
-                    offset,
-                );
-
-                if cmd.nhints.get(LE) > 0 {
-                    cmd.offset.set(LE, cmd.offset.get(LE));
-                }
-            }
-            macho::LC_FUNCTION_STARTS => {
-                let cmd = load_struct_inplace_mut::<macho::LinkeditDataCommand<LE>>(
-                    &mut out_mmap,
-                    offset,
-                );
-
-                if cmd.datasize.get(LE) > 0 {
-                    cmd.dataoff.set(LE, cmd.dataoff.get(LE));
-                    // TODO: This lists the start of every function. Which, of course, have moved.
-                    // That being said, to my understanding this section is optional and may just be debug information.
-                    // As such, updating it should not be required.
-                    // It will be more work to update due to being in "DWARF-style ULEB128" values.
-                }
-            }
-            macho::LC_DATA_IN_CODE => {
-                let (offset, size) = {
-                    let cmd = load_struct_inplace_mut::<macho::LinkeditDataCommand<LE>>(
-                        &mut out_mmap,
-                        offset,
-                    );
-
-                    if cmd.datasize.get(LE) > 0 {
-                        cmd.dataoff.set(LE, cmd.dataoff.get(LE));
-                    }
-                    (cmd.dataoff.get(LE), cmd.datasize.get(LE))
-                };
-
-                // Update every data in code entry.
-                if size > 0 {
-                    let entry_size = mem::size_of::<macho::DataInCodeEntry<LE>>();
-                    let entries = load_structs_inplace_mut::<macho::DataInCodeEntry<LE>>(
-                        &mut out_mmap,
-                        offset as usize,
-                        size as usize / entry_size,
-                    );
-                    for entry in entries.iter_mut() {
-                        entry.offset.set(LE, entry.offset.get(LE))
-                    }
-                }
-            }
-            macho::LC_CODE_SIGNATURE
-            | macho::LC_SEGMENT_SPLIT_INFO
-            | macho::LC_DYLIB_CODE_SIGN_DRS
-            | macho::LC_LINKER_OPTIMIZATION_HINT
-            | macho::LC_DYLD_EXPORTS_TRIE
-            | macho::LC_DYLD_CHAINED_FIXUPS => {
-                let cmd = load_struct_inplace_mut::<macho::LinkeditDataCommand<LE>>(
-                    &mut out_mmap,
-                    offset,
-                );
-
-                if cmd.datasize.get(LE) > 0 {
-                    cmd.dataoff.set(LE, cmd.dataoff.get(LE));
-                }
-            }
-            macho::LC_ENCRYPTION_INFO_64 => {
-                let cmd = load_struct_inplace_mut::<macho::EncryptionInfoCommand64<LE>>(
-                    &mut out_mmap,
-                    offset,
-                );
-
-                if cmd.cryptsize.get(LE) > 0 {
-                    cmd.cryptoff.set(LE, cmd.cryptoff.get(LE));
-                }
-            }
-            macho::LC_DYLD_INFO | macho::LC_DYLD_INFO_ONLY => {
-                let cmd =
-                    load_struct_inplace_mut::<macho::DyldInfoCommand<LE>>(&mut out_mmap, offset);
-
-                if cmd.rebase_size.get(LE) > 0 {
-                    cmd.rebase_off.set(LE, cmd.rebase_off.get(LE));
-                }
-
-                if cmd.bind_size.get(LE) > 0 {
-                    cmd.bind_off.set(LE, cmd.bind_off.get(LE));
-                }
-
-                if cmd.weak_bind_size.get(LE) > 0 {
-                    cmd.weak_bind_off.set(LE, cmd.weak_bind_off.get(LE));
-                }
-
-                if cmd.lazy_bind_size.get(LE) > 0 {
-                    cmd.lazy_bind_off.set(LE, cmd.lazy_bind_off.get(LE));
-                }
-
-                // TODO: Parse and update the related tables here.
-                // It is possible we may just need to delete things that point to stuff that will be in the roc app.
-                // We also may just be able to ignore it (lazy bindings should never run).
-                // This definitely has a list of virtual address that need to be updated.
-                // Some of them definitely will point to the roc app and should probably be removed.
-                // Also `xcrun dyldinfo` is useful for debugging this.
-            }
-            macho::LC_SYMSEG => {
-                let cmd =
-                    load_struct_inplace_mut::<macho::SymsegCommand<LE>>(&mut out_mmap, offset);
-
-                if cmd.size.get(LE) > 0 {
-                    cmd.offset.set(LE, cmd.offset.get(LE));
-                }
-            }
-            macho::LC_MAIN => {
-                let cmd =
-                    load_struct_inplace_mut::<macho::EntryPointCommand<LE>>(&mut out_mmap, offset);
-
-                cmd.entryoff.set(LE, cmd.entryoff.get(LE));
-            }
-            macho::LC_NOTE => {
-                let cmd = load_struct_inplace_mut::<macho::NoteCommand<LE>>(&mut out_mmap, offset);
-
-                if cmd.size.get(LE) > 0 {
-                    cmd.offset.set(LE, cmd.offset.get(LE));
-                }
-            }
-            macho::LC_ID_DYLIB
+        match cmd {
+            macho::LC_SEGMENT_64
+            | macho::LC_MAIN
+            | macho::LC_ID_DYLIB
             | macho::LC_LOAD_WEAK_DYLIB
             | macho::LC_LOAD_DYLIB
             | macho::LC_REEXPORT_DYLIB
             | macho::LC_SOURCE_VERSION
-            | macho::LC_IDENT
-            | macho::LC_LINKER_OPTION
             | macho::LC_BUILD_VERSION
             | macho::LC_VERSION_MIN_MACOSX
             | macho::LC_VERSION_MIN_IPHONEOS
             | macho::LC_VERSION_MIN_WATCHOS
             | macho::LC_VERSION_MIN_TVOS
-            | macho::LC_UUID
             | macho::LC_RPATH
             | macho::LC_ID_DYLINKER
             | macho::LC_LOAD_DYLINKER
             | macho::LC_DYLD_ENVIRONMENT
+            | macho::LC_UNIXTHREAD => {}
+
+            macho::LC_SYMTAB
+            | macho::LC_DYSYMTAB
+            | macho::LC_FUNCTION_STARTS
+            | macho::LC_DATA_IN_CODE
+            | macho::LC_DYLD_INFO
+            | macho::LC_DYLD_INFO_ONLY
+            | macho::LC_DYLD_EXPORTS_TRIE
+            | macho::LC_DYLD_CHAINED_FIXUPS
+            | macho::LC_UUID
+            | macho::LC_CODE_SIGNATURE => {
+                md.linkedit_offsets.push((cmd, offset));
+            }
+
+            macho::LC_LINKER_OPTIMIZATION_HINT
+            | macho::LC_NOTE
+            | macho::LC_IDENT
+            | macho::LC_LINKER_OPTION => {
+                internal_error!("Invalid load command in final linked image: {cmd:#x}");
+            }
+
+            macho::LC_DYLIB_CODE_SIGN_DRS => {
+                internal_error!("Invalid load command in executable program: {cmd:#x}");
+            }
+
+            macho::LC_TWOLEVEL_HINTS
+            | macho::LC_SEGMENT_SPLIT_INFO
+            | macho::LC_ENCRYPTION_INFO_64
+            | macho::LC_SYMSEG
             | macho::LC_ROUTINES_64
             | macho::LC_THREAD
-            | macho::LC_UNIXTHREAD
             | macho::LC_PREBOUND_DYLIB
             | macho::LC_SUB_FRAMEWORK
             | macho::LC_SUB_CLIENT
             | macho::LC_SUB_UMBRELLA
-            | macho::LC_SUB_LIBRARY => {
-                // These don't involve file offsets, so no change is needed for these.
-                // Just continue the loop!
+            | macho::LC_SUB_LIBRARY
+            | macho::LC_PREBIND_CKSUM
+            | macho::LC_FVMFILE
+            | macho::LC_IDFVMLIB
+            | macho::LC_LOADFVMLIB => {
+                internal_error!("Unhandled load command: {cmd:#x}");
             }
-            macho::LC_PREBIND_CKSUM => {
-                // We don't *think* we need to change this, but
-                // maybe what we're doing will break checksums?
-            }
-            macho::LC_SEGMENT | macho::LC_ROUTINES | macho::LC_ENCRYPTION_INFO => {
-                // These are 32-bit and unsuppoted
-                unreachable!();
-            }
-            macho::LC_FVMFILE | macho::LC_IDFVMLIB | macho::LC_LOADFVMLIB => {
-                // These are obsolete and unsupported
-                unreachable!()
-            }
-            cmd => {
-                eprintln!(
-                    "- - - Unrecognized Mach-O command during linker preprocessing: 0x{cmd:x?}"
-                );
-                // panic!(
-                //     "Unrecognized Mach-O command during linker preprocessing: 0x{:x?}",
-                //     cmd
-                // );
+
+            _ => {
+                internal_error!("Unknown load command: {cmd:#x}");
             }
         }
 
