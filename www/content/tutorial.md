@@ -1753,7 +1753,7 @@ In summary:
 - If the `main!` function ends in a `Ok {}`, then it means the final expression succeeded and the program will exit with status code 0.
 - If the `main!` function ends in a `Err (Exit 42 "…")`, then it means it failed, and the only information we got about the failure was that the program should exit with code 42 instead of 0, and that it should print a particular string to stderr to inform the user about what happened.
 
-### [Handling failure](#handling-failures) {#handling-failures}
+### [Handling failure](#handling-failure) {#handling-failure}
 
 If `main!` ends up failing with any other errors besides `Exit` (such as `StdoutErr` or `StdinErr`), then the `basic-cli` platform's automatic error handling will handle them by printing out words taken from the source code (such as "StdoutErr" and "StdinErr"), which could lead to a bad experience for people using this program!
 
