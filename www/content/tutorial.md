@@ -1577,8 +1577,6 @@ Including the hash solves a number of problems:
 
 \[This part of the tutorial has not been written yet. Coming soon!\]
 
-See [Html module](https://github.com/roc-lang/roc/blob/main/examples/virtual-dom-wip/platform/Html.roc) for an example.
-
 ### [Platform Modules](#platform-modules) {#platform-modules}
 
 \[This part of the tutorial has not been written yet. Coming soon!\]

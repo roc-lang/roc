@@ -163,34 +163,6 @@ mod cli_tests {
         );
     }
 
-    // TODO: write a new test once mono bugs are resolved in investigation
-    // Encountering this TODO years later, I presume the new test should test the execution, not just roc check.
-    #[test]
-    #[cfg(not(debug_assertions))] // https://github.com/roc-lang/roc/issues/4806 - later observation: this issue is closed but the tests still hangs in debug mode
-    fn check_virtual_dom_server() {
-        let cli_check = ExecCli::new(
-            CMD_CHECK,
-            file_from_root("examples/virtual-dom-wip", "example-server.roc"),
-        );
-
-        let cli_check_out = cli_check.run();
-        cli_check_out.assert_clean_success();
-    }
-
-    // TODO: write a new test once mono bugs are resolved in investigation
-    // Encountering this TODO years later, I presume the new test should test the execution, not just roc check.
-    #[test]
-    #[cfg(not(debug_assertions))] // https://github.com/roc-lang/roc/issues/4806 - later observation: this issue is closed but the tests still hangs in debug mode
-    fn check_virtual_dom_client() {
-        let cli_check = ExecCli::new(
-            CMD_CHECK,
-            file_from_root("examples/virtual-dom-wip", "example-client.roc"),
-        );
-
-        let cli_check_out = cli_check.run();
-        cli_check_out.assert_clean_success();
-    }
-
     #[test]
     #[cfg_attr(windows, ignore)]
     // tea = The Elm Architecture
