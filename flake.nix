@@ -33,7 +33,7 @@
       lib = { buildRocPackage = import ./nix/buildRocPackage.nix; };
     in {
       inherit templates lib;
-    } // 
+    } //
     flake-utils.lib.eachSystem supportedSystems (system:
       let
 
@@ -49,7 +49,7 @@
 
         # DevInputs are not necessary to build roc as a user
         linuxDevInputs = with pkgs;
-          lib.optionals stdenv.isLinux [
+          pkgs.lib.optionals stdenv.isLinux [
             valgrind # used in cli tests, see cli/tests/cli_tests.rs
             vulkan-headers # here and below is all graphics stuff for examples/gui
             vulkan-loader
@@ -61,12 +61,12 @@
             xorg.libXi
             xorg.libxcb
             cargo-llvm-cov # to visualize code coverage
-            
+
           ];
 
         # DevInputs are not necessary to build roc as a user
         darwinDevInputs = with pkgs;
-          lib.optionals stdenv.isDarwin
+          pkgs.lib.optionals stdenv.isDarwin
             (with pkgs.darwin.apple_sdk.frameworks; [
               CoreVideo # for examples/gui
               Metal # for examples/gui
@@ -122,7 +122,7 @@
       in
       {
 
-        devShell = pkgs.mkShell {
+        devShells.default = pkgs.mkShell {
           buildInputs = sharedInputs ++ sharedDevInputs ++ darwinInputs ++ darwinDevInputs ++ linuxDevInputs
           ++ (if system == "x86_64-linux" then
             [ pkgs.nixgl.nixVulkanIntel ]
@@ -137,10 +137,10 @@
           NIX_GLIBC_PATH =
             if pkgs.stdenv.isLinux then "${pkgs.glibc.out}/lib" else "";
 
-          LD_LIBRARY_PATH = with pkgs;
-            lib.makeLibraryPath
-              ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib ]
-              ++ linuxDevInputs);
+          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath
+            ([ pkgs.pkg-config pkgs.stdenv.cc.cc.lib pkgs.libffi pkgs.ncurses pkgs.zlib ]
+            ++ linuxDevInputs);
+
           NIXPKGS_ALLOW_UNFREE =
             1; # to run the GUI examples with NVIDIA's closed source drivers
 
