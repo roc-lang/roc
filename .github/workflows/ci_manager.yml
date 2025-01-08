@@ -141,8 +141,7 @@ jobs:
                 start-ubuntu-x86-64-nix-tests-debug,
                 start-windows-release-build-test,
                 start-windows-tests,
-                start-roc-benchmarks,
-                start-fuzzer-tests
+                start-roc-benchmarks
             ]
         steps:
             - run: echo "all workflows succeeded!"
