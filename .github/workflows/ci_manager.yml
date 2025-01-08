@@ -124,6 +124,11 @@ jobs:
         if: needs.check-changes.outputs.run_tests == 'full'
         uses: ./.github/workflows/benchmarks.yml
 
+    start-fuzzer-tests:
+        needs: check-changes
+        if: needs.check-changes.outputs.run_tests == 'full'
+        uses: ./.github/workflows/fuzzer.yml
+
     ran-full:
         runs-on: ubuntu-22.04
         needs: [
@@ -136,7 +141,7 @@ jobs:
                 start-ubuntu-x86-64-nix-tests-debug,
                 start-windows-release-build-test,
                 start-windows-tests,
-                start-roc-benchmarks,
+                start-roc-benchmarks
             ]
         steps:
             - run: echo "all workflows succeeded!"
