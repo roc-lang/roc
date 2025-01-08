@@ -737,8 +737,13 @@ impl<'a> Normalize<'a> for Expr<'a> {
                 arena.alloc(a.normalize(arena)),
                 b.map(|loc_b| &*arena.alloc(loc_b.normalize(arena))),
             ),
-            Expr::Apply(a, b, c) => {
-                Expr::Apply(arena.alloc(a.normalize(arena)), b.normalize(arena), c)
+            Expr::Apply(a, b, called_via) => Expr::Apply(
+                arena.alloc(a.normalize(arena)),
+                b.normalize(arena),
+                called_via,
+            ),
+            Expr::PncApply(a, b) => {
+                Expr::PncApply(arena.alloc(a.normalize(arena)), b.normalize(arena))
             }
             Expr::BinOps(a, b) => Expr::BinOps(a.normalize(arena), arena.alloc(b.normalize(arena))),
             Expr::UnaryOp(a, b) => {
@@ -835,6 +840,30 @@ fn fold_defs<'a>(
                             arena.alloc(Loc::at_zero(new_final)),
                         );
                     }
+                    ValueDef::Stmt(&Loc {
+                        value:
+                            Expr::PncApply(
+                                &Loc {
+                                    value: Expr::Dbg, ..
+                                },
+                                args,
+                            ),
+                        ..
+                    }) => {
+                        let rest = fold_defs(arena, defs, final_expr);
+                        let new_final = Expr::DbgStmt {
+                            first: args.items[0],
+                            extra_args: &args.items[1..],
+                            continuation: arena.alloc(Loc::at_zero(rest)),
+                        };
+                        if new_defs.is_empty() {
+                            return new_final;
+                        }
+                        return Expr::Defs(
+                            arena.alloc(new_defs),
+                            arena.alloc(Loc::at_zero(new_final)),
+                        );
+                    }
                     _ => {
                         new_defs.push_value_def(vd, Region::zero(), &[], &[]);
                     }
@@ -879,11 +908,13 @@ impl<'a> Normalize<'a> for Pattern<'a> {
             Pattern::Identifier { ident } => Pattern::Identifier { ident },
             Pattern::Tag(a) => Pattern::Tag(a),
             Pattern::OpaqueRef(a) => Pattern::OpaqueRef(a),
-            Pattern::Apply(a, b, c) => Pattern::Apply(
+            Pattern::Apply(a, b) => Pattern::Apply(
                 arena.alloc(a.normalize(arena)),
                 arena.alloc(b.normalize(arena)),
-                c,
             ),
+            Pattern::PncApply(a, b) => {
+                Pattern::PncApply(arena.alloc(a.normalize(arena)), b.normalize(arena))
+            }
             Pattern::RecordDestructure(a) => Pattern::RecordDestructure(a.normalize(arena)),
             Pattern::RequiredField(a, b) => {
                 Pattern::RequiredField(a, arena.alloc(b.normalize(arena)))

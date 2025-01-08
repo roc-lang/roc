@@ -17,13 +17,13 @@
         value_defs: [
             Annotation(
                 @0-15 Apply(
-                    @0-15 Apply(
+                    @0-15 PncApply(
                         @0-1 NumLiteral(
                             "1",
                         ),
                         [
                             @2-13 SpaceAfter(
-                                Apply(
+                                PncApply(
                                     @2-4 Identifier {
                                         ident: "ts",
                                     },
@@ -41,21 +41,18 @@
                                             ],
                                         ),
                                     ],
-                                    ParensAndCommas,
                                 ),
                                 [
                                     Newline,
                                 ],
                             ),
                         ],
-                        ParensAndCommas,
                     ),
                     [
                         @15-16 Identifier {
                             ident: "f",
                         },
                     ],
-                    Whitespace,
                 ),
                 @17-20 BoundVariable(
                     "i7f",

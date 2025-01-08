@@ -11,7 +11,7 @@ use crate::spaces::{
 use crate::Buf;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_module::called_via::{self, BinOp, CalledVia, UnaryOp};
+use roc_module::called_via::{self, BinOp, UnaryOp};
 use roc_parse::ast::{
     AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces, Pattern, Spaceable,
     Spaces, SpacesAfter, SpacesBefore, TryTarget, WhenBranch,
@@ -91,13 +91,23 @@ fn format_expr_only(
             buf.indent(indent);
             buf.push_str("try");
         }
-        Expr::Apply(loc_expr, loc_args, called_via::CalledVia::ParensAndCommas) => {
-            fmt_apply(loc_expr, loc_args, indent, buf, true);
+        Expr::PncApply(
+            loc_expr @ Loc {
+                value: Expr::Dbg, ..
+            },
+            loc_args,
+        ) => {
+            fmt_apply(loc_expr, loc_args.items, indent, buf);
+        }
+        Expr::PncApply(loc_expr, loc_args) => {
+            fmt_pnc_apply(loc_expr, loc_args, indent, buf);
         }
         Expr::Apply(loc_expr, loc_args, _) => {
             let apply_needs_parens = parens == Parens::InApply || parens == Parens::InApplyLastArg;
-            if buf.flags().parens_and_commas || !apply_needs_parens || loc_args.is_empty() {
-                fmt_apply(loc_expr, loc_args, indent, buf, false);
+            if buf.flags().parens_and_commas {
+                fmt_pnc_apply(loc_expr, &Collection::with_items(loc_args), indent, buf);
+            } else if !apply_needs_parens || loc_args.is_empty() {
+                fmt_apply(loc_expr, loc_args, indent, buf);
             } else {
                 fmt_parens(item, buf, indent);
             }
@@ -519,6 +529,12 @@ pub fn expr_is_multiline(me: &Expr<'_>, comments_only: bool) -> bool {
                     .iter()
                     .any(|loc_arg| expr_is_multiline(&loc_arg.value, comments_only))
         }
+        Expr::PncApply(loc_expr, args) => {
+            expr_is_multiline(&loc_expr.value, comments_only)
+                || args
+                    .iter()
+                    .any(|loc_arg| expr_is_multiline(&loc_arg.value, comments_only))
+        }
 
         Expr::DbgStmt { .. } => true,
         Expr::LowLevelDbg(_, _, _) => {
@@ -639,13 +655,28 @@ fn requires_space_after_unary(item: &Expr<'_>) -> bool {
     }
 }
 
+fn fmt_pnc_apply(
+    loc_expr: &Loc<Expr<'_>>,
+    loc_args: &Collection<'_, &Loc<Expr<'_>>>,
+    indent: u16,
+    buf: &mut Buf<'_>,
+) {
+    let expr = expr_lift_spaces(Parens::InApply, buf.text.bump(), &loc_expr.value);
+
+    if !expr.before.is_empty() {
+        format_spaces(buf, expr.before, Newlines::Yes, indent);
+    }
+    expr.item
+        .format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
+    fmt_expr_collection(buf, indent, Braces::Round, *loc_args, Newlines::No);
+}
+
 fn fmt_apply(
     loc_expr: &Loc<Expr<'_>>,
     loc_args: &[&Loc<Expr<'_>>],
 
     indent: u16,
     buf: &mut Buf<'_>,
-    expr_used_commas_and_parens: bool,
 ) {
     // should_reflow_outdentable, aka should we transform this:
     //
@@ -665,7 +696,6 @@ fn fmt_apply(
     //   2,
     // ]
     // ```
-    let use_commas_and_parens = expr_used_commas_and_parens || buf.flags().parens_and_commas;
     let should_reflow_outdentable = loc_expr.extract_spaces().after.is_empty()
         && except_last(loc_args).all(|a| !a.is_multiline())
         && loc_args
@@ -701,23 +731,17 @@ fn fmt_apply(
     if !expr.before.is_empty() {
         format_spaces(buf, expr.before, Newlines::Yes, indent);
     }
+
     expr.item
         .format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
-
-    if use_commas_and_parens {
-        buf.push('(');
-    }
 
     let mut last_after = expr.after;
 
     for (i, loc_arg) in loc_args.iter().enumerate() {
         let is_last_arg = i == loc_args.len() - 1;
-        let is_first_arg = i == 0;
 
         let arg = expr_lift_spaces(
-            if use_commas_and_parens {
-                Parens::NotNeeded
-            } else if is_last_arg {
+            if is_last_arg {
                 Parens::InApplyLastArg
             } else {
                 Parens::InApply
@@ -738,7 +762,7 @@ fn fmt_apply(
         last_after = arg.after;
         if needs_indent {
             buf.ensure_ends_with_newline();
-        } else if !(is_first_arg && use_commas_and_parens) {
+        } else {
             buf.spaces(1);
         }
 
@@ -746,33 +770,12 @@ fn fmt_apply(
         {
             fmt_parens(&arg.item, buf, arg_indent);
         } else {
-            format_expr_only(
-                &arg.item,
-                buf,
-                if use_commas_and_parens {
-                    Parens::NotNeeded
-                } else {
-                    Parens::InApply
-                },
-                Newlines::Yes,
-                arg_indent,
-            );
-        }
-        if use_commas_and_parens && (!is_last_arg || needs_indent) {
-            buf.push(',');
+            format_expr_only(&arg.item, buf, Parens::InApply, Newlines::Yes, arg_indent);
         }
     }
 
     if !last_after.is_empty() {
         format_spaces(buf, last_after, Newlines::Yes, arg_indent);
-    }
-
-    if use_commas_and_parens {
-        if needs_indent {
-            buf.ensure_ends_with_newline();
-            buf.indent(indent);
-        }
-        buf.push(')');
     }
 }
 
@@ -1038,16 +1041,12 @@ pub fn expr_lift_spaces<'a, 'b: 'a>(
     expr: &Expr<'b>,
 ) -> Spaces<'a, Expr<'a>> {
     match expr {
-        Expr::Apply(func, args, CalledVia::ParensAndCommas) => {
-            let lifted = expr_lift_spaces_before(Parens::NotNeeded, arena, &func.value);
+        Expr::PncApply(func, args) => {
+            let lifted = expr_lift_spaces_before(Parens::InApply, arena, &func.value);
 
             Spaces {
                 before: lifted.before,
-                item: Expr::Apply(
-                    arena.alloc(Loc::at(func.region, lifted.item)),
-                    args,
-                    CalledVia::ParensAndCommas,
-                ),
+                item: Expr::PncApply(arena.alloc(Loc::at(func.region, lifted.item)), *args),
                 after: arena.alloc([]),
             }
         }

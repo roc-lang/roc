@@ -26,7 +26,6 @@
                                 ident: "str",
                             },
                         ],
-                        Whitespace,
                     ),
                     @12-36 Apply(
                         @12-17 Tag(

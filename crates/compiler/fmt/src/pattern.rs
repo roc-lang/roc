@@ -7,8 +7,7 @@ use crate::spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT};
 use crate::Buf;
 use bumpalo::Bump;
 use roc_parse::ast::{
-    Base, CommentOrNewline, Pattern, PatternApplyStyle, PatternAs, Spaceable, Spaces, SpacesAfter,
-    SpacesBefore,
+    Base, CommentOrNewline, Pattern, PatternAs, Spaceable, Spaces, SpacesAfter, SpacesBefore,
 };
 use roc_parse::expr::merge_spaces;
 use roc_region::all::Loc;
@@ -73,8 +72,13 @@ impl<'a> Formattable for Pattern<'a> {
                 }
             },
             Pattern::StrLiteral(literal) => is_str_multiline(literal),
-            Pattern::Apply(pat, args, _) => {
+            Pattern::Apply(pat, args) => {
                 pat.is_multiline() || args.iter().any(|a| a.is_multiline())
+            }
+            Pattern::PncApply(pat, args) => {
+                pat.is_multiline()
+                    || args.iter().any(|a| a.is_multiline())
+                    || !args.final_comments().is_empty()
             }
 
             Pattern::Identifier { .. }
@@ -163,22 +167,19 @@ fn fmt_pattern_only(
             buf.indent(indent);
             buf.push_str(name);
         }
-        Pattern::Apply(
-            loc_pattern,
-            loc_arg_patterns,
-            style @ PatternApplyStyle::ParensAndCommas,
-        ) => {
+        Pattern::PncApply(loc_pattern, loc_arg_patterns) => {
             pattern_fmt_apply(
                 buf,
                 loc_pattern.value,
-                loc_arg_patterns,
+                loc_arg_patterns.items,
                 Parens::NotNeeded,
                 indent,
                 is_multiline,
-                *style,
+                true,
+                Some(loc_arg_patterns.final_comments()),
             );
         }
-        Pattern::Apply(loc_pattern, loc_arg_patterns, style) => {
+        Pattern::Apply(loc_pattern, loc_arg_patterns) => {
             pattern_fmt_apply(
                 buf,
                 loc_pattern.value,
@@ -186,7 +187,8 @@ fn fmt_pattern_only(
                 parens,
                 indent,
                 is_multiline,
-                *style,
+                false,
+                None,
             );
         }
         Pattern::RecordDestructure(loc_patterns) => {
@@ -455,6 +457,7 @@ fn fmt_pattern_only(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn pattern_fmt_apply(
     buf: &mut Buf<'_>,
     func: Pattern<'_>,
@@ -462,10 +465,10 @@ pub fn pattern_fmt_apply(
     parens: Parens,
     indent: u16,
     is_multiline: bool,
-    style: PatternApplyStyle,
+    is_pnc: bool,
+    final_comments: Option<&[CommentOrNewline]>,
 ) {
-    let use_commas_and_parens =
-        matches!(style, PatternApplyStyle::ParensAndCommas) || buf.flags().parens_and_commas;
+    let use_commas_and_parens = is_pnc || buf.flags().parens_and_commas;
     buf.indent(indent);
     // Sometimes, an Apply pattern needs parens around it.
     // In particular when an Apply's argument is itself an Apply (> 0) arguments
@@ -560,7 +563,7 @@ pub fn pattern_fmt_apply(
             buf.push_str("(implements)");
         } else {
             fmt_pattern_only(&arg.item, buf, parens, indent_more, arg.item.is_multiline());
-            if use_commas_and_parens && (!is_last_arg || add_newlines) {
+            if use_commas_and_parens && (!is_last_arg || is_multiline) {
                 buf.push(',');
             }
         }
@@ -570,6 +573,13 @@ pub fn pattern_fmt_apply(
         add_newlines |= was_multiline;
     }
 
+    if let Some(comments) = final_comments {
+        if !is_multiline {
+            fmt_comments_only(buf, comments.iter(), NewlineAt::Bottom, indent_more);
+        } else {
+            fmt_spaces(buf, comments.iter(), indent_more);
+        }
+    }
     if !last_after.is_empty() {
         if !is_multiline {
             fmt_comments_only(buf, last_after.iter(), NewlineAt::Bottom, indent_more)
@@ -578,7 +588,21 @@ pub fn pattern_fmt_apply(
         }
     }
 
-    if parens || use_commas_and_parens {
+    if use_commas_and_parens {
+        if is_multiline {
+            buf.ensure_ends_with_newline();
+            buf.indent(indent);
+        }
+        if buf.ends_with_newline() {
+            buf.indent(indent);
+        }
+        if buf.ends_with_newline() {
+            buf.indent(indent);
+        }
+        buf.push(')');
+    }
+
+    if parens {
         buf.push(')');
     }
 }
@@ -632,8 +656,9 @@ fn pattern_prec(pat: Pattern<'_>) -> Prec {
         | Pattern::SingleQuote(_)
         | Pattern::Tuple(..)
         | Pattern::List(..)
-        | Pattern::ListRest(_) => Prec::Term,
-        Pattern::Apply(_, _, _) | Pattern::As(_, _) => Prec::Apply,
+        | Pattern::ListRest(_)
+        | Pattern::PncApply(_, _) => Prec::Term,
+        Pattern::Apply(_, _) | Pattern::As(_, _) => Prec::Apply,
         Pattern::SpaceBefore(inner, _) | Pattern::SpaceAfter(inner, _) => pattern_prec(*inner),
         Pattern::Malformed(_) | Pattern::MalformedIdent(..) => Prec::Term,
     }
@@ -653,7 +678,7 @@ pub fn pattern_lift_spaces<'a, 'b: 'a>(
     pat: &Pattern<'b>,
 ) -> Spaces<'a, Pattern<'a>> {
     match pat {
-        Pattern::Apply(func, args, style) => {
+        Pattern::Apply(func, args) => {
             let func_lifted = pattern_lift_spaces(arena, &func.value);
 
             let args = arena.alloc_slice_copy(args);
@@ -688,8 +713,17 @@ pub fn pattern_lift_spaces<'a, 'b: 'a>(
             };
             Spaces {
                 before,
-                item: Pattern::Apply(arena.alloc(func), args, *style),
+                item: Pattern::Apply(arena.alloc(func), args),
                 after,
+            }
+        }
+        Pattern::PncApply(func, args) => {
+            let func_lifted = pattern_lift_spaces_before(arena, &func.value);
+
+            Spaces {
+                before: func_lifted.before,
+                item: Pattern::PncApply(arena.alloc(func), *args),
+                after: &[],
             }
         }
         Pattern::OptionalField(name, expr) => {
@@ -748,7 +782,9 @@ fn handle_multiline_str_spaces<'a>(pat: &Pattern<'_>, before: &mut &'a [CommentO
 
 fn starts_with_block_str(item: &Pattern<'_>) -> bool {
     match item {
-        Pattern::As(inner, _) | Pattern::Apply(inner, _, _) => starts_with_block_str(&inner.value),
+        Pattern::As(inner, _) | Pattern::Apply(inner, _) | Pattern::PncApply(inner, _) => {
+            starts_with_block_str(&inner.value)
+        }
         Pattern::SpaceBefore(inner, _) | Pattern::SpaceAfter(inner, _) => {
             starts_with_block_str(inner)
         }

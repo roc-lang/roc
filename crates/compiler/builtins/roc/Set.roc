@@ -51,19 +51,25 @@ is_eq = \xs, ys ->
     if len(xs) != len(ys) then
         Bool.false
     else
-        walk_until(xs, Bool.true, \_, elem ->
-            if contains(ys, elem) then
-                Continue(Bool.true)
-            else
-                Break(Bool.false))
+        walk_until(
+            xs,
+            Bool.true,
+            \_, elem ->
+                if contains(ys, elem) then
+                    Continue(Bool.true)
+                else
+                    Break(Bool.false),
+        )
 
 hash_set : hasher, Set k -> hasher where hasher implements Hasher
 hash_set = \hasher, @Set(inner) -> Hash.hash(hasher, inner)
 
 to_inspector_set : Set k -> Inspector f where k implements Inspect & Hash & Eq, f implements InspectFormatter
 to_inspector_set = \set ->
-    Inspect.custom(\fmt ->
-        Inspect.apply(Inspect.set(set, walk, Inspect.to_inspector), fmt))
+    Inspect.custom(
+        \fmt ->
+            Inspect.apply(Inspect.set(set, walk, Inspect.to_inspector), fmt),
+    )
 
 ## Creates a new empty `Set`.
 ## ```roc
@@ -326,8 +332,12 @@ map : Set a, (a -> b) -> Set b
 map = \set, transform ->
     init = with_capacity(capacity(set))
 
-    walk(set, init, \answer, k ->
-        insert(answer, transform(k)))
+    walk(
+        set,
+        init,
+        \answer, k ->
+            insert(answer, transform(k)),
+    )
 
 ## Like [Set.map], except the transformation function wraps the return value
 ## in a set. At the end, all the sets get joined together
@@ -338,8 +348,12 @@ join_map : Set a, (a -> Set b) -> Set b
 join_map = \set, transform ->
     init = with_capacity(capacity(set)) # Might be a pessimization
 
-    walk(set, init, \answer, k ->
-        union(answer, transform(k)))
+    walk(
+        set,
+        init,
+        \answer, k ->
+            union(answer, transform(k)),
+    )
 
 ## Iterate through the values of a given `Set` and build a value, can stop
 ## iterating part way through the collection.

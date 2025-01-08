@@ -42,14 +42,12 @@
                                     ),
                                 ),
                             ],
-                            Whitespace,
                         ),
                         [
                             @12-13 Identifier {
                                 ident: "f",
                             },
                         ],
-                        Whitespace,
                     ),
                     @14-15 Apply(
                         "",

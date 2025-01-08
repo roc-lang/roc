@@ -35,7 +35,6 @@
                                         ident: "e",
                                     },
                                 ],
-                                Whitespace,
                             ),
                             @8-14 Apply(
                                 @9-10 SpaceAfter(
@@ -53,7 +52,6 @@
                                         ident: "p",
                                     },
                                 ],
-                                Whitespace,
                             ),
                         ],
                     ),

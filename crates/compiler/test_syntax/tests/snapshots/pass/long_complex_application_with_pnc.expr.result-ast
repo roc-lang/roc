@@ -1,11 +1,11 @@
 @0-109 SpaceAfter(
-    Apply(
+    PncApply(
         @0-7 Var {
             module_name: "",
             ident: "combine",
         },
         [
-            @8-23 Apply(
+            @8-23 PncApply(
                 @8-11 Var {
                     module_name: "",
                     ident: "mix",
@@ -20,9 +20,8 @@
                         ident: "gin",
                     },
                 ],
-                ParensAndCommas,
             ),
-            @25-108 Apply(
+            @25-108 PncApply(
                 @25-31 Tag(
                     "Juices",
                 ),
@@ -85,10 +84,8 @@
                         ],
                     ),
                 ],
-                ParensAndCommas,
             ),
         ],
-        ParensAndCommas,
     ),
     [
         Newline,

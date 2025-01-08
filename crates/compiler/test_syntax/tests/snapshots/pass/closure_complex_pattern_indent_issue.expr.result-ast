@@ -38,7 +38,6 @@
                         },
                     ),
                 ],
-                Whitespace,
             ),
         ],
         @17-18 SpaceBefore(

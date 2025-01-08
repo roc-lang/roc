@@ -32,7 +32,6 @@
                                     ],
                                 ),
                             ],
-                            Whitespace,
                         ),
                         [
                             Newline,

@@ -26,7 +26,6 @@
                                 ident: "it",
                             },
                         ],
-                        Whitespace,
                     ),
                     @12-22 Apply(
                         @12-14 Var {

@@ -18,13 +18,13 @@
             value_defs: [
                 Annotation(
                     @0-12 Apply(
-                        @0-12 Apply(
+                        @0-12 PncApply(
                             @0-1 NumLiteral(
                                 "1",
                             ),
                             [
                                 @2-11 SpaceAfter(
-                                    Apply(
+                                    PncApply(
                                         @3-4 NumLiteral(
                                             "0",
                                         ),
@@ -40,21 +40,18 @@
                                                 ],
                                             ),
                                         ],
-                                        ParensAndCommas,
                                     ),
                                     [
                                         Newline,
                                     ],
                                 ),
                             ],
-                            ParensAndCommas,
                         ),
                         [
                             @12-13 Identifier {
                                 ident: "f",
                             },
                         ],
-                        Whitespace,
                     ),
                     @14-15 BoundVariable(
                         "f",

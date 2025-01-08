@@ -940,14 +940,16 @@ matches_at = \haystack, haystack_index, needle ->
     needle_length = Str.count_utf8_bytes(needle)
     end_index = min(Num.add_saturated(haystack_index, needle_length), haystack_length)
 
-    matches_at_help({
-        haystack,
-        haystack_index,
-        needle,
-        needle_index: 0,
-        needle_length,
-        end_index,
-    })
+    matches_at_help(
+        {
+            haystack,
+            haystack_index,
+            needle,
+            needle_index: 0,
+            needle_length,
+            end_index,
+        },
+    )
 
 matches_at_help = \state ->
     { haystack, haystack_index, needle, needle_index, needle_length, end_index } = state

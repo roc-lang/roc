@@ -88,7 +88,7 @@ Defs {
                                                             [
                                                                 WhenBranch {
                                                                     patterns: [
-                                                                        @24-32 Apply(
+                                                                        @24-32 PncApply(
                                                                             @24-32 Tag(
                                                                                 "Ok",
                                                                             ),
@@ -97,7 +97,6 @@ Defs {
                                                                                     ident: "success_BRANCH1_24_32",
                                                                                 },
                                                                             ],
-                                                                            ParensAndCommas,
                                                                         ),
                                                                     ],
                                                                     value: @24-32 Var {
@@ -108,7 +107,7 @@ Defs {
                                                                 },
                                                                 WhenBranch {
                                                                     patterns: [
-                                                                        @36-39 Apply(
+                                                                        @36-39 PncApply(
                                                                             @24-32 Tag(
                                                                                 "Err",
                                                                             ),
@@ -117,7 +116,6 @@ Defs {
                                                                                     "",
                                                                                 ),
                                                                             ],
-                                                                            ParensAndCommas,
                                                                         ),
                                                                     ],
                                                                     value: @36-39 Num(

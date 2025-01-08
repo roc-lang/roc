@@ -3811,6 +3811,16 @@ mod test_fmt {
     }
 
     #[test]
+    fn pipe_pnc_application_with_comment_no_args() {
+        expr_formats_same(indoc!(
+            r"
+            combine( # This is a comment
+            )
+            "
+        ));
+    }
+
+    #[test]
     fn single_line_nested_application_with_parens() {
         expr_formats_same(indoc!(
             r"
