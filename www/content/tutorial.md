@@ -1639,9 +1639,7 @@ Notice the subtle difference in these functions' types:
 
 The arrow in the type tells you whether a function is pure or might perform effects. Pure functions use `->` and effectful functions use `=>`. Effectful functions can call either pure functions or other effectful functions, but pure functions can only call other pure functions. (The fact that pure functions can only call pure functions is part of the definition of pure functions; Roc is just reflecting that fact in the type system.)
 
-The `!` is a suffix character inside function names themselves, marking them as effectful. This is just a naming convention, though it is enforced by the compiler with a warning.
-
-Note: this was a previous change to the language, and `!` used to be an operator, so you may still find code that as a `Task` in it or an effectful function like `main` without a `!` suffix. This code should be upgraded to use `Result` and the naming convention for purity inference, e.g. `main!`. For more information about this change, see [this recent talk](https://www.youtube.com/watch?v=42TUAKhzlRI).
+The suffix character `!` at the end of a function name marks it as effectful. This is a naming convention, and is enforced by the compiler with a warning.
 
 Let's look at some examples. In the `basic-cli` platform, here are four operations we can do:
 
