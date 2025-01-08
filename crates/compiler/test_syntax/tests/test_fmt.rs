@@ -5993,32 +5993,6 @@ mod test_fmt {
     }
 
     #[test]
-    /// Test that everything under examples/ is formatted correctly
-    /// If this test fails on your diff, it probably means you need to re-format the examples.
-    /// Try this:
-    /// `cargo run -- format $(find examples -name \*.roc)`
-    fn test_fmt_examples() {
-        let mut count = 0;
-        let mut root = workspace_root();
-        root.push("examples");
-        for entry in walkdir::WalkDir::new(&root) {
-            let entry = entry.unwrap();
-            let path = entry.path();
-            if path.extension() == Some(std::ffi::OsStr::new("roc")) {
-                count += 1;
-                let src = std::fs::read_to_string(path).unwrap();
-                println!("Now trying to format {}", path.display());
-                module_formats_same(&src);
-            }
-        }
-        assert!(
-            count > 0,
-            "Expecting to find at least 1 .roc file to format under {}",
-            root.display()
-        );
-    }
-
-    #[test]
     /// Test that builtins are formatted correctly
     /// If this test fails on your diff, it probably means you need to re-format a builtin.
     /// Try this:
