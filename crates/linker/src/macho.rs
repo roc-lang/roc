@@ -3,12 +3,12 @@ use iced_x86::{Decoder, DecoderOptions, Instruction, OpCodeOperandKind, OpKind};
 use memmap2::MmapMut;
 use object::macho;
 use object::{
-    CompressedFileRange, CompressionFormat, LittleEndian as LE, Object, ObjectSection,
-    ObjectSymbol, RelocationFlags, RelocationKind, RelocationTarget, Section, SectionIndex,
-    SectionKind, Symbol, SymbolIndex, SymbolSection,
+    LittleEndian as LE, Object, ObjectSection, ObjectSymbol, RelocationFlags, RelocationKind,
+    RelocationTarget, Section, SectionIndex, SectionKind, Symbol, SymbolIndex, SymbolSection,
 };
 use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
+use roc_target::Architecture;
 use serde::{Deserialize, Serialize};
 use std::{
     ffi::{c_char, CStr},
@@ -186,29 +186,17 @@ impl<'a> Surgeries<'a> {
     }
 
     fn append_text_section(&mut self, object_bytes: &[u8], sec: &Section, verbose: bool) {
-        let (file_offset, compressed) = match sec.compressed_file_range() {
-            Ok(CompressedFileRange {
-                format: CompressionFormat::None,
-                offset,
-                ..
-            }) => (offset, false),
-            Ok(range) => (range.offset, true),
-            Err(err) => {
-                internal_error!(
-                    "Issues dealing with section compression for {:+x?}: {}",
-                    sec,
-                    err
-                );
-            }
+        let file_offset = if let Some((file_offset, _)) = sec.file_range() {
+            file_offset
+        } else {
+            internal_error!("Could not get file range for {sec:+x?}");
         };
 
-        let data = match sec.uncompressed_data() {
+        let data = match sec.data() {
             Ok(data) => data,
-            Err(err) => {
-                internal_error!("Failed to load text section, {:+x?}: {}", sec, err);
-            }
+            Err(err) => internal_error!("Failed to load text section, {:+x?}: {err}", sec),
         };
-        let mut decoder = Decoder::with_ip(64, &data, sec.address(), DecoderOptions::NONE);
+        let mut decoder = Decoder::with_ip(64, data, sec.address(), DecoderOptions::NONE);
         let mut inst = Instruction::default();
 
         while decoder.can_decode() {
@@ -224,10 +212,6 @@ impl<'a> Surgeries<'a> {
                 Ok(OpKind::NearBranch16 | OpKind::NearBranch32 | OpKind::NearBranch64) => {
                     let target = inst.near_branch_target();
                     if let Some(func_name) = self.app_func_addresses.get(&target) {
-                        if compressed {
-                            internal_error!("Surgical linking does not work with compressed text sections: {:+x?}", sec);
-                        }
-
                         if verbose {
                             println!(
                                 "Found branch from {:+x} to {:+x}({})",
@@ -302,6 +286,7 @@ impl<'a> Surgeries<'a> {
 
 /// Constructs a `Metadata` from a host executable binary, and writes it to disk
 pub(crate) fn preprocess_macho_le(
+    arch: Architecture,
     host_exe_path: &Path,
     metadata_path: &Path,
     preprocessed_path: &Path,
@@ -341,16 +326,10 @@ pub(crate) fn preprocess_macho_le(
 
     let (plt_address, plt_offset) = match exec_obj.section_by_name(plt_section_name) {
         Some(section) => {
-            let file_offset = match section.compressed_file_range() {
-                Ok(
-                    range @ CompressedFileRange {
-                        format: CompressionFormat::None,
-                        ..
-                    },
-                ) => range.offset,
-                _ => {
-                    internal_error!("Surgical linking does not work with compressed plt section");
-                }
+            let file_offset = if let Some((file_offset, _)) = section.file_range() {
+                file_offset
+            } else {
+                internal_error!("Could not get file range for {section:+x?}");
             };
             (section.address(), file_offset)
         }
@@ -545,10 +524,7 @@ pub(crate) fn preprocess_macho_le(
         }
     };
 
-    // TODO this is correct on modern Macs (they align to the page size)
-    // but maybe someone can override the alignment somehow? Maybe in the
-    // future this could change? Is there some way to make this more future-proof?
-    md.load_align_constraint = 4096;
+    md.load_align_constraint = page_size(arch);
 
     let out_mmap = gen_macho_le(
         exec_data,
@@ -1345,59 +1321,9 @@ fn surgery_macho_help(
                         continue;
                     } else if matches!(app_obj.symbol_by_index(index), Ok(sym) if ["_longjmp", "_setjmp"].contains(&sym.name().unwrap_or_default()))
                     {
-                        // These symbols have to stay undefined as we dynamically link them from libSystem.dylib at runtime.
-                        // TODO have a table of all known symbols; perhaps parse and use an Apple provided libSystem.tbd stub file?
-                        let name = app_obj
-                            .symbol_by_index(index)
-                            .and_then(|sym| sym.name())
-                            .ok()
-                            .unwrap();
-                        match rel.1.kind() {
-                            RelocationKind::PltRelative => {
-                                if verbose {
-                                    println!("\t\tTODO synthesise __stub entry for {name}")
-                                }
-                            }
-                            RelocationKind::Got => {
-                                if verbose {
-                                    println!("\t\tTODO synthesise __got entry for {name}")
-                                }
-                            }
-                            RelocationKind::Unknown => {
-                                if let RelocationFlags::MachO { r_type, .. } = rel.1.flags() {
-                                    match r_type {
-                                        macho::ARM64_RELOC_GOT_LOAD_PAGE21
-                                        | macho::ARM64_RELOC_GOT_LOAD_PAGEOFF12 => {
-                                            if verbose {
-                                                println!(
-                                                    "\t\tTODO synthesise __got entry for {name}"
-                                                )
-                                            }
-                                        }
-                                        macho::ARM64_RELOC_BRANCH26 => {
-                                            if verbose {
-                                                println!(
-                                                    "\t\tTODO synthesise __stub entry for {name}"
-                                                )
-                                            }
-                                        }
-                                        _ => internal_error!(
-                                            "Invalid relocation for libc symbol, {:+x?}: {name}",
-                                            rel
-                                        ),
-                                    }
-                                } else {
-                                    internal_error!(
-                                        "Invalid relocation found for Mach-O: {:?}",
-                                        rel
-                                    );
-                                }
-                            }
-                            _ => internal_error!(
-                                "Invalid relocation for libc symbol, {:+x?}: {name}",
-                                rel
-                            ),
-                        }
+                        // Explicitly ignore `longjmp` and `setjmp` which are used only in `roc test` mode and thus are unreferenced
+                        // by the app and can be safely skipped.
+                        // In the future, `longjmp` and `setjmp` will be obsoleted and thus this prong can be safely deleted.
                         continue;
                     } else {
                         internal_error!(
@@ -1729,4 +1655,12 @@ fn format_reloc_type(value: u8) -> impl std::fmt::Display {
     }
 
     Inner(value)
+}
+
+fn page_size(arch: Architecture) -> u64 {
+    match arch {
+        Architecture::X86_64 => 0x1000,
+        Architecture::Aarch64 => 0x4000,
+        _ => unreachable!(),
+    }
 }

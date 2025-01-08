@@ -17,28 +17,34 @@
             type_defs: [],
             value_defs: [
                 Annotation(
-                    @0-1 Apply(
-                        @0-1 NumLiteral(
-                            "1",
-                        ),
-                        [
-                            @2-8 Apply(
-                                @3-4 SpaceAfter(
-                                    NumLiteral(
-                                        "0",
+                    @0-17 Apply(
+                        @0-9 Apply(
+                            @0-1 NumLiteral(
+                                "1",
+                            ),
+                            [
+                                @2-8 Apply(
+                                    @3-4 SpaceAfter(
+                                        NumLiteral(
+                                            "0",
+                                        ),
+                                        [
+                                            LineComment(
+                                                "",
+                                            ),
+                                        ],
                                     ),
                                     [
-                                        LineComment(
-                                            "",
-                                        ),
+                                        @7-8 Identifier {
+                                            ident: "f",
+                                        },
                                     ],
+                                    Whitespace,
                                 ),
-                                [
-                                    @7-8 Identifier {
-                                        ident: "f",
-                                    },
-                                ],
-                            ),
+                            ],
+                            ParensAndCommas,
+                        ),
+                        [
                             @10-16 Apply(
                                 @11-12 SpaceAfter(
                                     NumLiteral(
@@ -55,8 +61,10 @@
                                         ident: "f",
                                     },
                                 ],
+                                Whitespace,
                             ),
                         ],
+                        ParensAndCommas,
                     ),
                     @18-19 BoundVariable(
                         "f",

@@ -1,5 +1,6 @@
 use crate::ast::CommentOrNewline;
 use crate::ast::Spaceable;
+use crate::ast::SpacesBefore;
 use crate::parser::succeed;
 use crate::parser::Progress;
 use crate::parser::SpaceProblem;
@@ -171,6 +172,24 @@ where
                     .alloc(loc_expr.value)
                     .with_spaces_before(space_list, loc_expr.region)
             }
+        },
+    )
+}
+
+pub fn plain_spaces_before<'a, P, S, E>(
+    parser: P,
+    indent_problem: fn(Position) -> E,
+) -> impl Parser<'a, SpacesBefore<'a, S>, E>
+where
+    S: 'a,
+    P: 'a + Parser<'a, S, E>,
+    E: 'a + SpaceProblem,
+{
+    parser::map(
+        and(backtrackable(space0_e(indent_problem)), parser),
+        |(space_list, item): (&'a [CommentOrNewline<'a>], S)| SpacesBefore {
+            before: space_list,
+            item,
         },
     )
 }

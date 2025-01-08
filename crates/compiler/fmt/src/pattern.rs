@@ -7,7 +7,8 @@ use crate::spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT};
 use crate::Buf;
 use bumpalo::Bump;
 use roc_parse::ast::{
-    Base, CommentOrNewline, Pattern, PatternAs, Spaceable, Spaces, SpacesAfter, SpacesBefore,
+    Base, CommentOrNewline, Pattern, PatternApplyStyle, PatternAs, Spaceable, Spaces, SpacesAfter,
+    SpacesBefore,
 };
 use roc_parse::expr::merge_spaces;
 use roc_region::all::Loc;
@@ -72,7 +73,7 @@ impl<'a> Formattable for Pattern<'a> {
                 }
             },
             Pattern::StrLiteral(literal) => is_str_multiline(literal),
-            Pattern::Apply(pat, args) => {
+            Pattern::Apply(pat, args, _) => {
                 pat.is_multiline() || args.iter().any(|a| a.is_multiline())
             }
 
@@ -162,7 +163,22 @@ fn fmt_pattern_only(
             buf.indent(indent);
             buf.push_str(name);
         }
-        Pattern::Apply(loc_pattern, loc_arg_patterns) => {
+        Pattern::Apply(
+            loc_pattern,
+            loc_arg_patterns,
+            style @ PatternApplyStyle::ParensAndCommas,
+        ) => {
+            pattern_fmt_apply(
+                buf,
+                loc_pattern.value,
+                loc_arg_patterns,
+                Parens::NotNeeded,
+                indent,
+                is_multiline,
+                *style,
+            );
+        }
+        Pattern::Apply(loc_pattern, loc_arg_patterns, style) => {
             pattern_fmt_apply(
                 buf,
                 loc_pattern.value,
@@ -170,6 +186,7 @@ fn fmt_pattern_only(
                 parens,
                 indent,
                 is_multiline,
+                *style,
             );
         }
         Pattern::RecordDestructure(loc_patterns) => {
@@ -251,7 +268,7 @@ fn fmt_pattern_only(
         Pattern::OptionalField(name, loc_pattern) => {
             buf.indent(indent);
             snakify_camel_ident(buf, name);
-            buf.push_str(" ?");
+            buf.push_str(" ??");
             buf.spaces(1);
             loc_pattern.format(buf, indent);
         }
@@ -445,11 +462,14 @@ pub fn pattern_fmt_apply(
     parens: Parens,
     indent: u16,
     is_multiline: bool,
+    style: PatternApplyStyle,
 ) {
+    let use_commas_and_parens =
+        matches!(style, PatternApplyStyle::ParensAndCommas) || buf.flags().parens_and_commas;
     buf.indent(indent);
     // Sometimes, an Apply pattern needs parens around it.
     // In particular when an Apply's argument is itself an Apply (> 0) arguments
-    let parens = !args.is_empty() && parens == Parens::InApply;
+    let parens = !args.is_empty() && parens == Parens::InApply && !use_commas_and_parens;
 
     let indent_more = if is_multiline {
         indent + INDENT
@@ -473,14 +493,27 @@ pub fn pattern_fmt_apply(
 
     fmt_pattern_only(&func.item, buf, Parens::InApply, indent, is_multiline);
 
+    if use_commas_and_parens {
+        buf.push('(');
+    }
+
     let mut last_after = func.after;
 
     let mut add_newlines = is_multiline;
 
-    for loc_arg in args.iter() {
-        buf.spaces(1);
+    for (i, loc_arg) in args.iter().enumerate() {
+        let is_last_arg = i == args.len() - 1;
+        let is_first_arg = i == 0;
 
-        let parens = Parens::InApply;
+        if !(is_first_arg && use_commas_and_parens) {
+            buf.spaces(1);
+        }
+
+        let parens = if use_commas_and_parens {
+            Parens::NotNeeded
+        } else {
+            Parens::InApply
+        };
         let arg = pattern_lift_spaces(buf.text.bump(), &loc_arg.value);
 
         let mut was_multiline = arg.item.is_multiline();
@@ -527,6 +560,9 @@ pub fn pattern_fmt_apply(
             buf.push_str("(implements)");
         } else {
             fmt_pattern_only(&arg.item, buf, parens, indent_more, arg.item.is_multiline());
+            if use_commas_and_parens && (!is_last_arg || add_newlines) {
+                buf.push(',');
+            }
         }
 
         last_after = arg.after;
@@ -542,7 +578,7 @@ pub fn pattern_fmt_apply(
         }
     }
 
-    if parens {
+    if parens || use_commas_and_parens {
         buf.push(')');
     }
 }
@@ -597,7 +633,7 @@ fn pattern_prec(pat: Pattern<'_>) -> Prec {
         | Pattern::Tuple(..)
         | Pattern::List(..)
         | Pattern::ListRest(_) => Prec::Term,
-        Pattern::Apply(_, _) | Pattern::As(_, _) => Prec::Apply,
+        Pattern::Apply(_, _, _) | Pattern::As(_, _) => Prec::Apply,
         Pattern::SpaceBefore(inner, _) | Pattern::SpaceAfter(inner, _) => pattern_prec(*inner),
         Pattern::Malformed(_) | Pattern::MalformedIdent(..) => Prec::Term,
     }
@@ -617,7 +653,7 @@ pub fn pattern_lift_spaces<'a, 'b: 'a>(
     pat: &Pattern<'b>,
 ) -> Spaces<'a, Pattern<'a>> {
     match pat {
-        Pattern::Apply(func, args) => {
+        Pattern::Apply(func, args, style) => {
             let func_lifted = pattern_lift_spaces(arena, &func.value);
 
             let args = arena.alloc_slice_copy(args);
@@ -652,7 +688,7 @@ pub fn pattern_lift_spaces<'a, 'b: 'a>(
             };
             Spaces {
                 before,
-                item: Pattern::Apply(arena.alloc(func), args),
+                item: Pattern::Apply(arena.alloc(func), args, *style),
                 after,
             }
         }
@@ -712,7 +748,7 @@ fn handle_multiline_str_spaces<'a>(pat: &Pattern<'_>, before: &mut &'a [CommentO
 
 fn starts_with_block_str(item: &Pattern<'_>) -> bool {
     match item {
-        Pattern::As(inner, _) | Pattern::Apply(inner, _) => starts_with_block_str(&inner.value),
+        Pattern::As(inner, _) | Pattern::Apply(inner, _, _) => starts_with_block_str(&inner.value),
         Pattern::SpaceBefore(inner, _) | Pattern::SpaceAfter(inner, _) => {
             starts_with_block_str(inner)
         }
@@ -791,7 +827,10 @@ mod snakify_test {
     use crate::{Buf, MigrationFlags};
 
     fn check_snakify(arena: &Bump, original: &str) -> String {
-        let flags = MigrationFlags::new(true);
+        let flags = MigrationFlags {
+            snakify: true,
+            parens_and_commas: false,
+        };
         let mut buf = Buf::new_in(arena, flags);
         buf.indent(0);
         snakify_camel_ident(&mut buf, original);

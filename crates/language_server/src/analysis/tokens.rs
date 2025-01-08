@@ -535,12 +535,7 @@ impl IterTokens for Loc<ImplementsAbilities<'_>> {
 
 impl IterTokens for ImplementsAbilities<'_> {
     fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
-        match self {
-            ImplementsAbilities::Implements(impls) => impls.iter_tokens(arena),
-            ImplementsAbilities::SpaceBefore(i, _) | ImplementsAbilities::SpaceAfter(i, _) => {
-                i.iter_tokens(arena)
-            }
-        }
+        self.item.value.iter_tokens(arena)
     }
 }
 
@@ -767,7 +762,7 @@ impl IterTokens for Loc<Pattern<'_>> {
             Pattern::Identifier { .. } => onetoken(Token::Variable, region, arena),
             Pattern::Tag(_) => onetoken(Token::Tag, region, arena),
             Pattern::OpaqueRef(_) => onetoken(Token::Type, region, arena),
-            Pattern::Apply(p1, p2) => (p1.iter_tokens(arena).into_iter())
+            Pattern::Apply(p1, p2, _) => (p1.iter_tokens(arena).into_iter())
                 .chain(p2.iter_tokens(arena))
                 .collect_in(arena),
             Pattern::RecordDestructure(ps) => ps.iter_tokens(arena),

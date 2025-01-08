@@ -33,6 +33,9 @@ mod test_snapshots {
         (full => $input:expr) => {
             Input::Full($input)
         };
+        (pattern => $input:expr) => {
+            Input::Pattern($input)
+        };
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -298,6 +301,7 @@ mod test_snapshots {
         pass/ann_effectful_fn.expr,
         pass/ann_open_union.expr,
         pass/ann_parens_comments.expr,
+        pass/ann_parens_where_implements_func.expr,
         pass/ann_pattern_comment_before_body.expr,
         pass/ann_record_pat_with_comment.expr,
         pass/ann_tag_union_newline_comment.expr,
@@ -323,9 +327,13 @@ mod test_snapshots {
         pass/apply_record_ann.expr,
         pass/apply_record_parens_newline_field.expr,
         pass/apply_tag.expr,
+        pass/apply_tag_pnc.expr,
+        pass/apply_tag_single_arg_pnc.pattern,
+        pass/apply_tag_single_arg_whitespace.pattern,
         pass/apply_three_args.expr,
         pass/apply_tuple_ext_parens_ty.expr,
         pass/apply_two_args.expr,
+        pass/apply_two_args_pnc.expr,
         pass/apply_unary_negation.expr,
         pass/apply_unary_not.expr,
         pass/arg_pattern_as.expr,
@@ -363,6 +371,7 @@ mod test_snapshots {
         pass/comment_after_def.moduledefs,
         pass/comment_after_expr_in_parens.expr,
         pass/comment_after_op.expr,
+        pass/comment_after_whitespace_apply_arg_inside_pnc_apply.expr,
         pass/comment_before_colon_def.expr,
         pass/comment_before_comma_in_tuple_type_with_func.expr,
         pass/comment_before_equals_def.expr,
@@ -448,7 +457,7 @@ mod test_snapshots {
         pass/if_in_record_field_opt_pat.expr,
         pass/if_newline_then_negate_else_recordupdater.expr,
         pass/if_then_weird_indent.expr,
-        pass/implements_after_parens_comment.expr,
+        pass/implements_after_comment_with_newline.expr,
         pass/implements_annotation_comment.expr,
         pass/implements_in_pat_after_comment.expr,
         pass/implements_newline_in_fn_ty.expr,
@@ -479,6 +488,7 @@ mod test_snapshots {
         pass/list_minus_newlines.expr,
         pass/list_pattern_weird_indent.expr,
         pass/list_patterns.expr,
+        pass/long_complex_application_with_pnc.expr,
         pass/looks_like_implements.expr,
         pass/lowest_float.expr,
         pass/lowest_int.expr,
@@ -543,6 +553,7 @@ mod test_snapshots {
         pass/newline_after_sub.expr,
         pass/newline_and_spaces_before_less_than.expr,
         pass/newline_before_add.expr,
+        pass/newline_before_and_after_implements_opaque.expr,
         pass/newline_before_import_curlies.expr,
         pass/newline_before_sub.expr,
         pass/newline_in_packages.full,
@@ -657,6 +668,7 @@ mod test_snapshots {
         pass/return_multiline.expr,
         pass/return_only_statement.expr,
         pass/return_parens_comments.expr,
+        pass/return_record_update_comment_empty_fields.expr,
         pass/return_then_nested_parens.expr,
         pass/return_with_after.expr,
         pass/separate_defs.moduledefs,
@@ -855,8 +867,6 @@ mod test_snapshots {
             }
             Err(err) => Err(format!("{err:?}")),
         };
-
-        println!("{:?}", result);
 
         if expect == TestExpectation::Pass {
             let tokens = roc_parse::highlight::highlight(&source);

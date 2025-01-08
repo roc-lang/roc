@@ -13,13 +13,13 @@ use crate::pattern::{pattern_lift_spaces, pattern_lift_spaces_before};
 use crate::spaces::{
     fmt_comments_only, fmt_default_newline, fmt_default_spaces, fmt_spaces, NewlineAt, INDENT,
 };
-use crate::Buf;
+use crate::{Buf, MigrationFlags};
 use bumpalo::Bump;
 use roc_error_macros::internal_error;
 use roc_parse::ast::{
     AbilityMember, Defs, Expr, ExtractSpaces, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
     ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport,
-    ModuleImportParams, Pattern, Spaceable, Spaces, SpacesAfter, SpacesBefore, StrLiteral,
+    ModuleImportParams, Pattern, PatternApplyStyle, Spaces, SpacesBefore, StrLiteral,
     TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use roc_parse::expr::merge_spaces;
@@ -94,21 +94,6 @@ pub fn def_lift_spaces<'a, 'b: 'a>(
     }
 }
 
-fn lift_spaces_after<'a, 'b: 'a, T: 'b + ExtractSpaces<'a> + Spaceable<'a>>(
-    arena: &'a Bump,
-    item: T,
-) -> SpacesAfter<'a, <T as ExtractSpaces<'a>>::Item>
-where
-    <T as ExtractSpaces<'a>>::Item: Spaceable<'a>,
-{
-    let spaces = item.extract_spaces();
-
-    SpacesAfter {
-        item: spaces.item.maybe_before(arena, spaces.before),
-        after: spaces.after,
-    }
-}
-
 pub fn tydef_lift_spaces<'a, 'b: 'a>(arena: &'a Bump, def: TypeDef<'b>) -> Spaces<'a, TypeDef<'a>> {
     match def {
         TypeDef::Alias { header, ann } => {
@@ -128,17 +113,12 @@ pub fn tydef_lift_spaces<'a, 'b: 'a>(arena: &'a Bump, def: TypeDef<'b>) -> Space
             typ,
             derived,
         } => {
-            if let Some(derived) = derived {
-                let derived_lifted = lift_spaces_after(arena, derived.value);
-
+            if derived.is_some() {
+                // It's structurally impossible for a derived clause to have spaces after
                 Spaces {
                     before: &[],
-                    item: TypeDef::Opaque {
-                        header,
-                        typ,
-                        derived: Some(Loc::at(derived.region, derived_lifted.item)),
-                    },
-                    after: derived_lifted.after,
+                    item: def,
+                    after: &[],
                 }
             } else {
                 let typ_lifted = ann_lift_spaces_after(arena, &typ.value);
@@ -461,7 +441,7 @@ impl<'a> Formattable for TypeDef<'a> {
                 // Always put the has-abilities clause on a newline if the opaque annotation
                 // contains a where-has clause.
                 let has_abilities_multiline = if let Some(has_abilities) = has_abilities {
-                    !has_abilities.value.is_empty() && ann_is_where_clause
+                    !has_abilities.item.value.is_empty() && ann_is_where_clause
                 } else {
                     false
                 };
@@ -481,7 +461,7 @@ impl<'a> Formattable for TypeDef<'a> {
                 if let Some(has_abilities) = has_abilities {
                     buf.spaces(1);
 
-                    has_abilities.format_with_options(
+                    (*has_abilities).format_with_options(
                         buf,
                         Parens::NotNeeded,
                         Newlines::from_bool(make_multiline),
@@ -564,6 +544,11 @@ impl<'a> Formattable for TypeHeader<'a> {
         _newlines: Newlines,
         indent: u16,
     ) {
+        let old_flags = buf.flags;
+        buf.flags = MigrationFlags {
+            parens_and_commas: false,
+            ..old_flags
+        };
         pattern_fmt_apply(
             buf,
             Pattern::Tag(self.name.value),
@@ -571,7 +556,9 @@ impl<'a> Formattable for TypeHeader<'a> {
             Parens::NotNeeded,
             indent,
             self.vars.iter().any(|v| v.is_multiline()),
+            PatternApplyStyle::Whitespace,
         );
+        buf.flags = old_flags;
     }
 }
 
@@ -582,13 +569,14 @@ fn type_head_lift_spaces<'a, 'b: 'a>(
     let pat = Pattern::Apply(
         arena.alloc(Loc::at(head.name.region, Pattern::Tag(head.name.value))),
         head.vars,
+        PatternApplyStyle::Whitespace,
     );
 
     pattern_lift_spaces(arena, &pat)
 }
 
 impl<'a> Nodify<'a> for TypeHeader<'a> {
-    fn to_node<'b>(&'a self, arena: &'b Bump) -> NodeInfo<'b>
+    fn to_node<'b>(&'a self, arena: &'b Bump, _flags: MigrationFlags) -> NodeInfo<'b>
     where
         'a: 'b,
     {
@@ -903,7 +891,9 @@ impl<'a> Formattable for ValueDef<'a> {
 fn ann_pattern_needs_parens(value: &Pattern<'_>) -> bool {
     match value.extract_spaces().item {
         Pattern::Tag(_) => true,
-        Pattern::Apply(func, _args) if matches!(func.extract_spaces().item, Pattern::Tag(..)) => {
+        Pattern::Apply(func, _args, _style)
+            if matches!(func.extract_spaces().item, Pattern::Tag(..)) =>
+        {
             true
         }
         _ => false,
@@ -926,7 +916,7 @@ fn fmt_general_def<L: Formattable>(
     buf.push_str(sep);
     buf.spaces(1);
 
-    let rhs = rhs.to_node(buf.text.bump());
+    let rhs = rhs.to_node(buf.text.bump(), buf.flags());
 
     if rhs.node.is_multiline() || !rhs.before.is_empty() || !rhs.after.is_empty() {
         if rhs.node.is_multiline() && !rhs.needs_indent && rhs.before.iter().all(|s| s.is_newline())

@@ -50,6 +50,7 @@
                                 "",
                             ),
                         ],
+                        Whitespace,
                     ),
                     @11-19 Apply(
                         @11-15 Tag(
@@ -79,6 +80,7 @@
                                 ident: "y",
                             },
                         ],
+                        Whitespace,
                     ),
                     @31-39 Apply(
                         @31-35 Tag(
@@ -108,6 +110,7 @@
                                 "",
                             ),
                         ],
+                        Whitespace,
                     ),
                     @51-59 Apply(
                         @51-55 Tag(
@@ -161,6 +164,7 @@
                                         "",
                                     ),
                                 ],
+                                Whitespace,
                             ),
                             @90-98 Apply(
                                 @90-94 Tag(
@@ -174,8 +178,10 @@
                                         ident: "y",
                                     },
                                 ],
+                                Whitespace,
                             ),
                         ],
+                        Whitespace,
                     ),
                     @102-128 Apply(
                         @102-106 Tag(

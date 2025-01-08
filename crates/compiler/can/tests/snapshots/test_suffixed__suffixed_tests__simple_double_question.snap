@@ -1,6 +1,7 @@
 ---
 source: crates/compiler/can/tests/test_suffixed.rs
 expression: snapshot
+snapshot_kind: text
 ---
 Defs {
     tags: [
@@ -96,6 +97,7 @@ Defs {
                                                                                     ident: "success_BRANCH1_24_32",
                                                                                 },
                                                                             ],
+                                                                            ParensAndCommas,
                                                                         ),
                                                                     ],
                                                                     value: @24-32 Var {
@@ -115,6 +117,7 @@ Defs {
                                                                                     "",
                                                                                 ),
                                                                             ],
+                                                                            ParensAndCommas,
                                                                         ),
                                                                     ],
                                                                     value: @36-39 Num(

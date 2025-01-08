@@ -4538,8 +4538,8 @@ mod test_reporting {
     4│      f : { foo  bar }
                        ^
 
-    I was expecting to see a colon, question mark, comma or closing curly
-    brace.
+    I was expecting to see a colon, two question marks (??), comma or
+    closing curly brace.
     "
     );
 
@@ -6428,6 +6428,82 @@ All branches in an `if` must have the same type!
 
                     [Animal, default, tame]
             "
+            ),
+        )
+    }
+
+    #[test]
+    fn exposes_start() {
+        report_header_problem_as(
+            indoc!(
+                r"
+                module foobar []
+                "
+            ),
+            indoc!(
+                r#"
+                ── WEIRD EXPOSES in /code/proj/Main.roc ────────────────────────────────────────
+
+                I am partway through parsing a header, but I got stuck here:
+
+                1│  module foobar []
+                           ^
+
+                I was expecting an `exposes` list like
+
+                    [Animal, default, tame]
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn exposes_missing_comma() {
+        report_header_problem_as(
+            indoc!(
+                r"
+                module [value func]
+                "
+            ),
+            indoc!(
+                r#"
+                ── WEIRD EXPOSES in /code/proj/Main.roc ────────────────────────────────────────
+
+                I am partway through parsing an `exposes` list, but I got stuck here:
+
+                1│  module [value func]
+                                  ^
+
+                I was expecting a type name, value name or function name next, like
+
+                    [Animal, default, tame]
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn exposes_end() {
+        report_header_problem_as(
+            indoc!(
+                r"
+                module [value
+                "
+            ),
+            indoc!(
+                r#"
+                ── WEIRD EXPOSES in /code/proj/Main.roc ────────────────────────────────────────
+
+                I am partway through parsing an `exposes` list, but I got stuck here:
+
+                1│  module [value
+                2│
+                    ^
+
+                I was expecting a type name, value name or function name next, like
+
+                    [Animal, default, tame]
+            "#
             ),
         )
     }

@@ -9,13 +9,13 @@ use roc_error_macros::set_panic_not_exit;
 use roc_fmt::{annotation::Formattable, header::fmt_header, MigrationFlags};
 use roc_module::ident::QualifiedModuleName;
 use roc_module::symbol::{IdentIds, Interns, ModuleIds, PackageModuleIds, Symbol};
-use roc_parse::ast::RecursiveValueDefIter;
 use roc_parse::ast::ValueDef;
+use roc_parse::ast::{Pattern, RecursiveValueDefIter};
 use roc_parse::header::parse_module_defs;
 use roc_parse::parser::Parser;
 use roc_parse::parser::SyntaxError;
 use roc_parse::state::State;
-use roc_parse::test_helpers::parse_loc_with;
+use roc_parse::test_helpers::{parse_loc_with, parse_pattern_with};
 use roc_parse::{ast::Malformed, normalize::Normalize};
 use roc_parse::{
     ast::{Defs, Expr, FullAst, Header, SpacesBefore},
@@ -45,6 +45,9 @@ pub enum Input<'a> {
 
     /// Both the header and the module defs
     Full(&'a str),
+
+    /// A single pattern
+    Pattern(&'a str),
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -53,6 +56,7 @@ pub enum InputKind {
     ModuleDefs,
     Expr,
     Full,
+    Pattern,
 }
 
 impl InputKind {
@@ -62,6 +66,7 @@ impl InputKind {
             InputKind::ModuleDefs => Input::ModuleDefs(text),
             InputKind::Expr => Input::Expr(text),
             InputKind::Full => Input::Full(text),
+            InputKind::Pattern => Input::Pattern(text),
         }
     }
 }
@@ -73,6 +78,7 @@ pub enum InputOwned {
     ModuleDefs(String),
     Expr(String),
     Full(String),
+    Pattern(String),
 }
 
 impl InputOwned {
@@ -82,6 +88,7 @@ impl InputOwned {
             InputOwned::ModuleDefs(s) => Input::ModuleDefs(s),
             InputOwned::Expr(s) => Input::Expr(s),
             InputOwned::Full(s) => Input::Full(s),
+            InputOwned::Pattern(s) => Input::Pattern(s),
         }
     }
 }
@@ -96,12 +103,13 @@ pub enum Output<'a> {
     Expr(Loc<Expr<'a>>),
 
     Full(FullAst<'a>),
+
+    Pattern(Loc<Pattern<'a>>),
 }
 
 impl<'a> Output<'a> {
-    pub fn format(&self) -> InputOwned {
+    pub fn format(&self, flags: MigrationFlags) -> InputOwned {
         let arena = Bump::new();
-        let flags = MigrationFlags::new(false);
         let mut buf = Buf::new_in(&arena, flags);
         match self {
             Output::Header(header) => {
@@ -124,6 +132,10 @@ impl<'a> Output<'a> {
                 buf.fmt_end_of_file();
                 InputOwned::Full(buf.as_str().to_string())
             }
+            Output::Pattern(patt) => {
+                patt.format(&mut buf, 0);
+                InputOwned::Pattern(buf.as_str().to_string())
+            }
         }
     }
 
@@ -133,6 +145,7 @@ impl<'a> Output<'a> {
             Output::ModuleDefs(defs) => format!("{defs:#?}\n"),
             Output::Expr(expr) => format!("{expr:#?}\n"),
             Output::Full { .. } => format!("{self:#?}\n"),
+            Output::Pattern(patt) => format!("{patt:#?}\n"),
         }
     }
 
@@ -147,6 +160,7 @@ impl<'a> Output<'a> {
             Output::Full(_) => {
                 // TODO: canonicalize full ast
             }
+            Output::Pattern(_) => {}
             Output::Expr(loc_expr) => {
                 let mut var_store = VarStore::default();
                 let mut imported: Vec<(QualifiedModuleName, Region)> = vec![];
@@ -245,6 +259,7 @@ impl<'a> Malformed for Output<'a> {
             Output::ModuleDefs(defs) => defs.is_malformed(),
             Output::Expr(expr) => expr.is_malformed(),
             Output::Full(full) => full.is_malformed(),
+            Output::Pattern(patt) => patt.is_malformed(),
         }
     }
 }
@@ -256,6 +271,7 @@ impl<'a> Normalize<'a> for Output<'a> {
             Output::ModuleDefs(defs) => Output::ModuleDefs(defs.normalize(arena)),
             Output::Expr(expr) => Output::Expr(expr.normalize(arena)),
             Output::Full(full) => Output::Full(full.normalize(arena)),
+            Output::Pattern(patt) => Output::Pattern(patt.normalize(arena)),
         }
     }
 }
@@ -267,6 +283,7 @@ impl<'a> Input<'a> {
             Input::ModuleDefs(s) => s,
             Input::Expr(s) => s,
             Input::Full(s) => s,
+            Input::Pattern(s) => s,
         }
     }
 
@@ -305,27 +322,49 @@ impl<'a> Input<'a> {
 
                 Ok(Output::Full(FullAst { header, defs }))
             }
+
+            Input::Pattern(input) => {
+                let patt = parse_pattern_with(arena, input).map_err(|e| e.problem)?;
+                Ok(Output::Pattern(patt))
+            }
         }
     }
 
-    /// Parse and re-format the given input, and pass the output to `check_formatting`
-    /// for verification.  The expectation is that `check_formatting` assert the result matches
-    /// expectations (or, overwrite the expectation based on a command-line flag)
-    /// Optionally, based on the value of `check_idempotency`, also verify that the formatting
-    /// is idempotent - that if we reformat the output, we get the same result.
     pub fn check_invariants(
         &self,
         handle_formatted_output: impl Fn(Input),
         check_idempotency: bool,
         canonicalize_mode: Option<bool>,
     ) {
+        self.check_invariants_with_flags(
+            handle_formatted_output,
+            check_idempotency,
+            canonicalize_mode,
+            MigrationFlags {
+                snakify: false,
+                parens_and_commas: false,
+            },
+        );
+    }
+    /// Parse and re-format the given input, and pass the output to `check_formatting`
+    /// for verification.  The expectation is that `check_formatting` assert the result matches
+    /// expectations (or, overwrite the expectation based on a command-line flag)
+    /// Optionally, based on the value of `check_idempotency`, also verify that the formatting
+    /// is idempotent - that if we reformat the output, we get the same result.
+    pub fn check_invariants_with_flags(
+        &self,
+        handle_formatted_output: impl Fn(Input),
+        check_idempotency: bool,
+        canonicalize_mode: Option<bool>,
+        flags: MigrationFlags,
+    ) {
         let arena = Bump::new();
 
         let actual = self.parse_in(&arena).unwrap_or_else(|err| {
-            panic!("Unexpected parse failure when parsing this for formatting:\n\n{}\n\nParse error was:\n\n{:?}\n\n", self.as_str(), err);
+            panic!("Unexpected parse failure when parsing this for formatting:\n\n{}\n\nParse error was:\n\n{:#?}\n\n", self.as_str(), err);
         });
 
-        let output = actual.format();
+        let output = actual.format(flags);
 
         handle_formatted_output(output.as_ref());
 
@@ -343,31 +382,33 @@ impl<'a> Input<'a> {
             );
         });
 
-        let ast_normalized = actual.normalize(&arena);
-        let reparsed_ast_normalized = reparsed_ast.normalize(&arena);
+        if !flags.at_least_one_active() {
+            let ast_normalized = actual.normalize(&arena);
+            let reparsed_ast_normalized = reparsed_ast.normalize(&arena);
 
-        // HACK!
-        // We compare the debug format strings of the ASTs, because I'm finding in practice that _somewhere_ deep inside the ast,
-        // the PartialEq implementation is returning `false` even when the Debug-formatted impl is exactly the same.
-        // I don't have the patience to debug this right now, so let's leave it for another day...
-        // TODO: fix PartialEq impl on ast types
-        if format!("{ast_normalized:?}") != format!("{reparsed_ast_normalized:?}") {
-            panic!(
-                "Formatting bug; formatting didn't reparse to the same AST (after removing spaces)\n\n\
-                * * * Source code before formatting:\n{}\n\n\
-                * * * Source code after formatting:\n{}\n\n\
-                * * * AST before formatting:\n{:#?}\n\n\
-                * * * AST after formatting:\n{:#?}\n\n",
-                self.as_str(),
-                output.as_ref().as_str(),
-                actual,
-                reparsed_ast
-            );
+            // HACK!
+            // We compare the debug format strings of the ASTs, because I'm finding in practice that _somewhere_ deep inside the ast,
+            // the PartialEq implementation is returning `false` even when the Debug-formatted impl is exactly the same.
+            // I don't have the patience to debug this right now, so let's leave it for another day...
+            // TODO: fix PartialEq impl on ast types
+            if format!("{ast_normalized:?}") != format!("{reparsed_ast_normalized:?}") {
+                panic!(
+                    "Formatting bug; formatting didn't reparse to the same AST (after removing spaces)\n\n\
+                    * * * Source code before formatting:\n{}\n\n\
+                    * * * Source code after formatting:\n{}\n\n\
+                    * * * AST before formatting:\n{:#?}\n\n\
+                    * * * AST after formatting:\n{:#?}\n\n",
+                    self.as_str(),
+                    output.as_ref().as_str(),
+                    actual,
+                    reparsed_ast
+                );
+            }
         }
 
         // Now verify that the resultant formatting is _idempotent_ - i.e. that it doesn't change again if re-formatted
         if check_idempotency {
-            let reformatted = reparsed_ast.format();
+            let reformatted = reparsed_ast.format(flags);
 
             if output != reformatted {
                 eprintln!("Formatting bug; formatting is not stable.\nOriginal code:\n{}\n\nFormatted code:\n{}\n\nAST:\n{:#?}\n\nReparsed AST:\n{:#?}\n\n",

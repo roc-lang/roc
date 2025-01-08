@@ -43,11 +43,13 @@
                                             ident: "ry",
                                         },
                                     ],
+                                    Whitespace,
                                 ),
                                 @47-48 Underscore(
                                     "",
                                 ),
                             ],
+                            Whitespace,
                         ),
                         [
                             Newline,

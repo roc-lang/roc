@@ -11,7 +11,7 @@ use crate::spaces::{
 use crate::Buf;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_module::called_via::{self, BinOp, UnaryOp};
+use roc_module::called_via::{self, BinOp, CalledVia, UnaryOp};
 use roc_parse::ast::{
     AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces, Pattern, Spaceable,
     Spaces, SpacesAfter, SpacesBefore, TryTarget, WhenBranch,
@@ -91,13 +91,15 @@ fn format_expr_only(
             buf.indent(indent);
             buf.push_str("try");
         }
+        Expr::Apply(loc_expr, loc_args, called_via::CalledVia::ParensAndCommas) => {
+            fmt_apply(loc_expr, loc_args, indent, buf, true);
+        }
         Expr::Apply(loc_expr, loc_args, _) => {
             let apply_needs_parens = parens == Parens::InApply || parens == Parens::InApplyLastArg;
-
-            if apply_needs_parens && !loc_args.is_empty() {
-                fmt_parens(item, buf, indent);
+            if buf.flags().parens_and_commas || !apply_needs_parens || loc_args.is_empty() {
+                fmt_apply(loc_expr, loc_args, indent, buf, false);
             } else {
-                fmt_apply(loc_expr, loc_args, indent, buf);
+                fmt_parens(item, buf, indent);
             }
         }
         &Expr::Num(string) => {
@@ -643,6 +645,7 @@ fn fmt_apply(
 
     indent: u16,
     buf: &mut Buf<'_>,
+    expr_used_commas_and_parens: bool,
 ) {
     // should_reflow_outdentable, aka should we transform this:
     //
@@ -662,6 +665,7 @@ fn fmt_apply(
     //   2,
     // ]
     // ```
+    let use_commas_and_parens = expr_used_commas_and_parens || buf.flags().parens_and_commas;
     let should_reflow_outdentable = loc_expr.extract_spaces().after.is_empty()
         && except_last(loc_args).all(|a| !a.is_multiline())
         && loc_args
@@ -697,17 +701,23 @@ fn fmt_apply(
     if !expr.before.is_empty() {
         format_spaces(buf, expr.before, Newlines::Yes, indent);
     }
-
     expr.item
         .format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
+
+    if use_commas_and_parens {
+        buf.push('(');
+    }
 
     let mut last_after = expr.after;
 
     for (i, loc_arg) in loc_args.iter().enumerate() {
         let is_last_arg = i == loc_args.len() - 1;
+        let is_first_arg = i == 0;
 
         let arg = expr_lift_spaces(
-            if is_last_arg {
+            if use_commas_and_parens {
+                Parens::NotNeeded
+            } else if is_last_arg {
                 Parens::InApplyLastArg
             } else {
                 Parens::InApply
@@ -728,7 +738,7 @@ fn fmt_apply(
         last_after = arg.after;
         if needs_indent {
             buf.ensure_ends_with_newline();
-        } else {
+        } else if !(is_first_arg && use_commas_and_parens) {
             buf.spaces(1);
         }
 
@@ -736,12 +746,33 @@ fn fmt_apply(
         {
             fmt_parens(&arg.item, buf, arg_indent);
         } else {
-            format_expr_only(&arg.item, buf, Parens::InApply, Newlines::Yes, arg_indent);
+            format_expr_only(
+                &arg.item,
+                buf,
+                if use_commas_and_parens {
+                    Parens::NotNeeded
+                } else {
+                    Parens::InApply
+                },
+                Newlines::Yes,
+                arg_indent,
+            );
+        }
+        if use_commas_and_parens && (!is_last_arg || needs_indent) {
+            buf.push(',');
         }
     }
 
     if !last_after.is_empty() {
         format_spaces(buf, last_after, Newlines::Yes, arg_indent);
+    }
+
+    if use_commas_and_parens {
+        if needs_indent {
+            buf.ensure_ends_with_newline();
+            buf.indent(indent);
+        }
+        buf.push(')');
     }
 }
 
@@ -1007,6 +1038,19 @@ pub fn expr_lift_spaces<'a, 'b: 'a>(
     expr: &Expr<'b>,
 ) -> Spaces<'a, Expr<'a>> {
     match expr {
+        Expr::Apply(func, args, CalledVia::ParensAndCommas) => {
+            let lifted = expr_lift_spaces_before(Parens::NotNeeded, arena, &func.value);
+
+            Spaces {
+                before: lifted.before,
+                item: Expr::Apply(
+                    arena.alloc(Loc::at(func.region, lifted.item)),
+                    args,
+                    CalledVia::ParensAndCommas,
+                ),
+                after: arena.alloc([]),
+            }
+        }
         Expr::Apply(func, args, called_via) => {
             if args.is_empty() {
                 return expr_lift_spaces(Parens::NotNeeded, arena, &func.value);
@@ -1770,13 +1814,16 @@ fn fmt_return<'a>(
     buf.indent(indent);
     buf.push_str(keyword::RETURN);
 
-    let return_indent = if return_value.is_multiline() {
+    let value = expr_lift_spaces(parens, buf.text.bump(), &return_value.value);
+
+    let return_indent = if value.item.is_multiline()
+        || (newlines == Newlines::Yes && !value.before.is_empty())
+        || value.before.iter().any(|s| s.is_comment())
+    {
         indent + INDENT
     } else {
         indent
     };
-
-    let value = expr_lift_spaces(parens, buf.text.bump(), &return_value.value);
 
     if !value.before.is_empty() {
         format_spaces(buf, value.before, newlines, return_indent);
@@ -2013,15 +2060,17 @@ fn fmt_record_like<'a, 'b: 'a, Field, ToSpacesAround>(
             // doesnt make sense.
             Some(RecordPrefix::Update(record_var)) => {
                 buf.spaces(1);
-                record_var.format(buf, indent);
-                buf.indent(indent);
-                buf.push_str(" &");
+                record_var.format(buf, indent + INDENT);
+                buf.indent(indent + INDENT);
+                buf.ensure_ends_with_whitespace();
+                buf.push_str("&");
             }
             Some(RecordPrefix::Mapper(mapper_var)) => {
                 buf.spaces(1);
-                mapper_var.format(buf, indent);
-                buf.indent(indent);
-                buf.push_str(" <-");
+                mapper_var.format(buf, indent + INDENT);
+                buf.indent(indent + INDENT);
+                buf.ensure_ends_with_whitespace();
+                buf.push_str("<-");
             }
         }
 
