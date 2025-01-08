@@ -1912,7 +1912,7 @@ The `mapErr` function has this type:
 Result.mapErr : Result ok a, (a -> b) -> Result ok b
 ```
 
-Here we're passing in "tagging functions"—namely, `UnableToPrintPrompt` and `UnableToReadInput`. (See [Using tags as functions](#using-tags-as-functions) for how this works.)
+Here we're passing in "tagging functions" — namely, `UnableToPrintPrompt` and `UnableToReadInput`. (See [Using tags as functions](#using-tags-as-functions) for how this works.)
 
 This code is doing three things:
 
