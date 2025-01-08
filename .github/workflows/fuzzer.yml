@@ -1,6 +1,4 @@
 on:
-  # TODO remove pull_request and call this from CI manager.
-  pull_request:
   workflow_call:
 
 name: CI
