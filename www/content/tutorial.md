@@ -1701,7 +1701,7 @@ If you run this program, it will print "Type in something and press Enter:" and 
 That's because it's waiting for you to type something in and press Enter! Once you do,
 it should print back out what you entered.
 
-### [Effectul failure](#failure) {#failure}
+### [Effectful failure](#failure) {#failure}
 
 Sometimes, effects can fail. For example, reading from a file might fail if the file is not found.
 Even reading from stdin and writing to stdout can fail!
