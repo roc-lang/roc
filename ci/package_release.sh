@@ -12,7 +12,8 @@ mkdir -p $1 $1/examples
 mv target/release-with-lto/{roc,roc_language_server,lib} $1
 mv LICENSE LEGAL_DETAILS $1
 
-mv examples/platform-switching $1/examples
+mv crates/cli/tests/platform-switching $1/examples
+mv examples/README.md $1/examples
 
 # temporary github.com/roc-lang/roc/pull/7231
 rm $1/examples/platform-switching/rocLovesRust.roc
