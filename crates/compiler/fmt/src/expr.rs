@@ -107,7 +107,6 @@ fn format_expr_only(
             if buf.flags().parens_and_commas {
                 fmt_pnc_apply(loc_expr, &Collection::with_items(loc_args), indent, buf);
             } else if !apply_needs_parens || loc_args.is_empty() {
-                println!("No need parens");
                 fmt_apply(loc_expr, loc_args, indent, buf);
             } else {
                 fmt_parens(item, buf, indent);

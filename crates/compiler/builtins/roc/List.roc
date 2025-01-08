@@ -1092,11 +1092,15 @@ min = \list ->
 
 min_help : List (Num a), Num a -> Num a
 min_help = \list, initial ->
-    List.walk(list, initial, \best_so_far, current ->
-        if current < best_so_far then
-            current
-        else
-            best_so_far)
+    List.walk(
+        list,
+        initial,
+        \best_so_far, current ->
+            if current < best_so_far then
+                current
+            else
+                best_so_far,
+    )
 
 max : List (Num a) -> Result (Num a) [ListWasEmpty]
 max = \list ->
@@ -1109,11 +1113,15 @@ max = \list ->
 
 max_help : List (Num a), Num a -> Num a
 max_help = \list, initial ->
-    List.walk(list, initial, \best_so_far, current ->
-        if current > best_so_far then
-            current
-        else
-            best_so_far)
+    List.walk(
+        list,
+        initial,
+        \best_so_far, current ->
+            if current > best_so_far then
+                current
+            else
+                best_so_far,
+    )
 
 ## Like [List.map], except the transformation function wraps the return value
 ## in a list. At the end, all the lists get joined together into one list.
@@ -1156,11 +1164,15 @@ find_last = \list, pred ->
 ## If no satisfying element is found, an `Err NotFound` is returned.
 find_first_index : List elem, (elem -> Bool) -> Result U64 [NotFound]
 find_first_index = \list, matcher ->
-    found_index = List.iterate(list, 0, \index, elem ->
-        if matcher(elem) then
-            Break(index)
-        else
-            Continue(Num.add_wrap(index, 1)))
+    found_index = List.iterate(
+        list,
+        0,
+        \index, elem ->
+            if matcher(elem) then
+                Break(index)
+            else
+                Continue(Num.add_wrap(index, 1)),
+    )
 
     when found_index is
         Break(index) -> Ok(index)
@@ -1171,13 +1183,17 @@ find_first_index = \list, matcher ->
 ## If no satisfying element is found, an `Err NotFound` is returned.
 find_last_index : List elem, (elem -> Bool) -> Result U64 [NotFound]
 find_last_index = \list, matches ->
-    found_index = List.iterate_backwards(list, List.len(list), \prev_index, elem ->
-        answer = Num.sub_wrap(prev_index, 1)
+    found_index = List.iterate_backwards(
+        list,
+        List.len(list),
+        \prev_index, elem ->
+            answer = Num.sub_wrap(prev_index, 1)
 
-        if matches(elem) then
-            Break(answer)
-        else
-            Continue(answer))
+            if matches(elem) then
+                Break(answer)
+            else
+                Continue(answer),
+    )
 
     when found_index is
         Break(index) -> Ok(index)
@@ -1214,10 +1230,14 @@ intersperse = \list, sep ->
     capacity = 2 * List.len(list)
     init = List.with_capacity(capacity)
     new_list =
-        List.walk(list, init, \acc, elem ->
-            acc
-            |> List.append_unsafe(elem)
-            |> List.append_unsafe(sep))
+        List.walk(
+            list,
+            init,
+            \acc, elem ->
+                acc
+                |> List.append_unsafe(elem)
+                |> List.append_unsafe(sep),
+        )
 
     List.drop_last(new_list, 1)
 
@@ -1359,9 +1379,16 @@ chunks_of_help = \list_rest, chunk_size, chunks ->
 ## If it returns `Ok` for every element, [map_try] returns `Ok` with the transformed list.
 map_try : List elem, (elem -> Result ok err) -> Result (List ok) err
 map_try = \list, to_result ->
-    walk_try(list, [], \state, elem ->
-        Result.map(to_result(elem), \ok ->
-            List.append(state, ok)))
+    walk_try(
+        list,
+        [],
+        \state, elem ->
+            Result.map(
+                to_result(elem),
+                \ok ->
+                    List.append(state, ok),
+            ),
+    )
 
 ## Same as [List.walk], except you can stop walking early by returning `Err`.
 ##

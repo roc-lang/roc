@@ -108,10 +108,12 @@ err = \a -> @Task(\{} -> Err(a))
 ## matching to handle the success and possible failure cases.
 attempt : Task a b, (Result a b -> Task c d) -> Task c d
 attempt = \@Task(task), transform ->
-    @Task(\{} ->
-        @Task(transformed) = transform(task({}))
+    @Task(
+        \{} ->
+            @Task(transformed) = transform(task({}))
 
-        transformed({}))
+            transformed({}),
+    )
 
 ## Take the success value from a given [Task] and use that to generate a new [Task].
 ##
@@ -131,14 +133,16 @@ attempt = \@Task(task), transform ->
 ## ```
 await : Task a b, (a -> Task c b) -> Task c b
 await = \@Task(task), transform ->
-    @Task(\{} ->
-        when task({}) is
-            Ok(a) ->
-                @Task(transformed) = transform(a)
-                transformed({})
+    @Task(
+        \{} ->
+            when task({}) is
+                Ok(a) ->
+                    @Task(transformed) = transform(a)
+                    transformed({})
 
-            Err(b) ->
-                Err(b))
+                Err(b) ->
+                    Err(b),
+    )
 
 ## Take the error value from a given [Task] and use that to generate a new [Task].
 ##
@@ -149,14 +153,16 @@ await = \@Task(task), transform ->
 ## ```
 on_err : Task a b, (b -> Task a c) -> Task a c
 on_err = \@Task(task), transform ->
-    @Task(\{} ->
-        when task({}) is
-            Ok(a) ->
-                Ok(a)
+    @Task(
+        \{} ->
+            when task({}) is
+                Ok(a) ->
+                    Ok(a)
 
-            Err(b) ->
-                @Task(transformed) = transform(b)
-                transformed({}))
+                Err(b) ->
+                    @Task(transformed) = transform(b)
+                    transformed({}),
+    )
 
 ## Transform the success value of a given [Task] with a given function.
 ##
@@ -167,10 +173,12 @@ on_err = \@Task(task), transform ->
 ## ```
 map : Task a c, (a -> b) -> Task b c
 map = \@Task(task), transform ->
-    @Task(\{} ->
-        when task({}) is
-            Ok(a) -> Ok(transform(a))
-            Err(b) -> Err(b))
+    @Task(
+        \{} ->
+            when task({}) is
+                Ok(a) -> Ok(transform(a))
+                Err(b) -> Err(b),
+    )
 
 ## Transform the error value of a given [Task] with a given function.
 ##
@@ -181,10 +189,12 @@ map = \@Task(task), transform ->
 ## ```
 map_err : Task c a, (a -> b) -> Task c b
 map_err = \@Task(task), transform ->
-    @Task(\{} ->
-        when task({}) is
-            Ok(a) -> Ok(a)
-            Err(b) -> Err(transform(b)))
+    @Task(
+        \{} ->
+            when task({}) is
+                Ok(a) -> Ok(a)
+                Err(b) -> Err(transform(b)),
+    )
 
 ## Use a Result among other Tasks by converting it into a [Task].
 from_result : Result a b -> Task a b
@@ -197,8 +207,11 @@ from_result = \res ->
 batch : Task a c -> (Task (a -> b) c -> Task b c)
 batch = \current ->
     \next ->
-        await(next, \f ->
-            map(current, f))
+        await(
+            next,
+            \f ->
+                map(current, f),
+        )
 
 ## Combine the values of two tasks with a custom combining function.
 ##
@@ -214,11 +227,13 @@ batch = \current ->
 ## ```
 combine : Task a err, Task b err, (a, b -> c) -> Task c err
 combine = \@Task(left_task), @Task(right_task), combiner ->
-    @Task(\{} ->
-        left = try(left_task, {})
-        right = try(right_task, {})
+    @Task(
+        \{} ->
+            left = try(left_task, {})
+            right = try(right_task, {})
 
-        Ok(combiner(left, right)))
+            Ok(combiner(left, right)),
+    )
 
 ## Apply each task in a list sequentially, and return a list of the resulting values.
 ## Each task will be awaited before beginning the next task.
@@ -232,14 +247,20 @@ combine = \@Task(left_task), @Task(right_task), combiner ->
 ##
 sequence : List (Task ok err) -> Task (List ok) err
 sequence = \task_list ->
-    Task.loop((task_list, List.with_capacity(List.len(task_list))), \(tasks, values) ->
-        when tasks is
-            [task, .. as rest] ->
-                Task.map(task, \value ->
-                    Step((rest, List.append(values, value))))
+    Task.loop(
+        (task_list, List.with_capacity(List.len(task_list))),
+        \(tasks, values) ->
+            when tasks is
+                [task, .. as rest] ->
+                    Task.map(
+                        task,
+                        \value ->
+                            Step((rest, List.append(values, value))),
+                    )
 
-            [] ->
-                Task.ok(Done(values)))
+                [] ->
+                    Task.ok(Done(values)),
+    )
 
 ## Apply a task repeatedly for each item in a list
 ##
@@ -253,8 +274,12 @@ sequence = \task_list ->
 ##
 for_each : List a, (a -> Task {} b) -> Task {} b
 for_each = \items, fn ->
-    List.walk(items, ok({}), \state, item ->
-        state |> await(\_ -> fn(item)))
+    List.walk(
+        items,
+        ok({}),
+        \state, item ->
+            state |> await(\_ -> fn(item)),
+    )
 
 ## Transform a task that can either succeed with `ok`, or fail with `err`, into
 ## a task that succeeds with `Result ok err`.
@@ -274,5 +299,7 @@ for_each = \items, fn ->
 ##
 result : Task ok err -> Task (Result ok err) *
 result = \@Task(task) ->
-    @Task(\{} ->
-        Ok(task({})))
+    @Task(
+        \{} ->
+            Ok(task({})),
+    )

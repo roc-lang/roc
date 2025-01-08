@@ -133,8 +133,10 @@ hash_dict = \hasher, dict -> Hash.hash_unordered(hasher, to_list(dict), List.wal
 
 to_inspector_dict : Dict k v -> Inspector f where k implements Inspect & Hash & Eq, v implements Inspect, f implements InspectFormatter
 to_inspector_dict = \dict ->
-    Inspect.custom(\fmt ->
-        Inspect.apply(Inspect.dict(dict, walk, Inspect.to_inspector, Inspect.to_inspector), fmt))
+    Inspect.custom(
+        \fmt ->
+            Inspect.apply(Inspect.dict(dict, walk, Inspect.to_inspector, Inspect.to_inspector), fmt),
+    )
 
 ## Return an empty dictionary.
 ## ```roc
@@ -142,13 +144,15 @@ to_inspector_dict = \dict ->
 ## ```
 empty : {} -> Dict * *
 empty = \{} ->
-    @Dict({
-        buckets: [],
-        data: [],
-        max_bucket_capacity: 0,
-        max_load_factor: default_max_load_factor,
-        shifts: initial_shifts,
-    })
+    @Dict(
+        {
+            buckets: [],
+            data: [],
+            max_bucket_capacity: 0,
+            max_load_factor: default_max_load_factor,
+            shifts: initial_shifts,
+        },
+    )
 
 ## Return a dictionary with space allocated for a number of entries. This
 ## may provide a performance optimization if you know how many entries will be
@@ -169,13 +173,15 @@ reserve = \@Dict({ buckets, data, max_bucket_capacity: original_max_bucket_capac
     if List.is_empty(buckets) || requested_shifts > shifts then
         (buckets0, max_bucket_capacity) = alloc_buckets_from_shift(requested_shifts, max_load_factor)
         buckets1 = fill_buckets_from_data(buckets0, data, requested_shifts)
-        @Dict({
-            buckets: buckets1,
-            data: List.reserve(data, Num.sub_saturated(size, current_size)),
-            max_bucket_capacity,
-            max_load_factor,
-            shifts: requested_shifts,
-        })
+        @Dict(
+            {
+                buckets: buckets1,
+                data: List.reserve(data, Num.sub_saturated(size, current_size)),
+                max_bucket_capacity,
+                max_load_factor,
+                shifts: requested_shifts,
+            },
+        )
     else
         @Dict({ buckets, data, max_bucket_capacity: original_max_bucket_capacity, max_load_factor, shifts })
 
@@ -191,13 +197,15 @@ release_excess_capacity = \@Dict({ buckets, data, max_bucket_capacity: original_
     if min_shifts < shifts then
         (buckets0, max_bucket_capacity) = alloc_buckets_from_shift(min_shifts, max_load_factor)
         buckets1 = fill_buckets_from_data(buckets0, data, min_shifts)
-        @Dict({
-            buckets: buckets1,
-            data: List.release_excess_capacity(data),
-            max_bucket_capacity,
-            max_load_factor,
-            shifts: min_shifts,
-        })
+        @Dict(
+            {
+                buckets: buckets1,
+                data: List.release_excess_capacity(data),
+                max_bucket_capacity,
+                max_load_factor,
+                shifts: min_shifts,
+            },
+        )
     else
         @Dict({ buckets, data, max_bucket_capacity: original_max_bucket_capacity, max_load_factor, shifts })
 
@@ -280,14 +288,16 @@ is_empty = \@Dict({ data }) ->
 ## ```
 clear : Dict k v -> Dict k v
 clear = \@Dict({ buckets, data, max_bucket_capacity, max_load_factor, shifts }) ->
-    @Dict({
-        buckets: List.map(buckets, \_ -> empty_bucket),
-        # use take_first to keep around the capacity
-        data: List.take_first(data, 0),
-        max_bucket_capacity,
-        max_load_factor,
-        shifts,
-    })
+    @Dict(
+        {
+            buckets: List.map(buckets, \_ -> empty_bucket),
+            # use take_first to keep around the capacity
+            data: List.take_first(data, 0),
+            max_bucket_capacity,
+            max_load_factor,
+            shifts,
+        },
+    )
 
 ## Convert each value in the dictionary to something new, by calling a conversion
 ## function on each of them which receives both the key and the old value. Then return a
@@ -822,21 +832,25 @@ remove_bucket = \@Dict({ buckets: buckets0, data: data0, max_bucket_capacity, ma
         bucket_index3 = scan_for_index(buckets2, bucket_index2, Num.to_u32(last_data_index))
         swap_bucket = list_get_unsafe(buckets2, bucket_index3)
 
-        @Dict({
-            buckets: List.set(buckets2, bucket_index3, { swap_bucket & data_index: data_index_to_remove }),
-            data: List.drop_last(data1, 1),
-            max_bucket_capacity,
-            max_load_factor,
-            shifts,
-        })
+        @Dict(
+            {
+                buckets: List.set(buckets2, bucket_index3, { swap_bucket & data_index: data_index_to_remove }),
+                data: List.drop_last(data1, 1),
+                max_bucket_capacity,
+                max_load_factor,
+                shifts,
+            },
+        )
     else
-        @Dict({
-            buckets: buckets2,
-            data: List.drop_last(data0, 1),
-            max_bucket_capacity,
-            max_load_factor,
-            shifts,
-        })
+        @Dict(
+            {
+                buckets: buckets2,
+                data: List.drop_last(data0, 1),
+                max_bucket_capacity,
+                max_load_factor,
+                shifts,
+            },
+        )
 
 scan_for_index : List Bucket, U64, U32 -> U64
 scan_for_index = \buckets, bucket_index, data_index ->
@@ -863,13 +877,15 @@ increase_size = \@Dict({ data, max_bucket_capacity, max_load_factor, shifts }) -
         new_shifts = shifts |> Num.sub_wrap(1)
         (buckets0, new_max_bucket_capacity) = alloc_buckets_from_shift(new_shifts, max_load_factor)
         buckets1 = fill_buckets_from_data(buckets0, data, new_shifts)
-        @Dict({
-            buckets: buckets1,
-            data,
-            max_bucket_capacity: new_max_bucket_capacity,
-            max_load_factor,
-            shifts: new_shifts,
-        })
+        @Dict(
+            {
+                buckets: buckets1,
+                data,
+                max_bucket_capacity: new_max_bucket_capacity,
+                max_load_factor,
+                shifts: new_shifts,
+            },
+        )
     else
         crash("Dict hit limit of $(Num.to_str(max_bucket_count)) elements. Unable to grow more.")
 
