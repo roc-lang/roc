@@ -133,7 +133,7 @@ fn new_op_call_expr<'a>(
 
                     let mut desugared_args = Vec::with_capacity_in(loc_args.len() + 1, env.arena);
                     desugared_args.push(desugar_expr(env, scope, left));
-                    for loc_arg in &loc_args.items[..] {
+                    for loc_arg in loc_args.items {
                         desugared_args.push(desugar_expr(env, scope, loc_arg));
                     }
 

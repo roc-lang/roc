@@ -457,6 +457,7 @@ fn fmt_pattern_only(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn pattern_fmt_apply(
     buf: &mut Buf<'_>,
     func: Pattern<'_>,

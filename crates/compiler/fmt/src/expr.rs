@@ -97,7 +97,7 @@ fn format_expr_only(
             },
             loc_args,
         ) => {
-            fmt_apply(&loc_expr, loc_args.items, indent, buf);
+            fmt_apply(loc_expr, loc_args.items, indent, buf);
         }
         Expr::PncApply(loc_expr, loc_args) => {
             fmt_pnc_apply(loc_expr, loc_args, indent, buf);

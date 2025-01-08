@@ -761,6 +761,7 @@ pub struct WhenBranch {
     pub redundant: RedundantMark,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn canonicalize_expr_apply<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
@@ -801,16 +802,14 @@ fn canonicalize_expr_apply<'a>(
                     let (type_arguments, lambda_set_variables, specialized_def_type) =
                         freshen_opaque_def(var_store, opaque_def);
 
-                    let opaque_ref = OpaqueRef {
+                    OpaqueRef {
                         opaque_var: var_store.fresh(),
                         name,
                         argument,
                         specialized_def_type: Box::new(specialized_def_type),
                         type_arguments,
                         lambda_set_variables,
-                    };
-
-                    opaque_ref
+                    }
                 }
             }
         }
@@ -854,7 +853,7 @@ fn canonicalize_expr_apply<'a>(
         // Default: We're not tail-calling a symbol (by name), we're tail-calling a function value.
         output.tail_calls = vec![];
 
-        let expr = match fn_expr.value {
+        match fn_expr.value {
             Var(symbol, _) => {
                 output.references.insert_call(symbol);
 
@@ -918,9 +917,7 @@ fn canonicalize_expr_apply<'a>(
                     application_style,
                 )
             }
-        };
-
-        expr
+        }
     }
 }
 

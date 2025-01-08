@@ -233,6 +233,7 @@ fn loc_term<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
             ),
             zero_or_more(pnc_args()),
         ),
+        #[allow(clippy::type_complexity)]
         |arena,
          (expr, arg_locs_with_suffixes_vec): (
             Loc<Expr<'a>>,

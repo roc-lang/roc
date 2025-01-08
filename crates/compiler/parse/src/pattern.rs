@@ -348,7 +348,7 @@ fn loc_ident_pattern_help<'a>(
                 byte(b')', EPattern::ParenEnd),
                 Pattern::SpaceBefore,
             )),
-            |args| ArgType::PncArgs(args),
+            ArgType::PncArgs,
         );
 
         let whitespace_args =
