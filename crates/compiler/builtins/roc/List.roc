@@ -75,6 +75,7 @@ module [
     for_each!,
     for_each_try!,
     walk!,
+    walk_try!,
 ]
 
 import Bool exposing [Bool, Eq]
@@ -1514,11 +1515,24 @@ for_each_try! = \list, func! ->
 walk! : List elem, state, (state, elem => state) => state
 walk! = \list, state, func! ->
     when list is
-        [] -> 
+        [] ->
             state
 
         [elem, .. as rest] ->
             next_state = func!(state, elem)
             walk!(rest, next_state, func!)
 
+## Build a value from the contents of a list, using an effectful function that might fail.
+walk_try! : List elem, state, (state, elem => Result state err) => Result state err
+walk_try! = \list, state, func! ->
+    when list is
+        [] ->
+            Ok(state)
 
+        [elem, .. as rest] ->
+            when func!(state, elem) is
+                Ok(next_state) ->
+                    walk_try!(rest, next_state, func!)
+
+                Err(err) ->
+                    Err(err)
