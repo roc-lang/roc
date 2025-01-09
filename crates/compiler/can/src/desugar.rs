@@ -9,8 +9,8 @@ use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
 use roc_parse::ast::{
-    AssignedField, Collection, Defs, ModuleImportParams, Pattern, ResultTryKind,
-    StrLiteral, StrSegment, ValueDef, WhenBranch,
+    AssignedField, Collection, Defs, ModuleImportParams, Pattern, ResultTryKind, StrLiteral,
+    StrSegment, ValueDef, WhenBranch,
 };
 use roc_problem::can::Problem;
 use roc_region::all::{Loc, Region};
@@ -114,8 +114,7 @@ fn new_op_call_expr<'a>(
                 }
                 PncApply(
                     &Loc {
-                        value:
-                            TrySuffix(fn_expr),
+                        value: TrySuffix(fn_expr),
                         region: fn_region,
                     },
                     loc_args,
