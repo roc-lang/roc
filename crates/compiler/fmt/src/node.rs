@@ -4,8 +4,10 @@ use roc_parse::ast::{CommentOrNewline, Pattern, TypeAnnotation};
 use crate::{
     annotation::{Formattable, Newlines, Parens},
     collection::Braces,
-    expr::merge_spaces_conservative,
-    spaces::{fmt_comments_only, fmt_spaces, fmt_spaces_no_blank_lines, NewlineAt, INDENT},
+    spaces::{
+        fmt_comments_only, fmt_spaces, fmt_spaces_no_blank_lines, merge_spaces_conservative,
+        NewlineAt, INDENT,
+    },
     Buf, MigrationFlags,
 };
 

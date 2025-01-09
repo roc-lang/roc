@@ -1,12 +1,11 @@
 use crate::{
     collection::{fmt_collection, Braces},
-    expr::merge_spaces_conservative,
     node::{
         parens_around_node, DelimitedItem, Item, Node, NodeInfo, NodeSequenceBuilder, Nodify, Prec,
         Sp,
     },
     pattern::{pattern_lift_spaces_after, snakify_camel_ident},
-    spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT},
+    spaces::{fmt_comments_only, fmt_spaces, merge_spaces_conservative, NewlineAt, INDENT},
     Buf, MigrationFlags,
 };
 use bumpalo::{

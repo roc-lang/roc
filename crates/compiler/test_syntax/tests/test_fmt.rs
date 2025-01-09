@@ -3854,6 +3854,41 @@ mod test_fmt {
     }
 
     #[test]
+    fn list_with_comment_after_end_delim() {
+        expr_formats_same(indoc!(
+            r"
+            [
+                item_one,
+                item_two,
+            ] # This is a comment
+            "
+        ));
+    }
+
+    #[test]
+    fn pnc_apply_with_comment_after_end_paren() {
+        expr_formats_same(indoc!(
+            r"
+            some_func(
+                arg_one,
+                arg_two,
+            ) # This is a comment
+            "
+        ));
+    }
+
+    #[test]
+    fn pnc_apply_with_try_suffix() {
+        expr_formats_same(indoc!(
+            r"
+            some_func(
+                arg_one,
+                arg_two,
+            )?
+            "
+        ));
+    }
+    #[test]
     fn partial_multi_line_application() {
         expr_formats_to(
             indoc!(

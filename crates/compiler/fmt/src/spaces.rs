@@ -1,3 +1,4 @@
+use bumpalo::{collections::Vec, Bump};
 use roc_parse::ast::CommentOrNewline;
 
 use crate::Buf;
@@ -213,6 +214,30 @@ where
     }
 
     count
+}
+
+pub fn merge_spaces_conservative<'a>(
+    arena: &'a Bump,
+    a: &'a [CommentOrNewline<'a>],
+    b: &'a [CommentOrNewline<'a>],
+) -> &'a [CommentOrNewline<'a>] {
+    if a.is_empty() {
+        b
+    } else if b.is_empty() {
+        a
+    } else {
+        let mut merged = Vec::with_capacity_in(a.len() + b.len(), arena);
+        merged.extend_from_slice(a);
+        let mut it = b.iter();
+        for item in it.by_ref() {
+            if item.is_comment() {
+                merged.push(*item);
+                break;
+            }
+        }
+        merged.extend(it);
+        merged.into_bump_slice()
+    }
 }
 
 fn fmt_docs(buf: &mut Buf, docs: &str) {

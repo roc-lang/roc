@@ -5,13 +5,14 @@ use crate::annotation::{
 use crate::collection::{fmt_collection, Braces};
 use crate::expr::{
     expr_lift_and_lower, expr_lift_spaces, expr_lift_spaces_after, expr_lift_spaces_before,
-    fmt_str_literal, is_str_multiline, merge_spaces_conservative, sub_expr_requests_parens,
+    fmt_str_literal, is_str_multiline, sub_expr_requests_parens,
 };
 use crate::node::{NodeInfo, Nodify};
 use crate::pattern::{pattern_apply_to_node, pattern_fmt_apply};
 use crate::pattern::{pattern_lift_spaces, pattern_lift_spaces_before};
 use crate::spaces::{
-    fmt_comments_only, fmt_default_newline, fmt_default_spaces, fmt_spaces, NewlineAt, INDENT,
+    fmt_comments_only, fmt_default_newline, fmt_default_spaces, fmt_spaces,
+    merge_spaces_conservative, NewlineAt, INDENT,
 };
 use crate::{Buf, MigrationFlags};
 use bumpalo::Bump;
@@ -556,8 +557,6 @@ impl<'a> Formattable for TypeHeader<'a> {
             Parens::NotNeeded,
             indent,
             self.vars.iter().any(|v| v.is_multiline()),
-            false,
-            None,
         );
         buf.flags = old_flags;
     }
