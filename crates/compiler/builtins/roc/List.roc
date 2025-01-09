@@ -1523,6 +1523,21 @@ walk! = \list, state, func! ->
             walk!(rest, next_state, func!)
 
 ## Build a value from the contents of a list, using an effectful function that might fail.
+##
+## If the function returns `Err`, the iteration stops and the error is returned.
+##
+## ```
+## names = try List.walk_try!(
+##         ["First", "Middle", "Last"],
+##         [],
+##         \accumulator, which ->
+##             try Stdout.write! ("$(which) name: ")
+##             name = try Stdin.line! ({})
+##             Ok (List.append accumulator name),
+##     )
+## ```
+##
+## This is the same as [walk_try], except that the step function can have effects.
 walk_try! : List elem, state, (state, elem => Result state err) => Result state err
 walk_try! = \list, state, func! ->
     when list is
