@@ -10,7 +10,6 @@ use crate::annotation::IntroducedVariables;
 use crate::annotation::OwnedNamedOrAble;
 use crate::derive;
 use crate::env::Env;
-use crate::env::FxMode;
 use crate::expr::canonicalize_record;
 use crate::expr::get_lookup_symbols;
 use crate::expr::AnnotatedMark;
@@ -3265,13 +3264,7 @@ fn to_pending_value_def<'a>(
             ))
         }
         StmtAfterExpr => PendingValue::StmtAfterExpr,
-        Stmt(expr) => {
-            if env.fx_mode == FxMode::Task {
-                internal_error!("a Stmt was not desugared correctly, should have been converted to a Body(...) in desguar")
-            }
-
-            PendingValue::Def(PendingValueDef::Stmt(expr))
-        }
+        Stmt(expr) => PendingValue::Def(PendingValueDef::Stmt(expr)),
     }
 }
 

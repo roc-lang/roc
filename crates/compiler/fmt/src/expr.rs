@@ -14,7 +14,7 @@ use bumpalo::Bump;
 use roc_module::called_via::{self, BinOp, UnaryOp};
 use roc_parse::ast::{
     AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces, Pattern, Spaceable,
-    Spaces, SpacesAfter, SpacesBefore, TryTarget, WhenBranch,
+    Spaces, SpacesAfter, SpacesBefore, WhenBranch,
 };
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_parse::expr::merge_spaces;
@@ -349,12 +349,9 @@ fn format_expr_only(
             buf.push('.');
             buf.push_str(key);
         }
-        Expr::TrySuffix { expr, target } => {
+        Expr::TrySuffix(expr) => {
             expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
-            match target {
-                TryTarget::Task => buf.push('!'),
-                TryTarget::Result => buf.push('?'),
-            }
+            buf.push('?');
         }
         Expr::MalformedIdent(str, _) => {
             buf.indent(indent);
@@ -363,10 +360,6 @@ fn format_expr_only(
             } else {
                 buf.push_str(str);
             }
-        }
-        Expr::MalformedSuffixed(loc_expr) => {
-            buf.indent(indent);
-            loc_expr.format_with_options(buf, parens, newlines, indent);
         }
         Expr::PrecedenceConflict { .. } => {}
         Expr::EmptyRecordBuilder { .. } => {}
@@ -492,8 +485,6 @@ pub fn expr_is_multiline(me: &Expr<'_>, comments_only: bool) -> bool {
             }
         }
 
-        Expr::MalformedSuffixed(loc_expr) => expr_is_multiline(&loc_expr.value, comments_only),
-
         // These expressions never have newlines
         Expr::Float(..)
         | Expr::Num(..)
@@ -513,9 +504,9 @@ pub fn expr_is_multiline(me: &Expr<'_>, comments_only: bool) -> bool {
             unreachable!("LowLevelTry should only exist after desugaring, not during formatting")
         }
 
-        Expr::RecordAccess(inner, _)
-        | Expr::TupleAccess(inner, _)
-        | Expr::TrySuffix { expr: inner, .. } => expr_is_multiline(inner, comments_only),
+        Expr::RecordAccess(inner, _) | Expr::TupleAccess(inner, _) | Expr::TrySuffix(inner) => {
+            expr_is_multiline(inner, comments_only)
+        }
 
         // These expressions always have newlines
         Expr::Defs(_, _) | Expr::When(_, _) => true,
@@ -647,7 +638,7 @@ fn requires_space_after_unary(item: &Expr<'_>) -> bool {
             requires_space_after_unary(inner)
         }
         Expr::Apply(inner, _, _) => requires_space_after_unary(&inner.value),
-        Expr::TrySuffix { target: _, expr } => requires_space_after_unary(expr),
+        Expr::TrySuffix(expr) => requires_space_after_unary(expr),
         Expr::SpaceAfter(inner, _) | Expr::SpaceBefore(inner, _) => {
             requires_space_after_unary(inner)
         }
@@ -1305,15 +1296,12 @@ pub fn expr_lift_spaces<'a, 'b: 'a>(
             after: &[],
         },
 
-        Expr::TrySuffix { target, expr } => {
+        Expr::TrySuffix(expr) => {
             let expr_lifted = expr_lift_spaces_after(Parens::InApply, arena, expr);
 
             Spaces {
                 before: &[],
-                item: Expr::TrySuffix {
-                    target: *target,
-                    expr: arena.alloc(expr_lifted.item),
-                },
+                item: Expr::TrySuffix(arena.alloc(expr_lifted.item)),
                 after: expr_lifted.after,
             }
         }
@@ -1380,7 +1368,6 @@ pub fn expr_lift_spaces<'a, 'b: 'a>(
         }
 
         Expr::MalformedIdent(_, _)
-        | Expr::MalformedSuffixed(_)
         | Expr::PrecedenceConflict(_)
         | Expr::EmptyRecordBuilder(_)
         | Expr::SingleFieldRecordBuilder(_)

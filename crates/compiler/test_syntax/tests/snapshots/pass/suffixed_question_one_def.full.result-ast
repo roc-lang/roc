@@ -123,13 +123,12 @@ Full(
                                                     @126-128 Pizza,
                                                 ),
                                             ],
-                                            @129-132 TrySuffix {
-                                                target: Result,
-                                                expr: Var {
+                                            @129-132 TrySuffix(
+                                                Var {
                                                     module_name: "A",
                                                     ident: "x",
                                                 },
-                                            },
+                                            ),
                                         ),
                                     ),
                                     Stmt(
@@ -145,13 +144,12 @@ Full(
                                                 ),
                                             ],
                                             @171-205 Apply(
-                                                @171-174 TrySuffix {
-                                                    target: Result,
-                                                    expr: Var {
+                                                @171-174 TrySuffix(
+                                                    Var {
                                                         module_name: "B",
                                                         ident: "y",
                                                     },
-                                                },
+                                                ),
                                                 [
                                                     @185-205 SpaceBefore(
                                                         Record(

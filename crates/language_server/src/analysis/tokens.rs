@@ -656,7 +656,7 @@ impl IterTokens for Loc<Expr<'_>> {
             Expr::AccessorFunction(accessor) => Loc::at(region, accessor).iter_tokens(arena),
             Expr::RecordUpdater(updater) => Loc::at(region, updater).iter_tokens(arena),
             Expr::TupleAccess(tup, _field) => Loc::at(region, *tup).iter_tokens(arena),
-            Expr::TrySuffix { expr: inner, .. } => Loc::at(region, *inner).iter_tokens(arena),
+            Expr::TrySuffix(inner) => Loc::at(region, *inner).iter_tokens(arena),
             Expr::List(lst) => lst.iter_tokens(arena),
             Expr::RecordUpdate { update, fields } => (update.iter_tokens(arena).into_iter())
                 .chain(fields.iter().flat_map(|f| f.iter_tokens(arena)))
@@ -725,9 +725,7 @@ impl IterTokens for Loc<Expr<'_>> {
             Expr::EmptyRecordBuilder(e) => e.iter_tokens(arena),
             Expr::SingleFieldRecordBuilder(e) => e.iter_tokens(arena),
             Expr::OptionalFieldInRecordBuilder(_name, e) => e.iter_tokens(arena),
-            Expr::MalformedIdent(_, _)
-            | Expr::PrecedenceConflict(_)
-            | Expr::MalformedSuffixed(_) => {
+            Expr::MalformedIdent(_, _) | Expr::PrecedenceConflict(_) => {
                 bumpvec![in arena;]
             }
         }

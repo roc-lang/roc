@@ -189,6 +189,7 @@ mod test_snapshots {
         fail/ability_demands_not_indented_with_first.expr,
         fail/ability_first_demand_not_indented_enough.expr,
         fail/ability_non_signature_expression.expr,
+        fail/all_the_bangs.expr,
         fail/alias_or_opaque_fail.expr,
         fail/bound_variable.expr,
         fail/comment_with_tab.expr,
@@ -295,7 +296,6 @@ mod test_snapshots {
         pass/alias_comment_after_head.expr,
         pass/alias_parens_comment.expr,
         pass/alias_parens_comment_indent.expr,
-        pass/all_the_bangs.expr,
         pass/ann_apply_record_with_newlines.expr,
         pass/ann_closed_union.expr,
         pass/ann_effectful_fn.expr,
@@ -780,15 +780,12 @@ mod test_snapshots {
 
     /// Does the given test name expect the canonicalization process to panic?
     fn expect_canonicalize_panics(test_name: &str) -> bool {
+        #[allow(clippy::match_single_binding)]
         match test_name {
             // This is the current list as of writing.
             // We should be driving these down to zero over time.
             // Adding this protection in now to avoid accidentally adding more.
-            "all_the_bangs" | "bangs_and_tuple_accessors" => {
-                // both of these result in:
-                // "a Expr::TrySuffix expression was not completely removed in desugar_value_def_suffixed"
-                true
-            }
+            // NOTHING FOR NOW!
 
             // When adding new snapshot tests, strongly prefer fixing any canonicalization panics
             // they may run into rather than adding them to this list.

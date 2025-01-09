@@ -26,13 +26,12 @@ Defs {
                         (
                             @11-24 SpaceAfter(
                                 Apply(
-                                    @11-20 TrySuffix {
-                                        target: Result,
-                                        expr: Var {
+                                    @11-20 TrySuffix(
+                                        Var {
                                             module_name: "",
                                             ident: "parseArgs",
                                         },
-                                    },
+                                    ),
                                     [
                                         @22-24 Record(
                                             [],
@@ -69,13 +68,12 @@ Defs {
                         (
                             @56-77 SpaceAfter(
                                 Apply(
-                                    @56-67 TrySuffix {
-                                        target: Result,
-                                        expr: Var {
+                                    @56-67 TrySuffix(
+                                        Var {
                                             module_name: "List",
                                             ident: "mapTry",
                                         },
-                                    },
+                                    ),
                                     [
                                         @69-77 Var {
                                             module_name: "Str",

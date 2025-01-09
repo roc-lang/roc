@@ -691,10 +691,7 @@ impl<'a> Normalize<'a> for Expr<'a> {
             Expr::AccessorFunction(a) => Expr::AccessorFunction(a),
             Expr::RecordUpdater(a) => Expr::RecordUpdater(a),
             Expr::TupleAccess(a, b) => Expr::TupleAccess(arena.alloc(a.normalize(arena)), b),
-            Expr::TrySuffix { expr: a, target } => Expr::TrySuffix {
-                expr: arena.alloc(a.normalize(arena)),
-                target,
-            },
+            Expr::TrySuffix(a) => Expr::TrySuffix(arena.alloc(a.normalize(arena))),
             Expr::List(a) => Expr::List(a.normalize(arena)),
             Expr::RecordUpdate { update, fields } => Expr::RecordUpdate {
                 update: arena.alloc(update.normalize(arena)),
@@ -779,7 +776,6 @@ impl<'a> Normalize<'a> for Expr<'a> {
                 a.normalize(arena)
             }
             Expr::MalformedIdent(a, b) => Expr::MalformedIdent(a, remove_spaces_bad_ident(b)),
-            Expr::MalformedSuffixed(a) => Expr::MalformedSuffixed(a),
             Expr::PrecedenceConflict(a) => Expr::PrecedenceConflict(a),
             Expr::SpaceBefore(a, _) => a.normalize(arena),
             Expr::SpaceAfter(a, _) => a.normalize(arena),

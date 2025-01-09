@@ -3798,9 +3798,9 @@ mod test_reporting {
     of these?
 
         Set
-        Task
         List
         Dict
+        Hash
 
     ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
@@ -4327,26 +4327,33 @@ mod test_reporting {
             "
         ),
         @r#"
-    ── STATEMENT AFTER EXPRESSION in /code/proj/Main.roc ───────────────────────────
+    ── IGNORED RESULT in /code/proj/Main.roc ───────────────────────────────────────
 
-    I just finished parsing an expression with a series of definitions,
-
-    and this line is indented as if it's intended to be part of that
-    expression:
+    The result of this expression is ignored:
 
     6│          x == 5
                 ^^^^^^
 
-    However, I already saw the final expression in that series of
-    definitions.
+    Standalone statements are required to produce an empty record, but the
+    type of this one is:
 
-    Tip: An expression like `4`, `"hello"`, or `function_call(MyThing)` is
-    like `return 4` in other programming languages. To me, it seems like
-    you did `return 4` followed by more code in the lines after, that code
-    would never be executed!
+        Bool
 
-    Tip: If you are working with `Task`, this error can happen if you
-    forgot a `!` somewhere.
+    If you still want to ignore it, assign it to `_`, like this:
+
+        _ = File.delete! "data.json"
+
+    ── LEFTOVER STATEMENT in /code/proj/Main.roc ───────────────────────────────────
+
+    This statement does not produce any effects:
+
+    6│          x == 5
+                ^^^^^^
+
+    Standalone statements are only useful if they call effectful
+    functions.
+
+    Did you forget to use its result? If not, feel free to remove it.
     "#
     );
 
@@ -6352,7 +6359,7 @@ All branches in an `if` must have the same type!
             indoc!(
                 r#"
                 platform "folkertdev/foo"
-                    requires { main : Task {} [] }
+                    requires { main! : {} => Result {} [] }
                     exposes []
                     packages {}
                     imports []
@@ -6372,13 +6379,13 @@ All branches in an `if` must have the same type!
                 I am partway through parsing a header, but I got stuck here:
 
                 1│  platform "folkertdev/foo"
-                2│      requires { main : Task {} [] }
+                2│      requires { main! : {} => Result {} [] }
                                    ^
 
                 I am expecting a list of type names like `{}` or `{ Model }` next. A full
                 `requires` definition looks like
 
-                    requires { Model, Msg } {main : Task {} []}
+                    requires { Model, Msg } { main! : {} => Result {} [] }
             "#
             ),
         )
