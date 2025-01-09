@@ -521,10 +521,7 @@ pub fn expr_is_multiline(me: &Expr<'_>, comments_only: bool) -> bool {
                     .any(|loc_arg| expr_is_multiline(&loc_arg.value, comments_only))
         }
         Expr::PncApply(loc_expr, args) => {
-            expr_is_multiline(&loc_expr.value, comments_only)
-                || args
-                    .iter()
-                    .any(|loc_arg| expr_is_multiline(&loc_arg.value, comments_only))
+            expr_is_multiline(&loc_expr.value, comments_only) || is_collection_multiline(args)
         }
 
         Expr::DbgStmt { .. } => true,
