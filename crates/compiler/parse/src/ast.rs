@@ -633,7 +633,7 @@ pub struct PrecedenceConflict<'a> {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TypeHeader<'a> {
     pub name: Loc<&'a str>,
-    pub vars: &'a [Loc<Pattern<'a>>],
+    pub vars: &'a [Loc<TypeVar<'a>>],
 }
 
 impl<'a> TypeHeader<'a> {
@@ -644,6 +644,17 @@ impl<'a> TypeHeader<'a> {
                 .chain(self.vars.iter().map(|v| &v.region)),
         )
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TypeVar<'a> {
+    Identifier(&'a str),
+    SpaceBefore(&'a TypeVar<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a TypeVar<'a>, &'a [CommentOrNewline<'a>]),
+
+    // These are syntactically parsed as exprs first, so if there's anything else here,
+    // we consider it malformed but preserve it for error reporting and more resilient parsing.
+    Malformed(&'a Expr<'a>),
 }
 
 /// The `implements` keyword associated with ability definitions.
@@ -1642,6 +1653,7 @@ pub enum Pattern<'a> {
     // Malformed
     Malformed(&'a str),
     MalformedIdent(&'a str, crate::ident::BadIdent),
+    MalformedExpr(&'a Expr<'a>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -1867,6 +1879,11 @@ impl<'a> Pattern<'a> {
                 } else {
                     false
                 }
+            }
+
+            MalformedExpr(_expr_x) => {
+                // conservatively assume all malformed expr patterns are not-equivalient
+                false
             }
         }
     }
@@ -2256,6 +2273,7 @@ impl_extract_spaces!(AssignedField<T>);
 impl_extract_spaces!(TypeAnnotation);
 impl_extract_spaces!(ImplementsAbility);
 impl_extract_spaces!(Implements);
+impl_extract_spaces!(TypeVar);
 
 impl<'a, T: Copy> ExtractSpaces<'a> for Spaced<'a, T> {
     type Item = T;
@@ -2560,6 +2578,7 @@ impl<'a> Malformed for Pattern<'a> {
 
             Malformed(_) |
             MalformedIdent(_, _) |
+            MalformedExpr(_) |
             QualifiedIdentifier { .. } => true,
         }
     }
@@ -2727,6 +2746,16 @@ impl<'a> Malformed for TypeAnnotation<'a> {
 impl<'a> Malformed for TypeHeader<'a> {
     fn is_malformed(&self) -> bool {
         self.vars.iter().any(|var| var.is_malformed())
+    }
+}
+
+impl<'a> Malformed for TypeVar<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            TypeVar::Identifier(_) => false,
+            TypeVar::Malformed(_) => true,
+            TypeVar::SpaceBefore(var, _) | TypeVar::SpaceAfter(var, _) => var.is_malformed(),
+        }
     }
 }
 

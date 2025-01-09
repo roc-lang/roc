@@ -7,20 +7,19 @@ use crate::expr::{
     expr_lift_and_lower, expr_lift_spaces, expr_lift_spaces_after, expr_lift_spaces_before,
     fmt_str_literal, is_str_multiline, merge_spaces_conservative, sub_expr_requests_parens,
 };
-use crate::node::{NodeInfo, Nodify};
-use crate::pattern::{pattern_apply_to_node, pattern_fmt_apply};
-use crate::pattern::{pattern_lift_spaces, pattern_lift_spaces_before};
+use crate::node::Nodify;
+use crate::pattern::pattern_lift_spaces_before;
 use crate::spaces::{
     fmt_comments_only, fmt_default_newline, fmt_default_spaces, fmt_spaces, NewlineAt, INDENT,
 };
-use crate::{Buf, MigrationFlags};
+use crate::Buf;
 use bumpalo::Bump;
 use roc_error_macros::internal_error;
 use roc_parse::ast::{
     AbilityMember, Defs, Expr, ExtractSpaces, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
     ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport,
     ModuleImportParams, Pattern, Spaces, SpacesBefore, StrLiteral, TypeAnnotation, TypeDef,
-    TypeHeader, ValueDef,
+    ValueDef,
 };
 use roc_parse::expr::merge_spaces;
 use roc_parse::header::Keyword;
@@ -474,8 +473,8 @@ impl<'a> Formattable for TypeDef<'a> {
                 loc_implements,
                 members,
             } => {
-                let header_lifted = type_head_lift_spaces(buf.text.bump(), *header);
-                header_lifted.item.format(buf, indent);
+                let header_lifted = header.to_node(buf.text.bump(), buf.flags());
+                header_lifted.node.format(buf, indent);
                 let implements = loc_implements.value.extract_spaces();
                 let before_implements = merge_spaces_conservative(
                     buf.text.bump(),
@@ -532,57 +531,6 @@ impl<'a> Formattable for TypeDef<'a> {
     }
 }
 
-impl<'a> Formattable for TypeHeader<'a> {
-    fn is_multiline(&self) -> bool {
-        self.vars.iter().any(|v| v.is_multiline())
-    }
-
-    fn format_with_options(
-        &self,
-        buf: &mut Buf,
-        _parens: Parens,
-        _newlines: Newlines,
-        indent: u16,
-    ) {
-        let old_flags = buf.flags;
-        buf.flags = MigrationFlags {
-            parens_and_commas: false,
-            ..old_flags
-        };
-        pattern_fmt_apply(
-            buf,
-            Pattern::Tag(self.name.value),
-            self.vars,
-            Parens::NotNeeded,
-            indent,
-            self.vars.iter().any(|v| v.is_multiline()),
-            false,
-            None,
-        );
-        buf.flags = old_flags;
-    }
-}
-
-fn type_head_lift_spaces<'a, 'b: 'a>(
-    arena: &'a Bump,
-    head: TypeHeader<'b>,
-) -> Spaces<'a, Pattern<'a>> {
-    let pat = Pattern::Apply(
-        arena.alloc(Loc::at(head.name.region, Pattern::Tag(head.name.value))),
-        head.vars,
-    );
-
-    pattern_lift_spaces(arena, &pat)
-}
-
-impl<'a> Nodify<'a> for TypeHeader<'a> {
-    fn to_node<'b>(&'a self, arena: &'b Bump, _flags: MigrationFlags) -> NodeInfo<'b>
-    where
-        'a: 'b,
-    {
-        pattern_apply_to_node(arena, Pattern::Tag(self.name.value), self.vars)
-    }
-}
 impl<'a> Formattable for ModuleImport<'a> {
     fn is_multiline(&self) -> bool {
         let Self {

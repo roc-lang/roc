@@ -19,11 +19,15 @@
                     header: TypeHeader {
                         name: @0-1 "N",
                         vars: [
-                            @2-4 NumLiteral(
-                                "-0",
+                            @2-4 Malformed(
+                                Num(
+                                    "-0",
+                                ),
                             ),
-                            @5-6 Tag(
-                                "T",
+                            @5-6 Malformed(
+                                Tag(
+                                    "T",
+                                ),
                             ),
                         ],
                     },

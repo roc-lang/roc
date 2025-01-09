@@ -28,8 +28,10 @@
                     header: TypeHeader {
                         name: @0-1 "B",
                         vars: [
-                            @1-3 OpaqueRef(
-                                "@A",
+                            @1-3 Malformed(
+                                OpaqueRef(
+                                    "@A",
+                                ),
                             ),
                         ],
                     },

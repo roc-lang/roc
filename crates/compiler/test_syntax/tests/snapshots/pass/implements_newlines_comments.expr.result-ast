@@ -20,9 +20,9 @@
                         name: @0-1 "M",
                         vars: [
                             @4-6 SpaceBefore(
-                                Identifier {
-                                    ident: "im",
-                                },
+                                Identifier(
+                                    "im",
+                                ),
                                 [
                                     LineComment(
                                         "",

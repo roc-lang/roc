@@ -1,7 +1,7 @@
 use crate::ast::{
     AbilityImpls, AssignedField, Collection, CommentOrNewline, Expr, FunctionArrow,
-    ImplementsAbilities, ImplementsAbility, ImplementsClause, Pattern, Spaceable, Spaced,
-    SpacesBefore, Tag, TypeAnnotation, TypeHeader,
+    ImplementsAbilities, ImplementsAbility, ImplementsClause, Spaceable, Spaced, SpacesBefore, Tag,
+    TypeAnnotation, TypeHeader, TypeVar,
 };
 use crate::blankspace::{
     self, plain_spaces_before, space0_around_ee, space0_before, space0_before_e, space0_e,
@@ -74,7 +74,7 @@ fn check_type_alias<'a>(
             var_names.reserve(vars.len());
             for var in vars {
                 if let TypeAnnotation::BoundVariable(v) = var.value {
-                    var_names.push(Loc::at(var.region, Pattern::Identifier { ident: v }));
+                    var_names.push(Loc::at(var.region, TypeVar::Identifier(v)));
                 } else {
                     return Err(ETypeInlineAlias::ArgumentNotLowercase(var.region.start()));
                 }

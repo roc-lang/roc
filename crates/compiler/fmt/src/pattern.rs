@@ -91,6 +91,7 @@ impl<'a> Formattable for Pattern<'a> {
             | Pattern::Underscore(_)
             | Pattern::Malformed(_)
             | Pattern::MalformedIdent(_, _)
+            | Pattern::MalformedExpr(_)
             | Pattern::QualifiedIdentifier { .. } => false,
 
             Pattern::Tuple(patterns) | Pattern::List(patterns) => {
@@ -447,6 +448,10 @@ fn fmt_pattern_only(
             buf.indent(indent);
             buf.push_str(string);
         }
+        Pattern::MalformedExpr(expr) => {
+            buf.indent(indent);
+            expr.format(buf, indent);
+        }
         Pattern::QualifiedIdentifier { module_name, ident } => {
             buf.indent(indent);
             if !module_name.is_empty() {
@@ -538,20 +543,6 @@ pub fn pattern_fmt_apply(
         let mut before = merge_spaces(buf.text.bump(), last_after, arg.before);
 
         if !before.is_empty() {
-            if starts_with_block_str(&arg.item) {
-                // Ick!
-                // The block string will keep "generating" newlines when formatted (it wants to start on its own line),
-                // so we strip one out here.
-                //
-                // Note that this doesn't affect Expr's because those have explicit parens, and we can control
-                // whether spaces cross that boundary.
-                let chop_off = before
-                    .iter()
-                    .rev()
-                    .take_while(|&&s| matches!(s, CommentOrNewline::Newline))
-                    .count();
-                before = &before[..before.len() - chop_off];
-            }
             handle_multiline_str_spaces(&arg.item, &mut before);
 
             if !is_multiline {
@@ -674,7 +665,9 @@ fn pattern_prec(pat: Pattern<'_>) -> Prec {
         | Pattern::PncApply(_, _) => Prec::Term,
         Pattern::Apply(_, _) | Pattern::As(_, _) => Prec::Apply,
         Pattern::SpaceBefore(inner, _) | Pattern::SpaceAfter(inner, _) => pattern_prec(*inner),
-        Pattern::Malformed(_) | Pattern::MalformedIdent(..) => Prec::Term,
+        Pattern::Malformed(_) | Pattern::MalformedIdent(..) | Pattern::MalformedExpr(_) => {
+            Prec::Term
+        }
     }
 }
 

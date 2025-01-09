@@ -1,11 +1,11 @@
-@0-16 SpaceAfter(
+@0-11 SpaceAfter(
     Defs(
         Defs {
             tags: [
                 EitherIndex(0),
             ],
             regions: [
-                @0-14,
+                @0-9,
             ],
             space_before: [
                 Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
@@ -17,35 +17,38 @@
             type_defs: [
                 Alias {
                     header: TypeHeader {
-                        name: @0-1 "Q",
+                        name: @0-1 "U",
                         vars: [
-                            @3-11 Apply(
-                                @3-9 StrLiteral(
-                                    Block(
-                                        [],
+                            @3-6 Malformed(
+                                ParensAround(
+                                    Apply(
+                                        @3-4 Var {
+                                            module_name: "",
+                                            ident: "b",
+                                        },
+                                        [
+                                            @5-6 Var {
+                                                module_name: "",
+                                                ident: "a",
+                                            },
+                                        ],
+                                        Space,
                                     ),
                                 ),
-                                [
-                                    @9-11 StrLiteral(
-                                        PlainLine(
-                                            "",
-                                        ),
-                                    ),
-                                ],
                             ),
                         ],
                     },
-                    ann: @13-14 BoundVariable(
-                        "a",
+                    ann: @8-9 BoundVariable(
+                        "b",
                     ),
                 },
             ],
             value_defs: [],
         },
-        @15-16 SpaceBefore(
+        @10-11 SpaceBefore(
             Var {
                 module_name: "",
-                ident: "q",
+                ident: "a",
             },
             [
                 Newline,
