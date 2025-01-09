@@ -1,6 +1,6 @@
 platform "cli"
-    requires {} { main : Task {} [] } # TODO FIXME
+    requires {} { main! : {} => Result {} [] } # TODO FIXME
     exposes []
     packages {}
-    imports [Task.{ Task }]
+    imports [Foo.{ Foo }]
     provides [main_for_host]

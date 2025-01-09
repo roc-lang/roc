@@ -42,8 +42,6 @@ pub struct Env<'a> {
 
     pub opt_shorthand: Option<&'a str>,
 
-    pub fx_mode: FxMode,
-
     pub src: &'a str,
 
     /// Lazily calculated line info. This data is only needed if the code contains calls to `dbg`,
@@ -62,7 +60,6 @@ impl<'a> Env<'a> {
         dep_idents: &'a IdentIdsByModule,
         qualified_module_ids: &'a PackageModuleIds<'a>,
         opt_shorthand: Option<&'a str>,
-        fx_mode: FxMode,
     ) -> Env<'a> {
         Env {
             arena,
@@ -79,7 +76,6 @@ impl<'a> Env<'a> {
             home_params_record: None,
             opt_shorthand,
             line_info: arena.alloc(None),
-            fx_mode,
         }
     }
 
@@ -233,10 +229,4 @@ impl<'a> Env<'a> {
         }
         self.line_info.as_ref().unwrap()
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum FxMode {
-    PurityInference,
-    Task,
 }

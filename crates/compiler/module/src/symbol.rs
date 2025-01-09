@@ -1717,24 +1717,6 @@ define_builtins! {
         32 INSPECT_TO_INSPECTOR: "to_inspector"
         33 INSPECT_TO_STR: "to_str"
     }
-    15 TASK: "Task" => {
-        0 TASK_TASK: "Task" exposed_type=true // the Task.Task opaque type
-        1 TASK_FOREVER: "forever"
-        2 TASK_LOOP: "loop"
-        3 TASK_OK: "ok"
-        4 TASK_ERR: "err"
-        5 TASK_ATTEMPT: "attempt"
-        6 TASK_AWAIT: "await"
-        7 TASK_ON_ERR: "on_err"
-        8 TASK_MAP: "map"
-        9 TASK_MAP_ERR: "map_err"
-        10 TASK_FROM_RESULT: "from_result"
-        11 TASK_BATCH: "batch"
-        12 TASK_COMBINE: "combine"
-        13 TASK_SEQUENCE: "sequence"
-        14 TASK_FOR_EACH: "for_each"
-        15 TASK_RESULT: "result"
-    }
 
-    num_modules: 16 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
+    num_modules: 15 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
 }

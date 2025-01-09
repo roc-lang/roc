@@ -4288,7 +4288,7 @@ fn to_requires_report<'a>(
                     alloc.reflow(" keyword next, like"),
                 ]),
                 alloc
-                    .parser_suggestion("requires { main : Task I64 Str }")
+                    .parser_suggestion("requires { main! : {} => Result I64 Str }")
                     .indent(4),
             ]);
 
@@ -4315,7 +4315,7 @@ fn to_requires_report<'a>(
                     alloc.reflow(" keyword next, like"),
                 ]),
                 alloc
-                    .parser_suggestion("requires { main : Task I64 Str }")
+                    .parser_suggestion("requires { main! : {} => Result I64 Str }")
                     .indent(4),
             ]);
 
@@ -4338,13 +4338,13 @@ fn to_requires_report<'a>(
                     alloc.reflow("I am expecting a list of rigids like "),
                     alloc.keyword("{}"),
                     alloc.reflow(" or "),
-                    alloc.keyword("{model=>Model}"),
+                    alloc.keyword("{ Model }"),
                     alloc.reflow(" next. A full "),
                     alloc.keyword("requires"),
                     alloc.reflow(" definition looks like"),
                 ]),
                 alloc
-                    .parser_suggestion("requires {model=>Model, msg=>Msg} {main : Task {} []}")
+                    .parser_suggestion("requires { Model, Msg } { main! : {} => Result {} [] }")
                     .indent(4),
             ]);
 
@@ -4373,7 +4373,7 @@ fn to_requires_report<'a>(
                     alloc.reflow(" definition looks like"),
                 ]),
                 alloc
-                    .parser_suggestion("requires { Model, Msg } {main : Task {} []}")
+                    .parser_suggestion("requires { Model, Msg } { main! : {} => Result {} [] }")
                     .indent(4),
             ]);
 

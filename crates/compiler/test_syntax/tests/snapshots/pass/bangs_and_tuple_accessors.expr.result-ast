@@ -24,24 +24,31 @@
             ],
         },
         @2-9 SpaceBefore(
-            UnaryOp(
-                @4-6 SpaceBefore(
-                    TupleAccess(
-                        TrySuffix {
-                            target: Task,
-                            expr: AccessorFunction(
-                                TupleIndex(
-                                    "1",
-                                ),
+            Apply(
+                @2-6 UnaryOp(
+                    @4-6 SpaceBefore(
+                        AccessorFunction(
+                            TupleIndex(
+                                "1",
                             ),
-                        },
-                        "0",
+                        ),
+                        [
+                            Newline,
+                        ],
                     ),
-                    [
-                        Newline,
-                    ],
+                    @2-3 Not,
                 ),
-                @2-3 Not,
+                [
+                    @6-9 UnaryOp(
+                        @7-9 AccessorFunction(
+                            TupleIndex(
+                                "0",
+                            ),
+                        ),
+                        @6-7 Not,
+                    ),
+                ],
+                Space,
             ),
             [
                 Newline,

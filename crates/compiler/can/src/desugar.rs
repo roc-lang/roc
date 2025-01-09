@@ -1,18 +1,16 @@
 #![allow(clippy::manual_map)]
 
-use crate::env::{Env, FxMode};
+use crate::env::Env;
 use crate::scope::Scope;
-use crate::suffixed::{apply_try_function, unwrap_suffixed_expression, EUnwrapped};
 use bumpalo::collections::Vec;
-use bumpalo::Bump;
 use roc_error_macros::internal_error;
 use roc_module::called_via::BinOp::{DoubleQuestion, Pizza};
 use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
 use roc_parse::ast::{
-    is_expr_suffixed, AssignedField, Collection, Defs, ModuleImportParams, Pattern, ResultTryKind,
-    StrLiteral, StrSegment, TryTarget, TypeAnnotation, ValueDef, WhenBranch,
+    AssignedField, Collection, Defs, ModuleImportParams, Pattern, ResultTryKind,
+    StrLiteral, StrSegment, ValueDef, WhenBranch,
 };
 use roc_problem::can::Problem;
 use roc_region::all::{Loc, Region};
@@ -95,10 +93,7 @@ fn new_op_call_expr<'a>(
                         ),
                     );
                 }
-                TrySuffix {
-                    target: TryTarget::Result,
-                    expr: fn_expr,
-                } => {
+                TrySuffix(fn_expr) => {
                     let loc_fn = env.arena.alloc(Loc::at(right.region, **fn_expr));
                     let function = desugar_expr(env, scope, loc_fn);
 
@@ -120,10 +115,7 @@ fn new_op_call_expr<'a>(
                 PncApply(
                     &Loc {
                         value:
-                            TrySuffix {
-                                target: TryTarget::Result,
-                                expr: fn_expr,
-                            },
+                            TrySuffix(fn_expr),
                         region: fn_region,
                     },
                     loc_args,
@@ -154,11 +146,7 @@ fn new_op_call_expr<'a>(
                 }
                 Apply(
                     &Loc {
-                        value:
-                            TrySuffix {
-                                target: TryTarget::Result,
-                                expr: fn_expr,
-                            },
+                        value: TrySuffix(fn_expr),
                         region: fn_region,
                     },
                     loc_args,
@@ -386,46 +374,7 @@ fn desugar_value_def<'a>(
             "StmtAfterExpression is only created during desugaring, so it shouldn't exist here."
         ),
 
-        Stmt(stmt_expr) => {
-            if env.fx_mode == FxMode::PurityInference {
-                // In purity inference mode, statements aren't fully desugared here
-                // so we can provide better errors
-                return Stmt(desugar_expr(env, scope, stmt_expr));
-            }
-
-            // desugar `stmt_expr!` to
-            // _ : {}
-            // _ = stmt_expr!
-
-            let desugared_expr = desugar_expr(env, scope, stmt_expr);
-
-            if !is_expr_suffixed(&desugared_expr.value)
-                && !matches!(&desugared_expr.value, LowLevelTry(_, _))
-            {
-                env.problems.push(Problem::StmtAfterExpr(stmt_expr.region));
-
-                return ValueDef::StmtAfterExpr;
-            }
-
-            let region = stmt_expr.region;
-            let new_pat = env
-                .arena
-                .alloc(Loc::at(region, Pattern::Underscore("#!stmt")));
-
-            ValueDef::AnnotatedBody {
-                ann_pattern: new_pat,
-                ann_type: env.arena.alloc(Loc::at(
-                    region,
-                    TypeAnnotation::Record {
-                        fields: Collection::empty(),
-                        ext: None,
-                    },
-                )),
-                lines_between: &[],
-                body_pattern: new_pat,
-                body_expr: desugared_expr,
-            }
-        }
+        Stmt(stmt_expr) => Stmt(desugar_expr(env, scope, stmt_expr)),
     }
 }
 
@@ -433,146 +382,9 @@ pub fn desugar_defs_node_values<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
     defs: &mut roc_parse::ast::Defs<'a>,
-    top_level_def: bool,
 ) {
     for value_def in defs.value_defs.iter_mut() {
         *value_def = desugar_value_def(env, scope, env.arena.alloc(*value_def));
-    }
-
-    // `desugar_defs_node_values` is called recursively in `desugar_expr`
-    // and we only want to unwrap suffixed nodes if they are a top level def.
-    //
-    // check here first so we only unwrap the expressions once, and after they have
-    // been desugared
-    if top_level_def {
-        for value_def in defs.value_defs.iter_mut() {
-            *value_def = desugar_value_def_suffixed(env.arena, *value_def);
-        }
-    }
-}
-
-/// For each top-level ValueDef in our module, we will unwrap any suffixed
-/// expressions
-///
-/// e.g. `say! "hi"` desugars to `Task.await (say "hi") \{} -> ...`
-pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) -> ValueDef<'a> {
-    use ValueDef::*;
-
-    match value_def {
-        Body(loc_pattern, loc_expr) => {
-            // note called_from_def is passed as `false` as this is a top_level_def
-            match unwrap_suffixed_expression(arena, loc_expr, None) {
-                Ok(new_expr) => Body(loc_pattern, new_expr),
-                Err(EUnwrapped::UnwrappedSubExpr {
-                    sub_arg,
-                    sub_pat,
-                    sub_new,
-                    target,
-                }) => desugar_value_def_suffixed(
-                    arena,
-                    Body(
-                        loc_pattern,
-                        apply_try_function(
-                            arena,
-                            loc_expr.region,
-                            sub_arg,
-                            sub_pat,
-                            sub_new,
-                            None,
-                            target,
-                        ),
-                    ),
-                ),
-                Err(..) => Body(
-                    loc_pattern,
-                    arena.alloc(Loc::at(loc_expr.region, MalformedSuffixed(loc_expr))),
-                ),
-            }
-        }
-        ann @ Annotation(_, _) => ann,
-        AnnotatedBody {
-            ann_pattern,
-            ann_type,
-            lines_between,
-            body_pattern,
-            body_expr,
-        } => {
-            match unwrap_suffixed_expression(arena, body_expr, Some(ann_pattern)) {
-                Ok(new_expr) => AnnotatedBody {
-                    ann_pattern,
-                    ann_type,
-                    lines_between,
-                    body_pattern,
-                    body_expr: new_expr,
-                },
-                Err(EUnwrapped::UnwrappedSubExpr {
-                    sub_arg,
-                    sub_pat,
-                    sub_new,
-                    target,
-                }) => desugar_value_def_suffixed(
-                    arena,
-                    AnnotatedBody {
-                        ann_pattern,
-                        ann_type,
-                        lines_between,
-                        body_pattern,
-                        body_expr: apply_try_function(
-                            arena,
-                            body_expr.region,
-                            sub_arg,
-                            sub_pat,
-                            sub_new,
-                            Some((ann_pattern, ann_type)),
-                            target,
-                        ),
-                    },
-                ),
-                // When the last expression is suffixed, it will try to unwrap the def, but because we
-                // have an annotated def we can simply ignore the try and return it as is without
-                // creating an intermediate identifier
-                Err(EUnwrapped::UnwrappedDefExpr { loc_expr, .. }) => desugar_value_def_suffixed(
-                    arena,
-                    AnnotatedBody {
-                        ann_pattern,
-                        ann_type,
-                        lines_between,
-                        body_pattern,
-                        body_expr: loc_expr,
-                    },
-                ),
-                Err(..) => AnnotatedBody {
-                    ann_pattern,
-                    ann_type,
-                    lines_between,
-                    body_pattern,
-                    body_expr: arena.alloc(Loc::at(body_expr.region, MalformedSuffixed(body_expr))),
-                },
-            }
-        }
-
-        Expect {
-            condition,
-            preceding_comment,
-        } => match unwrap_suffixed_expression(arena, condition, None) {
-            Ok(new_condition) => ValueDef::Expect {
-                condition: new_condition,
-                preceding_comment,
-            },
-            Err(..) => {
-                internal_error!("Unable to desugar the suffix inside an Expect value def");
-            }
-        },
-
-        // TODO support desugaring of Dbg
-        Dbg { .. } => value_def,
-        ModuleImport { .. } | IngestedFileImport(_) | StmtAfterExpr => value_def,
-
-        Stmt(..) => {
-            internal_error!(
-                "this should have been desugared into a Body(..) before this call in desugar_expr"
-            )
-        }
     }
 }
 
@@ -588,10 +400,10 @@ pub fn desugar_expr<'a>(
         | Num(..)
         | NonBase10Int { .. }
         | SingleQuote(_)
+        | Var { .. }
         | AccessorFunction(_)
         | Underscore { .. }
         | MalformedIdent(_, _)
-        | MalformedSuffixed(..)
         | PrecedenceConflict { .. }
         | EmptyRecordBuilder(_)
         | SingleFieldRecordBuilder(_)
@@ -600,23 +412,6 @@ pub fn desugar_expr<'a>(
         | OpaqueRef(_)
         | Crash
         | Try => loc_expr,
-
-        Var { module_name, ident } => {
-            if env.fx_mode == FxMode::Task && ident.ends_with('!') {
-                env.arena.alloc(Loc::at(
-                    Region::new(loc_expr.region.start(), loc_expr.region.end().sub(1)),
-                    TrySuffix {
-                        expr: env.arena.alloc(Var {
-                            module_name,
-                            ident: ident.trim_end_matches('!'),
-                        }),
-                        target: roc_parse::ast::TryTarget::Task,
-                    },
-                ))
-            } else {
-                loc_expr
-            }
-        }
 
         Str(str_literal) => match str_literal {
             StrLiteral::PlainLine(_) => loc_expr,
@@ -651,32 +446,14 @@ pub fn desugar_expr<'a>(
 
             env.arena.alloc(Loc { region, value })
         }
-        TrySuffix {
-            expr: sub_expr,
-            target,
-        } => {
+        TrySuffix(sub_expr) => {
             let intermediate = env.arena.alloc(Loc::at(loc_expr.region, **sub_expr));
             let new_sub_loc_expr = desugar_expr(env, scope, intermediate);
 
-            match target {
-                TryTarget::Result => env.arena.alloc(Loc::at(
-                    loc_expr.region,
-                    LowLevelTry(new_sub_loc_expr, ResultTryKind::OperatorSuffix),
-                )),
-                TryTarget::Task => {
-                    let new_sub_expr = env.arena.alloc(new_sub_loc_expr.value);
-
-                    // desugar the sub_expression, but leave the TrySuffix as this will
-                    // be unwrapped later in desugar_value_def_suffixed
-                    env.arena.alloc(Loc::at(
-                        loc_expr.region,
-                        TrySuffix {
-                            expr: new_sub_expr,
-                            target: *target,
-                        },
-                    ))
-                }
-            }
+            env.arena.alloc(Loc::at(
+                loc_expr.region,
+                LowLevelTry(new_sub_loc_expr, ResultTryKind::OperatorSuffix),
+            ))
         }
         RecordAccess(sub_expr, paths) => {
             let region = loc_expr.region;
@@ -1066,7 +843,7 @@ pub fn desugar_expr<'a>(
         BinOps(lefts, right) => desugar_bin_ops(env, scope, loc_expr.region, lefts, right),
         Defs(defs, loc_ret) => {
             let mut defs = (*defs).clone();
-            desugar_defs_node_values(env, scope, &mut defs, false);
+            desugar_defs_node_values(env, scope, &mut defs);
             let loc_ret = desugar_expr(env, scope, loc_ret);
 
             env.arena.alloc(Loc::at(
@@ -1132,11 +909,7 @@ pub fn desugar_expr<'a>(
         }
         Apply(
             Loc {
-                value:
-                    TrySuffix {
-                        target: TryTarget::Result,
-                        expr: fn_expr,
-                    },
+                value: TrySuffix(fn_expr),
                 region: fn_region,
             },
             loc_args,

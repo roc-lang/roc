@@ -256,7 +256,6 @@ fn read_cached_types() -> MutMap<ModuleId, TypeState> {
     let mod_decode = include_bytes_align_as!(u128, concat!(env!("OUT_DIR"), "/Decode.dat"));
     let mod_hash = include_bytes_align_as!(u128, concat!(env!("OUT_DIR"), "/Hash.dat"));
     let mod_inspect = include_bytes_align_as!(u128, concat!(env!("OUT_DIR"), "/Inspect.dat"));
-    let mod_task = include_bytes_align_as!(u128, concat!(env!("OUT_DIR"), "/Task.dat"));
 
     let mut output = MutMap::default();
 
@@ -280,8 +279,6 @@ fn read_cached_types() -> MutMap<ModuleId, TypeState> {
 
         output.insert(ModuleId::HASH, deserialize_help(mod_hash));
         output.insert(ModuleId::INSPECT, deserialize_help(mod_inspect));
-
-        output.insert(ModuleId::TASK, deserialize_help(mod_task));
     }
 
     output
