@@ -29,7 +29,7 @@ procedure Encode.26 (Encode.107, Encode.108):
     let Encode.110 : List U8 = CallByName Encode.24 Encode.111 Encode.112 Encode.108;
     ret Encode.110;
 
-procedure List.100 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2, #Derived_gen.3, #Derived_gen.4):
+procedure List.100 (#Derived_gen.6, #Derived_gen.7, #Derived_gen.8, #Derived_gen.9, #Derived_gen.10):
     joinpoint List.668 List.174 List.175 List.176 List.177 List.178:
         let List.670 : Int1 = CallByName Num.22 List.177 List.178;
         if List.670 then
@@ -43,8 +43,8 @@ procedure List.100 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2, #Derived_gen
             dec List.174;
             ret List.175;
     in
-    inc #Derived_gen.0;
-    jump List.668 #Derived_gen.0 #Derived_gen.1 #Derived_gen.2 #Derived_gen.3 #Derived_gen.4;
+    inc #Derived_gen.6;
+    jump List.668 #Derived_gen.6 #Derived_gen.7 #Derived_gen.8 #Derived_gen.9 #Derived_gen.10;
 
 procedure List.13 (#Attr.2, #Attr.3):
     let List.691 : List Str = lowlevel ListPrepend #Attr.2 #Attr.3;

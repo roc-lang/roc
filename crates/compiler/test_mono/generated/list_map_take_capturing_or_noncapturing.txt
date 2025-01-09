@@ -108,8 +108,8 @@ procedure Test.0 ():
     else
         let Test.22 : Str = "B";
         let Test.23 : Int1 = lowlevel Eq Test.22 Test.12;
-        dec Test.12;
         dec Test.22;
+        dec Test.12;
         if Test.23 then
             let Test.17 : [C U8, C U8, C ] = TagId(1) Test.2;
             jump Test.13 Test.17;

@@ -1,4 +1,4 @@
-procedure List.100 (#Derived_gen.13, #Derived_gen.14, #Derived_gen.15, #Derived_gen.16, #Derived_gen.17):
+procedure List.100 (#Derived_gen.11, #Derived_gen.12, #Derived_gen.13, #Derived_gen.14, #Derived_gen.15):
     joinpoint List.668 List.174 List.175 List.176 List.177 List.178:
         let List.670 : Int1 = CallByName Num.22 List.177 List.178;
         if List.670 then
@@ -11,8 +11,8 @@ procedure List.100 (#Derived_gen.13, #Derived_gen.14, #Derived_gen.15, #Derived_
             dec List.174;
             ret List.175;
     in
-    inc #Derived_gen.13;
-    jump List.668 #Derived_gen.13 #Derived_gen.14 #Derived_gen.15 #Derived_gen.16 #Derived_gen.17;
+    inc #Derived_gen.11;
+    jump List.668 #Derived_gen.11 #Derived_gen.12 #Derived_gen.13 #Derived_gen.14 #Derived_gen.15;
 
 procedure List.18 (List.171, List.172, List.173):
     let List.666 : U64 = 0i64;
@@ -38,8 +38,8 @@ procedure Num.51 (#Attr.2, #Attr.3):
 
 procedure Test.10 (Test.69, #Attr.12):
     let Test.72 : {} = UnionAtIndex (Id 0) (Index 0) #Attr.12;
-    let #Derived_gen.20 : Int1 = lowlevel RefCountIsUnique #Attr.12;
-    if #Derived_gen.20 then
+    let #Derived_gen.18 : Int1 = lowlevel RefCountIsUnique #Attr.12;
+    if #Derived_gen.18 then
         free #Attr.12;
         ret Test.72;
     else
@@ -53,7 +53,7 @@ procedure Test.10 (Test.69, #Attr.12):
 procedure Test.14 (Test.45, #Attr.12):
     let Test.55 : {{}, []} = UnionAtIndex (Id 1) (Index 1) #Attr.12;
     let Test.54 : [<r>C {}, C *self {{}, []}] = UnionAtIndex (Id 1) (Index 0) #Attr.12;
-    joinpoint #Derived_gen.18:
+    joinpoint #Derived_gen.19:
         let Test.50 : {} = Struct {};
         let Test.51 : U8 = GetTagId Test.54;
         joinpoint Test.52 Test.15:
@@ -80,14 +80,14 @@ procedure Test.14 (Test.45, #Attr.12):
                 jump Test.52 Test.53;
         
     in
-    let #Derived_gen.19 : Int1 = lowlevel RefCountIsUnique #Attr.12;
-    if #Derived_gen.19 then
+    let #Derived_gen.20 : Int1 = lowlevel RefCountIsUnique #Attr.12;
+    if #Derived_gen.20 then
         free #Attr.12;
-        jump #Derived_gen.18;
+        jump #Derived_gen.19;
     else
         inc Test.54;
         decref #Attr.12;
-        jump #Derived_gen.18;
+        jump #Derived_gen.19;
 
 procedure Test.20 (Test.21, Test.18):
     let Test.23 : [C {}, C []] = CallByName Test.32 Test.21 Test.18;
