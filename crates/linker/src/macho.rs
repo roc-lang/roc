@@ -21,8 +21,7 @@ use std::{
 use crate::util::{is_roc_definition, is_roc_undefined, report_timing};
 use crate::{
     align_by_constraint, align_to_offset_by_constraint, load_struct_inplace,
-    load_struct_inplace_mut, load_structs_inplace, load_structs_inplace_mut, open_mmap,
-    open_mmap_mut,
+    load_struct_inplace_mut, load_structs_inplace, open_mmap, open_mmap_mut,
 };
 
 const MIN_SECTION_ALIGNMENT: usize = 0x40;
@@ -601,7 +600,9 @@ fn gen_macho_le(
     // https://github.com/kubkon/zignature
     // https://github.com/kubkon/zig-deploy
 
-    use macho::{Section64, SegmentCommand64};
+    use macho::{
+        Section64, SegmentCommand64, VM_PROT_EXECUTE as E, VM_PROT_READ as R, VM_PROT_WRITE as W,
+    };
 
     let exec_header = load_struct_inplace::<macho::MachHeader64<LE>>(exec_data, 0);
     let size_of_header = mem::size_of::<macho::MachHeader64<LE>>();
@@ -609,12 +610,11 @@ fn gen_macho_le(
     let size_of_cmds = exec_header.sizeofcmds.get(LE) as usize;
 
     // Add a new text segment and data segment load commands.
-    // TODO: For the time being, assume there will be a single section per segment but we can
-    // come up with some worst case upper bound and use that instead to preallocate too many
-    // and then trim.
+    // We assume existence of __ROC_TEXT,__text, __ROC_DATA_CONST,__const, __ROC_DATA,__data and __ROC_DATA,__bss.
     let segment_cmd_size = mem::size_of::<SegmentCommand64<LE>>();
     let section_size = mem::size_of::<Section64<LE>>();
-    let required_size = segment_cmd_size * 2 + section_size * 2;
+    let num_roc_cmds = 3u32;
+    let required_size = segment_cmd_size * num_roc_cmds as usize + section_size * 4;
 
     // We need the full command size, including the dynamic-length string at the end.
     // To get that, we need to load the command.
@@ -651,18 +651,12 @@ fn gen_macho_le(
     out_mmap[start_index..start_index + rest_of_data.len()].copy_from_slice(rest_of_data);
 
     let out_header = load_struct_inplace_mut::<macho::MachHeader64<LE>>(&mut out_mmap, 0);
+    out_header.ncmds.set(LE, num_load_cmds + num_roc_cmds - 1);
+    out_header
+        .sizeofcmds
+        .set(LE, (size_of_cmds - total_cmd_size + required_size) as u32);
 
-    // TODO: this needs to change to adding the 2 new commands when we are ready.
-    // -1 because we're deleting 1 load command and then NOT adding 2 new ones.
-    {
-        let added_bytes = -(total_cmd_size as isize); // TODO: Change when add the new sections.
-        out_header.ncmds.set(LE, num_load_cmds - 1);
-        out_header
-            .sizeofcmds
-            .set(LE, (size_of_cmds as isize + added_bytes) as u32);
-    }
-
-    // Go through every command and shift it by added_bytes if it's absolute, unless it's inside the command header
+    // Go through every command and record interesting information.
     let mut offset = mem::size_of_val(exec_header);
 
     // minus one because we "deleted" a load command
@@ -740,10 +734,127 @@ fn gen_macho_le(
         offset += cmd_size;
     }
 
+    // Add Roc segment commands with segments size 0.
+    {
+        set_segment_load_command(&mut out_mmap, offset, b"__ROC_TEXT", E | R, false, 1);
+        offset += mem::size_of::<macho::SegmentCommand64<LE>>();
+        set_section_load_command(
+            &mut out_mmap,
+            offset,
+            b"__text",
+            b"__ROC_TEXT",
+            macho::S_ATTR_PURE_INSTRUCTIONS | macho::S_ATTR_SOME_INSTRUCTIONS,
+        );
+        offset += mem::size_of::<macho::Section64<LE>>();
+    }
+
+    {
+        set_segment_load_command(&mut out_mmap, offset, b"__ROC_DATA_CONST", W | R, true, 1);
+        offset += mem::size_of::<macho::SegmentCommand64<LE>>();
+        set_section_load_command(
+            &mut out_mmap,
+            offset,
+            b"__const",
+            b"__ROC_DATA_CONST",
+            macho::S_REGULAR,
+        );
+        offset += mem::size_of::<macho::Section64<LE>>();
+    }
+
+    {
+        set_segment_load_command(&mut out_mmap, offset, b"__ROC_DATA", W | R, false, 2);
+        offset += mem::size_of::<macho::SegmentCommand64<LE>>();
+        set_section_load_command(
+            &mut out_mmap,
+            offset,
+            b"__data",
+            b"__ROC_DATA",
+            macho::S_REGULAR,
+        );
+        offset += mem::size_of::<macho::Section64<LE>>();
+        set_section_load_command(
+            &mut out_mmap,
+            offset,
+            b"__bss",
+            b"__ROC_DATA",
+            macho::S_ZEROFILL,
+        );
+        offset += mem::size_of::<macho::Section64<LE>>();
+    }
+
     // cmd_loc should be where the last offset ended
     md.end_of_load_commands = offset;
 
     out_mmap
+}
+
+fn set_segment_load_command(
+    bytes: &mut [u8],
+    offset: usize,
+    name: &[u8],
+    prot: u32,
+    is_relro: bool,
+    nsects: u32,
+) {
+    let cmdsize = mem::size_of::<macho::SegmentCommand64<LE>>() as u32
+        + mem::size_of::<macho::Section64<LE>>() as u32 * nsects;
+    let info = load_struct_inplace_mut::<macho::SegmentCommand64<LE>>(bytes, offset);
+
+    info.cmd.set(LE, macho::LC_SEGMENT_64);
+    info.cmdsize.set(LE, cmdsize);
+
+    assert!(name.len() <= 16);
+    info.segname.fill(0);
+    info.segname[0..name.len()].copy_from_slice(name);
+
+    info.vmaddr.set(LE, 0);
+    info.vmsize.set(LE, 0);
+    info.fileoff.set(LE, 0);
+    info.filesize.set(LE, 0);
+
+    info.maxprot.set(LE, prot);
+    info.initprot.set(LE, prot);
+
+    info.nsects.set(LE, nsects);
+    info.flags.set(
+        LE,
+        if is_relro {
+            macho::SG_PROTECTED_VERSION_1
+        } else {
+            0
+        },
+    );
+}
+
+fn set_section_load_command(
+    bytes: &mut [u8],
+    offset: usize,
+    sectname: &[u8],
+    segname: &[u8],
+    flags: u32,
+) {
+    let info = load_struct_inplace_mut::<macho::Section64<LE>>(bytes, offset);
+
+    assert!(sectname.len() <= 16);
+    info.sectname.fill(0);
+    info.sectname[0..sectname.len()].copy_from_slice(sectname);
+
+    assert!(segname.len() <= 16);
+    info.segname.fill(0);
+    info.segname[0..segname.len()].copy_from_slice(segname);
+
+    info.addr.set(LE, 0);
+    info.size.set(LE, 0);
+    info.offset.set(LE, 0);
+    info.align.set(LE, 0);
+    info.reloff.set(LE, 0);
+    info.nreloc.set(LE, 0);
+
+    info.flags.set(LE, flags);
+
+    info.reserved1.set(LE, 0);
+    info.reserved2.set(LE, 0);
+    info.reserved3.set(LE, 0);
 }
 
 // fn scan_macho_dynamic_deps(
