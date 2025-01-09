@@ -780,6 +780,7 @@ mod test_snapshots {
 
     /// Does the given test name expect the canonicalization process to panic?
     fn expect_canonicalize_panics(test_name: &str) -> bool {
+        #[allow(clippy::match_single_binding)]
         match test_name {
             // This is the current list as of writing.
             // We should be driving these down to zero over time.
