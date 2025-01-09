@@ -1,9 +1,8 @@
 use crate::ast::{
-    is_expr_suffixed, AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces,
-    Implements, ImplementsAbilities, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
-    ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport,
-    ModuleImportParams, Pattern, Spaceable, Spaced, Spaces, SpacesBefore, TryTarget,
-    TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces, Implements,
+    ImplementsAbilities, ImportAlias, ImportAsKeyword, ImportExposingKeyword, ImportedModuleName,
+    IngestedFileAnnotation, IngestedFileImport, ModuleImport, ModuleImportParams, Pattern,
+    Spaceable, Spaced, Spaces, SpacesBefore, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use crate::blankspace::{
     loc_space0_e, require_newline_or_eof, space0_after_e, space0_around_ee, space0_before_e,
@@ -157,12 +156,7 @@ fn record_field_access_chain<'a>() -> impl Parser<'a, Vec<'a, Suffix<'a>>, EExpr
                 )
             )
         ),
-        map(byte(b'!', EExpr::Access), |_| Suffix::TrySuffix(
-            TryTarget::Task
-        )),
-        map(byte(b'?', EExpr::Access), |_| Suffix::TrySuffix(
-            TryTarget::Result
-        )),
+        map(byte(b'?', EExpr::Access), |()| Suffix::TrySuffix)
     ))
 }
 
@@ -876,7 +870,6 @@ impl<'a> ExprState<'a> {
         } else if !self.expr.value.is_tag()
             && !self.expr.value.is_opaque()
             && !self.arguments.is_empty()
-            && !is_expr_suffixed(&self.expr.value)
         {
             let region = Region::across_all(self.arguments.iter().map(|v| &v.region));
 
@@ -2222,7 +2215,6 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::LowLevelDbg(_, _, _)
         | Expr::LowLevelTry(_, _)
         | Expr::Return(_, _)
-        | Expr::MalformedSuffixed(..)
         | Expr::PrecedenceConflict { .. }
         | Expr::EmptyRecordBuilder(_)
         | Expr::SingleFieldRecordBuilder(_)
@@ -3885,10 +3877,7 @@ fn apply_expr_access_chain<'a>(
             Suffix::Accessor(Accessor::TupleIndex(field)) => {
                 Expr::TupleAccess(arena.alloc(value), field)
             }
-            Suffix::TrySuffix(target) => Expr::TrySuffix {
-                target,
-                expr: arena.alloc(value),
-            },
+            Suffix::TrySuffix => Expr::TrySuffix(arena.alloc(value)),
         })
 }
 

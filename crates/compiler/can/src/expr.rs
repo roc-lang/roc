@@ -1548,10 +1548,6 @@ pub fn canonicalize_expr<'a>(
 
             (RuntimeError(problem), Output::default())
         }
-        ast::Expr::MalformedSuffixed(..) => {
-            use roc_problem::can::RuntimeError::*;
-            (RuntimeError(MalformedSuffixed(region)), Output::default())
-        }
         ast::Expr::EmptyRecordBuilder(sub_expr) => {
             use roc_problem::can::RuntimeError::*;
 
@@ -2286,8 +2282,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         ast::Expr::Tuple(fields) => fields
             .iter()
             .all(|loc_field| is_valid_interpolation(&loc_field.value)),
-        ast::Expr::MalformedSuffixed(loc_expr)
-        | ast::Expr::EmptyRecordBuilder(loc_expr)
+        ast::Expr::EmptyRecordBuilder(loc_expr)
         | ast::Expr::SingleFieldRecordBuilder(loc_expr)
         | ast::Expr::OptionalFieldInRecordBuilder(_, loc_expr)
         | ast::Expr::PrecedenceConflict(PrecedenceConflict { expr: loc_expr, .. })
@@ -2296,7 +2291,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         ast::Expr::TupleAccess(sub_expr, _)
         | ast::Expr::ParensAround(sub_expr)
         | ast::Expr::RecordAccess(sub_expr, _)
-        | ast::Expr::TrySuffix { expr: sub_expr, .. } => is_valid_interpolation(sub_expr),
+        | ast::Expr::TrySuffix(sub_expr) => is_valid_interpolation(sub_expr),
         ast::Expr::Apply(loc_expr, args, _called_via) => {
             is_valid_interpolation(&loc_expr.value)
                 && args

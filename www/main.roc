@@ -17,7 +17,6 @@ main! = \{ input_dir, output_dir } ->
     # get the path and url of markdown files in content directory
     files = try(SSG.files!(input_dir))
 
-    # helper Task to process each file
     process_file! = \{ path, relpath, url } ->
 
         in_html = try(SSG.parse_markdown!(path))

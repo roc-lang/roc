@@ -80,20 +80,16 @@ pub enum CalledVia {
 
     /// This call is the result of desugaring a map2-based Record Builder field. e.g.
     /// ```roc
-    /// { Task.parallel <-
-    ///     foo: get "a",
-    ///     bar: get "b",
+    /// { Result.parallel <-
+    ///     foo: get("a"),
+    ///     bar: get("b"),
     /// }
     /// ```
     /// is transformed into
     /// ```roc
-    /// Task.parallel (get "a") (get "b") \foo, bar -> { foo, bar }
+    /// Result.parallel(get("a"), get("b"), (\foo, bar -> { foo, bar }))
     /// ```
     RecordBuilder,
-
-    /// This call is the result of desugaring a Task.await from `!` syntax
-    /// e.g. Stdout.line! "Hello" becomes Task.await (Stdout.line "Hello") \{} -> ...
-    BangSuffix,
 
     /// This call is the result of desugaring a Result.try from `?` syntax
     /// e.g. Dict.get? items "key" becomes Result.try (Dict.get items "key") \item -> ...

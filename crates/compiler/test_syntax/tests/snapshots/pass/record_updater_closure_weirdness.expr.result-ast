@@ -4,12 +4,11 @@
             (
                 @0-10 SpaceAfter(
                     Apply(
-                        @0-3 TrySuffix {
-                            target: Result,
-                            expr: RecordUpdater(
+                        @0-3 TrySuffix(
+                            RecordUpdater(
                                 "rm",
                             ),
-                        },
+                        ),
                         [
                             @4-10 Closure(
                                 [

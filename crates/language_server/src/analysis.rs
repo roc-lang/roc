@@ -192,7 +192,7 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
 
 /// Take the exposed imports from each module, lookup the symbol within that module's list of
 /// exposed symbols and then get the type info for that import.
-/// example: `import {Task.{await}}`. `await` is an exposed_import, so we need to lookup its type info.
+/// example: `import Foo exposing [bar]`. `bar` is an exposed_import, so we need to lookup its type info.
 fn resolve_exposed_imports(
     exposed_imports: MutMap<ModuleId, MutMap<Symbol, roc_region::all::Region>>,
     exposes: &MutMap<ModuleId, Vec<(Symbol, Variable)>>,

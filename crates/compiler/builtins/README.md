@@ -16,14 +16,14 @@ You can run your new tests locally using `cargo test-gen-llvm`. You can add a fi
 
 ### module/src/symbol.rs
 
-Towards the bottom of `symbol.rs` there is a `define_builtins!` macro being used that takes many modules and function names. The first level (`List`, `Int` ..) is the module name, and the second level is the function or value name (`reverse`, `rem` ..). If you wanted to add a `Int` function called `addTwo` go to `2 Int: "Int" => {` and inside that case add to the bottom `38 INT_ADD_TWO: "addTwo"` (assuming there are 37 existing ones).
+Towards the bottom of `symbol.rs` there is a `define_builtins!` macro being used that takes many modules and function names. The first level (`List`, `Int` ..) is the module name, and the second level is the function or value name (`reverse`, `rem` ..). If you wanted to add a `Int` function called `add_two` go to `2 Int: "Int" => {` and inside that case add to the bottom `38 INT_ADD_TWO: "add_two"` (assuming there are 37 existing ones).
 
 Some of these have `#` inside their name (`first#list`, `#lt` ..). This is a trick we are doing to hide implementation details from Roc programmers. To a Roc programmer, a name with `#` in it is invalid, because `#` means everything after it is parsed to a comment. We are constructing these functions manually, so we are circumventing the parsing step and don't have such restrictions. We get to make functions and values with `#` which as a consequence are not accessible to Roc programmers. Roc programmers simply cannot reference them.
 
 But we can use these values and some of these are necessary for implementing builtins. For example, `List.get` returns tags, and it is not easy for us to create tags when composing LLVM. What is easier however, is:
 
-- ..writing `List.#getUnsafe` that has the dangerous signature of `List elem, U64 -> elem` in LLVM
-- ..writing `List elem, U64 -> Result elem [OutOfBounds]*` in a type safe way that uses `getUnsafe` internally, only after it checks if the `elem` at `U64` index exists.
+- ..writing `List.#get_unsafe` that has the dangerous signature of `List elem, U64 -> elem` in LLVM
+- ..writing `List elem, U64 -> Result elem [OutOfBounds]*` in a type safe way that uses `get_unsafe` internally, only after it checks if the `elem` at `U64` index exists.
 
 ### can/src/builtins.rs
 
@@ -123,5 +123,5 @@ But replace `Num.atan`, the return value, and the return type with your new buil
 
 When implementing a new builtin, it is often easy to copy and paste the implementation for an existing builtin. This can take you quite far since many builtins are very similar, but it also risks forgetting to change one small part of what you copy and pasted and losing a lot of time later on when you cant figure out why things don't work. So, speaking from experience, even if you are copying an existing builtin, try and implement it manually without copying and pasting. Two recent instances of this (as of September 7th, 2020):
 
-- `List.keepIf` did not work for a long time because in builtins its `LowLevel` was `ListMap`. This was because I copy and pasted the `List.map` implementation in `builtins.rs
-- `List.walkBackwards` had mysterious memory bugs for a little while because in `unique.rs` its return type was `list_type(flex(b))` instead of `flex(b)` since it was copy and pasted from `List.keepIf`.
+- `List.keep_if` did not work for a long time because in builtins its `LowLevel` was `ListMap`. This was because I copy and pasted the `List.map` implementation in `builtins.rs
+- `List.walk_backwards` had mysterious memory bugs for a little while because in `unique.rs` its return type was `list_type(flex(b))` instead of `flex(b)` since it was copy and pasted from `List.keep_if`.

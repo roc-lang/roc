@@ -1169,7 +1169,7 @@ pub fn starts_with_block_string_literal(expr: &Expr<'_>) -> bool {
         }
         Expr::Apply(inner, _, _) => starts_with_block_string_literal(&inner.value),
         Expr::PncApply(inner, _) => starts_with_block_string_literal(&inner.value),
-        Expr::TrySuffix { target: _, expr } => starts_with_block_string_literal(expr),
+        Expr::TrySuffix(inner) => starts_with_block_string_literal(inner),
         _ => false,
     }
 }

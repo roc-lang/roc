@@ -63,7 +63,6 @@ const ABILITY_IMPLEMENTATION_NOT_IDENTIFIER: &str = "ABILITY IMPLEMENTATION NOT 
 const DUPLICATE_IMPLEMENTATION: &str = "DUPLICATE IMPLEMENTATION";
 const UNNECESSARY_IMPLEMENTATIONS: &str = "UNNECESSARY IMPLEMENTATIONS";
 const INCOMPLETE_ABILITY_IMPLEMENTATION: &str = "INCOMPLETE ABILITY IMPLEMENTATION";
-const STATEMENT_AFTER_EXPRESSION: &str = "STATEMENT AFTER EXPRESSION";
 const MISSING_EXCLAMATION: &str = "MISSING EXCLAMATION";
 const UNNECESSARY_EXCLAMATION: &str = "UNNECESSARY EXCLAMATION";
 const EMPTY_TUPLE_TYPE: &str = "EMPTY TUPLE TYPE";
@@ -1392,32 +1391,6 @@ pub fn can_problem<'b>(
             title = "UNNECESSARY RETURN".to_string();
         }
 
-        Problem::StmtAfterExpr(region) => {
-            doc = alloc.stack([
-                alloc
-                    .reflow(r"I just finished parsing an expression with a series of definitions,"),
-                alloc.reflow(
-                    r"and this line is indented as if it's intended to be part of that expression:",
-                ),
-                alloc.region(lines.convert_region(region), severity),
-                alloc.concat([alloc.reflow(
-                    "However, I already saw the final expression in that series of definitions.",
-                )]),
-                alloc.tip().append(
-                    alloc.reflow(
-                        "An expression like `4`, `\"hello\"`, or `function_call(MyThing)` is like `return 4` in other programming languages. To me, it seems like you did `return 4` followed by more code in the lines after, that code would never be executed!"
-                    )
-                ),
-                alloc.tip().append(
-                    alloc.reflow(
-                        "If you are working with `Task`, this error can happen if you forgot a `!` somewhere."
-                    )
-                )
-            ]);
-
-            title = STATEMENT_AFTER_EXPRESSION.to_string();
-        }
-
         Problem::UnsuffixedEffectfulRecordField(region) => {
             doc = alloc.stack([
                 alloc.reflow(
@@ -2227,9 +2200,6 @@ fn pretty_runtime_error<'b>(
 
             title = SYNTAX_PROBLEM;
         }
-        RuntimeError::MalformedSuffixed(_) => {
-            todo!("error for malformed suffix");
-        }
         RuntimeError::InvalidFloat(sign @ FloatErrorKind::PositiveInfinity, region, _raw_str)
         | RuntimeError::InvalidFloat(sign @ FloatErrorKind::NegativeInfinity, region, _raw_str) => {
             let tip = alloc
@@ -2670,6 +2640,15 @@ fn pretty_runtime_error<'b>(
             ]);
 
             title = "OPTIONAL FIELD IN RECORD BUILDER";
+        }
+        RuntimeError::NonFunctionHostedAnnotation(region) => {
+            doc = alloc.stack([
+                alloc.reflow("This hosted annotation is not for a function:"),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.reflow("Only functions can be configured for FFI with the host."),
+            ]);
+
+            title = "NON-FUNCTION HOSTED ANNOTATION";
         }
     }
 

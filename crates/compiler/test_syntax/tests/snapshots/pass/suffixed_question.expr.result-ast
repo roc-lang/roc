@@ -1,13 +1,10 @@
-@0-14 TrySuffix {
-    target: Result,
-    expr: TrySuffix {
-        target: Result,
-        expr: TrySuffix {
-            target: Result,
-            expr: Var {
+@0-14 TrySuffix(
+    TrySuffix(
+        TrySuffix(
+            Var {
                 module_name: "Stdout",
                 ident: "line",
             },
-        },
-    },
-}
+        ),
+    ),
+)

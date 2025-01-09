@@ -1868,51 +1868,6 @@ fn unified_empty_closure_byte() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn task_always_twice() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            app "test" provides [main] to "./platform"
-
-            Effect a := {} -> a
-
-            effect_always : a -> Effect a
-            effect_always = \x ->
-                inner = \{} -> x
-
-                @Effect inner
-
-            effect_after : Effect a, (a -> Effect b) -> Effect b
-            effect_after = \(@Effect thunk), transform -> transform (thunk {})
-
-            MyTask a err : Effect (Result a err)
-
-            always : a -> MyTask a *
-            always = \x -> effect_always (Ok x)
-
-            fail : err -> MyTask * err
-            fail = \x -> effect_always (Err x)
-
-            after : MyTask a err, (a -> MyTask b err) -> MyTask b err
-            after = \task, transform ->
-                effect_after task \res ->
-                    when res is
-                        Ok x -> transform x
-                        Err e -> fail e
-
-            main : MyTask {} F64
-            main = after (always "foo") (\_ -> always {})
-
-            "#
-        ),
-        (),
-        (f64, u8),
-        |_| ()
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn wildcard_rigid() {
     assert_evals_to!(
         indoc!(
