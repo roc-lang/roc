@@ -1514,7 +1514,11 @@ for_each_try! = \list, func! ->
 walk! : List elem, state, (state, elem => state) => state
 walk! = \list, state, func! ->
     when list is
-        [] -> state
+        [] -> 
+            state
+
         [elem, .. as rest] ->
             next_state = func!(state, elem)
             walk!(rest, next_state, func!)
+
+
