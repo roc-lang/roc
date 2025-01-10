@@ -91,14 +91,6 @@ fn format_expr_only(
             buf.indent(indent);
             buf.push_str("try");
         }
-        Expr::PncApply(
-            loc_expr @ Loc {
-                value: Expr::Dbg, ..
-            },
-            loc_args,
-        ) => {
-            fmt_apply(loc_expr, loc_args.items, indent, buf);
-        }
         Expr::PncApply(loc_expr, loc_args) => {
             fmt_pnc_apply(loc_expr, loc_args, indent, buf);
         }
@@ -1763,12 +1755,21 @@ fn fmt_dbg_stmt<'a>(
     args.push(condition);
     args.extend_from_slice(extra_args);
 
-    Expr::Apply(
-        &Loc::at_zero(Expr::Dbg),
-        args.into_bump_slice(),
-        called_via::CalledVia::Space,
-    )
-    .format_with_options(buf, parens, Newlines::Yes, indent);
+    if args.is_empty() {
+        Expr::PncApply(&Loc::at_zero(Expr::Dbg), Collection::empty()).format_with_options(
+            buf,
+            parens,
+            Newlines::Yes,
+            indent,
+        );
+    } else {
+        Expr::Apply(
+            &Loc::at_zero(Expr::Dbg),
+            args.into_bump_slice(),
+            called_via::CalledVia::Space,
+        )
+        .format_with_options(buf, parens, Newlines::Yes, indent);
+    }
 
     let cont_lifted = expr_lift_spaces(Parens::NotNeeded, buf.text.bump(), &continuation.value);
 
