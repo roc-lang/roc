@@ -33,6 +33,9 @@ mod test_snapshots {
         (full => $input:expr) => {
             Input::Full($input)
         };
+        (pattern => $input:expr) => {
+            Input::Pattern($input)
+        };
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -186,8 +189,8 @@ mod test_snapshots {
         fail/ability_demands_not_indented_with_first.expr,
         fail/ability_first_demand_not_indented_enough.expr,
         fail/ability_non_signature_expression.expr,
+        fail/all_the_bangs.expr,
         fail/alias_or_opaque_fail.expr,
-        fail/backpassing_after_annotation.expr,
         fail/bound_variable.expr,
         fail/comment_with_tab.expr,
         fail/d_assign_return_bang.expr,
@@ -207,13 +210,11 @@ mod test_snapshots {
         fail/exponential_else_branch_parsing_repro.expr,
         fail/exposed_type_bang.header,
         fail/expr_to_pattern_fail.expr,
-        fail/expression_indentation_end.expr,
         fail/if_guard_without_condition.expr,
         fail/if_missing_else.expr,
         fail/if_outdented_else_branch.expr,
         fail/if_outdented_then.expr,
         fail/ifbang_eqeq.expr,
-        fail/implements_in_multibackpassing_parens.expr,
         fail/import_with_lowercase_alias.moduledefs,
         fail/imports_missing_comma.header,
         fail/inline_hastype.expr,
@@ -233,7 +234,6 @@ mod test_snapshots {
         fail/nested_tuples_annotation_terrible_perf.expr,
         fail/nested_when_expect_binop_when.expr,
         fail/newline_before_operator_with_defs.expr,
-        fail/not_closure_with_multibackpassing.expr,
         fail/oom_repro.expr,
         fail/opaque_type_def_with_newline.expr,
         fail/pattern_binds_keyword.expr,
@@ -296,12 +296,12 @@ mod test_snapshots {
         pass/alias_comment_after_head.expr,
         pass/alias_parens_comment.expr,
         pass/alias_parens_comment_indent.expr,
-        pass/all_the_bangs.expr,
         pass/ann_apply_record_with_newlines.expr,
         pass/ann_closed_union.expr,
         pass/ann_effectful_fn.expr,
         pass/ann_open_union.expr,
         pass/ann_parens_comments.expr,
+        pass/ann_parens_where_implements_func.expr,
         pass/ann_pattern_comment_before_body.expr,
         pass/ann_record_pat_with_comment.expr,
         pass/ann_tag_union_newline_comment.expr,
@@ -327,19 +327,17 @@ mod test_snapshots {
         pass/apply_record_ann.expr,
         pass/apply_record_parens_newline_field.expr,
         pass/apply_tag.expr,
+        pass/apply_tag_pnc.expr,
+        pass/apply_tag_single_arg_pnc.pattern,
+        pass/apply_tag_single_arg_whitespace.pattern,
         pass/apply_three_args.expr,
         pass/apply_tuple_ext_parens_ty.expr,
         pass/apply_two_args.expr,
+        pass/apply_two_args_pnc.expr,
         pass/apply_unary_negation.expr,
         pass/apply_unary_not.expr,
         pass/arg_pattern_as.expr,
         pass/as_in_func_type_args.expr,
-        pass/backpassing_bananza.expr,
-        pass/backpassing_comment_pattern_fun.expr,
-        pass/backpassing_in_parens_in_tuple.expr,
-        pass/backpassing_parens_comment.expr,
-        pass/backpassing_pattern_weirdness.expr,
-        pass/backpassing_record_str_crazyness.expr,
         pass/bang_newline_double_accessor.expr,
         pass/bangs_and_tuple_accessors.expr,
         pass/basic_apply.expr,
@@ -373,12 +371,12 @@ mod test_snapshots {
         pass/comment_after_def.moduledefs,
         pass/comment_after_expr_in_parens.expr,
         pass/comment_after_op.expr,
+        pass/comment_after_whitespace_apply_arg_inside_pnc_apply.expr,
         pass/comment_before_colon_def.expr,
         pass/comment_before_comma_in_tuple_type_with_func.expr,
         pass/comment_before_equals_def.expr,
         pass/comment_before_op.expr,
         pass/comment_before_pat_in_parens.expr,
-        pass/comment_in_backpassing_args.expr,
         pass/comment_in_closure_pat.expr,
         pass/comment_in_closure_pat_apply.expr,
         pass/comment_in_tuple_ext.expr,
@@ -391,7 +389,6 @@ mod test_snapshots {
         pass/crash.expr,
         pass/crazy_annotation_left.expr,
         pass/crazy_annotation_left2.expr,
-        pass/crazy_backpassing_parens.expr,
         pass/crazy_implements_bangs.expr,
         pass/crazy_pat_ann.expr,
         pass/curried_function_type.expr,
@@ -412,7 +409,6 @@ mod test_snapshots {
         pass/docs.expr,
         pass/double_closure_newlines_binop.expr,
         pass/double_function_tuple.expr,
-        pass/double_parens_as_in_backpassing_pat.expr,
         pass/double_parens_comment_tuple_pat.expr,
         pass/double_question_binop.expr,
         pass/double_space_before.expr,
@@ -424,7 +420,6 @@ mod test_snapshots {
         pass/empty_package_header.header,
         pass/empty_platform_header.header,
         pass/empty_record.expr,
-        pass/empty_record_assign_backpassing.expr,
         pass/empty_record_assign_dbg.expr,
         pass/empty_record_assign_implements.expr,
         pass/empty_record_assign_return.expr,
@@ -462,7 +457,7 @@ mod test_snapshots {
         pass/if_in_record_field_opt_pat.expr,
         pass/if_newline_then_negate_else_recordupdater.expr,
         pass/if_then_weird_indent.expr,
-        pass/implements_after_parens_comment.expr,
+        pass/implements_after_comment_with_newline.expr,
         pass/implements_annotation_comment.expr,
         pass/implements_in_pat_after_comment.expr,
         pass/implements_newline_in_fn_ty.expr,
@@ -476,7 +471,6 @@ mod test_snapshots {
         pass/import_with_comments.moduledefs,
         pass/import_with_exposed.moduledefs,
         pass/import_with_params.moduledefs,
-        pass/indented_after_multi_backpassing.expr,
         pass/ingested_file.moduledefs,
         pass/inline_import.expr,
         pass/inline_ingested_file.expr,
@@ -494,6 +488,7 @@ mod test_snapshots {
         pass/list_minus_newlines.expr,
         pass/list_pattern_weird_indent.expr,
         pass/list_patterns.expr,
+        pass/long_complex_application_with_pnc.expr,
         pass/looks_like_implements.expr,
         pass/lowest_float.expr,
         pass/lowest_int.expr,
@@ -516,19 +511,14 @@ mod test_snapshots {
         pass/module_with_params.header,
         pass/module_with_params_and_multiline_exposes.header,
         pass/mul_comment_neg.expr,
-        pass/multi_backpassing.expr,
-        pass/multi_backpassing_in_def.moduledefs,
-        pass/multi_backpassing_with_apply.expr,
         pass/multi_char_string.expr,
         pass/multilin_str_body.expr,
         pass/multiline_apply_equals_multiline_apply.expr,
-        pass/multiline_backpassing.expr,
         pass/multiline_binop_when_with_comments.expr,
         pass/multiline_str_after_newlines_in_pat.expr,
         pass/multiline_str_and_str_in_alias.expr,
         pass/multiline_str_apply_in_parens_pat.expr,
         pass/multiline_str_crazyness.expr,
-        pass/multiline_str_in_backpassing_pats.expr,
         pass/multiline_str_in_pat.expr,
         pass/multiline_str_interpolation_records.expr,
         pass/multiline_str_opt_field.expr,
@@ -563,6 +553,7 @@ mod test_snapshots {
         pass/newline_after_sub.expr,
         pass/newline_and_spaces_before_less_than.expr,
         pass/newline_before_add.expr,
+        pass/newline_before_and_after_implements_opaque.expr,
         pass/newline_before_import_curlies.expr,
         pass/newline_before_sub.expr,
         pass/newline_in_packages.full,
@@ -582,7 +573,6 @@ mod test_snapshots {
         pass/number_literal_suffixes.expr,
         pass/old_app_header.full,
         pass/old_interface_header.header,
-        pass/one_backpassing.expr,
         pass/one_char_string.expr,
         pass/one_def.expr,
         pass/one_minus_two.expr,
@@ -666,11 +656,9 @@ mod test_snapshots {
         pass/record_with_if.expr,
         pass/record_with_lots_of_newlines.expr,
         pass/repr_7342.expr,
-        pass/repr_7343.expr,
         pass/repr_7346.expr,
         pass/requires_type.header,
         pass/return_apply_newline.expr,
-        pass/return_backpassing.expr,
         pass/return_field_access_in_parens.expr,
         pass/return_in_apply_func.expr,
         pass/return_in_if.expr,
@@ -680,6 +668,7 @@ mod test_snapshots {
         pass/return_multiline.expr,
         pass/return_only_statement.expr,
         pass/return_parens_comments.expr,
+        pass/return_record_update_comment_empty_fields.expr,
         pass/return_then_nested_parens.expr,
         pass/return_with_after.expr,
         pass/separate_defs.moduledefs,
@@ -729,7 +718,6 @@ mod test_snapshots {
         pass/tuple_type_ext.expr,
         pass/tuples_parens_comments.expr,
         pass/two_arg_closure.expr,
-        pass/two_backpassing.expr,
         pass/two_branch_when.expr,
         pass/two_spaced_def.expr,
         pass/type_ann_tag_union_parens_applies.expr,
@@ -743,7 +731,6 @@ mod test_snapshots {
         pass/unary_negation_with_parens.expr,
         pass/unary_not.expr,
         pass/unary_not_with_parens.expr,
-        pass/underscore_backpassing.expr,
         pass/underscore_expr_in_def.expr,
         pass/underscore_in_assignment_pattern.expr,
         pass/unicode_overflow_str.expr,
@@ -793,15 +780,12 @@ mod test_snapshots {
 
     /// Does the given test name expect the canonicalization process to panic?
     fn expect_canonicalize_panics(test_name: &str) -> bool {
+        #[allow(clippy::match_single_binding)]
         match test_name {
             // This is the current list as of writing.
             // We should be driving these down to zero over time.
             // Adding this protection in now to avoid accidentally adding more.
-            "all_the_bangs" | "bangs_and_tuple_accessors" => {
-                // both of these result in:
-                // "a Expr::TrySuffix expression was not completely removed in desugar_value_def_suffixed"
-                true
-            }
+            // NOTHING FOR NOW!
 
             // When adding new snapshot tests, strongly prefer fixing any canonicalization panics
             // they may run into rather than adding them to this list.
@@ -880,8 +864,6 @@ mod test_snapshots {
             }
             Err(err) => Err(format!("{err:?}")),
         };
-
-        println!("{:?}", result);
 
         if expect == TestExpectation::Pass {
             let tokens = roc_parse::highlight::highlight(&source);

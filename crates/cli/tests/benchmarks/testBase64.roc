@@ -1,17 +1,15 @@
-app [main] { pf: platform "platform/main.roc" }
+app [main!] { pf: platform "platform/main.roc" }
 
 import Base64
-import pf.PlatformTasks
+import pf.Host
 
-IO a : Task a []
+main! : {} => {}
+main! = \{} ->
+    when Base64.from_bytes(Str.to_utf8("Hello World")) is
+        Err(_) -> Host.put_line!("sadness")
+        Ok(encoded) ->
+            Host.put_line!(Str.concat("encoded: ", encoded))
 
-main : IO {}
-main =
-    when Base64.fromBytes (Str.toUtf8 "Hello World") is
-        Err _ -> PlatformTasks.putLine "sadness"
-        Ok encoded ->
-            PlatformTasks.putLine! (Str.concat "encoded: " encoded)
-
-            when Base64.toStr encoded is
-                Ok decoded -> PlatformTasks.putLine (Str.concat "decoded: " decoded)
-                Err _ -> PlatformTasks.putLine "sadness"
+            when Base64.to_str(encoded) is
+                Ok(decoded) -> Host.put_line!(Str.concat("decoded: ", decoded))
+                Err(_) -> Host.put_line!("sadness")

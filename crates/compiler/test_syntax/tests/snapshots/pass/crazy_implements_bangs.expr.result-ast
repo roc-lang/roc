@@ -24,16 +24,16 @@
                         "p",
                     ),
                     derived: Some(
-                        @18-20 SpaceBefore(
-                            Implements(
-                                [],
-                            ),
-                            [
+                        ImplementsAbilities {
+                            before_implements_kw: [
                                 LineComment(
                                     "",
                                 ),
                             ],
-                        ),
+                            implements: @8-18,
+                            after_implements_kw: [],
+                            item: @18-20 [],
+                        },
                     ),
                 },
             ],

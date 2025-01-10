@@ -436,7 +436,7 @@ pub fn type_problem<'b>(
                 alloc.region(lines.convert_region(region), severity),
                 alloc.reflow("Add an exclamation mark at the end, like:"),
                 alloc
-                    .parser_suggestion("{ readFile! : File.read! }")
+                    .parser_suggestion("{ read_file! : File.read! }")
                     .indent(4),
                 alloc.reflow("This will help readers identify it as a source of effects."),
             ];
@@ -1489,7 +1489,7 @@ fn to_expr_report<'b>(
                                     alloc.concat([
                                         alloc.note(""),
                                         alloc.reflow("Record builders need a mapper function before the "),
-                                        alloc.backpassing_arrow(),
+                                        alloc.backwards_arrow(),
                                         alloc.reflow(" to combine fields together with.")
                                     ])
                                 }

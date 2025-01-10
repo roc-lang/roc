@@ -1,52 +1,57 @@
-@0-12 Defs(
-    Defs {
-        tags: [
-            EitherIndex(0),
-        ],
-        regions: [
-            @0-10,
-        ],
-        space_before: [
-            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
-        ],
-        space_after: [
-            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
-        ],
-        spaces: [],
-        type_defs: [
-            Alias {
-                header: TypeHeader {
-                    name: @0-2 "Zx",
-                    vars: [
-                        @3-4 SpaceAfter(
-                            Identifier {
-                                ident: "e",
+@0-13 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(0),
+            ],
+            regions: [
+                @0-11,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [
+                Alias {
+                    header: TypeHeader {
+                        name: @0-2 "Zx",
+                        vars: [
+                            @4-5 SpaceAfter(
+                                Identifier {
+                                    ident: "e",
+                                },
+                                [
+                                    LineComment(
+                                        "",
+                                    ),
+                                ],
+                            ),
+                            @8-9 Identifier {
+                                ident: "f",
                             },
-                            [
-                                LineComment(
-                                    "",
-                                ),
-                            ],
-                        ),
-                        @7-8 Identifier {
-                            ident: "f",
-                        },
-                    ],
+                        ],
+                    },
+                    ann: @10-11 BoundVariable(
+                        "i",
+                    ),
                 },
-                ann: @9-10 BoundVariable(
-                    "i",
-                ),
-            },
-        ],
-        value_defs: [],
-    },
-    @11-12 SpaceBefore(
-        Var {
-            module_name: "",
-            ident: "s",
+            ],
+            value_defs: [],
         },
-        [
-            Newline,
-        ],
+        @12-13 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "s",
+            },
+            [
+                Newline,
+            ],
+        ),
     ),
+    [
+        Newline,
+    ],
 )

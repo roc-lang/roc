@@ -1,0 +1,19 @@
+@0-13 SpaceAfter(
+    PncApply(
+        @0-4 Var {
+            module_name: "",
+            ident: "whee",
+        },
+        [
+            @5-7 Num(
+                "12",
+            ),
+            @10-12 Num(
+                "34",
+            ),
+        ],
+    ),
+    [
+        Newline,
+    ],
+)

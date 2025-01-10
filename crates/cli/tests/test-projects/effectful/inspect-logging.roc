@@ -8,28 +8,28 @@ import Community
 
 main! = \{} ->
     Community.empty
-    |> Community.addPerson {
-        firstName: "John",
-        lastName: "Smith",
+    |> Community.add_person({
+        first_name: "John",
+        last_name: "Smith",
         age: 27,
-        hasBeard: Bool.true,
-        favoriteColor: Blue,
-    }
-    |> Community.addPerson {
-        firstName: "Debby",
-        lastName: "Johnson",
+        has_beard: Bool.true,
+        favorite_color: Blue,
+    })
+    |> Community.add_person({
+        first_name: "Debby",
+        last_name: "Johnson",
         age: 47,
-        hasBeard: Bool.false,
-        favoriteColor: Green,
-    }
-    |> Community.addPerson {
-        firstName: "Jane",
-        lastName: "Doe",
+        has_beard: Bool.false,
+        favorite_color: Green,
+    })
+    |> Community.add_person({
+        first_name: "Jane",
+        last_name: "Doe",
         age: 33,
-        hasBeard: Bool.false,
-        favoriteColor: RGB (255, 255, 0),
-    }
-    |> Community.addFriend 0 2
-    |> Community.addFriend 1 2
-    |> Inspect.toStr
-    |> Effect.putLine!
+        has_beard: Bool.false,
+        favorite_color: RGB((255, 255, 0)),
+    })
+    |> Community.add_friend(0, 2)
+    |> Community.add_friend(1, 2)
+    |> Inspect.to_str
+    |> Effect.put_line!

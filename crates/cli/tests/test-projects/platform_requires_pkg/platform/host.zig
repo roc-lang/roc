@@ -101,7 +101,7 @@ comptime {
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
-extern fn roc__mainForHost_1_exposed_generic(*RocStr) void;
+extern fn roc__main_for_host_1_exposed_generic(*RocStr) void;
 
 const Unit = extern struct {};
 
@@ -110,7 +110,7 @@ pub export fn main() u8 {
 
     // actually call roc to populate the callresult
     var callresult = RocStr.empty();
-    roc__mainForHost_1_exposed_generic(&callresult);
+    roc__main_for_host_1_exposed_generic(&callresult);
 
     // stdout the result
     stdout.print("{s}", .{callresult.asSlice()}) catch unreachable;

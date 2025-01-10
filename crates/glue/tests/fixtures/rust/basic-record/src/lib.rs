@@ -8,7 +8,7 @@ pub extern "C" fn rust_main() {
 
     init();
 
-    let record = roc_app::mainForHost();
+    let record = roc_app::main_for_host();
 
     // Verify that the record has all the expected traits.
 

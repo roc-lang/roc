@@ -28,7 +28,7 @@ pub(crate) fn decode_from_utf8_result<'a, 'ctx>(
     )
 }
 
-/// Dec.toStr : Dec -> Str
+/// Dec.to_str : Dec -> Str
 
 /// Str.equal : Str, Str -> Bool
 pub(crate) fn str_equal<'ctx>(

@@ -3,14 +3,14 @@ use bumpalo::Bump;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
 
+use crate::ast::ImplementsAbilities;
 use crate::{
     ast::{
         AbilityImpls, AbilityMember, AssignedField, Collection, Defs, Expr, FullAst, Header,
-        Implements, ImplementsAbilities, ImplementsAbility, ImplementsClause, ImportAlias,
-        ImportAsKeyword, ImportExposingKeyword, ImportedModuleName, IngestedFileAnnotation,
-        IngestedFileImport, ModuleImport, ModuleImportParams, Pattern, PatternAs, Spaced, Spaces,
-        SpacesBefore, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
-        WhenBranch,
+        Implements, ImplementsAbility, ImplementsClause, ImportAlias, ImportAsKeyword,
+        ImportExposingKeyword, ImportedModuleName, IngestedFileAnnotation, IngestedFileImport,
+        ModuleImport, ModuleImportParams, Pattern, PatternAs, Spaced, Spaces, SpacesBefore,
+        StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef, WhenBranch,
     },
     header::{
         AppHeader, ExposedName, ExposesKeyword, HostedHeader, ImportsEntry, ImportsKeyword,
@@ -372,7 +372,7 @@ impl<'a> Normalize<'a> for TypeDef<'a> {
                     vars: vars.normalize(arena),
                 },
                 typ: typ.normalize(arena),
-                derived: derived.normalize(arena),
+                derived: derived.map(|item| &*arena.alloc(item.normalize(arena))),
             },
             Ability {
                 header: TypeHeader { name, vars },
@@ -691,10 +691,7 @@ impl<'a> Normalize<'a> for Expr<'a> {
             Expr::AccessorFunction(a) => Expr::AccessorFunction(a),
             Expr::RecordUpdater(a) => Expr::RecordUpdater(a),
             Expr::TupleAccess(a, b) => Expr::TupleAccess(arena.alloc(a.normalize(arena)), b),
-            Expr::TrySuffix { expr: a, target } => Expr::TrySuffix {
-                expr: arena.alloc(a.normalize(arena)),
-                target,
-            },
+            Expr::TrySuffix(a) => Expr::TrySuffix(arena.alloc(a.normalize(arena))),
             Expr::List(a) => Expr::List(a.normalize(arena)),
             Expr::RecordUpdate { update, fields } => Expr::RecordUpdate {
                 update: arena.alloc(update.normalize(arena)),
@@ -716,11 +713,6 @@ impl<'a> Normalize<'a> for Expr<'a> {
             ),
             Expr::Crash => Expr::Crash,
             Expr::Defs(a, b) => fold_defs(arena, a.defs(), b.value.normalize(arena)),
-            Expr::Backpassing(a, b, c) => Expr::Backpassing(
-                arena.alloc(a.normalize(arena)),
-                arena.alloc(b.normalize(arena)),
-                arena.alloc(c.normalize(arena)),
-            ),
             Expr::Dbg => Expr::Dbg,
             Expr::DbgStmt {
                 first,
@@ -742,8 +734,13 @@ impl<'a> Normalize<'a> for Expr<'a> {
                 arena.alloc(a.normalize(arena)),
                 b.map(|loc_b| &*arena.alloc(loc_b.normalize(arena))),
             ),
-            Expr::Apply(a, b, c) => {
-                Expr::Apply(arena.alloc(a.normalize(arena)), b.normalize(arena), c)
+            Expr::Apply(a, b, called_via) => Expr::Apply(
+                arena.alloc(a.normalize(arena)),
+                b.normalize(arena),
+                called_via,
+            ),
+            Expr::PncApply(a, b) => {
+                Expr::PncApply(arena.alloc(a.normalize(arena)), b.normalize(arena))
             }
             Expr::BinOps(a, b) => Expr::BinOps(a.normalize(arena), arena.alloc(b.normalize(arena))),
             Expr::UnaryOp(a, b) => {
@@ -779,7 +776,6 @@ impl<'a> Normalize<'a> for Expr<'a> {
                 a.normalize(arena)
             }
             Expr::MalformedIdent(a, b) => Expr::MalformedIdent(a, remove_spaces_bad_ident(b)),
-            Expr::MalformedSuffixed(a) => Expr::MalformedSuffixed(a),
             Expr::PrecedenceConflict(a) => Expr::PrecedenceConflict(a),
             Expr::SpaceBefore(a, _) => a.normalize(arena),
             Expr::SpaceAfter(a, _) => a.normalize(arena),
@@ -840,6 +836,30 @@ fn fold_defs<'a>(
                             arena.alloc(Loc::at_zero(new_final)),
                         );
                     }
+                    ValueDef::Stmt(&Loc {
+                        value:
+                            Expr::PncApply(
+                                &Loc {
+                                    value: Expr::Dbg, ..
+                                },
+                                args,
+                            ),
+                        ..
+                    }) => {
+                        let rest = fold_defs(arena, defs, final_expr);
+                        let new_final = Expr::DbgStmt {
+                            first: args.items[0],
+                            extra_args: &args.items[1..],
+                            continuation: arena.alloc(Loc::at_zero(rest)),
+                        };
+                        if new_defs.is_empty() {
+                            return new_final;
+                        }
+                        return Expr::Defs(
+                            arena.alloc(new_defs),
+                            arena.alloc(Loc::at_zero(new_final)),
+                        );
+                    }
                     _ => {
                         new_defs.push_value_def(vd, Region::zero(), &[], &[]);
                     }
@@ -888,6 +908,9 @@ impl<'a> Normalize<'a> for Pattern<'a> {
                 arena.alloc(a.normalize(arena)),
                 arena.alloc(b.normalize(arena)),
             ),
+            Pattern::PncApply(a, b) => {
+                Pattern::PncApply(arena.alloc(a.normalize(arena)), b.normalize(arena))
+            }
             Pattern::RecordDestructure(a) => Pattern::RecordDestructure(a.normalize(arena)),
             Pattern::RequiredField(a, b) => {
                 Pattern::RequiredField(a, arena.alloc(b.normalize(arena)))
@@ -1005,6 +1028,17 @@ impl<'a> Normalize<'a> for AbilityImpls<'a> {
     }
 }
 
+impl<'a> Normalize<'a> for ImplementsAbilities<'a> {
+    fn normalize(&self, arena: &'a Bump) -> Self {
+        ImplementsAbilities {
+            before_implements_kw: &[],
+            implements: Region::zero(),
+            after_implements_kw: &[],
+            item: self.item.normalize(arena),
+        }
+    }
+}
+
 impl<'a> Normalize<'a> for ImplementsAbility<'a> {
     fn normalize(&self, arena: &'a Bump) -> Self {
         match *self {
@@ -1017,18 +1051,6 @@ impl<'a> Normalize<'a> for ImplementsAbility<'a> {
             ImplementsAbility::SpaceBefore(has, _) | ImplementsAbility::SpaceAfter(has, _) => {
                 has.normalize(arena)
             }
-        }
-    }
-}
-
-impl<'a> Normalize<'a> for ImplementsAbilities<'a> {
-    fn normalize(&self, arena: &'a Bump) -> Self {
-        match *self {
-            ImplementsAbilities::Implements(derived) => {
-                ImplementsAbilities::Implements(derived.normalize(arena))
-            }
-            ImplementsAbilities::SpaceBefore(derived, _)
-            | ImplementsAbilities::SpaceAfter(derived, _) => derived.normalize(arena),
         }
     }
 }
@@ -1083,9 +1105,6 @@ impl<'a> Normalize<'a> for EExpr<'a> {
             }
             EExpr::MalformedPattern(_pos) => EExpr::MalformedPattern(Position::zero()),
             EExpr::QualifiedTag(_pos) => EExpr::QualifiedTag(Position::zero()),
-            EExpr::BackpassComma(_pos) => EExpr::BackpassComma(Position::zero()),
-            EExpr::BackpassArrow(_pos) => EExpr::BackpassArrow(Position::zero()),
-            EExpr::BackpassContinue(_pos) => EExpr::BackpassContinue(Position::zero()),
             EExpr::DbgContinue(_pos) => EExpr::DbgContinue(Position::zero()),
             EExpr::When(inner_err, _pos) => {
                 EExpr::When(inner_err.normalize(arena), Position::zero())
@@ -1226,6 +1245,7 @@ impl<'a> Normalize<'a> for ERecord<'a> {
             ERecord::UnderscoreField(_pos) => ERecord::Field(Position::zero()),
             ERecord::Colon(_) => ERecord::Colon(Position::zero()),
             ERecord::QuestionMark(_) => ERecord::QuestionMark(Position::zero()),
+            ERecord::SecondQuestionMark(_) => ERecord::SecondQuestionMark(Position::zero()),
             ERecord::Arrow(_) => ERecord::Arrow(Position::zero()),
             ERecord::Ampersand(_) => ERecord::Ampersand(Position::zero()),
             ERecord::Expr(inner_err, _) => {
@@ -1265,6 +1285,8 @@ impl<'a> Normalize<'a> for EPattern<'a> {
             EPattern::AccessorFunction(_) => EPattern::AccessorFunction(Position::zero()),
             EPattern::RecordUpdaterFunction(_) => EPattern::RecordUpdaterFunction(Position::zero()),
             EPattern::Str(e, _) => EPattern::Str(e.normalize(arena), Position::zero()),
+            EPattern::ParenStart(_) => EPattern::ParenStart(Position::zero()),
+            EPattern::ParenEnd(_) => EPattern::ParenEnd(Position::zero()),
         }
     }
 }
@@ -1398,6 +1420,9 @@ impl<'a> Normalize<'a> for ETypeAbilityImpl<'a> {
                 ETypeAbilityImpl::Space(*inner_err, Position::zero())
             }
             ETypeAbilityImpl::QuestionMark(_) => ETypeAbilityImpl::QuestionMark(Position::zero()),
+            ETypeAbilityImpl::SecondQuestionMark(_) => {
+                ETypeAbilityImpl::SecondQuestionMark(Position::zero())
+            }
             ETypeAbilityImpl::Ampersand(_) => ETypeAbilityImpl::Ampersand(Position::zero()),
             ETypeAbilityImpl::Expr(inner_err, _) => {
                 ETypeAbilityImpl::Expr(arena.alloc(inner_err.normalize(arena)), Position::zero())
@@ -1476,7 +1501,8 @@ impl<'a> Normalize<'a> for ETypeRecord<'a> {
             ETypeRecord::Open(_) => ETypeRecord::Open(Position::zero()),
             ETypeRecord::Field(_) => ETypeRecord::Field(Position::zero()),
             ETypeRecord::Colon(_) => ETypeRecord::Colon(Position::zero()),
-            ETypeRecord::Optional(_) => ETypeRecord::Optional(Position::zero()),
+            ETypeRecord::OptionalFirst(_) => ETypeRecord::OptionalFirst(Position::zero()),
+            ETypeRecord::OptionalSecond(_) => ETypeRecord::OptionalSecond(Position::zero()),
             ETypeRecord::Type(inner_err, _) => {
                 ETypeRecord::Type(arena.alloc(inner_err.normalize(arena)), Position::zero())
             }
@@ -1496,7 +1522,8 @@ impl<'a> Normalize<'a> for PRecord<'a> {
             PRecord::Open(_) => PRecord::Open(Position::zero()),
             PRecord::Field(_) => PRecord::Field(Position::zero()),
             PRecord::Colon(_) => PRecord::Colon(Position::zero()),
-            PRecord::Optional(_) => PRecord::Optional(Position::zero()),
+            PRecord::OptionalFirst(_) => PRecord::OptionalFirst(Position::zero()),
+            PRecord::OptionalSecond(_) => PRecord::OptionalSecond(Position::zero()),
             PRecord::Pattern(inner_err, _) => {
                 PRecord::Pattern(arena.alloc(inner_err.normalize(arena)), Position::zero())
             }

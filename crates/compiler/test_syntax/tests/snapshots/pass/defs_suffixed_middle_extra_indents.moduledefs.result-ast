@@ -62,13 +62,12 @@ Defs {
                             ),
                             Stmt(
                                 @97-111 Apply(
-                                    @97-108 TrySuffix {
-                                        target: Result,
-                                        expr: Var {
+                                    @97-108 TrySuffix(
+                                        Var {
                                             module_name: "Stdout",
                                             ident: "line",
                                         },
-                                    },
+                                    ),
                                     [
                                         @110-111 Var {
                                             module_name: "",
@@ -81,13 +80,12 @@ Defs {
                         ],
                     },
                     @141-150 SpaceBefore(
-                        TrySuffix {
-                            target: Result,
-                            expr: Var {
+                        TrySuffix(
+                            Var {
                                 module_name: "",
                                 ident: "printBar",
                             },
-                        },
+                        ),
                         [
                             Newline,
                             Newline,

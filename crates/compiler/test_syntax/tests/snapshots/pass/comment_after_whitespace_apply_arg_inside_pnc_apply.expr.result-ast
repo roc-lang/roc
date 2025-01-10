@@ -1,0 +1,113 @@
+@0-44 SpaceAfter(
+    PncApply(
+        @0-2 Tag(
+            "PP",
+        ),
+        [
+            @3-42 SpaceAfter(
+                Apply(
+                    @3-4 Tag(
+                        "P",
+                    ),
+                    [
+                        @4-42 PncApply(
+                            @4-6 OpaqueRef(
+                                "@P",
+                            ),
+                            [
+                                @7-40 SpaceAfter(
+                                    Apply(
+                                        @7-8 Tag(
+                                            "P",
+                                        ),
+                                        [
+                                            @9-24 SpaceBefore(
+                                                PncApply(
+                                                    @9-10 Tag(
+                                                        "P",
+                                                    ),
+                                                    [
+                                                        @11-22 SpaceAfter(
+                                                            PncApply(
+                                                                @11-14 Tag(
+                                                                    "PPP",
+                                                                ),
+                                                                [
+                                                                    @15-20 SpaceAfter(
+                                                                        Apply(
+                                                                            @15-16 Tag(
+                                                                                "P",
+                                                                            ),
+                                                                            [
+                                                                                @17-20 SpaceBefore(
+                                                                                    Tag(
+                                                                                        "PPP",
+                                                                                    ),
+                                                                                    [
+                                                                                        Newline,
+                                                                                    ],
+                                                                                ),
+                                                                            ],
+                                                                            Space,
+                                                                        ),
+                                                                        [
+                                                                            Newline,
+                                                                        ],
+                                                                    ),
+                                                                ],
+                                                            ),
+                                                            [
+                                                                Newline,
+                                                            ],
+                                                        ),
+                                                    ],
+                                                ),
+                                                [
+                                                    Newline,
+                                                ],
+                                            ),
+                                            @25-40 SpaceBefore(
+                                                PncApply(
+                                                    @25-27 Tag(
+                                                        "PP",
+                                                    ),
+                                                    [
+                                                        @28-33 SpaceAfter(
+                                                            Var {
+                                                                module_name: "",
+                                                                ident: "mport",
+                                                            },
+                                                            [
+                                                                LineComment(
+                                                                    "<|\"P",
+                                                                ),
+                                                            ],
+                                                        ),
+                                                    ],
+                                                ),
+                                                [
+                                                    Newline,
+                                                ],
+                                            ),
+                                        ],
+                                        Space,
+                                    ),
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                            ],
+                        ),
+                    ],
+                    Space,
+                ),
+                [
+                    Newline,
+                ],
+            ),
+        ],
+    ),
+    [
+        Newline,
+    ],
+)

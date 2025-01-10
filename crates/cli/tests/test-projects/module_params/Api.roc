@@ -1,69 +1,69 @@
-module { appId, protocol } -> [
-    baseUrl,
-    getUser,
-    getPost,
-    getPosts,
-    getPostComments,
-    getCompanies,
-    baseUrlAliased,
-    getPostAliased,
-    getUserSafe,
-    getPostComment,
+module { app_id, protocol } -> [
+    base_url,
+    get_user,
+    get_post,
+    get_posts,
+    get_post_comments,
+    get_companies,
+    base_url_aliased,
+    get_post_aliased,
+    get_user_safe,
+    get_post_comment,
 ]
 
 ## value def referencing params
-baseUrl : Str
-baseUrl =
-    protocol "api.example.com/$(appId)"
+base_url : Str
+base_url =
+    protocol("api.example.com/$(app_id)")
 
 ## function def referencing params
-getUser : U32 -> Str
-getUser = \userId ->
+get_user : U32 -> Str
+get_user = \user_id ->
     # purposefully not using baseUrl to test top-level fn referencing param
-    protocol "api.example.com/$(appId)/users/$(Num.toStr userId)"
+    protocol("api.example.com/$(app_id)/users/$(Num.to_str(user_id))")
 
 ## function def referencing top-level value
-getPost : U32 -> Str
-getPost = \postId ->
-    "$(baseUrl)/posts/$(Num.toStr postId)"
+get_post : U32 -> Str
+get_post = \post_id ->
+    "$(base_url)/posts/$(Num.to_str(post_id))"
 
 ## function def passing top-level function
-getPosts : List U32 -> List Str
-getPosts = \ids ->
-    List.map ids getPost
+get_posts : List U32 -> List Str
+get_posts = \ids ->
+    List.map(ids, get_post)
 
 ## function def calling top-level function
-getPostComments : U32 -> Str
-getPostComments = \postId ->
-    "$(getPost postId)/comments"
+get_post_comments : U32 -> Str
+get_post_comments = \post_id ->
+    "$(get_post(post_id))/comments"
 
 ## function def passing nested function
-getCompanies : List U32 -> List Str
-getCompanies = \ids ->
-    getCompany = \id ->
-        protocol "api.example.com/$(appId)/companies/$(Num.toStr id)"
+get_companies : List U32 -> List Str
+get_companies = \ids ->
+    get_company = \id ->
+        protocol("api.example.com/$(app_id)/companies/$(Num.to_str(id))")
 
-    List.map ids getCompany
+    List.map(ids, get_company)
 
 ## aliasing top-level value
-baseUrlAliased : Str
-baseUrlAliased =
-    baseUrl
+base_url_aliased : Str
+base_url_aliased =
+    base_url
 
 ## aliasing top-level fn
-getPostAliased : U32 -> Str
-getPostAliased =
-    getPost
+get_post_aliased : U32 -> Str
+get_post_aliased =
+    get_post
 
 ## top-level value returning functions
-getUserSafe : U32 -> Str
-getUserSafe =
-    if Str.startsWith appId "prod_" then
-        \id -> "$(getUser id)?safe=true"
+get_user_safe : U32 -> Str
+get_user_safe =
+    if Str.starts_with(app_id, "prod_") then
+        \id -> "$(get_user(id))?safe=true"
     else
-        getUser
+        get_user
 
 ## two-argument function
-getPostComment : U32, U32 -> Str
-getPostComment = \postId, commentId ->
-    "$(getPost postId)/comments/$(Num.toStr commentId)"
+get_post_comment : U32, U32 -> Str
+get_post_comment = \post_id, comment_id ->
+    "$(get_post(post_id))/comments/$(Num.to_str(comment_id))"

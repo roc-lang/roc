@@ -24,10 +24,10 @@ module [
     record,
     tuple,
     custom,
-    decodeWith,
-    fromBytesPartial,
-    fromBytes,
-    mapResult,
+    decode_with,
+    from_bytes_partial,
+    from_bytes,
+    map_result,
 ]
 
 import List
@@ -55,13 +55,13 @@ DecodeError : [TooShort]
 ## Return type of a [Decoder].
 ##
 ## This can be useful when creating a [custom](#custom) decoder or when
-## using [fromBytesPartial](#fromBytesPartial). For example writing unit tests,
+## using [from_bytes_partial](#from_bytes_partial). For example writing unit tests,
 ## such as;
 ## ```roc
 ## expect
 ##     input = "\"hello\", " |> Str.toUtf8
-##     actual = Decode.fromBytesPartial input Json.json
-##     expected = Ok "hello"
+##     actual = Decode.from_bytes_partial(input, Json.json)
+##     expected = Ok("hello")
 ##
 ##     actual.result == expected
 ## ```
@@ -95,51 +95,51 @@ DecoderFormatting implements
     string : Decoder Str fmt where fmt implements DecoderFormatting
     list : Decoder elem fmt -> Decoder (List elem) fmt where fmt implements DecoderFormatting
 
-    ## `record state stepField finalizer` decodes a record field-by-field.
+    ## `record(state, step_field, finalizer)` decodes a record field-by-field.
     ##
-    ## `stepField` returns a decoder for the given field in the record, or
+    ## `step_field` returns a decoder for the given field in the record, or
     ## `Skip` if the field is not a part of the decoded record.
     ##
     ## `finalizer` should produce the record value from the decoded `state`.
     record : state, (state, Str -> [Keep (Decoder state fmt), Skip]), (state, fmt -> Result val DecodeError) -> Decoder val fmt where fmt implements DecoderFormatting
 
-    ## `tuple state stepElem finalizer` decodes a tuple element-by-element.
+    ## `tuple(state, step_elem, finalizer)` decodes a tuple element-by-element.
     ##
-    ## `stepElem` returns a decoder for the nth index in the tuple, or
+    ## `step_elem` returns a decoder for the nth index in the tuple, or
     ## `TooLong` if the index is larger than the expected size of the tuple. The
-    ## index passed to `stepElem` is 0-indexed.
+    ## index passed to `step_elem` is 0-indexed.
     ##
     ## `finalizer` should produce the tuple value from the decoded `state`.
     tuple : state, (state, U64 -> [Next (Decoder state fmt), TooLong]), (state -> Result val DecodeError) -> Decoder val fmt where fmt implements DecoderFormatting
 
 ## Build a custom [Decoder] function. For example the implementation of
-## `decodeBool` could be defined as follows;
+## `decode_bool` could be defined as follows;
 ##
 ## ```roc
-## decodeBool = Decode.custom \bytes, @Json {} ->
+## decode_bool = Decode.custom \bytes, @Json({}) ->
 ##     when bytes is
-##         ['f', 'a', 'l', 's', 'e', ..] -> { result: Ok Bool.false, rest: List.dropFirst bytes 5 }
-##         ['t', 'r', 'u', 'e', ..] -> { result: Ok Bool.true, rest: List.dropFirst bytes 4 }
-##         _ -> { result: Err TooShort, rest: bytes }
+##         ['f', 'a', 'l', 's', 'e', ..] -> { result: Ok(Bool.false), rest: List.drop_first(bytes, 5) }
+##         ['t', 'r', 'u', 'e', ..] -> { result: Ok Bool.true, rest: List.drop_first(bytes, 4) }
+##         _ -> { result: Err(TooShort), rest: bytes }
 ## ```
 custom : (List U8, fmt -> DecodeResult val) -> Decoder val fmt where fmt implements DecoderFormatting
-custom = \decode -> @Decoder decode
+custom = \decode -> @Decoder(decode)
 
 ## Decode a `List U8` utf-8 bytes using a specific [Decoder] function
-decodeWith : List U8, Decoder val fmt, fmt -> DecodeResult val where fmt implements DecoderFormatting
-decodeWith = \bytes, @Decoder decode, fmt -> decode bytes fmt
+decode_with : List U8, Decoder val fmt, fmt -> DecodeResult val where fmt implements DecoderFormatting
+decode_with = \bytes, @Decoder(decode), fmt -> decode(bytes, fmt)
 
 ## Decode a `List U8` utf-8 bytes and return a [DecodeResult](#DecodeResult)
 ## ```roc
 ## expect
 ##     input = "\"hello\", " |> Str.toUtf8
-##     actual = Decode.fromBytesPartial input Json.json
-##     expected = Ok "hello"
+##     actual = Decode.from_bytes_partial(input Json.json)
+##     expected = Ok("hello")
 ##
 ##     actual.result == expected
 ## ```
-fromBytesPartial : List U8, fmt -> DecodeResult val where val implements Decoding, fmt implements DecoderFormatting
-fromBytesPartial = \bytes, fmt -> decodeWith bytes decoder fmt
+from_bytes_partial : List U8, fmt -> DecodeResult val where val implements Decoding, fmt implements DecoderFormatting
+from_bytes_partial = \bytes, fmt -> decode_with(bytes, decoder, fmt)
 
 ## Decode a `List U8` utf-8 bytes and return a [Result] with no leftover bytes
 ## expected. If successful returns `Ok val`, however, if there are bytes
@@ -147,22 +147,22 @@ fromBytesPartial = \bytes, fmt -> decodeWith bytes decoder fmt
 ## ```roc
 ## expect
 ##     input = "\"hello\", " |> Str.toUtf8
-##     actual = Decode.fromBytes input Json.json
-##     expected = Ok "hello"
+##     actual = Decode.from_bytes(input, Json.json)
+##     expected = Ok("hello")
 ##
 ##     actual == expected
 ## ```
-fromBytes : List U8, fmt -> Result val [Leftover (List U8)]DecodeError where val implements Decoding, fmt implements DecoderFormatting
-fromBytes = \bytes, fmt ->
-    when fromBytesPartial bytes fmt is
+from_bytes : List U8, fmt -> Result val [Leftover (List U8)]DecodeError where val implements Decoding, fmt implements DecoderFormatting
+from_bytes = \bytes, fmt ->
+    when from_bytes_partial(bytes, fmt) is
         { result, rest } ->
-            if List.isEmpty rest then
+            if List.is_empty(rest) then
                 when result is
-                    Ok val -> Ok val
-                    Err TooShort -> Err TooShort
+                    Ok(val) -> Ok(val)
+                    Err(TooShort) -> Err(TooShort)
             else
-                Err (Leftover rest)
+                Err(Leftover(rest))
 
 ## Transform the `val` of a [DecodeResult]
-mapResult : DecodeResult a, (a -> b) -> DecodeResult b
-mapResult = \{ result, rest }, mapper -> { result: Result.map result mapper, rest }
+map_result : DecodeResult a, (a -> b) -> DecodeResult b
+map_result = \{ result, rest }, mapper -> { result: Result.map(result, mapper), rest }

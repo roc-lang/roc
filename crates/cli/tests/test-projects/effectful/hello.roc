@@ -4,4 +4,4 @@ import pf.Effect
 
 main! : {} => {}
 main! = \{} ->
-    Effect.putLine! "I'm an effect 👻"
+    Effect.put_line!("I'm an effect 👻")

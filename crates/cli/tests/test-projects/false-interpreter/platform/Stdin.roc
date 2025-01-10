@@ -4,8 +4,8 @@ import pf.Host
 
 line! : {} => Str
 line! = \{} ->
-    Host.getLine! {}
+    Host.get_line!({})
 
 char! : {} => U8
 char! = \{} ->
-    Host.getChar! {}
+    Host.get_char!({})

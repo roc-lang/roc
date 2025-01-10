@@ -1,7 +1,7 @@
-module [plainText, emText]
+module [plain_text, em_text]
 
 import Symbol exposing [Ident]
 
-plainText = \str -> PlainText str
+plain_text = \str -> PlainText(str)
 
-emText = \str -> EmText str
+em_text = \str -> EmText(str)

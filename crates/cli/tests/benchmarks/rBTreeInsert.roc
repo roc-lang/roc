@@ -1,45 +1,45 @@
-app [main] { pf: platform "platform/main.roc" }
+app [main!] { pf: platform "platform/main.roc" }
 
-import pf.PlatformTasks
+import pf.Host
 
-main : Task {} []
-main =
+main! : {} => {}
+main! = \{} ->
     tree : RedBlackTree I64 {}
-    tree = insert 0 {} Empty
+    tree = insert(0, {}, Empty)
 
     tree
     |> show
-    |> PlatformTasks.putLine
+    |> Host.put_line!
 
 show : RedBlackTree I64 {} -> Str
-show = \tree -> showRBTree tree Num.toStr (\{} -> "{}")
+show = \tree -> show_rb_tree(tree, Num.to_str, \{} -> "{}")
 
-showRBTree : RedBlackTree k v, (k -> Str), (v -> Str) -> Str
-showRBTree = \tree, showKey, showValue ->
+show_rb_tree : RedBlackTree k v, (k -> Str), (v -> Str) -> Str
+show_rb_tree = \tree, show_key, show_value ->
     when tree is
         Empty -> "Empty"
-        Node color key value left right ->
-            sColor = showColor color
-            sKey = showKey key
-            sValue = showValue value
-            sL = nodeInParens left showKey showValue
-            sR = nodeInParens right showKey showValue
+        Node(color, key, value, left, right) ->
+            s_color = show_color(color)
+            s_key = show_key(key)
+            s_value = show_value(value)
+            s_l = node_in_parens(left, show_key, show_value)
+            s_r = node_in_parens(right, show_key, show_value)
 
-            "Node $(sColor) $(sKey) $(sValue) $(sL) $(sR)"
+            "Node $(s_color) $(s_key) $(s_value) $(s_l) $(s_r)"
 
-nodeInParens : RedBlackTree k v, (k -> Str), (v -> Str) -> Str
-nodeInParens = \tree, showKey, showValue ->
+node_in_parens : RedBlackTree k v, (k -> Str), (v -> Str) -> Str
+node_in_parens = \tree, show_key, show_value ->
     when tree is
         Empty ->
-            showRBTree tree showKey showValue
+            show_rb_tree(tree, show_key, show_value)
 
-        Node _ _ _ _ _ ->
-            inner = showRBTree tree showKey showValue
+        Node(_, _, _, _, _) ->
+            inner = show_rb_tree(tree, show_key, show_value)
 
             "($(inner))"
 
-showColor : NodeColor -> Str
-showColor = \color ->
+show_color : NodeColor -> Str
+show_color = \color ->
     when color is
         Red -> "Red"
         Black -> "Black"
@@ -52,49 +52,51 @@ Key k : Num k
 
 insert : Key k, v, RedBlackTree (Key k) v -> RedBlackTree (Key k) v
 insert = \key, value, dict ->
-    when insertHelp key value dict is
-        Node Red k v l r -> Node Black k v l r
+    when insert_help(key, value, dict) is
+        Node(Red, k, v, l, r) -> Node(Black, k, v, l, r)
         x -> x
 
-insertHelp : Key k, v, RedBlackTree (Key k) v -> RedBlackTree (Key k) v
-insertHelp = \key, value, dict ->
+insert_help : Key k, v, RedBlackTree (Key k) v -> RedBlackTree (Key k) v
+insert_help = \key, value, dict ->
     when dict is
         Empty ->
             # New nodes are always red. If it violates the rules, it will be fixed
             # when balancing.
-            Node Red key value Empty Empty
+            Node(Red, key, value, Empty, Empty)
 
-        Node nColor nKey nValue nLeft nRight ->
-            when Num.compare key nKey is
-                LT -> balance nColor nKey nValue (insertHelp key value nLeft) nRight
-                EQ -> Node nColor nKey value nLeft nRight
-                GT -> balance nColor nKey nValue nLeft (insertHelp key value nRight)
+        Node(n_color, n_key, n_value, n_left, n_right) ->
+            when Num.compare(key, n_key) is
+                LT -> balance(n_color, n_key, n_value, insert_help(key, value, n_left), n_right)
+                EQ -> Node(n_color, n_key, value, n_left, n_right)
+                GT -> balance(n_color, n_key, n_value, n_left, insert_help(key, value, n_right))
 
 balance : NodeColor, k, v, RedBlackTree k v, RedBlackTree k v -> RedBlackTree k v
 balance = \color, key, value, left, right ->
     when right is
-        Node Red rK rV rLeft rRight ->
+        Node(Red, r_k, r_v, r_left, r_right) ->
             when left is
-                Node Red lK lV lLeft lRight ->
-                    Node
-                        Red
-                        key
-                        value
-                        (Node Black lK lV lLeft lRight)
-                        (Node Black rK rV rLeft rRight)
+                Node(Red, l_k, l_v, l_left, l_right) ->
+                    Node(
+                        Red,
+                        key,
+                        value,
+                        Node(Black, l_k, l_v, l_left, l_right),
+                        Node(Black, r_k, r_v, r_left, r_right),
+                    )
 
                 _ ->
-                    Node color rK rV (Node Red key value left rLeft) rRight
+                    Node(color, r_k, r_v, Node(Red, key, value, left, r_left), r_right)
 
         _ ->
             when left is
-                Node Red lK lV (Node Red llK llV llLeft llRight) lRight ->
-                    Node
-                        Red
-                        lK
-                        lV
-                        (Node Black llK llV llLeft llRight)
-                        (Node Black key value lRight right)
+                Node(Red, l_k, l_v, Node(Red, ll_k, ll_v, ll_left, ll_right), l_right) ->
+                    Node(
+                        Red,
+                        l_k,
+                        l_v,
+                        Node(Black, ll_k, ll_v, ll_left, ll_right),
+                        Node(Black, key, value, l_right, right),
+                    )
 
                 _ ->
-                    Node color key value left right
+                    Node(color, key, value, left, right)

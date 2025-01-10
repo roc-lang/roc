@@ -174,7 +174,7 @@
 
         const rc_encoded = rc_pointers.map((ptr) => ptr && deref(ptr));
         const rc_encoded_hex = rc_encoded.map((x) =>
-          x ? x.toString(16) : "(deallocated)"
+          x ? x.to_string(16) : "(deallocated)"
         );
         const rc_values = rc_encoded.map((x) => x && x - 0x80000000 + 1);
 

@@ -3,11 +3,11 @@ platform "test-platform"
     exposes []
     packages {}
     imports []
-    provides [mainForHost]
+    provides [main_for_host]
 
 Outer : { x : Inner, y : Str, z : List U8 }
 
 Inner : { a : U16, b : F32 }
 
-mainForHost : Outer
-mainForHost = main
+main_for_host : Outer
+main_for_host = main

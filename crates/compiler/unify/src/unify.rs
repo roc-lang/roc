@@ -1282,9 +1282,9 @@ fn extract_specialization_lambda_set<M: MetaCollector>(
         // lambda set does not line up with one required by the ability member prototype.
         // As an example, consider
         //
-        //   Q := [ F (Str -> Str) ] implements [Eq {isEq}]
+        //   Q := [ F (Str -> Str) ] implements [Eq {is_eq}]
         //
-        //   isEq = \@Q _, @Q _ -> Bool.false
+        //   is_eq = \@Q _, @Q _ -> Bool.false
         //
         // here the lambda set of `F`'s payload is part of the specialization signature, but it is
         // irrelevant to the specialization. As such, I believe it is safe to drop the

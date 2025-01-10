@@ -1,7 +1,7 @@
-module [valueFromPkg]
+module [value_from_pkg]
 
 import pkg.Foo
 
-valueFromPkg = Foo.foo
+value_from_pkg = Foo.foo
 
-expect valueFromPkg == "Foo"
+expect value_from_pkg == "Foo"

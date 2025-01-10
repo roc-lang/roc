@@ -71,7 +71,6 @@ impl CanExpr {
                     &dep_idents,
                     &qualified_module_ids,
                     None,
-                    roc_can::env::FxMode::PurityInference,
                 );
 
                 // Desugar operators (convert them to Apply calls, taking into account

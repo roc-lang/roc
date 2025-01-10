@@ -42,4 +42,4 @@ parseInput = \{} ->
     ] is
     _ -> ""
 
-main = Bool.isEq (parseInput {}) ""
+main = Bool.is_eq (parseInput {}) ""

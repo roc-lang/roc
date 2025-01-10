@@ -80,6 +80,8 @@ impl ExecCli {
         app_stdin_opt: Option<&str>,
         app_args_opt: Option<&[&str]>,
     ) {
+        assert!(self.sub_command == roc_cli::CMD_BUILD, "check_build_and_run should be run with the build command, instead it was run with '{}'.", self.sub_command);
+
         let build_cmd_out = self.run();
         build_cmd_out.assert_clean_success();
 

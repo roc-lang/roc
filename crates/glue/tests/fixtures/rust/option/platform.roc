@@ -1,9 +1,9 @@
 platform "test-platform"
-    requires {} { main : Bool -> [ Some Str, None ] }
+    requires {} { main : Bool -> [Some Str, None] }
     exposes []
     packages {}
     imports []
-    provides [mainForHost]
+    provides [main_for_host]
 
-mainForHost : Bool -> [ Some Str, None ]
-mainForHost = \u -> main u
+main_for_host : Bool -> [Some Str, None]
+main_for_host = \u -> main(u)

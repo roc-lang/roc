@@ -81,8 +81,11 @@
                         [],
                     ),
                     derived: Some(
-                        @19-29 Implements(
-                            [
+                        ImplementsAbilities {
+                            before_implements_kw: [],
+                            implements: @8-18,
+                            after_implements_kw: [],
+                            item: @19-29 [
                                 @20-22 ImplementsAbility {
                                     ability: @20-22 Apply(
                                         "",
@@ -100,7 +103,7 @@
                                     impls: None,
                                 },
                             ],
-                        ),
+                        },
                     ),
                 },
                 Opaque {
@@ -126,8 +129,11 @@
                         ],
                     ),
                     derived: Some(
-                        @74-84 Implements(
-                            [
+                        ImplementsAbilities {
+                            before_implements_kw: [],
+                            implements: @63-73,
+                            after_implements_kw: [],
+                            item: @74-84 [
                                 @75-77 ImplementsAbility {
                                     ability: @75-77 Apply(
                                         "",
@@ -145,7 +151,7 @@
                                     impls: None,
                                 },
                             ],
-                        ),
+                        },
                     ),
                 },
                 Opaque {
@@ -171,31 +177,31 @@
                         ],
                     ),
                     derived: Some(
-                        @134-144 SpaceBefore(
-                            Implements(
-                                [
-                                    @135-137 ImplementsAbility {
-                                        ability: @135-137 Apply(
-                                            "",
-                                            "Eq",
-                                            [],
-                                        ),
-                                        impls: None,
-                                    },
-                                    @139-143 ImplementsAbility {
-                                        ability: @139-143 Apply(
-                                            "",
-                                            "Hash",
-                                            [],
-                                        ),
-                                        impls: None,
-                                    },
-                                ],
-                            ),
-                            [
+                        ImplementsAbilities {
+                            before_implements_kw: [
                                 Newline,
                             ],
-                        ),
+                            implements: @123-133,
+                            after_implements_kw: [],
+                            item: @134-144 [
+                                @135-137 ImplementsAbility {
+                                    ability: @135-137 Apply(
+                                        "",
+                                        "Eq",
+                                        [],
+                                    ),
+                                    impls: None,
+                                },
+                                @139-143 ImplementsAbility {
+                                    ability: @139-143 Apply(
+                                        "",
+                                        "Hash",
+                                        [],
+                                    ),
+                                    impls: None,
+                                },
+                            ],
+                        },
                     ),
                 },
                 Opaque {
@@ -209,8 +215,11 @@
                         [],
                     ),
                     derived: Some(
-                        @165-187 Implements(
-                            [
+                        ImplementsAbilities {
+                            before_implements_kw: [],
+                            implements: @154-164,
+                            after_implements_kw: [],
+                            item: @165-187 [
                                 @166-173 ImplementsAbility {
                                     ability: @166-168 Apply(
                                         "",
@@ -244,7 +253,7 @@
                                     ),
                                 },
                             ],
-                        ),
+                        },
                     ),
                 },
                 Opaque {
@@ -258,8 +267,11 @@
                         [],
                     ),
                     derived: Some(
-                        @208-222 Implements(
-                            [
+                        ImplementsAbilities {
+                            before_implements_kw: [],
+                            implements: @197-207,
+                            after_implements_kw: [],
+                            item: @208-222 [
                                 @209-221 ImplementsAbility {
                                     ability: @209-211 Apply(
                                         "",
@@ -280,7 +292,7 @@
                                     ),
                                 },
                             ],
-                        ),
+                        },
                     ),
                 },
                 Opaque {
@@ -294,8 +306,11 @@
                         [],
                     ),
                     derived: Some(
-                        @243-263 Implements(
-                            [
+                        ImplementsAbilities {
+                            before_implements_kw: [],
+                            implements: @232-242,
+                            after_implements_kw: [],
+                            item: @243-263 [
                                 @244-256 ImplementsAbility {
                                     ability: @244-246 Apply(
                                         "",
@@ -324,7 +339,7 @@
                                     impls: None,
                                 },
                             ],
-                        ),
+                        },
                     ),
                 },
                 Opaque {
@@ -338,8 +353,11 @@
                         [],
                     ),
                     derived: Some(
-                        @284-304 Implements(
-                            [
+                        ImplementsAbilities {
+                            before_implements_kw: [],
+                            implements: @273-283,
+                            after_implements_kw: [],
+                            item: @284-304 [
                                 @285-289 ImplementsAbility {
                                     ability: @285-289 Apply(
                                         "",
@@ -368,7 +386,7 @@
                                     ),
                                 },
                             ],
-                        ),
+                        },
                     ),
                 },
                 Opaque {
@@ -382,9 +400,12 @@
                         [],
                     ),
                     derived: Some(
-                        @325-327 Implements(
-                            [],
-                        ),
+                        ImplementsAbilities {
+                            before_implements_kw: [],
+                            implements: @314-324,
+                            after_implements_kw: [],
+                            item: @325-327 [],
+                        },
                     ),
                 },
                 Opaque {
@@ -410,47 +431,47 @@
                         ],
                     ),
                     derived: Some(
-                        @377-399 SpaceBefore(
-                            Implements(
-                                [
-                                    @378-385 ImplementsAbility {
-                                        ability: @378-380 Apply(
-                                            "",
-                                            "Eq",
-                                            [],
-                                        ),
-                                        impls: Some(
-                                            @381-385 AbilityImpls(
-                                                [
-                                                    @382-384 LabelOnly(
-                                                        @382-384 "eq",
-                                                    ),
-                                                ],
-                                            ),
-                                        ),
-                                    },
-                                    @387-398 ImplementsAbility {
-                                        ability: @387-391 Apply(
-                                            "",
-                                            "Hash",
-                                            [],
-                                        ),
-                                        impls: Some(
-                                            @392-398 AbilityImpls(
-                                                [
-                                                    @393-397 LabelOnly(
-                                                        @393-397 "hash",
-                                                    ),
-                                                ],
-                                            ),
-                                        ),
-                                    },
-                                ],
-                            ),
-                            [
+                        ImplementsAbilities {
+                            before_implements_kw: [
                                 Newline,
                             ],
-                        ),
+                            implements: @366-376,
+                            after_implements_kw: [],
+                            item: @377-399 [
+                                @378-385 ImplementsAbility {
+                                    ability: @378-380 Apply(
+                                        "",
+                                        "Eq",
+                                        [],
+                                    ),
+                                    impls: Some(
+                                        @381-385 AbilityImpls(
+                                            [
+                                                @382-384 LabelOnly(
+                                                    @382-384 "eq",
+                                                ),
+                                            ],
+                                        ),
+                                    ),
+                                },
+                                @387-398 ImplementsAbility {
+                                    ability: @387-391 Apply(
+                                        "",
+                                        "Hash",
+                                        [],
+                                    ),
+                                    impls: Some(
+                                        @392-398 AbilityImpls(
+                                            [
+                                                @393-397 LabelOnly(
+                                                    @393-397 "hash",
+                                                ),
+                                            ],
+                                        ),
+                                    ),
+                                },
+                            ],
+                        },
                     ),
                 },
                 Opaque {
@@ -464,8 +485,11 @@
                         [],
                     ),
                     derived: Some(
-                        @420-427 Implements(
-                            [
+                        ImplementsAbilities {
+                            before_implements_kw: [],
+                            implements: @409-419,
+                            after_implements_kw: [],
+                            item: @420-427 [
                                 @421-426 ImplementsAbility {
                                     ability: @421-423 Apply(
                                         "",
@@ -479,7 +503,7 @@
                                     ),
                                 },
                             ],
-                        ),
+                        },
                     ),
                 },
             ],

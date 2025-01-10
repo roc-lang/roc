@@ -1,5 +1,4 @@
 use roc_collections::all::MutSet;
-use roc_module::called_via::Suffix;
 use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_module::symbol::DERIVABLE_ABILITIES;
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
@@ -64,7 +63,6 @@ const ABILITY_IMPLEMENTATION_NOT_IDENTIFIER: &str = "ABILITY IMPLEMENTATION NOT 
 const DUPLICATE_IMPLEMENTATION: &str = "DUPLICATE IMPLEMENTATION";
 const UNNECESSARY_IMPLEMENTATIONS: &str = "UNNECESSARY IMPLEMENTATIONS";
 const INCOMPLETE_ABILITY_IMPLEMENTATION: &str = "INCOMPLETE ABILITY IMPLEMENTATION";
-const STATEMENT_AFTER_EXPRESSION: &str = "STATEMENT AFTER EXPRESSION";
 const MISSING_EXCLAMATION: &str = "MISSING EXCLAMATION";
 const UNNECESSARY_EXCLAMATION: &str = "UNNECESSARY EXCLAMATION";
 const EMPTY_TUPLE_TYPE: &str = "EMPTY TUPLE TYPE";
@@ -249,26 +247,6 @@ pub fn can_problem<'b>(
             ]);
 
             title = DUPLICATE_NAME.to_string();
-        }
-
-        Problem::DeprecatedBackpassing(region) => {
-            doc = alloc.stack([
-                alloc.concat([
-                    alloc.reflow("Backpassing ("),
-                    alloc.backpassing_arrow(),
-                    alloc.reflow(") like this will soon be deprecated:"),
-                ]),
-                alloc.region(lines.convert_region(region), severity),
-                alloc.concat([
-                    alloc.reflow("You should use a "),
-                    alloc.suffix(Suffix::Bang),
-                    alloc.reflow(" for awaiting tasks or a "),
-                    alloc.suffix(Suffix::Question),
-                    alloc.reflow(" for trying results, and functions everywhere else."),
-                ]),
-            ]);
-
-            title = "BACKPASSING DEPRECATED".to_string();
         }
 
         Problem::DefsOnlyUsedInRecursion(1, region) => {
@@ -1413,32 +1391,6 @@ pub fn can_problem<'b>(
             title = "UNNECESSARY RETURN".to_string();
         }
 
-        Problem::StmtAfterExpr(region) => {
-            doc = alloc.stack([
-                alloc
-                    .reflow(r"I just finished parsing an expression with a series of definitions,"),
-                alloc.reflow(
-                    r"and this line is indented as if it's intended to be part of that expression:",
-                ),
-                alloc.region(lines.convert_region(region), severity),
-                alloc.concat([alloc.reflow(
-                    "However, I already saw the final expression in that series of definitions.",
-                )]),
-                alloc.tip().append(
-                    alloc.reflow(
-                        "An expression like `4`, `\"hello\"`, or `functionCall MyThing` is like `return 4` in other programming languages. To me, it seems like you did `return 4` followed by more code in the lines after, that code would never be executed!"
-                    )
-                ),
-                alloc.tip().append(
-                    alloc.reflow(
-                        "If you are working with `Task`, this error can happen if you forgot a `!` somewhere."
-                    )
-                )
-            ]);
-
-            title = STATEMENT_AFTER_EXPRESSION.to_string();
-        }
-
         Problem::UnsuffixedEffectfulRecordField(region) => {
             doc = alloc.stack([
                 alloc.reflow(
@@ -1447,7 +1399,7 @@ pub fn can_problem<'b>(
                 alloc.region(lines.convert_region(region), severity),
                 alloc.reflow("Add an exclamation mark at the end, like:"),
                 alloc
-                    .parser_suggestion("{ readFile!: Str => Str }")
+                    .parser_suggestion("{ read_file!: Str => Str }")
                     .indent(4),
                 alloc.reflow("This will help readers identify it as a source of effects."),
             ]);
@@ -2248,9 +2200,6 @@ fn pretty_runtime_error<'b>(
 
             title = SYNTAX_PROBLEM;
         }
-        RuntimeError::MalformedSuffixed(_) => {
-            todo!("error for malformed suffix");
-        }
         RuntimeError::InvalidFloat(sign @ FloatErrorKind::PositiveInfinity, region, _raw_str)
         | RuntimeError::InvalidFloat(sign @ FloatErrorKind::NegativeInfinity, region, _raw_str) => {
             let tip = alloc
@@ -2691,6 +2640,15 @@ fn pretty_runtime_error<'b>(
             ]);
 
             title = "OPTIONAL FIELD IN RECORD BUILDER";
+        }
+        RuntimeError::NonFunctionHostedAnnotation(region) => {
+            doc = alloc.stack([
+                alloc.reflow("This hosted annotation is not for a function:"),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.reflow("Only functions can be configured for FFI with the host."),
+            ]);
+
+            title = "NON-FUNCTION HOSTED ANNOTATION";
         }
     }
 

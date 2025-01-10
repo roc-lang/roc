@@ -1501,12 +1501,12 @@ fn f64_literal_to_ast(arena: &Bump, num: f64) -> Expr<'_> {
     use std::fmt::Write;
 
     if num.is_nan() {
-        Expr::Num("Num.nanF64")
+        Expr::Num("Num.nan_f64")
     } else if num.is_infinite() {
         if num.is_sign_positive() {
-            Expr::Num("Num.infinityF64")
+            Expr::Num("Num.infinity_f64")
         } else {
-            Expr::Num("-Num.infinityF64")
+            Expr::Num("-Num.infinity_f64")
         }
     } else {
         let mut string = bumpalo::collections::String::with_capacity_in(64, arena);
@@ -1519,12 +1519,12 @@ fn f32_literal_to_ast(arena: &Bump, num: f32) -> Expr<'_> {
     use std::fmt::Write;
 
     if num.is_nan() {
-        Expr::Num("Num.nanF32")
+        Expr::Num("Num.nan_f32")
     } else if num.is_infinite() {
         if num.is_sign_positive() {
-            Expr::Num("Num.infinityF32")
+            Expr::Num("Num.infinity_f32")
         } else {
-            Expr::Num("-Num.infinityF32")
+            Expr::Num("-Num.infinity_f32")
         }
     } else {
         let mut string = bumpalo::collections::String::with_capacity_in(64, arena);

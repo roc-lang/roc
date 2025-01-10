@@ -113,9 +113,9 @@ fn fn_record() {
     assert_evals_to!(
         indoc!(
             r#"
-                    getRec = \x -> { y: "foo", x, z: 19 }
+                    get_rec = \x -> { y: "foo", x, z: 19 }
 
-                    (getRec 15).x
+                    (get_rec 15).x
                 "#
         ),
         15,
@@ -1005,10 +1005,10 @@ fn update_the_only_field() {
 
             foo = 4
 
-            newModel : Model
-            newModel = { model & foo }
+            new_model : Model
+            new_model = { model & foo }
 
-            newModel.foo
+            new_model.foo
                 "
         ),
         4,
@@ -1095,9 +1095,9 @@ fn generalized_accessor() {
     assert_evals_to!(
         indoc!(
             r#"
-            returnFoo = .foo
+            return_foo = .foo
 
-            returnFoo { foo: "foo" }
+            return_foo { foo: "foo" }
             "#
         ),
         RocStr::from("foo"),
@@ -1113,11 +1113,11 @@ fn update_record_that_is_a_thunk() {
             r#"
             app "test" provides [main] to "./platform"
 
-            main = Num.toStr fromOriginal.birds
+            main = Num.to_str from_original.birds
 
             original = { birds: 5, iguanas: 7, zebras: 2, goats: 1 }
 
-            fromOriginal = { original & birds: 4, iguanas: 3 }
+            from_original = { original & birds: 4, iguanas: 3 }
             "#
         ),
         RocStr::from("4"),
@@ -1133,11 +1133,11 @@ fn update_record_that_is_a_thunk_single_field() {
             r#"
             app "test" provides [main] to "./platform"
 
-            main = Num.toStr fromOriginal.birds
+            main = Num.to_str from_original.birds
 
             original = { birds: 5 }
 
-            fromOriginal = { original & birds: 4 }
+            from_original = { original & birds: 4 }
             "#
         ),
         RocStr::from("4"),

@@ -1,4 +1,4 @@
-@0-8 SpaceAfter(
+@0-9 SpaceAfter(
     BinOps(
         [
             (
@@ -8,24 +8,24 @@
                 @1-2 LessThan,
             ),
         ],
-        @2-7 Apply(
+        @2-8 Apply(
             @2-3 Var {
                 module_name: "",
                 ident: "l",
             },
             [
-                @4-7 ParensAround(
+                @5-8 ParensAround(
                     BinOps(
                         [
                             (
-                                @4-5 Var {
+                                @5-6 Var {
                                     module_name: "",
                                     ident: "r",
                                 },
-                                @5-6 Star,
+                                @6-7 Star,
                             ),
                         ],
-                        @6-7 Tag(
+                        @7-8 Tag(
                             "N",
                         ),
                     ),

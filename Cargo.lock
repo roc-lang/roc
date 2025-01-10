@@ -2392,7 +2392,6 @@ dependencies = [
  "bitvec",
  "bumpalo",
  "indoc",
- "insta",
  "pretty_assertions",
  "roc_collections",
  "roc_error_macros",

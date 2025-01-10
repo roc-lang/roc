@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 
 const LINK_SVG: &str = include_str!("./static/link.svg");
 
-pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
+pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path, maybe_root_dir: Option<String>) {
     let mut loaded_module = load_module_for_docs(root_file);
     let exposed_module_docs = get_exposed_module_docs(&mut loaded_module);
 
@@ -117,7 +117,7 @@ pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
                 .join("\n    ")
                 .as_str(),
         )
-        .replace("<!-- base -->", &base_url())
+        .replace("<!-- base -->", &base_url(maybe_root_dir.as_deref()))
         .replace(
             "<!-- Module links -->",
             render_sidebar(exposed_module_docs.iter().map(|(_, docs)| docs)).as_str(),
@@ -156,7 +156,7 @@ pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
             )
             .replace(
                 "<!-- Package Name -->",
-                render_name_link(package_name.as_str()).as_str(),
+                render_name_link(package_name.as_str(), maybe_root_dir.as_deref()).as_str(),
             )
             .replace("<!-- Package Name String -->", package_name.as_str())
             .replace(
@@ -184,7 +184,7 @@ pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
             )
             .replace(
                 "<!-- Package Name -->",
-                render_name_link(package_name.as_str()).as_str(),
+                render_name_link(package_name.as_str(), maybe_root_dir.as_deref()).as_str(),
             )
             .replace("<!-- Package Name String -->", package_name.as_str())
             .replace(
@@ -194,6 +194,7 @@ pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
                     module_docs,
                     &loaded_module,
                     &all_exposed_symbols,
+                    maybe_root_dir.as_deref(),
                 )
                 .as_str(),
             );
@@ -294,6 +295,7 @@ fn render_module_documentation(
     module: &ModuleDocumentation,
     root_module: &LoadedModule,
     all_exposed_symbols: &VecSet<Symbol>,
+    maybe_root_dir: Option<&str>,
 ) -> String {
     let mut buf = String::new();
     let module_name = module.name.as_str();
@@ -356,6 +358,7 @@ fn render_module_documentation(
                             &module.scope,
                             docs,
                             root_module,
+                            maybe_root_dir,
                         );
                     }
 
@@ -370,6 +373,7 @@ fn render_module_documentation(
                     &module.scope,
                     docs,
                     root_module,
+                    maybe_root_dir,
                 );
             }
             DocEntry::DetachedDoc(docs) => {
@@ -380,6 +384,7 @@ fn render_module_documentation(
                     &module.scope,
                     docs,
                     root_module,
+                    maybe_root_dir,
                 );
             }
         };
@@ -413,19 +418,16 @@ where
     buf.push('>');
 }
 
-fn base_url() -> String {
-    // e.g. "builtins/" in "https://roc-lang.org/builtins/Str"
-    //
-    // TODO make this a CLI flag to the `docs` subcommand instead of an env var
-    match std::env::var("ROC_DOCS_URL_ROOT") {
-        Ok(root_builtins_path) => {
+fn base_url(maybe_root_dir: Option<&str>) -> String {
+    match maybe_root_dir {
+        Some(root_builtins_path) => {
             let mut url_str = String::with_capacity(root_builtins_path.len() + 64);
 
             if !root_builtins_path.starts_with('/') {
                 url_str.push('/');
             }
 
-            url_str.push_str(&root_builtins_path);
+            url_str.push_str(root_builtins_path);
 
             if !root_builtins_path.ends_with('/') {
                 url_str.push('/');
@@ -444,14 +446,19 @@ fn base_url() -> String {
 }
 
 // TODO render version as well
-fn render_name_link(name: &str) -> String {
+fn render_name_link(name: &str, maybe_root_dir: Option<&str>) -> String {
     let mut buf = String::new();
 
     push_html(&mut buf, "h1", [("class", "pkg-full-name")], {
         let mut link_buf = String::new();
 
         // link to root (= docs overview page)
-        push_html(&mut link_buf, "a", [("href", base_url().as_str())], name);
+        push_html(
+            &mut link_buf,
+            "a",
+            [("href", base_url(maybe_root_dir).as_str())],
+            name,
+        );
 
         link_buf
     });
@@ -1141,6 +1148,7 @@ fn doc_url<'a>(
     interns: &'a Interns,
     mut module_name: &'a str,
     ident: &str,
+    maybe_root_dir: Option<&str>,
 ) -> Result<DocUrl, (String, LinkProblem)> {
     if module_name.is_empty() {
         // This is an unqualified lookup, so look for the ident
@@ -1194,7 +1202,7 @@ fn doc_url<'a>(
         }
     }
 
-    let mut url = base_url();
+    let mut url = base_url(maybe_root_dir);
 
     // Example:
     //
@@ -1216,6 +1224,7 @@ fn markdown_to_html(
     scope: &Scope,
     markdown: &str,
     loaded_module: &LoadedModule,
+    maybe_root_dir: Option<&str>,
 ) {
     use pulldown_cmark::{BrokenLink, CodeBlockKind, CowStr, Event, LinkType, Tag::*};
 
@@ -1253,6 +1262,7 @@ fn markdown_to_html(
                                     &loaded_module.interns,
                                     module_name,
                                     symbol_name,
+                                    maybe_root_dir,
                                 ) {
                                     Ok(DocUrl { url, title }) => Some((url.into(), title.into())),
                                     Err((link_markdown, problem)) => {
@@ -1287,6 +1297,7 @@ fn markdown_to_html(
                             &loaded_module.interns,
                             "",
                             type_name,
+                            maybe_root_dir,
                         ) {
                             Ok(DocUrl { url, title }) => Some((url.into(), title.into())),
                             Err((link_markdown, problem)) => {

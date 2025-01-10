@@ -10,7 +10,6 @@ use crate::annotation::IntroducedVariables;
 use crate::annotation::OwnedNamedOrAble;
 use crate::derive;
 use crate::env::Env;
-use crate::env::FxMode;
 use crate::expr::canonicalize_record;
 use crate::expr::get_lookup_symbols;
 use crate::expr::AnnotatedMark;
@@ -272,7 +271,7 @@ enum PendingTypeDef<'a> {
         name: Loc<Symbol>,
         vars: Vec<Loc<Lowercase>>,
         ann: &'a Loc<ast::TypeAnnotation<'a>>,
-        derived: Option<&'a Loc<ast::ImplementsAbilities<'a>>>,
+        derived: Option<&'a ast::ImplementsAbilities<'a>>,
     },
 
     Ability {
@@ -319,7 +318,7 @@ impl PendingTypeDef<'_> {
                 ann,
                 derived,
             } => {
-                let end = derived.map(|d| d.region).unwrap_or(ann.region);
+                let end = derived.map(|d| d.item.region).unwrap_or(ann.region);
                 let region = Region::span_across(&name.region, &end);
 
                 Some((name.value, region))
@@ -761,12 +760,11 @@ fn canonicalize_opaque<'a>(
     var_store: &mut VarStore,
     scope: &mut Scope,
     pending_abilities_in_scope: &PendingAbilitiesInScope,
-
     name: Loc<Symbol>,
     name_str: &'a str,
     ann: &'a Loc<ast::TypeAnnotation<'a>>,
     vars: &[Loc<Lowercase>],
-    has_abilities: Option<&'a Loc<ast::ImplementsAbilities<'a>>>,
+    has_abilities: Option<&'a ast::ImplementsAbilities<'a>>,
 ) -> Result<CanonicalizedOpaque<'a>, ()> {
     let alias = canonicalize_alias(
         env,
@@ -784,11 +782,11 @@ fn canonicalize_opaque<'a>(
 
     let mut derived_defs = Vec::new();
     if let Some(has_abilities) = has_abilities {
-        let has_abilities = has_abilities.value.collection();
+        let has_abilities = has_abilities.item;
 
         let mut derived_abilities = vec![];
 
-        for has_ability in has_abilities.items {
+        for has_ability in has_abilities.value.items {
             let region = has_ability.region;
             let (ability, opt_impls) = match has_ability.value.extract_spaces().item {
                 ast::ImplementsAbility::ImplementsAbility { ability, impls } => (ability, impls),
@@ -847,8 +845,8 @@ fn canonicalize_opaque<'a>(
                     // Did the user claim this implementation for a specialization of a different
                     // type? e.g.
                     //
-                    //   A implements [Hash {hash: myHash}]
-                    //   B implements [Hash {hash: myHash}]
+                    //   A implements [Hash {hash: my_hash}]
+                    //   B implements [Hash {hash: my_hash}]
                     //
                     // If so, that's an error and we drop the impl for this opaque type.
                     let member_impl = match scope.abilities_store.impl_key(impl_symbol) {
@@ -1303,7 +1301,7 @@ fn canonicalize_type_defs<'a>(
             Loc<Symbol>,
             Vec<Loc<Lowercase>>,
             &'a Loc<ast::TypeAnnotation<'a>>,
-            Option<&'a Loc<ast::ImplementsAbilities<'a>>>,
+            Option<&'a ast::ImplementsAbilities<'a>>,
         ),
         Ability(Loc<Symbol>, Vec<PendingAbilityMember<'a>>),
     }
@@ -2805,7 +2803,7 @@ fn to_pending_alias_or_opaque<'a>(
     name: &'a Loc<&'a str>,
     vars: &'a [Loc<ast::Pattern<'a>>],
     ann: &'a Loc<ast::TypeAnnotation<'a>>,
-    opt_derived: Option<&'a Loc<ast::ImplementsAbilities<'a>>>,
+    opt_derived: Option<&'a ast::ImplementsAbilities<'a>>,
     kind: AliasKind,
 ) -> PendingTypeDef<'a> {
     let region = Region::span_across(&name.region, &ann.region);
@@ -2898,15 +2896,7 @@ fn to_pending_type_def<'a>(
             header: TypeHeader { name, vars },
             typ: ann,
             derived,
-        } => to_pending_alias_or_opaque(
-            env,
-            scope,
-            name,
-            vars,
-            ann,
-            derived.as_ref(),
-            AliasKind::Opaque,
-        ),
+        } => to_pending_alias_or_opaque(env, scope, name, vars, ann, *derived, AliasKind::Opaque),
 
         Ability {
             header, members, ..
@@ -3274,13 +3264,7 @@ fn to_pending_value_def<'a>(
             ))
         }
         StmtAfterExpr => PendingValue::StmtAfterExpr,
-        Stmt(expr) => {
-            if env.fx_mode == FxMode::Task {
-                internal_error!("a Stmt was not desugared correctly, should have been converted to a Body(...) in desguar")
-            }
-
-            PendingValue::Def(PendingValueDef::Stmt(expr))
-        }
+        Stmt(expr) => PendingValue::Def(PendingValueDef::Stmt(expr)),
     }
 }
 

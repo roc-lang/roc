@@ -1,12 +1,12 @@
 module [
-    addAndStringify,
+    add_and_stringify,
 ]
 
 import Transitive
 
-addAndStringify = \num1, num2 ->
-    Num.toStr (Transitive.add num1 num2)
+add_and_stringify = \num1, num2 ->
+    Num.to_str(Transitive.add(num1, num2))
 
-expect addAndStringify 1 2 == "3"
+expect add_and_stringify(1, 2) == "3"
 
-expect addAndStringify 3 4 == "7"
+expect add_and_stringify(3, 4) == "7"
