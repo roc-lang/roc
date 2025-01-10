@@ -634,6 +634,7 @@ mod test_snapshots {
         pass/plus_if.expr,
         pass/plus_when.expr,
         pass/pnc_apply_comment_after_newline.expr,
+        pass/pnc_parens_apply_etc.expr,
         pass/pos_inf_float.expr,
         pass/positive_float.expr,
         pass/positive_int.expr,
