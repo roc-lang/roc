@@ -682,6 +682,7 @@ impl IterTokens for Loc<Expr<'_>> {
                 first,
                 extra_args,
                 continuation,
+                pnc_style: _,
             } => (first.iter_tokens(arena).into_iter())
                 .chain(extra_args.iter_tokens(arena))
                 .chain(continuation.iter_tokens(arena))

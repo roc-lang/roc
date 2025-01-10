@@ -208,8 +208,17 @@ fn format_expr_only(
             first: condition,
             extra_args,
             continuation,
+            pnc_style,
         } => {
-            fmt_dbg_stmt(buf, condition, extra_args, continuation, parens, indent);
+            fmt_dbg_stmt(
+                buf,
+                condition,
+                extra_args,
+                *pnc_style,
+                continuation,
+                parens,
+                indent,
+            );
         }
         Expr::LowLevelDbg(_, _, _) => {
             unreachable!("LowLevelDbg should only exist after desugaring, not during formatting")
@@ -1298,6 +1307,7 @@ pub fn expr_lift_spaces<'a, 'b: 'a>(
             first,
             extra_args,
             continuation,
+            pnc_style,
         } => {
             let continuation_lifted =
                 expr_lift_spaces_after(Parens::NotNeeded, arena, &continuation.value);
@@ -1309,6 +1319,7 @@ pub fn expr_lift_spaces<'a, 'b: 'a>(
                     extra_args,
                     continuation: arena
                         .alloc(Loc::at(continuation.region, continuation_lifted.item)),
+                    pnc_style: *pnc_style,
                 },
                 after: continuation_lifted.after,
             }
@@ -1746,6 +1757,7 @@ fn fmt_dbg_stmt<'a>(
     buf: &mut Buf,
     condition: &'a Loc<Expr<'a>>,
     extra_args: &'a [&'a Loc<Expr<'a>>],
+    pnc_style: bool,
     continuation: &'a Loc<Expr<'a>>,
     parens: Parens,
     indent: u16,
@@ -1755,13 +1767,12 @@ fn fmt_dbg_stmt<'a>(
     args.push(condition);
     args.extend_from_slice(extra_args);
 
-    if args.is_empty() {
-        Expr::PncApply(&Loc::at_zero(Expr::Dbg), Collection::empty()).format_with_options(
-            buf,
-            parens,
-            Newlines::Yes,
-            indent,
-        );
+    if pnc_style {
+        Expr::PncApply(
+            &Loc::at_zero(Expr::Dbg),
+            Collection::with_items(args.into_bump_slice()),
+        )
+        .format_with_options(buf, parens, Newlines::Yes, indent);
     } else {
         Expr::Apply(
             &Loc::at_zero(Expr::Dbg),

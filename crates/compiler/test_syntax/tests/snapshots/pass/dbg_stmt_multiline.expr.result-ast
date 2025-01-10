@@ -25,6 +25,7 @@
                 Newline,
             ],
         ),
+        pnc_style: false,
     },
     [
         Newline,

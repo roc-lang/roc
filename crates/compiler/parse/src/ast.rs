@@ -527,6 +527,7 @@ pub enum Expr<'a> {
         first: &'a Loc<Expr<'a>>,
         extra_args: &'a [&'a Loc<Expr<'a>>],
         continuation: &'a Loc<Expr<'a>>,
+        pnc_style: bool,
     },
 
     /// The `try` keyword that performs early return on errors
@@ -829,6 +830,7 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                     first,
                     extra_args,
                     continuation,
+                    pnc_style: _,
                 } => {
                     expr_stack.reserve(2);
                     expr_stack.push(&first.value);
@@ -2414,7 +2416,7 @@ impl<'a> Malformed for Expr<'a> {
             Closure(args, body) => args.iter().any(|arg| arg.is_malformed()) || body.is_malformed(),
             Defs(defs, body) => defs.is_malformed() || body.is_malformed(),
             Dbg => false,
-            DbgStmt { first, extra_args, continuation } => first.is_malformed() || extra_args.iter().any(|a| a.is_malformed()) || continuation.is_malformed(),
+            DbgStmt { first, extra_args, continuation, pnc_style: _ } => first.is_malformed() || extra_args.iter().any(|a| a.is_malformed()) || continuation.is_malformed(),
             LowLevelDbg(_, condition, continuation) => condition.is_malformed() || continuation.is_malformed(),
             Try => false,
             LowLevelTry(loc_expr, _) => loc_expr.is_malformed(),

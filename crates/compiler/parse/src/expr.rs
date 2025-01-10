@@ -3148,6 +3148,7 @@ fn stmts_to_defs<'a>(
                                 first,
                                 extra_args,
                                 continuation: arena.alloc(rest),
+                                pnc_style: false,
                             };
 
                             let e = if sp_stmt.before.is_empty() {
@@ -3181,6 +3182,7 @@ fn stmts_to_defs<'a>(
                                 first,
                                 extra_args,
                                 continuation: arena.alloc(rest),
+                                pnc_style: true,
                             };
 
                             let e = if sp_stmt.before.is_empty() {
@@ -3284,6 +3286,7 @@ fn stmts_to_defs<'a>(
                                 first: arena.alloc(condition),
                                 extra_args: &[],
                                 continuation: arena.alloc(rest),
+                                pnc_style: false,
                             }
                         } else {
                             Expr::Apply(
