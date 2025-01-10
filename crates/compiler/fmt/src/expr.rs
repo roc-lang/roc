@@ -91,14 +91,6 @@ fn format_expr_only(
             buf.indent(indent);
             buf.push_str("try");
         }
-        Expr::PncApply(
-            loc_expr @ Loc {
-                value: Expr::Dbg, ..
-            },
-            loc_args,
-        ) => {
-            fmt_apply(loc_expr, loc_args.items, indent, buf);
-        }
         Expr::PncApply(loc_expr, loc_args) => {
             fmt_pnc_apply(loc_expr, loc_args, indent, buf);
         }
@@ -521,10 +513,7 @@ pub fn expr_is_multiline(me: &Expr<'_>, comments_only: bool) -> bool {
                     .any(|loc_arg| expr_is_multiline(&loc_arg.value, comments_only))
         }
         Expr::PncApply(loc_expr, args) => {
-            expr_is_multiline(&loc_expr.value, comments_only)
-                || args
-                    .iter()
-                    .any(|loc_arg| expr_is_multiline(&loc_arg.value, comments_only))
+            expr_is_multiline(&loc_expr.value, comments_only) || is_collection_multiline(args)
         }
 
         Expr::DbgStmt { .. } => true,
@@ -1343,9 +1332,16 @@ pub fn expr_lift_spaces<'a, 'b: 'a>(
 
             let right_lifted = expr_lift_spaces_after(Parens::InOperator, arena, &right.value);
 
+            let mut item =
+                Expr::BinOps(lefts, arena.alloc(Loc::at(right.region, right_lifted.item)));
+
+            if parens == Parens::InApply || parens == Parens::InApplyLastArg {
+                item = Expr::ParensAround(arena.alloc(item));
+            }
+
             Spaces {
                 before,
-                item: Expr::BinOps(lefts, arena.alloc(Loc::at(right.region, right_lifted.item))),
+                item,
                 after: right_lifted.after,
             }
         }
@@ -1759,12 +1755,21 @@ fn fmt_dbg_stmt<'a>(
     args.push(condition);
     args.extend_from_slice(extra_args);
 
-    Expr::Apply(
-        &Loc::at_zero(Expr::Dbg),
-        args.into_bump_slice(),
-        called_via::CalledVia::Space,
-    )
-    .format_with_options(buf, parens, Newlines::Yes, indent);
+    if args.is_empty() {
+        Expr::PncApply(&Loc::at_zero(Expr::Dbg), Collection::empty()).format_with_options(
+            buf,
+            parens,
+            Newlines::Yes,
+            indent,
+        );
+    } else {
+        Expr::Apply(
+            &Loc::at_zero(Expr::Dbg),
+            args.into_bump_slice(),
+            called_via::CalledVia::Space,
+        )
+        .format_with_options(buf, parens, Newlines::Yes, indent);
+    }
 
     let cont_lifted = expr_lift_spaces(Parens::NotNeeded, buf.text.bump(), &continuation.value);
 

@@ -1,0 +1,32 @@
+@0-8 SpaceAfter(
+    DbgStmt {
+        first: @4-7 BinOps(
+            [
+                (
+                    @4-5 Var {
+                        module_name: "",
+                        ident: "a",
+                    },
+                    @5-6 Slash,
+                ),
+            ],
+            @6-7 Var {
+                module_name: "",
+                ident: "a",
+            },
+        ),
+        extra_args: [],
+        continuation: @9-10 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "d",
+            },
+            [
+                Newline,
+            ],
+        ),
+    },
+    [
+        Newline,
+    ],
+)

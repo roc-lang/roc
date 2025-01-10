@@ -722,7 +722,7 @@ pub fn pattern_lift_spaces<'a, 'b: 'a>(
 
             Spaces {
                 before: func_lifted.before,
-                item: Pattern::PncApply(arena.alloc(func), *args),
+                item: Pattern::PncApply(arena.alloc(Loc::at_zero(func_lifted.item)), *args),
                 after: &[],
             }
         }

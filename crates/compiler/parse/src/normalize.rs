@@ -822,19 +822,23 @@ fn fold_defs<'a>(
                             ),
                         ..
                     }) => {
-                        let rest = fold_defs(arena, defs, final_expr);
-                        let new_final = Expr::DbgStmt {
-                            first: args[0],
-                            extra_args: &args[1..],
-                            continuation: arena.alloc(Loc::at_zero(rest)),
-                        };
-                        if new_defs.is_empty() {
-                            return new_final;
+                        if let Some((first, extra_args)) = args.split_first() {
+                            let rest = fold_defs(arena, defs, final_expr);
+                            let new_final = Expr::DbgStmt {
+                                first,
+                                extra_args,
+                                continuation: arena.alloc(Loc::at_zero(rest)),
+                            };
+                            if new_defs.is_empty() {
+                                return new_final;
+                            }
+                            return Expr::Defs(
+                                arena.alloc(new_defs),
+                                arena.alloc(Loc::at_zero(new_final)),
+                            );
+                        } else {
+                            new_defs.push_value_def(vd, Region::zero(), &[], &[]);
                         }
-                        return Expr::Defs(
-                            arena.alloc(new_defs),
-                            arena.alloc(Loc::at_zero(new_final)),
-                        );
                     }
                     ValueDef::Stmt(&Loc {
                         value:
@@ -846,19 +850,23 @@ fn fold_defs<'a>(
                             ),
                         ..
                     }) => {
-                        let rest = fold_defs(arena, defs, final_expr);
-                        let new_final = Expr::DbgStmt {
-                            first: args.items[0],
-                            extra_args: &args.items[1..],
-                            continuation: arena.alloc(Loc::at_zero(rest)),
-                        };
-                        if new_defs.is_empty() {
-                            return new_final;
+                        if let Some((first, extra_args)) = args.items.split_first() {
+                            let rest = fold_defs(arena, defs, final_expr);
+                            let new_final = Expr::DbgStmt {
+                                first,
+                                extra_args,
+                                continuation: arena.alloc(Loc::at_zero(rest)),
+                            };
+                            if new_defs.is_empty() {
+                                return new_final;
+                            }
+                            return Expr::Defs(
+                                arena.alloc(new_defs),
+                                arena.alloc(Loc::at_zero(new_final)),
+                            );
+                        } else {
+                            new_defs.push_value_def(vd, Region::zero(), &[], &[]);
                         }
-                        return Expr::Defs(
-                            arena.alloc(new_defs),
-                            arena.alloc(Loc::at_zero(new_final)),
-                        );
                     }
                     _ => {
                         new_defs.push_value_def(vd, Region::zero(), &[], &[]);
