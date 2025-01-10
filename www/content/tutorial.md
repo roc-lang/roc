@@ -1017,7 +1017,7 @@ Sometimes you may want to document the type of a definition. For example, you mi
 ```roc
 # Takes a first_name string and a last_name string, and returns a string
 full_name = \first_name, last_name ->
-    "${first_name) ${last_name}"
+    "${first_name} ${last_name}"
 ```
 
 Comments can be valuable documentation, but they can also get out of date and become misleading. If someone changes this function and forgets to update the comment, it will no longer be accurate.

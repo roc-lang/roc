@@ -858,7 +858,7 @@ generate_non_nullable_unwrapped = \buf, types, name, tag_name, payload, discrimi
     pub struct ${escaped_name}(roc_std::RocBox<${name}_${tag_name}>);
 
     impl ${escaped_name} {
-        pub fn ${tag_name)(${constructor_arguments}) -> Self {
+        pub fn ${tag_name}(${constructor_arguments}) -> Self {
             let payload = ${name}_${tag_name} { ${payload_field_names} };
 
             Self(roc_std::RocBox::new(payload))
@@ -997,7 +997,7 @@ generate_recursive_tag_union = \buf, types, id, tag_union_name, tags, discrimina
                 pub fn get_${tag_name}(mut self) -> ${escaped_name}_${tag_name} {
                     debug_assert!(self.is_${tag_name}());
 
-                    unsafe { core::mem::ManuallyDrop::take(&mut self.ptr_read_union().{dtag_name}) }
+                    unsafe { core::mem::ManuallyDrop::take(&mut self.ptr_read_union().${tag_name}) }
                 }
             """
 
@@ -2218,7 +2218,7 @@ type_name = \types, id ->
         RocList(elem) ->
             elem_name = type_name(types, elem)
 
-            "roc_std::RocList<{delem_name}>"
+            "roc_std::RocList<${elem_name}>"
 
         RocBox(elem) ->
             elem_name = type_name(types, elem)
