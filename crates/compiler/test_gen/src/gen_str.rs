@@ -2080,7 +2080,7 @@ fn with_ascii_lowercased_non_zero_refcount() {
         r#"
         original = "cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ"
         res = Str.with_ascii_lowercased original
-        Str.dropPrefix res original
+        Str.drop_prefix res original
         "#,
         RocStr::from("coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ"),
         RocStr

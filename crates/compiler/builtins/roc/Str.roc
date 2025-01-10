@@ -1105,6 +1105,6 @@ drop_suffix = |haystack, suffix|
 ## That said, strings received from user input can always contain non-ASCII Unicode characters, and lowercasing [Unicode](https://unicode.org) works differently in different languages. For example, the string `"I"lowercases to `"i"## ` in English and to `"ı"` (a [dotless i](https://en.wikipedia.org/wiki/Dotless_I)) in Turkish. These rules can also change in each [Unicode release](https://www.unicode.org/releases/), so we have separate [`unicode` package]## (https://github.com/roc-lang/unicode) for Unicode capitalization that can be upgraded independently from the language's builtins.
 ##
 ## To do a case-insensitive comparison of the ASCII characters in a string, use [`caseless_ascii_equals`](#caseless_ascii_equals).
-with_ascii_lowercased: Str -> Str
+with_ascii_lowercased : Str -> Str
 
 expect Str.with_ascii_lowercased "cOFFÉ" == "XYZFÉ"
