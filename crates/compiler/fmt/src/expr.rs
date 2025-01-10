@@ -1340,9 +1340,16 @@ pub fn expr_lift_spaces<'a, 'b: 'a>(
 
             let right_lifted = expr_lift_spaces_after(Parens::InOperator, arena, &right.value);
 
+            let mut item =
+                Expr::BinOps(lefts, arena.alloc(Loc::at(right.region, right_lifted.item)));
+
+            if parens == Parens::InApply || parens == Parens::InApplyLastArg {
+                item = Expr::ParensAround(arena.alloc(item));
+            }
+
             Spaces {
                 before,
-                item: Expr::BinOps(lefts, arena.alloc(Loc::at(right.region, right_lifted.item))),
+                item,
                 after: right_lifted.after,
             }
         }
