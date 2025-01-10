@@ -75,7 +75,7 @@ pub enum CalledVia {
     UnaryOp(UnaryOp),
 
     /// This call is the result of desugaring string interpolation,
-    /// e.g. "$(first) $(last)" is transformed into Str.concat (Str.concat first " ") last.
+    /// e.g. "${first} ${last}" is transformed into `Str.concat(Str.concat(first, " "))` last.
     StringInterpolation,
 
     /// This call is the result of desugaring a map2-based Record Builder field. e.g.

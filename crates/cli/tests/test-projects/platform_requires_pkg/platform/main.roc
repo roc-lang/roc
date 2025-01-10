@@ -11,4 +11,4 @@ import foo.Foo
 
 main_for_host : Str
 main_for_host =
-    "$(main) $(Foo.foo)"
+    "${main} ${Foo.foo}"

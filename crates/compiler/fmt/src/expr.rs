@@ -911,8 +911,8 @@ fn format_str_segment(seg: &StrSegment, buf: &mut Buf) {
             buf.push(escaped.to_parsed_char());
         }
         Interpolated(loc_expr) => {
-            buf.push_str("$(");
-            // e.g. (name) in "Hi, $(name)!"
+            buf.push_str("${");
+            // e.g. {name} in "Hi, ${name}!"
             let min_indent = buf.cur_line_indent() + INDENT;
             loc_expr.value.format_with_options(
                 buf,
@@ -921,7 +921,7 @@ fn format_str_segment(seg: &StrSegment, buf: &mut Buf) {
                 min_indent,
             );
             buf.indent(min_indent);
-            buf.push(')');
+            buf.push('}');
         }
     }
 }

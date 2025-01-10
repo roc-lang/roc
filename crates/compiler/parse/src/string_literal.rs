@@ -425,16 +425,18 @@ pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EStri
                         }
                     }
                 }
-                b'(' if preceded_by_dollar && !is_single_quote => {
+                b'(' | b'{' if preceded_by_dollar && !is_single_quote => {
+                    let old_style_interpolation_block = one_byte == b'(';
+
                     // We're about to begin string interpolation!
                     //
                     // End the previous segment so we can begin a new one.
                     // Retroactively end it right before the `$` char we parsed.
                     // (We can't use end_segment! here because it ends it right after
-                    // the just-parsed character, which here would be '(' rather than '$')
+                    // the just-parsed character, which here would be '{' rather than '$')
                     // Don't push anything if the string would be empty.
                     if segment_parsed_bytes > 2 {
-                        // exclude the 2 chars we just parsed, namely '$' and '('
+                        // exclude the 2 chars we just parsed, namely '$' and '{'
                         let string_bytes = &state.bytes()[0..(segment_parsed_bytes - 2)];
 
                         match std::str::from_utf8(string_bytes) {
@@ -452,19 +454,27 @@ pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EStri
                         }
                     }
 
-                    // Advance past the `$(`
+                    // Advance past the `${`
                     state.advance_mut(2);
 
                     let original_byte_count = state.bytes().len();
 
-                    // Parse an arbitrary expression, followed by ')'
+                    // Parse an arbitrary expression, followed by '}' or ')'
+                    let terminating_char = if old_style_interpolation_block {
+                        b')'
+                    } else {
+                        b'}'
+                    };
                     let (_progress, (mut loc_expr, sp), new_state) = and(
                         specialize_err_ref(
                             EString::Format,
                             loc(allocated(reset_min_indent(expr::expr_help())))
                                 .trace("str_interpolation"),
                         ),
-                        skip_second(space0_e(EString::FormatEnd), byte(b')', EString::FormatEnd)),
+                        skip_second(
+                            space0_e(EString::FormatEnd),
+                            byte(terminating_char, EString::FormatEnd),
+                        ),
                     )
                     .parse(arena, state, min_indent)?;
 
@@ -488,8 +498,8 @@ pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EStri
                 }
             }
 
-            // iff the '$' is followed by '(', this is string interpolation.
-            // We'll check for the '(' on the next iteration of the loop.
+            // iff the '$' is followed by '{', this is string interpolation.
+            // We'll check for the '{' on the next iteration of the loop.
             preceded_by_dollar = one_byte == b'$';
         }
 

@@ -5864,7 +5864,7 @@ mod test_reporting {
                 r#"
             greeting = "Privet"
 
-            if Bool.true then 1 else "$(greeting), World!"
+            if Bool.true then 1 else "${greeting}, World!"
             "#,
             ),
             @r#"
@@ -5872,7 +5872,7 @@ mod test_reporting {
 
     This `if` has an `else` branch with a different type from its `then` branch:
 
-    6│      if Bool.true then 1 else "$(greeting), World!"
+    6│      if Bool.true then 1 else "${greeting}, World!"
                                      ^^^^^^^^^^^^^^^^^^^^^
 
     The `else` branch is a string of type:
@@ -15052,7 +15052,7 @@ All branches in an `if` must have the same type!
             u64_nums = parse_items_with Str.to_u64
             u8_nums = parse_items_with Str.to_u8
 
-            "$(Inspect.to_str u64_nums) $(Inspect.to_str u8_nums)"
+            "${Inspect.to_str(u64_nums)} ${Inspect.to_str(u8_nums)}"
             "#
         ),
         @"" // no errors
@@ -15304,7 +15304,7 @@ All branches in an `if` must have the same type!
             get_cheer = \msg ->
                 name = Effect.get_line! {}
 
-                "$(msg), $(name)!"
+                "${msg}, ${name}!"
             "#
         ),
         @r"
@@ -15340,7 +15340,7 @@ All branches in an `if` must have the same type!
 
             trim : Str -> Str
             trim = \msg ->
-                Effect.put_line! "Trimming $(msg)"
+                Effect.put_line!("Trimming ${msg}")
                 Str.trim msg
             "#
         ),
@@ -15349,7 +15349,7 @@ All branches in an `if` must have the same type!
 
     This call to `Effect.put_line!` might produce an effect:
 
-    10│      Effect.put_line! "Trimming $(msg)"
+    10│      Effect.put_line!("Trimming ${msg}")
              ^^^^^^^^^^^^^^^^
 
     However, the type of the enclosing function requires that it's pure:
@@ -15736,7 +15736,7 @@ All branches in an `if` must have the same type!
                 (get, put) = (Effect.get_line!, Effect.put_line!)
 
                 name = get {}
-                put "Hi, $(name)"
+                put "Hi, ${name}"
             "#
         ),
         @r###"
@@ -15808,7 +15808,7 @@ All branches in an `if` must have the same type!
                 Tag get put = Tag Effect.get_line! Effect.put_line!
 
                 name = get {}
-                put "Hi, $(name)"
+                put "Hi, ${name}"
             "#
         ),
         @r###"

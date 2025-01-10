@@ -37,7 +37,7 @@ view =
             Newline,
             Desc([Ident("user"), Kw("="), Ident("Http.get!"), Ident("url"), Ident("Json.utf8")], "<p>This fetches the contents of the URL and decodes them as <a href=\"https://www.json.org\">JSON</a>.</p><p>If the shape of the JSON isn't compatible with the type of <code>user</code> (based on type inference), this will give a decoding error immediately.</p><p>As with all the other function calls involving the <code>!</code> operator, if there's an error, nothing else in <code>storeEmail</code> will be run, and <code>handleErr</code> will run.</p>"),
             Newline,
-            Desc([Ident("dest"), Kw("="), Ident("Path.fromStr"), StrInterpolation("\"", "user.name", ".txt\"")], "<p>The <code>\$(user.name)</code> in this string literal will be replaced with the value stored in the <code>user</code> record's <code>name</code> field. This is <a href=\"/tutorial#string-interpolation\">string interpolation</a>.</p><p>Note that this function call doesn't involve the <code>!</code> operator. That's because <code>Path.fromStr</code> doesn't involve any Tasks, so there's no need to use <code>!</code> to wait for it to finish.</p>"),
+            Desc([Ident("dest"), Kw("="), Ident("Path.fromStr"), StrInterpolation("\"", "user.name", ".txt\"")], "<p>The <code>\${user.name}</code> in this string literal will be replaced with the value stored in the <code>user</code> record's <code>name</code> field. This is <a href=\"/tutorial#string-interpolation\">string interpolation</a>.</p><p>Note that this function call doesn't involve the <code>!</code> operator. That's because <code>Path.fromStr</code> doesn't involve any Tasks, so there's no need to use <code>!</code> to wait for it to finish.</p>"),
             Newline,
             Desc([Ident("File.writeUtf8!"), Ident("dest"), Ident("user.email")], "<p>This writes <code>user.email</code> to the file, encoded as <a href=\"https://en.wikipedia.org/wiki/UTF-8\">UTF-8</a>.</p><p>Since <code>File.writeUtf8</code> doesn't produce any information on success, we don't bother using <code>=</code> like we did on the other lines.</p>"),
             Newline,
@@ -90,7 +90,7 @@ tokens_to_str = \tokens ->
                 # Don't put spaces after opening parens or before closing parens
                 args_with_commas =
                     args
-                    |> List.map(\ident -> "<span class=\"ident\">$(ident)</span>")
+                    |> List.map(\ident -> "<span class=\"ident\">${ident}</span>")
                     |> Str.join_with("<span class=\"literal\">,</span> ")
 
                 buf_with_space
@@ -99,22 +99,22 @@ tokens_to_str = \tokens ->
                 |> Str.concat("<span class=\"kw\"> -></span>")
 
             Kw(str) ->
-                Str.concat(buf_with_space, "<span class=\"kw\">$(str)</span>")
+                Str.concat(buf_with_space, "<span class=\"kw\">${str}</span>")
 
             Num(str) | Str(str) | Literal(str) -> # We may render these differently in the future
-                Str.concat(buf_with_space, "<span class=\"literal\">$(str)</span>")
+                Str.concat(buf_with_space, "<span class=\"literal\">${str}</span>")
 
             Comment(str) ->
-                Str.concat(buf_with_space, "<span class=\"comment\"># $(str)</span>")
+                Str.concat(buf_with_space, "<span class=\"comment\"># ${str}</span>")
 
             Ident(str) ->
                 Str.concat(buf_with_space, ident_to_html(str))
 
             StrInterpolation(before, interp, after) ->
                 buf_with_space
-                |> Str.concat((if Str.is_empty(before) then "" else "<span class=\"literal\">$(before)</span>"))
-                |> Str.concat("<span class=\"kw\">\$(</span>$(ident_to_html(interp))<span class=\"kw\">)</span>")
-                |> Str.concat((if Str.is_empty(after) then "" else "<span class=\"literal\">$(after)</span>")))
+                |> Str.concat((if Str.is_empty(before) then "" else "<span class=\"literal\">${before}</span>"))
+                |> Str.concat("<span class=\"kw\">\${</span>${ident_to_html(interp)}<span class=\"kw\">}</span>")
+                |> Str.concat((if Str.is_empty(after) then "" else "<span class=\"literal\">${after}</span>")))
 
 ident_to_html : Str -> Str
 ident_to_html = \str ->
@@ -122,18 +122,18 @@ ident_to_html = \str ->
         len = Str.count_utf8_bytes(ident)
         without_suffix = ident |> Str.replace_last("!", "")
 
-        ident_html = "<span class=\"ident\">$(without_suffix)</span>"
+        ident_html = "<span class=\"ident\">${without_suffix}</span>"
         html =
             # If removing a trailing "!" changed the length, then there must have been a trailing "!"
             if len > Str.count_utf8_bytes(without_suffix) then
-                "$(ident_html)<span class=\"kw\">!</span>"
+                "${ident_html}<span class=\"kw\">!</span>"
             else
                 ident_html
 
         if Str.is_empty(accum) then
             html
         else
-            "$(accum)<span class=\"kw\">.</span>$(html)")
+            "${accum}<span class=\"kw\">.</span>${html}")
 
 sections_to_str : List Section -> Str
 sections_to_str = \sections ->
@@ -178,5 +178,5 @@ radio = \index, label_html, desc_html ->
     checked_html = if index == 0 then " checked" else ""
 
     """
-    <input class="interactive-radio" type="radio" name="r" id="r$(Num.to_str(index))" $(checked_html)><label for="r$(Num.to_str(index))" title="Tap to learn about this syntax">$(label_html)</label><span class="interactive-desc" role="presentation"><button class="close-desc">X</button>$(desc_html)</span>
+    <input class="interactive-radio" type="radio" name="r" id="r${Num.to_str(index)}" ${checked_html}><label for="r${Num.to_str(index)}" title="Tap to learn about this syntax">${label_html}</label><span class="interactive-desc" role="presentation"><button class="close-desc">X</button>${desc_html}</span>
     """

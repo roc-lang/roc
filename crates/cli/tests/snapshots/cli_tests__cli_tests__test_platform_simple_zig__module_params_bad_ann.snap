@@ -11,7 +11,7 @@ fn_annotated_as_value definition:
 
 3│   fn_annotated_as_value : Str
 4│>  fn_annotated_as_value = \post_id, comment_id ->
-5│>      "/posts/$(post_id)/comments/$(Num.to_str(comment_id))"
+5│>      "/posts/${post_id}/comments/${Num.to_str(comment_id)}"
 
 The body is an anonymous function of type:
 
@@ -28,7 +28,7 @@ Something is off with the body of the missing_arg definition:
 
 7│   missing_arg : Str -> Str
 8│>  missing_arg = \post_id, _ ->
-9│>      "/posts/$(post_id)/comments"
+9│>      "/posts/${post_id}/comments"
 
 The body is an anonymous function of type:
 

@@ -2157,10 +2157,10 @@ mod test_can {
     //         // This should NOT be string interpolation, because of the \\
     //         indoc!(
     //             r#"
-    //                      "abcd\$(efg)hij"
+    //                      "abcd\${efg}hij"
     //                      "#
     //         ),
-    //         Str(r"abcd$(efg)hij".into()),
+    //         Str(r"abcd${efg}hij".into()),
     //     );
     // }
 

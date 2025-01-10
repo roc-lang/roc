@@ -4,7 +4,7 @@ app [main] {
 
 import Api { app_id: "one", protocol: https }
 
-https = \url -> "https://$(url)"
+https = \url -> "https://${url}"
 
 main =
-    "$(Api.get_post)"
+    "${Api.get_post}"

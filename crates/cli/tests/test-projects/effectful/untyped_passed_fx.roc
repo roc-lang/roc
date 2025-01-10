@@ -7,6 +7,6 @@ main! = \{} ->
     logged!("hello", \{} -> Effect.put_line!("Hello, World!"))
 
 logged! = \name, fx! ->
-    Effect.put_line!("Before $(name)")
+    Effect.put_line!("Before ${name}")
     fx!({})
-    Effect.put_line!("After $(name)")
+    Effect.put_line!("After ${name}")

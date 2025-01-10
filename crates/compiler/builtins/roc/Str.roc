@@ -34,7 +34,7 @@
 ## ```
 ## name = "Sam"
 ##
-## "Hi, my name is $(name)!"
+## "Hi, my name is ${name}!"
 ## ```
 ##
 ## This will evaluate to the string `"Hi, my name is Sam!"`
@@ -44,7 +44,7 @@
 ## ```
 ## colors = ["red", "green", "blue"]
 ##
-## "The colors are $(colors |> Str.join_with(", "))!"
+## "The colors are ${colors |> Str.join_with(", ")}!"
 ## ```
 ##
 ## Interpolation can be used in multiline strings, but the part inside the parentheses must still be on one line.
@@ -800,7 +800,7 @@ replace_first : Str, Str, Str -> Str
 replace_first = \haystack, needle, flower ->
     when split_first(haystack, needle) is
         Ok({ before, after }) ->
-            "$(before)$(flower)$(after)"
+            "${before}${flower}${after}"
 
         Err(NotFound) -> haystack
 
@@ -818,7 +818,7 @@ replace_last : Str, Str, Str -> Str
 replace_last = \haystack, needle, flower ->
     when split_last(haystack, needle) is
         Ok({ before, after }) ->
-            "$(before)$(flower)$(after)"
+            "${before}${flower}${after}"
 
         Err(NotFound) -> haystack
 

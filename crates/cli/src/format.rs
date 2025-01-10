@@ -278,14 +278,14 @@ import pf.Stdin
 main =
     Stdout.line! "What's your name?"
     name = Stdin.line!
-    Stdout.line! "Hi $(name)!""#;
+    Stdout.line! "Hi ${name}!""#;
 
     const UNFORMATTED_ROC: &str = r#"app [main] { pf: platform "platform/main.roc" }
 
 main =
         Stdout.line! "What's your name?"
         name = Stdin.line!
-        Stdout.line! "Hi $(name)!"
+        Stdout.line! "Hi ${name}!"
 "#;
 
     fn setup_test_file(dir: &Path, file_name: &str, contents: &str) -> PathBuf {
