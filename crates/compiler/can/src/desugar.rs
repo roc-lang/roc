@@ -311,7 +311,9 @@ fn desugar_value_def<'a>(
             desugar_loc_pattern(env, scope, loc_pattern),
             desugar_expr(env, scope, loc_expr),
         ),
-        ann @ Annotation(_, _) => *ann,
+        Annotation(ann_pattern, ann_type) => {
+            Annotation(*desugar_loc_pattern(env, scope, ann_pattern), *ann_type)
+        }
         AnnotatedBody {
             ann_pattern,
             ann_type,
@@ -319,7 +321,7 @@ fn desugar_value_def<'a>(
             body_pattern,
             body_expr,
         } => AnnotatedBody {
-            ann_pattern,
+            ann_pattern: desugar_loc_pattern(env, scope, ann_pattern),
             ann_type,
             lines_between,
             body_pattern: desugar_loc_pattern(env, scope, body_pattern),

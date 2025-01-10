@@ -11,7 +11,7 @@ fuzz_target!(|data: &[u8]| {
         let ast = input.parse_in(&arena);
         if let Ok(ast) = ast {
             if !ast.is_malformed() {
-                input.check_invariants(|_| (), true, None);
+                input.check_invariants(|_| (), true, Some(false));
             }
         }
     }

@@ -151,6 +151,24 @@ fn round_trip_once(input: Input<'_>, options: Options) -> Option<String> {
         return Some("Formatting not stable".to_string());
     }
 
+    let text = input.as_str();
+    let res = std::panic::catch_unwind(|| {
+        let new_arena = Bump::new();
+        actual.canonicalize(&new_arena, text);
+    });
+
+    if let Err(e) = res {
+        if options.minimize_full_error {
+            if let Some(s) = e.downcast_ref::<&'static str>() {
+                return Some(s.to_string());
+            }
+            if let Some(s) = e.downcast_ref::<String>() {
+                return Some(s.clone());
+            }
+        }
+        return Some("Panic during canonicalization".to_string());
+    }
+
     None
 }
 
