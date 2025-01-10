@@ -662,15 +662,12 @@ fn gen_macho_le(
 
     let mut out_mmap = open_mmap_mut(out_filename, md.exec_len as usize);
     let end_of_cmds = size_of_cmds + mem::size_of_val(exec_header);
-    let mut start_of_roc_commands = 0;
 
     // Copy load commands over making space for Roc-specific commands
-    {
+    let start_of_roc_commands = {
         let mut out_offset = 0;
         let mut in_offset = 0;
         let mut size = md.linkedit_segment;
-
-        println!("{}-{} <== {}-{}", out_offset, size, in_offset, size);
 
         out_mmap[out_offset..out_offset + size]
             .copy_from_slice(&exec_data[in_offset..in_offset + size]);
@@ -678,8 +675,7 @@ fn gen_macho_le(
         in_offset += size;
 
         // Make space for Roc segment load commands
-        println!("{}-{} <== ", out_offset, required_size);
-        start_of_roc_commands = out_offset;
+        let start_of_roc_commands = out_offset;
         out_offset += required_size;
         md.linkedit_segment += required_size;
 
@@ -688,24 +684,24 @@ fn gen_macho_le(
         // It has a dynamic-length string at the end that we also need to delete,
         // in addition to the header.
         size = macho_load_so_offset - in_offset;
-        println!("{}-{} <== {}-{}", out_offset, size, in_offset, size);
         out_mmap[out_offset..out_offset + size]
             .copy_from_slice(&exec_data[in_offset..in_offset + size]);
         out_offset += size;
         in_offset += size;
 
-        println!("<== {}-{}", in_offset, total_cmd_size);
+        // Skip "deleted" load command
         in_offset += total_cmd_size;
 
         size = end_of_cmds - in_offset;
-        println!("{}-{} <== {}-{}", out_offset, size, in_offset, size);
         out_mmap[out_offset..out_offset + size]
             .copy_from_slice(&exec_data[in_offset..in_offset + size]);
 
         // Copy the rest of the file.
         out_mmap[md.start_of_first_section..]
             .copy_from_slice(&exec_data[md.start_of_first_section..]);
-    }
+
+        start_of_roc_commands
+    };
 
     // Add Roc segment commands with segments size 0.
     {
