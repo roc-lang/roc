@@ -324,7 +324,7 @@ mod solve_expr {
                 r#"
                 what_it_is = "great"
 
-                "type inference is $(what_it_is)!"
+                "type inference is ${what_it_is}!"
             "#
             ),
             "Str",
@@ -338,7 +338,7 @@ mod solve_expr {
                 r#"
                 what_it_is = "great"
 
-                str = "type inference is $(what_it_is)!"
+                str = "type inference is ${what_it_is}!"
 
                 what_it_is
             "#
@@ -354,7 +354,7 @@ mod solve_expr {
                 r#"
                 rec = { what_it_is: "great" }
 
-                str = "type inference is $(rec.what_it_is)!"
+                str = "type inference is ${rec.what_it_is}!"
 
                 rec
             "#
@@ -4751,7 +4751,7 @@ mod solve_expr {
                 r#"
                 set_roc_email : _ -> { name: Str, email: Str }_
                 set_roc_email = \person ->
-                    { person & email: "$(person.name)@roclang.com" }
+                    { person & email: "${person.name}@roclang.com" }
                 set_roc_email
                 "#
             ),

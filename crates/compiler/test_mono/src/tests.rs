@@ -1759,7 +1759,7 @@ fn lambda_capture_niches_with_other_lambda_capture() {
                 when val is
                     _ -> ""
 
-        capture2 = \val -> \{} -> "$(val)"
+        capture2 = \val -> \{} -> "${val}"
 
         x : [A, B, C]
         x = A
@@ -2072,7 +2072,7 @@ fn polymorphic_expression_unification() {
         ]
         parse_function : Str -> RenderTree
         parse_function = \name ->
-            last = Indent [Text ".trace(\"$(name)\")" ]
+            last = Indent [Text ".trace(\"${name}\")" ]
             Indent [last]
 
         values = parse_function "interface_header"
@@ -2636,7 +2636,7 @@ fn recursively_build_effect() {
             hi = "Hello"
             name = "World"
 
-            "$(hi), $(name)!"
+            "${hi}, ${name}!"
 
         main =
             when nest_help 4 is
@@ -2956,8 +2956,8 @@ fn compose_recursive_lambda_set_productive_nullable_wrapped() {
             else \x -> f (g x)
 
          identity = \x -> x
-         exclaim = \s -> "$(s)!"
-         whisper = \s -> "($(s))"
+         exclaim = \s -> "${s}!"
+         whisper = \s -> "(${s})"
 
          main =
              res: Str -> Str
@@ -3291,7 +3291,7 @@ fn dbg_nested_expr() {
 fn dbg_inside_string() {
     indoc!(
         r#"
-        "Hello $(dbg "world")!"
+        "Hello ${dbg "world"}!"
         "#
     )
 }
@@ -3690,7 +3690,7 @@ fn dec_refcount_for_usage_after_early_return_in_if() {
                     else
                         third
 
-            "$(first), $(second)"
+            "${first}, ${second}"
 
         display_n 3
         "#

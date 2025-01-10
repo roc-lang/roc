@@ -25,7 +25,7 @@ show_rb_tree = \tree, show_key, show_value ->
             s_l = node_in_parens(left, show_key, show_value)
             s_r = node_in_parens(right, show_key, show_value)
 
-            "Node $(s_color) $(s_key) $(s_value) $(s_l) $(s_r)"
+            "Node ${s_color} ${s_key} ${s_value} ${s_l} ${s_r}"
 
 node_in_parens : RedBlackTree k v, (k -> Str), (v -> Str) -> Str
 node_in_parens = \tree, show_key, show_value ->
@@ -36,7 +36,7 @@ node_in_parens = \tree, show_key, show_value ->
         Node(_, _, _, _, _) ->
             inner = show_rb_tree(tree, show_key, show_value)
 
-            "($(inner))"
+            "(${inner})"
 
 show_color : NodeColor -> Str
 show_color = \color ->

@@ -4,14 +4,14 @@ app [main] {
 
 import Api { app_id: "one", protocol: https }
 
-https = \url -> "https://$(url)"
+https = \url -> "https://${url}"
 
 main =
     """
     # too many args
-    $(Api.get_user(1, 2))
-    $(Api.base_url(1))
+    ${Api.get_user(1, 2)}
+    ${Api.base_url(1)}
 
     # too few args
-    $(Api.get_post_comment(1))
+    ${Api.get_post_comment(1)}
     """

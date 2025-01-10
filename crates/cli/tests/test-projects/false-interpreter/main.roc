@@ -21,7 +21,7 @@ main! = \filename ->
             {}
 
         Err(StringErr(e)) ->
-            Stdout.line!("Ran into problem:\n$(e)\n")
+            Stdout.line!("Ran into problem:\n${e}\n")
 
 interpret_file! : Str => Result {} [StringErr Str]
 interpret_file! = \filename ->
@@ -44,7 +44,7 @@ interpret_file! = \filename ->
                 Err(StringErr("Ran into an invalid boolean that was neither false (0) or true (-1)"))
 
             Err(InvalidChar(char)) ->
-                Err(StringErr("Ran into an invalid character with ascii code: $(char)"))
+                Err(StringErr("Ran into an invalid character with ascii code: ${char}"))
 
             Err(MaxInputNumber) ->
                 Err(StringErr("Like the original false compiler, the max input number is 320,000"))

@@ -341,7 +341,7 @@ fn joinpoint_with_closure() {
                 cat_sound = make_sound Cat
                 dog_sound = make_sound Dog
                 goose_sound = make_sound Goose
-                "Cat: $(cat_sound), Dog: $(dog_sound), Goose: $(goose_sound)"
+                "Cat: ${cat_sound}, Dog: ${dog_sound}, Goose: ${goose_sound}"
 
             test
         )
@@ -370,7 +370,7 @@ fn joinpoint_with_reuse() {
                 Cons x xs ->
                     str_x = f x
                     str_xs = print_linked_list xs f
-                    "Cons $(str_x) ($(str_xs))"
+                    "Cons ${str_x} (${str_xs})"
 
             test =
                 new_list = map_linked_list (Cons 1 (Cons 2 (Cons 3 Nil))) (\x -> x + 1)
@@ -457,7 +457,7 @@ fn tree_rebalance() {
                     s_l = node_in_parens left show_key show_value
                     s_r = node_in_parens right show_key show_value
 
-                    "Node $(s_color) $(s_key) $(s_value) $(s_l) $(s_r)"
+                    "Node ${s_color} ${s_key} ${s_value} ${s_l} ${s_r}"
 
         node_in_parens : RedBlackTree k v, (k -> Str), (v -> Str) -> Str
         node_in_parens = \tree, show_key, show_value ->
@@ -468,7 +468,7 @@ fn tree_rebalance() {
                 Node _ _ _ _ _ ->
                     inner = show_rb_tree tree show_key show_value
 
-                    "($(inner))"
+                    "(${inner})"
 
         show_color : NodeColor -> Str
         show_color = \color ->
@@ -516,7 +516,7 @@ fn joinpoint_nullpointer() {
                     Nil -> "Nil"
                     Cons x xs ->
                         str_xs = print_linked_list xs
-                        "Cons $(x) ($(str_xs))"
+                        "Cons ${x} (${str_xs})"
 
             linked_list_head : LinkedList Str -> LinkedList Str
             linked_list_head = \linked_list ->
@@ -528,7 +528,7 @@ fn joinpoint_nullpointer() {
             test =
                 cons = print_linked_list (linked_list_head (Cons "foo" Nil))
                 nil = print_linked_list (linked_list_head (Nil))
-                "$(cons) - $(nil)"
+                "${cons} - ${nil}"
 
             test
         )

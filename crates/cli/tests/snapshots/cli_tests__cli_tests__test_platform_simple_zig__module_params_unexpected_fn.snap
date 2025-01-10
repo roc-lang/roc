@@ -8,7 +8,7 @@ snapshot_kind: text
 
 This argument to this string interpolation has an unexpected type:
 
-10│      "$(Api.get_post)"
+10│      "${Api.get_post}"
             ^^^^^^^^^^^^
 
 The argument is an anonymous function of type:

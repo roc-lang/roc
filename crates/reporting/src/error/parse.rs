@@ -1098,7 +1098,7 @@ fn to_str_report<'a>(
                 alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow(r"You could change it to something like "),
-                    alloc.parser_suggestion("\"The count is $(count)\""),
+                    alloc.parser_suggestion("\"The count is ${count}\""),
                     alloc.reflow("."),
                 ]),
             ]);
@@ -1176,7 +1176,7 @@ fn to_str_report<'a>(
                     alloc.stack([
                         alloc.concat([
                             alloc.reflow("I am part way through parsing this single-quote literal, "),
-                            alloc.reflow("but I encountered a string interpolation like \"$(this)\","),
+                            alloc.reflow("but I encountered a string interpolation like \"${this}\","),
                             alloc.reflow("which is not allowed in single-quote literals."),
                         ]),
                         alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),

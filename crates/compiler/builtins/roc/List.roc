@@ -1485,7 +1485,7 @@ for_each! = \list, func! ->
 ## List.for_each_try!(files_to_delete, \path ->
 ##     File.delete!(path)?
 ##
-##     Stdout.line!("$(path) deleted")
+##     Stdout.line!("${path} deleted")
 ## )
 ## ```
 for_each_try! : List a, (a => Result {} err) => Result {} err
@@ -1527,14 +1527,15 @@ walk! = \list, state, func! ->
 ## If the function returns `Err`, the iteration stops and the error is returned.
 ##
 ## ```
-## names = try List.walk_try!(
+## names =
+##     List.walk_try!(
 ##         ["First", "Middle", "Last"],
 ##         [],
 ##         \accumulator, which ->
-##             try Stdout.write! ("$(which) name: ")
-##             name = try Stdin.line! ({})
-##             Ok (List.append accumulator name),
-##     )
+##             Stdout.write!("${which} name: ")?
+##             name = Stdin.line!({})?
+##             Ok(List.append(accumulator, name)),
+##     )?
 ## ```
 ##
 ## This is the same as [walk_try], except that the step function can have effects.

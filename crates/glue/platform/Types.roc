@@ -48,7 +48,7 @@ shape = \@Types(types), id ->
         Err(OutOfBounds) ->
             id_str = Num.to_str(type_id_to_u64(id))
 
-            crash("TypeId #$(id_str) was not found in Types. This should never happen, and means there was a bug in `roc glue`. If you have time, please open an issue at <https://github.com/roc-lang/roc/issues>")
+            crash("TypeId #${id_str} was not found in Types. This should never happen, and means there was a bug in `roc glue`. If you have time, please open an issue at <https://github.com/roc-lang/roc/issues>")
 
 alignment : Types, TypeId -> U32
 alignment = \@Types(types), id ->
@@ -57,7 +57,7 @@ alignment = \@Types(types), id ->
         Err(OutOfBounds) ->
             id_str = Num.to_str(type_id_to_u64(id))
 
-            crash("TypeId #$(id_str) was not found in Types. This should never happen, and means there was a bug in `roc glue`. If you have time, please open an issue at <https://github.com/roc-lang/roc/issues>")
+            crash("TypeId #${id_str} was not found in Types. This should never happen, and means there was a bug in `roc glue`. If you have time, please open an issue at <https://github.com/roc-lang/roc/issues>")
 
 size : Types, TypeId -> U32
 size = \@Types(types), id ->
@@ -66,4 +66,4 @@ size = \@Types(types), id ->
         Err(OutOfBounds) ->
             id_str = Num.to_str(type_id_to_u64(id))
 
-            crash("TypeId #$(id_str) was not found in Types. This should never happen, and means there was a bug in `roc glue`. If you have time, please open an issue at <https://github.com/roc-lang/roc/issues>")
+            crash("TypeId #${id_str} was not found in Types. This should never happen, and means there was a bug in `roc glue`. If you have time, please open an issue at <https://github.com/roc-lang/roc/issues>")

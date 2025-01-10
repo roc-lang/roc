@@ -10,7 +10,7 @@ show = \list ->
             |> List.map(Num.to_str)
             |> Str.join_with(", ")
 
-        "[$(content)]"
+        "[${content}]"
 
 sort_by : List a, (a -> Num *) -> List a
 sort_by = \list, to_comparable ->

@@ -12,7 +12,7 @@ main =
             _: Task.ok(Dict.single("a", "b")),
         }!
 
-    Stdout.line!("For multiple tasks: $(Inspect.to_str(multiple_in))")
+    Stdout.line!("For multiple tasks: ${Inspect.to_str(multiple_in)}")
 
 sequential : Task a err, Task b err, (a, b -> c) -> Task c err
 sequential = \first_task, second_task, mapper ->
