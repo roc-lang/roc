@@ -18,8 +18,15 @@
             value_defs: [
                 Annotation(
                     @0-10 StrLiteral(
-                        PlainLine(
-                            "{(g)",
+                        Line(
+                            [
+                                Interpolated(
+                                    @5-6 Var {
+                                        module_name: "",
+                                        ident: "g",
+                                    },
+                                ),
+                            ],
                         ),
                     ),
                     @11-12 BoundVariable(
