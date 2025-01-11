@@ -305,6 +305,7 @@ mod test_snapshots {
         pass/ann_pattern_comment_before_body.expr,
         pass/ann_record_pat_with_comment.expr,
         pass/ann_tag_union_newline_comment.expr,
+        pass/ann_where_e_newline_implements.expr,
         pass/annotate_tuple_func.expr,
         pass/annotated_empty_record_destructure.expr,
         pass/annotated_record_destructure.expr,

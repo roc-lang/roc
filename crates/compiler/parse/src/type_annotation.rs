@@ -12,8 +12,8 @@ use crate::ident::{lowercase_ident, lowercase_ident_keyword_e};
 use crate::keyword;
 use crate::parser::{
     absolute_column_min_indent, and, collection_trailing_sep_e, either, error_on_byte,
-    increment_min_indent, indented_seq, loc, map, map_with_arena, skip_first, skip_second, succeed,
-    then, zero_or_more, ERecord, ETypeAbilityImpl, ParseResult,
+    increment_min_indent, indented_seq, loc, map, map_with_arena, reset_min_indent, skip_first,
+    skip_second, succeed, then, zero_or_more, ERecord, ETypeAbilityImpl, ParseResult,
 };
 use crate::parser::{
     allocated, backtrackable, byte, fail, optional, specialize_err, specialize_err_ref, two_bytes,
@@ -717,7 +717,7 @@ fn ability_chain<'a>() -> impl Parser<'a, Vec<'a, Loc<TypeAnnotation<'a>>>, ETyp
 fn implements_clause<'a>() -> impl Parser<'a, Loc<ImplementsClause<'a>>, EType<'a>> {
     map(
         // Suppose we are trying to parse "a implements Hash"
-        and(
+        reset_min_indent(and(
             space0_around_ee(
                 // Parse "a", with appropriate spaces
                 specialize_err(
@@ -733,7 +733,7 @@ fn implements_clause<'a>() -> impl Parser<'a, Loc<ImplementsClause<'a>>, EType<'
                 // Parse "Hash & ..."; this may be qualified from another module like "Hash.Hash"
                 absolute_column_min_indent(ability_chain()),
             ),
-        ),
+        )),
         |(var, abilities): (Loc<Spaced<'a, &'a str>>, Vec<'a, Loc<TypeAnnotation<'a>>>)| {
             let abilities_region = Region::span_across(
                 &abilities.first().unwrap().region,
@@ -753,7 +753,7 @@ fn implements_clause<'a>() -> impl Parser<'a, Loc<ImplementsClause<'a>>, EType<'
 /// Returns the clauses and spaces before the starting "where", if there were any.
 fn implements_clause_chain<'a>(
 ) -> impl Parser<'a, (&'a [CommentOrNewline<'a>], &'a [Loc<ImplementsClause<'a>>]), EType<'a>> {
-    move |arena, state: State<'a>, min_indent: u32| {
+    (move |arena, state: State<'a>, min_indent: u32| {
         let (_, (spaces_before, ()), state) = and(
             space0_e(EType::TIndentStart),
             crate::parser::keyword(crate::keyword::WHERE, EType::TWhereBar),
@@ -763,7 +763,8 @@ fn implements_clause_chain<'a>(
         let (_, clauses, state) =
             parse_implements_clause_chain_after_where(arena, min_indent, state)?;
         Ok((MadeProgress, (spaces_before, clauses), state))
-    }
+    })
+    .trace("type_annotation:implements_clause_chain")
 }
 
 fn parse_implements_clause_chain_after_where<'a>(
