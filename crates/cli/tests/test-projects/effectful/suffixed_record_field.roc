@@ -18,5 +18,5 @@ main! = \{} ->
         get_line!: Effect.get_line!,
     }
 
-    Effect.put_line!("not_effectful: $(not_effectful.get_line!({}))")
-    Effect.put_line!("effectful: $(effectful.get_line!({}))")
+    Effect.put_line!("not_effectful: ${not_effectful.get_line!({})}")
+    Effect.put_line!("effectful: ${effectful.get_line!({})}")

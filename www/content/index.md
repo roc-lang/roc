@@ -6,7 +6,7 @@
 
 <p id="homepage-tagline">A fast, friendly, functional language.</p>
 <pre id="first-code-sample"><samp class="code-snippet">credits <span class="kw">=</span> List<span class="punctuation section">.</span>map songs <span class="kw">\</span>song <span class="kw">-></span>
-    <span class="string">"Performed by </span><span class="kw">$(</span>song<span class="punctuation section">.</span>artist<span class="kw">)</span><span class="string">"</span></samp></pre>
+    <span class="string">"Performed by </span><span class="kw">${</span>song<span class="punctuation section">.</span>artist<span class="kw">}</span><span class="string">"</span></samp></pre>
 </div>
 </div>
 

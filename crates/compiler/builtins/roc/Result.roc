@@ -124,11 +124,12 @@ on_err = \result, transform ->
 ## Like [on_err], but it allows the transformation function to produce effects.
 ##
 ## ```roc
-## Result.on_err(Err("missing user"), (\msg ->
-##     Stdout.line!("ERROR: $(msg)")?
-##
-##     Err(msg)
-## ))
+## Result.on_err(
+##     Err("missing user"),
+##     \msg ->
+##         Stdout.line!("ERROR: ${msg}")?
+##         Err(msg),
+## )
 ## ```
 on_err! : Result a err, (err => Result a other_err) => Result a other_err
 on_err! = \result, transform! ->

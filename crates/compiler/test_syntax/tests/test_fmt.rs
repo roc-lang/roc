@@ -6575,13 +6575,13 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 "
-                    x = \"foo:\u{200B} $(bar).\"
+                    x = \"foo:\u{200B} ${bar}.\"
                     x
                 "
             ),
             indoc!(
                 r#"
-                    x = "foo:\u(200b) $(bar)."
+                    x = "foo:\u(200b) ${bar}."
                     x
                 "#
             ),
@@ -6595,7 +6595,7 @@ mod test_fmt {
                 "
                     x =
                         \"\"\"
-                        foo:\u{200B} $(bar).
+                        foo:\u{200B} ${bar}.
                         \"\"\"
                     x
                 "
@@ -6604,7 +6604,7 @@ mod test_fmt {
                 r#"
                     x =
                         """
-                        foo:\u(200b) $(bar).
+                        foo:\u(200b) ${bar}.
                         """
                     x
                 "#

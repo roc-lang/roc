@@ -1574,7 +1574,7 @@ fn module_params_checks() {
                 r#"
             module { key } -> [url]
 
-            url = "example.com/$(key)"
+            url = "example.com/${key}"
             "#
             ),
         ),
@@ -1605,7 +1605,7 @@ fn module_params_optional() {
                 r#"
             module { key, exp ? "default" } -> [url]
 
-            url = "example.com/$(key)?exp=$(exp)"
+            url = "example.com/${key}?exp=${exp}"
             "#
             ),
         ),
@@ -1636,7 +1636,7 @@ fn module_params_typecheck_fail() {
                 r#"
             module { key } -> [url]
 
-            url = "example.com/$(key)"
+            url = "example.com/${key}"
             "#
             ),
         ),
@@ -1687,7 +1687,7 @@ fn module_params_missing_fields() {
                 r#"
             module { key } -> [url]
 
-            url = "example.com/$(key)"
+            url = "example.com/${key}"
             "#
             ),
         ),
@@ -1740,7 +1740,7 @@ fn module_params_extra_fields() {
                 r#"
             module { key } -> [url]
 
-            url = "example.com/$(key)"
+            url = "example.com/${key}"
             "#
             ),
         ),
@@ -1839,7 +1839,7 @@ fn module_params_missing() {
                 r#"
             module { key, exp } -> [url]
 
-            url = "example.com/$(key)?exp=$(Num.to_str exp)"
+            url = "example.com/${key}?exp=${Num.to_str(exp)}"
             "#
             ),
         ),
@@ -2169,7 +2169,7 @@ fn roc_package_depends_on_other_package() {
                 r#"
             module [say]
 
-            say = \msg -> "$(msg), world!"
+            say = \msg -> "${msg}, world!"
             "#
             ),
         ),

@@ -189,8 +189,8 @@ mod test_snapshots {
         fail/ability_demands_not_indented_with_first.expr,
         fail/ability_first_demand_not_indented_enough.expr,
         fail/ability_non_signature_expression.expr,
-        fail/all_the_bangs.expr,
         fail/alias_or_opaque_fail.expr,
+        fail/all_the_bangs.expr,
         fail/bound_variable.expr,
         fail/comment_with_tab.expr,
         fail/d_assign_return_bang.expr,
@@ -397,6 +397,8 @@ mod test_snapshots {
         pass/dbg_double_newline.expr,
         pass/dbg_extra_parens.expr,
         pass/dbg_newline_apply.expr,
+        pass/dbg_pnc_a_over_a.expr,
+        pass/dbg_pnc_zero_args.expr,
         pass/dbg_stmt.expr,
         pass/dbg_stmt_in_parens.expr,
         pass/dbg_stmt_multiline.expr,
@@ -631,6 +633,8 @@ mod test_snapshots {
         pass/pizza_question.moduledefs,
         pass/plus_if.expr,
         pass/plus_when.expr,
+        pass/pnc_apply_comment_after_newline.expr,
+        pass/pnc_parens_apply_etc.expr,
         pass/pos_inf_float.expr,
         pass/positive_float.expr,
         pass/positive_int.expr,
@@ -1032,7 +1036,7 @@ mod test_snapshots {
 
     #[test]
     fn string_with_interpolation_in_middle() {
-        assert_segments(r#""Hi, $(name)!""#, |arena| {
+        assert_segments(r#""Hi, ${name}!""#, |arena| {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
@@ -1048,7 +1052,7 @@ mod test_snapshots {
 
     #[test]
     fn string_with_interpolation_in_front() {
-        assert_segments(r#""$(name), hi!""#, |arena| {
+        assert_segments(r#""${name}, hi!""#, |arena| {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
@@ -1063,7 +1067,7 @@ mod test_snapshots {
 
     #[test]
     fn string_with_interpolation_in_back() {
-        assert_segments(r#""Hello $(name)""#, |arena| {
+        assert_segments(r#""Hello ${name}""#, |arena| {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
@@ -1078,7 +1082,7 @@ mod test_snapshots {
 
     #[test]
     fn string_with_multiple_interpolations() {
-        assert_segments(r#""Hi, $(name)! How is $(project) going?""#, |arena| {
+        assert_segments(r#""Hi, ${name}! How is ${project} going?""#, |arena| {
             let expr1 = arena.alloc(Var {
                 module_name: "",
                 ident: "name",

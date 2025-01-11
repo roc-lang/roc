@@ -7,4 +7,4 @@ app [main] {
 import one.One
 import two.Two
 
-main = "$(One.example) | $(Two.example)"
+main = "${One.example} | ${Two.example}"

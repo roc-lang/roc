@@ -109,16 +109,16 @@ Note that in Roc, we don't need parentheses or commas to call functions. We don'
 
 That said, just like in the arithmetic example above, we can use parentheses to specify how nested function calls should work. For example, we could write this:
 
-<pre><samp><span class="repl-prompt">Str.concat "Birds: " (Num.toStr 42)</span>
+<pre><samp><span class="repl-prompt">Str.concat "Birds: " (Num.to_str 42)</span>
 
 <span class="literal">"Birds: 42"</span> <span class="colon">:</span> Str
 </samp></pre>
 
-This calls `Num.toStr` on the number `42`, which converts it into the string `"42"`, and then passes that string as the second argument to `Str.concat`.
+This calls `Num.to_str` on the number `42`, which converts it into the string `"42"`, and then passes that string as the second argument to `Str.concat`.
 
 The parentheses are important here to specify how the function calls nest. Try removing them, and see what happens:
 
-<pre><samp><span class="repl-prompt">Str.concat "Birds: " Num.toStr 42</span>
+<pre><samp><span class="repl-prompt">Str.concat "Birds: " Num.to_str 42</span>
 
 <span class="repl-err">&lt;error&gt;</span>
 </samp></pre>
@@ -126,12 +126,12 @@ The parentheses are important here to specify how the function calls nest. Try r
 The error tells us that we've given `Str.concat` too many arguments. Indeed we have! We've passed it three arguments:
 
 1.  The string `"Birds"`
-2.  The function `Num.toStr`
+2.  The function `Num.to_str`
 3.  The number `42`
 
-That's not what we intended to do. Putting parentheses around the `Num.toStr 42` call clarifies that we want it to be evaluated as its own expression, rather than being two arguments to `Str.concat`.
+That's not what we intended to do. Putting parentheses around the `Num.to_str 42` call clarifies that we want it to be evaluated as its own expression, rather than being two arguments to `Str.concat`.
 
-Both the `Str.concat` function and the `Num.toStr` function have a dot in their names. In `Str.concat`, `Str` is the name of a _module_, and `concat` is the name of a function inside that module. Similarly, `Num` is a module, and `toStr` is a function inside that module.
+Both the `Str.concat` function and the `Num.to_str` function have a dot in their names. In `Str.concat`, `Str` is the name of a _module_, and `concat` is the name of a function inside that module. Similarly, `Num` is a module, and `to_str` is a function inside that module.
 
 We'll get into more depth about modules later, but for now you can think of a module as a named collection of functions. Eventually we'll discuss how to use them for more than that.
 
@@ -139,7 +139,7 @@ We'll get into more depth about modules later, but for now you can think of a mo
 
 An alternative syntax for `Str.concat` is _string interpolation_, which looks like this:
 
-<pre><samp class="repl-prompt"><span class="literal">"<span class="str-esc">$(</span><span class="str-interp">greeting</span><span class="str-esc">)</span> there, <span class="str-esc">$(</span><span class="str-interp">audience</span><span class="str-esc">)</span>."</span></samp></pre>
+<pre><samp class="repl-prompt"><span class="literal">"<span class="str-esc">${</span><span class="str-interp">greeting</span><span class="str-esc">}</span> there, <span class="str-esc">${</span><span class="str-interp">audience</span><span class="str-esc">}</span>."</span></samp></pre>
 
 This is syntax sugar for calling `Str.concat` several times, like so:
 
@@ -149,7 +149,7 @@ Str.concat greeting (Str.concat " there, " (Str.concat audience "."))
 
 You can put entire single-line expressions inside the parentheses in string interpolation. For example:
 
-<pre><samp class="repl-prompt"><span class="literal">"Two plus three is: <span class="str-esc">$(</span><span class="str-interp">Num.toStr (2 + 3)</span><span class="str-esc">)</span>"</span></samp></pre>
+<pre><samp class="repl-prompt"><span class="literal">"Two plus three is: <span class="str-esc">${</span><span class="str-interp">Num.to_str(2 + 3)</span><span class="str-esc">}</span>"</span></samp></pre>
 
 By the way, there are many other ways to put strings together! Check out the [documentation](https://www.roc-lang.org/builtins/Str) for the `Str` module for more.
 
@@ -187,10 +187,10 @@ birds = 3
 
 iguanas = 2
 
-total = Num.toStr (birds + iguanas)
+total = Num.to_str (birds + iguanas)
 
 main! = \_args ->
-    Stdout.line! "There are $(total) animals."
+    Stdout.line! "There are ${total} animals."
 ```
 
 Now run `roc main.roc` again. This time the "Downloading ..." message won't appear; the file has been cached from last time, and won't need to be downloaded again.
@@ -204,9 +204,9 @@ You should see this:
 A definition names an expression.
 
 - The first two defs assign the names `birds` and `iguanas` to the expressions `3` and `2`.
-- The next def assigns the name `total` to the expression `Num.toStr (birds + iguanas)`.
+- The next def assigns the name `total` to the expression `Num.to_str (birds + iguanas)`.
 
-Once we have a def, we can use its name in other expressions. For example, the `total` expression refers to `birds` and `iguanas`, and `Stdout.line! "There are $(total) animals."` refers to `total`.
+Once we have a def, we can use its name in other expressions. For example, the `total` expression refers to `birds` and `iguanas`, and `Stdout.line! "There are ${total} animals."` refers to `total`.
 
 You can name a def using any combination of letters and numbers, but they have to start with a lowercase letter.
 
@@ -219,7 +219,7 @@ birds = 2
 
 ### [Defining Functions](#defining-functions) {#defining-functions}
 
-So far we've called functions like `Num.toStr`, `Str.concat`, and `Stdout.line`. Next let's try defining a function of our own.
+So far we've called functions like `Num.to_str`, `Str.concat`, and `Stdout.line`. Next let's try defining a function of our own.
 
 ```roc
 birds = 3
@@ -229,13 +229,13 @@ iguanas = 2
 total = add_and_stringify birds iguanas
 
 main! = \_args ->
-    Stdout.line! "There are $(total) animals."
+    Stdout.line! "There are ${total} animals."
 
 add_and_stringify = \num1, num2 ->
-    Num.toStr (num1 + num2)
+    Num.to_str (num1 + num2)
 ```
 
-This new `add_and_stringify` function we've defined accepts two numbers, adds them, calls `Num.toStr` on the result, and returns that.
+This new `add_and_stringify` function we've defined accepts two numbers, adds them, calls `Num.to_str` on the result, and returns that.
 
 The `\num1, num2 ->` syntax defines a function's arguments, and the expression after the `->` is the body of the function. Whenever a function gets called, its body expression gets evaluated and returned.
 
@@ -250,13 +250,13 @@ add_and_stringify = \num1, num2 ->
     if sum == 0 then
         ""
     else
-        Num.toStr sum
+        Num.to_str sum
 ```
 
 We did two things here:
 
 - We introduced a _local def_ named `sum`, and set it equal to `num1 + num2`. Because we defined `sum` inside `add_and_stringify`, it's _local_ to that scope and can't be accessed outside that function.
-- We added an `if`\-`then`\-`else` conditional to return either `""` or `Num.toStr sum` depending on whether `sum == 0`.
+- We added an `if`\-`then`\-`else` conditional to return either `""` or `Num.to_str sum` depending on whether `sum == 0`.
 
 Every `if` must be accompanied by both `then` and also `else`. Having an `if` without an `else` is an error, because `if` is an expression, and all expressions must evaluate to a value. If there were ever an `if` without an `else`, that would be an expression that might not evaluate to a value!
 
@@ -273,7 +273,7 @@ add_and_stringify = \num1, num2 ->
     else if sum < 0 then
         "negative"
     else
-        Num.toStr sum
+        Num.to_str sum
 ```
 
 Note that `else if` is not a separate language keyword! It's just an `if`/`else` where the `else` branch contains another `if`/`else`. This is easier to see with different indentation:
@@ -288,7 +288,7 @@ add_and_stringify = \num1, num2 ->
         if sum < 0 then
             "negative"
         else
-            Num.toStr sum
+            Num.to_str sum
 ```
 
 This differently-indented version is equivalent to writing `else if sum < 0 then` on the same line, although the convention is to use the original version's style.
@@ -325,7 +325,7 @@ Currently our `add_and_stringify` function takes two arguments. We can instead m
 total = add_and_stringify { birds: 5, iguanas: 7 }
 
 add_and_stringify = \counts ->
-    Num.toStr (counts.birds + counts.iguanas)
+    Num.to_str (counts.birds + counts.iguanas)
 ```
 
 The function now takes a _record_, which is a group of named values. Records are not [objects](<https://en.wikipedia.org/wiki/Object_(computer_science)>); they don't have methods or inheritance, they just store information.
@@ -349,7 +349,7 @@ total = add_and_stringify { birds: 5, iguanas: 7 }
 total_with_note = add_and_stringify { birds: 4, iguanas: 3, note: "Whee!" }
 
 add_and_stringify = \counts ->
-    Num.toStr (counts.birds + counts.iguanas)
+    Num.to_str (counts.birds + counts.iguanas)
 ```
 
 This works because `add_and_stringify` only uses `counts.birds` and `counts.iguanas`. If we were to use `counts.note` inside `add_and_stringify`, then we would get an error because `total` is calling `add_and_stringify` passing a record that doesn't have a `note` field.
@@ -383,14 +383,14 @@ We can use _destructuring_ to avoid naming a record in a function argument, inst
 
 ```roc
 add_and_stringify = \{ birds, iguanas } ->
-    Num.toStr (birds + iguanas)
+    Num.to_str (birds + iguanas)
 ```
 
 Here, we've _destructured_ the record to create a `birds` def that's assigned to its `birds` field, and an `iguanas` def that's assigned to its `iguanas` field. We can customize this if we like:
 
 ```roc
 add_and_stringify = \{ birds, iguanas: lizards } ->
-    Num.toStr (birds + lizards)
+    Num.to_str (birds + lizards)
 ```
 
 In this version, we created a `lizards` def that's assigned to the record's `iguanas` field. (We could also do something similar with the `birds` field if we like.)
@@ -810,7 +810,7 @@ Here's how calling `List.get` can look in practice:
 
 ```roc
 when List.get ["a", "b", "c"] index is
-    Ok str -> "I got this string: $(str)"
+    Ok str -> "I got this string: ${str}"
     Err OutOfBounds -> "That index was out of bounds, sorry!"
 ```
 
@@ -1017,7 +1017,7 @@ Sometimes you may want to document the type of a definition. For example, you mi
 ```roc
 # Takes a first_name string and a last_name string, and returns a string
 full_name = \first_name, last_name ->
-    "$(first_name) $(last_name)"
+    "${first_name} ${last_name}"
 ```
 
 Comments can be valuable documentation, but they can also get out of date and become misleading. If someone changes this function and forgets to update the comment, it will no longer be accurate.
@@ -1029,7 +1029,7 @@ Here's another way to document this function's type, which doesn't have that pro
 ```roc
 full_name : Str, Str -> Str
 full_name = \first_name, last_name ->
-    "$(first_name) $(last_name)"
+    "${first_name} ${last_name}"
 ```
 
 The `full_name :` line is a _type annotation_. It's a strictly optional piece of metadata we can add above a def to describe its type. Unlike a comment, the Roc compiler will check type annotations for accuracy. If the annotation ever doesn't fit with the implementation, we'll get a compile-time error.
@@ -1410,12 +1410,12 @@ You can write automated tests for your Roc code like so:
 
 ```roc
 pluralize = \singular, plural, count ->
-    count_str = Num.toStr count
+    count_str = Num.to_str count
 
     if count == 1 then
-        "$(count_str) $(singular)"
+        "${count_str} ${singular}"
     else
-        "$(count_str) $(plural)"
+        "${count_str} ${plural}"
 
 expect pluralize "cactus" "cacti" 1 == "1 cactus"
 
@@ -1439,14 +1439,14 @@ Expects do not have to be at the top level:
 
 ```roc
 pluralize = \singular, plural, count ->
-    count_str = Num.toStr count
+    count_str = Num.to_str count
 
     if count == 1 then
-        "$(count_str) $(singular)"
+        "${count_str} ${singular}"
     else
         expect count > 0
 
-        "$(count_str) $(plural)"
+        "${count_str} ${plural}"
 ```
 
 This `expect` will fail if you call `pluralize` passing a count of 0.
@@ -1625,7 +1625,7 @@ There are two types of functions in roc, "pure" and "effectful". Consider these 
 ```roc
 with_extension : Str -> Str
 with_extension = \filename ->
-    "$(filename).roc"
+    "${filename}.roc"
 
 read_file! : Str => Str
 read_file! = \path ->
@@ -1690,7 +1690,7 @@ import pf.Stdin
 main! = \_args ->
     try Stdout.line! "Type in something and press Enter:"
     input = try Stdin.line! {}
-    try Stdout.line! "Your input was: $(input)"
+    try Stdout.line! "Your input was: ${input}"
 
     Ok {}
 ```
@@ -1766,7 +1766,7 @@ main! : List Arg => Result {} [Exit I32 Str]
 main! = \_args ->
     try Stdout.line! "Type in something and press Enter:"
     input = try Stdin.line! {}
-    try Stdout.line! "Your input was: $(input)"
+    try Stdout.line! "Your input was: ${input}"
 
     Ok {}
 ```
@@ -1798,7 +1798,7 @@ my_function! : {} => Result {} [EndOfFile, StdinErr _, StdoutErr _]
 my_function! = \{} ->
     try Stdout.line! "Type in something and press Enter:"
     input = try Stdin.line! {}
-    try Stdout.line! "Your input was: $(input)"
+    try Stdout.line! "Your input was: ${input}"
 
     Ok {}
 ```
@@ -1841,7 +1841,7 @@ import pf.Stdin
 main! = \_args ->
     try Stdout.line! "Type in something and press Enter:"
     input = try Stdin.line! {}
-    try Stdout.line! "Your input was: $(input)"
+    try Stdout.line! "Your input was: ${input}"
     Ok {}
 ```
 
@@ -1856,7 +1856,7 @@ main! = \_args ->
     _ = Stdout.line! "Type in something and press Enter:"
     when Stdin.line! {} is
         Ok input ->
-            _ = Stdout.line! "Your input was: $(input)"
+            _ = Stdout.line! "Your input was: ${input}"
             Ok {}
         Err _ ->
             Ok {}
@@ -1870,7 +1870,7 @@ Although it's rare, it is possible that either of the `Stdout.line!` operations 
 main! = \_args ->
     try Stdout.line! "Type something and press Enter."
     input = try Stdin.line! {}
-    try Stdout.line! "You entered: $(input)"
+    try Stdout.line! "You entered: ${input}"
     Ok {}
 ```
 
@@ -1897,7 +1897,7 @@ main! = \_args ->
         |> Result.mapErr UnableToReadInput
         |> try
 
-    Stdout.line! "You entered: $(input)"
+    Stdout.line! "You entered: ${input}"
     |> Result.mapErr UnableToPrintInput
     |> try
 
@@ -1920,14 +1920,14 @@ This code is doing three things:
 
 See the [Error Handling example](https://www.roc-lang.org/examples/ErrorHandling/README.html) for a more detailed explanation of error handling in a larger program.
 
-### [Displaying Roc values with `Inspect.toStr`](#inspect) {#inspect}
+### [Displaying Roc values with `Inspect.to_str`](#inspect) {#inspect}
 
-The [`Inspect.toStr`](https://www.roc-lang.org/builtins/Inspect#toStr) function returns a `Str` representation of any Roc value using its [`Inspect` ability](/abilities#inspect-ability). It's useful for things like debugging and logging (although [`dbg`](https://www.roc-lang.org/tutorial#debugging) is often nicer for debugging in particular), but its output is almost never something that should be shown to end users! In this case we're just using it for our own learning, but it would be better to run a `when` on `e` and display a more helpful message.
+The [`Inspect.to_str`](https://www.roc-lang.org/builtins/Inspect#to_str) function returns a `Str` representation of any Roc value using its [`Inspect` ability](/abilities#inspect-ability). It's useful for things like debugging and logging (although [`dbg`](https://www.roc-lang.org/tutorial#debugging) is often nicer for debugging in particular), but its output is almost never something that should be shown to end users! In this case we're just using it for our own learning, but it would be better to run a `when` on `e` and display a more helpful message.
 
 ```roc
 when err is
-    StdoutErr e -> Exit 1 "Error writing to stdout: $(Inspect.toStr e)"
-    StdinErr e -> Exit 2 "Error writing to stdin: $(Inspect.toStr e)"
+    StdoutErr e -> Exit 1 "Error writing to stdout: ${Inspect.to_str e}"
+    StdinErr e -> Exit 2 "Error writing to stdin: ${Inspect.to_str e}"
 ```
 
 ### [The early `return` keyword](#the-early-return-keyword) {#the-early-return-keyword}
@@ -1988,7 +1988,7 @@ Let's say I write a function which takes a record with a `first_name` and `last_
 
 ```roc
 full_name = \user ->
-    "$(user.first_name) $(user.last_name)"
+    "${user.first_name} ${user.last_name}"
 ```
 
 I can pass this function a record that has more fields than just `first_name` and `last_name`, as long as it has _at least_ both of those fields (and both of them are strings). So any of these calls would work:
@@ -2007,14 +2007,14 @@ If we add a type annotation to this `full_name` function, we can choose to have 
 # Closed record
 full_name : { first_name : Str, last_name : Str } -> Str
 full_name = \user ->
-    "$(user.first_name) $(user.last_name)"
+    "${user.first_name} ${user.last_name}"
 ```
 
 ```roc
 # Open record (because of the `*`)
 full_name : { first_name : Str, last_name : Str }* -> Str
 full_name = \user ->
-    "$(user.first_name) $(user.last_name)"
+    "${user.first_name} ${user.last_name}"
 ```
 
 The `*` in the type `{ first_name : Str, last_name : Str }*` is what makes it an open record type. This `*` is the _wildcard type_ we saw earlier with empty lists. (An empty list has the type `List *`, in contrast to something like `List Str` which is a list of strings.)
@@ -2030,7 +2030,7 @@ The type variable can also be a named type variable, like so:
 ```roc
 add_https : { url : Str }a -> { url : Str }a
 add_https = \record ->
-    { record & url: "https://$(record.url)" }
+    { record & url: "https://${record.url}" }
 ```
 
 This function uses _constrained records_ in its type. The annotation is saying:

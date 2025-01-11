@@ -15,8 +15,8 @@ main! = \{} ->
 validate! : U32 => Result {} U32
 validate! = \x ->
     if Num.is_even(x) then
-        Effect.put_line!("✅ $(Num.to_str(x))")
+        Effect.put_line!("✅ ${Num.to_str(x)}")
         Ok({})
     else
-        Effect.put_line!("$(Num.to_str(x)) is not even! ABORT!")
+        Effect.put_line!("${Num.to_str(x)} is not even! ABORT!")
         Err(x)

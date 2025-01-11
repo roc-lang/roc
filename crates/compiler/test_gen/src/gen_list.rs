@@ -330,7 +330,7 @@ fn list_map_try_ok() {
             List.map_try [1, 2, 3] \num ->
                 str = Num.to_str (num * 2)
 
-                Ok "$(str)!"
+                Ok "${str}!"
         "#,
         // Result Str [] is unwrapped to just Str
         RocList::<RocStr>::from_slice(&[
@@ -3870,10 +3870,10 @@ fn issue_3571_lowlevel_call_function_with_bool_lambda_set() {
                     List.concat state mapped_vals
 
             add2 : Str -> Str
-            add2 = \x -> "added $(x)"
+            add2 = \x -> "added ${x}"
 
             mul2 : Str -> Str
-            mul2 = \x -> "multiplied $(x)"
+            mul2 = \x -> "multiplied ${x}"
 
             foo = [add2, mul2]
             bar = ["1", "2", "3", "4"]

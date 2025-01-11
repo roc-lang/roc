@@ -15,5 +15,5 @@ main! = \{} ->
     else
         {}
 
-    Effect.put_line!("You entered: $(line)")
+    Effect.put_line!("You entered: ${line}")
     Effect.put_line!("It is known")

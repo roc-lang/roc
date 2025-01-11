@@ -7,7 +7,7 @@ main! = \{} ->
     first = ask!("What's your first name?")
     last = ask!("What's your last name?")
 
-    Effect.put_line!("\nHi, $(first) $(last)!\n")
+    Effect.put_line!("\nHi, ${first} ${last}!\n")
 
     when Str.to_u8(ask!("How old are you?")) is
         Err(InvalidNumStr) ->
@@ -17,7 +17,7 @@ main! = \{} ->
             Effect.put_line!("\nNice! You can vote!")
 
         Ok(age) ->
-            Effect.put_line!("\nYou'll be able to vote in $(Num.to_str((18 - age))) years")
+            Effect.put_line!("\nYou'll be able to vote in ${Num.to_str(18 - age)} years")
 
     Effect.put_line!("\nBye! 👋")
 

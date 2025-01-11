@@ -37,7 +37,7 @@ fn early_return_nested_ifs() {
                         else
                             third
 
-                "$(first), $(second)"
+                "${first}, ${second}"
 
             main : List Str
             main = List.map [1, 2, 3] display_n
@@ -76,7 +76,7 @@ fn early_return_nested_whens() {
                                 _ ->
                                     third
 
-                "$(first), $(second)"
+                "${first}, ${second}"
 
             main : List Str
             main = List.map [1, 2, 3] display_n

@@ -887,7 +887,7 @@ increase_size = \@Dict({ data, max_bucket_capacity, max_load_factor, shifts }) -
             },
         )
     else
-        crash("Dict hit limit of $(Num.to_str(max_bucket_count)) elements. Unable to grow more.")
+        crash("Dict hit limit of ${Num.to_str(max_bucket_count)} elements. Unable to grow more.")
 
 alloc_buckets_from_shift : U8, F32 -> (List Bucket, U64)
 alloc_buckets_from_shift = \shifts, max_load_factor ->

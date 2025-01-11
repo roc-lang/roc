@@ -75,6 +75,7 @@ module [
     for_each!,
     for_each_try!,
     walk!,
+    walk_try!,
 ]
 
 import Bool exposing [Bool, Eq]
@@ -1484,7 +1485,7 @@ for_each! = \list, func! ->
 ## List.for_each_try!(files_to_delete, \path ->
 ##     File.delete!(path)?
 ##
-##     Stdout.line!("$(path) deleted")
+##     Stdout.line!("${path} deleted")
 ## )
 ## ```
 for_each_try! : List a, (a => Result {} err) => Result {} err
@@ -1514,7 +1515,40 @@ for_each_try! = \list, func! ->
 walk! : List elem, state, (state, elem => state) => state
 walk! = \list, state, func! ->
     when list is
-        [] -> state
+        [] ->
+            state
+
         [elem, .. as rest] ->
             next_state = func!(state, elem)
             walk!(rest, next_state, func!)
+
+## Build a value from the contents of a list, using an effectful function that might fail.
+##
+## If the function returns `Err`, the iteration stops and the error is returned.
+##
+## ```
+## names =
+##     List.walk_try!(
+##         ["First", "Middle", "Last"],
+##         [],
+##         \accumulator, which ->
+##             Stdout.write!("${which} name: ")?
+##             name = Stdin.line!({})?
+##             Ok(List.append(accumulator, name)),
+##     )?
+## ```
+##
+## This is the same as [walk_try], except that the step function can have effects.
+walk_try! : List elem, state, (state, elem => Result state err) => Result state err
+walk_try! = \list, state, func! ->
+    when list is
+        [] ->
+            Ok(state)
+
+        [elem, .. as rest] ->
+            when func!(state, elem) is
+                Ok(next_state) ->
+                    walk_try!(rest, next_state, func!)
+
+                Err(err) ->
+                    Err(err)

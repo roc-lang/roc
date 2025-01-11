@@ -242,15 +242,7 @@ fn loc_term<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
             let mut e = expr;
             let orig_region = e.region;
             for (args_loc, maybe_suffixes) in arg_locs_with_suffixes_vec.iter() {
-                let value = if matches!(
-                    e,
-                    Loc {
-                        value: Expr::Dbg,
-                        ..
-                    }
-                ) {
-                    Expr::Apply(arena.alloc(e), args_loc.value.items, CalledVia::Space)
-                } else if let Some(suffixes) = maybe_suffixes {
+                let value = if let Some(suffixes) = maybe_suffixes {
                     apply_expr_access_chain(
                         arena,
                         Expr::PncApply(arena.alloc(e), args_loc.value),
@@ -3150,24 +3142,32 @@ fn stmts_to_defs<'a>(
                         _,
                     ) = e
                     {
-                        let condition = &args[0];
-                        let rest = stmts_to_expr(&stmts[i + 1..], arena)?;
-                        let e = Expr::DbgStmt {
-                            first: condition,
-                            extra_args: &args[1..],
-                            continuation: arena.alloc(rest),
-                        };
+                        if let Some((first, extra_args)) = args.split_first() {
+                            let rest = stmts_to_expr(&stmts[i + 1..], arena)?;
+                            let e = Expr::DbgStmt {
+                                first,
+                                extra_args,
+                                continuation: arena.alloc(rest),
+                            };
 
-                        let e = if sp_stmt.before.is_empty() {
-                            e
+                            let e = if sp_stmt.before.is_empty() {
+                                e
+                            } else {
+                                arena.alloc(e).before(sp_stmt.before)
+                            };
+
+                            last_expr = Some(Loc::at(sp_stmt.item.region, e));
+
+                            // don't re-process the rest of the statements; they got consumed by the dbg expr
+                            break;
                         } else {
-                            arena.alloc(e).before(sp_stmt.before)
-                        };
-
-                        last_expr = Some(Loc::at(sp_stmt.item.region, e));
-
-                        // don't re-process the rest of the statements; they got consumed by the dbg expr
-                        break;
+                            defs.push_value_def(
+                                ValueDef::Stmt(arena.alloc(Loc::at(sp_stmt.item.region, e))),
+                                sp_stmt.item.region,
+                                sp_stmt.before,
+                                &[],
+                            );
+                        }
                     } else if let Expr::PncApply(
                         Loc {
                             value: Expr::Dbg, ..
@@ -3175,24 +3175,32 @@ fn stmts_to_defs<'a>(
                         args,
                     ) = e
                     {
-                        let condition = &args.items[0];
-                        let rest = stmts_to_expr(&stmts[i + 1..], arena)?;
-                        let e = Expr::DbgStmt {
-                            first: condition,
-                            extra_args: &args.items[1..],
-                            continuation: arena.alloc(rest),
-                        };
+                        if let Some((first, extra_args)) = args.items.split_first() {
+                            let rest = stmts_to_expr(&stmts[i + 1..], arena)?;
+                            let e = Expr::DbgStmt {
+                                first,
+                                extra_args,
+                                continuation: arena.alloc(rest),
+                            };
 
-                        let e = if sp_stmt.before.is_empty() {
-                            e
+                            let e = if sp_stmt.before.is_empty() {
+                                e
+                            } else {
+                                arena.alloc(e).before(sp_stmt.before)
+                            };
+
+                            last_expr = Some(Loc::at(sp_stmt.item.region, e));
+
+                            // don't re-process the rest of the statements; they got consumed by the dbg expr
+                            break;
                         } else {
-                            arena.alloc(e).before(sp_stmt.before)
-                        };
-
-                        last_expr = Some(Loc::at(sp_stmt.item.region, e));
-
-                        // don't re-process the rest of the statements; they got consumed by the dbg expr
-                        break;
+                            defs.push_value_def(
+                                ValueDef::Stmt(arena.alloc(Loc::at(sp_stmt.item.region, e))),
+                                sp_stmt.item.region,
+                                sp_stmt.before,
+                                &[],
+                            );
+                        }
                     } else {
                         defs.push_value_def(
                             ValueDef::Stmt(arena.alloc(Loc::at(sp_stmt.item.region, e))),

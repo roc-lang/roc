@@ -56,7 +56,7 @@ to_str = \{ scopes, stack, state, vars } ->
     stack_str = Str.join_with(List.map(stack, to_str_data), " ")
     vars_str = Str.join_with(List.map(vars, to_str_data), " ")
 
-    "\n============\nDepth: $(depth)\nState: $(state_str)\nStack: [$(stack_str)]\nVars: [$(vars_str)]\n============\n"
+    "\n============\nDepth: ${depth}\nState: ${state_str}\nStack: [${stack_str}]\nVars: [${vars_str}]\n============\n"
 
 with! : Str, (Context => a) => a
 with! = \path, callback! ->

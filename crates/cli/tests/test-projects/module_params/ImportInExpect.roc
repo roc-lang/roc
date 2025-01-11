@@ -1,6 +1,6 @@
 module []
 
-https = \url -> "https://$(url)"
+https = \url -> "https://${url}"
 
 expect
     import Api { app_id: "one", protocol: https }
