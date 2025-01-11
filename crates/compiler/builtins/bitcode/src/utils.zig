@@ -224,10 +224,7 @@ pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
                     const old = @as(usize, @bitCast(refcount));
                     const new = old + @as(usize, @intCast(amount));
 
-                    const oldH = old - REFCOUNT_ONE + 1;
-                    const newH = new - REFCOUNT_ONE + 1;
-
-                    std.debug.print("{} + {} = {}!\n", .{ oldH, amount, newH });
+                    std.debug.print("{} + {} = {}!\n", .{ old, amount, new });
                 }
 
                 ptr_to_refcount.* = refcount + amount;
@@ -390,10 +387,7 @@ inline fn decref_ptr_to_refcount(
                 const new = @as(usize, @bitCast(refcount -% 1));
 
                 if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
-                    const oldH = old - REFCOUNT_ONE + 1;
-                    const newH = new - REFCOUNT_ONE + 1;
-
-                    std.debug.print("{} - 1 = {}!\n", .{ oldH, newH });
+                    std.debug.print("{} - 1 = {}!\n", .{ old, new });
                 }
 
                 if (refcount == REFCOUNT_ONE_ISIZE) {
