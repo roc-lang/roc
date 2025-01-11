@@ -135,7 +135,7 @@ fn err_type_var_annotation() {
     assert_evals_to!(
         indoc!(
             r"
-            ok : Result I64 *
+            ok : Result I64 _
             ok = Ok 3
 
             Result.map ok (\x -> x + 1)
