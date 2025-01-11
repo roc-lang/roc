@@ -2998,6 +2998,13 @@ fn parse_stmt_seq<'a, E: SpaceProblem + 'a>(
                         break;
                     }
 
+                    // If this expr might be followed by an arrow (e.g. in a when branch guard),
+                    // then we also need to treat that as a terminator.
+                    if !check_for_arrow.0 && new_state.bytes().starts_with(b"->") {
+                        state = state_before_space;
+                        break;
+                    }
+
                     return Err((
                         MadeProgress,
                         wrap_error(arena.alloc(EExpr::BadExprEnd(state.pos())), state.pos()),

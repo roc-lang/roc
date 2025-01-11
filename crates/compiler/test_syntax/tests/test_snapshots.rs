@@ -522,6 +522,7 @@ mod test_snapshots {
         pass/multiline_str_and_str_in_alias.expr,
         pass/multiline_str_apply_in_parens_pat.expr,
         pass/multiline_str_crazyness.expr,
+        pass/multiline_str_in_closure_in_when_guard_wtf.expr,
         pass/multiline_str_in_pat.expr,
         pass/multiline_str_interpolation_records.expr,
         pass/multiline_str_opt_field.expr,
