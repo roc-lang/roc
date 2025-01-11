@@ -47,6 +47,7 @@ pub fn fmt_collection<'a, 'buf, T: ExtractSpaces<'a> + Formattable + std::fmt::D
     let end = braces.end();
 
     if is_collection_multiline(&items) {
+        println!("Collection is multiline");
         let braces_indent = indent;
         let item_indent = braces_indent + INDENT;
         if newline == Newlines::Yes {

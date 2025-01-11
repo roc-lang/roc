@@ -1,13 +1,17 @@
 use crate::annotation::{Formattable, Newlines, Parens};
+use crate::collection::{fmt_collection, Braces};
 use crate::expr::{
-    expr_is_multiline, expr_lift_spaces_after, fmt_str_literal, format_sq_literal, is_str_multiline,
+    expr_is_multiline, expr_lift_spaces_after, fmt_str_literal, format_spaces, format_sq_literal,
+    is_str_multiline,
 };
 use crate::node::{Node, NodeInfo, NodeSequenceBuilder, Prec, Sp};
-use crate::spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT};
+use crate::spaces::{fmt_comments_only, fmt_spaces, merge_spaces_conservative, NewlineAt, INDENT};
 use crate::Buf;
+use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_parse::ast::{
-    Base, CommentOrNewline, Pattern, PatternAs, Spaceable, Spaces, SpacesAfter, SpacesBefore,
+    Base, Collection, CommentOrNewline, Pattern, PatternAs, Spaceable, Spaces, SpacesAfter,
+    SpacesBefore,
 };
 use roc_parse::expr::merge_spaces;
 use roc_region::all::Loc;
@@ -168,28 +172,26 @@ fn fmt_pattern_only(
             buf.push_str(name);
         }
         Pattern::PncApply(loc_pattern, loc_arg_patterns) => {
-            pattern_fmt_apply(
-                buf,
-                loc_pattern.value,
-                loc_arg_patterns.items,
-                Parens::NotNeeded,
-                indent,
-                is_multiline,
-                true,
-                Some(loc_arg_patterns.final_comments()),
-            );
+            pattern_fmt_pnc_apply(buf, loc_pattern.value, *loc_arg_patterns, indent);
         }
         Pattern::Apply(loc_pattern, loc_arg_patterns) => {
-            pattern_fmt_apply(
-                buf,
-                loc_pattern.value,
-                loc_arg_patterns,
-                parens,
-                indent,
-                is_multiline,
-                false,
-                None,
-            );
+            if buf.flags().parens_and_commas {
+                pattern_fmt_pnc_apply(
+                    buf,
+                    loc_pattern.value,
+                    Collection::with_items(loc_arg_patterns),
+                    indent,
+                );
+            } else {
+                pattern_fmt_apply(
+                    buf,
+                    loc_pattern.value,
+                    loc_arg_patterns,
+                    parens,
+                    indent,
+                    is_multiline,
+                );
+            }
         }
         Pattern::RecordDestructure(loc_patterns) => {
             buf.indent(indent);
@@ -457,6 +459,74 @@ fn fmt_pattern_only(
     }
 }
 
+fn fmt_pattern_collection(
+    buf: &mut Buf<'_>,
+
+    indent: u16,
+    braces: Braces,
+    items: Collection<'_, &Loc<Pattern<'_>>>,
+    newlines: Newlines,
+) {
+    let arena = buf.text.bump();
+    let mut new_items: Vec<'_, &Pattern<'_>> = Vec::with_capacity_in(items.len(), arena);
+
+    let mut last_after: &[CommentOrNewline<'_>] = &[];
+
+    for item in items.items {
+        let mut lifted = pattern_lift_spaces(arena, &item.value);
+        lifted.before = merge_spaces_conservative(arena, last_after, lifted.before);
+        last_after = lifted.after;
+        lifted.after = &[];
+        new_items.push(arena.alloc(lower(arena, lifted)));
+    }
+
+    let final_comments = merge_spaces_conservative(arena, last_after, items.final_comments());
+
+    let new_items =
+        Collection::with_items_and_comments(arena, new_items.into_bump_slice(), final_comments);
+
+    fmt_collection(buf, indent, braces, new_items, newlines)
+}
+
+fn lower<'a, 'b: 'a>(arena: &'b Bump, lifted: Spaces<'b, Pattern<'b>>) -> Pattern<'b> {
+    if lifted.before.is_empty() && lifted.after.is_empty() {
+        return lifted.item;
+    }
+    if lifted.before.is_empty() {
+        return Pattern::SpaceAfter(arena.alloc(lifted.item), lifted.after);
+    }
+    if lifted.after.is_empty() {
+        return Pattern::SpaceBefore(arena.alloc(lifted.item), lifted.before);
+    }
+    Pattern::SpaceBefore(
+        arena.alloc(Pattern::SpaceAfter(arena.alloc(lifted.item), lifted.after)),
+        lifted.before,
+    )
+}
+
+fn pattern_fmt_pnc_apply(
+    buf: &mut Buf<'_>,
+    func: Pattern<'_>,
+    args: Collection<'_, Loc<Pattern<'_>>>,
+    indent: u16,
+) {
+    let patt = pattern_lift_spaces(buf.text.bump(), &func);
+
+    if !patt.before.is_empty() {
+        format_spaces(buf, patt.before, Newlines::Yes, indent);
+    }
+
+    patt.item
+        .format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
+    fmt_pattern_collection(
+        buf,
+        indent,
+        Braces::Round,
+        args.ptrify_items(buf.text.bump()),
+        Newlines::No,
+    );
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn pattern_fmt_apply(
     buf: &mut Buf<'_>,
@@ -465,14 +535,11 @@ pub fn pattern_fmt_apply(
     parens: Parens,
     indent: u16,
     is_multiline: bool,
-    is_pnc: bool,
-    final_comments: Option<&[CommentOrNewline]>,
 ) {
-    let use_commas_and_parens = is_pnc || buf.flags().parens_and_commas;
     buf.indent(indent);
     // Sometimes, an Apply pattern needs parens around it.
     // In particular when an Apply's argument is itself an Apply (> 0) arguments
-    let parens = !args.is_empty() && parens == Parens::InApply && !use_commas_and_parens;
+    let parens = !args.is_empty() && parens == Parens::InApply;
 
     let indent_more = if is_multiline {
         indent + INDENT
@@ -496,27 +563,14 @@ pub fn pattern_fmt_apply(
 
     fmt_pattern_only(&func.item, buf, Parens::InApply, indent, is_multiline);
 
-    if use_commas_and_parens {
-        buf.push('(');
-    }
-
     let mut last_after = func.after;
 
     let mut add_newlines = is_multiline;
 
-    for (i, loc_arg) in args.iter().enumerate() {
-        let is_last_arg = i == args.len() - 1;
-        let is_first_arg = i == 0;
+    for loc_arg in args.iter() {
+        buf.spaces(1);
 
-        if !(is_first_arg && use_commas_and_parens) {
-            buf.spaces(1);
-        }
-
-        let parens = if use_commas_and_parens {
-            Parens::NotNeeded
-        } else {
-            Parens::InApply
-        };
+        let parens = Parens::InApply;
         let arg = pattern_lift_spaces(buf.text.bump(), &loc_arg.value);
 
         let mut was_multiline = arg.item.is_multiline();
@@ -563,9 +617,6 @@ pub fn pattern_fmt_apply(
             buf.push_str("(implements)");
         } else {
             fmt_pattern_only(&arg.item, buf, parens, indent_more, arg.item.is_multiline());
-            if use_commas_and_parens && (!is_last_arg || is_multiline) {
-                buf.push(',');
-            }
         }
 
         last_after = arg.after;
@@ -573,33 +624,12 @@ pub fn pattern_fmt_apply(
         add_newlines |= was_multiline;
     }
 
-    if let Some(comments) = final_comments {
-        if !is_multiline {
-            fmt_comments_only(buf, comments.iter(), NewlineAt::Bottom, indent_more);
-        } else {
-            fmt_spaces(buf, comments.iter(), indent_more);
-        }
-    }
     if !last_after.is_empty() {
         if !is_multiline {
             fmt_comments_only(buf, last_after.iter(), NewlineAt::Bottom, indent_more)
         } else {
             fmt_spaces(buf, last_after.iter(), indent_more);
         }
-    }
-
-    if use_commas_and_parens {
-        if is_multiline {
-            buf.ensure_ends_with_newline();
-            buf.indent(indent);
-        }
-        if buf.ends_with_newline() {
-            buf.indent(indent);
-        }
-        if buf.ends_with_newline() {
-            buf.indent(indent);
-        }
-        buf.push(')');
     }
 
     if parens {
@@ -817,7 +847,7 @@ pub fn pattern_lift_spaces_after<'a, 'b: 'a>(
 
 /// Convert camelCase identifier to snake case
 pub fn snakify_camel_ident(buf: &mut Buf, string: &str) {
-    let chars: Vec<char> = string.chars().collect();
+    let chars: std::vec::Vec<char> = string.chars().collect();
     if !buf.flags().snakify || (string.contains('_') && !string.ends_with('_')) {
         buf.push_str(string);
         return;
