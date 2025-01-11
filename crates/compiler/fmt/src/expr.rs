@@ -262,11 +262,8 @@ fn format_expr_only(
 
             let before_all_newlines = lifted.before.iter().all(|s| s.is_newline());
 
-            let needs_newline = !before_all_newlines
-                || match &lifted.item {
-                    Expr::Str(text) => is_str_multiline(text),
-                    _ => false,
-                };
+            let needs_newline =
+                !before_all_newlines || term_starts_with_multiline_str(&lifted.item);
 
             let needs_parens = (needs_newline
                 && matches!(unary_op.value, called_via::UnaryOp::Negate))
@@ -366,6 +363,14 @@ fn format_expr_only(
         Expr::EmptyRecordBuilder { .. } => {}
         Expr::SingleFieldRecordBuilder { .. } => {}
         Expr::OptionalFieldInRecordBuilder(_, _) => {}
+    }
+}
+
+fn term_starts_with_multiline_str(expr: &Expr<'_>) -> bool {
+    match expr {
+        Expr::Str(text) => is_str_multiline(text),
+        Expr::PncApply(inner, _) => term_starts_with_multiline_str(&inner.value),
+        _ => false,
     }
 }
 
@@ -635,7 +640,9 @@ fn requires_space_after_unary(item: &Expr<'_>) -> bool {
         Expr::RecordAccess(inner, _field) | Expr::TupleAccess(inner, _field) => {
             requires_space_after_unary(inner)
         }
-        Expr::Apply(inner, _, _) => requires_space_after_unary(&inner.value),
+        Expr::Apply(inner, _, _) | Expr::PncApply(inner, _) => {
+            requires_space_after_unary(&inner.value)
+        }
         Expr::TrySuffix(expr) => requires_space_after_unary(expr),
         Expr::SpaceAfter(inner, _) | Expr::SpaceBefore(inner, _) => {
             requires_space_after_unary(inner)

@@ -691,6 +691,7 @@ mod test_snapshots {
         pass/stmt_parens_minus.expr,
         pass/stmts_in_empty_record_assignment.expr,
         pass/str_block_multiple_newlines.expr,
+        pass/str_minus_pnc_call_multiline_str.expr,
         pass/string_without_escape.expr,
         pass/sub_var_with_spaces.expr,
         pass/sub_with_spaces.expr,
