@@ -1003,7 +1003,16 @@ pub fn desugar_expr<'a>(
             },
             loc_args,
         ) => {
-            let result_expr = if loc_args.len() == 1 {
+            let result_expr = if loc_args.is_empty() {
+                env.problem(Problem::UnderAppliedTry {
+                    region: loc_expr.region,
+                });
+                // Replace with a dummy expression to avoid cascading errors
+                env.arena.alloc(Loc {
+                    value: Record(Collection::empty()),
+                    region: loc_expr.region,
+                })
+            } else if loc_args.len() == 1 {
                 desugar_expr(env, scope, loc_args.items[0])
             } else {
                 let function = desugar_expr(env, scope, loc_args.items.first().unwrap());

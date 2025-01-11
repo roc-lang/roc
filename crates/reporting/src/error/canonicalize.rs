@@ -1338,6 +1338,21 @@ pub fn can_problem<'b>(
             ]);
             title = "OVERAPPLIED DBG".to_string();
         }
+        Problem::UnderAppliedTry { region } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This "),
+                    alloc.keyword("try"),
+                    alloc.reflow(" has too few values given to it:"),
+                ]),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.concat([
+                    alloc.keyword("try"),
+                    alloc.reflow(" must be given exactly one value to try."),
+                ]),
+            ]);
+            title = "UNDERAPPLIED TRY".to_string();
+        }
         Problem::FileProblem { filename, error } => {
             let report = to_file_problem_report(alloc, filename, error);
             doc = report.doc;
@@ -2474,6 +2489,20 @@ fn pretty_runtime_error<'b>(
                     alloc.type_str(suffix_type),
                     alloc.reflow(", whose minimum value is "),
                     alloc.int_literal(min_value),
+                    alloc.reflow("."),
+                ])),
+            ]);
+
+            title = NUMBER_UNDERFLOWS_SUFFIX;
+        }
+        RuntimeError::InvalidTupleIndex(region) => {
+            doc = alloc.stack([
+                alloc.concat([alloc
+                    .reflow("This tuple accessor index is invalid:")]),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.tip().append(alloc.concat([
+                    alloc.reflow("Note that .2 in Roc is a function that extracts the tuple element at index 2 from its argument."),
+                    alloc.reflow("If you mean to create a floating point number, make sure it starts with a digit like 0.2"),
                     alloc.reflow("."),
                 ])),
             ]);

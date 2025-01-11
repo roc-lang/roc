@@ -1,0 +1,10 @@
+@0-21 SpaceAfter(
+    AccessorFunction(
+        TupleIndex(
+            "18888888888888888888",
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

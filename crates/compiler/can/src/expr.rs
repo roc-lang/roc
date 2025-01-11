@@ -1268,21 +1268,9 @@ pub fn canonicalize_expr<'a>(
                 output,
             )
         }
-        ast::Expr::AccessorFunction(field) => (
-            RecordAccessor(StructAccessorData {
-                name: scope.gen_unique_symbol(),
-                function_var: var_store.fresh(),
-                record_var: var_store.fresh(),
-                ext_var: var_store.fresh(),
-                closure_var: var_store.fresh(),
-                field_var: var_store.fresh(),
-                field: match field {
-                    Accessor::RecordField(field) => IndexOrField::Field((*field).into()),
-                    Accessor::TupleIndex(index) => IndexOrField::Index(index.parse().unwrap()),
-                },
-            }),
-            Output::default(),
-        ),
+        ast::Expr::AccessorFunction(field) => {
+            canonicalize_accessor_function(env, var_store, scope, field, region)
+        }
         ast::Expr::TupleAccess(tuple_expr, field) => {
             let (loc_expr, output) = canonicalize_expr(env, var_store, scope, region, tuple_expr);
 
@@ -1653,6 +1641,37 @@ pub fn canonicalize_expr<'a>(
             value: expr,
         },
         output,
+    )
+}
+
+fn canonicalize_accessor_function(
+    env: &mut Env<'_>,
+    var_store: &mut VarStore,
+    scope: &mut Scope,
+    field: &Accessor<'_>,
+    region: Region,
+) -> (Expr, Output) {
+    (
+        Expr::RecordAccessor(StructAccessorData {
+            name: scope.gen_unique_symbol(),
+            function_var: var_store.fresh(),
+            record_var: var_store.fresh(),
+            ext_var: var_store.fresh(),
+            closure_var: var_store.fresh(),
+            field_var: var_store.fresh(),
+            field: match field {
+                Accessor::RecordField(field) => IndexOrField::Field((*field).into()),
+                Accessor::TupleIndex(index) => match index.parse() {
+                    Ok(index) => IndexOrField::Index(index),
+                    Err(_) => {
+                        let error = roc_problem::can::RuntimeError::InvalidTupleIndex(region);
+                        env.problem(Problem::RuntimeError(error.clone()));
+                        return (Expr::RuntimeError(error), Output::default());
+                    }
+                },
+            },
+        }),
+        Output::default(),
     )
 }
 

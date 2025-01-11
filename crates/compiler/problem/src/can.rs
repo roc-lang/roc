@@ -225,6 +225,9 @@ pub enum Problem {
     OverAppliedDbg {
         region: Region,
     },
+    UnderAppliedTry {
+        region: Region,
+    },
     FileProblem {
         filename: PathBuf,
         error: io::ErrorKind,
@@ -339,6 +342,7 @@ impl Problem {
             Problem::OverAppliedCrash { .. } => RuntimeError,
             Problem::UnappliedDbg { .. } => RuntimeError,
             Problem::OverAppliedDbg { .. } => RuntimeError,
+            Problem::UnderAppliedTry { .. } => Warning,
             Problem::DefsOnlyUsedInRecursion(_, _) => Warning,
             Problem::FileProblem { .. } => Fatal,
             Problem::ReturnOutsideOfFunction { .. } => Warning,
@@ -467,6 +471,7 @@ impl Problem {
             | Problem::UnappliedCrash { region }
             | Problem::OverAppliedDbg { region }
             | Problem::UnappliedDbg { region }
+            | Problem::UnderAppliedTry { region }
             | Problem::DefsOnlyUsedInRecursion(_, region)
             | Problem::ReturnOutsideOfFunction { region, .. }
             | Problem::StatementsAfterReturn { region }
@@ -681,6 +686,7 @@ pub enum RuntimeError {
     },
 
     NonFunctionHostedAnnotation(Region),
+    InvalidTupleIndex(Region),
 }
 
 impl RuntimeError {
@@ -718,6 +724,7 @@ impl RuntimeError {
             | RuntimeError::InvalidFloat(_, region, _)
             | RuntimeError::InvalidInt(_, _, region, _)
             | RuntimeError::EmptySingleQuote(region)
+            | RuntimeError::InvalidTupleIndex(region)
             | RuntimeError::MultipleCharsInSingleQuote(region)
             | RuntimeError::DegenerateBranch(region)
             | RuntimeError::InvalidInterpolation(region)
