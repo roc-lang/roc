@@ -1,0 +1,43 @@
+@0-33 SpaceAfter(
+    If {
+        if_thens: [
+            (
+                @2-4 Str(
+                    PlainLine(
+                        "",
+                    ),
+                ),
+                @8-10 UnaryOp(
+                    @9-10 Var {
+                        module_name: "",
+                        ident: "p",
+                    },
+                    @8-9 Negate,
+                ),
+            ),
+            (
+                @18-20 Str(
+                    PlainLine(
+                        "",
+                    ),
+                ),
+                @24-26 UnaryOp(
+                    @25-26 Var {
+                        module_name: "",
+                        ident: "p",
+                    },
+                    @24-25 Negate,
+                ),
+            ),
+        ],
+        final_else: @31-33 AccessorFunction(
+            RecordField(
+                "e",
+            ),
+        ),
+        indented_else: false,
+    },
+    [
+        Newline,
+    ],
+)

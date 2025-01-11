@@ -1915,6 +1915,7 @@ fn fmt_if<'a>(
         buf.indent(indent);
 
         if i > 0 {
+            buf.ensure_ends_with_whitespace();
             buf.push_str("else");
             buf.spaces(1);
         }
@@ -1934,12 +1935,12 @@ fn fmt_if<'a>(
             fmt_comments_only(buf, then.after.iter(), NewlineAt::Bottom, return_indent);
             buf.ensure_ends_with_newline();
         } else {
-            buf.push_str("");
             buf.spaces(1);
             loc_then.format(buf, return_indent);
         }
     }
 
+    buf.ensure_ends_with_whitespace();
     if indented_else {
         buf.indent(indent + INDENT);
         buf.push_str("else");
@@ -1951,7 +1952,7 @@ fn fmt_if<'a>(
         buf.newline();
     } else {
         buf.indent(indent);
-        buf.push_str(" else");
+        buf.push_str("else");
         buf.spaces(1);
     }
     let indent = if indented_else { indent } else { return_indent };

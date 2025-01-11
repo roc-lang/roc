@@ -549,6 +549,7 @@ mod test_snapshots {
         pass/negative_single_quote.expr,
         pass/nested_def_annotation.moduledefs,
         pass/nested_if.expr,
+        pass/nested_if_unindented.expr,
         pass/nested_list_comment_in_closure_arg.expr,
         pass/nested_parens_in_pattern.expr,
         pass/nested_when_comment_in_pat.expr,
