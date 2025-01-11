@@ -277,7 +277,8 @@ fn fmt_pattern_only(
 
         Pattern::NumLiteral(string) => {
             buf.indent(indent);
-            let needs_parens = parens == Parens::InClosurePattern;
+            let needs_parens = parens == Parens::InClosurePattern
+                || (parens == Parens::InPncApplyFunc && string.starts_with('-'));
             if needs_parens {
                 buf.push('(');
             }
@@ -419,6 +420,7 @@ fn fmt_pattern_only(
         Pattern::As(pattern, pattern_as) => {
             let needs_parens = parens == Parens::InAsPattern
                 || parens == Parens::InApply
+                || parens == Parens::InPncApplyFunc
                 || parens == Parens::InClosurePattern;
 
             if needs_parens {
@@ -472,7 +474,9 @@ pub fn pattern_fmt_apply(
     buf.indent(indent);
     // Sometimes, an Apply pattern needs parens around it.
     // In particular when an Apply's argument is itself an Apply (> 0) arguments
-    let parens = !args.is_empty() && parens == Parens::InApply && !use_commas_and_parens;
+    let parens = !args.is_empty()
+        && (parens == Parens::InApply || parens == Parens::InPncApplyFunc)
+        && !use_commas_and_parens;
 
     let indent_more = if is_multiline {
         indent + INDENT
@@ -494,7 +498,17 @@ pub fn pattern_fmt_apply(
         }
     }
 
-    fmt_pattern_only(&func.item, buf, Parens::InApply, indent, is_multiline);
+    fmt_pattern_only(
+        &func.item,
+        buf,
+        if is_pnc {
+            Parens::InPncApplyFunc
+        } else {
+            Parens::InApply
+        },
+        indent,
+        is_multiline,
+    );
 
     if use_commas_and_parens {
         buf.push('(');
