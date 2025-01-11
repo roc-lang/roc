@@ -1547,7 +1547,7 @@ mod test_reporting {
 
     Tip: You can convert between integers and fractions using functions
     like `Num.to_frac` and `Num.round`.
-    "
+    "###
     );
 
     test_report!(
@@ -1582,7 +1582,7 @@ mod test_reporting {
 
     Tip: You can convert between integers and fractions using functions
     like `Num.to_frac` and `Num.round`.
-    "
+    "###
     );
 
     test_report!(
