@@ -3176,40 +3176,6 @@ fn stmts_to_defs<'a>(
                                 &[],
                             );
                         }
-                    } else if let Expr::PncApply(
-                        Loc {
-                            value: Expr::Dbg, ..
-                        },
-                        args,
-                    ) = e
-                    {
-                        if let Some((first, extra_args)) = args.items.split_first() {
-                            let rest = stmts_to_expr(&stmts[i + 1..], arena)?;
-                            let e = Expr::DbgStmt {
-                                first,
-                                extra_args,
-                                continuation: arena.alloc(rest),
-                                pnc_style: true,
-                            };
-
-                            let e = if sp_stmt.before.is_empty() {
-                                e
-                            } else {
-                                arena.alloc(e).before(sp_stmt.before)
-                            };
-
-                            last_expr = Some(Loc::at(sp_stmt.item.region, e));
-
-                            // don't re-process the rest of the statements; they got consumed by the dbg expr
-                            break;
-                        } else {
-                            defs.push_value_def(
-                                ValueDef::Stmt(arena.alloc(Loc::at(sp_stmt.item.region, e))),
-                                sp_stmt.item.region,
-                                sp_stmt.before,
-                                &[],
-                            );
-                        }
                     } else {
                         defs.push_value_def(
                             ValueDef::Stmt(arena.alloc(Loc::at(sp_stmt.item.region, e))),
