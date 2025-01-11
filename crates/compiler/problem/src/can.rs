@@ -255,6 +255,11 @@ pub enum Problem {
     SuffixedPureRecordField(Region),
     EmptyTupleType(Region),
     UnboundTypeVarsInAs(Region),
+    InvalidIgnoredValue {
+        field_name: Lowercase,
+        field_region: Region,
+        record_region: Region,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -291,6 +296,7 @@ impl Problem {
             Problem::DuplicateRecordFieldValue { .. } => Warning,
             Problem::DuplicateRecordFieldType { .. } => RuntimeError,
             Problem::InvalidOptionalValue { .. } => RuntimeError,
+            Problem::InvalidIgnoredValue { .. } => RuntimeError,
             Problem::DuplicateTag { .. } => RuntimeError,
             Problem::RuntimeError(_) => RuntimeError,
             Problem::SignatureDefMismatch { .. } => RuntimeError,
@@ -398,6 +404,10 @@ impl Problem {
                 ..
             }
             | Problem::InvalidOptionalValue {
+                record_region: region,
+                ..
+            }
+            | Problem::InvalidIgnoredValue {
                 record_region: region,
                 ..
             }
@@ -553,6 +563,11 @@ pub enum RuntimeError {
         record_region: Region,
         field_region: Region,
     },
+    InvalidIgnoredValue {
+        field_name: Lowercase,
+        field_region: Region,
+        record_region: Region,
+    },
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
     UnsupportedPattern(Region),
     // Example: when 1 is 1.X -> 32
@@ -686,6 +701,7 @@ impl RuntimeError {
         match self {
             RuntimeError::Shadowing { shadow, .. } => shadow.region,
             RuntimeError::InvalidOptionalValue { field_region, .. } => *field_region,
+            RuntimeError::InvalidIgnoredValue { field_region, .. } => *field_region,
             RuntimeError::UnsupportedPattern(region)
             | RuntimeError::MalformedPattern(_, region)
             | RuntimeError::OpaqueOutsideScope {

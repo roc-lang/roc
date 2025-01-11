@@ -628,6 +628,20 @@ pub fn can_problem<'b>(
                 record_region,
             );
         }
+        Problem::InvalidIgnoredValue {
+            field_name,
+            field_region,
+            record_region,
+        } => {
+            return to_invalid_ignored_value_report(
+                alloc,
+                lines,
+                filename,
+                field_name,
+                field_region,
+                record_region,
+            );
+        }
         Problem::DuplicateRecordFieldType {
             field_name,
             field_region,
@@ -1514,6 +1528,51 @@ fn to_invalid_optional_value_report_help<'b>(
         alloc.reflow(r"You can only use optional values in record destructuring, like:"),
         alloc
             .reflow(r"{ answer ? 42, otherField } = myRecord")
+            .indent(4),
+    ])
+}
+
+fn to_invalid_ignored_value_report<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    lines: &LineInfo,
+    filename: PathBuf,
+    field_name: Lowercase,
+    field_region: Region,
+    record_region: Region,
+) -> Report<'b> {
+    let doc =
+        to_invalid_ignored_value_report_help(alloc, lines, field_name, field_region, record_region);
+
+    Report {
+        title: "BAD IGNORED VALUE".to_string(),
+        filename,
+        doc,
+        severity: Severity::RuntimeError,
+    }
+}
+
+fn to_invalid_ignored_value_report_help<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    lines: &LineInfo,
+    field_name: Lowercase,
+    field_region: Region,
+    record_region: Region,
+) -> RocDocBuilder<'b> {
+    alloc.stack([
+        alloc.concat([
+            alloc.reflow("This record uses an ignored value for the "),
+            alloc.record_field(field_name),
+            alloc.reflow(" field in an incorrect context!"),
+        ]),
+        alloc.region_all_the_things(
+            lines.convert_region(record_region),
+            lines.convert_region(field_region),
+            lines.convert_region(field_region),
+            Annotation::Error,
+        ),
+        alloc.reflow(r"You can only use ignored values in record builders, like:"),
+        alloc
+            .reflow(r"{ Foo.Bar.baz <- x: 5, y: 0, _z: 3, _: 2 }")
             .indent(4),
     ])
 }
@@ -2427,6 +2486,21 @@ fn pretty_runtime_error<'b>(
             record_region,
         } => {
             doc = to_invalid_optional_value_report_help(
+                alloc,
+                lines,
+                field_name,
+                field_region,
+                record_region,
+            );
+
+            title = SYNTAX_PROBLEM;
+        }
+        RuntimeError::InvalidIgnoredValue {
+            field_name,
+            field_region,
+            record_region,
+        } => {
+            doc = to_invalid_ignored_value_report_help(
                 alloc,
                 lines,
                 field_name,

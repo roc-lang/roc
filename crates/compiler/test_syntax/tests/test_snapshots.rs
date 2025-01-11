@@ -357,6 +357,7 @@ mod test_snapshots {
         pass/body_with_unneeded_parens.expr,
         pass/call_bang.expr,
         pass/call_bang_no_space.expr,
+        pass/can_ignored_field_in_import.expr,
         pass/capture_body_parens_comment.expr,
         pass/closure_arg_parens_then_comment.expr,
         pass/closure_complex_pattern_indent_issue.expr,

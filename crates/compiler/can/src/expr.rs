@@ -974,6 +974,18 @@ pub fn canonicalize_expr<'a>(
                         }),
                         Output::default(),
                     ),
+                    Err(CanonicalizeRecordProblem::InvalidIgnoredValue {
+                        field_name,
+                        field_region,
+                        record_region,
+                    }) => (
+                        Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidIgnoredValue {
+                            field_name,
+                            field_region,
+                            record_region,
+                        }),
+                        Output::default(),
+                    ),
                 }
             } else {
                 // only (optionally qualified) variables can be updated, not arbitrary expressions
@@ -1676,6 +1688,18 @@ pub fn canonicalize_record<'a>(
                 }),
                 Output::default(),
             ),
+            Err(CanonicalizeRecordProblem::InvalidIgnoredValue {
+                field_name,
+                field_region,
+                record_region,
+            }) => (
+                Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidIgnoredValue {
+                    field_name,
+                    field_region,
+                    record_region,
+                }),
+                Output::default(),
+            ),
         }
     }
 }
@@ -2016,6 +2040,11 @@ enum CanonicalizeRecordProblem {
         field_region: Region,
         record_region: Region,
     },
+    InvalidIgnoredValue {
+        field_name: Lowercase,
+        field_region: Region,
+        record_region: Region,
+    },
 }
 fn canonicalize_fields<'a>(
     env: &mut Env<'a>,
@@ -2064,6 +2093,21 @@ fn canonicalize_fields<'a>(
                     record_region: region,
                 });
             }
+            Err(CanonicalizeFieldProblem::InvalidIgnoredValue {
+                field_name,
+                field_region,
+            }) => {
+                env.problems.push(Problem::InvalidIgnoredValue {
+                    field_name: field_name.clone(),
+                    field_region,
+                    record_region: region,
+                });
+                return Err(CanonicalizeRecordProblem::InvalidIgnoredValue {
+                    field_name,
+                    field_region,
+                    record_region: region,
+                });
+            }
         }
     }
 
@@ -2072,6 +2116,10 @@ fn canonicalize_fields<'a>(
 
 enum CanonicalizeFieldProblem {
     InvalidOptionalValue {
+        field_name: Lowercase,
+        field_region: Region,
+    },
+    InvalidIgnoredValue {
         field_name: Lowercase,
         field_region: Region,
     },
@@ -2105,9 +2153,10 @@ fn canonicalize_field<'a>(
         }),
 
         // An ignored value, e.g. `{ _name: 123 }`
-        IgnoredValue(_, _, _) => {
-            internal_error!("Somehow an IgnoredValue record field was not desugared!");
-        }
+        IgnoredValue(name, _, value) => Err(CanonicalizeFieldProblem::InvalidIgnoredValue {
+            field_name: Lowercase::from(name.value),
+            field_region: Region::span_across(&name.region, &value.region),
+        }),
 
         // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
         LabelOnly(_) => {
