@@ -381,7 +381,6 @@ inline fn decref_ptr_to_refcount(
         switch (RC_TYPE) {
             .normal => {
                 if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
-
                     const old = @as(usize, @bitCast(refcount));
                     const new = @as(usize, @bitCast(refcount_ptr[0] -% 1));
 
