@@ -925,7 +925,7 @@ impl BigString {
         let ptr = self.ptr_to_refcount();
         let rc = unsafe { std::ptr::read(ptr) as isize };
 
-        rc == isize::MIN
+        rc == 1
     }
 
     fn is_readonly(&self) -> bool {
@@ -973,7 +973,7 @@ impl BigString {
                 0 => {
                     // static lifetime, do nothing
                 }
-                isize::MIN => {
+                1 => {
                     // refcount becomes zero; free allocation
                     crate::roc_dealloc(self.ptr_to_allocation().cast(), 1);
                 }
