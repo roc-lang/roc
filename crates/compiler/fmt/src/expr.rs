@@ -788,6 +788,7 @@ fn fmt_parens(sub_expr: &Expr<'_>, buf: &mut Buf<'_>, indent: u16) {
     let should_add_newlines = match sub_expr {
         Expr::Closure(..)
         | Expr::SpaceBefore(..)
+        | Expr::When(..)
         | Expr::SpaceAfter(Expr::Closure(..), ..)
         | Expr::DbgStmt { .. } => false,
         _ => sub_expr.is_multiline(),
@@ -881,7 +882,7 @@ fn starts_with_newline(expr: &Expr) -> bool {
         SpaceBefore(_, comment_or_newline) => {
             matches!(comment_or_newline.first(), Some(CommentOrNewline::Newline))
         }
-        DbgStmt { .. } => true,
+        DbgStmt { .. } | When(..) => true,
         _ => false,
     }
 }
@@ -1724,7 +1725,20 @@ fn fmt_when<'a>(
             buf.indent(indent + INDENT);
             buf.push_str(" if");
             buf.spaces(1);
-            guard_expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent + INDENT);
+
+            let guard_lifted =
+                expr_lift_spaces(Parens::NotNeeded, buf.text.bump(), &guard_expr.value);
+
+            if guard_needs_parens(&guard_lifted.item) {
+                fmt_parens(&lower(buf.text.bump(), guard_lifted), buf, indent + INDENT);
+            } else {
+                lower(buf.text.bump(), guard_lifted).format_with_options(
+                    buf,
+                    Parens::NotNeeded,
+                    Newlines::Yes,
+                    indent + INDENT,
+                );
+            }
         }
 
         buf.indent(indent + INDENT);
@@ -1741,7 +1755,6 @@ fn fmt_when<'a>(
             buf.spaces(1);
         }
 
-        // expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, inner_indent);
         format_expr_only(
             &expr.item,
             buf,
@@ -1757,6 +1770,16 @@ fn fmt_when<'a>(
 
     if !last_after.is_empty() {
         format_spaces(buf, last_after, Newlines::Yes, indent);
+    }
+}
+
+fn guard_needs_parens(value: &Expr<'_>) -> bool {
+    match value {
+        Expr::When(..) => true,
+        Expr::ParensAround(expr) | Expr::SpaceBefore(expr, _) | Expr::SpaceAfter(expr, _) => {
+            guard_needs_parens(expr)
+        }
+        _ => false,
     }
 }
 

@@ -764,6 +764,7 @@ mod test_snapshots {
         pass/when_in_list.expr,
         pass/when_in_parens.expr,
         pass/when_in_parens_indented.expr,
+        pass/when_in_when_guard_wtf.expr,
         pass/when_newline_after_condition.expr,
         pass/when_newline_before_is_and_in_branch_parens.expr,
         pass/when_result_list.expr,
