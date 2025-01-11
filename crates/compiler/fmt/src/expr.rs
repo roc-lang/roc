@@ -1779,6 +1779,8 @@ fn guard_needs_parens(value: &Expr<'_>) -> bool {
         Expr::ParensAround(expr) | Expr::SpaceBefore(expr, _) | Expr::SpaceAfter(expr, _) => {
             guard_needs_parens(expr)
         }
+        Expr::Closure(_, body) => guard_needs_parens(&body.value),
+        Expr::Defs(_, final_expr) => guard_needs_parens(&final_expr.value),
         _ => false,
     }
 }

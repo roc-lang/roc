@@ -759,6 +759,7 @@ mod test_snapshots {
         pass/when_if_guard.expr,
         pass/when_in_assignment.expr,
         pass/when_in_binops.expr,
+        pass/when_in_closure_in_when_guard_wtf.expr,
         pass/when_in_function.expr,
         pass/when_in_function_python_style_indent.expr,
         pass/when_in_list.expr,
