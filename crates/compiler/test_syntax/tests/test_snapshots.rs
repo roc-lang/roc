@@ -299,6 +299,7 @@ mod test_snapshots {
         pass/ann_apply_record_with_newlines.expr,
         pass/ann_closed_union.expr,
         pass/ann_effectful_fn.expr,
+        pass/ann_extra_indented_implements.expr,
         pass/ann_open_union.expr,
         pass/ann_parens_comments.expr,
         pass/ann_parens_where_implements_func.expr,

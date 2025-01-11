@@ -2024,6 +2024,26 @@ pub trait Spaceable<'a> {
         }
     }
 
+    fn maybe_around_loc(
+        mut me: Loc<Self>,
+        arena: &'a Bump,
+        before: &'a [CommentOrNewline<'a>],
+        after: &'a [CommentOrNewline<'a>],
+    ) -> Loc<Self>
+    where
+        Self: Sized + 'a,
+    {
+        if !after.is_empty() {
+            me.value = arena.alloc(me.value).after(after);
+        }
+
+        if !before.is_empty() {
+            me.value = arena.alloc(me.value).before(before);
+        }
+
+        me
+    }
+
     fn with_spaces_before(&'a self, spaces: &'a [CommentOrNewline<'a>], region: Region) -> Loc<Self>
     where
         Self: Sized,

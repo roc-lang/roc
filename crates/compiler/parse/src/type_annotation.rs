@@ -1,24 +1,24 @@
 use crate::ast::{
     AbilityImpls, AssignedField, Collection, CommentOrNewline, Expr, FunctionArrow,
-    ImplementsAbilities, ImplementsAbility, ImplementsClause, Pattern, Spaceable, Spaced, Tag,
-    TypeAnnotation, TypeHeader,
+    ImplementsAbilities, ImplementsAbility, ImplementsClause, Pattern, Spaceable, Spaced,
+    SpacesBefore, Tag, TypeAnnotation, TypeHeader,
 };
 use crate::blankspace::{
-    self, plain_spaces_before, space0_around_ee, space0_before_e, space0_before_optional_after,
-    space0_e, spaces_before_optional_after,
+    self, plain_spaces_before, space0_around_ee, space0_before, space0_before_e, space0_e,
+    spaces_before_optional_after,
 };
 use crate::expr::record_field;
 use crate::ident::{lowercase_ident, lowercase_ident_keyword_e};
 use crate::keyword;
 use crate::parser::{
-    absolute_column_min_indent, and, collection_trailing_sep_e, either, error_on_byte,
-    increment_min_indent, indented_seq, loc, map, map_with_arena, reset_min_indent, skip_first,
-    skip_second, succeed, then, zero_or_more, ERecord, ETypeAbilityImpl, ParseResult,
-};
-use crate::parser::{
     allocated, backtrackable, byte, fail, optional, specialize_err, specialize_err_ref, two_bytes,
     EType, ETypeApply, ETypeInParens, ETypeInlineAlias, ETypeRecord, ETypeTagUnion, Parser,
     Progress::*,
+};
+use crate::parser::{
+    and, collection_trailing_sep_e, either, error_on_byte, increment_min_indent, indented_seq, loc,
+    map, map_with_arena, reset_min_indent, skip_first, skip_second, succeed, then, zero_or_more,
+    ERecord, ETypeAbilityImpl, ParseResult,
 };
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
@@ -688,30 +688,53 @@ fn loc_applied_args_e<'a>(
 
 // Hash & Eq & ...
 fn ability_chain<'a>() -> impl Parser<'a, Vec<'a, Loc<TypeAnnotation<'a>>>, EType<'a>> {
-    map(
+    map_with_arena(
         and(
-            space0_before_optional_after(
+            space0_before(
                 specialize_err(EType::TApply, loc(concrete_type())),
                 EType::TIndentStart,
-                EType::TIndentEnd,
             ),
-            zero_or_more(skip_first(
-                byte(b'&', EType::TImplementsClause),
-                space0_before_optional_after(
+            zero_or_more(and(
+                skip_second(
+                    backtrackable(space0_e(EType::TIndentStart)),
+                    byte(b'&', EType::TImplementsClause),
+                ),
+                space0_before(
                     specialize_err(EType::TApply, loc(concrete_type())),
                     EType::TIndentStart,
-                    EType::TIndentEnd,
                 ),
             )),
         ),
-        |(first_ability, mut other_abilities): (
-            Loc<TypeAnnotation<'a>>,
-            Vec<'a, Loc<TypeAnnotation<'a>>>,
+        |arena: &'a Bump,
+         (first_ability, other_abilities): (
+            SpacesBefore<'a, Loc<TypeAnnotation<'a>>>,
+            Vec<
+                'a,
+                (
+                    &'a [CommentOrNewline<'a>],
+                    SpacesBefore<'a, Loc<TypeAnnotation<'a>>>,
+                ),
+            >,
         )| {
-            other_abilities.insert(0, first_ability);
-            other_abilities
+            let mut res = Vec::with_capacity_in(other_abilities.len() + 1, arena);
+            let mut pending = first_ability;
+            for (after, ability) in other_abilities {
+                res.push(Spaceable::maybe_around_loc(
+                    pending.item,
+                    arena,
+                    pending.before,
+                    after,
+                ));
+                pending = ability;
+            }
+            res.push(Loc::at(
+                pending.item.region,
+                pending.item.value.maybe_before(arena, pending.before),
+            ));
+            res
         },
     )
+    .trace("ability_chain")
 }
 
 fn implements_clause<'a>() -> impl Parser<'a, Loc<ImplementsClause<'a>>, EType<'a>> {
@@ -731,7 +754,7 @@ fn implements_clause<'a>() -> impl Parser<'a, Loc<ImplementsClause<'a>>, EType<'
                 // Parse "implements"; we don't care about this keyword
                 crate::parser::keyword(crate::keyword::IMPLEMENTS, EType::TImplementsClause),
                 // Parse "Hash & ..."; this may be qualified from another module like "Hash.Hash"
-                absolute_column_min_indent(ability_chain()),
+                ability_chain(),
             ),
         )),
         |(var, abilities): (Loc<Spaced<'a, &'a str>>, Vec<'a, Loc<TypeAnnotation<'a>>>)| {
