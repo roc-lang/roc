@@ -465,6 +465,7 @@ mod test_snapshots {
         pass/implements_after_comment_with_newline.expr,
         pass/implements_annotation_comment.expr,
         pass/implements_in_pat_after_comment.expr,
+        pass/implements_in_pnc_pattern.expr,
         pass/implements_newline_in_fn_ty.expr,
         pass/implements_newlines_comments.expr,
         pass/implements_not_keyword.expr,

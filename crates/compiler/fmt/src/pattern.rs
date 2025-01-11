@@ -563,9 +563,9 @@ pub fn pattern_fmt_apply(
             buf.push_str("(implements)");
         } else {
             fmt_pattern_only(&arg.item, buf, parens, indent_more, arg.item.is_multiline());
-            if use_commas_and_parens && (!is_last_arg || is_multiline) {
-                buf.push(',');
-            }
+        }
+        if use_commas_and_parens && (!is_last_arg || is_multiline) {
+            buf.push(',');
         }
 
         last_after = arg.after;
