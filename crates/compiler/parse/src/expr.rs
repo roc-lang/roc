@@ -2998,6 +2998,13 @@ fn parse_stmt_seq<'a, E: SpaceProblem + 'a>(
                         break;
                     }
 
+                    // If this expr might be followed by an arrow (e.g. in a when branch guard),
+                    // then we also need to treat that as a terminator.
+                    if !check_for_arrow.0 && new_state.bytes().starts_with(b"->") {
+                        state = state_before_space;
+                        break;
+                    }
+
                     return Err((
                         MadeProgress,
                         wrap_error(arena.alloc(EExpr::BadExprEnd(state.pos())), state.pos()),
@@ -3148,39 +3155,7 @@ fn stmts_to_defs<'a>(
                                 first,
                                 extra_args,
                                 continuation: arena.alloc(rest),
-                            };
-
-                            let e = if sp_stmt.before.is_empty() {
-                                e
-                            } else {
-                                arena.alloc(e).before(sp_stmt.before)
-                            };
-
-                            last_expr = Some(Loc::at(sp_stmt.item.region, e));
-
-                            // don't re-process the rest of the statements; they got consumed by the dbg expr
-                            break;
-                        } else {
-                            defs.push_value_def(
-                                ValueDef::Stmt(arena.alloc(Loc::at(sp_stmt.item.region, e))),
-                                sp_stmt.item.region,
-                                sp_stmt.before,
-                                &[],
-                            );
-                        }
-                    } else if let Expr::PncApply(
-                        Loc {
-                            value: Expr::Dbg, ..
-                        },
-                        args,
-                    ) = e
-                    {
-                        if let Some((first, extra_args)) = args.items.split_first() {
-                            let rest = stmts_to_expr(&stmts[i + 1..], arena)?;
-                            let e = Expr::DbgStmt {
-                                first,
-                                extra_args,
-                                continuation: arena.alloc(rest),
+                                pnc_style: false,
                             };
 
                             let e = if sp_stmt.before.is_empty() {
@@ -3284,6 +3259,7 @@ fn stmts_to_defs<'a>(
                                 first: arena.alloc(condition),
                                 extra_args: &[],
                                 continuation: arena.alloc(rest),
+                                pnc_style: false,
                             }
                         } else {
                             Expr::Apply(

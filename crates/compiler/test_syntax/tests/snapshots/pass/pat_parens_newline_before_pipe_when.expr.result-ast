@@ -1,0 +1,51 @@
+@0-23 SpaceAfter(
+    When(
+        @5-6 SpaceAfter(
+            Num(
+                "0",
+            ),
+            [
+                Newline,
+            ],
+        ),
+        [
+            WhenBranch {
+                patterns: [
+                    @10-16 Apply(
+                        @10-11 Tag(
+                            "S",
+                        ),
+                        [
+                            @15-16 SpaceBefore(
+                                SpaceAfter(
+                                    Tag(
+                                        "H",
+                                    ),
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                                [
+                                    LineComment(
+                                        "",
+                                    ),
+                                ],
+                            ),
+                        ],
+                    ),
+                    @19-20 Tag(
+                        "B",
+                    ),
+                ],
+                value: @22-23 Var {
+                    module_name: "",
+                    ident: "e",
+                },
+                guard: None,
+            },
+        ],
+    ),
+    [
+        Newline,
+    ],
+)

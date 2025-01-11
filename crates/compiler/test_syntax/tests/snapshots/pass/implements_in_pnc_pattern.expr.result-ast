@@ -1,0 +1,53 @@
+@0-19 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-17,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Body(
+                    @0-15 PncApply(
+                        @0-1 Identifier {
+                            ident: "g",
+                        },
+                        [
+                            @2-12 Identifier {
+                                ident: "implements",
+                            },
+                            @13-14 Identifier {
+                                ident: "x",
+                            },
+                        ],
+                    ),
+                    @16-17 Var {
+                        module_name: "",
+                        ident: "c",
+                    },
+                ),
+            ],
+        },
+        @18-19 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "c",
+            },
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

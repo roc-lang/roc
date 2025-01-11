@@ -1166,6 +1166,7 @@ pub fn desugar_expr<'a>(
             first: condition,
             extra_args,
             continuation,
+            pnc_style: _,
         } => {
             let desugared_condition = &*env.arena.alloc(desugar_expr(env, scope, condition));
             let desugared_continuation = &*env.arena.alloc(desugar_expr(env, scope, continuation));

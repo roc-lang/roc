@@ -15,7 +15,7 @@ expect
     a == b
 
 poly_dbg = \x ->
-    dbg(x)
+    dbg x
 
     x
 
@@ -25,11 +25,11 @@ main =
     expect words == []
 
     x = 42
-    dbg(x)
+    dbg x
 
-    dbg("Fjoer en ferdjer frieten oan dyn geve lea")
+    dbg "Fjoer en ferdjer frieten oan dyn geve lea"
 
-    dbg("this is line 24")
+    dbg "this is line 24"
 
     r = { x: poly_dbg("abc"), y: poly_dbg(10u8), z: poly_dbg(A(B(C))) }
 

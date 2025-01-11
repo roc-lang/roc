@@ -205,6 +205,7 @@ impl From<Parens> for Prec {
             Parens::InFunctionType => Prec::FunctionType,
             Parens::InOperator => Prec::FunctionType,
             Parens::InAsPattern => Prec::AsType,
+            Parens::InPncApplyFunc => Prec::Term,
         }
     }
 }

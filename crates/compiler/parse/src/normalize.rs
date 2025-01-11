@@ -718,10 +718,12 @@ impl<'a> Normalize<'a> for Expr<'a> {
                 first,
                 extra_args,
                 continuation,
+                pnc_style,
             } => Expr::DbgStmt {
                 first: arena.alloc(first.normalize(arena)),
                 extra_args: extra_args.normalize(arena),
                 continuation: arena.alloc(continuation.normalize(arena)),
+                pnc_style,
             },
             Expr::LowLevelDbg(x, a, b) => Expr::LowLevelDbg(
                 x,
@@ -828,34 +830,7 @@ fn fold_defs<'a>(
                                 first,
                                 extra_args,
                                 continuation: arena.alloc(Loc::at_zero(rest)),
-                            };
-                            if new_defs.is_empty() {
-                                return new_final;
-                            }
-                            return Expr::Defs(
-                                arena.alloc(new_defs),
-                                arena.alloc(Loc::at_zero(new_final)),
-                            );
-                        } else {
-                            new_defs.push_value_def(vd, Region::zero(), &[], &[]);
-                        }
-                    }
-                    ValueDef::Stmt(&Loc {
-                        value:
-                            Expr::PncApply(
-                                &Loc {
-                                    value: Expr::Dbg, ..
-                                },
-                                args,
-                            ),
-                        ..
-                    }) => {
-                        if let Some((first, extra_args)) = args.items.split_first() {
-                            let rest = fold_defs(arena, defs, final_expr);
-                            let new_final = Expr::DbgStmt {
-                                first,
-                                extra_args,
-                                continuation: arena.alloc(Loc::at_zero(rest)),
+                                pnc_style: false,
                             };
                             if new_defs.is_empty() {
                                 return new_final;

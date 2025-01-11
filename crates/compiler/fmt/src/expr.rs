@@ -208,8 +208,17 @@ fn format_expr_only(
             first: condition,
             extra_args,
             continuation,
+            pnc_style,
         } => {
-            fmt_dbg_stmt(buf, condition, extra_args, continuation, parens, indent);
+            fmt_dbg_stmt(
+                buf,
+                condition,
+                extra_args,
+                *pnc_style,
+                continuation,
+                parens,
+                indent,
+            );
         }
         Expr::LowLevelDbg(_, _, _) => {
             unreachable!("LowLevelDbg should only exist after desugaring, not during formatting")
@@ -253,11 +262,8 @@ fn format_expr_only(
 
             let before_all_newlines = lifted.before.iter().all(|s| s.is_newline());
 
-            let needs_newline = !before_all_newlines
-                || match &lifted.item {
-                    Expr::Str(text) => is_str_multiline(text),
-                    _ => false,
-                };
+            let needs_newline =
+                !before_all_newlines || term_starts_with_multiline_str(&lifted.item);
 
             let needs_parens = (needs_newline
                 && matches!(unary_op.value, called_via::UnaryOp::Negate))
@@ -357,6 +363,14 @@ fn format_expr_only(
         Expr::EmptyRecordBuilder { .. } => {}
         Expr::SingleFieldRecordBuilder { .. } => {}
         Expr::OptionalFieldInRecordBuilder(_, _) => {}
+    }
+}
+
+fn term_starts_with_multiline_str(expr: &Expr<'_>) -> bool {
+    match expr {
+        Expr::Str(text) => is_str_multiline(text),
+        Expr::PncApply(inner, _) => term_starts_with_multiline_str(&inner.value),
+        _ => false,
     }
 }
 
@@ -626,7 +640,9 @@ fn requires_space_after_unary(item: &Expr<'_>) -> bool {
         Expr::RecordAccess(inner, _field) | Expr::TupleAccess(inner, _field) => {
             requires_space_after_unary(inner)
         }
-        Expr::Apply(inner, _, _) => requires_space_after_unary(&inner.value),
+        Expr::Apply(inner, _, _) | Expr::PncApply(inner, _) => {
+            requires_space_after_unary(&inner.value)
+        }
         Expr::TrySuffix(expr) => requires_space_after_unary(expr),
         Expr::SpaceAfter(inner, _) | Expr::SpaceBefore(inner, _) => {
             requires_space_after_unary(inner)
@@ -772,6 +788,7 @@ fn fmt_parens(sub_expr: &Expr<'_>, buf: &mut Buf<'_>, indent: u16) {
     let should_add_newlines = match sub_expr {
         Expr::Closure(..)
         | Expr::SpaceBefore(..)
+        | Expr::When(..)
         | Expr::SpaceAfter(Expr::Closure(..), ..)
         | Expr::DbgStmt { .. } => false,
         _ => sub_expr.is_multiline(),
@@ -865,7 +882,7 @@ fn starts_with_newline(expr: &Expr) -> bool {
         SpaceBefore(_, comment_or_newline) => {
             matches!(comment_or_newline.first(), Some(CommentOrNewline::Newline))
         }
-        DbgStmt { .. } => true,
+        DbgStmt { .. } | When(..) => true,
         _ => false,
     }
 }
@@ -1298,6 +1315,7 @@ pub fn expr_lift_spaces<'a, 'b: 'a>(
             first,
             extra_args,
             continuation,
+            pnc_style,
         } => {
             let continuation_lifted =
                 expr_lift_spaces_after(Parens::NotNeeded, arena, &continuation.value);
@@ -1309,6 +1327,7 @@ pub fn expr_lift_spaces<'a, 'b: 'a>(
                     extra_args,
                     continuation: arena
                         .alloc(Loc::at(continuation.region, continuation_lifted.item)),
+                    pnc_style: *pnc_style,
                 },
                 after: continuation_lifted.after,
             }
@@ -1690,11 +1709,11 @@ fn fmt_when<'a>(
             } else {
                 if is_multiline_patterns {
                     buf.ensure_ends_with_newline();
-                    buf.indent(indent + INDENT);
-                    buf.push('|');
                 } else {
-                    buf.push_str(" |");
+                    buf.ensure_ends_with_whitespace();
                 }
+                buf.indent(indent + INDENT);
+                buf.push_str("|");
 
                 buf.spaces(1);
 
@@ -1706,7 +1725,20 @@ fn fmt_when<'a>(
             buf.indent(indent + INDENT);
             buf.push_str(" if");
             buf.spaces(1);
-            guard_expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent + INDENT);
+
+            let guard_lifted =
+                expr_lift_spaces(Parens::NotNeeded, buf.text.bump(), &guard_expr.value);
+
+            if guard_needs_parens(&guard_lifted.item) {
+                fmt_parens(&lower(buf.text.bump(), guard_lifted), buf, indent + INDENT);
+            } else {
+                lower(buf.text.bump(), guard_lifted).format_with_options(
+                    buf,
+                    Parens::NotNeeded,
+                    Newlines::Yes,
+                    indent + INDENT,
+                );
+            }
         }
 
         buf.indent(indent + INDENT);
@@ -1723,7 +1755,6 @@ fn fmt_when<'a>(
             buf.spaces(1);
         }
 
-        // expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, inner_indent);
         format_expr_only(
             &expr.item,
             buf,
@@ -1742,10 +1773,23 @@ fn fmt_when<'a>(
     }
 }
 
+fn guard_needs_parens(value: &Expr<'_>) -> bool {
+    match value {
+        Expr::When(..) => true,
+        Expr::ParensAround(expr) | Expr::SpaceBefore(expr, _) | Expr::SpaceAfter(expr, _) => {
+            guard_needs_parens(expr)
+        }
+        Expr::Closure(_, body) => guard_needs_parens(&body.value),
+        Expr::Defs(_, final_expr) => guard_needs_parens(&final_expr.value),
+        _ => false,
+    }
+}
+
 fn fmt_dbg_stmt<'a>(
     buf: &mut Buf,
     condition: &'a Loc<Expr<'a>>,
     extra_args: &'a [&'a Loc<Expr<'a>>],
+    pnc_style: bool,
     continuation: &'a Loc<Expr<'a>>,
     parens: Parens,
     indent: u16,
@@ -1755,13 +1799,12 @@ fn fmt_dbg_stmt<'a>(
     args.push(condition);
     args.extend_from_slice(extra_args);
 
-    if args.is_empty() {
-        Expr::PncApply(&Loc::at_zero(Expr::Dbg), Collection::empty()).format_with_options(
-            buf,
-            parens,
-            Newlines::Yes,
-            indent,
-        );
+    if pnc_style {
+        Expr::PncApply(
+            &Loc::at_zero(Expr::Dbg),
+            Collection::with_items(args.into_bump_slice()),
+        )
+        .format_with_options(buf, parens, Newlines::Yes, indent);
     } else {
         Expr::Apply(
             &Loc::at_zero(Expr::Dbg),
@@ -1872,6 +1915,7 @@ fn fmt_if<'a>(
         buf.indent(indent);
 
         if i > 0 {
+            buf.ensure_ends_with_whitespace();
             buf.push_str("else");
             buf.spaces(1);
         }
@@ -1891,12 +1935,12 @@ fn fmt_if<'a>(
             fmt_comments_only(buf, then.after.iter(), NewlineAt::Bottom, return_indent);
             buf.ensure_ends_with_newline();
         } else {
-            buf.push_str("");
             buf.spaces(1);
             loc_then.format(buf, return_indent);
         }
     }
 
+    buf.ensure_ends_with_whitespace();
     if indented_else {
         buf.indent(indent + INDENT);
         buf.push_str("else");
@@ -1908,7 +1952,7 @@ fn fmt_if<'a>(
         buf.newline();
     } else {
         buf.indent(indent);
-        buf.push_str(" else");
+        buf.push_str("else");
         buf.spaces(1);
     }
     let indent = if indented_else { indent } else { return_indent };
