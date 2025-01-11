@@ -626,6 +626,7 @@ mod test_snapshots {
         pass/parenthetical_var.expr,
         pass/parse_alias.expr,
         pass/parse_as_ann.expr,
+        pass/pat_parens_newline_before_pipe_when.expr,
         pass/pat_space_after_comma.expr,
         pass/pattern_as.expr,
         pass/pattern_as_list_rest.expr,

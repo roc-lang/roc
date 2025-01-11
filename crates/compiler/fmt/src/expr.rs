@@ -1709,11 +1709,11 @@ fn fmt_when<'a>(
             } else {
                 if is_multiline_patterns {
                     buf.ensure_ends_with_newline();
-                    buf.indent(indent + INDENT);
-                    buf.push('|');
                 } else {
-                    buf.push_str(" |");
+                    buf.ensure_ends_with_whitespace();
                 }
+                buf.indent(indent + INDENT);
+                buf.push_str("|");
 
                 buf.spaces(1);
 
