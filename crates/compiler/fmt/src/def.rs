@@ -1014,7 +1014,6 @@ pub fn fmt_body<'a>(
     allow_simplify_empty_record_destructure: bool,
     pattern: &'a Pattern<'a>,
     body: &'a Expr<'a>,
-
     indent: u16,
 ) {
     let pattern_extracted = pattern.extract_spaces();
@@ -1168,6 +1167,7 @@ pub fn starts_with_block_string_literal(expr: &Expr<'_>) -> bool {
             starts_with_block_string_literal(inner)
         }
         Expr::Apply(inner, _, _) => starts_with_block_string_literal(&inner.value),
+        Expr::RecordAccess(inner, _) => starts_with_block_string_literal(inner),
         Expr::PncApply(inner, _) => starts_with_block_string_literal(&inner.value),
         Expr::TrySuffix(inner) => starts_with_block_string_literal(inner),
         _ => false,
