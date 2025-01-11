@@ -688,6 +688,14 @@ fn loc_applied_args_e<'a>(
 
 // Hash & Eq & ...
 fn ability_chain<'a>() -> impl Parser<'a, Vec<'a, Loc<TypeAnnotation<'a>>>, EType<'a>> {
+    // Avoid clippy type complexity warning
+    type MyItems<'a> = Vec<
+        'a,
+        (
+            &'a [CommentOrNewline<'a>],
+            SpacesBefore<'a, Loc<TypeAnnotation<'a>>>,
+        ),
+    >;
     map_with_arena(
         and(
             space0_before(
@@ -708,13 +716,7 @@ fn ability_chain<'a>() -> impl Parser<'a, Vec<'a, Loc<TypeAnnotation<'a>>>, ETyp
         |arena: &'a Bump,
          (first_ability, other_abilities): (
             SpacesBefore<'a, Loc<TypeAnnotation<'a>>>,
-            Vec<
-                'a,
-                (
-                    &'a [CommentOrNewline<'a>],
-                    SpacesBefore<'a, Loc<TypeAnnotation<'a>>>,
-                ),
-            >,
+            MyItems<'a>,
         )| {
             let mut res = Vec::with_capacity_in(other_abilities.len() + 1, arena);
             let mut pending = first_ability;
