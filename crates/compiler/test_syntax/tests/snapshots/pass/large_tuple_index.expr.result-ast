@@ -1,7 +1,21 @@
-@0-21 SpaceAfter(
-    AccessorFunction(
-        TupleIndex(
-            "18888888888888888888",
+@0-46 SpaceAfter(
+    BinOps(
+        [
+            (
+                @0-21 AccessorFunction(
+                    TupleIndex(
+                        "18888888888888888888",
+                    ),
+                ),
+                @22-23 Plus,
+            ),
+        ],
+        @24-46 TupleAccess(
+            Var {
+                module_name: "",
+                ident: "h",
+            },
+            "22222222222222222222",
         ),
     ),
     [

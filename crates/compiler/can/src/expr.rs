@@ -1274,16 +1274,20 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::TupleAccess(tuple_expr, field) => {
             let (loc_expr, output) = canonicalize_expr(env, var_store, scope, region, tuple_expr);
 
-            (
+            let res = if let Ok(index) = field.parse() {
                 TupleAccess {
                     tuple_var: var_store.fresh(),
                     ext_var: var_store.fresh(),
                     elem_var: var_store.fresh(),
                     loc_expr: Box::new(loc_expr),
-                    index: field.parse().unwrap(),
-                },
-                output,
-            )
+                    index,
+                }
+            } else {
+                let error = roc_problem::can::RuntimeError::InvalidTupleIndex(region);
+                env.problem(Problem::RuntimeError(error.clone()));
+                Expr::RuntimeError(error)
+            };
+            (res, output)
         }
         ast::Expr::TrySuffix { .. } => internal_error!(
             "a Expr::TrySuffix expression was not completely removed in desugar_value_def_suffixed"
