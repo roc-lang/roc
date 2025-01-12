@@ -550,6 +550,7 @@ mod test_snapshots {
         pass/multiline_type_signature_with_comment.expr,
         pass/multiple_fields.expr,
         pass/multiple_operators.expr,
+        pass/neg_float_literal_pnc_apply_pat.expr,
         pass/neg_inf_float.expr,
         pass/neg_nested_parens.expr,
         pass/neg_newline_four.expr,
