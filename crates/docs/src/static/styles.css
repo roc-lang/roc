@@ -90,7 +90,7 @@ table tr td {
 }
 
 .entry-name:target {
-  background-color: var(--violet-bg);
+  border: 4px solid var(--violet);
 }
 
 .entry-name a {
