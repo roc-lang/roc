@@ -2060,3 +2060,29 @@ fn str_drop_suffix() {
         RocStr
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn with_ascii_lowercased() {
+    assert_evals_to!(
+        r#"
+        Str.with_ascii_lowercased "cOFFÉ"
+        "#,
+        RocStr::from("coffÉ"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn with_ascii_lowercased_non_zero_refcount() {
+    assert_evals_to!(
+        r#"
+        original = "cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ"
+        res = Str.with_ascii_lowercased original
+        Str.drop_prefix res original
+        "#,
+        RocStr::from("coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ"),
+        RocStr
+    );
+}

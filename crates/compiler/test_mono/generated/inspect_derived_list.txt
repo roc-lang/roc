@@ -163,8 +163,8 @@ procedure Num.96 (#Attr.2):
     ret Num.283;
 
 procedure Str.3 (#Attr.2, #Attr.3):
-    let Str.246 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
-    ret Str.246;
+    let Str.248 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.248;
 
 procedure Test.0 ():
     let Test.2 : List I64 = Array [1i64, 2i64, 3i64];

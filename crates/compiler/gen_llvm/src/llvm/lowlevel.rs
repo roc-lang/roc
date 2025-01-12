@@ -593,6 +593,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 bitcode::STR_WITH_CAPACITY,
             )
         }
+
         ListLenU64 => {
             // List.len : List * -> U64
             arguments!(list);
@@ -633,6 +634,17 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 layout_ids,
                 list_len.into_int_value(),
                 list_element_layout!(layout_interner, result_layout),
+            )
+        }
+        StrWithAsciiLowercased => {
+            arguments!(string);
+
+            call_str_bitcode_fn(
+                env,
+                &[string],
+                &[],
+                BitcodeReturns::Str,
+                bitcode::STR_WITH_ASCII_LOWERCASED,
             )
         }
         ListConcat => {

@@ -1549,6 +1549,7 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         ListPrepend => RC::Rc,
         StrJoinWith => RC::NoRc,
         ListSortWith => RC::Rc,
+        StrWithAsciiLowercased => RC::Rc,
 
         ListAppendUnsafe
         | ListReserve
