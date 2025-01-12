@@ -802,6 +802,7 @@ mod test_snapshots {
         pass/where_implements_lots_of_newlines.expr,
         pass/where_in_tuple_after_comment.expr,
         pass/where_in_tuple_plain.expr,
+        pass/where_newline_p_implements.expr,
         pass/zero_float.expr,
         pass/zero_int.expr,
         // END SNAPSHOTS (for automatic test detection via `env ROC_SNAPSHOT_TEST_OVERWRITE=1 cargo test`)
