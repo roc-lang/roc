@@ -1,2 +1,2 @@
 when t is
-    Ok ({} as d)->S
+    Ok (() as d)->S

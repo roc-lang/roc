@@ -1,5 +1,5 @@
 app [main] { pf: platform "../false-interpreter/platform/main.roc" }
 
-main : Str -> Task {} []
+main : Str -> List ()
 main = \_ ->
-    "this is a string, not a Task {} [] function like the platform expects."
+    "this is a string, not a List () function like the platform expects."

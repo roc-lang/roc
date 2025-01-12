@@ -73,8 +73,7 @@ pub(crate) fn either_type_index_to_var(
                         types[type_index],
                         TypeTag::EmptyTuple | TypeTag::EmptyRecord | TypeTag::EmptyTagUnion
                     ),
-                "different variable was returned for type index variable cell! {:?}",
-                types[type_index]
+                "different variable was returned for type index variable cell!"
             );
             var
         }
@@ -474,10 +473,7 @@ pub(crate) fn type_to_var_help(
                 let ext_slice = types.get_type_arguments(typ_index);
 
                 // Elems should never be empty; we don't support empty tuples
-                debug_assert!(
-                    !elems.is_empty() || !ext_slice.is_empty(),
-                    "{elems:?} - {ext_slice:?}"
-                );
+                debug_assert!(!elems.is_empty() || !ext_slice.is_empty());
 
                 let mut elem_vars = Vec::with_capacity_in(elems.len(), arena);
 

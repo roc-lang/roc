@@ -17,7 +17,7 @@ open! = \path ->
     Host.open_file!(path)
     |> @Handle
 
-close! : Handle => {}
+close! : Handle => ()
 close! = \@Handle(handle) ->
     Host.close_file!(handle)
 

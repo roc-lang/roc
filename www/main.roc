@@ -29,7 +29,7 @@ main! = \{ input_dir, output_dir } ->
     List.for_each_try!(files, process_file!)
 
 page_data =
-    Dict.empty({})
+    Dict.empty()
     |> Dict.insert("/abilities.html", { title: "Abilities | Roc", description: "Learn about abilities in the Roc programming language." })
     |> Dict.insert("/bdfn.html", { title: "Governance | Roc", description: "Learn about the governance model of the Roc programming language." })
     |> Dict.insert("/community.html", { title: "Community | Roc", description: "Connect with the community of the Roc programming language." })

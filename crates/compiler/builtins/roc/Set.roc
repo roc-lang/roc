@@ -73,13 +73,13 @@ to_inspector_set = \set ->
 
 ## Creates a new empty `Set`.
 ## ```roc
-## empty_set = Set.empty(())
+## empty_set = Set.empty()
 ## count_values = Set.len(empty_set)
 ##
 ## expect count_values == 0
 ## ```
 empty : () -> Set *
-empty = \() -> @Set(Dict.empty(()))
+empty = \() -> @Set(Dict.empty())
 
 ## Return a set with space allocated for a number of entries. This
 ## may provide a performance optimization if you know how many entries will be
@@ -114,7 +114,7 @@ single = \key ->
 ## Insert a value into a `Set`.
 ## ```roc
 ## few_item_set =
-##     Set.empty(())
+##     Set.empty()
 ##     |> Set.insert("Apple")
 ##     |> Set.insert("Pear")
 ##     |> Set.insert("Banana")
@@ -130,14 +130,14 @@ insert = \@Set(dict), key ->
 # Inserting a duplicate key has no effect.
 expect
     actual =
-        empty(())
+        empty()
         |> insert("foo")
         |> insert("bar")
         |> insert("foo")
         |> insert("baz")
 
     expected =
-        empty(())
+        empty()
         |> insert("foo")
         |> insert("bar")
         |> insert("baz")
@@ -147,7 +147,7 @@ expect
 ## Counts the number of values in a given `Set`.
 ## ```roc
 ## few_item_set =
-##     Set.empty(())
+##     Set.empty()
 ##     |> Set.insert("Apple")
 ##     |> Set.insert("Pear")
 ##     |> Set.insert("Banana")
@@ -163,7 +163,7 @@ len = \@Set(dict) ->
 ## Returns the max number of elements the set can hold before requiring a rehash.
 ## ```roc
 ## food_set =
-##     Set.empty(())
+##     Set.empty()
 ##     |> Set.insert("apple")
 ##
 ## capacity_of_set = Set.capacity(food_set)
@@ -174,9 +174,9 @@ capacity = \@Set(dict) ->
 
 ## Check if the set is empty.
 ## ```roc
-## Set.is_empty(Set.empty(()) |> Set.insert(42))
+## Set.is_empty(Set.empty() |> Set.insert(42))
 ##
-## Set.is_empty(Set.empty(()))
+## Set.is_empty(Set.empty())
 ## ```
 is_empty : Set * -> Bool
 is_empty = \@Set(dict) ->
@@ -185,7 +185,7 @@ is_empty = \@Set(dict) ->
 # Inserting a duplicate key has no effect on length.
 expect
     actual =
-        empty(())
+        empty()
         |> insert("foo")
         |> insert("bar")
         |> insert("foo")
@@ -197,7 +197,7 @@ expect
 ## Removes the value from the given `Set`.
 ## ```roc
 ## numbers =
-##     Set.empty(())
+##     Set.empty()
 ##     |> Set.insert(10)
 ##     |> Set.insert(20)
 ##     |> Set.remove(10)
@@ -247,7 +247,7 @@ to_list = \@Set(dict) ->
 ## Create a `Set` from a `List` of values.
 ## ```roc
 ## values =
-##     Set.empty(())
+##     Set.empty()
 ##     |> Set.insert(Banana)
 ##     |> Set.insert(Apple)
 ##     |> Set.insert(Pear)

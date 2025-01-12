@@ -242,6 +242,11 @@ fn index_var(
                 }
                 FlatType::EmptyTuple => {
                     debug_assert!(matches!(ctor, IndexCtor::Tuple));
+                    debug_assert_eq!(
+                        render_as,
+                        &RenderAs::Tuple,
+                        "tuple constructors must always be rendered as tuples"
+                    );
 
                     return Ok(Vec::new());
                 }

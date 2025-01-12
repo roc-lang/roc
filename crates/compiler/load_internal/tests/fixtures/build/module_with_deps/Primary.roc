@@ -14,20 +14,20 @@ always_three = \_ -> Dep1.three
 
 identity = \a -> a
 
-z = identity(always_three({}))
+z = identity(always_three())
 
-w : Dep1.Identity {}
-w = Identity({})
+w : Dep1.Identity ()
+w = Identity()
 
 succeed : a -> Dep1.Identity a
 succeed = \x -> Identity(x)
 
 with_default = Res.with_default
 
-yay : Res.Res {} err
+yay : Res.Res () err
 yay =
     ok = Ok("foo")
 
-    f = \_ -> {}
+    f = \_ -> ()
 
     Res.map(ok, f)

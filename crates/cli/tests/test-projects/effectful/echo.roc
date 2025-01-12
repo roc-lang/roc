@@ -2,11 +2,11 @@ app [main!] { pf: platform "../test-platform-effects-zig/main.roc" }
 
 import pf.Effect
 
-main! : {} => {}
-main! = \{} -> tick!({})
+main! : () => ()
+main! = \() -> tick!()
 
-tick! = \{} ->
-    line = Effect.get_line!({})
+tick! = \() ->
+    line = Effect.get_line!()
 
     if !(Str.is_empty(line)) then
         Effect.put_line!(echo(line))

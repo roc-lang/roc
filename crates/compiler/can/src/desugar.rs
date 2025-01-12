@@ -1026,6 +1026,24 @@ pub fn desugar_expr<'a>(
                 Expr::LowLevelTry(result_expr, ResultTryKind::KeywordPrefix),
             ))
         }
+        PncApply(loc_fn, pnc_args @ Collection { items: &[], .. }) => {
+            let mut args = Vec::with_capacity_in(1, env.arena);
+            args.push(
+                &*env
+                    .arena
+                    .alloc(Loc::at(loc_fn.region, Expr::Tuple(Collection::empty()))),
+            );
+            let args = Collection::with_items_and_comments(
+                env.arena,
+                args.into_bump_slice(),
+                pnc_args.final_comments(),
+            );
+
+            env.arena.alloc(Loc {
+                value: PncApply(desugar_expr(env, scope, loc_fn), args),
+                region: loc_expr.region,
+            })
+        }
         PncApply(loc_fn, loc_args) => {
             let mut desugared_args = Vec::with_capacity_in(loc_args.len(), env.arena);
 
@@ -1359,6 +1377,17 @@ fn desugar_pattern<'a>(env: &mut Env<'a>, scope: &mut Scope, pattern: Pattern<'a
             }
 
             Apply(tag, desugared_arg_patterns.into_bump_slice())
+        }
+        PncApply(tag, arg_patterns) if arg_patterns.is_empty() => {
+            let mut args = Vec::with_capacity_in(1, env.arena);
+            args.push(Loc::at(tag.region, Pattern::Tuple(Collection::empty())));
+            let arg_patterns = Collection::with_items_and_comments(
+                env.arena,
+                args.into_bump_slice(),
+                arg_patterns.final_comments(),
+            );
+
+            PncApply(tag, arg_patterns)
         }
         PncApply(tag, arg_patterns) => {
             // Skip desugaring the tag, it should either be a Tag or OpaqueRef

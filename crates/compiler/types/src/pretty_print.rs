@@ -1212,40 +1212,51 @@ fn write_flat_type<'a>(
                 .expect("Something ended up weird in this record type");
             let ext_var = ext;
 
-            buf.push_str("( ");
+            if sorted_elems.is_empty() {
+                buf.push_str("()");
+            } else {
+                buf.push_str("( ");
 
-            let mut any_written_yet = false;
-            let mut expected_next_index = 0;
+                let mut any_written_yet = false;
+                let mut expected_next_index = 0;
 
-            for (index, var) in sorted_elems {
-                if any_written_yet {
-                    buf.push_str(", ");
-                } else {
-                    any_written_yet = true;
-                }
-
-                if index - expected_next_index > 4 {
-                    // Don't write out a large number of _'s - just write out a count
-                    buf.push_str(&format!("... {} omitted, ", index - expected_next_index));
-                } else if index - expected_next_index > 1 {
-                    // Write out a bunch of _'s
-                    for _ in expected_next_index..index {
-                        buf.push_str("_, ");
+                for (index, var) in sorted_elems {
+                    if any_written_yet {
+                        buf.push_str(", ");
+                    } else {
+                        any_written_yet = true;
                     }
-                }
-                expected_next_index = index + 1;
 
-                write_content(env, ctx, var, subs, buf, Parens::Unnecessary, pol);
+                    if index - expected_next_index > 4 {
+                        // Don't write out a large number of _'s - just write out a count
+                        buf.push_str(&format!("... {} omitted, ", index - expected_next_index));
+                    } else if index - expected_next_index > 1 {
+                        // Write out a bunch of _'s
+                        for _ in expected_next_index..index {
+                            buf.push_str("_, ");
+                        }
+                    }
+                    expected_next_index = index + 1;
+
+                    write_content(env, ctx, var, subs, buf, Parens::Unnecessary, pol);
+                }
+
+                buf.push_str(" )");
             }
 
-            buf.push_str(" )");
-
-            // This is an open tuple, so print the variable
-            // right after the ')'
-            //
-            // e.g. the "*" at the end of `( I64, I64 )*`
-            // or the "r" at the end of `( I64, I64 )r`
-            write_content(env, ctx, ext_var, subs, buf, parens, pol)
+            match subs.get_content_without_compacting(ext_var) {
+                Content::Structure(EmptyTuple) => {
+                    // This is a closed tuple. We're done!
+                }
+                _ => {
+                    // This is an open tuple, so print the variable
+                    // right after the ')'
+                    //
+                    // e.g. the "*" at the end of `( I64, I64 )*`
+                    // or the "r" at the end of `( I64, I64 )r`
+                    write_content(env, ctx, ext_var, subs, buf, parens, pol)
+                }
+            }
         }
         TagUnion(tags, ext_var) => {
             buf.push('[');

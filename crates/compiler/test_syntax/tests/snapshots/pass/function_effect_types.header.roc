@@ -1,5 +1,5 @@
 platform "cli"
-    requires {}{ main! : {} => Result {} [] } # TODO FIXME
+    requires {}{ main! : () => Result () [] }
     exposes []
     packages {}
     imports [ Foo.{ Foo } ]

@@ -7,5 +7,5 @@ platform "test-platform"
 
 Expr : [String Str, Concat Expr Expr]
 
-main_for_host : {} -> Expr
-main_for_host = \{} -> main
+main_for_host : () -> Expr
+main_for_host = \() -> main

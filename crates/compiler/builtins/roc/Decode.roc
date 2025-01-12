@@ -116,7 +116,7 @@ DecoderFormatting implements
 ## `decode_bool` could be defined as follows;
 ##
 ## ```roc
-## decode_bool = Decode.custom \bytes, @Json({}) ->
+## decode_bool = Decode.custom \bytes, @Json() ->
 ##     when bytes is
 ##         ['f', 'a', 'l', 's', 'e', ..] -> { result: Ok(Bool.false), rest: List.drop_first(bytes, 5) }
 ##         ['t', 'r', 'u', 'e', ..] -> { result: Ok Bool.true, rest: List.drop_first(bytes, 4) }

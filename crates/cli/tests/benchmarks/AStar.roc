@@ -14,26 +14,26 @@ Model position : {
 
 initial_model : position -> Model position where position implements Hash & Eq
 initial_model = \start -> {
-    evaluated: Set.empty({}),
+    evaluated: Set.empty(),
     open_set: Set.single(start),
     costs: Dict.single(start, 0),
-    came_from: Dict.empty({}),
+    came_from: Dict.empty(),
 }
 
-cheapest_open : (position -> F64), Model position -> Result position {} where position implements Hash & Eq
+cheapest_open : (position -> F64), Model position -> Result position () where position implements Hash & Eq
 cheapest_open = \cost_fn, model ->
     model.open_set
     |> Set.to_list
     |> List.keep_oks(
         \position ->
             when Dict.get(model.costs, position) is
-                Err(_) -> Err({})
+                Err(_) -> Err()
                 Ok(cost) -> Ok({ cost: cost + cost_fn(position), position }),
     )
     |> Quicksort.sort_by(.cost)
     |> List.first
     |> Result.map(.position)
-    |> Result.map_err(\_ -> {})
+    |> Result.map_err(\_ -> ())
 
 reconstruct_path : Dict position position, position -> List position where position implements Hash & Eq
 reconstruct_path = \came_from, goal ->
@@ -70,10 +70,10 @@ update_cost = \current, neighbor, model ->
             else
                 model
 
-astar : (position, position -> F64), (position -> Set position), position, Model position -> Result (List position) {} where position implements Hash & Eq
+astar : (position, position -> F64), (position -> Set position), position, Model position -> Result (List position) () where position implements Hash & Eq
 astar = \cost_fn, move_fn, goal, model ->
     when cheapest_open(\source -> cost_fn(source, goal), model) is
-        Err({}) -> Err({})
+        Err() -> Err()
         Ok(current) ->
             if current == goal then
                 Ok(reconstruct_path(model.came_from, goal))

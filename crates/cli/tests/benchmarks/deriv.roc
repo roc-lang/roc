@@ -3,9 +3,9 @@ app [main!] { pf: platform "platform/main.roc" }
 import pf.Host
 
 # based on: https://github.com/koka-lang/koka/blob/master/test/bench/haskell/deriv.hs
-main! : {} => {}
-main! = \{} ->
-    { value, is_error } = Host.get_int!({})
+main! : () => ()
+main! = \() ->
+    { value, is_error } = Host.get_int!()
     input_result =
         if is_error then
             Err(GetIntError)
@@ -21,7 +21,8 @@ main! = \{} ->
             f = pow(x, x)
 
             _ = nest!(deriv!, n, f) # original koka n = 10
-            {}
+
+            ()
 
         Err(GetIntError) ->
             Host.put_line!("Error: Failed to get Integer from stdin.")

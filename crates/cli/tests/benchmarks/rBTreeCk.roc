@@ -37,9 +37,9 @@ fold = \f, tree, b ->
         Leaf -> b
         Node(_, l, k, v, r) -> fold(f, r, f(k, v, fold(f, l, b)))
 
-main! : {} => {}
-main! = \{} ->
-    { value, is_error } = Host.get_int!({})
+main! : () => ()
+main! = \() ->
+    { value, is_error } = Host.get_int!()
     input_result =
         if is_error then
             Err(GetIntError)

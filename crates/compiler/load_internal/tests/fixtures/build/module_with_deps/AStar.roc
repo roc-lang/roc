@@ -11,10 +11,10 @@ Model position : {
 
 initial_model : position -> Model position where position implements Hash & Eq
 initial_model = \start -> {
-    evaluated: Set.empty({}),
+    evaluated: Set.empty(),
     open_set: Set.single(start),
     costs: Dict.single(start, 0.0),
-    came_from: Dict.empty({}),
+    came_from: Dict.empty(),
 }
 
 cheapest_open : (position -> F64), Model position -> Result position [KeyNotFound] where position implements Hash & Eq

@@ -2403,8 +2403,8 @@ fn adjust_rank_content(
                     rank
                 }
 
-                EmptyRecord | EmptyTuple => {
-                    // from elm-compiler: THEORY: an empty record/tuple never needs to get generalized
+                EmptyRecord => {
+                    // from elm-compiler: THEORY: an empty record never needs to get generalized
                     //
                     // But for us, that theory does not hold, because there might be type variables hidden
                     // inside a lambda set but not on the left or right of an arrow, and records should not
@@ -2417,6 +2417,8 @@ fn adjust_rank_content(
 
                 // THEORY: an empty tag never needs to get generalized
                 EmptyTagUnion => Rank::toplevel(),
+
+                EmptyTuple => Rank::toplevel(),
 
                 EffectfulFunc => Rank::toplevel(),
 

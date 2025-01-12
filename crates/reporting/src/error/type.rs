@@ -5567,16 +5567,20 @@ fn pattern_to_doc_help<'b>(
                         .append(" }")
                 }
                 RenderAs::Tuple => {
-                    let mut arg_docs = Vec::with_capacity(args.len());
+                    if args.is_empty() {
+                        alloc.text("()")
+                    } else {
+                        let mut arg_docs = Vec::with_capacity(args.len());
 
-                    for v in args.into_iter() {
-                        arg_docs.push(pattern_to_doc_help(alloc, v, false));
+                        for v in args.into_iter() {
+                            arg_docs.push(pattern_to_doc_help(alloc, v, false));
+                        }
+
+                        alloc
+                            .text("( ")
+                            .append(alloc.intersperse(arg_docs, alloc.reflow(", ")))
+                            .append(" )")
                     }
-
-                    alloc
-                        .text("( ")
-                        .append(alloc.intersperse(arg_docs, alloc.reflow(", ")))
-                        .append(" )")
                 }
                 RenderAs::Tag | RenderAs::Opaque => {
                     let ctor = &union.alternatives[tag_id.0 as usize];

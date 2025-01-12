@@ -1916,7 +1916,7 @@ cannot_support_default = \types, type ->
             List.any(fields, \{ id } -> cannot_support_default(types, Types.shape(types, id)))
 
 has_float = \types, type ->
-    has_float_help(types, type, Set.empty({}))
+    has_float_help(types, type, Set.empty())
 
 has_float_help = \types, type, do_not_recurse ->
     # TODO: is doNotRecurse problematic? Do we need an updated doNotRecurse for calls up the tree?
@@ -2142,7 +2142,7 @@ generate_roc_refcounted_named_fields = \types, fields, mode, wrapper ->
 
 # If a value or any data in it must be refcounted.
 contains_refcounted = \types, type ->
-    contains_refcounted_help(types, type, Set.empty({}))
+    contains_refcounted_help(types, type, Set.empty())
 
 contains_refcounted_help = \types, type, do_not_recurse ->
     # TODO: is doNotRecurse problematic? Do we need an updated doNotRecurse for calls up the tree?

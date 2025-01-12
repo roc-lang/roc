@@ -2,17 +2,17 @@ app [main!] { pf: platform "platform/main.roc" }
 
 import pf.Host
 
-main! : {} => {}
-main! = \{} ->
-    tree : RedBlackTree I64 {}
-    tree = insert(0, {}, Empty)
+main! : () => ()
+main! = \() ->
+    tree : RedBlackTree I64 ()
+    tree = insert(0, (), Empty)
 
     tree
     |> show
     |> Host.put_line!
 
-show : RedBlackTree I64 {} -> Str
-show = \tree -> show_rb_tree(tree, Num.to_str, \{} -> "{}")
+show : RedBlackTree I64 () -> Str
+show = \tree -> show_rb_tree(tree, Num.to_str, \() -> "()")
 
 show_rb_tree : RedBlackTree k v, (k -> Str), (v -> Str) -> Str
 show_rb_tree = \tree, show_key, show_value ->

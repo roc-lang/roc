@@ -619,13 +619,13 @@ any : List a, (a -> Bool) -> Bool
 any = \list, predicate ->
     looper = \(), element ->
         if predicate(element) then
-            Break(())
+            Break()
         else
-            Continue(())
+            Continue()
 
     when List.iterate(list, (), looper) is
-        Continue(()) -> Bool.false
-        Break(()) -> Bool.true
+        Continue() -> Bool.false
+        Break() -> Bool.true
 
 ## Run the given predicate on each element of the list, returning `Bool.true` if
 ## all of the elements satisfy it.
@@ -633,13 +633,13 @@ all : List a, (a -> Bool) -> Bool
 all = \list, predicate ->
     looper = \(), element ->
         if predicate(element) then
-            Continue(())
+            Continue()
         else
-            Break(())
+            Break()
 
     when List.iterate(list, (), looper) is
-        Continue(()) -> Bool.true
-        Break(()) -> Bool.false
+        Continue() -> Bool.true
+        Break() -> Bool.false
 
 ## Run the given function on each element of a list, and return all the
 ## elements for which the function returned `Bool.true`.
@@ -1140,10 +1140,10 @@ find_first = \list, pred ->
         if pred(elem) then
             Break(elem)
         else
-            Continue(())
+            Continue()
 
     when List.iterate(list, (), callback) is
-        Continue(()) -> Err(NotFound)
+        Continue() -> Err(NotFound)
         Break(found) -> Ok(found)
 
 ## Returns the last element of the list satisfying a predicate function.
@@ -1154,10 +1154,10 @@ find_last = \list, pred ->
         if pred(elem) then
             Break(elem)
         else
-            Continue(())
+            Continue()
 
     when List.iterate_backwards(list, (), callback) is
-        Continue(()) -> Err(NotFound)
+        Continue() -> Err(NotFound)
         Break(found) -> Ok(found)
 
 ## Returns the index at which the first element in the list
@@ -1492,11 +1492,11 @@ for_each_try! : List a, (a => Result () err) => Result () err
 for_each_try! = \list, func! ->
     when list is
         [] ->
-            Ok(())
+            Ok()
 
         [elem, .. as rest] ->
             when func!(elem) is
-                Ok(()) ->
+                Ok() ->
                     for_each_try!(rest, func!)
 
                 Err(err) ->
@@ -1506,7 +1506,7 @@ for_each_try! = \list, func! ->
 ##
 ## ```roc
 ## now_multiples = List.walk!([1, 2, 3], [], \nums, i ->
-##      now = Utc.now!(()) |> Utc.to_millis_since_epoch
+##      now = Utc.now!() |> Utc.to_millis_since_epoch
 ##      List.append(nums, now * i)
 ## )
 ## ```
@@ -1533,7 +1533,7 @@ walk! = \list, state, func! ->
 ##         [],
 ##         \accumulator, which ->
 ##             Stdout.write!("${which} name: ")?
-##             name = Stdin.line!(())?
+##             name = Stdin.line!()?
 ##             Ok(List.append(accumulator, name)),
 ##     )?
 ## ```

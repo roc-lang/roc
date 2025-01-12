@@ -4,16 +4,16 @@ hosted Host
 
 open_file! : Str => U64
 
-close_file! : U64 => {}
+close_file! : U64 => ()
 
 get_file_line! : U64 => Str
 
 get_file_bytes! : U64 => List U8
 
-put_line! : Str => {}
+put_line! : Str => ()
 
-put_raw! : Str => {}
+put_raw! : Str => ()
 
-get_line! : {} => Str
+get_line! : () => Str
 
-get_char! : {} => U8
+get_char! : () => U8

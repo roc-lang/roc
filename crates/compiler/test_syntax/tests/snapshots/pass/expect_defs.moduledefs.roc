@@ -1,5 +1,5 @@
 expect
-    html : Html {}
+    html : Html ()
     html =
         Element "a" 43 [HtmlAttr "href" "https://www.roc-lang.org/"] [Text "Roc"]
 

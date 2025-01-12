@@ -14,22 +14,22 @@ import Variable exposing [Variable]
 
 InterpreterErrors : [BadUtf8, DivByZero, EmptyStack, InvalidBooleanValue, InvalidChar Str, MaxInputNumber, NoLambdaOnStack, NoNumberOnStack, NoVariableOnStack, NoScope, OutOfBounds, UnexpectedEndOfData]
 
-main! : Str => {}
+main! : Str => ()
 main! = \filename ->
     when interpret_file!(filename) is
-        Ok({}) ->
-            {}
+        Ok(()) ->
+            ()
 
         Err(StringErr(e)) ->
             Stdout.line!("Ran into problem:\n${e}\n")
 
-interpret_file! : Str => Result {} [StringErr Str]
+interpret_file! : Str => Result () [StringErr Str]
 interpret_file! = \filename ->
     Context.with!(filename, \ctx ->
         result = interpret_ctx!(ctx)
         when result is
             Ok(_) ->
-                Ok({})
+                Ok(())
 
             Err(BadUtf8) ->
                 Err(StringErr("Failed to convert string from Utf8 bytes"))
@@ -377,7 +377,7 @@ step_exec_ctx! = \ctx, char ->
 
         0x5E ->
             # `^` read char as int
-            in = Stdin.char!({})
+            in = Stdin.char!()
             if in == 255 then
                 # max char sent on EOF. Change to -1
                 Ok(Context.push_stack(ctx, Number(-1)))

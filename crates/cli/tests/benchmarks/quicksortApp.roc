@@ -3,9 +3,9 @@ app [main!] { pf: platform "platform/main.roc" }
 import pf.Host
 import Quicksort
 
-main! : {} => {}
-main! = \{} ->
-    { value, is_error } = Host.get_int!({})
+main! : () => ()
+main! = \() ->
+    { value, is_error } = Host.get_int!()
     input_result =
         if is_error then
             Err(GetIntError)

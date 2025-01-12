@@ -5,5 +5,5 @@ platform "test-platform"
     imports []
     provides [main_for_host]
 
-main_for_host : {} -> {}
-main_for_host = \{} -> {}
+main_for_host : () -> ()
+main_for_host = \() -> ()

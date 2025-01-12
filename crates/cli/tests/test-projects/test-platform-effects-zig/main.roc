@@ -5,5 +5,5 @@ platform "effects"
     imports []
     provides [main_for_host!]
 
-main_for_host! : {} => {}
-main_for_host! = \{} -> main!({})
+main_for_host! : () => ()
+main_for_host! = \() -> main!()

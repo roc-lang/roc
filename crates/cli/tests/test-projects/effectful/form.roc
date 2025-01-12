@@ -2,8 +2,8 @@ app [main!] { pf: platform "../test-platform-effects-zig/main.roc" }
 
 import pf.Effect
 
-main! : {} => {}
-main! = \{} ->
+main! : () => ()
+main! = \() ->
     first = ask!("What's your first name?")
     last = ask!("What's your last name?")
 
@@ -24,4 +24,4 @@ main! = \{} ->
 ask! : Str => Str
 ask! = \question ->
     Effect.put_line!(question)
-    Effect.get_line!({})
+    Effect.get_line!()

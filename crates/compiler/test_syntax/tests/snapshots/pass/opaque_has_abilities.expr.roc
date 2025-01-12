@@ -18,6 +18,6 @@ A := U8 implements []
 A := a where a implements Other
      implements [Eq {eq}, Hash {hash}]
 
-A := U8 implements [Eq {}]
+A := U8 implements [Eq ()]
 
 0
