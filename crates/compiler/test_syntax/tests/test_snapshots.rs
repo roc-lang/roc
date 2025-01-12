@@ -473,6 +473,7 @@ mod test_snapshots {
         pass/implements_not_keyword.expr,
         pass/implements_record_destructure.expr,
         pass/import.moduledefs,
+        pass/import_backslash_as_m.expr,
         pass/import_from_package.moduledefs,
         pass/import_in_closure_with_curlies_after.expr,
         pass/import_with_alias.moduledefs,

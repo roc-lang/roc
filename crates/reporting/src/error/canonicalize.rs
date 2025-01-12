@@ -67,6 +67,7 @@ const MISSING_EXCLAMATION: &str = "MISSING EXCLAMATION";
 const UNNECESSARY_EXCLAMATION: &str = "UNNECESSARY EXCLAMATION";
 const EMPTY_TUPLE_TYPE: &str = "EMPTY TUPLE TYPE";
 const UNBOUND_TYPE_VARS_IN_AS: &str = "UNBOUND TYPE VARIABLES IN AS";
+const INTERPOLATED_STRING_NOT_ALLOWED: &str = "INTERPOLATED STRING NOT ALLOWED";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -1478,6 +1479,15 @@ pub fn can_problem<'b>(
 
             title = UNBOUND_TYPE_VARS_IN_AS.to_string();
         }
+        Problem::InterpolatedStringNotAllowed(region) => {
+            doc = alloc.stack([
+                alloc.reflow("Interpolated strings are not allowed here:"),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.reflow(r#"Only plain strings like "foo" or "foo\n" are allowed."#),
+            ]);
+
+            title = INTERPOLATED_STRING_NOT_ALLOWED.to_string();
+        }
     };
 
     Report {
@@ -2247,6 +2257,14 @@ fn pretty_runtime_error<'b>(
             let report = to_file_problem_report(alloc, filename, error);
 
             doc = report.doc;
+            title = INGESTED_FILE_ERROR;
+        }
+        RuntimeError::IngestedFilePathError(region) => {
+            doc = alloc.stack([
+                alloc.reflow(r"I tried to read this file, but something about the path is wrong:"),
+                alloc.region(lines.convert_region(region), severity),
+            ]);
+
             title = INGESTED_FILE_ERROR;
         }
         RuntimeError::InvalidPrecedence(_, _) => {

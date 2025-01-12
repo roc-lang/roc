@@ -263,6 +263,7 @@ pub enum Problem {
         field_region: Region,
         record_region: Region,
     },
+    InterpolatedStringNotAllowed(Region),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -280,6 +281,7 @@ impl Problem {
             Problem::UnusedDef(_, _) => Warning,
             Problem::UnusedImport(_, _) => Warning,
             Problem::UnusedModuleImport(_, _) => Warning,
+            Problem::InterpolatedStringNotAllowed(_) => RuntimeError,
             Problem::ImportNameConflict { .. } => RuntimeError,
             Problem::ExplicitBuiltinImport(_, _) => Warning,
             Problem::ExplicitBuiltinTypeImport(_, _) => Warning,
@@ -376,6 +378,7 @@ impl Problem {
                 ..
             }
             | Problem::ExplicitBuiltinImport(_, region)
+            | Problem::InterpolatedStringNotAllowed(region)
             | Problem::ExplicitBuiltinTypeImport(_, region)
             | Problem::ImportShadowsSymbol { region, .. }
             | Problem::UnusedArgument(_, _, _, region)
@@ -687,6 +690,7 @@ pub enum RuntimeError {
 
     NonFunctionHostedAnnotation(Region),
     InvalidTupleIndex(Region),
+    IngestedFilePathError(Region),
 }
 
 impl RuntimeError {
@@ -725,6 +729,7 @@ impl RuntimeError {
             | RuntimeError::InvalidInt(_, _, region, _)
             | RuntimeError::EmptySingleQuote(region)
             | RuntimeError::InvalidTupleIndex(region)
+            | RuntimeError::IngestedFilePathError(region)
             | RuntimeError::MultipleCharsInSingleQuote(region)
             | RuntimeError::DegenerateBranch(region)
             | RuntimeError::InvalidInterpolation(region)
