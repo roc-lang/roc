@@ -1075,7 +1075,7 @@ fn applied_tag_function_result() {
     assert_evals_to!(
         indoc!(
             r#"
-            x : List (Result Str *)
+            x : List (Result Str _)
             x = List.map ["a", "b"] Ok
 
             List.keep_oks x (\y -> y)

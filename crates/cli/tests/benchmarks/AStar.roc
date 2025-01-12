@@ -90,12 +90,12 @@ astar = \cost_fn, move_fn, goal, model ->
                 new_neighbors =
                     Set.difference(neighbors, model_popped.evaluated)
 
-                model_with_neighbors : Model position
+                model_with_neighbors : Model _
                 model_with_neighbors =
                     model_popped
                     |> &open_set(Set.union(model_popped.open_set, new_neighbors))
 
-                walker : Model position, position -> Model position
+                walker : Model _, _ -> Model _
                 walker = \amodel, n -> update_cost(current, n, amodel)
 
                 model_with_costs =

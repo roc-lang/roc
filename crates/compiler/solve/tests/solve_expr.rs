@@ -2510,13 +2510,15 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                    empty : [Cons a (ConsList a), Nil] as ConsList a
-                    empty = Nil
+                ConsList a : [Cons a (ConsList a), Nil]
 
-                    empty
-                       "
+                empty : ConsList _
+                empty = Nil
+
+                empty
+                   "
             ),
-            "ConsList a",
+            "ConsList *",
         );
     }
 
@@ -3742,7 +3744,7 @@ mod solve_expr {
             indoc!(
                 r"
                 \rec ->
-                    { x, y } : { x : I64, y ? Bool }*
+                    { x, y } : { x : I64, y ? Bool }_
                     { x, y ? Bool.false } = rec
 
                     { x, y }
@@ -3906,26 +3908,6 @@ mod solve_expr {
                 "
             ),
             "Num a -> Num a",
-        );
-    }
-
-    #[test]
-    fn double_named_rigids() {
-        infer_eq_without_problem(
-            indoc!(
-                r#"
-                app "test" provides [main] to "./platform"
-
-
-                main : List x
-                main =
-                    empty : List x
-                    empty = []
-
-                    empty
-                "#
-            ),
-            "List x",
         );
     }
 

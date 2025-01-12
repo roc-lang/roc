@@ -662,7 +662,7 @@ fn linked_list_len_1() {
 
             LinkedList a : [Nil, Cons a (LinkedList a)]
 
-            one : LinkedList (Int *)
+            one : LinkedList (Int _)
             one = Cons 1 Nil
 
             length : LinkedList a -> Int *
@@ -690,7 +690,7 @@ fn linked_list_len_twice_1() {
 
             LinkedList a : [Nil, Cons a (LinkedList a)]
 
-            one : LinkedList (Int *)
+            one : LinkedList (Int _)
             one = Cons 1 Nil
 
             length : LinkedList a -> Int *
@@ -718,7 +718,7 @@ fn linked_list_len_3() {
 
             LinkedList a : [Nil, Cons a (LinkedList a)]
 
-            three : LinkedList (Int *)
+            three : LinkedList (Int _)
             three = Cons 3 (Cons 2 (Cons 1 Nil))
 
             length : LinkedList a -> Int *
@@ -747,7 +747,7 @@ fn linked_list_sum_num_a() {
 
             LinkedList a : [Nil, Cons a (LinkedList a)]
 
-            three : LinkedList (Int *)
+            three : LinkedList (Int _)
             three = Cons 3 (Cons 2 (Cons 1 Nil))
 
 
@@ -776,7 +776,7 @@ fn linked_list_sum_int() {
 
             LinkedList a : [Nil, Cons a (LinkedList a)]
 
-            zero : LinkedList (Int *)
+            zero : LinkedList (Int _)
             zero = Nil
 
             sum : LinkedList (Int a) -> Int a
@@ -804,7 +804,7 @@ fn linked_list_map() {
 
             LinkedList a : [Nil, Cons a (LinkedList a)]
 
-            three : LinkedList (Int *)
+            three : LinkedList (Int _)
             three = Cons 3 (Cons 2 (Cons 1 Nil))
 
             sum : LinkedList (Num a) -> Num a
@@ -836,7 +836,7 @@ fn when_nested_maybe() {
             r"
             Maybe a : [Nothing, Just a]
 
-            x : Maybe (Maybe (Int a))
+            x : Maybe (Maybe (Int _))
             x = Just (Just 41)
 
             when x is
@@ -853,7 +853,7 @@ fn when_nested_maybe() {
             r"
             Maybe a : [Nothing, Just a]
 
-            x : Maybe (Maybe (Int *))
+            x : Maybe (Maybe (Int _))
             x = Just Nothing
 
             when x is
@@ -871,7 +871,7 @@ fn when_nested_maybe() {
             r"
             Maybe a : [Nothing, Just a]
 
-            x : Maybe (Maybe (Int *))
+            x : Maybe (Maybe (Int _))
             x = Nothing
 
             when x is
@@ -1402,7 +1402,7 @@ fn recursive_function_with_rigid() {
                 else
                     1 + foo { count: state.count - 1, x: state.x }
 
-            main : Int *
+            main : Int _
             main =
                 foo { count: 3, x: {} }
             "#
@@ -1517,7 +1517,7 @@ fn rbtree_balance_3() {
             balance = \key, left ->
                 Node key left Empty
 
-            main : RedBlackTree (Int *)
+            main : RedBlackTree (Int _)
             main =
                 balance 0 Empty
             "#
@@ -1696,7 +1696,7 @@ fn nested_pattern_match_two_ways() {
                         _ -> 3
                 _ -> 3
 
-            main : Int *
+            main : Int _
             main =
                 when balance Nil is
                     _ -> 3
@@ -1719,7 +1719,7 @@ fn nested_pattern_match_two_ways() {
                 Cons 1 (Cons 1 _) -> 3
                 _ -> 3
 
-            main : Int *
+            main : Int _
             main =
                 when balance Nil is
                     _ -> 3
@@ -1751,7 +1751,7 @@ fn linked_list_guarded_double_pattern_match() {
                         _ -> 3
                 _ -> 3
 
-            main : Int *
+            main : Int _
             main =
                 when balance Nil is
                     _ -> 3
@@ -1778,7 +1778,7 @@ fn linked_list_double_pattern_match() {
                     Cons _ (Cons x _) -> x
                     _ -> 0
 
-            main : Int *
+            main : Int _
             main =
                 foo (Cons 1 (Cons 32 Nil))
             "#
@@ -1886,7 +1886,7 @@ fn wildcard_rigid() {
                 @Effect inner
 
 
-            main : MyTask {} (Frac *)
+            main : MyTask {} (Frac _)
             main = always {}
             "#
         ),

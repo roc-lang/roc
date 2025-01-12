@@ -356,9 +356,9 @@ fn unify_help<M: MetaCollector>(
         }
     } else {
         let error_context = if mismatches.contains(&Mismatch::TypeNotInRange) {
-            ErrorTypeContext::ExpandRanges
+            ErrorTypeContext::EXPAND_RANGES
         } else {
-            ErrorTypeContext::None
+            ErrorTypeContext::empty()
         };
 
         let type1 = env.var_to_error_type_contextual(var1, error_context, observed_pol);
