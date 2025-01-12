@@ -344,6 +344,7 @@ fn find_chain(subs: &Subs, left: Variable, right: Variable) -> impl Iterator<Ite
                     Err(())
                 }
                 (EmptyRecord, EmptyRecord)
+                | (EmptyTuple, EmptyTuple)
                 | (EmptyTagUnion, EmptyTagUnion) => Err(()),
                 _ => internal_error!(
                     "structures {:?} and {:?} do not unify; they should never have been involved in fixing!",

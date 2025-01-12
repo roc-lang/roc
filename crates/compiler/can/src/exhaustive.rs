@@ -240,6 +240,11 @@ fn index_var(
                     };
                     return Ok(std::iter::repeat(Variable::NULL).take(num_fields).collect());
                 }
+                FlatType::EmptyTuple => {
+                    debug_assert!(matches!(ctor, IndexCtor::Tuple));
+
+                    return Ok(Vec::new());
+                }
                 FlatType::EmptyTagUnion => {
                     internal_error!("empty tag unions are not indexable")
                 }

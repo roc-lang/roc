@@ -4619,7 +4619,7 @@ pub fn with_hole<'a>(
             )
         }
 
-        EmptyRecord => let_empty_struct(assigned, hole),
+        EmptyRecord | EmptyTuple => let_empty_struct(assigned, hole),
 
         Expect { .. } => unreachable!("I think this is unreachable"),
         Dbg {
@@ -10141,6 +10141,7 @@ fn find_lambda_sets_help(
                     }
                 }
                 FlatType::EmptyRecord => {}
+                FlatType::EmptyTuple => {}
                 FlatType::EmptyTagUnion => {}
                 FlatType::EffectfulFunc => {}
             },

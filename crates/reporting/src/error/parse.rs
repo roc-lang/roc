@@ -2802,6 +2802,7 @@ fn to_type_report<'a>(
         EType::Space(_, pos)
         | EType::UnderscoreSpacing(pos)
         | EType::TWildcard(pos)
+        | EType::TEmptyTuple(pos)
         | EType::TInferred(pos)
         | EType::TEnd(pos)
         | EType::TWhereBar(pos)
@@ -3301,27 +3302,6 @@ fn to_tinparens_report<'a>(
                         severity,
                     }
                 }
-            }
-        }
-
-        ETypeInParens::Empty(pos) => {
-            let surroundings = Region::new(start, pos);
-            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
-
-            let doc = alloc.stack([
-                alloc.reflow("I am partway through parsing a parenthesized type:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
-                alloc.concat([
-                    alloc.reflow(r"I was expecting to see an expression next."),
-                    alloc.reflow(r"Note, Roc doesn't use '()' as a null type."),
-                ]),
-            ]);
-
-            Report {
-                filename,
-                doc,
-                title: "EMPTY PARENTHESES".to_string(),
-                severity,
             }
         }
 
@@ -4288,7 +4268,7 @@ fn to_requires_report<'a>(
                     alloc.reflow(" keyword next, like"),
                 ]),
                 alloc
-                    .parser_suggestion("requires { main! : {} => Result I64 Str }")
+                    .parser_suggestion("requires { main! : () => Result I64 Str }")
                     .indent(4),
             ]);
 
@@ -4315,7 +4295,7 @@ fn to_requires_report<'a>(
                     alloc.reflow(" keyword next, like"),
                 ]),
                 alloc
-                    .parser_suggestion("requires { main! : {} => Result I64 Str }")
+                    .parser_suggestion("requires { main! : () => Result I64 Str }")
                     .indent(4),
             ]);
 
@@ -4344,7 +4324,7 @@ fn to_requires_report<'a>(
                     alloc.reflow(" definition looks like"),
                 ]),
                 alloc
-                    .parser_suggestion("requires { Model, Msg } { main! : {} => Result {} [] }")
+                    .parser_suggestion("requires { Model, Msg } { main! : () => Result () [] }")
                     .indent(4),
             ]);
 
@@ -4373,7 +4353,7 @@ fn to_requires_report<'a>(
                     alloc.reflow(" definition looks like"),
                 ]),
                 alloc
-                    .parser_suggestion("requires { Model, Msg } { main! : {} => Result {} [] }")
+                    .parser_suggestion("requires { Model, Msg } { main! : () => Result () [] }")
                     .indent(4),
             ]);
 

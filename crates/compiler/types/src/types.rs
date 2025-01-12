@@ -369,6 +369,7 @@ pub struct AliasShared {
 #[derive(Debug, Clone, Copy)]
 pub enum TypeTag {
     EmptyRecord,
+    EmptyTuple,
     EmptyTagUnion,
     /// The arguments are implicit
     Function(
@@ -496,11 +497,15 @@ impl Types {
     const EMPTY_RECORD_TAG: TypeTag = TypeTag::Variable(Variable::EMPTY_RECORD);
     const EMPTY_RECORD_ARGS: Slice<TypeTag> = Slice::empty();
 
-    pub const EMPTY_TAG_UNION: Index<TypeTag> = Index::new(1);
+    pub const EMPTY_TUPLE: Index<TypeTag> = Index::new(1);
+    const EMPTY_TUPLE_TAG: TypeTag = TypeTag::Variable(Variable::EMPTY_TUPLE);
+    const EMPTY_TUPLE_ARGS: Slice<TypeTag> = Slice::empty();
+
+    pub const EMPTY_TAG_UNION: Index<TypeTag> = Index::new(2);
     const EMPTY_TAG_UNION_TAG: TypeTag = TypeTag::Variable(Variable::EMPTY_TAG_UNION);
     const EMPTY_TAG_UNION_ARGS: Slice<TypeTag> = Slice::empty();
 
-    pub const STR: Index<TypeTag> = Index::new(2);
+    pub const STR: Index<TypeTag> = Index::new(3);
     const STR_TAG: TypeTag = TypeTag::Variable(Variable::STR);
     const STR_ARGS: Slice<TypeTag> = Slice::empty();
 
@@ -509,11 +514,13 @@ impl Types {
             // tags.len() == tags_slices.len()
             tags: vec![
                 Self::EMPTY_RECORD_TAG,
+                Self::EMPTY_TUPLE_TAG,
                 Self::EMPTY_TAG_UNION_TAG,
                 Self::STR_TAG,
             ],
             tags_slices: vec![
                 Self::EMPTY_RECORD_ARGS,
+                Self::EMPTY_TUPLE_ARGS,
                 Self::EMPTY_TAG_UNION_ARGS,
                 Self::STR_ARGS,
             ],
@@ -751,6 +758,7 @@ impl Types {
     fn from_old_type_at(&mut self, index: Index<TypeTag>, old: &Type) {
         match old {
             Type::EmptyRec => self.set_type_tag(index, TypeTag::EmptyRecord, Slice::default()),
+            Type::EmptyTuple => self.set_type_tag(index, TypeTag::EmptyTuple, Slice::default()),
             Type::EmptyTagUnion => {
                 self.set_type_tag(index, TypeTag::EmptyTagUnion, Slice::default())
             }
@@ -1101,6 +1109,7 @@ impl Types {
             let (tag, args) = match self[typ] {
                 Variable(v) => (Variable(subst!(v)), Default::default()),
                 EmptyRecord => (EmptyRecord, Default::default()),
+                EmptyTuple => (EmptyTuple, Default::default()),
                 EmptyTagUnion => (EmptyTagUnion, Default::default()),
                 Function(clos, ret, fx) => {
                     let args = self.get_type_arguments(typ);
@@ -1339,6 +1348,7 @@ mod debug_types {
         use TPrec::*;
         let group = match types[tag] {
             TypeTag::EmptyRecord => f.text("{}"),
+            TypeTag::EmptyTuple => f.text("()"),
             TypeTag::EmptyTagUnion => f.text("[]"),
             TypeTag::Function(clos, ret, fx) => {
                 let args = types.get_type_arguments(tag);
@@ -1668,6 +1678,7 @@ impl std::ops::Index<Slice<AsideTypeSlice>> for Types {
 #[derive(PartialEq, Eq)]
 pub enum Type {
     EmptyRec,
+    EmptyTuple,
     EmptyTagUnion,
     /// A function. The types of its arguments, size of its closure, its return value, then the fx type.
     Function(Vec<Type>, Box<Type>, Box<Type>, Box<Type>),
@@ -1748,6 +1759,7 @@ impl Clone for Type {
 
         match self {
             Self::EmptyRec => Self::EmptyRec,
+            Self::EmptyTuple => Self::EmptyTuple,
             Self::EmptyTagUnion => Self::EmptyTagUnion,
             Self::Function(arg0, arg1, arg2, arg3) => {
                 Self::Function(arg0.clone(), arg1.clone(), arg2.clone(), arg3.clone())
@@ -1829,7 +1841,7 @@ impl TypeExtension {
     #[inline(always)]
     pub fn from_type(typ: Type, is_implicit_openness: ExtImplicitOpenness) -> Self {
         match typ {
-            Type::EmptyTagUnion | Type::EmptyRec => Self::Closed,
+            Type::EmptyTagUnion | Type::EmptyRec | Type::EmptyTuple => Self::Closed,
             _ => Self::Open(Box::new(typ), is_implicit_openness),
         }
     }
@@ -1837,7 +1849,7 @@ impl TypeExtension {
     #[inline(always)]
     pub fn from_non_annotation_type(typ: Type) -> Self {
         match typ {
-            Type::EmptyTagUnion | Type::EmptyRec => Self::Closed,
+            Type::EmptyTagUnion | Type::EmptyRec | Type::EmptyTuple => Self::Closed,
             _ => Self::Open(Box::new(typ), ExtImplicitOpenness::No),
         }
     }
@@ -1906,6 +1918,7 @@ impl fmt::Debug for Type {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Type::EmptyRec => write!(f, "{{}}"),
+            Type::EmptyTuple => write!(f, "()"),
             Type::EmptyTagUnion => write!(f, "[]"),
             Type::Function(args, closure, ret, fx) => {
                 write!(f, "Fn(")?;
@@ -2181,10 +2194,6 @@ impl Type {
         matches!(self, Type::EmptyTagUnion)
     }
 
-    pub fn is_empty_record(&self) -> bool {
-        matches!(self, Type::EmptyRec)
-    }
-
     pub fn variables(&self) -> ImSet<Variable> {
         let mut result = ImSet::default();
         variables_help(self, &mut result);
@@ -2324,7 +2333,7 @@ impl Type {
                     );
                 }
 
-                EmptyRec | EmptyTagUnion | Error | Pure | Effectful => {}
+                EmptyRec | EmptyTuple | EmptyTagUnion | Error | Pure | Effectful => {}
             }
         }
     }
@@ -2447,7 +2456,7 @@ impl Type {
                     );
                 }
 
-                EmptyRec | EmptyTagUnion | Error | Pure | Effectful => {}
+                EmptyRec | EmptyTuple | EmptyTagUnion | Error | Pure | Effectful => {}
             }
         }
     }
@@ -2564,6 +2573,7 @@ impl Type {
             RangedNumber(_) => Ok(()),
             UnspecializedLambdaSet { .. } => Ok(()),
             EmptyRec
+            | EmptyTuple
             | EmptyTagUnion
             | ClosureTag { .. }
             | Error
@@ -2633,6 +2643,7 @@ impl Type {
                 unspecialized: Uls(_, sym, _),
             } => *sym == rep_symbol,
             EmptyRec
+            | EmptyTuple
             | EmptyTagUnion
             | ClosureTag { .. }
             | Error
@@ -2700,7 +2711,7 @@ impl Type {
                 .iter()
                 .any(|arg| arg.value.contains_variable(rep_variable)),
             RangedNumber(_) => false,
-            EmptyRec | EmptyTagUnion | Error | Pure | Effectful => false,
+            EmptyRec | EmptyTuple | EmptyTagUnion | Error | Pure | Effectful => false,
         }
     }
 
@@ -3009,7 +3020,14 @@ fn instantiate_aliases<'a, F>(
         }
         RangedNumber(_) => {}
         UnspecializedLambdaSet { .. } => {}
-        EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) | Pure | Effectful => {}
+        EmptyRec
+        | EmptyTuple
+        | EmptyTagUnion
+        | ClosureTag { .. }
+        | Error
+        | Variable(_)
+        | Pure
+        | Effectful => {}
     }
 }
 
@@ -3072,6 +3090,7 @@ fn symbols_help(initial: &Type) -> Vec<Symbol> {
                 // ignore the member symbol because unspecialized lambda sets are internal-only
             }
             EmptyRec
+            | EmptyTuple
             | EmptyTagUnion
             | ClosureTag { .. }
             | Error
@@ -3091,7 +3110,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
     use Type::*;
 
     match tipe {
-        EmptyRec | EmptyTagUnion | Error => (),
+        EmptyRec | EmptyTuple | EmptyTagUnion | Error => (),
 
         Variable(v) => {
             accum.insert(*v);
@@ -3222,7 +3241,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
     use Type::*;
 
     match tipe {
-        EmptyRec | EmptyTagUnion | Error => (),
+        EmptyRec | EmptyTuple | EmptyTagUnion | Error => (),
 
         Variable(v) => {
             accum.type_variables.insert(*v);
@@ -3554,6 +3573,7 @@ pub enum PatternCategory {
     Tuple,
     List,
     EmptyRecord,
+    EmptyTuple,
     PatternGuard,
     PatternDefault,
     Set,
@@ -4298,6 +4318,7 @@ pub fn gather_tuple_elems_unsorted_iter(
                 var = *actual_var;
             }
 
+            Structure(EmptyTuple) => break,
             FlexVar(_) | FlexAbleVar(..) => break,
 
             // TODO investigate apparently this one pops up in the reporting tests!
@@ -4501,6 +4522,7 @@ fn instantiate_lambda_sets_as_unspecialized(
     while let Some(typ) = stack.pop() {
         match typ {
             Type::EmptyRec => {}
+            Type::EmptyTuple => {}
             Type::EmptyTagUnion => {}
             Type::Function(args, lambda_set, ret, fx) => {
                 debug_assert!(
@@ -4598,12 +4620,12 @@ mod test {
         let fx2 = Box::new(Type::Variable(var_store.fresh()));
         let fx3 = Box::new(Type::Variable(var_store.fresh()));
         let mut typ = Type::Function(
-            vec![Type::Function(vec![], l2, Box::new(Type::EmptyRec), fx1)],
+            vec![Type::Function(vec![], l2, Box::new(Type::EmptyTuple), fx1)],
             l1,
             Box::new(Type::TagUnion(
                 vec![(
                     TagName("A".into()),
-                    vec![Type::Function(vec![], l3, Box::new(Type::EmptyRec), fx2)],
+                    vec![Type::Function(vec![], l3, Box::new(Type::EmptyTuple), fx2)],
                 )],
                 TypeExtension::Closed,
             )),
@@ -4635,7 +4657,7 @@ mod test {
                     [Type::Function(args, l2, ret, _fx)] => {
                         check_uls!(**l2, 2);
                         assert!(args.is_empty());
-                        assert!(matches!(**ret, Type::EmptyRec));
+                        assert!(matches!(**ret, Type::EmptyTuple));
                     }
                     _ => panic!(),
                 }
@@ -4648,7 +4670,7 @@ mod test {
                                 [Type::Function(args, l3, ret, _fx)] => {
                                     check_uls!(**l3, 3);
                                     assert!(args.is_empty());
-                                    assert!(matches!(**ret, Type::EmptyRec));
+                                    assert!(matches!(**ret, Type::EmptyTuple));
                                 }
                                 _ => panic!(),
                             }

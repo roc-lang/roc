@@ -358,7 +358,7 @@ pub fn type_problem<'b>(
                     alloc.tip(),
                     alloc.reflow("If you don't need any arguments, use an empty record:"),
                 ]),
-                alloc.parser_suggestion("    askName! : {} => Str\n    askName! = \\{} ->\n        Stdout.line! \"What's your name?\"\n        Stdin.line! {}"),
+                alloc.parser_suggestion("    ask_name! : () => Str\n    ask_name! = \\() ->\n        Stdout.line!(\"What's your name?\")\n        Stdin.line!()"),
                 alloc.reflow("This will allow the caller to control when the effects run."),
             ];
 
@@ -1890,7 +1890,7 @@ fn to_expr_report<'b>(
                         ]),
                     },
                     alloc.region(lines.convert_region(region), severity),
-                    alloc.reflow("Standalone statements are required to produce an empty record, but the type of this one is:"),
+                    alloc.reflow("Standalone statements are required to produce an empty tuple, but the type of this one is:"),
                     alloc.type_block(type_with_able_vars(alloc, diff.left, diff.left_able)),
                     match found {
                         ErrorType::EffectfulFunc | ErrorType::Function(_, _, _, _) => {
@@ -2560,6 +2560,7 @@ fn add_pattern_category<'b>(
         Record => alloc.reflow(" record values of type:"),
         Tuple => alloc.reflow(" tuple values of type:"),
         EmptyRecord => alloc.reflow(" an empty record:"),
+        EmptyTuple => alloc.reflow(" an empty tuple:"),
         PatternGuard => alloc.reflow(" a pattern guard of type:"),
         PatternDefault => alloc.reflow(" an optional field of type:"),
         Set => alloc.reflow(" sets of type:"),

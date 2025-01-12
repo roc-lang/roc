@@ -187,7 +187,7 @@ fn deep_copy_var_help(
                         Func(new_arguments, new_closure_var, new_ret_var, new_fx_var)
                     }
 
-                    same @ (EmptyRecord | EmptyTagUnion | EffectfulFunc) => same,
+                    same @ (EmptyRecord | EmptyTuple | EmptyTagUnion | EffectfulFunc) => same,
 
                     Record(fields, ext_var) => {
                         let record_fields = {

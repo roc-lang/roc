@@ -806,6 +806,7 @@ pub fn can_problem<'b>(
 
         Problem::InvalidExtensionType { region, kind } => {
             let (kind_str, can_only_contain) = match kind {
+                ExtensionTypeKind::Tuple => ("tuple", "a type variable or another tuple"),
                 ExtensionTypeKind::Record => ("record", "a type variable or another record"),
                 ExtensionTypeKind::TagUnion => {
                     ("tag union", "a type variable or another tag union")

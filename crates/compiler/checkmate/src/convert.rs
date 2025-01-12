@@ -126,6 +126,7 @@ impl AsSchema<Content> for subs::FlatType {
                 ext.as_schema(subs),
             ),
             subs::FlatType::EmptyRecord => Content::EmptyRecord(),
+            subs::FlatType::EmptyTuple => Content::EmptyTuple(),
             subs::FlatType::EmptyTagUnion => Content::EmptyTagUnion(),
             subs::FlatType::EffectfulFunc => Content::EffectfulFunc(),
         }

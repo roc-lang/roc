@@ -366,6 +366,7 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
             .append(f.text(")"))
             .group(),
         EmptyRecord => f.text("{}"),
+        EmptyTuple => f.text("()"),
         RecordAccess {
             loc_expr, field, ..
         } => expr(c, AppArg, f, &loc_expr.value)

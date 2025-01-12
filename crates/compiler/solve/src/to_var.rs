@@ -71,9 +71,10 @@ pub(crate) fn either_type_index_to_var(
                 matches!(types[type_index], TypeTag::Variable(v) if v == var)
                     || matches!(
                         types[type_index],
-                        TypeTag::EmptyRecord | TypeTag::EmptyTagUnion
+                        TypeTag::EmptyTuple | TypeTag::EmptyRecord | TypeTag::EmptyTagUnion
                     ),
-                "different variable was returned for type index variable cell!"
+                "different variable was returned for type index variable cell! {:?}",
+                types[type_index]
             );
             var
         }
@@ -140,6 +141,7 @@ impl RegisterVariable {
         match types[typ] {
             TypeTag::Variable(var) => Direct(var),
             TypeTag::EmptyRecord => Direct(Variable::EMPTY_RECORD),
+            TypeTag::EmptyTuple => Direct(Variable::EMPTY_TUPLE),
             TypeTag::EmptyTagUnion => Direct(Variable::EMPTY_TAG_UNION),
             TypeTag::DelayedAlias { shared }
             | TypeTag::StructuralAlias { shared, .. }
@@ -316,7 +318,7 @@ pub(crate) fn type_to_var_help(
     {
         use TypeTag::*;
         match typ {
-            Variable(_) | EmptyRecord | EmptyTagUnion => {
+            Variable(_) | EmptyRecord | EmptyTuple | EmptyTagUnion => {
                 unreachable!("This variant should never be deferred!",)
             }
             RangedNumber(range) => {
@@ -472,7 +474,10 @@ pub(crate) fn type_to_var_help(
                 let ext_slice = types.get_type_arguments(typ_index);
 
                 // Elems should never be empty; we don't support empty tuples
-                debug_assert!(!elems.is_empty() || !ext_slice.is_empty());
+                debug_assert!(
+                    !elems.is_empty() || !ext_slice.is_empty(),
+                    "{elems:?} - {ext_slice:?}"
+                );
 
                 let mut elem_vars = Vec::with_capacity_in(elems.len(), arena);
 

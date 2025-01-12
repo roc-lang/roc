@@ -1072,6 +1072,7 @@ fn fix_values_captured_in_closure_expr(
         | ParamsVar { .. }
         | AbilityMember(..)
         | EmptyRecord
+        | EmptyTuple
         | RuntimeError(_)
         | ZeroArgumentTag { .. }
         | RecordAccessor { .. } => {}

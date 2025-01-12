@@ -1333,6 +1333,7 @@ impl<'a> Normalize<'a> for EType<'a> {
             }
             EType::TBadTypeVariable(_) => EType::TBadTypeVariable(Position::zero()),
             EType::TWildcard(_) => EType::TWildcard(Position::zero()),
+            EType::TEmptyTuple(_) => EType::TEmptyTuple(Position::zero()),
             EType::TInferred(_) => EType::TInferred(Position::zero()),
             EType::TStart(_) => EType::TStart(Position::zero()),
             EType::TEnd(_) => EType::TEnd(Position::zero()),
@@ -1447,7 +1448,6 @@ impl<'a> Normalize<'a> for ETypeApply {
 impl<'a> Normalize<'a> for ETypeInParens<'a> {
     fn normalize(&self, arena: &'a Bump) -> Self {
         match self {
-            ETypeInParens::Empty(_) => ETypeInParens::Empty(Position::zero()),
             ETypeInParens::End(_) => ETypeInParens::End(Position::zero()),
             ETypeInParens::Open(_) => ETypeInParens::Open(Position::zero()),
             ETypeInParens::Type(inner_err, _) => {

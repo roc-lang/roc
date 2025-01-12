@@ -3247,6 +3247,16 @@ fn unify_flat_type<M: MetaCollector>(
             unify_record(env, pool, ctx, *fields1, *ext1, *fields2, *ext2)
         }
 
+        (EmptyTuple, EmptyTuple) => merge(env, ctx, Structure(*left)),
+
+        (Tuple(elems, ext), EmptyTuple) if elems.is_empty() => {
+            unify_pool(env, pool, *ext, ctx.second, ctx.mode)
+        }
+
+        (EmptyTuple, Tuple(elems, ext)) if elems.is_empty() => {
+            unify_pool(env, pool, ctx.first, *ext, ctx.mode)
+        }
+
         (Tuple(elems1, ext1), Tuple(elems2, ext2)) => {
             unify_tuple(env, pool, ctx, *elems1, *ext1, *elems2, *ext2)
         }

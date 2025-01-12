@@ -2192,7 +2192,10 @@ fn lambda_set_size(subs: &Subs, var: Variable) -> (usize, usize, usize) {
                     }
                     stack.push((ext.var(), depth_any + 1, depth_lset));
                 }
-                FlatType::EmptyRecord | FlatType::EmptyTagUnion | FlatType::EffectfulFunc => {}
+                FlatType::EmptyRecord
+                | FlatType::EmptyTuple
+                | FlatType::EmptyTagUnion
+                | FlatType::EffectfulFunc => {}
             },
             Content::FlexVar(_)
             | Content::RigidVar(_)
@@ -3465,6 +3468,7 @@ fn layout_from_flat_type<'a>(
         }
         EmptyTagUnion => cacheable(Ok(Layout::VOID)),
         EmptyRecord => cacheable(Ok(Layout::UNIT)),
+        EmptyTuple => cacheable(Ok(Layout::UNIT)),
         EffectfulFunc => {
             internal_error!("Cannot create a layout for an unconstrained EffectfulFunc")
         }

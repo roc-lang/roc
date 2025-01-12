@@ -469,6 +469,9 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                 Content::Structure(FlatType::Tuple(elems, _)) => {
                     struct_to_ast_tuple(env, mem, addr, *elems)
                 }
+                Content::Structure(FlatType::EmptyTuple) => {
+                    struct_to_ast_tuple(env, mem, addr, TupleElems::empty())
+                }
                 Content::Structure(FlatType::TagUnion(tags, _)) => {
                     let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
 
@@ -673,6 +676,9 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             }
             Content::Structure(FlatType::EmptyRecord) => {
                 struct_to_ast(env, mem, addr, RecordFields::empty())
+            }
+            Content::Structure(FlatType::EmptyTuple) => {
+                struct_to_ast_tuple(env, mem, addr, TupleElems::empty())
             }
             other => {
                 unreachable!(
@@ -1209,8 +1215,6 @@ fn struct_to_ast_tuple<'a, M: ReplAppMemory>(
     let arena = env.arena;
     let subs = env.subs;
     let mut output = Vec::with_capacity_in(tuple_elems.len(), arena);
-
-    debug_assert!(tuple_elems.len() > 1);
 
     // We'll advance this as we iterate through the fields
     let mut field_addr = addr;

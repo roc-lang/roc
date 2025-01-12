@@ -480,6 +480,7 @@ impl Problem {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExtensionTypeKind {
+    Tuple,
     Record,
     TagUnion,
 }

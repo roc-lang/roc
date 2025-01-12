@@ -1199,6 +1199,7 @@ pub enum EType<'a> {
     TInlineAlias(ETypeInlineAlias, Position),
     TBadTypeVariable(Position),
     TWildcard(Position),
+    TEmptyTuple(Position),
     TInferred(Position),
     ///
     TStart(Position),
@@ -1228,6 +1229,7 @@ impl<'a> EType<'a> {
             | EType::UnderscoreSpacing(p)
             | EType::TBadTypeVariable(p)
             | EType::TWildcard(p)
+            | EType::TEmptyTuple(p)
             | EType::TInferred(p)
             | EType::TStart(p)
             | EType::TEnd(p)
@@ -1308,9 +1310,6 @@ impl<'a> ETypeTagUnion<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ETypeInParens<'a> {
-    /// e.g. (), which isn't a valid type
-    Empty(Position),
-
     End(Position),
     Open(Position),
     ///
@@ -1330,8 +1329,7 @@ impl<'a> ETypeInParens<'a> {
             ETypeInParens::Type(type_expr, _) => type_expr.get_region(),
 
             // Cases with Position values
-            ETypeInParens::Empty(p)
-            | ETypeInParens::End(p)
+            ETypeInParens::End(p)
             | ETypeInParens::Open(p)
             | ETypeInParens::Space(_, p)
             | ETypeInParens::IndentOpen(p)

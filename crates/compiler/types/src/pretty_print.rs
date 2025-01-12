@@ -14,6 +14,7 @@ use roc_module::symbol::{Interns, ModuleId, Symbol};
 
 pub static WILDCARD: &str = "*";
 static EMPTY_RECORD: &str = "{}";
+static EMPTY_TUPLE: &str = "()";
 static EMPTY_TAG_UNION: &str = "[]";
 static EFFECTFUL_FUNC: &str = "! : ... => ?";
 
@@ -412,6 +413,7 @@ fn find_names_needed(
         }
         Error
         | Structure(EmptyRecord)
+        | Structure(EmptyTuple)
         | Structure(EmptyTagUnion)
         | Pure
         | Effectful
@@ -986,6 +988,7 @@ impl ExtContent {
         match content {
             Content::Structure(FlatType::EmptyTagUnion) => ExtContent::Empty,
             Content::Structure(FlatType::EmptyRecord) => ExtContent::Empty,
+            Content::Structure(FlatType::EmptyTuple) => ExtContent::Empty,
 
             Content::FlexVar(None) | Content::FlexAbleVar(None, _)
                 if pol.is_pos() && !debug_flags.ignore_polarity =>
@@ -1128,6 +1131,7 @@ fn write_flat_type<'a>(
             pol,
         ),
         EmptyRecord => buf.push_str(EMPTY_RECORD),
+        EmptyTuple => buf.push_str(EMPTY_TUPLE),
         EmptyTagUnion => buf.push_str(EMPTY_TAG_UNION),
         Func(args, closure, ret, fx) => write_fn(
             env,

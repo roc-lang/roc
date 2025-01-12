@@ -204,14 +204,12 @@ fn loc_pattern_in_parens_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PInPare
             let elements = loc_elements.value;
             let region = loc_elements.region;
 
-            if elements.len() > 1 {
+            if elements.len() != 1 {
                 Ok((
                     MadeProgress,
                     Loc::at(region, Pattern::Tuple(elements)),
                     state,
                 ))
-            } else if elements.is_empty() {
-                Err((NoProgress, PInParens::Empty(state.pos())))
             } else {
                 // TODO: don't discard comments before/after
                 // (stored in the Collection)

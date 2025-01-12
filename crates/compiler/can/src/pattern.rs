@@ -181,6 +181,7 @@ impl Pattern {
             UnwrappedOpaque { opaque, .. } => C::Opaque(*opaque),
             RecordDestructure { destructs, .. } if destructs.is_empty() => C::EmptyRecord,
             RecordDestructure { .. } => C::Record,
+            TupleDestructure { destructs, .. } if destructs.is_empty() => C::EmptyTuple,
             TupleDestructure { .. } => C::Tuple,
             List { .. } => C::List,
             NumLiteral(..) => C::Num,

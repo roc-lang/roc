@@ -131,8 +131,12 @@ fn headers_from_annotation_help(
             }
         }
 
-        TupleDestructure { destructs: _, .. } => {
-            todo!();
+        TupleDestructure { destructs, .. } => {
+            let dealiased = types.shallow_dealias(annotation.value);
+            match types[dealiased] {
+                TypeTag::EmptyTuple => destructs.is_empty(),
+                _ => todo!(),
+            }
         }
 
         List { patterns, .. } => {
@@ -571,24 +575,24 @@ pub fn constrain_pattern_help(
             };
 
             let whole_var_index = constraints.push_variable(*whole_var);
-            let expected_record =
+            let expected_tuple =
                 constraints.push_expected_type(Expected::NoExpectation(tuple_type));
             let whole_con = constraints.equal_types(
                 whole_var_index,
-                expected_record,
+                expected_tuple,
                 Category::Storage(std::file!(), std::line!()),
                 region,
             );
 
-            let record_con = constraints.pattern_presence(
+            let tuple_con = constraints.pattern_presence(
                 whole_var_index,
                 expected,
-                PatternCategory::Record,
+                PatternCategory::Tuple,
                 region,
             );
 
             state.constraints.push(whole_con);
-            state.constraints.push(record_con);
+            state.constraints.push(tuple_con);
         }
 
         RecordDestructure {
@@ -966,7 +970,10 @@ fn could_be_a_tag_union(types: &Types, typ: TypeOrVar) -> bool {
     match typ.split() {
         Ok(typ_index) => !matches!(
             types[typ_index],
-            TypeTag::Apply { .. } | TypeTag::Function(..) | TypeTag::Record(..)
+            TypeTag::Apply { .. }
+                | TypeTag::Function(..)
+                | TypeTag::Tuple(..)
+                | TypeTag::Record(..)
         ),
         Err(_) => {
             // Variables are opaque at this point, assume yes

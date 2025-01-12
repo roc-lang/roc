@@ -88,14 +88,12 @@ fn loc_expr_in_parens_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EInParens<'a>
             let elements = loc_elements.value;
             let region = loc_elements.region;
 
-            if elements.len() > 1 {
+            if elements.len() != 1 {
                 Ok((
                     MadeProgress,
                     Loc::at(region, Expr::Tuple(elements.ptrify_items(arena))),
                     state,
                 ))
-            } else if elements.is_empty() {
-                Err((NoProgress, EInParens::Empty(state.pos())))
             } else {
                 // TODO: don't discard comments before/after
                 // (stored in the Collection)

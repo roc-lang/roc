@@ -509,6 +509,20 @@
             "type": {
               "type": "string",
               "enum": [
+                "EmptyTuple"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
                 "EmptyTagUnion"
               ]
             }

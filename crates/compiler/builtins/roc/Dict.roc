@@ -53,7 +53,7 @@ import Inspect exposing [Inspect, Inspector, InspectFormatter]
 ## its population as the associated value.
 ## ```roc
 ## population_by_city =
-##     Dict.empty({})
+##     Dict.empty(())
 ##     |> Dict.insert("London", 8_961_989)
 ##     |> Dict.insert("Philadelphia", 1_603_797)
 ##     |> Dict.insert("Shanghai", 24_870_895)
@@ -140,10 +140,10 @@ to_inspector_dict = \dict ->
 
 ## Return an empty dictionary.
 ## ```roc
-## empty_dict = Dict.empty({})
+## empty_dict = Dict.empty(())
 ## ```
-empty : {} -> Dict * *
-empty = \{} ->
+empty : () -> Dict * *
+empty = \() ->
     @Dict(
         {
             buckets: [],
@@ -159,7 +159,7 @@ empty = \{} ->
 ## inserted.
 with_capacity : U64 -> Dict * *
 with_capacity = \requested ->
-    empty({})
+    empty(())
     |> reserve(requested)
 
 ## Enlarge the dictionary for at least capacity additional elements
@@ -212,7 +212,7 @@ release_excess_capacity = \@Dict({ buckets, data, max_bucket_capacity: original_
 ## Returns the max number of elements the dictionary can hold before requiring a rehash.
 ## ```roc
 ## food_dict =
-##     Dict.empty({})
+##     Dict.empty(())
 ##     |> Dict.insert("apple", "fruit")
 ##
 ## capacity_of_dict = Dict.capacity(food_dict)
@@ -225,11 +225,11 @@ capacity = \@Dict({ max_bucket_capacity }) ->
 ## ```roc
 ## expect
 ##     Dict.single("A", "B")
-##     |> Bool.is_eq(Dict.empty({}) |> Dict.insert("A", "B"))
+##     |> Bool.is_eq(Dict.empty(()) |> Dict.insert("A", "B"))
 ## ```
 single : k, v -> Dict k v
 single = \k, v ->
-    insert(empty({}), k, v)
+    insert(empty(()), k, v)
 
 ## Returns dictionary with the keys and values specified by the input [List].
 ## ```roc
@@ -248,12 +248,12 @@ single = \k, v ->
 ## with the same capacity of the list and walk it calling [Dict.insert]
 from_list : List (k, v) -> Dict k v
 from_list = \data ->
-    List.walk(data, empty({}), \dict, (k, v) -> insert(dict, k, v))
+    List.walk(data, empty(()), \dict, (k, v) -> insert(dict, k, v))
 
 ## Returns the number of values in the dictionary.
 ## ```roc
 ## expect
-##     Dict.empty({})
+##     Dict.empty(())
 ##     |> Dict.insert("One", "A Song")
 ##     |> Dict.insert("Two", "Candy Canes")
 ##     |> Dict.insert("Three", "Boughs of Holly")
@@ -266,9 +266,9 @@ len = \@Dict({ data }) ->
 
 ## Check if the dictionary is empty.
 ## ```roc
-## Dict.is_empty(Dict.empty({}) |> Dict.insert("key", 42))
+## Dict.is_empty(Dict.empty(()) |> Dict.insert("key", 42))
 ##
-## Dict.is_empty(Dict.empty({}))
+## Dict.is_empty(Dict.empty(()))
 ## ```
 is_empty : Dict * * -> Bool
 is_empty = \@Dict({ data }) ->
@@ -277,7 +277,7 @@ is_empty = \@Dict({ data }) ->
 ## Clears all elements from a dictionary keeping around the allocation if it isn't huge.
 ## ```roc
 ## songs =
-##        Dict.empty({})
+##        Dict.empty(())
 ##        |> Dict.insert("One", "A Song")
 ##        |> Dict.insert("Two", "Candy Canes")
 ##        |> Dict.insert("Three", "Boughs of Holly")
@@ -334,7 +334,7 @@ join_map = \dict, transform ->
 ## initial `state` value provided for the first call.
 ## ```roc
 ## expect
-##     Dict.empty({})
+##     Dict.empty(())
 ##     |> Dict.insert("Apples", 12)
 ##     |> Dict.insert("Orange", 24)
 ##     |> Dict.walk(0, (\count, _, qty -> count + qty))
@@ -357,7 +357,7 @@ walk = \@Dict({ data }), initial_state, transform ->
 ## if returning `Break` earlier than the last element is expected to be common.
 ## ```roc
 ## people =
-##     Dict.empty({})
+##     Dict.empty(())
 ##     |> Dict.insert("Alice", 17)
 ##     |> Dict.insert("Bob", 18)
 ##     |> Dict.insert("Charlie", 19)
@@ -379,7 +379,7 @@ walk_until = \@Dict({ data }), initial_state, transform ->
 ## Run the given function on each key-value pair of a dictionary, and return
 ## a dictionary with just the pairs for which the function returned `Bool.true`.
 ## ```roc
-## expect Dict.empty({})
+## expect Dict.empty(())
 ##     |> Dict.insert("Alice", 17)
 ##     |> Dict.insert("Bob", 18)
 ##     |> Dict.insert("Charlie", 19)
@@ -405,7 +405,7 @@ keep_if_help = \@Dict(dict), predicate, index, length ->
 ## Run the given function on each key-value pair of a dictionary, and return
 ## a dictionary with just the pairs for which the function returned `Bool.false`.
 ## ```roc
-## expect Dict.empty({})
+## expect Dict.empty(())
 ##     |> Dict.insert("Alice", 17)
 ##     |> Dict.insert("Bob", 18)
 ##     |> Dict.insert("Charlie", 19)
@@ -421,7 +421,7 @@ drop_if = \dict, predicate ->
 ## will return [Ok value], otherwise return [Err KeyNotFound].
 ## ```roc
 ## dictionary =
-##     Dict.empty({})
+##     Dict.empty(())
 ##     |> Dict.insert(1,s "Apple")
 ##     |> Dict.insert(2,s "Orange")
 ##
@@ -436,7 +436,7 @@ get = \dict, key ->
 ## Check if the dictionary has a value for a specified key.
 ## ```roc
 ## expect
-##     Dict.empty({})
+##     Dict.empty(())
 ##     |> Dict.insert(1234, "5678")
 ##     |> Dict.contains(1234)
 ##     |> Bool.is_eq(Bool.true)
@@ -450,7 +450,7 @@ contains = \dict, key ->
 ## Insert a value into the dictionary at a specified key.
 ## ```roc
 ## expect
-##     Dict.empty({})
+##     Dict.empty(())
 ##     |> Dict.insert("Apples", 12)
 ##     |> Dict.get("Apples")
 ##     |> Bool.is_eq(Ok(12))
@@ -495,7 +495,7 @@ insert_helper = \buckets0, data0, bucket_index0, dist_and_fingerprint0, key, val
 ## Remove a value from the dictionary for a specified key.
 ## ```roc
 ## expect
-##     Dict.empty({})
+##     Dict.empty(())
 ##     |> Dict.insert("Some", "Value")
 ##     |> Dict.remove("Some")
 ##     |> Dict.len
@@ -538,9 +538,9 @@ remove_helper = \buckets, bucket_index, dist_and_fingerprint, data, key ->
 ##         Err Missing -> Ok(Bool.false)
 ##         Ok value -> if value then Err(Missing) else Ok(Bool.true)
 ##
-## expect Dict.update(Dict.empty({}), "a", alter_value) == Dict.single("a", Bool.false)
+## expect Dict.update(Dict.empty(()), "a", alter_value) == Dict.single("a", Bool.false)
 ## expect Dict.update(Dict.single("a", Bool.false), "a", alter_value) == Dict.single("a", Bool.true)
-## expect Dict.update(Dict.single("a", Bool.true), "a", alter_value) == Dict.empty({})
+## expect Dict.update(Dict.single("a", Bool.true), "a", alter_value) == Dict.empty(())
 ## ```
 update : Dict k v, k, (Result v [Missing] -> Result v [Missing]) -> Dict k v
 update = \@Dict({ buckets, data, max_bucket_capacity, max_load_factor, shifts }), key, alter ->
@@ -987,7 +987,7 @@ bucket_index_from_hash = \hash, shifts ->
 
 expect
     val =
-        empty({})
+        empty(())
         |> insert("foo", "bar")
         |> get("foo")
 
@@ -995,12 +995,12 @@ expect
 
 expect
     dict1 =
-        empty({})
+        empty(())
         |> insert(1, "bar")
         |> insert(2, "baz")
 
     dict2 =
-        empty({})
+        empty(())
         |> insert(2, "baz")
         |> insert(1, "bar")
 
@@ -1008,12 +1008,12 @@ expect
 
 expect
     dict1 =
-        empty({})
+        empty(())
         |> insert(1, "bar")
         |> insert(2, "baz")
 
     dict2 =
-        empty({})
+        empty(())
         |> insert(1, "bar")
         |> insert(2, "baz!")
 
@@ -1021,17 +1021,17 @@ expect
 
 expect
     inner1 =
-        empty({})
+        empty(())
         |> insert(1, "bar")
         |> insert(2, "baz")
 
     inner2 =
-        empty({})
+        empty(())
         |> insert(2, "baz")
         |> insert(1, "bar")
 
     outer =
-        empty({})
+        empty(())
         |> insert(inner1, "wrong")
         |> insert(inner2, "right")
 
@@ -1039,28 +1039,28 @@ expect
 
 expect
     inner1 =
-        empty({})
+        empty(())
         |> insert(1, "bar")
         |> insert(2, "baz")
 
     inner2 =
-        empty({})
+        empty(())
         |> insert(2, "baz")
         |> insert(1, "bar")
 
     outer1 =
-        empty({})
+        empty(())
         |> insert(inner1, "val")
 
     outer2 =
-        empty({})
+        empty(())
         |> insert(inner2, "val")
 
     outer1 == outer2
 
 expect
     val =
-        empty({})
+        empty(())
         |> insert("foo", "bar")
         |> insert("foo", "baz")
         |> get("foo")
@@ -1069,23 +1069,23 @@ expect
 
 expect
     val =
-        empty({})
+        empty(())
         |> insert("foo", "bar")
         |> get("bar")
 
     val == Err(KeyNotFound)
 
 expect
-    empty({})
-    |> insert("foo", {})
+    empty(())
+    |> insert("foo", ())
     |> contains("foo")
 
 expect
     dict =
-        empty({})
-        |> insert("foo", {})
-        |> insert("bar", {})
-        |> insert("baz", {})
+        empty(())
+        |> insert("foo", ())
+        |> insert("bar", ())
+        |> insert("baz", ())
 
     contains(dict, "baz") && !(contains(dict, "other"))
 
@@ -1110,7 +1110,7 @@ expect
 # Reach capacity, no rehash.
 expect
     val =
-        empty({})
+        empty(())
         |> insert("a", 0)
         |> insert("b", 1)
         |> insert("c", 2)
@@ -1130,7 +1130,7 @@ expect
 # Reach capacity, all elements still exist
 expect
     dict =
-        empty({})
+        empty(())
         |> insert("a", 0)
         |> insert("b", 1)
         |> insert("c", 2)
@@ -1160,7 +1160,7 @@ expect
 # Force rehash.
 expect
     val =
-        empty({})
+        empty(())
         |> insert("a", 0)
         |> insert("b", 1)
         |> insert("c", 2)
@@ -1181,7 +1181,7 @@ expect
 # Force rehash, all elements still exist
 expect
     dict =
-        empty({})
+        empty(())
         |> insert("a", 0)
         |> insert("b", 1)
         |> insert("c", 2)
@@ -1211,7 +1211,7 @@ expect
     && (get(dict, "m") == Ok(12))
 
 expect
-    empty({})
+    empty(())
     |> insert("Some", "Value")
     |> remove("Some")
     |> len
@@ -1249,7 +1249,7 @@ expect
     dict =
         List.walk(
             bad_keys,
-            Dict.empty({}),
+            Dict.empty(()),
             \acc, k ->
                 Dict.update(
                     acc,
@@ -1296,13 +1296,13 @@ LowLevelHasher := { initialized_seed : U64, state : U64 } implements [
 
 # Returns a application specific pseudo random seed for Dict.
 # This avoids trivial DOS attacks.
-pseudo_seed : {} -> U64
+pseudo_seed : () -> U64
 
 create_low_level_hasher : [PseudoRandSeed, WithSeed U64] -> LowLevelHasher
 create_low_level_hasher = \seed_opt ->
     seed =
         when seed_opt is
-            PseudoRandSeed -> pseudo_seed({})
+            PseudoRandSeed -> pseudo_seed(())
             WithSeed(s) -> s
     @LowLevelHasher({ initialized_seed: init_seed(seed), state: seed })
 
@@ -1686,12 +1686,12 @@ expect
     hash1 != hash2
 
 expect
-    empty({})
+    empty(())
     |> len
     |> Bool.is_eq(0)
 
 expect
-    empty({})
+    empty(())
     |> insert("One", "A Song")
     |> insert("Two", "Candy Canes")
     |> insert("Three", "Boughs of Holly")
@@ -1700,7 +1700,7 @@ expect
     |> Bool.is_eq(0)
 
 expect
-    Dict.empty({})
+    Dict.empty(())
     |> Dict.insert("Alice", 17)
     |> Dict.insert("Bob", 18)
     |> Dict.insert("Charlie", 19)
@@ -1709,14 +1709,14 @@ expect
 
 expect
     d1 =
-        Dict.empty({})
+        Dict.empty(())
         |> Dict.insert("Alice", 17)
         |> Dict.insert("Bob", 18)
         |> Dict.insert("Charlie", 19)
         |> Dict.keep_if(\(_k, v) -> v >= 18)
 
     d2 =
-        Dict.empty({})
+        Dict.empty(())
         |> Dict.insert("Bob", 18)
         |> Dict.insert("Charlie", 19)
 
@@ -1724,14 +1724,14 @@ expect
 
 expect
     d1 =
-        Dict.empty({})
+        Dict.empty(())
         |> Dict.insert("Alice", 17)
         |> Dict.insert("Bob", 18)
         |> Dict.insert("Charlie", 19)
         |> Dict.keep_if(\(k, _v) -> Str.ends_with(k, "e"))
 
     d2 =
-        Dict.empty({})
+        Dict.empty(())
         |> Dict.insert("Alice", 17)
         |> Dict.insert("Charlie", 19)
 
@@ -1740,7 +1740,7 @@ expect
 expect
     keys_to_delete = [1, 2]
     d1 =
-        Dict.empty({})
+        Dict.empty(())
         |> Dict.insert(0, 0)
         |> Dict.insert(1, 1)
         |> Dict.insert(2, 2)
@@ -1749,7 +1749,7 @@ expect
         |> Dict.keep_if(\(k, _v) -> !(List.contains(keys_to_delete, k)))
 
     d2 =
-        Dict.empty({})
+        Dict.empty(())
         |> Dict.insert(0, 0)
         |> Dict.insert(3, 3)
         |> Dict.insert(4, 4)
@@ -1759,7 +1759,7 @@ expect
 expect
     keys_to_delete = [2, 4]
     d1 =
-        Dict.empty({})
+        Dict.empty(())
         |> Dict.insert(0, 0)
         |> Dict.insert(1, 1)
         |> Dict.insert(2, 2)
@@ -1768,7 +1768,7 @@ expect
         |> Dict.keep_if(\(k, _v) -> !(List.contains(keys_to_delete, k)))
 
     d2 =
-        Dict.empty({})
+        Dict.empty(())
         |> Dict.insert(0, 0)
         |> Dict.insert(1, 1)
         |> Dict.insert(3, 3)

@@ -1425,6 +1425,9 @@ fn add_type_help<'a>(
         Content::Structure(FlatType::EmptyRecord) => {
             types.add_anonymous(&env.layout_cache.interner, RocType::Unit, layout)
         }
+        Content::Structure(FlatType::EmptyTuple) => {
+            types.add_anonymous(&env.layout_cache.interner, RocType::Unit, layout)
+        }
         Content::Structure(FlatType::EmptyTagUnion) => {
             types.add_anonymous(&env.layout_cache.interner, RocType::EmptyTagUnion, layout)
         }

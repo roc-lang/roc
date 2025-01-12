@@ -460,7 +460,7 @@ fn loc_type_in_parens<'a>(
             Collection::with_items_and_comments(arena, fields.into_bump_slice(), final_comments);
 
         // Optionally parse the extension
-        let (progress, ext, state) = optional(allocated(specialize_err_ref(
+        let (_progress, ext, state) = optional(allocated(specialize_err_ref(
             ETypeInParens::Type,
             term(stop_at_surface_has),
         )))
@@ -469,13 +469,10 @@ fn loc_type_in_parens<'a>(
         let end = state.pos();
 
         // Determine the result based on the parsed fields and extension
-        let result = if fields.len() > 1 || ext.is_some() {
+        let result = if fields.len() != 1 || ext.is_some() {
             TypeAnnotation::Tuple { elems: fields, ext }
-        } else if fields.len() == 1 {
-            return Ok((MadeProgress, fields.items[0], state));
         } else {
-            debug_assert!(fields.is_empty());
-            return Err((progress, ETypeInParens::Empty(state.pos())));
+            return Ok((MadeProgress, fields.items[0], state));
         };
 
         let region = Region::between(start, end);

@@ -901,7 +901,7 @@ fn can_annotation_help(
                 local_aliases,
                 references,
                 ext,
-                roc_problem::can::ExtensionTypeKind::Record,
+                roc_problem::can::ExtensionTypeKind::Tuple,
             );
 
             debug_assert!(
@@ -910,24 +910,36 @@ fn can_annotation_help(
             );
 
             if elems.is_empty() {
-                env.problem(roc_problem::can::Problem::EmptyTupleType(region));
+                match ext {
+                    Some(_) => {
+                        // just `a` does not mean the same as `()a`, so even
+                        // if there are no fields, still make this a `Tuple`,
+                        // not an EmptyTuple
+                        Type::Tuple(
+                            Default::default(),
+                            TypeExtension::from_type(ext_type, is_implicit_openness),
+                        )
+                    }
+
+                    None => Type::EmptyTuple,
+                }
+            } else {
+                let elem_types = can_assigned_tuple_elems(
+                    env,
+                    pol,
+                    &elems.items,
+                    scope,
+                    var_store,
+                    introduced_variables,
+                    local_aliases,
+                    references,
+                );
+
+                Type::Tuple(
+                    elem_types,
+                    TypeExtension::from_type(ext_type, is_implicit_openness),
+                )
             }
-
-            let elem_types = can_assigned_tuple_elems(
-                env,
-                pol,
-                &elems.items,
-                scope,
-                var_store,
-                introduced_variables,
-                local_aliases,
-                references,
-            );
-
-            Type::Tuple(
-                elem_types,
-                TypeExtension::from_type(ext_type, is_implicit_openness),
-            )
         }
         Record { fields, ext } => {
             let (ext_type, is_implicit_openness) = can_extension_type(
@@ -939,7 +951,7 @@ fn can_annotation_help(
                 local_aliases,
                 references,
                 ext,
-                roc_problem::can::ExtensionTypeKind::Record,
+                roc_problem::can::ExtensionTypeKind::Tuple,
             );
 
             debug_assert!(
@@ -1163,6 +1175,13 @@ fn can_extension_type(
             Type::EmptyRec | Type::Record(..) | Type::Variable(..) | Type::Error
         )
     }
+    fn valid_tuple_ext_type(typ: &Type) -> bool {
+        // Include erroneous types so that we don't overreport errors.
+        matches!(
+            typ,
+            Type::EmptyTuple | Type::Tuple(..) | Type::Variable(..) | Type::Error
+        )
+    }
     fn valid_tag_ext_type(typ: &Type) -> bool {
         matches!(
             typ,
@@ -1173,6 +1192,7 @@ fn can_extension_type(
     use roc_problem::can::ExtensionTypeKind;
 
     let valid_extension_type: fn(&Type) -> bool = match ext_problem_kind {
+        ExtensionTypeKind::Tuple => valid_tuple_ext_type,
         ExtensionTypeKind::Record => valid_record_ext_type,
         ExtensionTypeKind::TagUnion => valid_tag_ext_type,
     };
@@ -1228,6 +1248,7 @@ fn can_extension_type(
         }
         None => match ext_problem_kind {
             ExtensionTypeKind::Record => (Type::EmptyRec, ExtImplicitOpenness::No),
+            ExtensionTypeKind::Tuple => (Type::EmptyTuple, ExtImplicitOpenness::No),
             ExtensionTypeKind::TagUnion => {
                 // In negative positions a missing extension variable forces a closed tag union;
                 // otherwise, open-in-output-position means we give the tag an inference variable.

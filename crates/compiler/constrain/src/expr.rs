@@ -307,6 +307,7 @@ pub fn constrain_expr(
             float_literal(types, constraints, var, precision, expected, region, bound)
         }
         EmptyRecord => constrain_empty_record(types, constraints, region, expected),
+        Expr::EmptyTuple => constrain_empty_tuple(types, constraints, region, expected),
         Expr::Record { record_var, fields } => {
             if fields.is_empty() {
                 constrain_empty_record(types, constraints, region, expected)
@@ -361,49 +362,53 @@ pub fn constrain_expr(
             }
         }
         Expr::Tuple { tuple_var, elems } => {
-            let mut elem_types = VecMap::with_capacity(elems.len());
-            let mut elem_vars = Vec::with_capacity(elems.len());
+            if elems.is_empty() {
+                constrain_empty_tuple(types, constraints, region, expected)
+            } else {
+                let mut elem_types = VecMap::with_capacity(elems.len());
+                let mut elem_vars = Vec::with_capacity(elems.len());
 
-            // Constraints need capacity for each elem
-            // + 1 for the tuple itself + 1 for tuple var
-            let mut tuple_constraints = Vec::with_capacity(2 + elems.len());
+                // Constraints need capacity for each elem
+                // + 1 for the tuple itself + 1 for tuple var
+                let mut tuple_constraints = Vec::with_capacity(2 + elems.len());
 
-            for (i, (elem_var, loc_expr)) in elems.iter().enumerate() {
-                let elem_type = constraints.push_variable(*elem_var);
-                let elem_expected = constraints.push_expected_type(NoExpectation(elem_type));
-                let elem_con = constrain_expr(
-                    types,
-                    constraints,
-                    env,
-                    loc_expr.region,
-                    &loc_expr.value,
-                    elem_expected,
+                for (i, (elem_var, loc_expr)) in elems.iter().enumerate() {
+                    let elem_type = constraints.push_variable(*elem_var);
+                    let elem_expected = constraints.push_expected_type(NoExpectation(elem_type));
+                    let elem_con = constrain_expr(
+                        types,
+                        constraints,
+                        env,
+                        loc_expr.region,
+                        &loc_expr.value,
+                        elem_expected,
+                    );
+
+                    elem_vars.push(*elem_var);
+                    elem_types.insert(i, Variable(*elem_var));
+
+                    tuple_constraints.push(elem_con);
+                }
+
+                let tuple_type = {
+                    let typ = types.from_old_type(&Type::Tuple(elem_types, TypeExtension::Closed));
+                    constraints.push_type(types, typ)
+                };
+
+                let tuple_con = constraints.equal_types_with_storage(
+                    tuple_type,
+                    expected,
+                    Category::Tuple,
+                    region,
+                    *tuple_var,
                 );
 
-                elem_vars.push(*elem_var);
-                elem_types.insert(i, Variable(*elem_var));
+                tuple_constraints.push(tuple_con);
+                elem_vars.push(*tuple_var);
 
-                tuple_constraints.push(elem_con);
+                let and_constraint = constraints.and_constraint(tuple_constraints);
+                constraints.exists(elem_vars, and_constraint)
             }
-
-            let tuple_type = {
-                let typ = types.from_old_type(&Type::Tuple(elem_types, TypeExtension::Closed));
-                constraints.push_type(types, typ)
-            };
-
-            let tuple_con = constraints.equal_types_with_storage(
-                tuple_type,
-                expected,
-                Category::Tuple,
-                region,
-                *tuple_var,
-            );
-
-            tuple_constraints.push(tuple_con);
-            elem_vars.push(*tuple_var);
-
-            let and_constraint = constraints.and_constraint(tuple_constraints);
-            constraints.exists(elem_vars, and_constraint)
         }
         RecordUpdate {
             record_var,
@@ -2692,6 +2697,17 @@ fn constrain_empty_record(
     constraints.equal_types(record_type_index, expected, Category::Record, region)
 }
 
+#[inline(always)]
+fn constrain_empty_tuple(
+    types: &mut Types,
+    constraints: &mut Constraints,
+    region: Region,
+    expected: ExpectedTypeIndex,
+) -> Constraint {
+    let tuple_type_index = constraints.push_type(types, Types::EMPTY_TUPLE);
+    constraints.equal_types(tuple_type_index, expected, Category::Tuple, region)
+}
+
 fn add_host_annotation(
     types: &mut Types,
     constraints: &mut Constraints,
@@ -2960,7 +2976,7 @@ fn constrain_typed_def(
     // instead of the more generic "something is wrong with the body of `f`"
     match (&def.loc_expr.value, types[signature]) {
         (
-            Closure(ClosureData {
+            Expr::Closure(ClosureData {
                 function_type: fn_var,
                 closure_type: closure_var,
                 return_type: ret_var,
@@ -3559,18 +3575,20 @@ fn constrain_stmt_def(
         let loc_fn_expr = &boxed.1;
 
         match loc_fn_expr.value {
-            Var(symbol, _) | ParamsVar { symbol, .. } => (Some(symbol), loc_fn_expr.region),
+            Expr::Var(symbol, _) | Expr::ParamsVar { symbol, .. } => {
+                (Some(symbol), loc_fn_expr.region)
+            }
             _ => (None, def.loc_expr.region),
         }
     } else {
         (None, def.loc_expr.region)
     };
 
-    // Statement expressions must return an empty record
-    let empty_record_index = constraints.push_type(types, Types::EMPTY_RECORD);
-    let expect_empty_record = constraints.push_expected_type(ForReason(
+    // Statement expressions must return an empty tuple
+    let empty_tuple_index = constraints.push_type(types, Types::EMPTY_TUPLE);
+    let expect_empty_tuple = constraints.push_expected_type(ForReason(
         Reason::Stmt(fn_name),
-        empty_record_index,
+        empty_tuple_index,
         error_region,
     ));
 
@@ -3581,7 +3599,7 @@ fn constrain_stmt_def(
             env,
             region,
             &def.loc_expr.value,
-            expect_empty_record,
+            expect_empty_tuple,
         )
     });
 
@@ -4451,7 +4469,9 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
                 return true;
             }
             RuntimeError(roc_problem::can::RuntimeError::NoImplementation)
-            | RuntimeError(roc_problem::can::RuntimeError::NoImplementationNamed { .. }) => {
+            | RuntimeError(roc_problem::can::RuntimeError::NoImplementationNamed {
+                ..
+            }) => {
                 // Allow generalization of signatures with no implementation
                 return true;
             }
@@ -4470,6 +4490,7 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             | RunLowLevel { .. }
             | ForeignCall { .. }
             | EmptyRecord
+            | Expr::EmptyTuple { .. }
             | Expr::Record { .. }
             | Expr::Tuple { .. }
             | Crash { .. }
@@ -4599,7 +4620,7 @@ fn rec_defs_help(
                 // instead of the more generic "something is wrong with the body of `f`"
                 match (&def.loc_expr.value, types[signature]) {
                     (
-                        Closure(ClosureData {
+                        Expr::Closure(ClosureData {
                             function_type: fn_var,
                             closure_type: closure_var,
                             return_type: ret_var,

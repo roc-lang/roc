@@ -82,8 +82,8 @@ impl FlatInspectable {
                     let (elems_iter, ext) = elems.sorted_iterator_and_ext(subs, ext);
 
                     // TODO someday we can put #[cfg(debug_assertions)] around this, but for now let's always do it.
-                    check_derivable_ext_var(subs, ext, |_| {
-                        false
+                    check_derivable_ext_var(subs, ext, |ext| {
+                        matches!(ext, Content::Structure(FlatType::EmptyTuple))
                     }).expect("Compiler error: unexpected nonempty ext var when deriving Inspect for tuple");
 
                     Key(FlatInspectableKey::Tuple(elems_iter.count() as _))
@@ -127,6 +127,7 @@ impl FlatInspectable {
                     ))
                 }
                 FlatType::EmptyRecord => Key(FlatInspectableKey::Record(Vec::new())),
+                FlatType::EmptyTuple => Key(FlatInspectableKey::Tuple(0)),
                 FlatType::EmptyTagUnion => Key(FlatInspectableKey::TagUnion(Vec::new())),
                 FlatType::Func(..) => Immediate(Symbol::INSPECT_FUNCTION),
                 FlatType::EffectfulFunc => {

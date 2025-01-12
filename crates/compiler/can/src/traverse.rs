@@ -317,7 +317,7 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
         } => elems
             .iter()
             .for_each(|(var, elem)| visitor.visit_expr(&elem.value, elem.region, *var)),
-        Expr::EmptyRecord => { /* terminal */ }
+        Expr::EmptyRecord | Expr::EmptyTuple => { /* terminal */ }
         Expr::ImportParams(_, region, Some((_, expr))) => visitor.visit_expr(expr, *region, var),
         Expr::ImportParams(_, _, None) => { /* terminal */ }
         Expr::RecordAccess {

@@ -236,6 +236,9 @@ pub enum Expr {
         elems: Vec<(Variable, Box<Loc<Expr>>)>,
     },
 
+    /// Empty tuple constant
+    EmptyTuple,
+
     /// Module params expression in import
     ImportParams(ModuleId, Region, Option<(Variable, Box<Expr>)>),
 
@@ -389,6 +392,7 @@ impl Expr {
             Self::ForeignCall { .. } => Category::ForeignCall,
             Self::Closure(..) => Category::Lambda,
             Self::Tuple { .. } => Category::Tuple,
+            Self::EmptyTuple => Category::Tuple,
             Self::Record { .. } => Category::Record,
             Self::EmptyRecord => Category::Record,
             Self::RecordAccess { field, .. } => Category::RecordAccess(field.clone()),
@@ -436,6 +440,7 @@ impl Expr {
             | Self::ParamsVar { .. }
             | Self::Closure(..)
             | Self::EmptyRecord
+            | Self::EmptyTuple
             | Self::RecordAccessor(_)
             | Self::ZeroArgumentTag { .. }
             | Self::OpaqueWrapFunction(_)
@@ -994,27 +999,31 @@ pub fn canonicalize_expr<'a>(
             let mut can_elems = Vec::with_capacity(fields.len());
             let mut references = References::new();
 
-            for loc_elem in fields.iter() {
-                let (can_expr, elem_out) =
-                    canonicalize_expr(env, var_store, scope, loc_elem.region, &loc_elem.value);
+            if fields.is_empty() {
+                (EmptyTuple, Output::default())
+            } else {
+                for loc_elem in fields.iter() {
+                    let (can_expr, elem_out) =
+                        canonicalize_expr(env, var_store, scope, loc_elem.region, &loc_elem.value);
 
-                references.union_mut(&elem_out.references);
+                    references.union_mut(&elem_out.references);
 
-                can_elems.push((var_store.fresh(), Box::new(can_expr)));
+                    can_elems.push((var_store.fresh(), Box::new(can_expr)));
+                }
+
+                let output = Output {
+                    references,
+                    ..Default::default()
+                };
+
+                (
+                    Tuple {
+                        tuple_var: var_store.fresh(),
+                        elems: can_elems,
+                    },
+                    output,
+                )
             }
-
-            let output = Output {
-                references,
-                ..Default::default()
-            };
-
-            (
-                Tuple {
-                    tuple_var: var_store.fresh(),
-                    elems: can_elems,
-                },
-                output,
-            )
         }
 
         ast::Expr::Str(literal) => flatten_str_literal(env, var_store, scope, literal),
@@ -3162,6 +3171,7 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
             | Expr::RecordAccessor(_)
             | Expr::SingleQuote(..)
             | Expr::EmptyRecord
+            | Expr::EmptyTuple
             | Expr::RuntimeError(_)
             | Expr::ImportParams(_, _, None)
             | Expr::OpaqueWrapFunction(_) => {}

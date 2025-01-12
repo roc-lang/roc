@@ -66,7 +66,9 @@ impl FlatDecodable {
                 FlatType::Tuple(elems, ext) => {
                     let (elems_iter, ext) = elems.sorted_iterator_and_ext(subs, ext);
 
-                    check_derivable_ext_var(subs, ext, |_| false)?;
+                    check_derivable_ext_var(subs, ext, |ext| {
+                        matches!(ext, Content::Structure(FlatType::EmptyTuple))
+                    })?;
 
                     Ok(Key(FlatDecodableKey::Tuple(elems_iter.count() as _)))
                 }
@@ -77,6 +79,7 @@ impl FlatDecodable {
                     Err(Underivable) // yet
                 }
                 FlatType::EmptyRecord => Ok(Key(FlatDecodableKey::Record(vec![]))),
+                FlatType::EmptyTuple => Ok(Key(FlatDecodableKey::Tuple(0))),
                 FlatType::EmptyTagUnion => {
                     Err(Underivable) // yet
                 }

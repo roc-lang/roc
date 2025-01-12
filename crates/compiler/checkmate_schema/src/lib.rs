@@ -94,6 +94,7 @@ impl_content! {
         extension: TagUnionExtension,
     },
     EmptyRecord {},
+    EmptyTuple {},
     EmptyTagUnion {},
     EffectfulFunc {},
     RangedNumber {

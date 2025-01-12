@@ -613,6 +613,14 @@ trait DerivableVisitor {
     }
 
     #[inline(always)]
+    fn visit_empty_tuple(var: Variable) -> Result<(), NotDerivable> {
+        Err(NotDerivable {
+            var,
+            context: NotDerivableContext::NoContext,
+        })
+    }
+
+    #[inline(always)]
     fn visit_empty_tag_union(var: Variable) -> Result<(), NotDerivable> {
         Err(NotDerivable {
             var,
@@ -779,6 +787,7 @@ trait DerivableVisitor {
                         }
                     }
                     EmptyRecord => Self::visit_empty_record(var)?,
+                    EmptyTuple => Self::visit_empty_tuple(var)?,
                     EmptyTagUnion => Self::visit_empty_tag_union(var)?,
                     EffectfulFunc => {
                         return Err(NotDerivable {
@@ -1011,6 +1020,11 @@ impl DerivableVisitor for DeriveEncoding {
     }
 
     #[inline(always)]
+    fn visit_empty_tuple(_var: Variable) -> Result<(), NotDerivable> {
+        Ok(())
+    }
+
+    #[inline(always)]
     fn visit_empty_tag_union(_var: Variable) -> Result<(), NotDerivable> {
         Ok(())
     }
@@ -1115,6 +1129,11 @@ impl DerivableVisitor for DeriveDecoding {
     }
 
     #[inline(always)]
+    fn visit_empty_tuple(_var: Variable) -> Result<(), NotDerivable> {
+        Ok(())
+    }
+
+    #[inline(always)]
     fn visit_empty_tag_union(_var: Variable) -> Result<(), NotDerivable> {
         Ok(())
     }
@@ -1215,6 +1234,11 @@ impl DerivableVisitor for DeriveHash {
 
     #[inline(always)]
     fn visit_empty_record(_var: Variable) -> Result<(), NotDerivable> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_empty_tuple(_var: Variable) -> Result<(), NotDerivable> {
         Ok(())
     }
 
@@ -1329,6 +1353,11 @@ impl DerivableVisitor for DeriveEq {
 
     #[inline(always)]
     fn visit_empty_record(_var: Variable) -> Result<(), NotDerivable> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_empty_tuple(_var: Variable) -> Result<(), NotDerivable> {
         Ok(())
     }
 

@@ -325,6 +325,7 @@ fn number_lambda_sets(subs: &Subs, initial: Variable) -> Vec<Variable> {
                 }
 
                 EmptyRecord => (),
+                EmptyTuple => (),
                 EmptyTagUnion => (),
                 EffectfulFunc => internal_error!(),
 
