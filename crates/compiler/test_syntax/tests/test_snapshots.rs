@@ -799,6 +799,7 @@ mod test_snapshots {
         pass/where_clause_non_function.expr,
         pass/where_clause_on_newline.expr,
         pass/where_ident.expr,
+        pass/where_implements_lots_of_newlines.expr,
         pass/where_in_tuple_after_comment.expr,
         pass/where_in_tuple_plain.expr,
         pass/zero_float.expr,

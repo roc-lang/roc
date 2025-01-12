@@ -1347,7 +1347,7 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                         rest: arena.alloc_slice_copy(&items),
                         allow_blank_lines: false,
                         allow_newlines: false,
-                        indent_rest: false,
+                        indent_rest: true,
                     },
                     after: last_after,
                     needs_indent,

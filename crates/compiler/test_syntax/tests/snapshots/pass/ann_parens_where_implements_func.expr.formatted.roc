@@ -1,5 +1,5 @@
 x :
     (a where e
-        implements K)
+            implements K)
     -> Z
 s
