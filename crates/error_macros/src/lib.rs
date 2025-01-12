@@ -43,6 +43,7 @@ pub fn set_panic_not_exit(inp: bool) {
 #[inline(never)]
 #[cold]
 #[cfg(any(unix, windows, target_arch = "wasm32"))]
+#[track_caller]
 pub fn error_and_exit(args: fmt::Arguments) -> ! {
     use core::panic;
 

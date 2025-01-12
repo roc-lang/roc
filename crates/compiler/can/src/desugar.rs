@@ -311,7 +311,9 @@ fn desugar_value_def<'a>(
             desugar_loc_pattern(env, scope, loc_pattern),
             desugar_expr(env, scope, loc_expr),
         ),
-        ann @ Annotation(_, _) => *ann,
+        Annotation(ann_pattern, ann_type) => {
+            Annotation(*desugar_loc_pattern(env, scope, ann_pattern), *ann_type)
+        }
         AnnotatedBody {
             ann_pattern,
             ann_type,
@@ -319,7 +321,7 @@ fn desugar_value_def<'a>(
             body_pattern,
             body_expr,
         } => AnnotatedBody {
-            ann_pattern,
+            ann_pattern: desugar_loc_pattern(env, scope, ann_pattern),
             ann_type,
             lines_between,
             body_pattern: desugar_loc_pattern(env, scope, body_pattern),
@@ -1001,7 +1003,16 @@ pub fn desugar_expr<'a>(
             },
             loc_args,
         ) => {
-            let result_expr = if loc_args.len() == 1 {
+            let result_expr = if loc_args.is_empty() {
+                env.problem(Problem::UnderAppliedTry {
+                    region: loc_expr.region,
+                });
+                // Replace with a dummy expression to avoid cascading errors
+                env.arena.alloc(Loc {
+                    value: Record(Collection::empty()),
+                    region: loc_expr.region,
+                })
+            } else if loc_args.len() == 1 {
                 desugar_expr(env, scope, loc_args.items[0])
             } else {
                 let function = desugar_expr(env, scope, loc_args.items.first().unwrap());
