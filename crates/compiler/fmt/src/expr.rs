@@ -1,6 +1,6 @@
 use crate::annotation::{except_last, is_collection_multiline, Formattable, Newlines, Parens};
 use crate::collection::{fmt_collection, Braces};
-use crate::def::{fmt_defs, valdef_lift_spaces_before};
+use crate::def::{fmt_defs, valdef_lift_spaces_before, starts_with_block_string_literal};
 use crate::node::Prec;
 use crate::pattern::{
     fmt_pattern, pattern_lift_spaces, snakify_camel_ident, starts_with_inline_comment,
@@ -264,7 +264,7 @@ fn format_expr_only(
             let before_all_newlines = lifted.before.iter().all(|s| s.is_newline());
 
             let needs_newline =
-                !before_all_newlines || term_starts_with_multiline_str(&lifted.item);
+                !before_all_newlines || starts_with_block_string_literal(&lifted.item);
 
             let needs_parens = (needs_newline
                 && matches!(unary_op.value, called_via::UnaryOp::Negate))
@@ -364,14 +364,6 @@ fn format_expr_only(
         Expr::EmptyRecordBuilder { .. } => {}
         Expr::SingleFieldRecordBuilder { .. } => {}
         Expr::OptionalFieldInRecordBuilder(_, _) => {}
-    }
-}
-
-fn term_starts_with_multiline_str(expr: &Expr<'_>) -> bool {
-    match expr {
-        Expr::Str(text) => is_str_multiline(text),
-        Expr::PncApply(inner, _) => term_starts_with_multiline_str(&inner.value),
-        _ => false,
     }
 }
 

@@ -403,6 +403,7 @@ mod test_snapshots {
         pass/crazy_annotation_left.expr,
         pass/crazy_annotation_left2.expr,
         pass/crazy_implements_bangs.expr,
+        pass/crazy_parens_multiline_str_question_etc.expr,
         pass/crazy_pat_ann.expr,
         pass/curried_function_type.expr,
         pass/dbg.expr,
