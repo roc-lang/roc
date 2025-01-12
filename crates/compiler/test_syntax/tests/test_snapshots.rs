@@ -541,6 +541,7 @@ mod test_snapshots {
         pass/multiline_str_interpolation_records.expr,
         pass/multiline_str_opt_field.expr,
         pass/multiline_str_pnc_apply_in_assignment_newline.expr,
+        pass/multiline_str_pnc_apply_in_assignment_record_access_newline.expr,
         pass/multiline_string.expr,
         pass/multiline_string_in_apply.expr,
         pass/multiline_tuple_with_comments.expr,

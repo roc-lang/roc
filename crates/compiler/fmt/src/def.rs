@@ -1116,6 +1116,7 @@ pub fn starts_with_block_string_literal(expr: &Expr<'_>) -> bool {
         }
         Expr::Apply(inner, _, _) => starts_with_block_string_literal(&inner.value),
         Expr::RecordAccess(inner, _) => starts_with_block_string_literal(inner),
+        Expr::TupleAccess(inner, _) => starts_with_block_string_literal(inner),
         Expr::PncApply(inner, _) => starts_with_block_string_literal(&inner.value),
         Expr::TrySuffix(inner) => starts_with_block_string_literal(inner),
         _ => false,
