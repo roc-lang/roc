@@ -17,7 +17,7 @@ InterpreterErrors : [BadUtf8, DivByZero, EmptyStack, InvalidBooleanValue, Invali
 main! : Str => ()
 main! = \filename ->
     when interpret_file!(filename) is
-        Ok(()) ->
+        Ok() ->
             ()
 
         Err(StringErr(e)) ->
@@ -29,7 +29,7 @@ interpret_file! = \filename ->
         result = interpret_ctx!(ctx)
         when result is
             Ok(_) ->
-                Ok(())
+                Ok()
 
             Err(BadUtf8) ->
                 Err(StringErr("Failed to convert string from Utf8 bytes"))

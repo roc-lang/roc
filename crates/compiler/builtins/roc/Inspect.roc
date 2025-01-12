@@ -92,7 +92,7 @@ Inspect implements
 inspect : val -> f where val implements Inspect, f implements InspectFormatter
 inspect = \val ->
     @Inspector(val_fn) = to_inspector(val)
-    val_fn(init(()))
+    val_fn(init())
 
 to_str : val -> Str where val implements Inspect
 to_str = \val ->
