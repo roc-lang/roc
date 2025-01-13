@@ -1,5 +1,8 @@
 use bumpalo::{collections::Vec, Bump};
-use roc_parse::ast::CommentOrNewline;
+use roc_parse::{
+    ast::{AssignedField, CommentOrNewline, Spaces},
+    expr::merge_spaces,
+};
 
 use crate::Buf;
 
@@ -252,4 +255,27 @@ fn fmt_docs(buf: &mut Buf, docs: &str) {
         buf.spaces(1);
     }
     buf.push_str(docs.trim_end());
+}
+
+pub(crate) fn assigned_field_to_spaces<'a, 'b: 'a, T: Copy>(
+    arena: &'a Bump,
+    field: &'b AssignedField<'b, T>,
+) -> Spaces<'a, AssignedField<'a, T>> {
+    match field {
+        AssignedField::SpaceBefore(sub_field, spaces) => {
+            let mut inner = assigned_field_to_spaces(arena, sub_field);
+            inner.before = merge_spaces(arena, spaces, inner.before);
+            inner
+        }
+        AssignedField::SpaceAfter(sub_field, spaces) => {
+            let mut inner = assigned_field_to_spaces(arena, sub_field);
+            inner.after = merge_spaces(arena, inner.after, spaces);
+            inner
+        }
+        _ => Spaces {
+            before: &[],
+            item: *field,
+            after: &[],
+        },
+    }
 }

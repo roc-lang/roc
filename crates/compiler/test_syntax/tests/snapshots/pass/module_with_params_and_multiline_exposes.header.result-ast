@@ -6,12 +6,12 @@ SpacesBefore {
             params: Some(
                 ModuleParams {
                     pattern: @7-20 [
-                        @8-12 Identifier {
-                            ident: "echo",
-                        },
-                        @14-18 Identifier {
-                            ident: "read",
-                        },
+                        @8-12 LabelOnly(
+                            @8-12 "echo",
+                        ),
+                        @14-18 LabelOnly(
+                            @14-18 "read",
+                        ),
                     ],
                     before_arrow: [],
                     after_arrow: [],

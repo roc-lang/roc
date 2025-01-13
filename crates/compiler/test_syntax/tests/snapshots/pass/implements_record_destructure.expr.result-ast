@@ -19,9 +19,9 @@
                 Body(
                     @0-12 RecordDestructure(
                         [
-                            @1-11 Identifier {
-                                ident: "implements",
-                            },
+                            @1-11 LabelOnly(
+                                @1-11 "implements",
+                            ),
                         ],
                     ),
                     @13-14 Var {

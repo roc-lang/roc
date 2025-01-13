@@ -19,12 +19,12 @@
                 Body(
                     @0-23 RecordDestructure(
                         [
-                            @1-16 Identifier {
-                                ident: "launchTheNukes!",
-                            },
-                            @18-22 Identifier {
-                                ident: "code",
-                            },
+                            @1-16 LabelOnly(
+                                @1-16 "launchTheNukes!",
+                            ),
+                            @18-22 LabelOnly(
+                                @18-22 "code",
+                            ),
                         ],
                     ),
                     @26-32 Var {

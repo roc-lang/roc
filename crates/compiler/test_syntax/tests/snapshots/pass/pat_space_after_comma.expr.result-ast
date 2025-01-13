@@ -20,16 +20,16 @@
                     @0-6 RecordDestructure(
                         [
                             @1-3 SpaceAfter(
-                                Identifier {
-                                    ident: "i",
-                                },
+                                LabelOnly(
+                                    @1-2 "i",
+                                ),
                                 [
                                     Newline,
                                 ],
                             ),
-                            @4-5 Identifier {
-                                ident: "p",
-                            },
+                            @4-5 LabelOnly(
+                                @4-5 "p",
+                            ),
                         ],
                     ),
                     @7-8 Num(

@@ -1595,15 +1595,8 @@ pub enum Pattern<'a> {
     /// This is Located<Pattern> rather than Located<str> so we can record comments
     /// around the destructured names, e.g. { x ### x does stuff ###, y }
     /// In practice, these patterns will always be Identifier
-    RecordDestructure(Collection<'a, Loc<Pattern<'a>>>),
-
-    /// A required field pattern, e.g. { x: Just 0 } -> ...
-    /// Can only occur inside of a RecordDestructure
-    RequiredField(&'a str, &'a Loc<Pattern<'a>>),
-
-    /// An optional field pattern, e.g. { x ? Just 0 } -> ...
-    /// Can only occur inside of a RecordDestructure
-    OptionalField(&'a str, &'a Loc<Expr<'a>>),
+    RecordDestructure(Collection<'a, Loc<AssignedField<'a, Pattern<'a>>>>),
+    ExprWrapped(Expr<'a>),
 
     // Literal
     NumLiteral(&'a str),
@@ -1711,32 +1704,35 @@ impl<'a> Pattern<'a> {
             }
             RecordDestructure(fields_x) => {
                 if let RecordDestructure(fields_y) = other {
+                    use AssignedField::*;
                     fields_x
                         .iter()
                         .zip(fields_y.iter())
-                        .all(|(p, q)| p.value.equivalent(&q.value))
+                        .all(|(p, q)| match (p.value, q.value) {
+                            (RequiredValue(name, _, val), RequiredValue(other, _, other_val))
+                            | (OptionalValue(name, _, val), OptionalValue(other, _, other_val)) => {
+                                name.value == other.value && val.value.equivalent(&other_val.value)
+                            }
+                            (RequiredValue(name, _, _), LabelOnly(other))
+                            | (OptionalValue(name, _, _), LabelOnly(other))
+                            | (LabelOnly(other), RequiredValue(name, _, _))
+                            | (LabelOnly(other), OptionalValue(name, _, _)) => {
+                                name.value == other.value
+                            }
+                            _ => false,
+                        })
                 } else {
                     false
                 }
             }
-            RequiredField(x, inner_x) => {
-                if let RequiredField(y, inner_y) = other {
-                    x == y && inner_x.value.equivalent(&inner_y.value)
-                } else {
-                    false
-                }
-            }
-
-            // optional record fields can be annotated as:
-            //      { x, y } : { x : Int, y ? Bool }
-            //      { x, y ? False } = rec
-            OptionalField(x, _) => match other {
-                Identifier { ident: y } | OptionalField(y, _) => x == y,
+            ExprWrapped(_) => match other {
+                // This feels wrong, but it is inline with what was done before with
+                // Pattern:OptionalField
+                ExprWrapped(_) => true,
                 _ => false,
             },
             Identifier { ident: x } => match other {
                 Identifier { ident: y } => x == y,
-                OptionalField(y, _) => x == y,
                 _ => false,
             },
             NumLiteral(x) => {
@@ -2519,8 +2515,7 @@ impl<'a> Malformed for Pattern<'a> {
             Apply(func, args) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
             PncApply(func, args) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
             RecordDestructure(items) => items.iter().any(|item| item.is_malformed()),
-            RequiredField(_, pat) => pat.is_malformed(),
-            OptionalField(_, expr) => expr.is_malformed(),
+            ExprWrapped(expr) => expr.is_malformed(),
 
             NumLiteral(_) |
             NonBase10Literal { .. } |

@@ -12,7 +12,6 @@ use bumpalo::{
     collections::{String, Vec},
     Bump,
 };
-use roc_parse::{ast::Spaced, ident::UppercaseIdent};
 use roc_parse::{
     ast::{
         AbilityImpls, AssignedField, Collection, CommentOrNewline, Expr, ExtractSpaces,
@@ -20,6 +19,10 @@ use roc_parse::{
         SpacesAfter, SpacesBefore, Tag, TypeAnnotation, TypeHeader,
     },
     expr::merge_spaces,
+};
+use roc_parse::{
+    ast::{Pattern, Spaced},
+    ident::UppercaseIdent,
 };
 use roc_region::all::Loc;
 
@@ -104,6 +107,37 @@ where
 
     fn format(&self, buf: &mut Buf, indent: u16) {
         (*self).format(buf, indent)
+    }
+}
+
+pub trait FieldValue {
+    fn separator_spaces(&self) -> usize;
+}
+
+impl<'a, T> FieldValue for &'a T
+where
+    T: FieldValue,
+{
+    fn separator_spaces(&self) -> usize {
+        (*self).separator_spaces()
+    }
+}
+
+impl<'a> FieldValue for Expr<'a> {
+    fn separator_spaces(&self) -> usize {
+        0
+    }
+}
+
+impl<'a> FieldValue for TypeAnnotation<'a> {
+    fn separator_spaces(&self) -> usize {
+        1
+    }
+}
+
+impl<'a> FieldValue for Pattern<'a> {
+    fn separator_spaces(&self) -> usize {
+        0
     }
 }
 
@@ -347,25 +381,15 @@ pub fn ty_is_outdentable(mut rhs: &TypeAnnotation) -> bool {
 /// >   term: { x: 100, y: True }
 ///
 /// So we need two instances, each having the specific separator
-impl<'a> Formattable for AssignedField<'a, TypeAnnotation<'a>> {
+
+impl<'a, Item: Formattable + FieldValue> Formattable for AssignedField<'a, Item> {
     fn is_multiline(&self) -> bool {
         is_multiline_assigned_field_help(self)
     }
 
     fn format_with_options(&self, buf: &mut Buf, _parens: Parens, newlines: Newlines, indent: u16) {
         // we abuse the `Newlines` type to decide between multiline or single-line layout
-        format_assigned_field_help(self, buf, indent, 1, newlines == Newlines::Yes);
-    }
-}
-
-impl<'a> Formattable for AssignedField<'a, Expr<'a>> {
-    fn is_multiline(&self) -> bool {
-        is_multiline_assigned_field_help(self)
-    }
-
-    fn format_with_options(&self, buf: &mut Buf, _parens: Parens, newlines: Newlines, indent: u16) {
-        // we abuse the `Newlines` type to decide between multiline or single-line layout
-        format_assigned_field_help(self, buf, indent, 0, newlines == Newlines::Yes);
+        format_assigned_field_help(self, buf, indent, newlines == Newlines::Yes);
     }
 }
 
@@ -463,10 +487,9 @@ fn format_assigned_field_help<T>(
     zelf: &AssignedField<T>,
     buf: &mut Buf,
     indent: u16,
-    separator_spaces: usize,
     is_multiline: bool,
 ) where
-    T: Formattable,
+    T: Formattable + FieldValue,
 {
     use self::AssignedField::*;
 
@@ -487,7 +510,7 @@ fn format_assigned_field_help<T>(
                 fmt_spaces(buf, spaces.iter(), indent);
             }
 
-            buf.spaces(separator_spaces);
+            buf.spaces(ann.value.separator_spaces());
             buf.indent(indent);
             buf.push(':');
             buf.spaces(1);
@@ -509,7 +532,7 @@ fn format_assigned_field_help<T>(
                 fmt_spaces(buf, spaces.iter(), indent);
             }
 
-            buf.spaces(separator_spaces);
+            buf.spaces(1);
             buf.indent(indent);
             buf.push_str("??");
             buf.spaces(1);
@@ -532,7 +555,7 @@ fn format_assigned_field_help<T>(
                 fmt_spaces(buf, spaces.iter(), indent);
             }
 
-            buf.spaces(separator_spaces);
+            buf.spaces(ann.value.separator_spaces());
             buf.indent(indent);
             buf.push(':');
             buf.spaces(1);
@@ -552,10 +575,10 @@ fn format_assigned_field_help<T>(
         }
         AssignedField::SpaceBefore(sub_field, spaces) => {
             fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
-            format_assigned_field_help(sub_field, buf, indent, separator_spaces, is_multiline);
+            format_assigned_field_help(sub_field, buf, indent, is_multiline);
         }
         AssignedField::SpaceAfter(sub_field, spaces) => {
-            format_assigned_field_help(sub_field, buf, indent, separator_spaces, is_multiline);
+            format_assigned_field_help(sub_field, buf, indent, is_multiline);
             fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
         }
     }

@@ -63,9 +63,9 @@
                     [
                         @54-62 RecordDestructure(
                             [
-                                @55-61 Identifier {
-                                    ident: "height",
-                                },
+                                @55-61 LabelOnly(
+                                    @55-61 "height",
+                                ),
                             ],
                         ),
                     ],

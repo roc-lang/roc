@@ -695,11 +695,16 @@ pub fn canonicalize_pattern<'a>(
             })
         }
 
-        RequiredField(_name, _loc_pattern) => {
-            unreachable!("should have been handled in RecordDestructure");
-        }
-        OptionalField(_name, _loc_pattern) => {
-            unreachable!("should have been handled in RecordDestructure");
+        ExprWrapped(e) => {
+            unreachable!(
+                "What the hell is this? {e:#?}\nBacktrace: {:?}",
+                std::backtrace::Backtrace::capture()
+            );
+            // let (can_default, expr_output) = canonicalize_expr(env, var_store, scope, region, e);
+            // output.union(expr_output);
+            // Pattern::RecordDestruct {
+            //     can_default
+            // }
         }
 
         List(patterns) => {
@@ -846,27 +851,27 @@ pub fn canonicalize_record_destructs<'a>(
     scope: &mut Scope,
     output: &mut Output,
     pattern_type: PatternType,
-    patterns: &ast::Collection<Loc<ast::Pattern<'a>>>,
+    assigned_fields: &ast::Collection<Loc<ast::AssignedField<'a, ast::Pattern<'a>>>>,
     region: Region,
     permit_shadows: PermitShadows,
 ) -> (Vec<Loc<RecordDestruct>>, Option<Pattern>) {
-    use ast::Pattern::*;
+    use ast::AssignedField::*;
 
-    let mut destructs = Vec::with_capacity(patterns.len());
+    let mut destructs = Vec::with_capacity(assigned_fields.len());
     let mut opt_erroneous = None;
 
-    for loc_pattern in patterns.iter() {
-        match loc_pattern.value.extract_spaces().item {
-            Identifier { ident: label } => {
-                match scope.introduce(label.into(), region) {
+    for loc_assigned_field in assigned_fields.iter() {
+        match loc_assigned_field.value.extract_spaces().item {
+            LabelOnly(label) => {
+                match scope.introduce(label.value.into(), region) {
                     Ok(symbol) => {
                         output.references.insert_bound(symbol);
 
                         destructs.push(Loc {
-                            region: loc_pattern.region,
+                            region: loc_assigned_field.region,
                             value: RecordDestruct {
                                 var: var_store.fresh(),
-                                label: Lowercase::from(label),
+                                label: Lowercase::from(label.value),
                                 symbol,
                                 typ: DestructType::Required,
                             },
@@ -892,9 +897,10 @@ pub fn canonicalize_record_destructs<'a>(
                 };
             }
 
-            RequiredField(label, loc_guard) => {
+            RequiredValue(label, _, loc_guard) => {
                 // a guard does not introduce the label into scope!
-                let symbol = scope.scopeless_symbol(&Ident::from(label), loc_pattern.region);
+                let symbol =
+                    scope.scopeless_symbol(&Ident::from(label.value), loc_assigned_field.region);
                 let can_guard = canonicalize_pattern(
                     env,
                     var_store,
@@ -907,26 +913,28 @@ pub fn canonicalize_record_destructs<'a>(
                 );
 
                 destructs.push(Loc {
-                    region: loc_pattern.region,
+                    region: loc_assigned_field.region,
                     value: RecordDestruct {
                         var: var_store.fresh(),
-                        label: Lowercase::from(label),
+                        label: Lowercase::from(label.value),
                         symbol,
                         typ: DestructType::Guard(var_store.fresh(), can_guard),
                     },
                 });
             }
-            OptionalField(label, loc_default) => {
+            OptionalValue(
+                label,
+                _,
+                Loc {
+                    value: ast::Pattern::ExprWrapped(default),
+                    region: loc_region,
+                },
+            ) => {
                 // an optional DOES introduce the label into scope!
-                match scope.introduce(label.into(), region) {
+                match scope.introduce(label.value.into(), region) {
                     Ok(symbol) => {
-                        let (can_default, expr_output) = canonicalize_expr(
-                            env,
-                            var_store,
-                            scope,
-                            loc_default.region,
-                            &loc_default.value,
-                        );
+                        let (can_default, expr_output) =
+                            canonicalize_expr(env, var_store, scope, *loc_region, default);
 
                         // an optional field binds the symbol!
                         output.references.insert_bound(symbol);
@@ -934,10 +942,10 @@ pub fn canonicalize_record_destructs<'a>(
                         output.union(expr_output);
 
                         destructs.push(Loc {
-                            region: loc_pattern.region,
+                            region: loc_assigned_field.region,
                             value: RecordDestruct {
                                 var: var_store.fresh(),
-                                label: Lowercase::from(label),
+                                label: Lowercase::from(label.value),
                                 symbol,
                                 typ: DestructType::Optional(var_store.fresh(), can_default),
                             },
@@ -962,9 +970,34 @@ pub fn canonicalize_record_destructs<'a>(
                     }
                 };
             }
+            OptionalValue(label, _, loc_guard) => {
+                // a guard does not introduce the label into scope!
+                let symbol =
+                    scope.scopeless_symbol(&Ident::from(label.value), loc_assigned_field.region);
+                let can_guard = canonicalize_pattern(
+                    env,
+                    var_store,
+                    scope,
+                    output,
+                    pattern_type,
+                    &loc_guard.value,
+                    loc_guard.region,
+                    permit_shadows,
+                );
+
+                destructs.push(Loc {
+                    region: loc_assigned_field.region,
+                    value: RecordDestruct {
+                        var: var_store.fresh(),
+                        label: Lowercase::from(label.value),
+                        symbol,
+                        typ: DestructType::Guard(var_store.fresh(), can_guard),
+                    },
+                });
+            }
             _ => unreachable!(
-                "Any other pattern should have given a parse error: {:?}",
-                loc_pattern.value
+                "Any other pattern should have given a parse error: {:#?}",
+                loc_assigned_field.value
             ),
         }
     }

@@ -25,9 +25,9 @@
                             @1-6 RecordDestructure(
                                 [
                                     @2-5 SpaceAfter(
-                                        Identifier {
-                                            ident: "t",
-                                        },
+                                        LabelOnly(
+                                            @2-3 "t",
+                                        ),
                                         [
                                             LineComment(
                                                 "",

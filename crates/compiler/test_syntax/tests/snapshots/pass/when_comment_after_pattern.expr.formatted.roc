@@ -1,3 +1,3 @@
 when nns is
     O #
-     -> r
+    -> r

@@ -6,13 +6,13 @@ SpacesBefore {
             params: Some(
                 ModuleParams {
                     pattern: @7-45 [
-                        @8-12 Identifier {
-                            ident: "echo",
-                        },
+                        @8-12 LabelOnly(
+                            @8-12 "echo",
+                        ),
                         @39-43 SpaceBefore(
-                            Identifier {
-                                ident: "read",
-                            },
+                            LabelOnly(
+                                @39-43 "read",
+                            ),
                             [
                                 Newline,
                                 LineComment(

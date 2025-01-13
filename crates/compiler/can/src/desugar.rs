@@ -1377,10 +1377,11 @@ fn desugar_pattern<'a>(env: &mut Env<'a>, scope: &mut Scope, pattern: Pattern<'a
         RecordDestructure(field_patterns) => {
             RecordDestructure(desugar_record_destructures(env, scope, field_patterns))
         }
-        RequiredField(name, field_pattern) => {
-            RequiredField(name, desugar_loc_pattern(env, scope, field_pattern))
+        ExprWrapped(e) => {
+            let loc_expr = Loc::at(Region::zero(), e);
+            let Loc { value, .. } = desugar_expr(env, scope, env.arena.alloc(loc_expr));
+            ExprWrapped(*value)
         }
-        OptionalField(name, expr) => OptionalField(name, desugar_expr(env, scope, expr)),
         Tuple(patterns) => {
             let mut allocated = Vec::with_capacity_in(patterns.len(), env.arena);
             for pattern in patterns.iter() {
@@ -1413,21 +1414,70 @@ fn desugar_pattern<'a>(env: &mut Env<'a>, scope: &mut Scope, pattern: Pattern<'a
     }
 }
 
+fn desugar_assigned_field<'a>(
+    env: &mut Env<'a>,
+    scope: &mut Scope,
+    assigned_field: &Loc<AssignedField<'a, Pattern<'a>>>,
+) -> Loc<AssignedField<'a, Pattern<'a>>> {
+    use AssignedField::*;
+    match assigned_field.value {
+        RequiredValue(name, spaces, field_pattern) => {
+            let value = desugar_pattern(env, scope, field_pattern.value);
+            Loc {
+                value: RequiredValue(
+                    name,
+                    spaces,
+                    env.arena.alloc(Loc {
+                        region: field_pattern.region,
+                        value,
+                    }),
+                ),
+                region: assigned_field.region,
+            }
+        }
+        OptionalValue(name, spaces, field_pattern) => {
+            let value = desugar_pattern(env, scope, field_pattern.value);
+            Loc {
+                value: OptionalValue(
+                    name,
+                    spaces,
+                    env.arena.alloc(Loc {
+                        region: field_pattern.region,
+                        value,
+                    }),
+                ),
+                region: assigned_field.region,
+            }
+        }
+        LabelOnly(..) | IgnoredValue(..) => {
+            *assigned_field
+        }
+        SpaceAfter(af, spaces) => {
+            Loc {
+                value: SpaceAfter(env.arena.alloc(desugar_assigned_field(env, scope, &Loc::at(Region::zero(), *af)).value), spaces),
+                region: assigned_field.region,
+            }
+        }
+        SpaceBefore(af, spaces) => {
+            Loc {
+                value: SpaceBefore(env.arena.alloc(desugar_assigned_field(env, scope, &Loc::at(Region::zero(), *af)).value), spaces),
+                region: assigned_field.region,
+            }
+        }
+    }
+}
+
 pub fn desugar_record_destructures<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
-    field_patterns: Collection<'a, Loc<Pattern<'a>>>,
-) -> Collection<'a, Loc<Pattern<'a>>> {
-    let mut allocated = Vec::with_capacity_in(field_patterns.len(), env.arena);
-    for field_pattern in field_patterns.iter() {
-        let value = desugar_pattern(env, scope, field_pattern.value);
-        allocated.push(Loc {
-            value,
-            region: field_pattern.region,
-        });
+    assigned_fields: Collection<'a, Loc<AssignedField<'a, Pattern<'a>>>>,
+) -> Collection<'a, Loc<AssignedField<'a, Pattern<'a>>>> {
+    let mut allocated = Vec::with_capacity_in(assigned_fields.len(), env.arena);
+    for assigned_field in assigned_fields.iter() {
+        allocated.push(desugar_assigned_field(env, scope, assigned_field));
     }
 
-    field_patterns.replace_items(allocated.into_bump_slice())
+    assigned_fields.replace_items(allocated.into_bump_slice())
 }
 
 /// Desugars a `dbg expr` expression into a statement block that prints and returns the

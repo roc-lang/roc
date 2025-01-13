@@ -18,18 +18,16 @@
             Annotation(
                 @0-7 RecordDestructure(
                     [
-                        @1-6 SpaceAfter(
-                            RequiredField(
-                                "l",
-                                @5-6 Identifier {
-                                    ident: "s",
-                                },
-                            ),
+                        @1-6 RequiredValue(
+                            @1-2 "l",
                             [
                                 LineComment(
                                     "",
                                 ),
                             ],
+                            @5-6 Identifier {
+                                ident: "s",
+                            },
                         ),
                     ],
                 ),

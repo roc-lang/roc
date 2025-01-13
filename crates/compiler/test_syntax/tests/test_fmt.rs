@@ -937,6 +937,91 @@ mod test_fmt {
     }
 
     #[test]
+    fn anthony_testing_collections() {
+        expr_formats_to(
+            indoc!(
+                r"
+                list = [0
+                ]
+
+                list
+                "
+            ),
+            indoc!(
+                r"
+                list = [
+                    0,
+                ]
+
+                list
+                "
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r"
+                applied = func(0
+                )
+
+                applied
+                "
+            ),
+            indoc!(
+                r"
+                applied = func(
+                    0,
+                )
+
+                applied
+                "
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r"
+                applied = func(other_func(0
+                ))
+
+                applied
+                "
+            ),
+            indoc!(
+                r"
+                applied = func(
+                    other_func(
+                        0,
+                    ),
+                )
+
+                applied
+                "
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r"
+                Tag((OtherTag(0
+                ))) : f
+                applied
+                "
+            ),
+            indoc!(
+                r"
+                Tag(
+                    OtherTag(
+                        0,
+                    ),
+                ) : f
+                applied
+                "
+            ),
+        );
+    }
+
+    #[test]
     fn list_allow_blank_line_before_and_after_comment() {
         expr_formats_same(indoc!(
             r"
@@ -2853,32 +2938,60 @@ mod test_fmt {
         //    "
         // ));
 
-        expr_formats_same(indoc!(
-            r"
-            identity = \a,
-                b,
-                # it's c!!
-                c
-                -> a
+        expr_formats_to(
+            indoc!(
+                r"
+                identity = \a,
+                    b,
+                    # it's c!!
+                    c
+                    -> a
 
-            identity 43
-            "
-        ));
+                identity 43
+                "
+            ),
+            indoc!(
+                r"
+                identity = \
+                    a,
+                    b,
+                    # it's c!!
+                    c
+                    -> a
+
+                identity 43
+                "
+            ),
+        );
     }
 
     #[test]
     fn closure_multiline_pattern() {
-        expr_formats_same(indoc!(
-            r"
-            identity = \a,
-                b,
-                # it's c!!
-                c
-                -> a
+        expr_formats_to(
+            indoc!(
+                r"
+                identity = \a,
+                    b,
+                    # it's c!!
+                    c
+                    -> a
 
-            identity 43
-            "
-        ));
+                identity 43
+                "
+            ),
+            indoc!(
+                r"
+                identity = \
+                    a,
+                    b,
+                    # it's c!!
+                    c
+                    -> a
+
+                identity 43
+                "
+            ),
+        );
     }
 
     // LIST
@@ -6450,7 +6563,11 @@ mod test_fmt {
             indoc!(
                 r"
                 when l1 is
-                    [.. as rest] as l2 ->
+                    [
+                        .. as rest,
+                    ]
+                        as l2
+                    ->
                         f rest
                 "
             ),

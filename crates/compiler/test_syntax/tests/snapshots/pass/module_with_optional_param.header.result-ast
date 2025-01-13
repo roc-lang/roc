@@ -6,13 +6,16 @@ SpacesBefore {
             params: Some(
                 ModuleParams {
                     pattern: @7-20 [
-                        @9-10 Identifier {
-                            ident: "x",
-                        },
-                        @12-18 OptionalField(
-                            "y",
-                            @17-18 Num(
-                                "0",
+                        @9-10 LabelOnly(
+                            @9-10 "x",
+                        ),
+                        @12-18 OptionalValue(
+                            @12-13 "y",
+                            [],
+                            @17-18 ExprWrapped(
+                                Num(
+                                    "0",
+                                ),
                             ),
                         ),
                     ],

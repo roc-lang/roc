@@ -1,11 +1,11 @@
 use crate::annotation::{Formattable, Newlines, Parens};
-use crate::collection::{fmt_collection, Braces};
-use crate::expr::{
-    expr_is_multiline, expr_lift_spaces_after, fmt_str_literal, format_spaces, format_sq_literal,
-    is_str_multiline,
-};
+use crate::collection::{fmt_collection, fmt_record_like, Braces};
+use crate::expr::{fmt_str_literal, format_spaces, format_sq_literal, is_str_multiline};
 use crate::node::{Node, NodeInfo, NodeSequenceBuilder, Prec, Sp};
-use crate::spaces::{fmt_comments_only, fmt_spaces, merge_spaces_conservative, NewlineAt, INDENT};
+use crate::spaces::{
+    assigned_field_to_spaces, fmt_comments_only, fmt_spaces, merge_spaces_conservative, NewlineAt,
+    INDENT,
+};
 use crate::Buf;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -59,15 +59,11 @@ impl<'a> Formattable for Pattern<'a> {
                     "spaces is empty in pattern {:#?}",
                     pattern
                 );
-
-                spaces.iter().any(|s| s.is_comment()) || pattern.is_multiline()
+                true
             }
 
             Pattern::RecordDestructure(fields) => fields.iter().any(|f| f.is_multiline()),
-            Pattern::RequiredField(_, subpattern) => subpattern.is_multiline(),
-
-            Pattern::OptionalField(_, expr) => expr_is_multiline(&expr.value, true),
-
+            Pattern::ExprWrapped(e) => e.is_multiline(),
             Pattern::As(pattern, pattern_as) => pattern.is_multiline() || pattern_as.is_multiline(),
             Pattern::ListRest(opt_pattern_as) => match opt_pattern_as {
                 None => false,
@@ -104,55 +100,22 @@ impl<'a> Formattable for Pattern<'a> {
     }
 
     fn format_with_options(&self, buf: &mut Buf, parens: Parens, _newlines: Newlines, indent: u16) {
-        fmt_pattern_inner(self, buf, parens, indent, self.is_multiline(), false);
+        fmt_pattern_inner(self, buf, parens, indent);
     }
 }
 
-fn fmt_pattern_inner(
-    pat: &Pattern<'_>,
-    buf: &mut Buf,
-    parens: Parens,
-    indent: u16,
-    outer_is_multiline: bool,
-    force_newline_at_start: bool,
-) -> bool {
+fn fmt_pattern_inner(pat: &Pattern<'_>, buf: &mut Buf, parens: Parens, indent: u16) {
     let me = pattern_lift_spaces(buf.text.bump(), pat);
 
-    let mut was_multiline = me.item.is_multiline();
-
     if !me.before.is_empty() {
-        if !outer_is_multiline {
-            was_multiline |= me.before.iter().any(|s| s.is_comment());
-            fmt_comments_only(buf, me.before.iter(), NewlineAt::Bottom, indent)
-        } else {
-            was_multiline |= true;
-            fmt_spaces(buf, me.before.iter(), indent);
-        }
+        fmt_spaces(buf, me.before.iter(), indent);
     }
 
-    if force_newline_at_start {
-        buf.ensure_ends_with_newline();
-    }
-
-    let is_multiline = me.item.is_multiline();
-
-    fmt_pattern_only(&me.item, buf, parens, indent, is_multiline);
+    fmt_pattern_only(&me.item, buf, parens, indent, me.item.is_multiline());
 
     if !me.after.is_empty() {
-        if starts_with_inline_comment(me.after.iter()) {
-            buf.spaces(1);
-        }
-
-        if !outer_is_multiline {
-            was_multiline |= me.before.iter().any(|s| s.is_comment());
-            fmt_comments_only(buf, me.after.iter(), NewlineAt::Bottom, indent)
-        } else {
-            was_multiline |= true;
-            fmt_spaces(buf, me.after.iter(), indent);
-        }
+        fmt_spaces(buf, me.after.iter(), indent);
     }
-
-    was_multiline
 }
 
 fn fmt_pattern_only(
@@ -194,87 +157,10 @@ fn fmt_pattern_only(
             }
         }
         Pattern::RecordDestructure(loc_patterns) => {
-            buf.indent(indent);
-            buf.push_str("{");
-
-            if !loc_patterns.is_empty() {
-                buf.spaces(1);
-                let mut last_was_multiline = false;
-                let mut it = loc_patterns.iter().peekable();
-                while let Some(loc_pattern) = it.next() {
-                    let item = pattern_lift_spaces(buf.text.bump(), &loc_pattern.value);
-
-                    if !item.before.is_empty() {
-                        if !is_multiline {
-                            fmt_comments_only(buf, item.before.iter(), NewlineAt::Bottom, indent)
-                        } else {
-                            fmt_spaces(buf, item.before.iter(), indent);
-                        }
-                    }
-
-                    if last_was_multiline {
-                        buf.ensure_ends_with_newline();
-                    }
-
-                    fmt_pattern_inner(
-                        &item.item,
-                        buf,
-                        Parens::NotNeeded,
-                        indent,
-                        is_multiline,
-                        false,
-                    );
-
-                    let is_multiline = item.item.is_multiline();
-                    last_was_multiline = is_multiline;
-
-                    if it.peek().is_some() {
-                        buf.push_str(",");
-                    }
-
-                    if !item.after.is_empty() {
-                        if starts_with_inline_comment(item.after.iter()) {
-                            buf.spaces(1);
-                        }
-
-                        if !is_multiline {
-                            fmt_comments_only(buf, item.after.iter(), NewlineAt::Bottom, indent)
-                        } else {
-                            fmt_spaces(buf, item.after.iter(), indent);
-                        }
-                    }
-                    if it.peek().is_some() {
-                        buf.ensure_ends_with_whitespace();
-                    }
-                }
-                buf.spaces(1);
-            }
-
-            buf.indent(indent);
-            buf.push_str("}");
+            fmt_record_like(buf, None, *loc_patterns, indent, assigned_field_to_spaces);
         }
-
-        Pattern::RequiredField(name, loc_pattern) => {
-            buf.indent(indent);
-            snakify_camel_ident(buf, name);
-            buf.push_str(":");
-            buf.spaces(1);
-            fmt_pattern_inner(
-                &loc_pattern.value,
-                buf,
-                Parens::NotNeeded,
-                indent,
-                is_multiline,
-                false,
-            );
-        }
-
-        Pattern::OptionalField(name, loc_pattern) => {
-            buf.indent(indent);
-            snakify_camel_ident(buf, name);
-            buf.push_str(" ??");
-            buf.spaces(1);
-            loc_pattern.format(buf, indent);
+        Pattern::ExprWrapped(e) => {
+            e.format(buf, indent);
         }
 
         Pattern::NumLiteral(string) => {
@@ -356,18 +242,9 @@ fn fmt_pattern_only(
             buf.indent(indent);
             buf.push_str("(");
 
-            let mut add_newlines = false;
-
             let mut it = loc_patterns.iter().peekable();
             while let Some(loc_pattern) = it.next() {
-                add_newlines |= fmt_pattern_inner(
-                    &loc_pattern.value,
-                    buf,
-                    Parens::NotNeeded,
-                    indent,
-                    is_multiline,
-                    add_newlines,
-                );
+                fmt_pattern_inner(&loc_pattern.value, buf, Parens::NotNeeded, indent);
 
                 if it.peek().is_some() {
                     buf.indent(indent);
@@ -381,30 +258,7 @@ fn fmt_pattern_only(
         }
         Pattern::List(loc_patterns) => {
             buf.indent(indent);
-            buf.push_str("[");
-
-            let mut add_newlines = false;
-
-            let mut it = loc_patterns.iter().peekable();
-            while let Some(loc_pattern) = it.next() {
-                add_newlines |= fmt_pattern_inner(
-                    &loc_pattern.value,
-                    buf,
-                    Parens::NotNeeded,
-                    indent,
-                    is_multiline,
-                    add_newlines,
-                );
-
-                if it.peek().is_some() {
-                    buf.indent(indent);
-                    buf.push_str(",");
-                    buf.spaces(1);
-                }
-            }
-
-            buf.indent(indent);
-            buf.push_str("]");
+            fmt_collection(buf, indent, Braces::Square, *loc_patterns, Newlines::No);
         }
         Pattern::ListRest(opt_pattern_as) => {
             buf.indent(indent);
@@ -517,7 +371,7 @@ fn pattern_fmt_pnc_apply(
     }
 
     patt.item
-        .format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
+        .format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
     fmt_pattern_collection(
         buf,
         indent,
@@ -676,8 +530,7 @@ fn pattern_prec(pat: Pattern<'_>) -> Prec {
         | Pattern::Tag(_)
         | Pattern::OpaqueRef(_)
         | Pattern::RecordDestructure(..)
-        | Pattern::RequiredField(_, _)
-        | Pattern::OptionalField(_, _)
+        | Pattern::ExprWrapped(_)
         | Pattern::NumLiteral(_)
         | Pattern::NonBase10Literal { .. }
         | Pattern::FloatLiteral(_)
@@ -752,37 +605,19 @@ pub fn pattern_lift_spaces<'a, 'b: 'a>(
 
             Spaces {
                 before: func_lifted.before,
-                item: Pattern::PncApply(arena.alloc(func), *args),
+                item: Pattern::PncApply(arena.alloc(Loc::at(func.region, func_lifted.item)), *args),
                 after: &[],
-            }
-        }
-        Pattern::OptionalField(name, expr) => {
-            let lifted = expr_lift_spaces_after(Parens::NotNeeded, arena, &expr.value);
-            Spaces {
-                before: &[],
-                item: Pattern::OptionalField(name, arena.alloc(Loc::at(expr.region, lifted.item))),
-                after: lifted.after,
-            }
-        }
-        Pattern::RequiredField(name, pat) => {
-            let lifted = pattern_lift_spaces_after(arena, &pat.value);
-            Spaces {
-                before: &[],
-                item: Pattern::RequiredField(name, arena.alloc(Loc::at(pat.region, lifted.item))),
-                after: lifted.after,
             }
         }
         Pattern::SpaceBefore(expr, spaces) => {
             let mut inner = pattern_lift_spaces(arena, expr);
-            inner.before = merge_spaces(arena, spaces, inner.before);
-
-            handle_multiline_str_spaces(expr, &mut inner.before);
+            inner.before = merge_spaces_conservative(arena, spaces, inner.before);
 
             inner
         }
         Pattern::SpaceAfter(expr, spaces) => {
             let mut inner = pattern_lift_spaces(arena, expr);
-            inner.after = merge_spaces(arena, inner.after, spaces);
+            inner.after = merge_spaces_conservative(arena, inner.after, spaces);
             inner
         }
         _ => Spaces {

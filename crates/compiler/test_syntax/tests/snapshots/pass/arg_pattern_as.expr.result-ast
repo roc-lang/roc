@@ -4,12 +4,12 @@
             @2-19 As(
                 @2-10 RecordDestructure(
                     [
-                        @4-5 Identifier {
-                            ident: "x",
-                        },
-                        @7-8 Identifier {
-                            ident: "y",
-                        },
+                        @4-5 LabelOnly(
+                            @4-5 "x",
+                        ),
+                        @7-8 LabelOnly(
+                            @7-8 "y",
+                        ),
                     ],
                 ),
                 PatternAs {

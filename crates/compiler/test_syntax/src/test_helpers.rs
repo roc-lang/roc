@@ -231,6 +231,8 @@ impl<'a> Output<'a> {
                     roc_types::types::AliasKind::Structural,
                 );
 
+                println!("Canonicalizing source:\n{src}\nAST: {loc_expr:#?}");
+
                 let (_loc_expr, _output) = canonicalize_expr(
                     &mut env,
                     &mut var_store,
@@ -359,7 +361,7 @@ impl<'a> Input<'a> {
     ) {
         let arena = Bump::new();
 
-        let actual = self.parse_in(&arena).unwrap_or_else(|err| {
+        let actual: Output<'_> = self.parse_in(&arena).unwrap_or_else(|err| {
             panic!("Unexpected parse failure when parsing this for formatting:\n\n{}\n\nParse error was:\n\n{:#?}\n\n", self.as_str(), err);
         });
 
@@ -367,7 +369,7 @@ impl<'a> Input<'a> {
 
         handle_formatted_output(output.as_ref());
 
-        let reparsed_ast = output.as_ref().parse_in(&arena).unwrap_or_else(|err| {
+        let reparsed_ast: Output<'_> = output.as_ref().parse_in(&arena).unwrap_or_else(|err| {
             panic!(
                 "After formatting, the source code no longer parsed!\n\n\
                 Parse error was: {:?}\n\n\
@@ -412,18 +414,40 @@ impl<'a> Input<'a> {
         // Now verify that the resultant formatting is _idempotent_ - i.e. that it doesn't change again if re-formatted
         if check_idempotency {
             let reformatted = reparsed_ast.format(flags);
+            let reformatted_ast = reformatted.as_ref().parse_in(&arena).unwrap_or_else(|err| {
+                panic!(
+                    "After reformatting, the source code no longer parsed!\n\n\
+                    Parse error was: {:?}\n\n\
+                    The original code was:\n\n{}\n\n\
+                    The code that failed to parse:\n\n{}\n\n\
+                    The original ast was:\n\n{:#?}\n\n",
+                    err,
+                    reformatted.as_ref().as_str(),
+                    output.as_ref().as_str(),
+                    actual,
+                )
+            });
 
             if output != reformatted {
                 pretty_compare_string(
                     format!("{actual:#?}").as_str(),
                     format!("{reparsed_ast:#?}").as_str(),
                 );
-                eprintln!("Formatting bug; formatting is not stable.\nOriginal code:\n{}\n\nFormatted code:\n{}\n\nAST:\n{:#?}\n\nReparsed AST:\n{:#?}\n\n",
+                eprintln!(
+                    "Formatting bug; formatting is not stable.\n\
+                    Original code:\n{}\n\n\
+                    Formatted code:\n{}\n\n\
+                    Reformatted code:\n{}\n\n\
+                    Original AST:\n{:#?}\n\n\
+                    Formatted AST:\n{:#?}\n\n\
+                    Reformatted AST:\n{:#?}\n\n",
                     self.as_str(),
                     output.as_ref().as_str(),
+                    reformatted.as_ref().as_str(),
                     actual,
-                    reparsed_ast);
-                eprintln!("Reformatting the formatted code changed it again, as follows:\n\n");
+                    reparsed_ast,
+                    reformatted_ast,
+                );
 
                 assert_multiline_str_eq!(output.as_ref().as_str(), reformatted.as_ref().as_str());
             }

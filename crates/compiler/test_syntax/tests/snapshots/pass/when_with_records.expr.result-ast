@@ -10,9 +10,9 @@
                     @11-16 SpaceBefore(
                         RecordDestructure(
                             [
-                                @13-14 Identifier {
-                                    ident: "y",
-                                },
+                                @13-14 LabelOnly(
+                                    @13-14 "y",
+                                ),
                             ],
                         ),
                         [
@@ -30,12 +30,12 @@
                     @23-31 SpaceBefore(
                         RecordDestructure(
                             [
-                                @25-26 Identifier {
-                                    ident: "z",
-                                },
-                                @28-29 Identifier {
-                                    ident: "w",
-                                },
+                                @25-26 LabelOnly(
+                                    @25-26 "z",
+                                ),
+                                @28-29 LabelOnly(
+                                    @28-29 "w",
+                                ),
                             ],
                         ),
                         [

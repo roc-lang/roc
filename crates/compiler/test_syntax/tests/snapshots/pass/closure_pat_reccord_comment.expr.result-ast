@@ -3,18 +3,18 @@
         @1-8 RecordDestructure(
             [
                 @2-3 SpaceAfter(
-                    Identifier {
-                        ident: "i",
-                    },
+                    LabelOnly(
+                        @2-3 "i",
+                    ),
                     [
                         LineComment(
                             "",
                         ),
                     ],
                 ),
-                @6-7 Identifier {
-                    ident: "e",
-                },
+                @6-7 LabelOnly(
+                    @6-7 "e",
+                ),
             ],
         ),
     ],

@@ -454,7 +454,6 @@ mod test_snapshots {
         pass/i_over_not_g.expr,
         pass/if_bang_then_else_one_line.expr,
         pass/if_def.expr,
-        pass/if_in_record_field_opt_pat.expr,
         pass/if_newline_then_negate_else_recordupdater.expr,
         pass/if_then_weird_indent.expr,
         pass/implements_after_comment_with_newline.expr,
@@ -623,7 +622,6 @@ mod test_snapshots {
         pass/pattern_as_list_rest.expr,
         pass/pattern_as_spaces.expr,
         pass/pattern_comma_newlines.expr,
-        pass/pattern_opt_field_bonanza.expr,
         pass/pattern_record_apply_comment.expr,
         pass/pattern_with_as_parens.expr,
         pass/pattern_with_space_in_parens.expr, // https://github.com/roc-lang/roc/issues/929

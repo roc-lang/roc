@@ -24,8 +24,9 @@
                     @23-36 SpaceBefore(
                         RecordDestructure(
                             [
-                                @24-35 RequiredField(
-                                    "foo",
+                                @24-35 RequiredValue(
+                                    @24-27 "foo",
+                                    [],
                                     @29-35 Tuple(
                                         [
                                             @30-31 NumLiteral(
@@ -55,8 +56,9 @@
                     @43-56 SpaceBefore(
                         RecordDestructure(
                             [
-                                @44-55 RequiredField(
-                                    "foo",
+                                @44-55 RequiredValue(
+                                    @44-47 "foo",
+                                    [],
                                     @49-55 Tuple(
                                         [
                                             @50-51 Underscore(

@@ -1,12 +1,12 @@
 use crate::annotation::{except_last, is_collection_multiline, Formattable, Newlines, Parens};
-use crate::collection::{fmt_collection, Braces};
+use crate::collection::{fmt_collection, fmt_record_like, Braces, RecordPrefix};
 use crate::def::{fmt_defs, valdef_lift_spaces_before};
 use crate::pattern::{
     fmt_pattern, pattern_lift_spaces, snakify_camel_ident, starts_with_inline_comment,
 };
 use crate::spaces::{
-    count_leading_newlines, fmt_comments_only, fmt_spaces, fmt_spaces_no_blank_lines,
-    fmt_spaces_with_newline_mode, merge_spaces_conservative, NewlineAt, SpacesNewlineMode, INDENT,
+    assigned_field_to_spaces, fmt_comments_only, fmt_spaces, fmt_spaces_no_blank_lines,
+    merge_spaces_conservative, NewlineAt, INDENT,
 };
 use crate::Buf;
 use bumpalo::collections::Vec;
@@ -658,7 +658,7 @@ fn fmt_pnc_apply(
         format_spaces(buf, expr.before, Newlines::Yes, indent);
     }
     expr.item
-        .format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
+        .format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
     fmt_expr_collection(buf, indent, Braces::Round, *loc_args, Newlines::No);
 }
 
@@ -1678,7 +1678,13 @@ fn fmt_when<'a>(
 
                 buf.spaces(1);
 
-                fmt_pattern(buf, &pattern.value, indent + INDENT, Parens::NotNeeded);
+                let lifted = pattern_lift_spaces(buf.text.bump(), &pattern.value);
+
+                fmt_pattern(buf, &lifted.item, indent + INDENT, Parens::NotNeeded);
+
+                if !lifted.after.is_empty() && lifted.after.iter().any(|s| s.is_comment()) {
+                    fmt_comments_only(buf, lifted.after.iter(), NewlineAt::Bottom, indent);
+                }
             }
         }
 
@@ -1691,7 +1697,11 @@ fn fmt_when<'a>(
 
         buf.indent(indent + INDENT);
         let line_indent = buf.cur_line_indent();
-        buf.push_str(" ->");
+        if buf.ends_with_space() || buf.ends_with_newline() {
+            buf.push_str("->");
+        } else {
+            buf.push_str(" ->");
+        }
 
         let inner_indent = line_indent + INDENT;
 
@@ -1902,12 +1912,19 @@ fn fmt_closure<'a>(
         .iter()
         .any(|loc_pattern| loc_pattern.is_multiline());
 
+    let more_than_one_arg = loc_patterns.len() > 1;
+
     // If the arguments are multiline, go down a line and indent.
-    let indent = if arguments_are_multiline {
+    let indent = if arguments_are_multiline && more_than_one_arg {
         indent + INDENT
     } else {
         indent
     };
+
+    if arguments_are_multiline && more_than_one_arg {
+        buf.newline();
+        buf.indent(indent);
+    }
 
     let mut first = true;
 
@@ -1941,7 +1958,7 @@ fn fmt_closure<'a>(
         }
     }
 
-    if arguments_are_multiline {
+    if arguments_are_multiline && more_than_one_arg {
         buf.ensure_ends_with_newline();
         buf.indent(indent);
     } else {
@@ -1988,159 +2005,6 @@ fn fmt_closure<'a>(
         }
     } else {
         loc_ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, body_indent);
-    }
-}
-
-enum RecordPrefix<'a> {
-    Update(&'a Loc<Expr<'a>>),
-    Mapper(&'a Loc<Expr<'a>>),
-}
-
-fn fmt_record_like<'a, 'b: 'a, Field, ToSpacesAround>(
-    buf: &'a mut Buf,
-    prefix: Option<RecordPrefix<'b>>,
-    fields: Collection<'b, Loc<Field>>,
-    indent: u16,
-    to_space_around: ToSpacesAround,
-) where
-    Field: Formattable + std::fmt::Debug,
-    ToSpacesAround: Fn(&'a Bump, &'b Field) -> Spaces<'a, Field>,
-{
-    let loc_fields = fields.items;
-    let final_comments = fields.final_comments();
-    buf.indent(indent);
-    if loc_fields.is_empty() && final_comments.is_empty() && prefix.is_none() {
-        buf.push_str("{}");
-    } else {
-        buf.push('{');
-
-        match prefix {
-            None => {}
-            // We are presuming this to be a Var()
-            // If it wasnt a Var() we would not have made
-            // it this far. For example "{ 4 & hello = 9 }"
-            // doesnt make sense.
-            Some(RecordPrefix::Update(record_var)) => {
-                buf.spaces(1);
-                record_var.format(buf, indent + INDENT);
-                buf.indent(indent + INDENT);
-                buf.ensure_ends_with_whitespace();
-                buf.push_str("&");
-            }
-            Some(RecordPrefix::Mapper(mapper_var)) => {
-                buf.spaces(1);
-                mapper_var.format(buf, indent + INDENT);
-                buf.indent(indent + INDENT);
-                buf.ensure_ends_with_whitespace();
-                buf.push_str("<-");
-            }
-        }
-
-        let is_multiline = loc_fields.iter().any(|loc_field| loc_field.is_multiline())
-            || !final_comments.is_empty();
-
-        if is_multiline {
-            let field_indent = indent + INDENT;
-
-            let mut last_after: &[CommentOrNewline<'_>] = &[];
-
-            for (iter, field) in loc_fields.iter().enumerate() {
-                // comma addition is handled by the `format_field_multiline` function
-                // since we can have stuff like:
-                // { x # comment
-                // , y
-                // }
-                // In this case, we have to move the comma before the comment.
-
-                let field_lifted = to_space_around(buf.text.bump(), &field.value);
-
-                let before = merge_spaces(buf.text.bump(), last_after, field_lifted.before);
-
-                if iter == 0 || count_leading_newlines(before.iter()) == 0 {
-                    buf.ensure_ends_with_newline();
-                }
-
-                let newline_mode = if iter == 0 {
-                    if loc_fields.len() == 1 {
-                        SpacesNewlineMode::SkipNewlinesAtBoth
-                    } else {
-                        SpacesNewlineMode::SkipNewlinesAtStart
-                    }
-                } else {
-                    SpacesNewlineMode::Normal
-                };
-
-                fmt_spaces_with_newline_mode(buf, before, field_indent, newline_mode);
-                field_lifted.item.format_with_options(
-                    buf,
-                    Parens::NotNeeded,
-                    Newlines::No,
-                    field_indent,
-                );
-                buf.indent(field_indent);
-                buf.push_str(",");
-                last_after = field_lifted.after;
-            }
-
-            let after = merge_spaces(buf.text.bump(), last_after, final_comments);
-
-            if count_leading_newlines(after.iter()) == 0 {
-                buf.ensure_ends_with_newline();
-            }
-
-            fmt_spaces_with_newline_mode(
-                buf,
-                after,
-                field_indent,
-                SpacesNewlineMode::SkipNewlinesAtEnd,
-            );
-
-            buf.ensure_ends_with_newline();
-        } else {
-            // is_multiline == false
-            buf.spaces(1);
-            let field_indent = indent;
-            let mut iter = loc_fields.iter().peekable();
-            while let Some(field) = iter.next() {
-                field.format_with_options(buf, Parens::NotNeeded, Newlines::No, field_indent);
-
-                if iter.peek().is_some() {
-                    buf.push_str(",");
-                    buf.spaces(1);
-                }
-            }
-            buf.spaces(1);
-            // if we are here, that means that `final_comments` is empty, thus we don't have
-            // to add a comment. Anyway, it is not possible to have a single line record with
-            // a comment in it.
-        };
-
-        // closes the initial bracket
-        buf.indent(indent);
-        buf.push('}');
-    }
-}
-
-fn assigned_field_to_spaces<'a, 'b: 'a, T: Copy>(
-    arena: &'a Bump,
-    field: &'b AssignedField<'b, T>,
-) -> Spaces<'a, AssignedField<'a, T>> {
-    match field {
-        AssignedField::SpaceBefore(sub_field, spaces) => {
-            let mut inner = assigned_field_to_spaces(arena, sub_field);
-            inner.before = merge_spaces(arena, spaces, inner.before);
-            inner
-        }
-        AssignedField::SpaceAfter(sub_field, spaces) => {
-            let mut inner = assigned_field_to_spaces(arena, sub_field);
-            inner.after = merge_spaces(arena, inner.after, spaces);
-            inner
-        }
-        _ => Spaces {
-            before: &[],
-            item: *field,
-            after: &[],
-        },
     }
 }
 

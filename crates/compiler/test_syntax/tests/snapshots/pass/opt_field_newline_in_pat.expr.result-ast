@@ -18,21 +18,19 @@
             Body(
                 @0-7 RecordDestructure(
                     [
-                        @1-6 SpaceAfter(
-                            OptionalField(
-                                "i",
-                                @5-6 SpaceBefore(
-                                    Tag(
-                                        "Y",
-                                    ),
-                                    [
-                                        Newline,
-                                    ],
-                                ),
-                            ),
+                        @1-6 OptionalValue(
+                            @1-2 "i",
                             [
                                 Newline,
                             ],
+                            @5-6 SpaceBefore(
+                                Tag(
+                                    "Y",
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
                         ),
                     ],
                 ),

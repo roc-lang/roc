@@ -912,12 +912,7 @@ impl<'a> Normalize<'a> for Pattern<'a> {
                 Pattern::PncApply(arena.alloc(a.normalize(arena)), b.normalize(arena))
             }
             Pattern::RecordDestructure(a) => Pattern::RecordDestructure(a.normalize(arena)),
-            Pattern::RequiredField(a, b) => {
-                Pattern::RequiredField(a, arena.alloc(b.normalize(arena)))
-            }
-            Pattern::OptionalField(a, b) => {
-                Pattern::OptionalField(a, arena.alloc(b.normalize(arena)))
-            }
+            Pattern::ExprWrapped(e) => Pattern::ExprWrapped(e.normalize(arena)),
             Pattern::As(pattern, pattern_as) => Pattern::As(
                 arena.alloc(pattern.normalize(arena)),
                 pattern_as.normalize(arena),

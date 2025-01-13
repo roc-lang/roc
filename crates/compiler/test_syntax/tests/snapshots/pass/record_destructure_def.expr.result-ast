@@ -26,12 +26,12 @@
                     Body(
                         @18-26 RecordDestructure(
                             [
-                                @20-21 Identifier {
-                                    ident: "x",
-                                },
-                                @23-25 Identifier {
-                                    ident: "y",
-                                },
+                                @20-21 LabelOnly(
+                                    @20-21 "x",
+                                ),
+                                @23-25 LabelOnly(
+                                    @23-24 "y",
+                                ),
                             ],
                         ),
                         @29-30 Num(

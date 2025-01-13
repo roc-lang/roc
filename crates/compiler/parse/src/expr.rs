@@ -1247,6 +1247,8 @@ fn parse_stmt_alias_or_opaque<'a>(
         .validate_is_type_def(arena, kind)
         .map_err(|fail| (MadeProgress, fail))?;
 
+    println!("arguments: {arguments:#?}");
+
     let (res, state) = if let Some(tag) = extract_tag_and_spaces(arena, expr.value) {
         let name = tag.item;
         let mut type_arguments = Vec::with_capacity_in(arguments.len(), arena);
@@ -2246,7 +2248,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
 fn assigned_expr_field_to_pattern_help<'a>(
     arena: &'a Bump,
     assigned_field: &AssignedField<'a, Expr<'a>>,
-) -> Result<Pattern<'a>, ()> {
+) -> Result<AssignedField<'a, Pattern<'a>>, ()> {
     // the assigned fields always store spaces, but this slice is often empty
     Ok(match assigned_field {
         AssignedField::RequiredValue(name, spaces, value) => {
@@ -2255,35 +2257,22 @@ fn assigned_expr_field_to_pattern_help<'a>(
                 region: value.region,
                 value: pattern,
             });
-            if spaces.is_empty() {
-                Pattern::RequiredField(name.value, result)
-            } else {
-                Pattern::SpaceAfter(
-                    arena.alloc(Pattern::RequiredField(name.value, result)),
-                    spaces,
-                )
-            }
+            AssignedField::RequiredValue(*name, spaces, result)
         }
         AssignedField::OptionalValue(name, spaces, value) => {
+            let pattern = expr_to_pattern_help(arena, &value.value)?;
             let result = arena.alloc(Loc {
                 region: value.region,
-                value: value.value,
+                value: pattern,
             });
-            if spaces.is_empty() {
-                Pattern::OptionalField(name.value, result)
-            } else {
-                Pattern::SpaceAfter(
-                    arena.alloc(Pattern::OptionalField(name.value, result)),
-                    spaces,
-                )
-            }
+            AssignedField::OptionalValue(*name, spaces, result)
         }
-        AssignedField::LabelOnly(name) => Pattern::Identifier { ident: name.value },
-        AssignedField::SpaceBefore(nested, spaces) => Pattern::SpaceBefore(
+        AssignedField::LabelOnly(name) => AssignedField::LabelOnly(*name),
+        AssignedField::SpaceBefore(nested, spaces) => AssignedField::SpaceBefore(
             arena.alloc(assigned_expr_field_to_pattern_help(arena, nested)?),
             spaces,
         ),
-        AssignedField::SpaceAfter(nested, spaces) => Pattern::SpaceAfter(
+        AssignedField::SpaceAfter(nested, spaces) => AssignedField::SpaceAfter(
             arena.alloc(assigned_expr_field_to_pattern_help(arena, nested)?),
             spaces,
         ),
@@ -3364,7 +3353,7 @@ fn starts_with_spaces_conservative(value: &Pattern<'_>) -> bool {
         Pattern::Apply(left, _) => starts_with_spaces_conservative(&left.value),
         Pattern::PncApply(left, _) => starts_with_spaces_conservative(&left.value),
         Pattern::RecordDestructure(_) => false,
-        Pattern::RequiredField(_, _) | Pattern::OptionalField(_, _) => false,
+        Pattern::ExprWrapped(_) => false,
         Pattern::SpaceBefore(_, _) => true,
         Pattern::SpaceAfter(inner, _) => starts_with_spaces_conservative(inner),
         Pattern::Malformed(_) | Pattern::MalformedIdent(_, _) => true,
@@ -3433,8 +3422,7 @@ fn pat_ends_with_spaces_conservative(pat: &Pattern<'_>) -> bool {
             .last()
             .map_or(false, |a| pat_ends_with_spaces_conservative(&a.value)),
         Pattern::RecordDestructure(_) => false,
-        Pattern::RequiredField(_, _) => unreachable!(),
-        Pattern::OptionalField(_, _) => unreachable!(),
+        Pattern::ExprWrapped(_) => unreachable!(),
         Pattern::SpaceBefore(inner, _) => pat_ends_with_spaces_conservative(inner),
         Pattern::SpaceAfter(_, _) => true,
         Pattern::Malformed(_) | Pattern::MalformedIdent(_, _) => false,
