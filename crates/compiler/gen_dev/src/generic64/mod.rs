@@ -4561,46 +4561,27 @@ impl<
                 // be for our particular integer width
                 let sign_extend_shift_amount = 64 - (int_width.stack_size() as i64 * 8);
 
-                if sign_extend_shift_amount > 0 {
-                    self.storage_manager.with_tmp_general_reg(
-                        buf,
-                        |storage_manager, buf, tmp_reg| {
-                            ASM::mov_reg64_imm64(buf, tmp_reg, sign_extend_shift_amount);
-                            ASM::shl_reg64_reg64_reg64(
-                                buf,
-                                storage_manager,
-                                src1_reg,
-                                src1_reg,
-                                tmp_reg,
-                            );
-                        },
-                    )
-                }
-
-                ASM::sar_reg64_reg64_reg64(
-                    buf,
-                    &mut self.storage_manager,
-                    dst_reg,
-                    src1_reg,
-                    src2_reg,
-                );
-
-                if sign_extend_shift_amount > 0 {
-                    // shift back if needed
-                    self.storage_manager.with_tmp_general_reg(
-                        &mut self.buf,
-                        |storage_manager, buf, tmp_reg| {
-                            ASM::mov_reg64_imm64(buf, tmp_reg, sign_extend_shift_amount);
-                            ASM::shr_reg64_reg64_reg64(
-                                buf,
-                                storage_manager,
-                                dst_reg,
-                                dst_reg,
-                                tmp_reg,
-                            );
-                        },
-                    )
-                }
+                // PERF: could just be one shr for unsigned ints cases
+                // PERF: the shl/shr can be skipped when sign_extend_shift_amount is 0
+                self.storage_manager
+                    .with_tmp_general_reg(buf, |storage_manager, buf, tmp_reg| {
+                        ASM::mov_reg64_imm64(buf, tmp_reg, sign_extend_shift_amount);
+                        ASM::shl_reg64_reg64_reg64(
+                            buf,
+                            storage_manager,
+                            dst_reg,
+                            src1_reg,
+                            tmp_reg,
+                        );
+                        ASM::sar_reg64_reg64_reg64(
+                            buf,
+                            storage_manager,
+                            dst_reg,
+                            dst_reg,
+                            src2_reg,
+                        );
+                        ASM::shr_reg64_reg64_reg64(buf, storage_manager, dst_reg, dst_reg, tmp_reg);
+                    });
             }
         }
     }
