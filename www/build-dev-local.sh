@@ -16,6 +16,6 @@ cd "$DIR" || exit
 rm -rf dist/
 cp -r build dist/
 cp -r public/* dist/
-roc run main.roc -- content/ dist/
+roc main.roc --linker=legacy -- content/ dist/
 
 simple-http-server -p 8080 --nocache --cors --index -- dist/
