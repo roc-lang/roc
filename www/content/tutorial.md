@@ -19,21 +19,19 @@
         <p>Welcome to Roc!</p>
         <p>This tutorial will teach you how to build Roc applications. Along the way, you'll learn how to write tests, use the REPL, and more!</p>
         <p class="banner">
-            <p>
-                🚧 Roc is a <b>Work in Progress!</b> 🏗️
-            </p>
-            <p>
-                As of January 2025,
-                <a href="/plans">several large breaking changes</a>
-                are being implemented.
-                When those are complete, this tutorial will be majorly updated
-                for flow and accuracy.
-            </p>
-            <p>
-                Until then, you may hit some surprising errors that require
-                <a href="/community">help</a>
-                to diagnose and solve.
-            </p>
+            🚧 Roc is a <b>Work in Progress!</b> 🏗️
+            <br/>
+            <br/>
+            As of January 2025,
+            <a href="/plans">several large breaking changes</a>
+            are being implemented.
+            When those are complete, this tutorial will be majorly updated
+            for flow and accuracy.
+            <br/>
+            <br/>
+            Until then, you may hit some surprising errors that require
+            <a href="/community">help</a>
+            to diagnose and solve.
         </p>
     </section>
     <section>
