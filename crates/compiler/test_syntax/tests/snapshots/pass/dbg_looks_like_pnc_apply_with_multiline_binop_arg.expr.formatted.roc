@@ -1,6 +1,5 @@
-dbg
-    (
-        2ii / fi &fh
-    )
+dbg(
+    2ii / fi &fh,
+)
 
 i

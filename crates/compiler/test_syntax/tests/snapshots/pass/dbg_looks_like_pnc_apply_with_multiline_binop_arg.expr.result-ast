@@ -1,36 +1,58 @@
-@0-15 SpaceAfter(
-    DbgStmt {
-        first: @4-13 ParensAround(
-            SpaceAfter(
-                BinOps(
-                    [
-                        (
-                            @4-7 Num(
-                                "2ii",
-                            ),
-                            @7-8 Slash,
-                        ),
-                    ],
-                    @8-13 Apply(
-                        @8-10 Var {
-                            module_name: "",
-                            ident: "fi",
-                        },
+@0-18 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-15,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Stmt(
+                    @0-15 PncApply(
+                        @0-3 Dbg,
                         [
-                            @10-13 RecordUpdater(
-                                "fh",
+                            @4-13 SpaceAfter(
+                                BinOps(
+                                    [
+                                        (
+                                            @4-7 Num(
+                                                "2ii",
+                                            ),
+                                            @7-8 Slash,
+                                        ),
+                                    ],
+                                    @8-13 Apply(
+                                        @8-10 Var {
+                                            module_name: "",
+                                            ident: "fi",
+                                        },
+                                        [
+                                            @10-13 RecordUpdater(
+                                                "fh",
+                                            ),
+                                        ],
+                                        Space,
+                                    ),
+                                ),
+                                [
+                                    Newline,
+                                ],
                             ),
                         ],
-                        Space,
                     ),
                 ),
-                [
-                    Newline,
-                ],
-            ),
-        ),
-        extra_args: [],
-        continuation: @17-18 SpaceBefore(
+            ],
+        },
+        @17-18 SpaceBefore(
             Var {
                 module_name: "",
                 ident: "i",
@@ -40,7 +62,7 @@
                 Newline,
             ],
         ),
-    },
+    ),
     [
         Newline,
     ],
