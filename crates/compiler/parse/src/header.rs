@@ -1,11 +1,10 @@
 use std::fmt::Debug;
 
 use crate::ast::{
-    Collection, CommentOrNewline, Defs, Header, Malformed, Pattern, Spaced, Spaces, SpacesBefore,
-    StrLiteral, TypeAnnotation,
+    merge_spaces, Collection, CommentOrNewline, Defs, Header, Malformed, Pattern, Spaced, Spaces,
+    SpacesBefore, StrLiteral, TypeAnnotation,
 };
 use crate::blankspace::{space0_before_e, space0_e};
-use crate::expr::merge_spaces;
 use crate::ident::{self, lowercase_ident, unqualified_ident, UppercaseIdent};
 use crate::parser::Progress::{self, *};
 use crate::parser::{

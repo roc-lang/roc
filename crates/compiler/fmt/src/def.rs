@@ -17,12 +17,11 @@ use crate::{Buf, MigrationFlags};
 use bumpalo::Bump;
 use roc_error_macros::internal_error;
 use roc_parse::ast::{
-    AbilityMember, Defs, Expr, ExtractSpaces, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
-    ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport,
-    ModuleImportParams, Pattern, Spaces, SpacesBefore, StrLiteral, TypeAnnotation, TypeDef,
-    TypeHeader, ValueDef,
+    merge_spaces, AbilityMember, Defs, Expr, ExtractSpaces, ImportAlias, ImportAsKeyword,
+    ImportExposingKeyword, ImportedModuleName, IngestedFileAnnotation, IngestedFileImport,
+    ModuleImport, ModuleImportParams, Pattern, Spaces, SpacesBefore, StrLiteral, TypeAnnotation,
+    TypeDef, TypeHeader, ValueDef,
 };
-use roc_parse::expr::merge_spaces;
 use roc_parse::header::Keyword;
 use roc_region::all::Loc;
 
@@ -435,8 +434,10 @@ impl<'a> Formattable for TypeDef<'a> {
                 typ: ann,
                 derived: has_abilities,
             } => {
-                let ann_is_where_clause =
-                    matches!(ann.extract_spaces().item, TypeAnnotation::Where(..));
+                let ann_is_where_clause = matches!(
+                    ann.extract_spaces(buf.arena).item,
+                    TypeAnnotation::Where(..)
+                );
 
                 // Always put the has-abilities clause on a newline if the opaque annotation
                 // contains a where-has clause.
@@ -476,7 +477,7 @@ impl<'a> Formattable for TypeDef<'a> {
             } => {
                 let header_lifted = type_head_lift_spaces(buf.text.bump(), *header);
                 header_lifted.item.format(buf, indent);
-                let implements = loc_implements.value.extract_spaces();
+                let implements = loc_implements.value.extract_spaces(buf.arena);
                 let before_implements = merge_spaces_conservative(
                     buf.text.bump(),
                     header_lifted.after,
@@ -513,7 +514,7 @@ impl<'a> Formattable for TypeDef<'a> {
                             before,
                             item,
                             after,
-                        } = member.name.value.extract_spaces();
+                        } = member.name.value.extract_spaces(buf.arena);
                         fmt_spaces(buf, before.iter(), indent + INDENT);
                         buf.ensure_ends_with_newline();
 
@@ -833,7 +834,7 @@ impl<'a> Formattable for ValueDef<'a> {
         use roc_parse::ast::ValueDef::*;
         match self {
             Annotation(loc_pattern, loc_annotation) => {
-                let pat_parens = if ann_pattern_needs_parens(&loc_pattern.value) {
+                let pat_parens = if ann_pattern_needs_parens(buf.arena, &loc_pattern.value) {
                     Parens::InApply
                 } else {
                     Parens::NotNeeded
@@ -860,7 +861,7 @@ impl<'a> Formattable for ValueDef<'a> {
                 body_pattern,
                 body_expr,
             } => {
-                let pat_parens = if ann_pattern_needs_parens(&ann_pattern.value) {
+                let pat_parens = if ann_pattern_needs_parens(buf.arena, &ann_pattern.value) {
                     Parens::InApply
                 } else {
                     Parens::NotNeeded
@@ -888,10 +889,12 @@ impl<'a> Formattable for ValueDef<'a> {
     }
 }
 
-fn ann_pattern_needs_parens(value: &Pattern<'_>) -> bool {
-    match value.extract_spaces().item {
+fn ann_pattern_needs_parens(arena: &'_ Bump, value: &Pattern<'_>) -> bool {
+    match value.extract_spaces(arena).item {
         Pattern::Tag(_) => true,
-        Pattern::Apply(func, _args) if matches!(func.extract_spaces().item, Pattern::Tag(..)) => {
+        Pattern::Apply(func, _args)
+            if matches!(func.extract_spaces(arena).item, Pattern::Tag(..)) =>
+        {
             true
         }
         _ => false,
@@ -1016,7 +1019,7 @@ pub fn fmt_body<'a>(
     body: &'a Expr<'a>,
     indent: u16,
 ) {
-    let pattern_extracted = pattern.extract_spaces();
+    let pattern_extracted = pattern.extract_spaces(buf.arena);
     // Check if this is an assignment into the unit value
     let is_unit_assignment = if let Pattern::RecordDestructure(collection) = pattern_extracted.item
     {
@@ -1024,9 +1027,9 @@ pub fn fmt_body<'a>(
             && collection.is_empty()
             && pattern_extracted.before.iter().all(|s| s.is_newline())
             && pattern_extracted.after.iter().all(|s| s.is_newline())
-            && !matches!(body.extract_spaces().item, Expr::Defs(..))
-            && !matches!(body.extract_spaces().item, Expr::Return(..))
-            && !matches!(body.extract_spaces().item, Expr::DbgStmt { .. })
+            && !matches!(body.extract_spaces(buf.arena).item, Expr::Defs(..))
+            && !matches!(body.extract_spaces(buf.arena).item, Expr::Return(..))
+            && !matches!(body.extract_spaces(buf.arena).item, Expr::DbgStmt { .. })
             && !starts_with_expect_ident(body)
     } else {
         false
@@ -1186,7 +1189,7 @@ impl<'a> Formattable for AbilityMember<'a> {
         _newlines: Newlines,
         indent: u16,
     ) {
-        let Spaces { before, item, .. } = self.name.value.extract_spaces();
+        let Spaces { before, item, .. } = self.name.value.extract_spaces(buf.arena);
         fmt_spaces(buf, before.iter(), indent);
 
         buf.indent(indent);

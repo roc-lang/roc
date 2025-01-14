@@ -1,6 +1,5 @@
 use std::fmt::Debug;
 
-use crate::expr::merge_spaces;
 use crate::header::{
     self, AppHeader, HostedHeader, ModuleHeader, ModuleName, PackageHeader, PlatformHeader,
 };
@@ -31,7 +30,7 @@ pub struct Spaces<'a, T> {
 impl<'a, T: Copy> ExtractSpaces<'a> for Spaces<'a, T> {
     type Item = T;
 
-    fn extract_spaces(&self) -> Spaces<'a, T> {
+    fn extract_spaces(&self, _arena: &'a Bump) -> Spaces<'a, T> {
         *self
     }
 
@@ -47,6 +46,23 @@ impl<'a, T> Spaces<'a, T> {
             item,
             after: &[],
         }
+    }
+}
+
+pub fn merge_spaces<'a>(
+    arena: &'a Bump,
+    a: &'a [CommentOrNewline<'a>],
+    b: &'a [CommentOrNewline<'a>],
+) -> &'a [CommentOrNewline<'a>] {
+    if a.is_empty() {
+        b
+    } else if b.is_empty() {
+        a
+    } else {
+        let mut merged = Vec::with_capacity_in(a.len() + b.len(), arena);
+        merged.extend_from_slice(a);
+        merged.extend_from_slice(b);
+        merged.into_bump_slice()
     }
 }
 
@@ -124,14 +140,14 @@ impl<'a, T: Debug> Debug for Spaced<'a, T> {
 
 pub trait ExtractSpaces<'a>: Sized + Copy {
     type Item;
-    fn extract_spaces(&self) -> Spaces<'a, Self::Item>;
+    fn extract_spaces(&self, arena: &'a Bump) -> Spaces<'a, Self::Item>;
     fn without_spaces(&self) -> Self::Item;
 }
 
 impl<'a, T: ExtractSpaces<'a>> ExtractSpaces<'a> for &'a T {
     type Item = T::Item;
-    fn extract_spaces(&self) -> Spaces<'a, Self::Item> {
-        (*self).extract_spaces()
+    fn extract_spaces(&self, arena: &'a Bump) -> Spaces<'a, Self::Item> {
+        (*self).extract_spaces(arena)
     }
 
     fn without_spaces(&self) -> Self::Item {
@@ -141,8 +157,8 @@ impl<'a, T: ExtractSpaces<'a>> ExtractSpaces<'a> for &'a T {
 
 impl<'a, T: ExtractSpaces<'a>> ExtractSpaces<'a> for Loc<T> {
     type Item = T::Item;
-    fn extract_spaces(&self) -> Spaces<'a, Self::Item> {
-        let spaces = self.value.extract_spaces();
+    fn extract_spaces(&self, arena: &'a Bump) -> Spaces<'a, Self::Item> {
+        let spaces = self.value.extract_spaces(arena);
         Spaces {
             before: spaces.before,
             item: spaces.item,
@@ -190,7 +206,7 @@ impl<'a> Header<'a> {
             let len = imports.item.len();
 
             for (index, import) in imports.item.iter().enumerate() {
-                let spaced = import.extract_spaces();
+                let spaced = import.extract_spaces(arena);
 
                 let value_def = match spaced.item {
                     header::ImportsEntry::Package(pkg_name, name, exposed) => {
@@ -205,7 +221,7 @@ impl<'a> Header<'a> {
                         Self::header_import_to_value_def(None, name, exposed, import.region)
                     }
                     header::ImportsEntry::IngestedFile(path, typed_ident) => {
-                        let typed_ident = typed_ident.extract_spaces();
+                        let typed_ident = typed_ident.extract_spaces(arena);
 
                         ValueDef::IngestedFileImport(IngestedFileImport {
                             before_path: &[],
@@ -2185,15 +2201,31 @@ macro_rules! impl_extract_spaces {
 
         impl<'a, $($($generic_args: Copy),*)?> ExtractSpaces<'a> for $t<'a, $($($generic_args),*)?> {
             type Item = Self;
-            fn extract_spaces(&self) -> Spaces<'a, Self::Item> {
+            fn extract_spaces(&self, arena: &'a Bump) -> Spaces<'a, Self::Item> {
                 match self {
                     $t::SpaceBefore(item, before) => {
                         match item {
-                            $t::SpaceBefore(_, _) => todo!(),
-                            $t::SpaceAfter(item, after) => {
+                            sb @ $t::SpaceBefore(_, _) => {
+                                let Spaces {
+                                    before: before_inner,
+                                    item,
+                                    after,
+                                } = sb.extract_spaces(arena);
                                 Spaces {
-                                    before,
-                                    item: **item,
+                                    before: merge_spaces(arena, before, before_inner),
+                                    item,
+                                    after,
+                                }
+                            }
+                            sb @ $t::SpaceAfter(_, _) => {
+                                let Spaces {
+                                    before: before_inner,
+                                    item,
+                                    after,
+                                } = sb.extract_spaces(arena);
+                                Spaces {
+                                    before: merge_spaces(arena, before, before_inner),
+                                    item,
                                     after,
                                 }
                             }
@@ -2208,14 +2240,30 @@ macro_rules! impl_extract_spaces {
                     },
                     $t::SpaceAfter(item, after) => {
                         match item {
-                            $t::SpaceBefore(item, before) => {
+                            sb @ $t::SpaceBefore(_, _) => {
+                                let Spaces {
+                                    before,
+                                    item,
+                                    after: after_inner,
+                                } = sb.extract_spaces(arena);
                                 Spaces {
                                     before,
-                                    item: **item,
-                                    after,
+                                    item,
+                                    after: merge_spaces(arena, after_inner, after),
                                 }
                             }
-                            $t::SpaceAfter(_, _) => todo!(),
+                            sb @ $t::SpaceAfter(_, _) => {
+                                let Spaces {
+                                    before,
+                                    item,
+                                    after: after_inner,
+                                } = sb.extract_spaces(arena);
+                                Spaces {
+                                    before,
+                                    item,
+                                    after: merge_spaces(arena, after_inner, after),
+                                }
+                            }
                             _ => {
                                 Spaces {
                                     before: &[],
@@ -2260,19 +2308,31 @@ impl_extract_spaces!(Implements);
 impl<'a, T: Copy> ExtractSpaces<'a> for Spaced<'a, T> {
     type Item = T;
 
-    fn extract_spaces(&self) -> Spaces<'a, T> {
+    fn extract_spaces(&self, arena: &'a Bump) -> Spaces<'a, T> {
         match self {
             Spaced::SpaceBefore(item, before) => match item {
-                Spaced::SpaceBefore(_, _) => todo!(),
-                Spaced::SpaceAfter(item, after) => {
-                    if let Spaced::Item(item) = item {
-                        Spaces {
-                            before,
-                            item: *item,
-                            after,
-                        }
-                    } else {
-                        todo!();
+                sb @ Spaced::SpaceBefore(_, _) => {
+                    let Spaces {
+                        before: before_inner,
+                        item,
+                        after,
+                    } = sb.extract_spaces(arena);
+                    Spaces {
+                        before: merge_spaces(arena, before, before_inner),
+                        item,
+                        after,
+                    }
+                }
+                sb @ Spaced::SpaceAfter(_, _) => {
+                    let Spaces {
+                        before: before_inner,
+                        item,
+                        after,
+                    } = sb.extract_spaces(arena);
+                    Spaces {
+                        before: merge_spaces(arena, before, before_inner),
+                        item,
+                        after,
                     }
                 }
                 Spaced::Item(item) => Spaces {
@@ -2282,18 +2342,30 @@ impl<'a, T: Copy> ExtractSpaces<'a> for Spaced<'a, T> {
                 },
             },
             Spaced::SpaceAfter(item, after) => match item {
-                Spaced::SpaceBefore(item, before) => {
-                    if let Spaced::Item(item) = item {
-                        Spaces {
-                            before,
-                            item: *item,
-                            after,
-                        }
-                    } else {
-                        todo!();
+                sb @ Spaced::SpaceBefore(_, _) => {
+                    let Spaces {
+                        before,
+                        item,
+                        after: after_inner,
+                    } = sb.extract_spaces(arena);
+                    Spaces {
+                        before,
+                        item,
+                        after: merge_spaces(arena, after_inner, after),
                     }
                 }
-                Spaced::SpaceAfter(_, _) => todo!(),
+                sb @ Spaced::SpaceAfter(_, _) => {
+                    let Spaces {
+                        before,
+                        item,
+                        after: after_inner,
+                    } = sb.extract_spaces(arena);
+                    Spaces {
+                        before,
+                        item,
+                        after: merge_spaces(arena, after_inner, after),
+                    }
+                }
                 Spaced::Item(item) => Spaces {
                     before: &[],
                     item: *item,
@@ -2320,7 +2392,7 @@ impl<'a, T: Copy> ExtractSpaces<'a> for Spaced<'a, T> {
 impl<'a> ExtractSpaces<'a> for AbilityImpls<'a> {
     type Item = Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>;
 
-    fn extract_spaces(&self) -> Spaces<'a, Self::Item> {
+    fn extract_spaces(&self, arena: &'a Bump) -> Spaces<'a, Self::Item> {
         match self {
             AbilityImpls::AbilityImpls(inner) => Spaces {
                 before: &[],
@@ -2333,13 +2405,35 @@ impl<'a> ExtractSpaces<'a> for AbilityImpls<'a> {
                     item: *inner,
                     after: &[],
                 },
-                AbilityImpls::SpaceBefore(_, _) => todo!(),
                 AbilityImpls::SpaceAfter(AbilityImpls::AbilityImpls(inner), after) => Spaces {
                     before,
                     item: *inner,
                     after,
                 },
-                AbilityImpls::SpaceAfter(_, _) => todo!(),
+                sb @ AbilityImpls::SpaceBefore(_, _) => {
+                    let Spaces {
+                        before: before_inner,
+                        item,
+                        after,
+                    } = sb.extract_spaces(arena);
+                    Spaces {
+                        before: merge_spaces(arena, before, before_inner),
+                        item,
+                        after,
+                    }
+                }
+                sb @ AbilityImpls::SpaceAfter(_, _) => {
+                    let Spaces {
+                        before: before_inner,
+                        item,
+                        after,
+                    } = sb.extract_spaces(arena);
+                    Spaces {
+                        before: merge_spaces(arena, before, before_inner),
+                        item,
+                        after,
+                    }
+                }
             },
             AbilityImpls::SpaceAfter(item, after) => match item {
                 AbilityImpls::AbilityImpls(inner) => Spaces {
@@ -2352,8 +2446,30 @@ impl<'a> ExtractSpaces<'a> for AbilityImpls<'a> {
                     item: *inner,
                     after,
                 },
-                AbilityImpls::SpaceBefore(_, _) => todo!(),
-                AbilityImpls::SpaceAfter(_, _) => todo!(),
+                sb @ AbilityImpls::SpaceBefore(_, _) => {
+                    let Spaces {
+                        before,
+                        item,
+                        after: after_inner,
+                    } = sb.extract_spaces(arena);
+                    Spaces {
+                        before,
+                        item,
+                        after: merge_spaces(arena, after_inner, after),
+                    }
+                }
+                sb @ AbilityImpls::SpaceAfter(_, _) => {
+                    let Spaces {
+                        before,
+                        item,
+                        after: after_inner,
+                    } = sb.extract_spaces(arena);
+                    Spaces {
+                        before,
+                        item,
+                        after: merge_spaces(arena, after_inner, after),
+                    }
+                }
             },
         }
     }

@@ -21,6 +21,7 @@ pub struct Buf<'a> {
     beginning_of_line: bool,
     line_indent: u16,
     flags: MigrationFlags,
+    pub arena: &'a Bump,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -44,6 +45,7 @@ impl<'a> Buf<'a> {
             newlines_to_flush: 0,
             beginning_of_line: true,
             flags,
+            arena,
         }
     }
 
@@ -57,6 +59,10 @@ impl<'a> Buf<'a> {
 
     pub fn into_bump_str(self) -> &'a str {
         self.text.into_bump_str()
+    }
+
+    pub fn bump(&'a self) -> &'a Bump {
+        self.text.bump()
     }
 
     pub fn indent(&mut self, indent: u16) {

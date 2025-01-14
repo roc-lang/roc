@@ -1,7 +1,4 @@
-use roc_parse::{
-    ast::{Collection, CommentOrNewline, ExtractSpaces},
-    expr::merge_spaces,
-};
+use roc_parse::ast::{merge_spaces, Collection, CommentOrNewline, ExtractSpaces};
 
 use crate::{
     annotation::{is_collection_multiline, Formattable, Newlines},
@@ -33,7 +30,7 @@ impl Braces {
     }
 }
 
-pub fn fmt_collection<'a, 'buf, T: ExtractSpaces<'a> + Formattable + std::fmt::Debug>(
+pub fn fmt_collection<'a, 'buf: 'a, T: ExtractSpaces<'a> + Formattable + std::fmt::Debug>(
     buf: &mut Buf<'buf>,
 
     indent: u16,
@@ -59,7 +56,7 @@ pub fn fmt_collection<'a, 'buf, T: ExtractSpaces<'a> + Formattable + std::fmt::D
 
         for (index, item) in items.iter().enumerate() {
             let is_first_item = index == 0;
-            let item = item.extract_spaces();
+            let item = item.extract_spaces(buf.arena);
             let is_only_newlines = item.before.iter().all(|s| s.is_newline());
             let last_after_was_only_newlines = last_after.iter().all(|s| s.is_newline());
 
