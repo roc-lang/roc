@@ -61,7 +61,7 @@
             xorg.libXi
             xorg.libxcb
             cargo-llvm-cov # to visualize code coverage
-
+            curl # used by www/build.sh
           ];
 
         # DevInputs are not necessary to build roc as a user
