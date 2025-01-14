@@ -681,6 +681,7 @@ mod test_snapshots {
         pass/repr_7342.expr,
         pass/requires_type.header,
         pass/return_apply_newline.expr,
+        pass/return_empty_assign.expr,
         pass/return_field_access_in_parens.expr,
         pass/return_in_apply_func.expr,
         pass/return_in_if.expr,
