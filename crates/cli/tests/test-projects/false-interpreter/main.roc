@@ -16,454 +16,454 @@ InterpreterErrors : [BadUtf8, DivByZero, EmptyStack, InvalidBooleanValue, Invali
 
 main! : Str => {}
 main! = \filename ->
-    when interpretFile! filename is
-        Ok {} ->
+    when interpret_file!(filename) is
+        Ok({}) ->
             {}
 
-        Err (StringErr e) ->
-            Stdout.line! "Ran into problem:\n$(e)\n"
+        Err(StringErr(e)) ->
+            Stdout.line!("Ran into problem:\n${e}\n")
 
-interpretFile! : Str => Result {} [StringErr Str]
-interpretFile! = \filename ->
-    Context.with! filename \ctx ->
-        result = interpretCtx! ctx
+interpret_file! : Str => Result {} [StringErr Str]
+interpret_file! = \filename ->
+    Context.with!(filename, \ctx ->
+        result = interpret_ctx!(ctx)
         when result is
-            Ok _ ->
-                Ok {}
+            Ok(_) ->
+                Ok({})
 
-            Err BadUtf8 ->
-                Err (StringErr "Failed to convert string from Utf8 bytes")
+            Err(BadUtf8) ->
+                Err(StringErr("Failed to convert string from Utf8 bytes"))
 
-            Err DivByZero ->
-                Err (StringErr "Division by zero")
+            Err(DivByZero) ->
+                Err(StringErr("Division by zero"))
 
-            Err EmptyStack ->
-                Err (StringErr "Tried to pop a value off of the stack when it was empty")
+            Err(EmptyStack) ->
+                Err(StringErr("Tried to pop a value off of the stack when it was empty"))
 
-            Err InvalidBooleanValue ->
-                Err (StringErr "Ran into an invalid boolean that was neither false (0) or true (-1)")
+            Err(InvalidBooleanValue) ->
+                Err(StringErr("Ran into an invalid boolean that was neither false (0) or true (-1)"))
 
-            Err (InvalidChar char) ->
-                Err (StringErr "Ran into an invalid character with ascii code: $(char)")
+            Err(InvalidChar(char)) ->
+                Err(StringErr("Ran into an invalid character with ascii code: ${char}"))
 
-            Err MaxInputNumber ->
-                Err (StringErr "Like the original false compiler, the max input number is 320,000")
+            Err(MaxInputNumber) ->
+                Err(StringErr("Like the original false compiler, the max input number is 320,000"))
 
-            Err NoLambdaOnStack ->
-                Err (StringErr "Tried to run a lambda when no lambda was on the stack")
+            Err(NoLambdaOnStack) ->
+                Err(StringErr("Tried to run a lambda when no lambda was on the stack"))
 
-            Err NoNumberOnStack ->
-                Err (StringErr "Tried to run a number when no number was on the stack")
+            Err(NoNumberOnStack) ->
+                Err(StringErr("Tried to run a number when no number was on the stack"))
 
-            Err NoVariableOnStack ->
-                Err (StringErr "Tried to load a variable when no variable was on the stack")
+            Err(NoVariableOnStack) ->
+                Err(StringErr("Tried to load a variable when no variable was on the stack"))
 
-            Err NoScope ->
-                Err (StringErr "Tried to run code when not in any scope")
+            Err(NoScope) ->
+                Err(StringErr("Tried to run code when not in any scope"))
 
-            Err OutOfBounds ->
-                Err (StringErr "Tried to load from an offset that was outside of the stack")
+            Err(OutOfBounds) ->
+                Err(StringErr("Tried to load from an offset that was outside of the stack"))
 
-            Err UnexpectedEndOfData ->
-                Err (StringErr "Hit end of data while still parsing something")
+            Err(UnexpectedEndOfData) ->
+                Err(StringErr("Hit end of data while still parsing something")))
 
-interpretCtx! : Context => Result Context InterpreterErrors
-interpretCtx! = \ctx ->
-    when interpretCtxLoop! ctx is
-        Ok (Step next) ->
-            interpretCtx! next
+interpret_ctx! : Context => Result Context InterpreterErrors
+interpret_ctx! = \ctx ->
+    when interpret_ctx_loop!(ctx) is
+        Ok(Step(next)) ->
+            interpret_ctx!(next)
 
-        Ok (Done next) ->
-            Ok next
+        Ok(Done(next)) ->
+            Ok(next)
 
-        Err e ->
-            Err e
+        Err(e) ->
+            Err(e)
 
-interpretCtxLoop! : Context => Result [Step Context, Done Context] InterpreterErrors
-interpretCtxLoop! = \ctx ->
+interpret_ctx_loop! : Context => Result [Step Context, Done Context] InterpreterErrors
+interpret_ctx_loop! = \ctx ->
     when ctx.state is
-        Executing if Context.inWhileScope ctx ->
+        Executing if Context.in_while_scope(ctx) ->
             # Deal with the current while loop potentially looping.
-            last = (List.len ctx.scopes - 1)
+            last = (List.len(ctx.scopes) - 1)
 
-            scope = List.get ctx.scopes last |> Result.mapErr? \_ -> NoScope
-            when scope.whileInfo is
-                Some { state: InCond, body, cond } ->
+            scope = List.get(ctx.scopes, last) |> Result.map_err?(\_ -> NoScope)
+            when scope.while_info is
+                Some({ state: InCond, body, cond }) ->
                     # Just ran condition. Check the top of stack to see if body should run.
-                    (popCtx, n) = popNumber? ctx
+                    (pop_ctx, n) = pop_number?(ctx)
                     if n == 0 then
-                        newScope = { scope & whileInfo: None }
+                        new_scope = { scope & while_info: None }
 
-                        Ok (Step { popCtx & scopes: List.set ctx.scopes last newScope })
+                        Ok(Step({ pop_ctx & scopes: List.set(ctx.scopes, last, new_scope) }))
                     else
-                        newScope = { scope & whileInfo: Some { state: InBody, body, cond } }
+                        new_scope = { scope & while_info: Some({ state: InBody, body, cond }) }
 
-                        Ok (Step { popCtx & scopes: List.append (List.set ctx.scopes last newScope) { data: None, buf: body, index: 0, whileInfo: None } })
+                        Ok(Step({ pop_ctx & scopes: List.append(List.set(ctx.scopes, last, new_scope), { data: None, buf: body, index: 0, while_info: None }) }))
 
-                Some { state: InBody, body, cond } ->
+                Some({ state: InBody, body, cond }) ->
                     # Just rand the body. Run the condition again.
-                    newScope = { scope & whileInfo: Some { state: InCond, body, cond } }
+                    new_scope = { scope & while_info: Some({ state: InCond, body, cond }) }
 
-                    Ok (Step { ctx & scopes: List.append (List.set ctx.scopes last newScope) { data: None, buf: cond, index: 0, whileInfo: None } })
+                    Ok(Step({ ctx & scopes: List.append(List.set(ctx.scopes, last, new_scope), { data: None, buf: cond, index: 0, while_info: None }) }))
 
                 None ->
-                    Err NoScope
+                    Err(NoScope)
 
         Executing ->
-            # Stdout.line! (Context.toStr ctx)
-            result = Context.getChar! ctx
+            # Stdout.line! (Context.to_str ctx)
+            result = Context.get_char!(ctx)
             when result is
-                Ok (val, newCtx) ->
-                    execCtx = stepExecCtx!? newCtx val
-                    Ok (Step execCtx)
+                Ok((val, new_ctx)) ->
+                    exec_ctx = step_exec_ctx!?(new_ctx, val)
+                    Ok(Step(exec_ctx))
 
-                Err NoScope ->
-                    Err NoScope
+                Err(NoScope) ->
+                    Err(NoScope)
 
-                Err EndOfData ->
+                Err(EndOfData) ->
                     # Computation complete for this scope.
                     # Drop a scope.
-                    dropCtx = { ctx & scopes: List.dropAt ctx.scopes (List.len ctx.scopes - 1) }
+                    drop_ctx = { ctx & scopes: List.drop_at(ctx.scopes, (List.len(ctx.scopes) - 1)) }
 
                     # If no scopes left, all execution complete.
-                    if List.isEmpty dropCtx.scopes then
-                        Ok (Done dropCtx)
+                    if List.is_empty(drop_ctx.scopes) then
+                        Ok(Done(drop_ctx))
                     else
-                        Ok (Step dropCtx)
+                        Ok(Step(drop_ctx))
 
         InComment ->
-            (val, newCtx) = Context.getChar! ctx |> Result.mapErr? endUnexpected
+            (val, new_ctx) = Context.get_char!(ctx) |> Result.map_err?(end_unexpected)
             if val == 0x7D then
                 # `}` end of comment
-                Ok (Step { newCtx & state: Executing })
+                Ok(Step({ new_ctx & state: Executing }))
             else
-                Ok (Step { newCtx & state: InComment })
+                Ok(Step({ new_ctx & state: InComment }))
 
-        InNumber accum ->
-            (val, newCtx) = Context.getChar! ctx |> Result.mapErr? endUnexpected
-            if isDigit val then
+        InNumber(accum) ->
+            (val, new_ctx) = Context.get_char!(ctx) |> Result.map_err?(end_unexpected)
+            if is_digit(val) then
                 # still in the number
                 # i32 multiplication is kinda broken because it implicitly seems to want to upcast to i64.
                 # so like should be (i32, i32) -> i32, but seems to be (i32, i32) -> i64
                 # so this is make i64 mul by 10 then convert back to i32.
-                nextAccum = (10 * Num.intCast accum) + Num.intCast (val - 0x30)
+                next_accum = (10 * Num.int_cast(accum)) + Num.int_cast((val - 0x30))
 
-                Ok (Step { newCtx & state: InNumber (Num.intCast nextAccum) })
+                Ok(Step({ new_ctx & state: InNumber(Num.int_cast(next_accum)) }))
             else
                 # outside of number now, this needs to be executed.
-                pushCtx = Context.pushStack newCtx (Number accum)
+                push_ctx = Context.push_stack(new_ctx, Number(accum))
 
-                execCtx = stepExecCtx!? { pushCtx & state: Executing } val
-                Ok (Step execCtx)
+                exec_ctx = step_exec_ctx!?({ push_ctx & state: Executing }, val)
+                Ok(Step(exec_ctx))
 
-        InString bytes ->
-            (val, newCtx) = Context.getChar! ctx |> Result.mapErr? endUnexpected
+        InString(bytes) ->
+            (val, new_ctx) = Context.get_char!(ctx) |> Result.map_err?(end_unexpected)
             if val == 0x22 then
                 # `"` end of string
-                when Str.fromUtf8 bytes is
-                    Ok str ->
-                        Stdout.raw! str
-                        Ok (Step { newCtx & state: Executing })
+                when Str.from_utf8(bytes) is
+                    Ok(str) ->
+                        Stdout.raw!(str)
+                        Ok(Step({ new_ctx & state: Executing }))
 
-                    Err _ ->
-                        Err BadUtf8
+                    Err(_) ->
+                        Err(BadUtf8)
             else
-                Ok (Step { newCtx & state: InString (List.append bytes val) })
+                Ok(Step({ new_ctx & state: InString(List.append(bytes, val)) }))
 
-        InLambda depth bytes ->
-            (val, newCtx) = Context.getChar! ctx |> Result.mapErr? endUnexpected
+        InLambda(depth, bytes) ->
+            (val, new_ctx) = Context.get_char!(ctx) |> Result.map_err?(end_unexpected)
             if val == 0x5B then
                 # start of a nested lambda `[`
-                Ok (Step { newCtx & state: InLambda (depth + 1) (List.append bytes val) })
+                Ok(Step({ new_ctx & state: InLambda((depth + 1), List.append(bytes, val)) }))
             else if val == 0x5D then
                 # `]` end of current lambda
                 if depth == 0 then
                     # end of all lambdas
-                    Ok (Step (Context.pushStack { newCtx & state: Executing } (Lambda bytes)))
+                    Ok(Step(Context.push_stack({ new_ctx & state: Executing }, Lambda(bytes))))
                 else
                     # end of nested lambda
-                    Ok (Step { newCtx & state: InLambda (depth - 1) (List.append bytes val) })
+                    Ok(Step({ new_ctx & state: InLambda((depth - 1), List.append(bytes, val)) }))
             else
-                Ok (Step { newCtx & state: InLambda depth (List.append bytes val) })
+                Ok(Step({ new_ctx & state: InLambda(depth, List.append(bytes, val)) }))
 
         InSpecialChar ->
-            val = Context.getChar! { ctx & state: Executing } |> Result.mapErr? endUnexpected
+            val = Context.get_char!({ ctx & state: Executing }) |> Result.map_err?(end_unexpected)
             when val is
-                (0xB8, newCtx) ->
-                    (popCtx, index) = popNumber? newCtx
+                (0xB8, new_ctx) ->
+                    (pop_ctx, index) = pop_number?(new_ctx)
                     # I think Num.abs is too restrictive, it should be able to produce a natural number, but it seem to be restricted to signed numbers.
-                    size = List.len popCtx.stack - 1
-                    offset = Num.intCast size - index
+                    size = List.len(pop_ctx.stack) - 1
+                    offset = Num.int_cast(size) - index
 
                     if offset >= 0 then
-                        stackVal = List.get? popCtx.stack (Num.intCast offset)
-                        Ok (Step (Context.pushStack popCtx stackVal))
+                        stack_val = List.get?(pop_ctx.stack, Num.int_cast(offset))
+                        Ok(Step(Context.push_stack(pop_ctx, stack_val)))
                     else
-                        Err OutOfBounds
+                        Err(OutOfBounds)
 
-                (0x9F, newCtx) ->
+                (0x9F, new_ctx) ->
                     # This is supposed to flush io buffers. We don't buffer, so it does nothing
-                    Ok (Step newCtx)
+                    Ok(Step(new_ctx))
 
                 (x, _) ->
-                    data = Num.toStr (Num.intCast x)
+                    data = Num.to_str(Num.int_cast(x))
 
-                    Err (InvalidChar data)
+                    Err(InvalidChar(data))
 
         LoadChar ->
-            (x, newCtx) = Context.getChar! { ctx & state: Executing } |> Result.mapErr? endUnexpected
-            Ok (Step (Context.pushStack newCtx (Number (Num.intCast x))))
+            (x, new_ctx) = Context.get_char!({ ctx & state: Executing }) |> Result.map_err?(end_unexpected)
+            Ok(Step(Context.push_stack(new_ctx, Number(Num.int_cast(x)))))
 
 # If it weren't for reading stdin or writing to stdout, this could return a result.
-stepExecCtx! : Context, U8 => Result Context InterpreterErrors
-stepExecCtx! = \ctx, char ->
+step_exec_ctx! : Context, U8 => Result Context InterpreterErrors
+step_exec_ctx! = \ctx, char ->
     when char is
         0x21 ->
             # `!` execute lambda
-            (popCtx, bytes) = popLambda? ctx
-            Ok { popCtx & scopes: List.append popCtx.scopes { data: None, buf: bytes, index: 0, whileInfo: None } }
+            (pop_ctx, bytes) = pop_lambda?(ctx)
+            Ok({ pop_ctx & scopes: List.append(pop_ctx.scopes, { data: None, buf: bytes, index: 0, while_info: None }) })
 
         0x3F ->
             # `?` if
-            (popCtx1, bytes) = popLambda? ctx
-            (popCtx2, n1) = popNumber? popCtx1
+            (pop_ctx1, bytes) = pop_lambda?(ctx)
+            (pop_ctx2, n1) = pop_number?(pop_ctx1)
             if n1 == 0 then
-                Ok popCtx2
+                Ok(pop_ctx2)
             else
-                Ok { popCtx2 & scopes: List.append popCtx2.scopes { data: None, buf: bytes, index: 0, whileInfo: None } }
+                Ok({ pop_ctx2 & scopes: List.append(pop_ctx2.scopes, { data: None, buf: bytes, index: 0, while_info: None }) })
 
         0x23 ->
             # `#` while
-            (popCtx1, body) = popLambda? ctx
-            (popCtx2, cond) = popLambda? popCtx1
-            last = (List.len popCtx2.scopes - 1)
+            (pop_ctx1, body) = pop_lambda?(ctx)
+            (pop_ctx2, cond) = pop_lambda?(pop_ctx1)
+            last = (List.len(pop_ctx2.scopes) - 1)
 
-            scope = List.get popCtx2.scopes last |> Result.mapErr? \_ -> NoScope
+            scope = List.get(pop_ctx2.scopes, last) |> Result.map_err?(\_ -> NoScope)
             # set the current scope to be in a while loop.
-            scopes = List.set popCtx2.scopes last { scope & whileInfo: Some { cond: cond, body: body, state: InCond } }
+            scopes = List.set(pop_ctx2.scopes, last, { scope & while_info: Some({ cond: cond, body: body, state: InCond }) })
 
             # push a scope to execute the condition.
-            Ok { popCtx2 & scopes: List.append scopes { data: None, buf: cond, index: 0, whileInfo: None } }
+            Ok({ pop_ctx2 & scopes: List.append(scopes, { data: None, buf: cond, index: 0, while_info: None }) })
 
         0x24 ->
             # `$` dup
             # Switching this to List.last and changing the error to ListWasEmpty leads to a compiler bug.
             # Complains about the types eq not matching.
-            when List.get ctx.stack (List.len ctx.stack - 1) is
-                Ok dupItem -> Ok (Context.pushStack ctx dupItem)
-                Err OutOfBounds -> Err EmptyStack
+            when List.get(ctx.stack, (List.len(ctx.stack) - 1)) is
+                Ok(dup_item) -> Ok(Context.push_stack(ctx, dup_item))
+                Err(OutOfBounds) -> Err(EmptyStack)
 
         0x25 ->
             # `%` drop
-            when Context.popStack ctx is
+            when Context.pop_stack(ctx) is
                 # Dropping with an empty stack, all results here are fine
-                Ok (popCtx, _) -> Ok popCtx
-                Err _ -> Ok ctx
+                Ok((pop_ctx, _)) -> Ok(pop_ctx)
+                Err(_) -> Ok(ctx)
 
         0x5C ->
             # `\` swap
-            (popCtx1, n1) = Context.popStack? ctx
-            (popCtx2, n2) = Context.popStack? popCtx1
-            Ok (Context.pushStack (Context.pushStack popCtx2 n1) n2)
+            (pop_ctx1, n1) = Context.pop_stack?(ctx)
+            (pop_ctx2, n2) = Context.pop_stack?(pop_ctx1)
+            Ok(Context.push_stack(Context.push_stack(pop_ctx2, n1), n2))
 
         0x40 ->
             # `@` rot
             result2 =
-                (popCtx1, n1) = Context.popStack? ctx
-                (popCtx2, n2) = Context.popStack? popCtx1
-                (popCtx3, n3) = Context.popStack? popCtx2
-                Ok (Context.pushStack (Context.pushStack (Context.pushStack popCtx3 n2) n1) n3)
+                (pop_ctx1, n1) = Context.pop_stack?(ctx)
+                (pop_ctx2, n2) = Context.pop_stack?(pop_ctx1)
+                (pop_ctx3, n3) = Context.pop_stack?(pop_ctx2)
+                Ok(Context.push_stack(Context.push_stack(Context.push_stack(pop_ctx3, n2), n1), n3))
 
             when result2 is
-                Ok a ->
-                    Ok a
+                Ok(a) ->
+                    Ok(a)
 
                 # Being explicit with error type is required to stop the need to propogate the error parameters to Context.popStack
-                Err EmptyStack ->
-                    Err EmptyStack
+                Err(EmptyStack) ->
+                    Err(EmptyStack)
 
         0xC3 ->
             # `ø` pick or `ß` flush
             # these are actually 2 bytes, 0xC3 0xB8 or  0xC3 0x9F
             # requires special parsing
-            Ok { ctx & state: InSpecialChar }
+            Ok({ ctx & state: InSpecialChar })
 
         0x4F ->
             # `O` also treat this as pick for easier script writing
-            (popCtx, index) = popNumber? ctx
+            (pop_ctx, index) = pop_number?(ctx)
             # I think Num.abs is too restrictive, it should be able to produce a natural number, but it seem to be restricted to signed numbers.
-            size = List.len popCtx.stack - 1
-            offset = Num.intCast size - index
+            size = List.len(pop_ctx.stack) - 1
+            offset = Num.int_cast(size) - index
 
             if offset >= 0 then
-                stackVal = List.get? popCtx.stack (Num.intCast offset)
-                Ok (Context.pushStack popCtx stackVal)
+                stack_val = List.get?(pop_ctx.stack, Num.int_cast(offset))
+                Ok(Context.push_stack(pop_ctx, stack_val))
             else
-                Err OutOfBounds
+                Err(OutOfBounds)
 
         0x42 ->
             # `B` also treat this as flush for easier script writing
             # This is supposed to flush io buffers. We don't buffer, so it does nothing
-            Ok ctx
+            Ok(ctx)
 
         0x27 ->
             # `'` load next char
-            Ok { ctx & state: LoadChar }
+            Ok({ ctx & state: LoadChar })
 
         0x2B ->
             # `+` add
-            binaryOp ctx Num.addWrap
+            binary_op(ctx, Num.add_wrap)
 
         0x2D ->
             # `-` sub
-            binaryOp ctx Num.subWrap
+            binary_op(ctx, Num.sub_wrap)
 
         0x2A ->
             # `*` mul
-            binaryOp ctx Num.mulWrap
+            binary_op(ctx, Num.mul_wrap)
 
         0x2F ->
             # `/` div
             # Due to possible division by zero error, this must be handled specially.
-            (popCtx1, numR) = popNumber? ctx
-            (popCtx2, numL) = popNumber? popCtx1
-            res = Num.divTruncChecked? numL numR
-            Ok (Context.pushStack popCtx2 (Number res))
+            (pop_ctx1, num_r) = pop_number?(ctx)
+            (pop_ctx2, num_l) = pop_number?(pop_ctx1)
+            res = Num.div_trunc_checked?(num_l, num_r)
+            Ok(Context.push_stack(pop_ctx2, Number(res)))
 
         0x26 ->
             # `&` bitwise and
-            binaryOp ctx Num.bitwiseAnd
+            binary_op(ctx, Num.bitwise_and)
 
         0x7C ->
             # `|` bitwise or
-            binaryOp ctx Num.bitwiseOr
+            binary_op(ctx, Num.bitwise_or)
 
         0x3D ->
             # `=` equals
-            binaryOp ctx \a, b ->
+            binary_op(ctx, \a, b ->
                 if a == b then
                     -1
                 else
-                    0
+                    0)
 
         0x3E ->
             # `>` greater than
-            binaryOp ctx \a, b ->
+            binary_op(ctx, \a, b ->
                 if a > b then
                     -1
                 else
-                    0
+                    0)
 
         0x5F ->
             # `_` negate
-            unaryOp ctx Num.neg
+            unary_op(ctx, Num.neg)
 
         0x7E ->
             # `~` bitwise not
-            unaryOp ctx (\x -> Num.bitwiseXor x -1) # xor with -1 should be bitwise not
+            unary_op(ctx, \x -> Num.bitwise_xor(x, -1)) # xor with -1 should be bitwise not
 
         0x2C ->
             # `,` write char
-            (popCtx, num) = popNumber? ctx
-            str = Str.fromUtf8 [Num.intCast num] |> Result.mapErr? \_ -> BadUtf8
-            Stdout.raw! str
-            Ok popCtx
+            (pop_ctx, num) = pop_number?(ctx)
+            str = Str.from_utf8([Num.int_cast(num)]) |> Result.map_err?(\_ -> BadUtf8)
+            Stdout.raw!(str)
+            Ok(pop_ctx)
 
         0x2E ->
             # `.` write int
-            (popCtx, num) = popNumber? ctx
-            Stdout.raw! (Num.toStr (Num.intCast num))
-            Ok popCtx
+            (pop_ctx, num) = pop_number?(ctx)
+            Stdout.raw!(Num.to_str(Num.int_cast(num)))
+            Ok(pop_ctx)
 
         0x5E ->
             # `^` read char as int
-            in = Stdin.char! {}
+            in = Stdin.char!({})
             if in == 255 then
                 # max char sent on EOF. Change to -1
-                Ok (Context.pushStack ctx (Number -1))
+                Ok(Context.push_stack(ctx, Number(-1)))
             else
-                Ok (Context.pushStack ctx (Number (Num.intCast in)))
+                Ok(Context.push_stack(ctx, Number(Num.int_cast(in))))
 
         0x3A ->
             # `:` store to variable
-            (popCtx1, var) = popVariable? ctx
-            (popCtx2, n1) = Context.popStack? popCtx1
-            Ok { popCtx2 & vars: List.set popCtx2.vars (Variable.toIndex var) n1 }
+            (pop_ctx1, var) = pop_variable?(ctx)
+            (pop_ctx2, n1) = Context.pop_stack?(pop_ctx1)
+            Ok({ pop_ctx2 & vars: List.set(pop_ctx2.vars, Variable.to_index(var), n1) })
 
         0x3B ->
             # `;` load from variable
-            (popCtx, var) = popVariable? ctx
-            elem = List.get? popCtx.vars (Variable.toIndex var)
-            Ok (Context.pushStack popCtx elem)
+            (pop_ctx, var) = pop_variable?(ctx)
+            elem = List.get?(pop_ctx.vars, Variable.to_index(var))
+            Ok(Context.push_stack(pop_ctx, elem))
 
         0x22 ->
             # `"` string start
-            Ok { ctx & state: InString [] }
+            Ok({ ctx & state: InString([]) })
 
         0x5B ->
             # `"` string start
-            Ok { ctx & state: InLambda 0 [] }
+            Ok({ ctx & state: InLambda(0, []) })
 
         0x7B ->
             # `{` comment start
-            Ok { ctx & state: InComment }
+            Ok({ ctx & state: InComment })
 
-        x if isDigit x ->
+        x if is_digit(x) ->
             # number start
-            Ok { ctx & state: InNumber (Num.intCast (x - 0x30)) }
+            Ok({ ctx & state: InNumber(Num.int_cast((x - 0x30))) })
 
-        x if isWhitespace x ->
-            Ok ctx
+        x if is_whitespace(x) ->
+            Ok(ctx)
 
         x ->
-            when Variable.fromUtf8 x is
+            when Variable.from_utf8(x) is
                 # letters are variable names
-                Ok var ->
-                    Ok (Context.pushStack ctx (Var var))
+                Ok(var) ->
+                    Ok(Context.push_stack(ctx, Var(var)))
 
-                Err _ ->
-                    data = Num.toStr (Num.intCast x)
+                Err(_) ->
+                    data = Num.to_str(Num.int_cast(x))
 
-                    Err (InvalidChar data)
+                    Err(InvalidChar(data))
 
-unaryOp : Context, (I32 -> I32) -> Result Context InterpreterErrors
-unaryOp = \ctx, op ->
-    (popCtx, num) = popNumber? ctx
-    Ok (Context.pushStack popCtx (Number (op num)))
+unary_op : Context, (I32 -> I32) -> Result Context InterpreterErrors
+unary_op = \ctx, op ->
+    (pop_ctx, num) = pop_number?(ctx)
+    Ok(Context.push_stack(pop_ctx, Number(op(num))))
 
-binaryOp : Context, (I32, I32 -> I32) -> Result Context InterpreterErrors
-binaryOp = \ctx, op ->
-    (popCtx1, numR) = popNumber? ctx
-    (popCtx2, numL) = popNumber? popCtx1
-    Ok (Context.pushStack popCtx2 (Number (op numL numR)))
+binary_op : Context, (I32, I32 -> I32) -> Result Context InterpreterErrors
+binary_op = \ctx, op ->
+    (pop_ctx1, num_r) = pop_number?(ctx)
+    (pop_ctx2, num_l) = pop_number?(pop_ctx1)
+    Ok(Context.push_stack(pop_ctx2, Number(op(num_l, num_r))))
 
-popNumber : Context -> Result (Context, I32) InterpreterErrors
-popNumber = \ctx ->
-    when Context.popStack? ctx is
-        (popCtx, Number num) -> Ok (popCtx, num)
-        _ -> Err NoNumberOnStack
+pop_number : Context -> Result (Context, I32) InterpreterErrors
+pop_number = \ctx ->
+    when Context.pop_stack?(ctx) is
+        (pop_ctx, Number(num)) -> Ok((pop_ctx, num))
+        _ -> Err(NoNumberOnStack)
 
-popLambda : Context -> Result (Context, List U8) InterpreterErrors
-popLambda = \ctx ->
-    when Context.popStack? ctx is
-        (popCtx, Lambda bytes) -> Ok (popCtx, bytes)
-        _ -> Err NoLambdaOnStack
+pop_lambda : Context -> Result (Context, List U8) InterpreterErrors
+pop_lambda = \ctx ->
+    when Context.pop_stack?(ctx) is
+        (pop_ctx, Lambda(bytes)) -> Ok((pop_ctx, bytes))
+        _ -> Err(NoLambdaOnStack)
 
-popVariable : Context -> Result (Context, Variable) InterpreterErrors
-popVariable = \ctx ->
-    when Context.popStack? ctx is
-        (popCtx, Var var) -> Ok (popCtx, var)
-        _ -> Err NoVariableOnStack
+pop_variable : Context -> Result (Context, Variable) InterpreterErrors
+pop_variable = \ctx ->
+    when Context.pop_stack?(ctx) is
+        (pop_ctx, Var(var)) -> Ok((pop_ctx, var))
+        _ -> Err(NoVariableOnStack)
 
-isDigit : U8 -> Bool
-isDigit = \char ->
+is_digit : U8 -> Bool
+is_digit = \char ->
     char
     >= 0x30 # `0`
     && char
     <= 0x39 # `0`
 
-isWhitespace : U8 -> Bool
-isWhitespace = \char ->
+is_whitespace : U8 -> Bool
+is_whitespace = \char ->
     char
     == 0xA # new line
     || char
@@ -473,7 +473,7 @@ isWhitespace = \char ->
     || char
     == 0x9 # tab
 
-endUnexpected = \err ->
+end_unexpected = \err ->
     when err is
         NoScope ->
             NoScope

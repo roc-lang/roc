@@ -228,7 +228,7 @@ pub struct Expectations {
 
 #[derive(Clone, Debug, Default)]
 pub struct ExposedToHost {
-    /// usually `mainForHost`
+    /// usually `main_for_host`
     pub top_level_values: MutMap<Symbol, Variable>,
     /// exposed closure types, typically `Fx`
     pub closure_types: Vec<Symbol>,

@@ -3222,7 +3222,7 @@ fn specialize_external_help<'a>(
             }
 
             if procs.host_exposed_symbols.contains(&proc.name.name()) {
-                // layouts that are (transitively) used in the type of `mainForHost`.
+                // layouts that are (transitively) used in the type of `main_for_host`.
                 let mut host_exposed_layouts: Vec<_> = top_level
                     .arguments
                     .iter()

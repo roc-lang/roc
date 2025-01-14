@@ -1,111 +1,99 @@
-interface AStar
-    exposes [initialModel, reconstructPath, updateCost, cheapestOpen, astar, findPath]
-    imports []
-
+module [initial_model, reconstruct_path, update_cost, cheapest_open, astar, find_path]
 
 # a port of https://github.com/krisajenkins/elm-astar/blob/2.1.3/src/AStar/Generalised.elm
 
-Model position :
-    { evaluated : Set position
-    , openSet : Set position
-    , costs : Map.Map position F64
-    , cameFrom : Map.Map position position
-    }
+Model position : {
+    evaluated : Set position,
+    open_set : Set position,
+    costs : Map.Map position F64,
+    came_from : Map.Map position position,
+}
 
+initial_model : position -> Model position
+initial_model = \start -> {
+    evaluated: Set.empty({}),
+    open_set: Set.single(start),
+    costs: Dict.single(start, 0.0),
+    came_from: Map.empty,
+}
 
-initialModel : position -> Model position
-initialModel = \start ->
-    { evaluated : Set.empty {}
-    , openSet : Set.single start
-    , costs : Dict.single start 0.0
-    , cameFrom : Map.empty
-    }
+cheapest_open : (position -> F64), Model position -> Result position [KeyNotFound]*
+cheapest_open = \cost_function, model ->
 
+    folder = \res_smallest_so_far, position ->
+        when Map.get(model.costs, position) is
+            Err(e) ->
+                Err(e)
 
-cheapestOpen : (position -> F64), Model position -> Result position [KeyNotFound]*
-cheapestOpen = \costFunction, model ->
+            Ok(cost) ->
+                position_cost = cost_function(position)
 
-    folder = \resSmallestSoFar, position ->
-            when Map.get model.costs position is
-                Err e ->
-                    Err e
+                when res_smallest_so_far is
+                    Err(_) -> Ok({ position, cost: cost + position_cost })
+                    Ok(smallest_so_far) ->
+                        if position_cost + cost < smallest_so_far.cost then
+                            Ok({ position, cost: cost + position_cost })
+                        else
+                            Ok(smallest_so_far)
 
-                Ok cost ->
-                    positionCost = costFunction position
+    Set.walk(model.open_set, Err(KeyNotFound), folder)
+    |> Result.map(\x -> x.position)
 
-                    when resSmallestSoFar is
-                        Err _ -> Ok { position, cost: cost + positionCost }
-                        Ok smallestSoFar ->
-                            if positionCost + cost < smallestSoFar.cost then
-                                Ok { position, cost: cost + positionCost }
-
-                            else
-                                Ok smallestSoFar
-
-    Set.walk model.openSet (Err KeyNotFound) folder
-        |> Result.map (\x -> x.position)
-
-
-
-reconstructPath : Map position position, position -> List position
-reconstructPath = \cameFrom, goal ->
-    when Map.get cameFrom goal is
-        Err KeyNotFound ->
+reconstruct_path : Map position position, position -> List position
+reconstruct_path = \came_from, goal ->
+    when Map.get(came_from, goal) is
+        Err(KeyNotFound) ->
             []
 
-        Ok next ->
-            List.append (reconstructPath cameFrom next) goal
+        Ok(next) ->
+            List.append(reconstruct_path(came_from, next), goal)
 
-updateCost : position, position, Model position -> Model position
-updateCost = \current, neighbour, model ->
-    newCameFrom = Map.insert model.cameFrom neighbour current
+update_cost : position, position, Model position -> Model position
+update_cost = \current, neighbour, model ->
+    new_came_from = Map.insert(model.came_from, neighbour, current)
 
-    newCosts = Map.insert model.costs neighbour distanceTo
+    new_costs = Map.insert(model.costs, neighbour, distance_to)
 
-    distanceTo = reconstructPath newCameFrom neighbour
-            |> List.len
-            |> Num.toFrac
+    distance_to =
+        reconstruct_path(new_came_from, neighbour)
+        |> List.len
+        |> Num.to_frac
 
-    newModel = { model & costs : newCosts , cameFrom : newCameFrom }
+    new_model = { model & costs: new_costs, came_from: new_came_from }
 
-    when Map.get model.costs neighbour is
-        Err KeyNotFound ->
-            newModel
+    when Map.get(model.costs, neighbour) is
+        Err(KeyNotFound) ->
+            new_model
 
-        Ok previousDistance ->
-            if distanceTo < previousDistance then
-                newModel
-
+        Ok(previous_distance) ->
+            if distance_to < previous_distance then
+                new_model
             else
                 model
 
-
-findPath : { costFunction: (position, position -> F64), moveFunction: (position -> Set position), start : position, end : position } -> Result (List position) [KeyNotFound]*
-findPath = \{ costFunction, moveFunction, start, end } ->
-    astar costFunction moveFunction end (initialModel start)
-
+find_path : { cost_function : position, position -> F64, move_function : position -> Set position, start : position, end : position } -> Result (List position) [KeyNotFound]*
+find_path = \{ cost_function, move_function, start, end } ->
+    astar(cost_function, move_function, end, initial_model(start))
 
 astar : (position, position -> F64), (position -> Set position), position, Model position -> [Err [KeyNotFound]*, Ok (List position)]*
-astar = \costFn, moveFn, goal, model ->
-    when cheapestOpen (\position -> costFn goal position) model is
-        Err _ ->
-            Err KeyNotFound
+astar = \cost_fn, move_fn, goal, model ->
+    when cheapest_open(\position -> cost_fn(goal, position), model) is
+        Err(_) ->
+            Err(KeyNotFound)
 
-        Ok current ->
+        Ok(current) ->
             if current == goal then
-                Ok (reconstructPath model.cameFrom goal)
-
+                Ok(reconstruct_path(model.came_from, goal))
             else
+                model_popped = { model & open_set: Set.remove(model.open_set, current), evaluated: Set.insert(model.evaluated, current) }
 
-               modelPopped = { model & openSet : Set.remove model.openSet current, evaluated : Set.insert model.evaluated current }
+                neighbours = move_fn(current)
 
-               neighbours = moveFn current
+                new_neighbours = Set.difference(neighbours, model_popped.evaluated)
 
-               newNeighbours = Set.difference neighbours modelPopped.evaluated
+                model_with_neighbours = { model_popped & open_set: Set.union(model_popped.open_set, new_neighbours) }
 
-               modelWithNeighbours = { modelPopped & openSet : Set.union modelPopped.openSet newNeighbours }
+                model_with_costs = Set.walk(new_neighbours, model_with_neighbours, \md, nb -> update_cost(current, nb, md))
 
-               modelWithCosts = Set.walk newNeighbours modelWithNeighbours (\md, nb -> updateCost current nb md)
-
-               astar costFn moveFn goal modelWithCosts
+                astar(cost_fn, move_fn, goal, model_with_costs)
 

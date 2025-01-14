@@ -19,9 +19,9 @@ main! = \{} ->
             optimized = eval(const_folding(reassoc(e)))
 
             unoptimized
-            |> Num.toStr
+            |> Num.to_str
             |> Str.concat(" & ")
-            |> Str.concat(Num.toStr(optimized))
+            |> Str.concat(Num.to_str(optimized))
             |> Host.put_line!
 
         Err(GetIntError) ->

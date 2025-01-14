@@ -23,7 +23,7 @@ use roc_parse::{
 };
 use roc_region::all::Loc;
 use roc_region::all::Region;
-use roc_test_utils::assert_multiline_str_eq;
+use roc_test_utils::{assert_multiline_str_eq, pretty_compare_string};
 use roc_types::{
     subs::{VarStore, Variable},
     types::{AliasVar, Type},
@@ -208,7 +208,6 @@ impl<'a> Output<'a> {
                     &dep_idents,
                     &qualified_module_ids,
                     None,
-                    roc_can::env::FxMode::PurityInference,
                 );
 
                 // Desugar operators (convert them to Apply calls, taking into account
@@ -392,6 +391,10 @@ impl<'a> Input<'a> {
             // I don't have the patience to debug this right now, so let's leave it for another day...
             // TODO: fix PartialEq impl on ast types
             if format!("{ast_normalized:?}") != format!("{reparsed_ast_normalized:?}") {
+                pretty_compare_string(
+                    format!("{ast_normalized:#?}").as_str(),
+                    format!("{reparsed_ast_normalized:#?}").as_str(),
+                );
                 panic!(
                     "Formatting bug; formatting didn't reparse to the same AST (after removing spaces)\n\n\
                     * * * Source code before formatting:\n{}\n\n\
@@ -411,6 +414,10 @@ impl<'a> Input<'a> {
             let reformatted = reparsed_ast.format(flags);
 
             if output != reformatted {
+                pretty_compare_string(
+                    format!("{actual:#?}").as_str(),
+                    format!("{reparsed_ast:#?}").as_str(),
+                );
                 eprintln!("Formatting bug; formatting is not stable.\nOriginal code:\n{}\n\nFormatted code:\n{}\n\nAST:\n{:#?}\n\nReparsed AST:\n{:#?}\n\n",
                     self.as_str(),
                     output.as_ref().as_str(),

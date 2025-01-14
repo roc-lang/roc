@@ -80,6 +80,24 @@ where
     )
 }
 
+pub fn space0_before<'a, P, S, E>(
+    parser: P,
+    indent_before_problem: fn(Position) -> E,
+) -> impl Parser<'a, SpacesBefore<'a, S>, E>
+where
+    S: 'a,
+    P: 'a + Parser<'a, S, E>,
+    E: 'a + SpaceProblem,
+{
+    parser::map(
+        and(space0_e(indent_before_problem), parser),
+        |(space_list, loc_expr): (&'a [CommentOrNewline<'a>], S)| SpacesBefore {
+            before: space_list,
+            item: loc_expr,
+        },
+    )
+}
+
 pub fn spaces_before_optional_after<'a, P, S, E>(parser: P) -> impl Parser<'a, Loc<S>, E>
 where
     S: 'a + Spaceable<'a>,

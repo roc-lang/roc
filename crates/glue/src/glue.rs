@@ -24,7 +24,7 @@ pub struct Types {
     pub deps: roc_std::RocDict<u32, roc_std::RocList<u32>>,
     pub sizes: roc_std::RocList<u32>,
     pub types: roc_std::RocList<RocType>,
-    pub typesByName: roc_std::RocDict<roc_std::RocStr, u32>,
+    pub types_by_name: roc_std::RocDict<roc_std::RocStr, u32>,
     pub target: Target,
 }
 
@@ -163,7 +163,7 @@ pub struct R3 {
 #[repr(C)]
 pub struct Target {
     pub architecture: Architecture,
-    pub operatingSystem: OperatingSystem,
+    pub operating_system: OperatingSystem,
 }
 
 #[cfg(any(
@@ -289,16 +289,16 @@ pub union RocTagUnion {
 #[repr(C)]
 pub struct R13 {
     pub name: roc_std::RocStr,
-    pub payloadFields: roc_std::RocList<u32>,
-    pub tagName: roc_std::RocStr,
+    pub payload_fields: roc_std::RocList<u32>,
+    pub tag_name: roc_std::RocStr,
 }
 
 #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
 #[derive(Clone, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct R11 {
-    pub discriminantOffset: u32,
-    pub discriminantSize: u32,
+    pub discriminant_offset: u32,
+    pub discriminant_size: u32,
     pub name: roc_std::RocStr,
     pub tags: roc_std::RocList<R12>,
 }
@@ -337,11 +337,11 @@ pub union U4 {
 #[derive(Clone, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct R9 {
-    pub discriminantOffset: u32,
-    pub discriminantSize: u32,
+    pub discriminant_offset: u32,
+    pub discriminant_size: u32,
     pub name: roc_std::RocStr,
     pub tags: roc_std::RocList<R10>,
-    pub indexOfNullTag: u16,
+    pub index_of_null_tag: u16,
 }
 
 #[cfg(any(
@@ -379,10 +379,10 @@ pub union U3 {
 #[repr(C)]
 pub struct R8 {
     pub name: roc_std::RocStr,
-    pub nonNullPayload: u32,
-    pub nonNullTag: roc_std::RocStr,
-    pub nullTag: roc_std::RocStr,
-    pub whichTagIsNull: U2,
+    pub non_null_payload: u32,
+    pub non_null_tag: roc_std::RocStr,
+    pub null_tag: roc_std::RocStr,
+    pub which_tag_is_null: U2,
 }
 
 #[cfg(any(
@@ -412,8 +412,8 @@ impl core::fmt::Debug for U2 {
 #[derive(Clone, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct R6 {
-    pub discriminantOffset: u32,
-    pub discriminantSize: u32,
+    pub discriminant_offset: u32,
+    pub discriminant_size: u32,
     pub name: roc_std::RocStr,
     pub tags: roc_std::RocList<R7>,
 }
@@ -454,7 +454,7 @@ pub union U1 {
 pub struct R5 {
     pub name: roc_std::RocStr,
     pub payload: u32,
-    pub tagName: roc_std::RocStr,
+    pub tag_name: roc_std::RocStr,
 }
 
 #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
@@ -558,7 +558,7 @@ pub struct Types {
     pub deps: roc_std::RocDict<u64, roc_std::RocList<u64>>,
     pub sizes: roc_std::RocList<u32>,
     pub types: roc_std::RocList<RocType>,
-    pub typesByName: roc_std::RocDict<roc_std::RocStr, u64>,
+    pub types_by_name: roc_std::RocDict<roc_std::RocStr, u64>,
     pub target: Target,
 }
 
@@ -613,8 +613,8 @@ pub union RocTagUnion {
 #[repr(C)]
 pub struct R13 {
     pub name: roc_std::RocStr,
-    pub payloadFields: roc_std::RocList<u64>,
-    pub tagName: roc_std::RocStr,
+    pub payload_fields: roc_std::RocList<u64>,
+    pub tag_name: roc_std::RocStr,
 }
 
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
@@ -623,8 +623,8 @@ pub struct R13 {
 pub struct R11 {
     pub name: roc_std::RocStr,
     pub tags: roc_std::RocList<R12>,
-    pub discriminantOffset: u32,
-    pub discriminantSize: u32,
+    pub discriminant_offset: u32,
+    pub discriminant_size: u32,
 }
 
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
@@ -640,9 +640,9 @@ pub union U4 {
 pub struct R9 {
     pub name: roc_std::RocStr,
     pub tags: roc_std::RocList<R10>,
-    pub discriminantOffset: u32,
-    pub discriminantSize: u32,
-    pub indexOfNullTag: u16,
+    pub discriminant_offset: u32,
+    pub discriminant_size: u32,
+    pub index_of_null_tag: u16,
 }
 
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
@@ -657,10 +657,10 @@ pub union U3 {
 #[repr(C)]
 pub struct R8 {
     pub name: roc_std::RocStr,
-    pub nonNullPayload: u64,
-    pub nonNullTag: roc_std::RocStr,
-    pub nullTag: roc_std::RocStr,
-    pub whichTagIsNull: U2,
+    pub non_null_payload: u64,
+    pub non_null_tag: roc_std::RocStr,
+    pub null_tag: roc_std::RocStr,
+    pub which_tag_is_null: U2,
 }
 
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
@@ -669,8 +669,8 @@ pub struct R8 {
 pub struct R6 {
     pub name: roc_std::RocStr,
     pub tags: roc_std::RocList<R7>,
-    pub discriminantOffset: u32,
-    pub discriminantSize: u32,
+    pub discriminant_offset: u32,
+    pub discriminant_size: u32,
 }
 
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
@@ -686,7 +686,7 @@ pub union U1 {
 pub struct R5 {
     pub name: roc_std::RocStr,
     pub payload: u64,
-    pub tagName: roc_std::RocStr,
+    pub tag_name: roc_std::RocStr,
 }
 
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]

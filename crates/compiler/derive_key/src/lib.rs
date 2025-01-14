@@ -48,10 +48,10 @@ pub enum DeriveKey {
 impl DeriveKey {
     pub fn debug_name(&self) -> String {
         match self {
-            DeriveKey::ToEncoder(key) => format!("toEncoder_{}", key.debug_name()),
+            DeriveKey::ToEncoder(key) => format!("to_encoder_{}", key.debug_name()),
             DeriveKey::Decoder(key) => format!("decoder_{}", key.debug_name()),
             DeriveKey::Hash(key) => format!("hash_{}", key.debug_name()),
-            DeriveKey::ToInspector(key) => format!("toInspector_{}", key.debug_name()),
+            DeriveKey::ToInspector(key) => format!("to_inspector_{}", key.debug_name()),
         }
     }
 }

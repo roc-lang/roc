@@ -10,8 +10,8 @@ const maxInt = std.math.maxInt;
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
-extern fn roc__exposedForHost1_1_exposed(i64) i64;
-extern fn roc__exposedForHost2_1_exposed(i64) i64;
+extern fn roc__exposed_for_host1_1_exposed(i64) i64;
+extern fn roc__exposed_for_host2_1_exposed(i64) i64;
 
 const Align = 2 * @alignOf(usize);
 extern fn malloc(size: usize) callconv(.C) ?*align(Align) anyopaque;
@@ -109,8 +109,8 @@ comptime {
 pub export fn main() u8 {
     const stdout = std.io.getStdOut().writer();
 
-    const result = roc__exposedForHost1_1_exposed(10);
-    const result2 = roc__exposedForHost2_1_exposed(10);
+    const result = roc__exposed_for_host1_1_exposed(10);
+    const result2 = roc__exposed_for_host2_1_exposed(10);
 
     stdout.print("{d}\n", .{result}) catch unreachable;
     stdout.print("{d}\n", .{result2}) catch unreachable;

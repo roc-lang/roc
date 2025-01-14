@@ -291,10 +291,10 @@ fn eq_expr() {
                 Expr : [Add Expr Expr, Mul Expr Expr, Val I64, Var I64]
 
                 x : Expr
-                x = Val 0
+                x = Val(0)
 
                 y : Expr
-                y = Val 0
+                y = Val(0)
 
                 x == y
                 "#
@@ -331,10 +331,10 @@ fn eq_linked_list() {
                 LinkedList a : [Nil, Cons a (LinkedList a)]
 
                 x : LinkedList I64
-                x = Cons 1 Nil
+                x = Cons(1, Nil)
 
                 y : LinkedList I64
-                y = Cons 1 Nil
+                y = Cons(1, Nil)
 
                 x == y
                 "#
@@ -349,10 +349,10 @@ fn eq_linked_list() {
                 LinkedList a : [Nil, Cons a (LinkedList a)]
 
                 x : LinkedList I64
-                x = Cons 1 (Cons 2 Nil)
+                x = Cons(1, Cons(2, Nil))
 
                 y : LinkedList I64
-                y = Cons 1 (Cons 2 Nil)
+                y = Cons(1, Cons(2, Nil))
 
                 x == y
                 "#
@@ -371,10 +371,10 @@ fn eq_linked_list_false() {
                 LinkedList a : [Nil, Cons a (LinkedList a)]
 
                 x : LinkedList I64
-                x = Cons 1 Nil
+                x = Cons(1, Nil)
 
                 y : LinkedList I64
-                y = Cons 1 (Cons 2 Nil)
+                y = Cons(1, Cons(2, Nil))
 
                 y == x
                 "#
@@ -394,20 +394,20 @@ fn eq_linked_list_long() {
 
                 LinkedList a : [Nil, Cons a (LinkedList a)]
 
-                prependOnes = \n, tail ->
+                prepend_ones = \n, tail ->
                     if n == 0 then
                         tail
                     else
-                        prependOnes (n-1) (Cons 1 tail)
+                        prepend_ones (n-1) (Cons 1 tail)
 
                 main =
                     n = 100_000 # be careful, can make a noticeble difference to test_gen total time!
 
                     x : LinkedList I64
-                    x = prependOnes n (Cons 999 Nil)
+                    x = prepend_ones n (Cons 999 Nil)
 
                     y : LinkedList I64
-                    y = prependOnes n (Cons 123 Nil)
+                    y = prepend_ones n (Cons 123 Nil)
 
                     y == x
                 "#

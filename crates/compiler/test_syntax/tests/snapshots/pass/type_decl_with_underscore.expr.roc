@@ -1,2 +1,2 @@
-doStuff : UserId -> Task Str _
+doStuff : UserId -> Dict Str _
 42

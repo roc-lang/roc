@@ -12,18 +12,18 @@ const Allocator = mem.Allocator;
 
 const Program = extern struct { init: RocStr, update: Unit, view: Unit };
 
-extern fn roc__mainForHost_1_exposed() Program;
-extern fn roc__mainForHost_size() i64;
+extern fn roc__main_for_host_1_exposed() Program;
+extern fn roc__main_for_host_size() i64;
 
 const ConstModel = [*]const u8;
 const MutModel = [*]u8;
 
-extern fn roc__mainForHost_0_caller([*]u8, [*]u8, MutModel) void;
-extern fn roc__mainForHost_0_size() i64;
-extern fn roc__mainForHost_0_result_size() i64;
+extern fn roc__main_for_host_0_caller([*]u8, [*]u8, MutModel) void;
+extern fn roc__main_for_host_0_size() i64;
+extern fn roc__main_for_host_0_result_size() i64;
 
 fn allocate_model(allocator: *Allocator) MutModel {
-    const size = roc__mainForHost_0_result_size();
+    const size = roc__main_for_host_0_result_size();
     const raw_output = allocator.alignedAlloc(u8, @alignOf(u64), @as(usize, @intCast(size))) catch unreachable;
     const output = @as([*]u8, @ptrCast(raw_output));
 
@@ -34,33 +34,33 @@ fn init(allocator: *Allocator) ConstModel {
     const closure: [*]u8 = undefined;
     const output = allocate_model(allocator);
 
-    roc__mainForHost_0_caller(closure, closure, output);
+    roc__main_for_host_0_caller(closure, closure, output);
 
     return output;
 }
 
-extern fn roc__mainForHost_1_caller(ConstModel, *const RocStr, [*]u8, MutModel) void;
-extern fn roc__mainForHost_1_size() i64;
-extern fn roc__mainForHost_1_result_size() i64;
+extern fn roc__main_for_host_1_caller(ConstModel, *const RocStr, [*]u8, MutModel) void;
+extern fn roc__main_for_host_1_size() i64;
+extern fn roc__main_for_host_1_result_size() i64;
 
 fn update(allocator: *Allocator, model: ConstModel, msg: RocStr) ConstModel {
     const closure: [*]u8 = undefined;
     const output = allocate_model(allocator);
 
-    roc__mainForHost_1_caller(model, &msg, closure, output);
+    roc__main_for_host_1_caller(model, &msg, closure, output);
 
     return output;
 }
 
-extern fn roc__mainForHost_2_caller(ConstModel, [*]u8, *RocStr) void;
-extern fn roc__mainForHost_2_size() i64;
-extern fn roc__mainForHost_2_result_size() i64;
+extern fn roc__main_for_host_2_caller(ConstModel, [*]u8, *RocStr) void;
+extern fn roc__main_for_host_2_size() i64;
+extern fn roc__main_for_host_2_result_size() i64;
 
 fn view(input: ConstModel) RocStr {
     const closure: [*]u8 = undefined;
     var output: RocStr = undefined;
 
-    roc__mainForHost_2_caller(input, closure, &output);
+    roc__main_for_host_2_caller(input, closure, &output);
 
     return output;
 }
@@ -171,7 +171,7 @@ comptime {
 const Unit = extern struct {};
 
 pub export fn main() callconv(.C) u8 {
-    const program = roc__mainForHost_1_exposed();
+    const program = roc__main_for_host_1_exposed();
 
     call_the_closure(program);
 
@@ -206,7 +206,7 @@ fn call_the_closure(program: Program) void {
     return;
 }
 
-pub export fn roc_fx_putInt(int: i64) i64 {
+pub export fn roc_fx_put_int(int: i64) i64 {
     const stdout = std.io.getStdOut().writer();
 
     stdout.print("{d}", .{int}) catch unreachable;
@@ -216,7 +216,7 @@ pub export fn roc_fx_putInt(int: i64) i64 {
     return 0;
 }
 
-export fn roc_fx_putLine(rocPath: str.RocStr) callconv(.C) void {
+export fn roc_fx_put_line(rocPath: str.RocStr) callconv(.C) void {
     const stdout = std.io.getStdOut().writer();
 
     for (rocPath.asSlice()) |char| {
@@ -234,14 +234,14 @@ const GetInt = extern struct {
 
 comptime {
     if (@sizeOf(usize) == 8) {
-        @export(roc_fx_getInt_64bit, .{ .name = "roc_fx_getInt" });
+        @export(roc_fx_get_int_64bit, .{ .name = "roc_fx_get_int" });
     } else {
-        @export(roc_fx_getInt_32bit, .{ .name = "roc_fx_getInt" });
+        @export(roc_fx_get_int_32bit, .{ .name = "roc_fx_get_int" });
     }
 }
 
-fn roc_fx_getInt_64bit() callconv(.C) GetInt {
-    if (roc_fx_getInt_help()) |value| {
+fn roc_fx_get_int_64bit() callconv(.C) GetInt {
+    if (roc_fx_get_int_help()) |value| {
         const get_int = GetInt{ .is_error = false, .value = value, .error_code = false };
         return get_int;
     } else |err| switch (err) {
@@ -256,8 +256,8 @@ fn roc_fx_getInt_64bit() callconv(.C) GetInt {
     return 0;
 }
 
-fn roc_fx_getInt_32bit(output: *GetInt) callconv(.C) void {
-    if (roc_fx_getInt_help()) |value| {
+fn roc_fx_get_int_32bit(output: *GetInt) callconv(.C) void {
+    if (roc_fx_get_int_help()) |value| {
         const get_int = GetInt{ .is_error = false, .value = value, .error_code = false };
         output.* = get_int;
     } else |err| switch (err) {
@@ -272,7 +272,7 @@ fn roc_fx_getInt_32bit(output: *GetInt) callconv(.C) void {
     return;
 }
 
-fn roc_fx_getInt_help() !i64 {
+fn roc_fx_get_int_help() !i64 {
     const stdin = std.io.getStdIn().reader();
     var buf: [40]u8 = undefined;
 

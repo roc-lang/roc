@@ -871,7 +871,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             }
         }
         NumToStr => {
-            // Num.toStr : Num a -> Str
+            // Num.to_str : Num a -> Str
             arguments_with_layouts!((num, num_layout));
 
             match layout_interner.get_repr(num_layout) {

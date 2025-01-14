@@ -5,7 +5,7 @@ import Quicksort
 
 main! : {} => {}
 main! = \{} ->
-    { value, is_error } = Host.get_int! {}
+    { value, is_error } = Host.get_int!({})
     input_result =
         if is_error then
             Err(GetIntError)

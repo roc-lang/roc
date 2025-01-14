@@ -226,22 +226,22 @@ fn list_append_basic() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_take_first() {
     assert_evals_to!(
-        "List.takeFirst [1, 2, 3] 2",
+        "List.take_first [1, 2, 3] 2",
         RocList::from_slice(&[1, 2]),
         RocList<i64>
     );
     assert_evals_to!(
-        "List.takeFirst [1, 2, 3] 0",
+        "List.take_first [1, 2, 3] 0",
         RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
     assert_evals_to!(
-        "List.takeFirst [] 1",
+        "List.take_first [] 1",
         RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
     assert_evals_to!(
-        "List.takeFirst [1,2] 5",
+        "List.take_first [1,2] 5",
         RocList::from_slice(&[1, 2]),
         RocList<i64>
     );
@@ -251,22 +251,22 @@ fn list_take_first() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_take_last() {
     assert_evals_to!(
-        "List.takeLast [1, 2, 3] 2",
+        "List.take_last [1, 2, 3] 2",
         RocList::from_slice(&[2, 3]),
         RocList<i64>
     );
     assert_evals_to!(
-        "List.takeLast [1, 2, 3] 0",
+        "List.take_last [1, 2, 3] 0",
         RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
     assert_evals_to!(
-        "List.takeLast [] 1",
+        "List.take_last [] 1",
         RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
     assert_evals_to!(
-        "List.takeLast [1,2] 5",
+        "List.take_last [1,2] 5",
         RocList::from_slice(&[1, 2]),
         RocList<i64>
     );
@@ -318,7 +318,7 @@ fn list_map_try_ok() {
     assert_evals_to!(
         // No transformation
         r"
-            List.mapTry [1, 2, 3] \elem -> Ok elem
+            List.map_try [1, 2, 3] \elem -> Ok elem
         ",
         // Result I64 [] is unwrapped to just I64
         RocList::<i64>::from_slice(&[1, 2, 3]),
@@ -327,10 +327,10 @@ fn list_map_try_ok() {
     assert_evals_to!(
         // Transformation
         r#"
-            List.mapTry [1, 2, 3] \num ->
-                str = Num.toStr (num * 2)
+            List.map_try [1, 2, 3] \num ->
+                str = Num.to_str (num * 2)
 
-                Ok "$(str)!"
+                Ok "${str}!"
         "#,
         // Result Str [] is unwrapped to just Str
         RocList::<RocStr>::from_slice(&[
@@ -349,7 +349,7 @@ fn list_map_try_err() {
 
     assert_evals_to!(
         r"
-            List.mapTry [1, 2, 3] \_ -> Err -1
+            List.map_try [1, 2, 3] \_ -> Err -1
         ",
         RocResult::err(-1),
         RocResult<RocList<Infallible>, i64>
@@ -358,7 +358,7 @@ fn list_map_try_err() {
     assert_evals_to!(
         // If any element returns Err, the whole thing returns Err
         r"
-            List.mapTry [1, 2, 3] \num ->
+            List.map_try [1, 2, 3] \num ->
                 if num > 2 then
                     Err -1
                 else
@@ -374,7 +374,7 @@ fn list_map_try_err() {
 fn list_split_at() {
     assert_evals_to!(
         r"
-        list = List.splitAt [1, 2, 3] 0
+        list = List.split_at [1, 2, 3] 0
         list.before
         ",
         RocList::<i64>::from_slice(&[]),
@@ -382,7 +382,7 @@ fn list_split_at() {
     );
     assert_evals_to!(
         r"
-        list = List.splitAt [1, 2, 3] 0
+        list = List.split_at [1, 2, 3] 0
         list.others
         ",
         RocList::from_slice(&[1, 2, 3]),
@@ -390,13 +390,13 @@ fn list_split_at() {
     );
     assert_evals_to!(
         r"
-        List.splitAt [1, 2, 3] 1
+        List.split_at [1, 2, 3] 1
         ",
         (RocList::from_slice(&[1]), RocList::from_slice(&[2, 3])),
         (RocList<i64>, RocList<i64>,)
     );
     assert_evals_to!(
-        "List.splitAt [1, 2, 3] 3",
+        "List.split_at [1, 2, 3] 3",
         (
             RocList::from_slice(&[1, 2, 3]),
             RocList::<i64>::from_slice(&[]),
@@ -404,7 +404,7 @@ fn list_split_at() {
         (RocList<i64>, RocList<i64>,)
     );
     assert_evals_to!(
-        "List.splitAt [1, 2, 3] 4",
+        "List.split_at [1, 2, 3] 4",
         (
             RocList::from_slice(&[1, 2, 3]),
             RocList::<i64>::from_slice(&[]),
@@ -412,7 +412,7 @@ fn list_split_at() {
         (RocList<i64>, RocList<i64>,)
     );
     assert_evals_to!(
-        "List.splitAt [] 1",
+        "List.split_at [] 1",
         (
             RocList::<i64>::from_slice(&[]),
             RocList::<i64>::from_slice(&[]),
@@ -426,14 +426,14 @@ fn list_split_at() {
 fn list_split_on() {
     assert_evals_to!(
         r"
-        List.splitOn [] 1
+        List.split_on [] 1
         ",
         RocList::<RocList<i64>>::from_slice(&[RocList::<i64>::from_slice(&[])]),
         RocList<RocList<i64>>
     );
     assert_evals_to!(
         r"
-        List.splitOn [1] 1
+        List.split_on [1] 1
         ",
         RocList::<RocList<i64>>::from_slice(&[
             RocList::<i64>::from_slice(&[]),
@@ -443,14 +443,14 @@ fn list_split_on() {
     );
     assert_evals_to!(
         r"
-        List.splitOn [1, 2, 3] 47
+        List.split_on [1, 2, 3] 47
         ",
         RocList::<RocList<i64>>::from_slice(&[RocList::<i64>::from_slice(&[1, 2, 3])]),
         RocList<RocList<i64>>
     );
     assert_evals_to!(
         r"
-        List.splitOn [1, 2, 3, 4, 5] 3
+        List.split_on [1, 2, 3, 4, 5] 3
         ",
         RocList::<RocList<i64>>::from_slice(&[
             RocList::<i64>::from_slice(&[1, 2]),
@@ -460,7 +460,7 @@ fn list_split_on() {
     );
     assert_evals_to!(
         r"
-        List.splitOn [1, 0, 1, 0, 1] 1
+        List.split_on [1, 0, 1, 0, 1] 1
         ",
         RocList::<RocList<i64>>::from_slice(&[
             RocList::<i64>::from_slice(&[]),
@@ -472,7 +472,7 @@ fn list_split_on() {
     );
     assert_evals_to!(
         r"
-        List.splitOn [1, 0, 1, 0, 1] 0
+        List.split_on [1, 0, 1, 0, 1] 0
         ",
         RocList::<RocList<i64>>::from_slice(&[
             RocList::<i64>::from_slice(&[1]),
@@ -488,28 +488,28 @@ fn list_split_on() {
 fn list_split_on_list() {
     assert_evals_to!(
         r"
-        List.splitOnList [] []
+        List.split_on_list [] []
         ",
         RocList::<RocList<i64>>::from_slice(&[RocList::<i64>::from_slice(&[])]),
         RocList<RocList<i64>>
     );
     assert_evals_to!(
         r"
-        List.splitOnList [] [1, 2, 3]
+        List.split_on_list [] [1, 2, 3]
         ",
         RocList::<RocList<i64>>::from_slice(&[RocList::<i64>::from_slice(&[]),]),
         RocList<RocList<i64>>
     );
     assert_evals_to!(
         r"
-        List.splitOnList [1, 2, 3] []
+        List.split_on_list [1, 2, 3] []
         ",
         RocList::<RocList<i64>>::from_slice(&[RocList::<i64>::from_slice(&[1, 2, 3]),]),
         RocList<RocList<i64>>
     );
     assert_evals_to!(
         r"
-        List.splitOnList [1] [1]
+        List.split_on_list [1] [1]
         ",
         RocList::<RocList<i64>>::from_slice(&[
             RocList::<i64>::from_slice(&[]),
@@ -519,14 +519,14 @@ fn list_split_on_list() {
     );
     assert_evals_to!(
         r"
-        List.splitOnList [1, 2, 3] [47]
+        List.split_on_list [1, 2, 3] [47]
         ",
         RocList::<RocList<i64>>::from_slice(&[RocList::<i64>::from_slice(&[1, 2, 3])]),
         RocList<RocList<i64>>
     );
     assert_evals_to!(
         r"
-        List.splitOnList [1, 2, 3, 4, 5] [2, 3]
+        List.split_on_list [1, 2, 3, 4, 5] [2, 3]
         ",
         RocList::<RocList<i64>>::from_slice(&[
             RocList::<i64>::from_slice(&[1]),
@@ -536,7 +536,7 @@ fn list_split_on_list() {
     );
     assert_evals_to!(
         r"
-        List.splitOnList [1, 0, 1, 0, 1] [1]
+        List.split_on_list [1, 0, 1, 0, 1] [1]
         ",
         RocList::<RocList<i64>>::from_slice(&[
             RocList::<i64>::from_slice(&[]),
@@ -553,7 +553,7 @@ fn list_split_on_list() {
 fn list_split_first() {
     assert_evals_to!(
         r"
-               List.splitFirst [2, 3, 0, 4, 0, 6, 0, 8, 9] 0
+               List.split_first [2, 3, 0, 4, 0, 6, 0, 8, 9] 0
                |> Result.map .before
         ",
         RocResult::ok(RocList::<i64>::from_slice(&[2, 3])),
@@ -561,7 +561,7 @@ fn list_split_first() {
     );
     assert_evals_to!(
         r"
-               List.splitFirst [2, 3, 0, 4, 0, 6, 0, 8, 9] 0
+               List.split_first [2, 3, 0, 4, 0, 6, 0, 8, 9] 0
                |> Result.map .after
         ",
         RocResult::ok(RocList::<i64>::from_slice(&[4, 0, 6, 0, 8, 9])),
@@ -569,13 +569,13 @@ fn list_split_first() {
     );
 
     assert_evals_to!(
-        "List.splitFirst [1, 2, 3] 0",
+        "List.split_first [1, 2, 3] 0",
         RocResult::err(()),
         RocResult<(RocList<i64>, RocList<i64>), ()>
     );
 
     assert_evals_to!(
-        "List.splitFirst [] 1",
+        "List.split_first [] 1",
         RocResult::err(()),
         RocResult<(RocList<i64>, RocList<i64>), ()>
     );
@@ -586,7 +586,7 @@ fn list_split_first() {
 fn list_split_last() {
     assert_evals_to!(
         r"
-               List.splitLast [2, 3, 0, 4, 0, 6, 0, 8, 9] 0
+               List.split_last [2, 3, 0, 4, 0, 6, 0, 8, 9] 0
                |> Result.map .before
         ",
         RocResult::ok(RocList::<i64>::from_slice(&[2, 3, 0, 4, 0, 6])),
@@ -594,7 +594,7 @@ fn list_split_last() {
     );
     assert_evals_to!(
         r"
-               List.splitLast [2, 3, 0, 4, 0, 6, 0, 8, 9] 0
+               List.split_last [2, 3, 0, 4, 0, 6, 0, 8, 9] 0
                |> Result.map .after
         ",
         RocResult::ok(RocList::<i64>::from_slice(&[8, 9])),
@@ -602,13 +602,13 @@ fn list_split_last() {
     );
 
     assert_evals_to!(
-        "List.splitLast [1, 2, 3] 0",
+        "List.split_last [1, 2, 3] 0",
         RocResult::err(()),
         RocResult<(RocList<i64>, RocList<i64>), ()>
     );
 
     assert_evals_to!(
-        "List.splitLast [] 1",
+        "List.split_last [] 1",
         RocResult::err(()),
         RocResult<(RocList<i64>, RocList<i64>), ()>
     );
@@ -618,7 +618,7 @@ fn list_split_last() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_chunks_of() {
     assert_evals_to!(
-        "List.chunksOf [1, 2, 3, 4, 5, 6, 7, 8] 3",
+        "List.chunks_of [1, 2, 3, 4, 5, 6, 7, 8] 3",
         RocList::<RocList<i64>>::from_slice(&[
             RocList::from_slice(&[1, 2, 3]),
             RocList::from_slice(&[4, 5, 6]),
@@ -628,19 +628,19 @@ fn list_chunks_of() {
     );
 
     assert_evals_to!(
-        "List.chunksOf [1, 2, 3, 4] 5",
+        "List.chunks_of [1, 2, 3, 4] 5",
         RocList::<RocList<i64>>::from_slice(&[RocList::from_slice(&[1, 2, 3, 4]),]),
         RocList<RocList<i64>>
     );
 
     assert_evals_to!(
-        "List.chunksOf [1, 2, 3] 0",
+        "List.chunks_of [1, 2, 3] 0",
         RocList::<RocList<i64>>::from_slice(&[]),
         RocList<RocList<i64>>
     );
 
     assert_evals_to!(
-        "List.chunksOf [] 5",
+        "List.chunks_of [] 5",
         RocList::<RocList<i64>>::from_slice(&[]),
         RocList<RocList<i64>>
     );
@@ -650,17 +650,17 @@ fn list_chunks_of() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_drop_first() {
     assert_evals_to!(
-        "List.dropFirst [1,2,3] 2",
+        "List.drop_first [1,2,3] 2",
         RocList::from_slice(&[3]),
         RocList<i64>
     );
     assert_evals_to!(
-        "List.dropFirst [] 1",
+        "List.drop_first [] 1",
         RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
     assert_evals_to!(
-        "List.dropFirst [1,2] 5",
+        "List.drop_first [1,2] 5",
         RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
@@ -670,27 +670,27 @@ fn list_drop_first() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_drop_at() {
     assert_evals_to!(
-        "List.dropAt [1, 2, 3] 0",
+        "List.drop_at [1, 2, 3] 0",
         RocList::from_slice(&[2, 3]),
         RocList<i64>
     );
     assert_evals_to!(
-        "List.dropAt [1, 2, 3] 1",
+        "List.drop_at [1, 2, 3] 1",
         RocList::from_slice(&[1, 3]),
         RocList<i64>
     );
     assert_evals_to!(
-        "List.dropAt [0, 0, 0] 3",
+        "List.drop_at [0, 0, 0] 3",
         RocList::from_slice(&[0, 0, 0]),
         RocList<i64>
     );
     assert_evals_to!(
-        "List.dropAt [] 1",
+        "List.drop_at [] 1",
         RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
     assert_evals_to!(
-        "List.dropAt [0] 0",
+        "List.drop_at [0] 0",
         RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
@@ -728,7 +728,7 @@ fn list_drop_at_shared() {
                list : List I64
                list = [if Bool.true then 4 else 4, 5, 6]
 
-               { newList: List.dropAt list 0, original: list }
+               { new_list: List.drop_at list 0, original: list }
                "
         ),
         (
@@ -750,7 +750,7 @@ fn list_drop_if_empty_list_of_int() {
             empty : List I64
             empty = []
 
-            List.dropIf empty \_ -> Bool.true
+            List.drop_if empty \_ -> Bool.true
             "
         ),
         RocList::<i64>::from_slice(&[]),
@@ -764,10 +764,10 @@ fn list_drop_if_empty_list() {
     assert_evals_to!(
         indoc!(
             r"
-            alwaysTrue : I64 -> Bool
-            alwaysTrue = \_ -> Bool.true
+            always_true : I64 -> Bool
+            always_true = \_ -> Bool.true
 
-            List.dropIf [] alwaysTrue
+            List.drop_if [] always_true
             "
         ),
         RocList::<i64>::from_slice(&[]),
@@ -781,7 +781,7 @@ fn list_drop_if_always_false_for_non_empty_list() {
     assert_evals_to!(
         indoc!(
             r"
-            List.dropIf [1,2,3,4,5,6,7,8] (\_ -> Bool.false)
+            List.drop_if [1,2,3,4,5,6,7,8] (\_ -> Bool.false)
             "
         ),
         RocList::from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]),
@@ -795,7 +795,7 @@ fn list_drop_if_always_true_for_non_empty_list() {
     assert_evals_to!(
         indoc!(
             r"
-            List.dropIf [1,2,3,4,5,6,7,8] (\_ -> Bool.true)
+            List.drop_if [1,2,3,4,5,6,7,8] (\_ -> Bool.true)
             "
         ),
         RocList::<i64>::from_slice(&[]),
@@ -809,7 +809,7 @@ fn list_drop_if_geq3() {
     assert_evals_to!(
         indoc!(
             r"
-            List.dropIf [1,2,3,4,5,6,7,8] (\n -> n >= 3)
+            List.drop_if [1,2,3,4,5,6,7,8] (\n -> n >= 3)
             "
         ),
         RocList::from_slice(&[1, 2]),
@@ -823,7 +823,7 @@ fn list_drop_if_string_eq() {
     assert_evals_to!(
         indoc!(
             r#"
-             List.dropIf ["x", "y", "x"] (\s -> s == "y")
+             List.drop_if ["x", "y", "x"] (\s -> s == "y")
              "#
         ),
         RocList::from_slice(&[RocStr::from("x"), RocStr::from("x")]),
@@ -835,17 +835,17 @@ fn list_drop_if_string_eq() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_drop_last() {
     assert_evals_to!(
-        "List.dropLast [1, 2, 3] 1",
+        "List.drop_last [1, 2, 3] 1",
         RocList::from_slice(&[1, 2]),
         RocList<i64>
     );
     assert_evals_to!(
-        "List.dropLast [] 5",
+        "List.drop_last [] 5",
         RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
     assert_evals_to!(
-        "List.dropLast [0] 0",
+        "List.drop_last [0] 0",
         RocList::<i64>::from_slice(&[0]),
         RocList<i64>
     );
@@ -860,7 +860,7 @@ fn list_drop_last_mutable() {
                list : List I64
                list = [if Bool.true then 4 else 4, 5, 6]
 
-               { newList: List.dropLast list 1, original: list }
+               { new_list: List.drop_last list 1, original: list }
                "
         ),
         (
@@ -921,11 +921,11 @@ fn list_append_to_empty_list_of_int() {
     assert_evals_to!(
         indoc!(
             r"
-                initThrees : List I64
-                initThrees =
+                init_threes : List I64
+                init_threes =
                     []
 
-                List.append (List.append initThrees 3) 3
+                List.append (List.append init_threes 3) 3
             "
         ),
         RocList::from_slice(&[3, 3]),
@@ -1067,7 +1067,7 @@ fn list_walk_backwards_empty_all_inline() {
     assert_evals_to!(
         indoc!(
             r"
-            List.walkBackwards [0x1] 0 \state, elem -> state + elem
+            List.walk_backwards [0x1] 0 \state, elem -> state + elem
             "
         ),
         1,
@@ -1081,7 +1081,7 @@ fn list_walk_backwards_empty_all_inline() {
             empty =
                 []
 
-            List.walkBackwards empty 0 \state, elem -> state + elem
+            List.walk_backwards empty 0 \state, elem -> state + elem
             "
         ),
         0,
@@ -1093,13 +1093,13 @@ fn list_walk_backwards_empty_all_inline() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_walk_backwards_with_str() {
     assert_evals_to!(
-        r#"List.walkBackwards ["x", "y", "z"] "<" Str.concat"#,
+        r#"List.walk_backwards ["x", "y", "z"] "<" Str.concat"#,
         RocStr::from("<zyx"),
         RocStr
     );
 
     assert_evals_to!(
-        r#"List.walkBackwards ["Second", "Third", "Fourth"] "First" Str.concat"#,
+        r#"List.walk_backwards ["Second", "Third", "Fourth"] "First" Str.concat"#,
         RocStr::from("FirstFourthThirdSecond"),
         RocStr
     );
@@ -1116,16 +1116,16 @@ fn list_walk_backwards_with_record() {
             byte : List Bit
             byte = [Zero, One, Zero, One, Zero, Zero, One, Zero]
 
-            initialCounts = { zeroes: 0, ones: 0 }
+            initial_counts = { zeroes: 0, ones: 0 }
 
             acc = \r, b ->
                 when b is
                     Zero -> { r & zeroes: r.zeroes + 1 }
                     One -> { r & ones: r.ones + 1 }
 
-            finalCounts = List.walkBackwards byte initialCounts acc
+            final_counts = List.walk_backwards byte initial_counts acc
 
-            finalCounts.ones * 10 + finalCounts.zeroes
+            final_counts.ones * 10 + final_counts.zeroes
             "
         ),
         35,
@@ -1158,7 +1158,7 @@ fn list_walk_subtraction() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_walk_until_sum() {
-    assert_evals_to!(r"List.walkUntil [1, 2] 0 \a,b -> Continue (a + b)", 3, i64);
+    assert_evals_to!(r"List.walk_until [1, 2] 0 \a,b -> Continue (a + b)", 3, i64);
 }
 
 #[test]
@@ -1166,14 +1166,14 @@ fn list_walk_until_sum() {
 fn list_walk_with_index_until_sum() {
     assert_evals_to!(
         r"
-        List.walkWithIndexUntil [5, 7, 2, 3] 0 (\state, elem, index ->
+        List.walk_with_index_until [5, 7, 2, 3] 0 (\state, elem, index ->
             if elem % 2 == 0 then
                 Break state
             else
                 # Convert to I64 to sidestep weird bug with WASM codegen
-                a = Num.toI64 elem
-                b = Num.toI64 index
-                c = Num.toI64 state
+                a = Num.to_i64 elem
+                b = Num.to_i64 index
+                c = Num.to_i64 state
                 Continue (a + b + c)
         )
         ",
@@ -1191,11 +1191,11 @@ fn list_walk_implements_position() {
 
         find : List a, a -> Option U64 where a implements Eq
         find = \list, needle ->
-            findHelp list needle
+            find_help list needle
                 |> .v
 
-        findHelp = \list, needle ->
-            List.walkUntil list { n: 0, v: None } \{ n, v }, element ->
+        find_help = \list, needle ->
+            List.walk_until list { n: 0, v: None } \{ n, v }, element ->
                 if element == needle then
                     Break { n, v: Some n }
                 else
@@ -1216,13 +1216,13 @@ fn list_walk_until_even_prefix_sum() {
     assert_evals_to!(
         r"
         helper = \a, b ->
-            if Num.isEven b then
+            if Num.is_even b then
                 Continue (a + b)
 
             else
                 Break a
 
-        List.walkUntil [2, 4, 8, 9] 0 helper",
+        List.walk_until [2, 4, 8, 9] 0 helper",
         2 + 4 + 8,
         i64
     );
@@ -1231,7 +1231,7 @@ fn list_walk_until_even_prefix_sum() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_walk_from_sum() {
-    assert_evals_to!(r"List.walkFrom [1, 2, 3] 1 0 Num.add", 5, i64);
+    assert_evals_to!(r"List.walk_from [1, 2, 3] 1 0 Num.add", 5, i64);
 }
 
 #[test]
@@ -1244,7 +1244,7 @@ fn list_keep_if_empty_list_of_int() {
             empty =
                 []
 
-            List.keepIf empty \_ -> Bool.true
+            List.keep_if empty \_ -> Bool.true
             "
         ),
         RocList::<i64>::from_slice(&[]),
@@ -1258,12 +1258,12 @@ fn list_keep_if_empty_list() {
     assert_evals_to!(
         indoc!(
             r"
-            alwaysTrue : I64 -> Bool
-            alwaysTrue = \_ ->
+            always_true : I64 -> Bool
+            always_true = \_ ->
                 Bool.true
 
 
-            List.keepIf [] alwaysTrue
+            List.keep_if [] always_true
             "
         ),
         RocList::<i64>::from_slice(&[]),
@@ -1277,15 +1277,15 @@ fn list_keep_if_always_true_for_non_empty_list() {
     assert_evals_to!(
         indoc!(
             r"
-            alwaysTrue : I64 -> Bool
-            alwaysTrue = \_ ->
+            always_true : I64 -> Bool
+            always_true = \_ ->
                 Bool.true
 
-            oneThroughEight : List I64
-            oneThroughEight =
+            one_through_eight : List I64
+            one_through_eight =
                 [1,2,3,4,5,6,7,8]
 
-            List.keepIf oneThroughEight alwaysTrue
+            List.keep_if one_through_eight always_true
             "
         ),
         RocList::from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]),
@@ -1299,11 +1299,11 @@ fn list_keep_if_always_false_for_non_empty_list() {
     assert_evals_to!(
         indoc!(
             r"
-            alwaysFalse : I64 -> Bool
-            alwaysFalse = \_ ->
+            always_false : I64 -> Bool
+            always_false = \_ ->
                 Bool.false
 
-            List.keepIf [1,2,3,4,5,6,7,8] alwaysFalse
+            List.keep_if [1,2,3,4,5,6,7,8] always_false
             "
         ),
         RocList::<i64>::from_slice(&[]),
@@ -1317,11 +1317,11 @@ fn list_keep_if_one() {
     assert_evals_to!(
         indoc!(
             r"
-            intIsLessThanThree : I64 -> Bool
-            intIsLessThanThree = \i ->
+            int_is_less_than_three : I64 -> Bool
+            int_is_less_than_three = \i ->
                 i < 3
 
-            List.keepIf [1,2,3,4,5,6,7,8] intIsLessThanThree
+            List.keep_if [1,2,3,4,5,6,7,8] int_is_less_than_three
             "
         ),
         RocList::from_slice(&[1, 2]),
@@ -1335,7 +1335,7 @@ fn list_keep_if_str_is_hello() {
     assert_evals_to!(
         indoc!(
             r#"
-             List.keepIf ["x", "y", "x"] (\x -> x == "x")
+             List.keep_if ["x", "y", "x"] (\x -> x == "x")
              "#
         ),
         RocList::from_slice(&[RocStr::from("x"), RocStr::from("x")]),
@@ -1349,7 +1349,7 @@ fn list_count_if_empty_list() {
     assert_evals_to!(
         indoc!(
             r"
-            List.countIf [] \_ -> Bool.true
+            List.count_if [] \_ -> Bool.true
             "
         ),
         0,
@@ -1363,15 +1363,15 @@ fn list_count_if_always_true_for_non_empty_list() {
     assert_evals_to!(
         indoc!(
             r"
-            alwaysTrue : I64 -> Bool
-            alwaysTrue = \_ ->
+            always_true : I64 -> Bool
+            always_true = \_ ->
                 Bool.true
 
-            oneThroughEight : List I64
-            oneThroughEight =
+            one_through_eight : List I64
+            one_through_eight =
                 [1,2,3,4,5,6,7,8]
 
-            List.countIf oneThroughEight alwaysTrue
+            List.count_if one_through_eight always_true
             "
         ),
         8,
@@ -1385,11 +1385,11 @@ fn list_count_if_always_false_for_non_empty_list() {
     assert_evals_to!(
         indoc!(
             r"
-            alwaysFalse : I64 -> Bool
-            alwaysFalse = \_ ->
+            always_false : I64 -> Bool
+            always_false = \_ ->
                 Bool.false
 
-            List.countIf [1,2,3,4,5,6,7,8] alwaysFalse
+            List.count_if [1,2,3,4,5,6,7,8] always_false
             "
         ),
         0,
@@ -1403,11 +1403,11 @@ fn list_count_if_condition() {
     assert_evals_to!(
         indoc!(
             r"
-            intIsLessThanThree : I64 -> Bool
-            intIsLessThanThree = \i ->
+            int_is_less_than_three : I64 -> Bool
+            int_is_less_than_three = \i ->
                 i < 3
 
-            List.countIf [1,2,3,4,5,6,7,8] intIsLessThanThree
+            List.count_if [1,2,3,4,5,6,7,8] int_is_less_than_three
             "
         ),
         2,
@@ -1421,7 +1421,7 @@ fn list_count_if_str() {
     assert_evals_to!(
         indoc!(
             r#"
-             List.countIf ["x", "y", "x"] (\x -> x == "x")
+             List.count_if ["x", "y", "x"] (\x -> x == "x")
              "#
         ),
         2,
@@ -1453,11 +1453,11 @@ fn list_map_on_non_empty_list() {
     assert_evals_to!(
         indoc!(
             r"
-            nonEmpty : List I64
-            nonEmpty =
+            non_empty : List I64
+            non_empty =
                 [1]
 
-            List.map nonEmpty (\x -> x)
+            List.map non_empty (\x -> x)
             "
         ),
         RocList::from_slice(&[1]),
@@ -1471,11 +1471,11 @@ fn list_map_changes_input() {
     assert_evals_to!(
         indoc!(
             r"
-            nonEmpty : List I64
-            nonEmpty =
+            non_empty : List I64
+            non_empty =
                 [1]
 
-            List.map nonEmpty (\x -> x + 1)
+            List.map non_empty (\x -> x + 1)
             "
         ),
         RocList::from_slice(&[2]),
@@ -1489,11 +1489,11 @@ fn list_map_on_big_list() {
     assert_evals_to!(
         indoc!(
             r"
-            nonEmpty : List I64
-            nonEmpty =
+            non_empty : List I64
+            non_empty =
                 [1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5]
 
-            List.map nonEmpty (\x -> x * 2)
+            List.map non_empty (\x -> x * 2)
             "
         ),
         RocList::from_slice(&[
@@ -1509,12 +1509,12 @@ fn list_map_with_type_change() {
     assert_evals_to!(
         indoc!(
             r"
-            nonEmpty : List I64
-            nonEmpty =
+            non_empty : List I64
+            non_empty =
                 [1, 1, -4, 1, 2]
 
 
-            List.map nonEmpty (\x -> x > 0)
+            List.map non_empty (\x -> x > 0)
             "
         ),
         RocList::from_slice(&[true, true, false, true, true]),
@@ -1528,15 +1528,15 @@ fn list_map_using_defined_function() {
     assert_evals_to!(
         indoc!(
             r"
-             nonEmpty : List I64
-             nonEmpty =
+             non_empty : List I64
+             non_empty =
                  [2, 2, -4, 2, 3]
 
-             greaterThanOne : I64 -> Bool
-             greaterThanOne = \i ->
+             greater_than_one : I64 -> Bool
+             greater_than_one = \i ->
                  i > 1
 
-             List.map nonEmpty greaterThanOne
+             List.map non_empty greater_than_one
              "
         ),
         RocList::from_slice(&[true, true, false, true, true]),
@@ -1857,11 +1857,11 @@ fn list_repeat() {
     assert_evals_to!(
         indoc!(
             r"
-                noStrs : List Str
-                noStrs =
+                no_strs : List Str
+                no_strs =
                     []
 
-                List.repeat noStrs 2
+                List.repeat no_strs 2
             "
         ),
         RocList::from_slice(&[RocList::<i64>::default(), RocList::default()]),
@@ -1897,11 +1897,11 @@ fn list_reverse_empty_list_of_int() {
     assert_evals_to!(
         indoc!(
             r"
-                emptyList : List I64
-                emptyList =
+                empty_list : List I64
+                empty_list =
                     []
 
-                List.reverse emptyList
+                List.reverse empty_list
             "
         ),
         RocList::<i64>::from_slice(&[]),
@@ -1935,15 +1935,15 @@ fn list_concat_two_empty_lists_of_int() {
     assert_evals_to!(
         indoc!(
             r"
-                firstList : List I64
-                firstList =
+                first_list : List I64
+                first_list =
                     []
 
-                secondList : List I64
-                secondList =
+                second_list : List I64
+                second_list =
                     []
 
-                List.concat firstList secondList
+                List.concat first_list second_list
             "
         ),
         RocList::<i64>::from_slice(&[]),
@@ -2106,11 +2106,11 @@ fn fn_int_list_len() {
     assert_evals_to!(
         indoc!(
             r"
-                getLen = \list -> List.len list
+                get_len = \list -> List.len list
 
                 nums = [2, 4, 6, 8]
 
-                getLen nums
+                get_len nums
             "
         ),
         4,
@@ -2121,13 +2121,13 @@ fn fn_int_list_len() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn int_list_is_empty() {
-    assert_evals_to!("List.isEmpty [12, 9, 6, 3]", false, bool);
+    assert_evals_to!("List.is_empty [12, 9, 6, 3]", false, bool);
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn empty_list_is_empty() {
-    assert_evals_to!("List.isEmpty []", true, bool);
+    assert_evals_to!("List.is_empty []", true, bool);
 }
 
 #[test]
@@ -2527,10 +2527,10 @@ fn gen_wrap_len() {
     assert_evals_to!(
         indoc!(
             r"
-                wrapLen = \list ->
+                wrap_len = \list ->
                     [List.len list]
 
-                wrapLen [1, 7, 9]
+                wrap_len [1, 7, 9]
             "
         ),
         RocList::from_slice(&[3]),
@@ -2544,10 +2544,10 @@ fn gen_wrap_first() {
     assert_evals_to!(
         indoc!(
             r"
-                wrapFirst = \list ->
+                wrap_first = \list ->
                     [List.first list]
 
-                wrapFirst [1, 2]
+                wrap_first [1, 2]
             "
         ),
         RocList::from_slice(&[1]),
@@ -2590,10 +2590,10 @@ fn gen_swap() {
             swap : U64, U64, List a -> List a
             swap = \i, j, list ->
                 when Pair (List.get list i) (List.get list j) is
-                    Pair (Ok atI) (Ok atJ) ->
+                    Pair (Ok at_i) (Ok at_j) ->
                         list
-                            |> List.set i atJ
-                            |> List.set j atI
+                            |> List.set i at_j
+                            |> List.set j at_i
 
                     _ ->
                         []
@@ -2619,17 +2619,17 @@ fn gen_quicksort() {
                 quicksort : List (Num a) -> List (Num a)
                 quicksort = \list ->
                     n = List.len list
-                    quicksortHelp list 0 (n - 1)
+                    quicksort_help list 0 (n - 1)
 
 
-                quicksortHelp : List (Num a), U64, U64 -> List (Num a)
-                quicksortHelp = \list, low, high ->
+                quicksort_help : List (Num a), U64, U64 -> List (Num a)
+                quicksort_help = \list, low, high ->
                     if low < high then
                         when partition low high list is
-                            Pair partitionIndex partitioned ->
+                            Pair partition_index partitioned ->
                                 partitioned
-                                    |> quicksortHelp low (Num.subSaturated partitionIndex 1)
-                                    |> quicksortHelp (partitionIndex + 1) high
+                                    |> quicksort_help low (Num.sub_saturated partition_index 1)
+                                    |> quicksort_help (partition_index + 1) high
                     else
                         list
 
@@ -2637,35 +2637,35 @@ fn gen_quicksort() {
                 swap : U64, U64, List a -> List a
                 swap = \i, j, list ->
                     when Pair (List.get list i) (List.get list j) is
-                        Pair (Ok atI) (Ok atJ) ->
+                        Pair (Ok at_i) (Ok at_j) ->
                             list
-                                |> List.set i atJ
-                                |> List.set j atI
+                                |> List.set i at_j
+                                |> List.set j at_i
 
                         _ ->
                             []
 
                 partition : U64, U64, List (Num a) -> [Pair U64 (List (Num a))]
-                partition = \low, high, initialList ->
-                    when List.get initialList high is
+                partition = \low, high, initial_list ->
+                    when List.get initial_list high is
                         Ok pivot ->
-                            when partitionHelp low low initialList high pivot is
-                                Pair newI newList ->
-                                    Pair newI (swap newI high newList)
+                            when partition_help low low initial_list high pivot is
+                                Pair new_i new_list ->
+                                    Pair new_i (swap new_i high new_list)
 
                         Err _ ->
-                            Pair low initialList
+                            Pair low initial_list
 
 
-                partitionHelp : U64, U64, List (Num a), U64, (Num a) -> [Pair U64 (List (Num a))]
-                partitionHelp = \i, j, list, high, pivot ->
+                partition_help : U64, U64, List (Num a), U64, (Num a) -> [Pair U64 (List (Num a))]
+                partition_help = \i, j, list, high, pivot ->
                     if j < high then
                         when List.get list j is
                             Ok value ->
                                 if value <= pivot then
-                                    partitionHelp (i + 1) (j + 1) (swap i j list) high pivot
+                                    partition_help (i + 1) (j + 1) (swap i j list) high pivot
                                 else
-                                    partitionHelp i (j + 1) list high pivot
+                                    partition_help i (j + 1) list high pivot
 
                             Err _ ->
                                 Pair i list
@@ -2692,17 +2692,17 @@ fn quicksort() {
 
                    quicksort : List (Num a) -> List (Num a)
                    quicksort = \list ->
-                       quicksortHelp list 0 (List.len list - 1)
+                       quicksort_help list 0 (List.len list - 1)
 
 
-                   quicksortHelp : List (Num a), U64, U64 -> List (Num a)
-                   quicksortHelp = \list, low, high ->
+                   quicksort_help : List (Num a), U64, U64 -> List (Num a)
+                   quicksort_help = \list, low, high ->
                        if low < high then
                            when partition low high list is
-                               Pair partitionIndex partitioned ->
+                               Pair partition_index partitioned ->
                                    partitioned
-                                       |> quicksortHelp low (Num.subSaturated partitionIndex 1)
-                                       |> quicksortHelp (partitionIndex + 1) high
+                                       |> quicksort_help low (Num.sub_saturated partition_index 1)
+                                       |> quicksort_help (partition_index + 1) high
                        else
                            list
 
@@ -2710,36 +2710,36 @@ fn quicksort() {
                    swap : U64, U64, List a -> List a
                    swap = \i, j, list ->
                        when Pair (List.get list i) (List.get list j) is
-                           Pair (Ok atI) (Ok atJ) ->
+                           Pair (Ok at_i) (Ok at_j) ->
                                list
-                                   |> List.set i atJ
-                                   |> List.set j atI
+                                   |> List.set i at_j
+                                   |> List.set j at_i
 
                            _ ->
                                []
 
                    partition : U64, U64, List (Num a) -> [Pair U64 (List (Num a))]
-                   partition = \low, high, initialList ->
-                       when List.get initialList high is
+                   partition = \low, high, initial_list ->
+                       when List.get initial_list high is
                            Ok pivot ->
-                               when partitionHelp low low initialList high pivot is
-                                   Pair newI newList ->
-                                       Pair newI (swap newI high newList)
+                               when partition_help low low initial_list high pivot is
+                                   Pair new_i new_list ->
+                                       Pair new_i (swap new_i high new_list)
 
                            Err _ ->
-                               Pair low initialList
+                               Pair low initial_list
 
 
-                   partitionHelp : U64, U64, List (Num a), U64, Num a -> [Pair U64 (List (Num a))]
-                   partitionHelp = \i, j, list, high, pivot ->
+                   partition_help : U64, U64, List (Num a), U64, Num a -> [Pair U64 (List (Num a))]
+                   partition_help = \i, j, list, high, pivot ->
                        # if j < high then
                        if Bool.false then
                            when List.get list j is
                                Ok value ->
                                    if value <= pivot then
-                                       partitionHelp (i + 1) (j + 1) (swap i j list) high pivot
+                                       partition_help (i + 1) (j + 1) (swap i j list) high pivot
                                    else
-                                       partitionHelp i (j + 1) list high pivot
+                                       partition_help i (j + 1) list high pivot
 
                                Err _ ->
                                    Pair i list
@@ -2768,17 +2768,17 @@ fn quicksort_singleton() {
 
                    quicksort : List (Num a) -> List (Num a)
                    quicksort = \list ->
-                       quicksortHelp list 0 (List.len list - 1)
+                       quicksort_help list 0 (List.len list - 1)
 
 
-                   quicksortHelp : List (Num a), U64, U64 -> List (Num a)
-                   quicksortHelp = \list, low, high ->
+                   quicksort_help : List (Num a), U64, U64 -> List (Num a)
+                   quicksort_help = \list, low, high ->
                        if low < high then
                            when partition low high list is
-                               Pair partitionIndex partitioned ->
+                               Pair partition_index partitioned ->
                                    partitioned
-                                       |> quicksortHelp low (Num.subSaturated partitionIndex 1)
-                                       |> quicksortHelp (partitionIndex + 1) high
+                                       |> quicksort_help low (Num.sub_saturated partition_index 1)
+                                       |> quicksort_help (partition_index + 1) high
                        else
                            list
 
@@ -2786,35 +2786,35 @@ fn quicksort_singleton() {
                    swap : U64, U64, List a -> List a
                    swap = \i, j, list ->
                        when Pair (List.get list i) (List.get list j) is
-                           Pair (Ok atI) (Ok atJ) ->
+                           Pair (Ok at_i) (Ok at_j) ->
                                list
-                                   |> List.set i atJ
-                                   |> List.set j atI
+                                   |> List.set i at_j
+                                   |> List.set j at_i
 
                            _ ->
                                []
 
                    partition : U64, U64, List (Num a) -> [Pair U64 (List (Num a))]
-                   partition = \low, high, initialList ->
-                       when List.get initialList high is
+                   partition = \low, high, initial_list ->
+                       when List.get initial_list high is
                            Ok pivot ->
-                               when partitionHelp low low initialList high pivot is
-                                   Pair newI newList ->
-                                       Pair newI (swap newI high newList)
+                               when partition_help low low initial_list high pivot is
+                                   Pair new_i new_list ->
+                                       Pair new_i (swap new_i high new_list)
 
                            Err _ ->
-                               Pair low initialList
+                               Pair low initial_list
 
 
-                   partitionHelp : U64, U64, List (Num a), U64, Num a -> [Pair U64 (List (Num a))]
-                   partitionHelp = \i, j, list, high, pivot ->
+                   partition_help : U64, U64, List (Num a), U64, Num a -> [Pair U64 (List (Num a))]
+                   partition_help = \i, j, list, high, pivot ->
                        if j < high then
                            when List.get list j is
                                Ok value ->
                                    if value <= pivot then
-                                       partitionHelp (i + 1) (j + 1) (swap i j list) high pivot
+                                       partition_help (i + 1) (j + 1) (swap i j list) high pivot
                                    else
-                                       partitionHelp i (j + 1) list high pivot
+                                       partition_help i (j + 1) list high pivot
 
                                Err _ ->
                                    Pair i list
@@ -3047,13 +3047,13 @@ fn list_product() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_keep_void() {
     assert_evals_to!(
-        "List.keepOks [] (\\x -> x)",
+        "List.keep_oks [] (\\x -> x)",
         RocList::from_slice(&[]),
         RocList<()>
     );
 
     assert_evals_to!(
-        "List.keepErrs [] (\\x -> x)",
+        "List.keep_errs [] (\\x -> x)",
         RocList::from_slice(&[]),
         RocList<()>
     );
@@ -3063,22 +3063,22 @@ fn list_keep_void() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_keep_oks() {
     assert_evals_to!(
-        "List.keepOks [Ok {}, Ok {}] (\\x -> x)",
+        "List.keep_oks [Ok {}, Ok {}] (\\x -> x)",
         RocList::from_slice(&[(), ()]),
         RocList<()>
     );
     assert_evals_to!(
-        "List.keepOks [1,2] (\\x -> Ok x)",
+        "List.keep_oks [1,2] (\\x -> Ok x)",
         RocList::from_slice(&[1, 2]),
         RocList<i64>
     );
     assert_evals_to!(
-        "List.keepOks [1,2] (\\x -> Num.remChecked x 2)",
+        "List.keep_oks [1,2] (\\x -> Num.rem_checked x 2)",
         RocList::from_slice(&[1, 0]),
         RocList<i64>
     );
     assert_evals_to!(
-        "List.keepOks [Ok 1, Err 2] (\\x -> x)",
+        "List.keep_oks [Ok 1, Err 2] (\\x -> x)",
         RocList::from_slice(&[1]),
         RocList<i64>
     );
@@ -3088,19 +3088,19 @@ fn list_keep_oks() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_keep_errs() {
     assert_evals_to!(
-        "List.keepErrs [Err {}, Err {}] (\\x -> x)",
+        "List.keep_errs [Err {}, Err {}] (\\x -> x)",
         RocList::from_slice(&[(), ()]),
         RocList<()>
     );
     assert_evals_to!(
-        "List.keepErrs [1,2] (\\x -> Err x)",
+        "List.keep_errs [1,2] (\\x -> Err x)",
         RocList::from_slice(&[1, 2]),
         RocList<i64>
     );
     assert_evals_to!(
         indoc!(
             r"
-            List.keepErrs [0,1,2] (\x -> Num.remChecked x 0 |> Result.mapErr (\_ -> 32))
+            List.keep_errs [0,1,2] (\x -> Num.rem_checked x 0 |> Result.map_err (\_ -> 32))
             "
         ),
         RocList::from_slice(&[32, 32, 32]),
@@ -3108,7 +3108,7 @@ fn list_keep_errs() {
     );
 
     assert_evals_to!(
-        "List.keepErrs [Ok 1, Err 2] (\\x -> x)",
+        "List.keep_errs [Ok 1, Err 2] (\\x -> x)",
         RocList::from_slice(&[2]),
         RocList<i64>
     );
@@ -3118,7 +3118,7 @@ fn list_keep_errs() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_map_with_index() {
     assert_evals_to!(
-        "List.mapWithIndex [0,0,0] (\\x, index -> Num.intCast index + x)",
+        "List.map_with_index [0,0,0] (\\x, index -> Num.int_cast index + x)",
         RocList::from_slice(&[0, 1, 2]),
         RocList<i64>
     );
@@ -3136,7 +3136,7 @@ fn cleanup_because_exception() {
             five : I64
             five = 5
 
-            five + Num.maxI64 + 3 + (Num.intCast (List.len x))
+            five + Num.max_i64 + 3 + (Num.int_cast (List.len x))
                "
         ),
         9,
@@ -3148,17 +3148,17 @@ fn cleanup_because_exception() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_sort_with() {
     assert_evals_to!(
-        "List.sortWith [] Num.compare",
+        "List.sort_with [] Num.compare",
         RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
     assert_evals_to!(
-        "List.sortWith [4,3,2,1] Num.compare",
+        "List.sort_with [4,3,2,1] Num.compare",
         RocList::from_slice(&[1, 2, 3, 4]),
         RocList<i64>
     );
     assert_evals_to!(
-        "List.sortWith [1,2,3,4] (\\a,b -> Num.compare b a)",
+        "List.sort_with [1,2,3,4] (\\a,b -> Num.compare b a)",
         RocList::from_slice(&[4, 3, 2, 1]),
         RocList<i64>
     );
@@ -3168,12 +3168,12 @@ fn list_sort_with() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_sort_asc() {
     assert_evals_to!(
-        "List.sortAsc []",
+        "List.sort_asc []",
         RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
     assert_evals_to!(
-        "List.sortAsc [4,3,2,1]",
+        "List.sort_asc [4,3,2,1]",
         RocList::from_slice(&[1, 2, 3, 4]),
         RocList<i64>
     );
@@ -3183,12 +3183,12 @@ fn list_sort_asc() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_sort_desc() {
     assert_evals_to!(
-        "List.sortDesc []",
+        "List.sort_desc []",
         RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
     assert_evals_to!(
-        "List.sortDesc [1,2,3,4]",
+        "List.sort_desc [1,2,3,4]",
         RocList::from_slice(&[4, 3, 2, 1]),
         RocList<i64>
     );
@@ -3224,7 +3224,7 @@ fn list_all_empty_with_unknown_element_type() {
 }
 
 #[test]
-// This doesn't work on Windows. If you make it return a `bool`, e.g. with `|> Str.isEmpty` at the end,
+// This doesn't work on Windows. If you make it return a `bool`, e.g. with `|> Str.is_empty` at the end,
 // then it works. We don't know what the problem is here!
 #[cfg(all(
     not(target_family = "windows"),
@@ -3256,7 +3256,7 @@ fn map_with_index_multi_record() {
     assert_evals_to!(
         indoc!(
             r"
-            List.mapWithIndex [{ x: {}, y: {} }] \_, _ -> {}
+            List.map_with_index [{ x: {}, y: {} }] \_, _ -> {}
             "
         ),
         RocList::from_slice(&[((), ())]),
@@ -3271,17 +3271,17 @@ fn empty_list_of_function_type() {
     assert_evals_to!(
         indoc!(
             r#"
-            myList : List (Str -> Str)
-            myList = []
+            my_list : List (Str -> Str)
+            my_list = []
 
-            myClosure : Str -> Str
-            myClosure = \_ -> "bar"
+            my_closure : Str -> Str
+            my_closure = \_ -> "bar"
 
             choose =
                 if Bool.false then
-                    myList
+                    my_list
                 else
-                    [myClosure]
+                    [my_closure]
 
             when List.get choose 0 is
                 Ok f -> f "foo"
@@ -3299,7 +3299,7 @@ fn list_join_map() {
     assert_evals_to!(
         indoc!(
             r#"
-            List.joinMap ["guava,apple,pear", "bailey,cyrus"] (\s -> Str.splitOn s ",")
+            List.join_map ["guava,apple,pear", "bailey,cyrus"] (\s -> Str.split_on s ",")
             "#
         ),
         RocList::from_slice(&[
@@ -3319,7 +3319,7 @@ fn list_join_map_empty() {
     assert_evals_to!(
         indoc!(
             r#"
-            List.joinMap [] (\s -> Str.splitOn s ",")
+            List.join_map [] (\s -> Str.split_on s ",")
             "#
         ),
         RocList::from_slice(&[]),
@@ -3333,7 +3333,7 @@ fn list_find() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.findFirst ["a", "bc", "def", "g"] (\s -> Str.countUtf8Bytes s > 1) is
+            when List.find_first ["a", "bc", "def", "g"] (\s -> Str.count_utf8_bytes s > 1) is
                 Ok v -> v
                 Err _ -> "not found"
             "#
@@ -3345,7 +3345,7 @@ fn list_find() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.findLast ["a", "bc", "def", "g"] (\s -> Str.countUtf8Bytes s > 1) is
+            when List.find_last ["a", "bc", "def", "g"] (\s -> Str.count_utf8_bytes s > 1) is
                 Ok v -> v
                 Err _ -> "not found"
             "#
@@ -3361,7 +3361,7 @@ fn list_find_not_found() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.findFirst ["a", "bc", "def", "g"] (\s -> Str.countUtf8Bytes s > 5) is
+            when List.find_first ["a", "bc", "def", "g"] (\s -> Str.count_utf8_bytes s > 5) is
                 Ok v -> v
                 Err _ -> "not found"
             "#
@@ -3373,7 +3373,7 @@ fn list_find_not_found() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.findLast ["a", "bc", "def", "g"] (\s -> Str.countUtf8Bytes s > 5) is
+            when List.find_last ["a", "bc", "def", "g"] (\s -> Str.count_utf8_bytes s > 5) is
                 Ok v -> v
                 Err _ -> "not found"
             "#
@@ -3389,7 +3389,7 @@ fn list_find_empty_typed_list() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.findFirst [] (\s -> Str.countUtf8Bytes s > 5) is
+            when List.find_first [] (\s -> Str.count_utf8_bytes s > 5) is
                 Ok v -> v
                 Err _ -> "not found"
             "#
@@ -3401,7 +3401,7 @@ fn list_find_empty_typed_list() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.findLast [] (\s -> Str.countUtf8Bytes s > 5) is
+            when List.find_last [] (\s -> Str.count_utf8_bytes s > 5) is
                 Ok v -> v
                 Err _ -> "not found"
             "#
@@ -3417,7 +3417,7 @@ fn list_find_empty_layout() {
     assert_evals_to!(
         indoc!(
             r"
-            List.findFirst [] \_ -> Bool.true
+            List.find_first [] \_ -> Bool.true
             "
         ),
         // [Ok [], Err [NotFound]] gets unwrapped all the way to just [NotFound],
@@ -3429,7 +3429,7 @@ fn list_find_empty_layout() {
     assert_evals_to!(
         indoc!(
             r"
-            List.findLast [] \_ -> Bool.true
+            List.find_last [] \_ -> Bool.true
             "
         ),
         // [Ok [], Err [NotFound]] gets unwrapped all the way to just [NotFound],
@@ -3445,7 +3445,7 @@ fn list_find_index() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.findFirstIndex ["a", "bc", "def", "g"] (\s -> Str.countUtf8Bytes s > 1) is
+            when List.find_first_index ["a", "bc", "def", "g"] (\s -> Str.count_utf8_bytes s > 1) is
                 Ok v -> v
                 Err _ -> 999
             "#
@@ -3457,7 +3457,7 @@ fn list_find_index() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.findLastIndex ["a", "bc", "def", "g"] (\s -> Str.countUtf8Bytes s > 1) is
+            when List.find_last_index ["a", "bc", "def", "g"] (\s -> Str.count_utf8_bytes s > 1) is
                 Ok v -> v
                 Err _ -> 999
             "#
@@ -3473,7 +3473,7 @@ fn list_find_index_not_found() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.findFirstIndex ["a", "bc", "def", "g"] (\s -> Str.countUtf8Bytes s > 5) is
+            when List.find_first_index ["a", "bc", "def", "g"] (\s -> Str.count_utf8_bytes s > 5) is
                 Ok v -> v
                 Err _ -> 999
             "#
@@ -3485,7 +3485,7 @@ fn list_find_index_not_found() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.findLastIndex ["a", "bc", "def"] (\s -> Str.countUtf8Bytes s > 5) is
+            when List.find_last_index ["a", "bc", "def"] (\s -> Str.count_utf8_bytes s > 5) is
                 Ok v -> v
                 Err _ -> 999
             "#
@@ -3501,7 +3501,7 @@ fn list_find_index_empty_typed_list() {
     assert_evals_to!(
         indoc!(
             r"
-            when List.findFirstIndex [] (\s -> Str.countUtf8Bytes s > 5) is
+            when List.find_first_index [] (\s -> Str.count_utf8_bytes s > 5) is
                 Ok v -> v
                 Err _ -> 999
             "
@@ -3513,7 +3513,7 @@ fn list_find_index_empty_typed_list() {
     assert_evals_to!(
         indoc!(
             r"
-            when List.findLastIndex [] (\s -> Str.countUtf8Bytes s > 5) is
+            when List.find_last_index [] (\s -> Str.count_utf8_bytes s > 5) is
                 Ok v -> v
                 Err _ -> 999
             "
@@ -3529,7 +3529,7 @@ fn list_ends_with_empty() {
     assert_evals_to!(
         indoc!(
             r"
-            List.endsWith [] []
+            List.ends_with [] []
             "
         ),
         true,
@@ -3539,7 +3539,7 @@ fn list_ends_with_empty() {
     assert_evals_to!(
         indoc!(
             r#"
-            List.endsWith ["a"] []
+            List.ends_with ["a"] []
             "#
         ),
         true,
@@ -3549,7 +3549,7 @@ fn list_ends_with_empty() {
     assert_evals_to!(
         indoc!(
             r#"
-            List.endsWith [] ["a"]
+            List.ends_with [] ["a"]
             "#
         ),
         false,
@@ -3563,7 +3563,7 @@ fn list_ends_with_nonempty() {
     assert_evals_to!(
         indoc!(
             r#"
-            List.endsWith ["a", "bc", "def"] ["def"]
+            List.ends_with ["a", "bc", "def"] ["def"]
             "#
         ),
         true,
@@ -3573,7 +3573,7 @@ fn list_ends_with_nonempty() {
     assert_evals_to!(
         indoc!(
             r#"
-            List.endsWith ["a", "bc", "def"] ["bc", "def"]
+            List.ends_with ["a", "bc", "def"] ["bc", "def"]
             "#
         ),
         true,
@@ -3583,7 +3583,7 @@ fn list_ends_with_nonempty() {
     assert_evals_to!(
         indoc!(
             r#"
-            List.endsWith ["a", "bc", "def"] ["a"]
+            List.ends_with ["a", "bc", "def"] ["a"]
             "#
         ),
         false,
@@ -3593,7 +3593,7 @@ fn list_ends_with_nonempty() {
     assert_evals_to!(
         indoc!(
             r#"
-            List.endsWith ["a", "bc", "def"] [""]
+            List.ends_with ["a", "bc", "def"] [""]
             "#
         ),
         false,
@@ -3607,7 +3607,7 @@ fn list_starts_with_empty() {
     assert_evals_to!(
         indoc!(
             r"
-            List.startsWith [] []
+            List.starts_with [] []
             "
         ),
         true,
@@ -3617,7 +3617,7 @@ fn list_starts_with_empty() {
     assert_evals_to!(
         indoc!(
             r#"
-            List.startsWith ["a"] []
+            List.starts_with ["a"] []
             "#
         ),
         true,
@@ -3627,7 +3627,7 @@ fn list_starts_with_empty() {
     assert_evals_to!(
         indoc!(
             r#"
-            List.startsWith [] ["a"]
+            List.starts_with [] ["a"]
             "#
         ),
         false,
@@ -3641,7 +3641,7 @@ fn list_starts_with_nonempty() {
     assert_evals_to!(
         indoc!(
             r#"
-            List.startsWith ["a", "bc", "def"] ["a"]
+            List.starts_with ["a", "bc", "def"] ["a"]
             "#
         ),
         true,
@@ -3651,7 +3651,7 @@ fn list_starts_with_nonempty() {
     assert_evals_to!(
         indoc!(
             r#"
-            List.startsWith ["a", "bc", "def"] ["a", "bc"]
+            List.starts_with ["a", "bc", "def"] ["a", "bc"]
             "#
         ),
         true,
@@ -3661,7 +3661,7 @@ fn list_starts_with_nonempty() {
     assert_evals_to!(
         indoc!(
             r#"
-            List.startsWith ["a", "bc", "def"] ["def"]
+            List.starts_with ["a", "bc", "def"] ["def"]
             "#
         ),
         false,
@@ -3671,7 +3671,7 @@ fn list_starts_with_nonempty() {
     assert_evals_to!(
         indoc!(
             r#"
-            List.startsWith ["a", "bc", "def"] [""]
+            List.starts_with ["a", "bc", "def"] [""]
             "#
         ),
         false,
@@ -3705,7 +3705,7 @@ fn with_capacity() {
         indoc!(
             r"
             l : List U64
-            l = List.withCapacity 10
+            l = List.with_capacity 10
 
             l
             "
@@ -3724,7 +3724,7 @@ fn with_capacity_append() {
     assert_evals_to!(
         indoc!(
             r"
-            List.withCapacity 10
+            List.with_capacity 10
                 |> List.append 0u64
                 |> List.append 1u64
                 |> List.append 2u64
@@ -3783,7 +3783,7 @@ fn release_excess_capacity() {
         indoc!(
             r"
             List.reserve [] 15
-            |> List.releaseExcessCapacity
+            |> List.release_excess_capacity
             "
         ),
         (0, RocList::empty()),
@@ -3799,7 +3799,7 @@ fn release_excess_capacity_with_len() {
         indoc!(
             r"
             List.reserve [1] 50
-            |> List.releaseExcessCapacity
+            |> List.release_excess_capacity
             "
         ),
         (1, RocList::from_slice(&[1])),
@@ -3814,7 +3814,7 @@ fn release_excess_capacity_empty() {
     assert_evals_to!(
         indoc!(
             r"
-            List.releaseExcessCapacity []
+            List.release_excess_capacity []
             "
         ),
         (0, RocList::empty()),
@@ -3864,21 +3864,21 @@ fn issue_3571_lowlevel_call_function_with_bool_lambda_set() {
 
             apply : List (a -> b), List a -> List b
             apply = \funs, vals ->
-              initial = List.withCapacity ((List.len funs) * (List.len vals))
-              List.walk funs initial \state, fun ->
-                mappedVals = List.map vals fun
-                List.concat state mappedVals
+                initial = List.with_capacity ((List.len funs) * (List.len vals))
+                List.walk funs initial \state, fun ->
+                    mapped_vals = List.map vals fun
+                    List.concat state mapped_vals
 
             add2 : Str -> Str
-            add2 = \x -> "added $(x)"
+            add2 = \x -> "added ${x}"
 
             mul2 : Str -> Str
-            mul2 = \x -> "multiplied $(x)"
+            mul2 = \x -> "multiplied ${x}"
 
             foo = [add2, mul2]
             bar = ["1", "2", "3", "4"]
 
-            main = foo |> apply bar |> Str.joinWith ", "
+            main = foo |> apply bar |> Str.join_with ", "
             "#
         ),
         RocStr::from("added 1, added 2, added 3, added 4, multiplied 1, multiplied 2, multiplied 3, multiplied 4"),
@@ -3930,11 +3930,11 @@ fn list_walk_backwards_implements_position() {
 
         find : List a, a -> Option U64 where a implements Eq
         find = \list, needle ->
-            findHelp list needle
+            find_help list needle
                 |> .v
 
-        findHelp = \list, needle ->
-            List.walkBackwardsUntil list { n: 0, v: None } \{ n, v }, element ->
+        find_help = \list, needle ->
+            List.walk_backwards_until list { n: 0, v: None } \{ n, v }, element ->
                 if element == needle then
                     Break { n, v: Some n }
                 else
@@ -3953,7 +3953,7 @@ fn list_walk_backwards_implements_position() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_walk_backwards_until_sum() {
     assert_evals_to!(
-        r"List.walkBackwardsUntil [1, 2] 0 \a,b -> Continue (a + b)",
+        r"List.walk_backwards_until [1, 2] 0 \a,b -> Continue (a + b)",
         3,
         i64
     );
@@ -3965,13 +3965,13 @@ fn list_walk_backwards_until_even_prefix_sum() {
     assert_evals_to!(
         r"
         helper = \a, b ->
-            if Num.isEven b then
+            if Num.is_even b then
                 Continue (a + b)
 
             else
                 Break a
 
-        List.walkBackwardsUntil [9, 8, 4, 2] 0 helper",
+        List.walk_backwards_until [9, 8, 4, 2] 0 helper",
         2 + 4 + 8,
         i64
     );
@@ -3981,7 +3981,7 @@ fn list_walk_backwards_until_even_prefix_sum() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_walk_from_until_sum() {
     assert_evals_to!(
-        r"List.walkFromUntil [1, 2, 3, 4] 2 0 \a,b -> Continue (a + b)",
+        r"List.walk_from_until [1, 2, 3, 4] 2 0 \a,b -> Continue (a + b)",
         7,
         i64
     );
@@ -3992,13 +3992,13 @@ fn list_walk_from_until_sum() {
 fn concat_unique_to_nonunique_overlapping_issue_4697() {
     assert_evals_to!(
         r"
-        # originalList is shared, but others is unique.
-        # When we concat originalList with others, others should be re-used.
+        # original_list is shared, but others is unique.
+        # When we concat original_list with others, others should be re-used.
 
-        originalList = [1u8]
+        original_list = [1u8]
         others = [2u8, 3u8, 4u8]
-        new = List.concat originalList others
-        {a: originalList, b: new}
+        new = List.concat original_list others
+        {a: original_list, b: new}
         ",
         (
             RocList::from_slice(&[1u8]),
@@ -4014,13 +4014,13 @@ fn list_walk_from_even_prefix_sum() {
     assert_evals_to!(
         r"
         helper = \a, b ->
-            if Num.isEven b then
+            if Num.is_even b then
                 Continue (a + b)
 
             else
                 Break a
 
-        List.walkFromUntil [2, 4, 8, 9] 1 0 helper",
+        List.walk_from_until [2, 4, 8, 9] 1 0 helper",
         4 + 8,
         i64
     );
@@ -4281,7 +4281,7 @@ mod pattern_match {
 fn list_concat_utf8() {
     assert_evals_to!(
         r#"
-        List.concatUtf8 [1, 2, 3, 4] "🐦"
+        List.concat_utf8 [1, 2, 3, 4] "🐦"
         "#,
         RocList::from_slice(&[1u8, 2, 3, 4, 240, 159, 144, 166]),
         RocList<u8>

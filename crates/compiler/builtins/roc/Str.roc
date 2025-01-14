@@ -34,7 +34,7 @@
 ## ```
 ## name = "Sam"
 ##
-## "Hi, my name is $(name)!"
+## "Hi, my name is ${name}!"
 ## ```
 ##
 ## This will evaluate to the string `"Hi, my name is Sam!"`
@@ -44,7 +44,7 @@
 ## ```
 ## colors = ["red", "green", "blue"]
 ##
-## "The colors are $(colors |> Str.joinWith ", ")!"
+## "The colors are ${colors |> Str.join_with(", ")}!"
 ## ```
 ##
 ## Interpolation can be used in multiline strings, but the part inside the parentheses must still be on one line.
@@ -245,7 +245,7 @@
 ##
 ## A valuable feature of UTF-8 is that it is backwards-compatible with the [ASCII](https://en.wikipedia.org/wiki/ASCII) encoding that was widely used for many years. ASCII existed before Unicode did, and only used the integers 0 to 127 to represent its equivalent of code points. The Unicode code points 0 to 127 represent the same semantic information as ASCII, (e.g. the number 64 represents the letter "A" in both ASCII and in Unicode), and since UTF-8 represents code points 0 to 127 using one byte, all valid ASCII strings can be successfully parsed as UTF-8 without any need for conversion.
 ##
-## Since many textual computer encodings—including [CSV](https://en.wikipedia.org/wiki/CSV), [XML](https://en.wikipedia.org/wiki/XML), and [JSON](https://en.wikipedia.org/wiki/JSON)—do not use any code points above 127 for their delimiters, it is often possible to write parsers for these formats using only `Str` functions which present UTF-8 as raw `U8` sequences, such as [`Str.walkUtf8`](https://www.roc-lang.org/builtins/Str#walkUtf8) and [`Str.toUtf8`](https://www.roc-lang.org/builtins/Str#toUtf8). In the typical case where they do not to need to parse out individual Unicode code points, they can get everything they need from `Str` UTF-8 functions without needing to depend on other packages.
+## Since many textual computer encodings—including [CSV](https://en.wikipedia.org/wiki/CSV), [XML](https://en.wikipedia.org/wiki/XML), and [JSON](https://en.wikipedia.org/wiki/JSON)—do not use any code points above 127 for their delimiters, it is often possible to write parsers for these formats using only `Str` functions which present UTF-8 as raw `U8` sequences, such as [`Str.walk_utf8`](https://www.roc-lang.org/builtins/Str#walk_utf8) and [`Str.to_utf8`](https://www.roc-lang.org/builtins/Str#to_utf8). In the typical case where they do not to need to parse out individual Unicode code points, they can get everything they need from `Str` UTF-8 functions without needing to depend on other packages.
 ##
 ## ### When to use code points, graphemes, and UTF-8
 ##
@@ -253,8 +253,8 @@
 ##
 ## The way Roc organizes the `Str` module and supporting packages is designed to help answer this question. Every situation is different, but the following rules of thumb are typical:
 ##
-## * Most often, using `Str` values along with helper functions like [`splitOn`](https://www.roc-lang.org/builtins/Str#splitOn), [`joinWith`](https://www.roc-lang.org/builtins/Str#joinWith), and so on, is the best option.
-## * If you are specifically implementing a parser, working in UTF-8 bytes is usually the best option. So functions like [`walkUtf8`](https://www.roc-lang.org/builtins/Str#walkUtf8), [toUtf8](https://www.roc-lang.org/builtins/Str#toUtf8), and so on. (Note that single-quote literals produce number literals, so ASCII-range literals like `'a'` gives an integer literal that works with a UTF-8 `U8`.)
+## * Most often, using `Str` values along with helper functions like [`split_on`](https://www.roc-lang.org/builtins/Str#split_on), [`join_with`](https://www.roc-lang.org/builtins/Str#join_with), and so on, is the best option.
+## * If you are specifically implementing a parser, working in UTF-8 bytes is usually the best option. So functions like [`walk_utf8`](https://www.roc-lang.org/builtins/Str#walk_utf8), [to_utf8](https://www.roc-lang.org/builtins/Str#to_utf8), and so on. (Note that single-quote literals produce number literals, so ASCII-range literals like `'a'` gives an integer literal that works with a UTF-8 `U8`.)
 ## * If you are implementing a Unicode library like [roc-lang/unicode](https://github.com/roc-lang/unicode), working in terms of code points will be unavoidable. Aside from basic readability considerations like `\u(...)` in string literals, if you have the option to avoid working in terms of code points, it is almost always correct to avoid them.
 ## * If it seems like a good idea to split a string into "characters" (graphemes), you should definitely stop and reconsider whether this is really the best design. Almost always, doing this is some combination of more error-prone or slower (usually both) than doing something else that does not require taking graphemes into consideration.
 ##
@@ -275,7 +275,7 @@
 ##
 ## Like lists, dictionaries, and sets, Roc strings are automatically reference-counted and can benefit from opportunistic in-place mutation. The reference count is stored on the heap immediately before the first byte of the string's contents, and it has the same size as a memory address. This means it can count so high that it's impossible to write a Roc program which overflows a reference count, because having that many simultaneous references (each of which is a memory address) would have exhausted the operating system's address space first.
 ##
-## When the string's reference count is 1, functions like [`Str.concat`](https://www.roc-lang.org/builtins/Str#concat) and [`Str.replaceEach`](https://www.roc-lang.org/builtins/Str#replaceEach) mutate the string in-place rather than allocating a new string. This preserves semantic immutability because it is unobservable in terms of the operation's output; if the reference count is 1, it means that memory would have otherwise been deallocated immediately anyway, and it's more efficient to reuse it instead of deallocating it and then immediately making a new allocation.
+## When the string's reference count is 1, functions like [`Str.concat`](https://www.roc-lang.org/builtins/Str#concat) and [`Str.replace_each`](https://www.roc-lang.org/builtins/Str#replace_each) mutate the string in-place rather than allocating a new string. This preserves semantic immutability because it is unobservable in terms of the operation's output; if the reference count is 1, it means that memory would have otherwise been deallocated immediately anyway, and it's more efficient to reuse it instead of deallocating it and then immediately making a new allocation.
 ##
 ##  The contents of statically-known strings (today that means string literals) are stored in the readonly section of the binary, so they do not need heap allocations or reference counts. They are not eligible for in-place mutation, since mutating the readonly section of the binary would cause an operating system [access violation](https://en.wikipedia.org/wiki/Segmentation_fault).
 ##
@@ -294,7 +294,7 @@
 ## Try putting this into `roc repl`:
 ##
 ## ```
-## » "foo/bar/baz" |> Str.splitOn "/"
+## » "foo/bar/baz" |> Str.split_on("/")
 ##
 ## ["foo", "bar", "baz"] : List Str
 ## ```
@@ -304,7 +304,7 @@
 ## Now let's suppose they were long enough that this optimization no longer applied:
 ##
 ## ```
-## » "a much, much, much, much/longer/string compared to the last one!" |> Str.splitOn "/"
+## » "a much, much, much, much/longer/string compared to the last one!" |> Str.split_on "/"
 ##
 ## ["a much, much, much, much", "longer", "string compared to the last one!"] : List Str
 ## ```
@@ -323,52 +323,52 @@
 ## 2. The smaller slice is used for a long time in the program, whereas the much larger original string stops being used.
 ## 3. In this situation, it might have been better for total program memory usage (although not necessarily overall performance) if the original large string could have been deallocated sooner, even at the expense of having to copy the smaller string into a new allocation instead of reusing the bytes with a seamless slice.
 ##
-## If a situation like this comes up, a slice can be turned into a separate string by using [`Str.concat`](https://www.roc-lang.org/builtins/Str#concat) to concatenate the slice onto an empty string (or one created with [`Str.withCapacity`](https://www.roc-lang.org/builtins/Str#withCapacity)).
+## If a situation like this comes up, a slice can be turned into a separate string by using [`Str.concat`](https://www.roc-lang.org/builtins/Str#concat) to concatenate the slice onto an empty string (or one created with [`Str.with_capacity`](https://www.roc-lang.org/builtins/Str#with_capacity)).
 ##
 ## Currently, the only way to get seamless slices of strings is by calling certain `Str` functions which return them. In general, `Str` functions which accept a string and return a subset of that string tend to do this. [`Str.trim`](https://www.roc-lang.org/builtins/Str#trim) is another example of a function which returns a seamless slice.
 module [
     Utf8Problem,
     Utf8ByteProblem,
     concat,
-    isEmpty,
-    joinWith,
-    splitOn,
+    is_empty,
+    join_with,
+    split_on,
     repeat,
-    countUtf8Bytes,
-    toUtf8,
-    fromUtf8,
-    startsWith,
-    endsWith,
+    count_utf8_bytes,
+    to_utf8,
+    from_utf8,
+    starts_with,
+    ends_with,
     trim,
-    trimStart,
-    trimEnd,
-    toDec,
-    toF64,
-    toF32,
-    toU128,
-    toI128,
-    toU64,
-    toI64,
-    toU32,
-    toI32,
-    toU16,
-    toI16,
-    toU8,
-    toI8,
-    replaceEach,
-    replaceFirst,
-    replaceLast,
-    splitFirst,
-    splitLast,
-    walkUtf8,
-    walkUtf8WithIndex,
+    trim_start,
+    trim_end,
+    to_dec,
+    to_f64,
+    to_f32,
+    to_u128,
+    to_i128,
+    to_u64,
+    to_i64,
+    to_u32,
+    to_i32,
+    to_u16,
+    to_i16,
+    to_u8,
+    to_i8,
+    replace_each,
+    replace_first,
+    replace_last,
+    split_first,
+    split_last,
+    walk_utf8,
+    walk_utf8_with_index,
     reserve,
-    releaseExcessCapacity,
-    withCapacity,
-    withPrefix,
+    release_excess_capacity,
+    with_capacity,
+    with_prefix,
     contains,
-    dropPrefix,
-    dropSuffix,
+    drop_prefix,
+    drop_suffix,
 ]
 
 import Bool exposing [Bool]
@@ -385,20 +385,20 @@ Utf8ByteProblem : [
     EncodesSurrogateHalf,
 ]
 
-Utf8Problem : { byteIndex : U64, problem : Utf8ByteProblem }
+Utf8Problem : { byte_index : U64, problem : Utf8ByteProblem }
 
 ## Returns [Bool.true] if the string is empty, and [Bool.false] otherwise.
 ## ```roc
-## expect Str.isEmpty "hi!" == Bool.false
-## expect Str.isEmpty "" == Bool.true
+## expect Str.is_empty("hi!") == Bool.false
+## expect Str.is_empty("") == Bool.true
 ## ```
-isEmpty : Str -> Bool
+is_empty : Str -> Bool
 
 ## Concatenates two strings together.
 ## ```roc
-## expect Str.concat "ab" "cd" == "abcd"
-## expect Str.concat "hello" "" == "hello"
-## expect Str.concat "" "" == ""
+## expect Str.concat("ab", "cd") == "abcd"
+## expect Str.concat("hello", "") == "hello"
+## expect Str.concat("", "") == ""
 ## ```
 concat : Str, Str -> Str
 
@@ -412,21 +412,21 @@ concat : Str, Str -> Str
 ## subject = "Awesome Programmer"
 ##
 ## # Evaluates to "Hello and welcome to Roc, Awesome Programmer!"
-## helloWorld =
-##     Str.withCapacity 45
-##     |> Str.concat greeting
-##     |> Str.concat ", "
-##     |> Str.concat subject
-##     |> Str.concat "!"
+## hello_world =
+##     Str.with_capacity(45)
+##     |> Str.concat(greeting)
+##     |> Str.concat(", ")
+##     |> Str.concat(subject)
+##     |> Str.concat("!")
 ## ```
 ##
 ## In general, if you plan to use [Str.concat] on an empty string, it will be faster to start with
-## [Str.withCapacity] than with `""`. Even if you don't know the exact capacity of the string, giving [withCapacity]
+## [Str.with_capacity] than with `""`. Even if you don't know the exact capacity of the string, giving [with_capacity]
 ## a higher value than ends up being necessary can help prevent reallocation and copying—at
 ## the cost of using more memory than is necessary.
 ##
 ## For more details on how the performance optimization works, see [Str.reserve].
-withCapacity : U64 -> Str
+with_capacity : U64 -> Str
 
 ## Increase a string's capacity by at least the given number of additional bytes.
 ##
@@ -439,11 +439,11 @@ withCapacity : U64 -> Str
 ## subject = "Awesome Programmer"
 ##
 ## # Evaluates to "Hello and welcome to Roc, Awesome Programmer!"
-## helloWorld =
+## hello_world =
 ##     greeting
-##     |> Str.concat ", "
-##     |> Str.concat subject
-##     |> Str.concat "!"
+##     |> Str.concat(", ")
+##     |> Str.concat(subject)
+##     |> Str.concat("!")
 ## ```
 ##
 ## In this example:
@@ -457,19 +457,19 @@ withCapacity : U64 -> Str
 ## Here's a modified example which uses [Str.reserve] to eliminate the need for all that reallocation, copying, and deallocation.
 ##
 ## ```roc
-## helloWorld =
+## hello_world =
 ##     greeting
-##     |> Str.reserve 21
-##     |> Str.concat ", "
-##     |> Str.concat subject
-##     |> Str.concat "!"
+##     |> Str.reserve(21)
+##     |> Str.concat(", ")
+##     |> Str.concat(subject)
+##     |> Str.concat("!")
 ## ```
 ##
 ## In this example:
 ## 1. We again start with `greeting`, which has both a length and capacity of 24 bytes.
-## 2. `|> Str.reserve 21` will ensure that there is enough capacity in the string for an additional 21 bytes (to make room for `", "`, `"Awesome Programmer"`, and `"!"`). Since the current capacity is only 24, it will create a new 45-byte (24 + 21) heap allocation and copy the contents of the existing allocation (`greeting`) into it.
-## 3. `|> Str.concat ", "` will concatenate `, ` to the string. No reallocation, copying, or deallocation will be necessary, because the string already has a capacity of 45 btytes, and `greeting` will only use 24 of them.
-## 4. `|> Str.concat subject` will concatenate `subject` (`"Awesome Programmer"`) to the string. Again, no reallocation, copying, or deallocation will be necessary.
+## 2. `|> Str.reserve(21)` will ensure that there is enough capacity in the string for an additional 21 bytes (to make room for `", "`, `"Awesome Programmer"`, and `"!"`). Since the current capacity is only 24, it will create a new 45-byte (24 + 21) heap allocation and copy the contents of the existing allocation (`greeting`) into it.
+## 3. `|> Str.concat(", ")` will concatenate `, ` to the string. No reallocation, copying, or deallocation will be necessary, because the string already has a capacity of 45 btytes, and `greeting` will only use 24 of them.
+## 4. `|> Str.concat(subject)` will concatenate `subject` (`"Awesome Programmer"`) to the string. Again, no reallocation, copying, or deallocation will be necessary.
 ## 5. `|> Str.concat "!\n"` will concatenate `"!\n"` to the string, still without any reallocation, copying, or deallocation.
 ##
 ## Here, [Str.reserve] prevented multiple reallocations, copies, and deallocations during the
@@ -483,399 +483,399 @@ withCapacity : U64 -> Str
 ## this, of course; if you always give it ten times what it turns out to need, that could prevent
 ## reallocations but will also waste a lot of memory!
 ##
-## If you plan to use [Str.reserve] on an empty string, it's generally better to use [Str.withCapacity] instead.
+## If you plan to use [Str.reserve] on an empty string, it's generally better to use [Str.with_capacity] instead.
 reserve : Str, U64 -> Str
 
 ## Combines a [List] of strings into a single string, with a separator
 ## string in between each.
 ## ```roc
-## expect Str.joinWith ["one", "two", "three"] ", " == "one, two, three"
-## expect Str.joinWith ["1", "2", "3", "4"] "." == "1.2.3.4"
+## expect Str.join_with(["one", "two", "three"], ", ") == "one, two, three"
+## expect Str.join_with(["1", "2", "3", "4"], ".") == "1.2.3.4"
 ## ```
-joinWith : List Str, Str -> Str
+join_with : List Str, Str -> Str
 
 ## Split a string around a separator.
 ##
 ## Passing `""` for the separator is not useful;
 ## it returns the original string wrapped in a [List].
 ## ```roc
-## expect Str.splitOn "1,2,3" "," == ["1","2","3"]
-## expect Str.splitOn "1,2,3" "" == ["1,2,3"]
+## expect Str.split_on("1,2,3", ",") == ["1","2","3"]
+## expect Str.split_on("1,2,3", "") == ["1,2,3"]
 ## ```
-splitOn : Str, Str -> List Str
+split_on : Str, Str -> List Str
 
 ## Repeats a string the given number of times.
 ## ```roc
-## expect Str.repeat "z" 3 == "zzz"
-## expect Str.repeat "na" 8 == "nananananananana"
+## expect Str.repeat("z", 3) == "zzz"
+## expect Str.repeat("na", 8) == "nananananananana"
 ## ```
 ## Returns `""` when given `""` for the string or `0` for the count.
 ## ```roc
-## expect Str.repeat "" 10 == ""
-## expect Str.repeat "anything" 0 == ""
+## expect Str.repeat("", 10) == ""
+## expect Str.repeat("anything", 0) == ""
 ## ```
 repeat : Str, U64 -> Str
 
 ## Returns a [List] of the string's [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit).
 ## (To split the string into a [List] of smaller [Str] values instead of [U8] values,
-## see [Str.splitOn].)
+## see [Str.split_on].)
 ## ```roc
-## expect Str.toUtf8 "Roc" == [82, 111, 99]
-## expect Str.toUtf8 "鹏" == [233, 185, 143]
-## expect Str.toUtf8 "சி" == [224, 174, 154, 224, 174, 191]
-## expect Str.toUtf8 "🐦" == [240, 159, 144, 166]
+## expect Str.to_utf8("Roc") == [82, 111, 99]
+## expect Str.to_utf8("鹏") == [233, 185, 143]
+## expect Str.to_utf8("சி") == [224, 174, 154, 224, 174, 191]
+## expect Str.to_utf8("🐦") == [240, 159, 144, 166]
 ## ```
-toUtf8 : Str -> List U8
+to_utf8 : Str -> List U8
 
 ## Converts a [List] of [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit) to a string.
 ##
 ## Returns `Err` if the given bytes are invalid UTF-8, and returns `Ok ""` when given `[]`.
 ## ```roc
-## expect Str.fromUtf8 [82, 111, 99] == Ok "Roc"
-## expect Str.fromUtf8 [233, 185, 143] == Ok "鹏"
-## expect Str.fromUtf8 [224, 174, 154, 224, 174, 191] == Ok "சி"
-## expect Str.fromUtf8 [240, 159, 144, 166] == Ok "🐦"
-## expect Str.fromUtf8 [] == Ok ""
-## expect Str.fromUtf8 [255] |> Result.isErr
+## expect Str.from_utf8([82, 111, 99]) == Ok("Roc")
+## expect Str.from_utf8([233, 185, 143]) == Ok("鹏")
+## expect Str.from_utf8([224, 174, 154, 224, 174, 191]) == Ok("சி")
+## expect Str.from_utf8([240, 159, 144, 166]) == Ok("🐦")
+## expect Str.from_utf8([]) == Ok("")
+## expect Str.from_utf8([255]) |> Result.is_err
 ## ```
-fromUtf8 : List U8 -> Result Str [BadUtf8 { problem : Utf8ByteProblem, index : U64 }]
-fromUtf8 = \bytes ->
-    result = fromUtf8Lowlevel bytes
+from_utf8 : List U8 -> Result Str [BadUtf8 { problem : Utf8ByteProblem, index : U64 }]
+from_utf8 = \bytes ->
+    result = from_utf8_lowlevel bytes
 
-    if result.cIsOk then
-        Ok result.bString
+    if result.c_is_ok then
+        Ok(result.b_string)
     else
-        Err (BadUtf8 { problem: result.dProblemCode, index: result.aByteIndex })
+        Err (BadUtf8 { problem: result.d_problem_code, index: result.a_byte_index })
 
-expect (Str.fromUtf8 [82, 111, 99]) == Ok "Roc"
-expect (Str.fromUtf8 [224, 174, 154, 224, 174, 191]) == Ok "சி"
-expect (Str.fromUtf8 [240, 159, 144, 166]) == Ok "🐦"
-expect (Str.fromUtf8 []) == Ok ""
-expect (Str.fromUtf8 [255]) |> Result.isErr
+expect (Str.from_utf8([82, 111, 99])) == Ok("Roc")
+expect (Str.from_utf8([224, 174, 154, 224, 174, 191])) == Ok("சி")
+expect (Str.from_utf8([240, 159, 144, 166])) == Ok("🐦")
+expect (Str.from_utf8([])) == Ok("")
+expect (Str.from_utf8([255])) |> Result.is_err
 
 FromUtf8Result : {
-    aByteIndex : U64,
-    bString : Str,
-    cIsOk : Bool,
-    dProblemCode : Utf8ByteProblem,
+    a_byte_index : U64,
+    b_string : Str,
+    c_is_ok : Bool,
+    d_problem_code : Utf8ByteProblem,
 }
 
-fromUtf8Lowlevel : List U8 -> FromUtf8Result
+from_utf8_lowlevel : List U8 -> FromUtf8Result
 
 ## Check if the given [Str] starts with a value.
 ## ```roc
-## expect Str.startsWith "ABC" "A" == Bool.true
-## expect Str.startsWith "ABC" "X" == Bool.false
+## expect Str.starts_with("ABC", "A") == Bool.true
+## expect Str.starts_with("ABC", "X") == Bool.false
 ## ```
-startsWith : Str, Str -> Bool
+starts_with : Str, Str -> Bool
 
 ## Check if the given [Str] ends with a value.
 ## ```roc
-## expect Str.endsWith "ABC" "C" == Bool.true
-## expect Str.endsWith "ABC" "X" == Bool.false
+## expect Str.ends_with("ABC", "C") == Bool.true
+## expect Str.ends_with("ABC", "X") == Bool.false
 ## ```
-endsWith : Str, Str -> Bool
+ends_with : Str, Str -> Bool
 
 ## Return the [Str] with all whitespace removed from both the beginning
 ## as well as the end.
 ## ```roc
-## expect Str.trim "   Hello      \n\n" == "Hello"
+## expect Str.trim("   Hello      \n\n") == "Hello"
 ## ```
 trim : Str -> Str
 
 ## Return the [Str] with all whitespace removed from the beginning.
 ## ```roc
-## expect Str.trimStart "   Hello      \n\n" == "Hello      \n\n"
+## expect Str.trim_start("   Hello      \n\n") == "Hello      \n\n"
 ## ```
-trimStart : Str -> Str
+trim_start : Str -> Str
 
 ## Return the [Str] with all whitespace removed from the end.
 ## ```roc
-## expect Str.trimEnd "   Hello      \n\n" == "   Hello"
+## expect Str.trim_end("   Hello      \n\n") == "   Hello"
 ## ```
-trimEnd : Str -> Str
+trim_end : Str -> Str
 
 ## Encode a [Str] to a [Dec]. A [Dec] value is a 128-bit decimal
 ## [fixed-point number](https://en.wikipedia.org/wiki/Fixed-point_arithmetic).
 ## ```roc
-## expect Str.toDec "10" == Ok 10dec
-## expect Str.toDec "-0.25" == Ok -0.25dec
-## expect Str.toDec "not a number" == Err InvalidNumStr
+## expect Str.to_dec("10") == Ok(10dec)
+## expect Str.to_dec("-0.25") == Ok(-0.25dec)
+## expect Str.to_dec("not a number") == Err(InvalidNumStr)
 ## ```
-toDec : Str -> Result Dec [InvalidNumStr]
-toDec = \string -> strToNumHelp string
+to_dec : Str -> Result Dec [InvalidNumStr]
+to_dec = \string -> str_to_num_help(string)
 
 ## Encode a [Str] to a [F64]. A [F64] value is a 64-bit
 ## [floating-point number](https://en.wikipedia.org/wiki/IEEE_754) and can be
 ## specified with a `f64` suffix.
 ## ```roc
-## expect Str.toF64 "0.10" == Ok 0.10f64
-## expect Str.toF64 "not a number" == Err InvalidNumStr
+## expect Str.to_f64("0.10") == Ok(0.10f64)
+## expect Str.to_f64("not a number") == Err(InvalidNumStr)
 ## ```
-toF64 : Str -> Result F64 [InvalidNumStr]
-toF64 = \string -> strToNumHelp string
+to_f64 : Str -> Result F64 [InvalidNumStr]
+to_f64 = \string -> str_to_num_help(string)
 
 ## Encode a [Str] to a [F32].A [F32] value is a 32-bit
 ## [floating-point number](https://en.wikipedia.org/wiki/IEEE_754) and can be
 ## specified with a `f32` suffix.
 ## ```roc
-## expect Str.toF32 "0.10" == Ok 0.10f32
-## expect Str.toF32 "not a number" == Err InvalidNumStr
+## expect Str.to_f32("0.10") == Ok(0.10f32)
+## expect Str.to_f32("not a number") == Err(InvalidNumStr)
 ## ```
-toF32 : Str -> Result F32 [InvalidNumStr]
-toF32 = \string -> strToNumHelp string
+to_f32 : Str -> Result F32 [InvalidNumStr]
+to_f32 = \string -> str_to_num_help(string)
 
 ## Encode a [Str] to an unsigned [U128] integer. A [U128] value can hold numbers
 ## from `0` to `340_282_366_920_938_463_463_374_607_431_768_211_455` (over
 ## 340 undecillion). It can be specified with a u128 suffix.
 ## ```roc
-## expect Str.toU128 "1500" == Ok 1500u128
-## expect Str.toU128 "0.1" == Err InvalidNumStr
-## expect Str.toU128 "-1" == Err InvalidNumStr
-## expect Str.toU128 "not a number" == Err InvalidNumStr
+## expect Str.to_u128("1500") == Ok(1500u128)
+## expect Str.to_u128("0.1") == Err(InvalidNumStr)
+## expect Str.to_u128("-1") == Err(InvalidNumStr)
+## expect Str.to_u128("not a number") == Err(InvalidNumStr)
 ## ```
-toU128 : Str -> Result U128 [InvalidNumStr]
-toU128 = \string -> strToNumHelp string
+to_u128 : Str -> Result U128 [InvalidNumStr]
+to_u128 = \string -> str_to_num_help(string)
 
 ## Encode a [Str] to a signed [I128] integer. A [I128] value can hold numbers
 ## from `-170_141_183_460_469_231_731_687_303_715_884_105_728` to
 ## `170_141_183_460_469_231_731_687_303_715_884_105_727`. It can be specified
 ## with a i128 suffix.
 ## ```roc
-## expect Str.toI128 "1500" == Ok 1500i128
-## expect Str.toI128 "-1" == Ok -1i128
-## expect Str.toI128 "0.1" == Err InvalidNumStr
-## expect Str.toI128 "not a number" == Err InvalidNumStr
+## expect Str.to_u128("1500") == Ok(1500i128)
+## expect Str.to_i128("-1") == Ok(-1i128)
+## expect Str.to_i128("0.1") == Err(InvalidNumStr)
+## expect Str.to_i128("not a number") == Err(InvalidNumStr)
 ## ```
-toI128 : Str -> Result I128 [InvalidNumStr]
-toI128 = \string -> strToNumHelp string
+to_i128 : Str -> Result I128 [InvalidNumStr]
+to_i128 = \string -> str_to_num_help(string)
 
 ## Encode a [Str] to an unsigned [U64] integer. A [U64] value can hold numbers
 ## from `0` to `18_446_744_073_709_551_615` (over 18 quintillion). It
 ## can be specified with a u64 suffix.
 ## ```roc
-## expect Str.toU64 "1500" == Ok 1500u64
-## expect Str.toU64 "0.1" == Err InvalidNumStr
-## expect Str.toU64 "-1" == Err InvalidNumStr
-## expect Str.toU64 "not a number" == Err InvalidNumStr
+## expect Str.to_u64("1500") == Ok(1500u64)
+## expect Str.to_u64("0.1") == Err(InvalidNumStr)
+## expect Str.to_u64("-1") == Err(InvalidNumStr)
+## expect Str.to_u64("not a number") == Err(InvalidNumStr)
 ## ```
-toU64 : Str -> Result U64 [InvalidNumStr]
-toU64 = \string -> strToNumHelp string
+to_u64 : Str -> Result U64 [InvalidNumStr]
+to_u64 = \string -> str_to_num_help(string)
 
 ## Encode a [Str] to a signed [I64] integer. A [I64] value can hold numbers
 ## from `-9_223_372_036_854_775_808` to `9_223_372_036_854_775_807`. It can be
 ## specified with a i64 suffix.
 ## ```roc
-## expect Str.toI64 "1500" == Ok 1500i64
-## expect Str.toI64 "-1" == Ok -1i64
-## expect Str.toI64 "0.1" == Err InvalidNumStr
-## expect Str.toI64 "not a number" == Err InvalidNumStr
+## expect Str.to_i64("1500") == Ok(1500i64)
+## expect Str.to_i64("-1") == Ok(-1i64)
+## expect Str.to_i64("0.1") == Err(InvalidNumStr)
+## expect Str.to_i64("not a number") == Err(InvalidNumStr)
 ## ```
-toI64 : Str -> Result I64 [InvalidNumStr]
-toI64 = \string -> strToNumHelp string
+to_i64 : Str -> Result I64 [InvalidNumStr]
+to_i64 = \string -> str_to_num_help(string)
 
 ## Encode a [Str] to an unsigned [U32] integer. A [U32] value can hold numbers
 ## from `0` to `4_294_967_295` (over 4 billion). It can be specified with
 ## a u32 suffix.
 ## ```roc
-## expect Str.toU32 "1500" == Ok 1500u32
-## expect Str.toU32 "0.1" == Err InvalidNumStr
-## expect Str.toU32 "-1" == Err InvalidNumStr
-## expect Str.toU32 "not a number" == Err InvalidNumStr
+## expect Str.to_u32("1500") == Ok(1500u32)
+## expect Str.to_u32("0.1") == Err(InvalidNumStr)
+## expect Str.to_u32("-1") == Err(InvalidNumStr)
+## expect Str.to_u32("not a number") == Err(InvalidNumStr)
 ## ```
-toU32 : Str -> Result U32 [InvalidNumStr]
-toU32 = \string -> strToNumHelp string
+to_u32 : Str -> Result U32 [InvalidNumStr]
+to_u32 = \string -> str_to_num_help(string)
 
 ## Encode a [Str] to a signed [I32] integer. A [I32] value can hold numbers
 ## from `-2_147_483_648` to `2_147_483_647`. It can be
 ## specified with a i32 suffix.
 ## ```roc
-## expect Str.toI32 "1500" == Ok 1500i32
-## expect Str.toI32 "-1" == Ok -1i32
-## expect Str.toI32 "0.1" == Err InvalidNumStr
-## expect Str.toI32 "not a number" == Err InvalidNumStr
+## expect Str.to_i32("1500") == Ok(1500i32)
+## expect Str.to_i32("-1") == Ok(-1i32)
+## expect Str.to_i32("0.1") == Err(InvalidNumStr)
+## expect Str.to_i32("not a number") == Err(InvalidNumStr)
 ## ```
-toI32 : Str -> Result I32 [InvalidNumStr]
-toI32 = \string -> strToNumHelp string
+to_i32 : Str -> Result I32 [InvalidNumStr]
+to_i32 = \string -> str_to_num_help(string)
 
 ## Encode a [Str] to an unsigned [U16] integer. A [U16] value can hold numbers
 ## from `0` to `65_535`. It can be specified with a u16 suffix.
 ## ```roc
-## expect Str.toU16 "1500" == Ok 1500u16
-## expect Str.toU16 "0.1" == Err InvalidNumStr
-## expect Str.toU16 "-1" == Err InvalidNumStr
-## expect Str.toU16 "not a number" == Err InvalidNumStr
+## expect Str.to_u16("1500") == Ok(1500u16)
+## expect Str.to_u16("0.1") == Err(InvalidNumStr)
+## expect Str.to_u16("-1") == Err(InvalidNumStr)
+## expect Str.to_u16("not a number") == Err(InvalidNumStr)
 ## ```
-toU16 : Str -> Result U16 [InvalidNumStr]
-toU16 = \string -> strToNumHelp string
+to_u16 : Str -> Result U16 [InvalidNumStr]
+to_u16 = \string -> str_to_num_help(string)
 
 ## Encode a [Str] to a signed [I16] integer. A [I16] value can hold numbers
 ## from `-32_768` to `32_767`. It can be
 ## specified with a i16 suffix.
 ## ```roc
-## expect Str.toI16 "1500" == Ok 1500i16
-## expect Str.toI16 "-1" == Ok -1i16
-## expect Str.toI16 "0.1" == Err InvalidNumStr
-## expect Str.toI16 "not a number" == Err InvalidNumStr
+## expect Str.to_i16("1500") == Ok(1500i16)
+## expect Str.to_i16("-1") == Ok(-1i16)
+## expect Str.to_i16("0.1") == Err(InvalidNumStr)
+## expect Str.to_i16("not a number") == Err(InvalidNumStr)
 ## ```
-toI16 : Str -> Result I16 [InvalidNumStr]
-toI16 = \string -> strToNumHelp string
+to_i16 : Str -> Result I16 [InvalidNumStr]
+to_i16 = \string -> str_to_num_help(string)
 
 ## Encode a [Str] to an unsigned [U8] integer. A [U8] value can hold numbers
 ## from `0` to `255`. It can be specified with a u8 suffix.
 ## ```roc
-## expect Str.toU8 "250" == Ok 250u8
-## expect Str.toU8 "-0.1" == Err InvalidNumStr
-## expect Str.toU8 "not a number" == Err InvalidNumStr
-## expect Str.toU8 "1500" == Err InvalidNumStr
+## expect Str.to_u8("250") == Ok(250u8)
+## expect Str.to_u8("-0.1") == Err(InvalidNumStr)
+## expect Str.to_u8("not a number") == Err(InvalidNumStr)
+## expect Str.to_u8("1500") == Err(InvalidNumStr)
 ## ```
-toU8 : Str -> Result U8 [InvalidNumStr]
-toU8 = \string -> strToNumHelp string
+to_u8 : Str -> Result U8 [InvalidNumStr]
+to_u8 = \string -> str_to_num_help(string)
 
 ## Encode a [Str] to a signed [I8] integer. A [I8] value can hold numbers
 ## from `-128` to `127`. It can be
 ## specified with a i8 suffix.
 ## ```roc
-## expect Str.toI8 "-15" == Ok -15i8
-## expect Str.toI8 "150.00" == Err InvalidNumStr
-## expect Str.toI8 "not a number" == Err InvalidNumStr
+## expect Str.to_i8("-15") == Ok(-15i8)
+## expect Str.to_i8("150.00") == Err(InvalidNumStr)
+## expect Str.to_i8("not a number") == Err(InvalidNumStr)
 ## ```
-toI8 : Str -> Result I8 [InvalidNumStr]
-toI8 = \string -> strToNumHelp string
+to_i8 : Str -> Result I8 [InvalidNumStr]
+to_i8 = \string -> str_to_num_help(string)
 
 ## Get the byte at the given index, without performing a bounds check.
-getUnsafe : Str, U64 -> U8
+get_unsafe : Str, U64 -> U8
 
 ## Gives the number of bytes in a [Str] value.
 ## ```roc
-## expect Str.countUtf8Bytes "Hello World" == 11
+## expect Str.count_utf8_bytes("Hello World") == 11
 ## ```
-countUtf8Bytes : Str -> U64
+count_utf8_bytes : Str -> U64
 
-## string slice that does not do bounds checking or utf-8 verification
-substringUnsafe : Str, U64, U64 -> Str
+## string slice that does not do bounds checking or UTF-8 verification
+substring_unsafe : Str, U64, U64 -> Str
 
 ## Returns the given [Str] with each occurrence of a substring replaced.
 ## If the substring is not found, returns the original string.
 ##
 ## ```roc
-## expect Str.replaceEach "foo/bar/baz" "/" "_" == "foo_bar_baz"
-## expect Str.replaceEach "not here" "/" "_" == "not here"
+## expect Str.replace_each("foo/bar/baz", "/", "_") == "foo_bar_baz"
+## expect Str.replace_each("not here", "/", "_") == "not here"
 ## ```
-replaceEach : Str, Str, Str -> Str
-replaceEach = \haystack, needle, flower ->
-    when splitFirst haystack needle is
-        Ok { before, after } ->
+replace_each : Str, Str, Str -> Str
+replace_each = \haystack, needle, flower ->
+    when split_first(haystack, needle) is
+        Ok({ before, after }) ->
             # We found at least one needle, so start the buffer off with
             # `before` followed by the first replacement flower.
-            Str.withCapacity (Str.countUtf8Bytes haystack)
-            |> Str.concat before
-            |> Str.concat flower
-            |> replaceEachHelp after needle flower
+            Str.with_capacity(Str.count_utf8_bytes(haystack))
+            |> Str.concat(before)
+            |> Str.concat(flower)
+            |> replace_each_help(after, needle, flower)
 
-        Err NotFound -> haystack
+        Err(NotFound) -> haystack
 
-replaceEachHelp : Str, Str, Str, Str -> Str
-replaceEachHelp = \buf, haystack, needle, flower ->
-    when splitFirst haystack needle is
-        Ok { before, after } ->
+replace_each_help : Str, Str, Str, Str -> Str
+replace_each_help = \buf, haystack, needle, flower ->
+    when split_first(haystack, needle) is
+        Ok({ before, after }) ->
             buf
-            |> Str.concat before
-            |> Str.concat flower
-            |> replaceEachHelp after needle flower
+            |> Str.concat(before)
+            |> Str.concat(flower)
+            |> replace_each_help(after, needle, flower)
 
-        Err NotFound -> Str.concat buf haystack
+        Err(NotFound) -> Str.concat(buf, haystack)
 
-expect Str.replaceEach "abXdeXghi" "X" "_" == "ab_de_ghi"
-expect Str.replaceEach "abcdefg" "nothing" "_" == "abcdefg"
+expect Str.replace_each("abXdeXghi", "X", "_") == "ab_de_ghi"
+expect Str.replace_each("abcdefg", "nothing", "_") == "abcdefg"
 
 ## Returns the given [Str] with the first occurrence of a substring replaced.
 ## If the substring is not found, returns the original string.
 ##
 ## ```roc
-## expect Str.replaceFirst "foo/bar/baz" "/" "_" == "foo_bar/baz"
-## expect Str.replaceFirst "no slashes here" "/" "_" == "no slashes here"
+## expect Str.replace_first("foo/bar/baz", "/", "_") == "foo_bar/baz"
+## expect Str.replace_first("no slashes here", "/", "_") == "no slashes here"
 ## ```
-replaceFirst : Str, Str, Str -> Str
-replaceFirst = \haystack, needle, flower ->
-    when splitFirst haystack needle is
-        Ok { before, after } ->
-            "$(before)$(flower)$(after)"
+replace_first : Str, Str, Str -> Str
+replace_first = \haystack, needle, flower ->
+    when split_first(haystack, needle) is
+        Ok({ before, after }) ->
+            "${before}${flower}${after}"
 
-        Err NotFound -> haystack
+        Err(NotFound) -> haystack
 
-expect Str.replaceFirst "abXdeXghi" "X" "_" == "ab_deXghi"
-expect Str.replaceFirst "abcdefg" "nothing" "_" == "abcdefg"
+expect Str.replace_first("abXdeXghi", "X", "_") == "ab_deXghi"
+expect Str.replace_first("abcdefg", "nothing", "_") == "abcdefg"
 
 ## Returns the given [Str] with the last occurrence of a substring replaced.
 ## If the substring is not found, returns the original string.
 ##
 ## ```roc
-## expect Str.replaceLast "foo/bar/baz" "/" "_" == "foo/bar_baz"
-## expect Str.replaceLast "no slashes here" "/" "_" == "no slashes here"
+## expect Str.replace_last("foo/bar/baz", "/", "_") == "foo/bar_baz"
+## expect Str.replace_last("no slashes here", "/", "_") == "no slashes here"
 ## ```
-replaceLast : Str, Str, Str -> Str
-replaceLast = \haystack, needle, flower ->
-    when splitLast haystack needle is
-        Ok { before, after } ->
-            "$(before)$(flower)$(after)"
+replace_last : Str, Str, Str -> Str
+replace_last = \haystack, needle, flower ->
+    when split_last(haystack, needle) is
+        Ok({ before, after }) ->
+            "${before}${flower}${after}"
 
-        Err NotFound -> haystack
+        Err(NotFound) -> haystack
 
-expect Str.replaceLast "abXdeXghi" "X" "_" == "abXde_ghi"
-expect Str.replaceLast "abcdefg" "nothing" "_" == "abcdefg"
+expect Str.replace_last("abXdeXghi", "X", "_") == "abXde_ghi"
+expect Str.replace_last("abcdefg", "nothing", "_") == "abcdefg"
 
 ## Returns the given [Str] before the first occurrence of a [delimiter](https://www.computerhope.com/jargon/d/delimite.htm), as well
 ## as the rest of the string after that occurrence.
 ## Returns [Err NotFound] if the delimiter is not found.
 ## ```roc
-## expect Str.splitFirst "foo/bar/baz" "/" == Ok { before: "foo", after: "bar/baz" }
-## expect Str.splitFirst "no slashes here" "/" == Err NotFound
+## expect Str.split_first("foo/bar/baz", "/") == Ok({ before: "foo", after: "bar/baz" })
+## expect Str.split_first("no slashes here", "/") == Err(NotFound)
 ## ```
-splitFirst : Str, Str -> Result { before : Str, after : Str } [NotFound]
-splitFirst = \haystack, needle ->
-    when firstMatch haystack needle is
-        Some index ->
-            remaining = Str.countUtf8Bytes haystack - Str.countUtf8Bytes needle - index
+split_first : Str, Str -> Result { before : Str, after : Str } [NotFound]
+split_first = \haystack, needle ->
+    when first_match(haystack, needle) is
+        Some(index) ->
+            remaining = Str.count_utf8_bytes(haystack) - Str.count_utf8_bytes(needle) - index
 
-            before = Str.substringUnsafe haystack 0 index
-            after = Str.substringUnsafe haystack (Num.addWrap index (Str.countUtf8Bytes needle)) remaining
+            before = Str.substring_unsafe(haystack, 0, index)
+            after = Str.substring_unsafe(haystack, Num.add_wrap(index, Str.count_utf8_bytes(needle)), remaining)
 
-            Ok { before, after }
+            Ok({ before, after })
 
         None ->
-            Err NotFound
+            Err(NotFound)
 
-# splitFirst when needle isn't in haystack
-expect splitFirst "foo" "z" == Err NotFound
+# split_first when needle isn't in haystack
+expect split_first("foo", "z") == Err(NotFound)
 
-# splitFirst when needle isn't in haystack, and haystack is empty
-expect splitFirst "" "z" == Err NotFound
+# split_first when needle isn't in haystack, and haystack is empty
+expect split_first("", "z") == Err(NotFound)
 
-# splitFirst when haystack ends with needle repeated
-expect splitFirst "foo" "o" == Ok { before: "f", after: "o" }
+# split_first when haystack ends with needle repeated
+expect split_first("foo", "o") == Ok({ before: "f", after: "o" })
 
-# splitFirst with multi-byte needle
-expect splitFirst "hullabaloo" "ab" == Ok { before: "hull", after: "aloo" }
+# split_first with multi-byte needle
+expect split_first("hullabaloo", "ab") == Ok({ before: "hull", after: "aloo" })
 
-# splitFirst when needle is haystack
-expect splitFirst "foo" "foo" == Ok { before: "", after: "" }
+# split_first when needle is haystack
+expect split_first("foo", "foo") == Ok({ before: "", after: "" })
 
-firstMatch : Str, Str -> [Some U64, None]
-firstMatch = \haystack, needle ->
-    haystackLength = Str.countUtf8Bytes haystack
-    needleLength = Str.countUtf8Bytes needle
-    lastPossible = Num.subSaturated haystackLength needleLength
+first_match : Str, Str -> [Some U64, None]
+first_match = \haystack, needle ->
+    haystack_length = Str.count_utf8_bytes(haystack)
+    needle_length = Str.count_utf8_bytes(needle)
+    last_possible = Num.sub_saturated(haystack_length, needle_length)
 
-    firstMatchHelp haystack needle 0 lastPossible
+    first_match_help(haystack, needle, 0, last_possible)
 
-firstMatchHelp : Str, Str, U64, U64 -> [Some U64, None]
-firstMatchHelp = \haystack, needle, index, lastPossible ->
-    if index <= lastPossible then
-        if matchesAt haystack index needle then
-            Some index
+first_match_help : Str, Str, U64, U64 -> [Some U64, None]
+first_match_help = \haystack, needle, index, last_possible ->
+    if index <= last_possible then
+        if matches_at(haystack, index, needle) then
+            Some(index)
         else
-            firstMatchHelp haystack needle (Num.addWrap index 1) lastPossible
+            first_match_help(haystack, needle, Num.add_wrap(index, 1), last_possible)
     else
         None
 
@@ -883,113 +883,116 @@ firstMatchHelp = \haystack, needle, index, lastPossible ->
 ## the rest of the string after that occurrence.
 ## Returns [Err NotFound] if the delimiter is not found.
 ## ```roc
-## expect Str.splitLast "foo/bar/baz" "/" == Ok { before: "foo/bar", after: "baz" }
-## expect Str.splitLast "no slashes here" "/" == Err NotFound
+## expect Str.split_last("foo/bar/baz", "/") == Ok({ before: "foo/bar", after: "baz" })
+## expect Str.split_last("no slashes here", "/") == Err(NotFound)
 ## ```
-splitLast : Str, Str -> Result { before : Str, after : Str } [NotFound]
-splitLast = \haystack, needle ->
-    when lastMatch haystack needle is
-        Some index ->
-            remaining = Str.countUtf8Bytes haystack - Str.countUtf8Bytes needle - index
+split_last : Str, Str -> Result { before : Str, after : Str } [NotFound]
+split_last = \haystack, needle ->
+    when last_match(haystack, needle) is
+        Some(index) ->
+            remaining = Str.count_utf8_bytes(haystack) - Str.count_utf8_bytes(needle) - index
 
-            before = Str.substringUnsafe haystack 0 index
-            after = Str.substringUnsafe haystack (Num.addWrap index (Str.countUtf8Bytes needle)) remaining
+            before = Str.substring_unsafe(haystack, 0, index)
+            after = Str.substring_unsafe(haystack, Num.add_wrap(index, Str.count_utf8_bytes(needle)), remaining)
 
-            Ok { before, after }
+            Ok({ before, after })
 
         None ->
-            Err NotFound
+            Err(NotFound)
 
-# splitLast when needle isn't in haystack
-expect Str.splitLast "foo" "z" == Err NotFound
+# split_last when needle isn't in haystack
+expect Str.split_last("foo", "z") == Err(NotFound)
 
-# splitLast when haystack ends with needle repeated
-expect Str.splitLast "foo" "o" == Ok { before: "fo", after: "" }
+# split_last when haystack ends with needle repeated
+expect Str.split_last("foo", "o") == Ok({ before: "fo", after: "" })
 
-# splitLast with multi-byte needle
-expect Str.splitLast "hullabaloo" "ab" == Ok { before: "hull", after: "aloo" }
+# split_last with multi-byte needle
+expect Str.split_last("hullabaloo", "ab") == Ok({ before: "hull", after: "aloo" })
 
-# splitLast when needle is haystack
-expect Str.splitLast "foo" "foo" == Ok { before: "", after: "" }
+# split_last when needle is haystack
+expect Str.split_last("foo", "foo") == Ok({ before: "", after: "" })
 
-lastMatch : Str, Str -> [Some U64, None]
-lastMatch = \haystack, needle ->
-    haystackLength = Str.countUtf8Bytes haystack
-    needleLength = Str.countUtf8Bytes needle
-    lastPossibleIndex = Num.subSaturated haystackLength needleLength
+last_match : Str, Str -> [Some U64, None]
+last_match = \haystack, needle ->
+    haystack_length = Str.count_utf8_bytes(haystack)
+    needle_length = Str.count_utf8_bytes(needle)
+    last_possible_index = Num.sub_saturated(haystack_length, needle_length)
 
-    lastMatchHelp haystack needle lastPossibleIndex
+    last_match_help(haystack, needle, last_possible_index)
 
-lastMatchHelp : Str, Str, U64 -> [Some U64, None]
-lastMatchHelp = \haystack, needle, index ->
-    if matchesAt haystack index needle then
-        Some index
+last_match_help : Str, Str, U64 -> [Some U64, None]
+last_match_help = \haystack, needle, index ->
+    if matches_at(haystack, index, needle) then
+        Some(index)
     else
-        when Num.subChecked index 1 is
-            Ok nextIndex ->
-                lastMatchHelp haystack needle nextIndex
+        when Num.sub_checked(index, 1) is
+            Ok(next_index) ->
+                last_match_help(haystack, needle, next_index)
 
-            Err _ ->
+            Err(_) ->
                 None
 
 min = \x, y -> if x < y then x else y
 
-matchesAt : Str, U64, Str -> Bool
-matchesAt = \haystack, haystackIndex, needle ->
-    haystackLength = Str.countUtf8Bytes haystack
-    needleLength = Str.countUtf8Bytes needle
-    endIndex = min (Num.addSaturated haystackIndex needleLength) haystackLength
+matches_at : Str, U64, Str -> Bool
+matches_at = \haystack, haystack_index, needle ->
+    haystack_length = Str.count_utf8_bytes(haystack)
+    needle_length = Str.count_utf8_bytes(needle)
+    end_index = min(Num.add_saturated(haystack_index, needle_length), haystack_length)
 
-    matchesAtHelp {
-        haystack,
-        haystackIndex,
-        needle,
-        needleIndex: 0,
-        needleLength,
-        endIndex,
-    }
+    matches_at_help(
+        {
+            haystack,
+            haystack_index,
+            needle,
+            needle_index: 0,
+            needle_length,
+            end_index,
+        },
+    )
 
-matchesAtHelp = \state ->
-    { haystack, haystackIndex, needle, needleIndex, needleLength, endIndex } = state
-    isAtEndOfHaystack = haystackIndex >= endIndex
+matches_at_help = \state ->
+    { haystack, haystack_index, needle, needle_index, needle_length, end_index } = state
+    is_at_end_of_haystack = haystack_index >= end_index
 
-    if isAtEndOfHaystack then
-        didWalkEntireNeedle = needleIndex == needleLength
+    if is_at_end_of_haystack then
+        did_walk_entire_needle = needle_index == needle_length
 
-        didWalkEntireNeedle
+        did_walk_entire_needle
     else
-        doesThisMatch =
-            Str.getUnsafe haystack haystackIndex
+        does_this_match =
+            Str.get_unsafe(haystack, haystack_index)
             ==
-            Str.getUnsafe needle needleIndex
-        doesRestMatch =
-            matchesAtHelp
+            Str.get_unsafe(needle, needle_index)
+        does_rest_match =
+            matches_at_help(
                 { state &
-                    haystackIndex: Num.addWrap haystackIndex 1,
-                    needleIndex: Num.addWrap needleIndex 1,
-                }
+                    haystack_index: Num.add_wrap(haystack_index, 1),
+                    needle_index: Num.add_wrap(needle_index, 1),
+                },
+            )
 
-        doesThisMatch && doesRestMatch
+        does_this_match && does_rest_match
 
 ## Walks over the `UTF-8` bytes of the given [Str] and calls a function to update
 ## state for each byte. The index for that byte in the string is provided
 ## to the update function.
 ## ```roc
 ## f : List U8, U8, U64 -> List U8
-## f = \state, byte, _ -> List.append state byte
-## expect Str.walkUtf8WithIndex "ABC" [] f == [65, 66, 67]
+## f = \state, byte, _ -> List.append(state, byte)
+## expect Str.walk_utf8_with_index("ABC", [], f) == [65, 66, 67]
 ## ```
-walkUtf8WithIndex : Str, state, (state, U8, U64 -> state) -> state
-walkUtf8WithIndex = \string, state, step ->
-    walkUtf8WithIndexHelp string state step 0 (Str.countUtf8Bytes string)
+walk_utf8_with_index : Str, state, (state, U8, U64 -> state) -> state
+walk_utf8_with_index = \string, state, step ->
+    walk_utf8_with_index_help(string, state, step, 0, Str.count_utf8_bytes(string))
 
-walkUtf8WithIndexHelp : Str, state, (state, U8, U64 -> state), U64, U64 -> state
-walkUtf8WithIndexHelp = \string, state, step, index, length ->
+walk_utf8_with_index_help : Str, state, (state, U8, U64 -> state), U64, U64 -> state
+walk_utf8_with_index_help = \string, state, step, index, length ->
     if index < length then
-        byte = Str.getUnsafe string index
-        newState = step state byte index
+        byte = Str.get_unsafe(string, index)
+        new_state = step(state, byte, index)
 
-        walkUtf8WithIndexHelp string newState step (Num.addWrap index 1) length
+        walk_utf8_with_index_help(string, new_state, step, Num.add_wrap(index, 1), length)
     else
         state
 
@@ -997,78 +1000,79 @@ walkUtf8WithIndexHelp = \string, state, step, index, length ->
 ## state for each byte.
 ##
 ## ```roc
-## sumOfUtf8Bytes =
-##     Str.walkUtf8 "Hello, World!" 0 \total, byte ->
+## sum_of_utf8_bytes =
+##     Str.walk_utf8("Hello, World!", 0, (\total, byte ->
 ##         total + byte
+##     ))
 ##
-## expect sumOfUtf8Bytes == 105
+## expect sum_of_utf8_bytes == 105
 ## ```
-walkUtf8 : Str, state, (state, U8 -> state) -> state
-walkUtf8 = \str, initial, step ->
-    walkUtf8Help str initial step 0 (Str.countUtf8Bytes str)
+walk_utf8 : Str, state, (state, U8 -> state) -> state
+walk_utf8 = \str, initial, step ->
+    walk_utf8_help(str, initial, step, 0, Str.count_utf8_bytes(str))
 
-walkUtf8Help : Str, state, (state, U8 -> state), U64, U64 -> state
-walkUtf8Help = \str, state, step, index, length ->
+walk_utf8_help : Str, state, (state, U8 -> state), U64, U64 -> state
+walk_utf8_help = \str, state, step, index, length ->
     if index < length then
-        byte = Str.getUnsafe str index
-        newState = step state byte
+        byte = Str.get_unsafe(str, index)
+        new_state = step(state, byte)
 
-        walkUtf8Help str newState step (Num.addWrap index 1) length
+        walk_utf8_help(str, new_state, step, Num.add_wrap(index, 1), length)
     else
         state
 
-expect (walkUtf8 "ABC" [] List.append) == [65, 66, 67]
-expect (walkUtf8 "鹏" [] List.append) == [233, 185, 143]
+expect (walk_utf8("ABC", [], List.append)) == [65, 66, 67]
+expect (walk_utf8("鹏", [], List.append)) == [233, 185, 143]
 
 ## Shrink the memory footprint of a str such that its capacity and length are equal.
 ## Note: This will also convert seamless slices to regular lists.
-releaseExcessCapacity : Str -> Str
+release_excess_capacity : Str -> Str
 
-strToNum : Str -> { berrorcode : U8, aresult : Num * }
+str_to_num : Str -> { berrorcode : U8, aresult : Num * }
 
-strToNumHelp : Str -> Result (Num a) [InvalidNumStr]
-strToNumHelp = \string ->
+str_to_num_help : Str -> Result (Num a) [InvalidNumStr]
+str_to_num_help = \string ->
     result : { berrorcode : U8, aresult : Num a }
-    result = strToNum string
+    result = str_to_num(string)
 
     if result.berrorcode == 0 then
-        Ok result.aresult
+        Ok(result.aresult)
     else
-        Err InvalidNumStr
+        Err(InvalidNumStr)
 
 ## Adds a prefix to the given [Str].
 ## ```roc
-## expect Str.withPrefix "Awesome" "Roc" == "RocAwesome"
+## expect Str.with_prefix("Awesome", "Roc") == "RocAwesome"
 ## ```
-withPrefix : Str, Str -> Str
-withPrefix = \str, prefix -> Str.concat prefix str
+with_prefix : Str, Str -> Str
+with_prefix = \str, prefix -> Str.concat(prefix, str)
 
 ## Determines whether or not the first Str contains the second.
 ## ```roc
-## expect Str.contains "foobarbaz" "bar"
-## expect !(Str.contains "apple" "orange")
-## expect Str.contains "anything" ""
+## expect Str.contains("foobarbaz", "bar")
+## expect !Str.contains("apple", "orange")
+## expect Str.contains("anything", "")
 ## ```
 contains : Str, Str -> Bool
 contains = \haystack, needle ->
-    when firstMatch haystack needle is
-        Some _index -> Bool.true
+    when first_match(haystack, needle) is
+        Some(_index) -> Bool.true
         None -> Bool.false
 
 ## Drops the given prefix [Str] from the start of a [Str]
 ## If the prefix is not found, returns the original string.
 ##
 ## ```roc
-## expect Str.dropPrefix "bar" "foo" == "bar"
-## expect Str.dropPrefix "foobar" "foo" == "bar"
+## expect Str.drop_prefix("bar", "foo") == "bar"
+## expect Str.drop_prefix("foobar", "foo") == "bar"
 ## ```
-dropPrefix : Str, Str -> Str
-dropPrefix = \haystack, prefix ->
-    if Str.startsWith haystack prefix then
-        start = Str.countUtf8Bytes prefix
-        len = Num.subWrap (Str.countUtf8Bytes haystack) start
+drop_prefix : Str, Str -> Str
+drop_prefix = \haystack, prefix ->
+    if Str.starts_with(haystack, prefix) then
+        start = Str.count_utf8_bytes(prefix)
+        len = Num.sub_wrap(Str.count_utf8_bytes(haystack), start)
 
-        substringUnsafe haystack start len
+        substring_unsafe(haystack, start, len)
     else
         haystack
 
@@ -1076,15 +1080,15 @@ dropPrefix = \haystack, prefix ->
 ## If the suffix is not found, returns the original string.
 ##
 ## ```roc
-## expect Str.dropSuffix "bar" "foo" == "bar"
-## expect Str.dropSuffix "barfoo" "foo" == "bar"
+## expect Str.drop_suffix("bar", "foo") == "bar"
+## expect Str.drop_suffix("barfoo", "foo") == "bar"
 ## ```
-dropSuffix : Str, Str -> Str
-dropSuffix = \haystack, suffix ->
-    if Str.endsWith haystack suffix then
+drop_suffix : Str, Str -> Str
+drop_suffix = \haystack, suffix ->
+    if Str.ends_with(haystack, suffix) then
         start = 0
-        len = Num.subWrap (Str.countUtf8Bytes haystack) (Str.countUtf8Bytes suffix)
+        len = Num.sub_wrap(Str.count_utf8_bytes(haystack), Str.count_utf8_bytes(suffix))
 
-        substringUnsafe haystack start len
+        substring_unsafe(haystack, start, len)
     else
         haystack

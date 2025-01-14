@@ -1,5 +1,5 @@
-interface Dep2 exposes [DepStr2, string] imports []
+module [DepStr2, string]
 
 DepStr2 := [R Str]
 
-string = \s -> @DepStr2 (R s)
+string = \s -> @DepStr2(R(s))

@@ -1,6 +1,6 @@
 @0-9 UnaryOp(
     @2-8 ParensAround(
-        Apply(
+        PncApply(
             @2-3 Num(
                 "0",
             ),
@@ -23,7 +23,6 @@
                     Space,
                 ),
             ],
-            ParensAndCommas,
         ),
     ),
     @0-1 Negate,

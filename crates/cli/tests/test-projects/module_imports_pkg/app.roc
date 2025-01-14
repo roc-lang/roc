@@ -5,4 +5,4 @@ app [main] {
 import Module
 
 main =
-    Module.valueFromPkg
+    Module.value_from_pkg

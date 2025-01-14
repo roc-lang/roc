@@ -17,22 +17,31 @@ SpacesBefore {
                 item: PlatformRequires {
                     rigids: [],
                     signatures: [
-                        @32-49 TypedIdent {
-                            ident: @32-36 "main",
+                        @32-58 TypedIdent {
+                            ident: @32-37 "main!",
                             spaces_before_colon: [],
-                            ann: @39-49 Apply(
-                                "",
-                                "Task",
+                            ann: @40-58 Function(
                                 [
-                                    @44-46 Record {
+                                    @40-42 Record {
                                         fields: [],
                                         ext: None,
                                     },
-                                    @47-49 TagUnion {
-                                        ext: None,
-                                        tags: [],
-                                    },
                                 ],
+                                Effectful,
+                                @46-58 Apply(
+                                    "",
+                                    "Result",
+                                    [
+                                        @53-55 Record {
+                                            fields: [],
+                                            ext: None,
+                                        },
+                                        @56-58 TagUnion {
+                                            ext: None,
+                                            tags: [],
+                                        },
+                                    ],
+                                ),
                             ),
                         },
                     ],
@@ -69,13 +78,13 @@ SpacesBefore {
                     after: [],
                 },
                 item: [
-                    @110-123 Module(
+                    @119-130 Module(
                         ModuleName(
-                            "Task",
+                            "Foo",
                         ),
                         [
-                            @117-121 ExposedName(
-                                "Task",
+                            @125-128 ExposedName(
+                                "Foo",
                             ),
                         ],
                     ),
@@ -90,8 +99,8 @@ SpacesBefore {
                     after: [],
                 },
                 item: [
-                    @141-152 ExposedName(
-                        "mainForHost",
+                    @148-161 ExposedName(
+                        "main_for_host",
                     ),
                 ],
             },

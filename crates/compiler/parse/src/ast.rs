@@ -432,16 +432,6 @@ pub enum StrLiteral<'a> {
     Block(&'a [&'a [StrSegment<'a>]]),
 }
 
-/// Values that can be tried, extracting success values or "returning early" on failure
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TryTarget {
-    // TODO: Remove when purity inference replaces Task fully
-    /// Tasks suffixed with ! are `Task.await`ed
-    Task,
-    /// Results suffixed with ? are `Result.try`ed
-    Result,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResultTryKind {
     KeywordPrefix,
@@ -485,11 +475,8 @@ pub enum Expr<'a> {
     /// Look up exactly one field on a tuple, e.g. `(x, y).1`.
     TupleAccess(&'a Expr<'a>, &'a str),
 
-    /// Early return on failures - e.g. the ! in `File.readUtf8! path`
-    TrySuffix {
-        target: TryTarget,
-        expr: &'a Expr<'a>,
-    },
+    /// Early return on failures - e.g. the ? in `File.read_utf8(path)?`
+    TrySuffix(&'a Expr<'a>),
 
     // Collection Literals
     List(Collection<'a, &'a Loc<Expr<'a>>>),
@@ -504,9 +491,9 @@ pub enum Expr<'a> {
     Tuple(Collection<'a, &'a Loc<Expr<'a>>>),
 
     /// Mapper-based record builders, e.g.
-    /// { Task.parallel <-
-    ///     foo: Task.getData Foo,
-    ///     bar: Task.getData Bar,
+    /// { Result.parallel <-
+    ///     foo: Http.get_data(Foo),
+    ///     bar: Http.get_data(Bar),
     /// }
     RecordBuilder {
         mapper: &'a Loc<Expr<'a>>,
@@ -515,7 +502,7 @@ pub enum Expr<'a> {
 
     // Lookups
     Var {
-        module_name: &'a str, // module_name will only be filled if the original Roc code stated something like `5 + SomeModule.myVar`, module_name will be blank if it was `5 + myVar`
+        module_name: &'a str, // module_name will only be filled if the original Roc code stated something like `5 + SomeModule.my_var`, module_name will be blank if it was `5 + my_var`
         ident: &'a str,
     },
 
@@ -540,6 +527,7 @@ pub enum Expr<'a> {
         first: &'a Loc<Expr<'a>>,
         extra_args: &'a [&'a Loc<Expr<'a>>],
         continuation: &'a Loc<Expr<'a>>,
+        pnc_style: bool,
     },
 
     /// The `try` keyword that performs early return on errors
@@ -554,6 +542,7 @@ pub enum Expr<'a> {
     /// To apply by name, do Apply(Var(...), ...)
     /// To apply a tag by name, do Apply(Tag(...), ...)
     Apply(&'a Loc<Expr<'a>>, &'a [&'a Loc<Expr<'a>>], CalledVia),
+    PncApply(&'a Loc<Expr<'a>>, Collection<'a, &'a Loc<Expr<'a>>>),
     BinOps(&'a [(Loc<Expr<'a>>, Loc<BinOp>)], &'a Loc<Expr<'a>>),
     UnaryOp(&'a Loc<Expr<'a>>, Loc<UnaryOp>),
 
@@ -589,7 +578,6 @@ pub enum Expr<'a> {
 
     // Problems
     MalformedIdent(&'a str, crate::ident::BadIdent),
-    MalformedSuffixed(&'a Loc<Expr<'a>>),
     // Both operators were non-associative, e.g. (True == False == False).
     // We should tell the author to disambiguate by grouping them with parens.
     PrecedenceConflict(&'a PrecedenceConflict<'a>),
@@ -623,152 +611,6 @@ pub fn split_loc_exprs_around<'a>(
     let after = &rest[1..]; // Skip the index element
 
     (before, after)
-}
-
-/// Checks if the bang suffix is applied only at the top level of expression
-pub fn is_top_level_suffixed(expr: &Expr) -> bool {
-    // TODO: should we check BinOps with pizza where the last expression is TrySuffix?
-    match expr {
-        Expr::TrySuffix { .. } => true,
-        Expr::Apply(a, _, _) => is_top_level_suffixed(&a.value),
-        Expr::SpaceBefore(a, _) => is_top_level_suffixed(a),
-        Expr::SpaceAfter(a, _) => is_top_level_suffixed(a),
-        _ => false,
-    }
-}
-
-/// Check if the bang suffix is applied recursevely in expression
-pub fn is_expr_suffixed(expr: &Expr) -> bool {
-    match expr {
-        // expression without arguments, `read!`
-        Expr::Var { .. } => false,
-
-        Expr::TrySuffix { .. } => true,
-
-        // expression with arguments, `line! "Foo"`
-        Expr::Apply(sub_loc_expr, apply_args, _) => {
-            let is_function_suffixed = is_expr_suffixed(&sub_loc_expr.value);
-            let any_args_suffixed = apply_args.iter().any(|arg| is_expr_suffixed(&arg.value));
-
-            any_args_suffixed || is_function_suffixed
-        }
-
-        // expression in a pipeline, `"hi" |> say!`
-        Expr::BinOps(firsts, last) => {
-            firsts
-                .iter()
-                .any(|(chain_loc_expr, _)| is_expr_suffixed(&chain_loc_expr.value))
-                || is_expr_suffixed(&last.value)
-        }
-
-        // expression in a if-then-else, `if isOk! then "ok" else doSomething!`
-        Expr::If {
-            if_thens,
-            final_else,
-            ..
-        } => {
-            let any_if_thens_suffixed = if_thens.iter().any(|(if_then, else_expr)| {
-                is_expr_suffixed(&if_then.value) || is_expr_suffixed(&else_expr.value)
-            });
-
-            is_expr_suffixed(&final_else.value) || any_if_thens_suffixed
-        }
-
-        // expression in parens `(read!)`
-        Expr::ParensAround(sub_loc_expr) => is_expr_suffixed(sub_loc_expr),
-
-        // expression in a closure
-        Expr::Closure(_, sub_loc_expr) => is_expr_suffixed(&sub_loc_expr.value),
-
-        // expressions inside a Defs
-        Expr::Defs(defs, expr) => {
-            let any_defs_suffixed = defs.tags.iter().any(|tag| match tag.split() {
-                Ok(_) => false,
-                Err(value_index) => match defs.value_defs[value_index.index()] {
-                    ValueDef::Body(_, loc_expr) => is_expr_suffixed(&loc_expr.value),
-                    ValueDef::AnnotatedBody { body_expr, .. } => is_expr_suffixed(&body_expr.value),
-                    _ => false,
-                },
-            });
-
-            any_defs_suffixed || is_expr_suffixed(&expr.value)
-        }
-        Expr::Float(_) => false,
-        Expr::Num(_) => false,
-        Expr::NonBase10Int { .. } => false,
-        Expr::Str(_) => false,
-        Expr::SingleQuote(_) => false,
-        Expr::RecordAccess(a, _) => is_expr_suffixed(a),
-        Expr::AccessorFunction(_) => false,
-        Expr::RecordUpdater(_) => false,
-        Expr::TupleAccess(a, _) => is_expr_suffixed(a),
-        Expr::List(items) => items.iter().any(|x| is_expr_suffixed(&x.value)),
-        Expr::RecordUpdate { update, fields } => {
-            is_expr_suffixed(&update.value)
-                || fields
-                    .iter()
-                    .any(|field| is_assigned_value_suffixed(&field.value))
-        }
-        Expr::Record(items) => items
-            .iter()
-            .any(|field| is_assigned_value_suffixed(&field.value)),
-        Expr::Tuple(items) => items.iter().any(|x| is_expr_suffixed(&x.value)),
-        Expr::RecordBuilder { mapper: _, fields } => fields
-            .iter()
-            .any(|field| is_assigned_value_suffixed(&field.value)),
-        Expr::Underscore(_) => false,
-        Expr::Crash => false,
-        Expr::Tag(_) => false,
-        Expr::OpaqueRef(_) => false,
-        Expr::Dbg => false,
-        Expr::DbgStmt {
-            first,
-            extra_args,
-            continuation,
-        } => {
-            is_expr_suffixed(&first.value)
-                || extra_args.iter().any(|a| is_expr_suffixed(&a.value))
-                || is_expr_suffixed(&continuation.value)
-        }
-        Expr::LowLevelDbg(_, a, b) => is_expr_suffixed(&a.value) || is_expr_suffixed(&b.value),
-        Expr::Try => false,
-        Expr::LowLevelTry(loc_expr, _) => is_expr_suffixed(&loc_expr.value),
-        Expr::UnaryOp(a, _) => is_expr_suffixed(&a.value),
-        Expr::When(cond, branches) => {
-            is_expr_suffixed(&cond.value) || branches.iter().any(|x| is_when_branch_suffixed(x))
-        }
-        Expr::Return(a, b) => {
-            is_expr_suffixed(&a.value) || b.is_some_and(|loc_b| is_expr_suffixed(&loc_b.value))
-        }
-        Expr::SpaceBefore(a, _) => is_expr_suffixed(a),
-        Expr::SpaceAfter(a, _) => is_expr_suffixed(a),
-        Expr::MalformedIdent(_, _) => false,
-        Expr::MalformedSuffixed(_) => false,
-        Expr::PrecedenceConflict(_) => false,
-        Expr::EmptyRecordBuilder(_) => false,
-        Expr::SingleFieldRecordBuilder(_) => false,
-        Expr::OptionalFieldInRecordBuilder(_, _) => false,
-    }
-}
-
-fn is_when_branch_suffixed(branch: &WhenBranch<'_>) -> bool {
-    is_expr_suffixed(&branch.value.value)
-        || branch
-            .guard
-            .map(|x| is_expr_suffixed(&x.value))
-            .unwrap_or(false)
-}
-
-fn is_assigned_value_suffixed<'a>(value: &AssignedField<'a, Expr<'a>>) -> bool {
-    match value {
-        AssignedField::RequiredValue(_, _, a)
-        | AssignedField::OptionalValue(_, _, a)
-        | AssignedField::IgnoredValue(_, _, a) => is_expr_suffixed(&a.value),
-        AssignedField::LabelOnly(_) => false,
-        AssignedField::SpaceBefore(a, _) | AssignedField::SpaceAfter(a, _) => {
-            is_assigned_value_suffixed(a)
-        }
-    }
 }
 
 pub fn split_around<T>(items: &[T], target: usize) -> (&[T], &[T]) {
@@ -988,6 +830,7 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                     first,
                     extra_args,
                     continuation,
+                    pnc_style: _,
                 } => {
                     expr_stack.reserve(2);
                     expr_stack.push(&first.value);
@@ -1014,6 +857,14 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                     }
                 }
                 Apply(fun, args, _) => {
+                    expr_stack.reserve(args.len() + 1);
+                    expr_stack.push(&fun.value);
+
+                    for loc_expr in args.iter() {
+                        expr_stack.push(&loc_expr.value);
+                    }
+                }
+                PncApply(fun, args) => {
                     expr_stack.reserve(args.len() + 1);
                     expr_stack.push(&fun.value);
 
@@ -1063,7 +914,7 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                 }
                 RecordAccess(expr, _)
                 | TupleAccess(expr, _)
-                | TrySuffix { expr, .. }
+                | TrySuffix(expr)
                 | SpaceBefore(expr, _)
                 | SpaceAfter(expr, _)
                 | ParensAround(expr) => expr_stack.push(expr),
@@ -1087,8 +938,7 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                 | Tag(_)
                 | OpaqueRef(_)
                 | MalformedIdent(_, _)
-                | PrecedenceConflict(_)
-                | MalformedSuffixed(_) => { /* terminal */ }
+                | PrecedenceConflict(_) => { /* terminal */ }
             }
         }
     }
@@ -1726,12 +1576,6 @@ impl<'a> PatternAs<'a> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum PatternApplyStyle {
-    Whitespace,
-    ParensAndCommas,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Pattern<'a> {
     // Identifier
     Identifier {
@@ -1746,11 +1590,9 @@ pub enum Pattern<'a> {
 
     OpaqueRef(&'a str),
 
-    Apply(
-        &'a Loc<Pattern<'a>>,
-        &'a [Loc<Pattern<'a>>],
-        PatternApplyStyle,
-    ),
+    Apply(&'a Loc<Pattern<'a>>, &'a [Loc<Pattern<'a>>]),
+
+    PncApply(&'a Loc<Pattern<'a>>, Collection<'a, Loc<Pattern<'a>>>),
 
     /// This is Located<Pattern> rather than Located<str> so we can record comments
     /// around the destructured names, e.g. { x ### x does stuff ###, y }
@@ -1831,8 +1673,34 @@ impl<'a> Pattern<'a> {
                     false
                 }
             }
-            Apply(constructor_x, args_x, _) => {
-                if let Apply(constructor_y, args_y, _) = other {
+            Apply(constructor_x, args_x) => {
+                if let Apply(constructor_y, args_y) = other {
+                    let equivalent_args = args_x
+                        .iter()
+                        .zip(args_y.iter())
+                        .all(|(p, q)| p.value.equivalent(&q.value));
+
+                    constructor_x.value.equivalent(&constructor_y.value) && equivalent_args
+                } else if let PncApply(constructor_y, args_y) = other {
+                    let equivalent_args = args_x
+                        .iter()
+                        .zip(args_y.iter())
+                        .all(|(p, q)| p.value.equivalent(&q.value));
+
+                    constructor_x.value.equivalent(&constructor_y.value) && equivalent_args
+                } else {
+                    false
+                }
+            }
+            PncApply(constructor_x, args_x) => {
+                if let PncApply(constructor_y, args_y) = other {
+                    let equivalent_args = args_x
+                        .iter()
+                        .zip(args_y.iter())
+                        .all(|(p, q)| p.value.equivalent(&q.value));
+
+                    constructor_x.value.equivalent(&constructor_y.value) && equivalent_args
+                } else if let Apply(constructor_y, args_y) = other {
                     let equivalent_args = args_x
                         .iter()
                         .zip(args_y.iter())
@@ -2154,6 +2022,26 @@ pub trait Spaceable<'a> {
         } else {
             arena.alloc(self).after(spaces)
         }
+    }
+
+    fn maybe_around_loc(
+        mut me: Loc<Self>,
+        arena: &'a Bump,
+        before: &'a [CommentOrNewline<'a>],
+        after: &'a [CommentOrNewline<'a>],
+    ) -> Loc<Self>
+    where
+        Self: Sized + 'a,
+    {
+        if !after.is_empty() {
+            me.value = arena.alloc(me.value).after(after);
+        }
+
+        if !before.is_empty() {
+            me.value = arena.alloc(me.value).before(before);
+        }
+
+        me
     }
 
     fn with_spaces_before(&'a self, spaces: &'a [CommentOrNewline<'a>], region: Region) -> Loc<Self>
@@ -2535,7 +2423,7 @@ impl<'a> Malformed for Expr<'a> {
 
             RecordAccess(inner, _) |
             TupleAccess(inner, _) |
-            TrySuffix { expr: inner, .. } => inner.is_malformed(),
+            TrySuffix(inner) => inner.is_malformed(),
 
             List(items) => items.is_malformed(),
 
@@ -2548,12 +2436,13 @@ impl<'a> Malformed for Expr<'a> {
             Closure(args, body) => args.iter().any(|arg| arg.is_malformed()) || body.is_malformed(),
             Defs(defs, body) => defs.is_malformed() || body.is_malformed(),
             Dbg => false,
-            DbgStmt { first, extra_args, continuation } => first.is_malformed() || extra_args.iter().any(|a| a.is_malformed()) || continuation.is_malformed(),
+            DbgStmt { first, extra_args, continuation, pnc_style: _ } => first.is_malformed() || extra_args.iter().any(|a| a.is_malformed()) || continuation.is_malformed(),
             LowLevelDbg(_, condition, continuation) => condition.is_malformed() || continuation.is_malformed(),
             Try => false,
             LowLevelTry(loc_expr, _) => loc_expr.is_malformed(),
             Return(return_value, after_return) => return_value.is_malformed() || after_return.is_some_and(|ar| ar.is_malformed()),
             Apply(func, args, _) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
+            PncApply(func, args) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
             BinOps(firsts, last) => firsts.iter().any(|(expr, _)| expr.is_malformed()) || last.is_malformed(),
             UnaryOp(expr, _) => expr.is_malformed(),
             If { if_thens, final_else, ..} => if_thens.iter().any(|(cond, body)| cond.is_malformed() || body.is_malformed()) || final_else.is_malformed(),
@@ -2564,7 +2453,6 @@ impl<'a> Malformed for Expr<'a> {
             ParensAround(expr) => expr.is_malformed(),
 
             MalformedIdent(_, _) |
-            MalformedSuffixed(..) |
             PrecedenceConflict(_) |
             EmptyRecordBuilder(_) |
             SingleFieldRecordBuilder(_) |
@@ -2650,7 +2538,8 @@ impl<'a> Malformed for Pattern<'a> {
             Identifier{ .. } |
             Tag(_) |
             OpaqueRef(_) => false,
-            Apply(func, args, _) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
+            Apply(func, args) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
+            PncApply(func, args) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
             RecordDestructure(items) => items.iter().any(|item| item.is_malformed()),
             RequiredField(_, pat) => pat.is_malformed(),
             OptionalField(_, expr) => expr.is_malformed(),

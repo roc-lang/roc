@@ -1,0 +1,67 @@
+@0-17 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-14,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                ModuleImport(
+                    ModuleImport {
+                        before_name: [],
+                        name: @7-8 ImportedModuleName {
+                            package: None,
+                            name: ModuleName(
+                                "P",
+                            ),
+                        },
+                        params: Some(
+                            ModuleImportParams {
+                                before: [],
+                                params: @8-14 [
+                                    @9-12 SpaceAfter(
+                                        IgnoredValue(
+                                            @9-10 "",
+                                            [],
+                                            @11-12 Var {
+                                                module_name: "",
+                                                ident: "h",
+                                            },
+                                        ),
+                                        [
+                                            Newline,
+                                        ],
+                                    ),
+                                ],
+                            },
+                        ),
+                        alias: None,
+                        exposed: None,
+                    },
+                ),
+            ],
+        },
+        @15-17 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "t!",
+            },
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

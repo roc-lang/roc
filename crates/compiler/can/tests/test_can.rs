@@ -806,7 +806,7 @@ mod test_can {
     fn question_suffix_simple() {
         let src = indoc!(
             r#"
-                (Str.toU64 "123")?
+                (Str.to_u64 "123")?
             "#
         );
         let arena = Bump::new();
@@ -816,10 +816,10 @@ mod test_can {
 
         // Assert that we desugar to:
         //
-        // Try(Str.toU64 "123")
+        // Try(Str.to_u64 "123")
 
         let cond_expr = assert_try_expr(&out.loc_expr.value);
-        let cond_args = assert_func_call(cond_expr, "toU64", CalledVia::Space, &out.interns);
+        let cond_args = assert_func_call(cond_expr, "to_u64", CalledVia::Space, &out.interns);
 
         assert_eq!(cond_args.len(), 1);
         assert_str_value(&cond_args[0].1.value, "123");
@@ -829,7 +829,7 @@ mod test_can {
     fn question_suffix_after_function() {
         let src = indoc!(
             r#"
-                Str.toU64? "123"
+                Str.to_u64? "123"
             "#
         );
         let arena = Bump::new();
@@ -839,10 +839,10 @@ mod test_can {
 
         // Assert that we desugar to:
         //
-        // Try(Str.toU64 "123")
+        // Try(Str.to_u64 "123")
 
         let cond_expr = assert_try_expr(&out.loc_expr.value);
-        let cond_args = assert_func_call(cond_expr, "toU64", CalledVia::Try, &out.interns);
+        let cond_args = assert_func_call(cond_expr, "to_u64", CalledVia::Try, &out.interns);
 
         assert_eq!(cond_args.len(), 1);
         assert_str_value(&cond_args[0].1.value, "123");
@@ -852,7 +852,7 @@ mod test_can {
     fn question_suffix_pipe() {
         let src = indoc!(
             r#"
-                "123" |> Str.toU64?
+                "123" |> Str.to_u64?
             "#
         );
         let arena = Bump::new();
@@ -862,10 +862,10 @@ mod test_can {
 
         // Assert that we desugar to:
         //
-        // Try(Str.toU64 "123")
+        // Try(Str.to_u64 "123")
 
         let cond_expr = assert_try_expr(&out.loc_expr.value);
-        let cond_args = assert_func_call(cond_expr, "toU64", CalledVia::Try, &out.interns);
+        let cond_args = assert_func_call(cond_expr, "to_u64", CalledVia::Try, &out.interns);
 
         assert_eq!(cond_args.len(), 1);
         assert_str_value(&cond_args[0].1.value, "123");
@@ -875,7 +875,7 @@ mod test_can {
     fn question_suffix_pipe_nested() {
         let src = indoc!(
             r#"
-                "123" |> Str.toU64? (Ok 123)?
+                "123" |> Str.to_u64? (Ok 123)?
             "#
         );
         let arena = Bump::new();
@@ -885,10 +885,10 @@ mod test_can {
 
         // Assert that we desugar to:
         //
-        // Try(Str.toU64 "123" Try(Ok 123))
+        // Try(Str.to_u64 "123" Try(Ok 123))
 
         let cond_expr = assert_try_expr(&out.loc_expr.value);
-        let cond_args = assert_func_call(cond_expr, "toU64", CalledVia::Try, &out.interns);
+        let cond_args = assert_func_call(cond_expr, "to_u64", CalledVia::Try, &out.interns);
 
         assert_eq!(cond_args.len(), 2);
 
@@ -906,7 +906,7 @@ mod test_can {
     fn try_desugar_plain_prefix() {
         let src = indoc!(
             r#"
-                try Str.toU64 "123"
+                try Str.to_u64 "123"
             "#
         );
         let arena = Bump::new();
@@ -916,10 +916,10 @@ mod test_can {
 
         // Assert that we desugar to:
         //
-        // Try(Str.toU64 "123")
+        // Try(Str.to_u64 "123")
 
         let cond_expr = assert_try_expr(&out.loc_expr.value);
-        let cond_args = assert_func_call(cond_expr, "toU64", CalledVia::Try, &out.interns);
+        let cond_args = assert_func_call(cond_expr, "to_u64", CalledVia::Try, &out.interns);
 
         assert_eq!(cond_args.len(), 1);
         assert_str_value(&cond_args[0].1.value, "123");
@@ -929,7 +929,7 @@ mod test_can {
     fn try_desugar_pipe_prefix() {
         let src = indoc!(
             r#"
-                "123" |> try Str.toU64
+                "123" |> try Str.to_u64
             "#
         );
         let arena = Bump::new();
@@ -939,10 +939,10 @@ mod test_can {
 
         // Assert that we desugar to:
         //
-        // Try(Str.toU64 "123")
+        // Try(Str.to_u64 "123")
 
         let cond_expr = assert_try_expr(&out.loc_expr.value);
-        let cond_args = assert_func_call(cond_expr, "toU64", CalledVia::Try, &out.interns);
+        let cond_args = assert_func_call(cond_expr, "to_u64", CalledVia::Try, &out.interns);
 
         assert_eq!(cond_args.len(), 1);
         assert_str_value(&cond_args[0].1.value, "123");
@@ -952,7 +952,7 @@ mod test_can {
     fn try_desugar_pipe_suffix() {
         let src = indoc!(
             r#"
-                Str.toU64 "123" |> try
+                Str.to_u64 "123" |> try
             "#
         );
         let arena = Bump::new();
@@ -962,10 +962,10 @@ mod test_can {
 
         // Assert that we desugar to:
         //
-        // Try(Str.toU64 "123")
+        // Try(Str.to_u64 "123")
 
         let cond_expr = assert_try_expr(&out.loc_expr.value);
-        let cond_args = assert_func_call(cond_expr, "toU64", CalledVia::Space, &out.interns);
+        let cond_args = assert_func_call(cond_expr, "to_u64", CalledVia::Space, &out.interns);
 
         assert_eq!(cond_args.len(), 1);
         assert_str_value(&cond_args[0].1.value, "123");
@@ -975,7 +975,7 @@ mod test_can {
     fn try_desugar_double_question_suffix() {
         let src = indoc!(
             r#"
-                Str.toU64 "123" ?? Num.maxU64
+                Str.to_u64 "123" ?? Num.max_u64
             "#
         );
         let arena = Bump::new();
@@ -985,12 +985,12 @@ mod test_can {
 
         // Assert that we desugar to:
         //
-        // when Str.toU64 "123"
+        // when Str.to_u64 "123"
         //   Ok success_BRANCH1_0_9 -> success_BRANCH1_0_9
-        //   Err _ -> Num.maxU64
+        //   Err _ -> Num.max_u64
 
         let (cond_expr, branches) = assert_when(&out.loc_expr.value);
-        let cond_args = assert_func_call(cond_expr, "toU64", CalledVia::Space, &out.interns);
+        let cond_args = assert_func_call(cond_expr, "to_u64", CalledVia::Space, &out.interns);
 
         assert_eq!(cond_args.len(), 1);
         assert_str_value(&cond_args[0].1.value, "123");
@@ -1000,16 +1000,16 @@ mod test_can {
         assert_pattern_tag_apply_with_ident(
             &branches[0].patterns[0].pattern.value,
             "Ok",
-            "success_BRANCH1_0_15",
+            "success_BRANCH1_0_16",
             &out.interns,
         );
         assert_var_usage(
             &branches[0].value.value,
-            "success_BRANCH1_0_15",
+            "success_BRANCH1_0_16",
             &out.interns,
         );
         assert_pattern_tag_apply_with_underscore(&branches[1].patterns[0].pattern.value, "Err");
-        assert_var_usage(&branches[1].value.value, "maxU64", &out.interns);
+        assert_var_usage(&branches[1].value.value, "max_u64", &out.interns);
     }
 
     #[test]
@@ -2157,10 +2157,10 @@ mod test_can {
     //         // This should NOT be string interpolation, because of the \\
     //         indoc!(
     //             r#"
-    //                      "abcd\$(efg)hij"
+    //                      "abcd\${efg}hij"
     //                      "#
     //         ),
-    //         Str(r"abcd$(efg)hij".into()),
+    //         Str(r"abcd${efg}hij".into()),
     //     );
     // }
 

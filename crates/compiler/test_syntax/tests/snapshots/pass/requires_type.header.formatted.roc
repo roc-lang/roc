@@ -3,4 +3,4 @@ platform "test/types"
     exposes []
     packages {}
     imports []
-    provides [mainForHost]
+    provides [main_for_host]

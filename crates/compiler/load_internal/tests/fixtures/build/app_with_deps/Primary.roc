@@ -1,6 +1,4 @@
-interface Primary
-    exposes [blah2, blah3, str, alwaysThree, identity, z, w, succeed, withDefault, yay]
-    imports []
+module [blah2, blah3, str, always_three, identity, z, w, succeed, with_default, yay]
 
 import Dep1
 import Dep2
@@ -12,24 +10,24 @@ blah3 = bar
 
 str = Dep1.str
 
-alwaysThree = \_ -> Dep1.three
+always_three = \_ -> Dep1.three
 
 identity = \a -> a
 
-z = identity (alwaysThree {})
+z = identity(always_three({}))
 
 w : Dep1.Identity {}
-w = Identity {}
+w = Identity({})
 
 succeed : a -> Dep1.Identity a
-succeed = \x -> Identity x
+succeed = \x -> Identity(x)
 
-withDefault = Res.withDefault
+with_default = Res.with_default
 
 yay : Res.Res {} err
 yay =
-    ok = Ok "foo"
+    ok = Ok("foo")
 
     f = \_ -> {}
 
-    Res.map ok f
+    Res.map(ok, f)

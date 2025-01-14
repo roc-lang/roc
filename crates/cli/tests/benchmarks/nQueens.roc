@@ -14,7 +14,7 @@ main! = \{} ->
     when input_result is
         Ok(n) ->
             queens(n) # original koka 13
-            |> Num.toStr
+            |> Num.to_str
             |> Host.put_line!
 
         Err(GetIntError) ->

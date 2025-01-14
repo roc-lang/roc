@@ -6,6 +6,7 @@ use crate::num::{
     ParsedNumResult,
 };
 use crate::scope::{PendingAbilitiesInScope, Scope};
+use bumpalo::collections::Vec as BumpVec;
 use roc_exhaustive::ListArity;
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
@@ -367,6 +368,75 @@ fn canonicalize_pattern_symbol(
     }
 }
 
+pub fn canonicalize_apply_tag<'a>(
+    tag: Loc<ast::Pattern<'a>>,
+    env: &mut Env<'a>,
+    var_store: &mut VarStore,
+    scope: &mut Scope,
+    output: &mut Output,
+    region: Region,
+    can_patterns: BumpVec<(Variable, Loc<Pattern>)>,
+) -> Pattern {
+    use ast::Pattern::*;
+    match tag.value {
+        Tag(name) => {
+            let tag_name = TagName(name.into());
+            Pattern::AppliedTag {
+                whole_var: var_store.fresh(),
+                ext_var: var_store.fresh(),
+                tag_name,
+                arguments: can_patterns.to_vec(),
+            }
+        }
+
+        OpaqueRef(name) => match scope.lookup_opaque_ref(name, tag.region) {
+            Ok((opaque, opaque_def)) => {
+                debug_assert!(!can_patterns.is_empty());
+
+                if can_patterns.len() > 1 {
+                    env.problem(Problem::RuntimeError(
+                        RuntimeError::OpaqueAppliedToMultipleArgs(region),
+                    ));
+
+                    Pattern::UnsupportedPattern(region)
+                } else {
+                    let argument = Box::new(can_patterns[0].clone());
+
+                    let (type_arguments, lambda_set_variables, specialized_def_type) =
+                        freshen_opaque_def(var_store, opaque_def);
+
+                    output.references.insert_type_lookup(
+                        opaque,
+                        crate::procedure::QualifiedReference::Unqualified,
+                    );
+
+                    Pattern::UnwrappedOpaque {
+                        whole_var: var_store.fresh(),
+                        opaque,
+                        argument,
+                        specialized_def_type: Box::new(specialized_def_type),
+                        type_arguments,
+                        lambda_set_variables,
+                    }
+                }
+            }
+            Err(runtime_error) => {
+                env.problem(Problem::RuntimeError(runtime_error));
+
+                Pattern::OpaqueNotInScope(Loc::at(tag.region, name.into()))
+            }
+        },
+        _ => {
+            env.problem(Problem::RuntimeError(RuntimeError::MalformedPattern(
+                MalformedPatternProblem::CantApplyPattern,
+                tag.region,
+            )));
+
+            Pattern::UnsupportedPattern(region)
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn canonicalize_pattern<'a>(
     env: &mut Env<'a>,
@@ -411,9 +481,9 @@ pub fn canonicalize_pattern<'a>(
             )));
             Pattern::UnsupportedPattern(region)
         }
-        Apply(tag, patterns, _) => {
-            let mut can_patterns = Vec::with_capacity(patterns.len());
-            for loc_pattern in *patterns {
+        PncApply(tag, patterns) => {
+            let mut can_patterns = BumpVec::with_capacity_in(patterns.len(), env.arena);
+            for loc_pattern in patterns.items.iter() {
                 let can_pattern = canonicalize_pattern(
                     env,
                     var_store,
@@ -428,63 +498,25 @@ pub fn canonicalize_pattern<'a>(
                 can_patterns.push((var_store.fresh(), can_pattern));
             }
 
-            match tag.value {
-                Tag(name) => {
-                    let tag_name = TagName(name.into());
-                    Pattern::AppliedTag {
-                        whole_var: var_store.fresh(),
-                        ext_var: var_store.fresh(),
-                        tag_name,
-                        arguments: can_patterns,
-                    }
-                }
+            canonicalize_apply_tag(**tag, env, var_store, scope, output, region, can_patterns)
+        }
+        Apply(tag, patterns) => {
+            let mut can_patterns = BumpVec::with_capacity_in(patterns.len(), env.arena);
+            for loc_pattern in *patterns {
+                let can_pattern = canonicalize_pattern(
+                    env,
+                    var_store,
+                    scope,
+                    output,
+                    pattern_type,
+                    &loc_pattern.value,
+                    loc_pattern.region,
+                    permit_shadows,
+                );
 
-                OpaqueRef(name) => match scope.lookup_opaque_ref(name, tag.region) {
-                    Ok((opaque, opaque_def)) => {
-                        debug_assert!(!can_patterns.is_empty());
-
-                        if can_patterns.len() > 1 {
-                            env.problem(Problem::RuntimeError(
-                                RuntimeError::OpaqueAppliedToMultipleArgs(region),
-                            ));
-
-                            Pattern::UnsupportedPattern(region)
-                        } else {
-                            let argument = Box::new(can_patterns.pop().unwrap());
-
-                            let (type_arguments, lambda_set_variables, specialized_def_type) =
-                                freshen_opaque_def(var_store, opaque_def);
-
-                            output.references.insert_type_lookup(
-                                opaque,
-                                crate::procedure::QualifiedReference::Unqualified,
-                            );
-
-                            Pattern::UnwrappedOpaque {
-                                whole_var: var_store.fresh(),
-                                opaque,
-                                argument,
-                                specialized_def_type: Box::new(specialized_def_type),
-                                type_arguments,
-                                lambda_set_variables,
-                            }
-                        }
-                    }
-                    Err(runtime_error) => {
-                        env.problem(Problem::RuntimeError(runtime_error));
-
-                        Pattern::OpaqueNotInScope(Loc::at(tag.region, name.into()))
-                    }
-                },
-                _ => {
-                    env.problem(Problem::RuntimeError(RuntimeError::MalformedPattern(
-                        MalformedPatternProblem::CantApplyPattern,
-                        tag.region,
-                    )));
-
-                    Pattern::UnsupportedPattern(region)
-                }
+                can_patterns.push((var_store.fresh(), can_pattern));
             }
+            canonicalize_apply_tag(**tag, env, var_store, scope, output, region, can_patterns)
         }
 
         &FloatLiteral(str) => match pattern_type {

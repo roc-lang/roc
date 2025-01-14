@@ -22,6 +22,7 @@
                 Newline,
             ],
         ),
+        pnc_style: false,
     },
     [
         LineComment(

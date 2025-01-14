@@ -3,7 +3,7 @@ platform "test-platform"
     exposes []
     packages {}
     imports []
-    provides [mainForHost]
+    provides [main_for_host]
 
-mainForHost : {} -> {}
-mainForHost = \{} -> {}
+main_for_host : {} -> {}
+main_for_host = \{} -> {}

@@ -23,8 +23,8 @@ initial_model = \start -> {
 cheapest_open : (position -> F64), Model position -> Result position {} where position implements Hash & Eq
 cheapest_open = \cost_fn, model ->
     model.open_set
-    |> Set.toList
-    |> List.keepOks(
+    |> Set.to_list
+    |> List.keep_oks(
         \position ->
             when Dict.get(model.costs, position) is
                 Err(_) -> Err({})
@@ -33,7 +33,7 @@ cheapest_open = \cost_fn, model ->
     |> Quicksort.sort_by(.cost)
     |> List.first
     |> Result.map(.position)
-    |> Result.mapErr(\_ -> {})
+    |> Result.map_err(\_ -> {})
 
 reconstruct_path : Dict position position, position -> List position where position implements Hash & Eq
 reconstruct_path = \came_from, goal ->
@@ -52,7 +52,7 @@ update_cost = \current, neighbor, model ->
     distance_to =
         reconstruct_path(new_came_from, neighbor)
         |> List.len
-        |> Num.toFrac
+        |> Num.to_frac
 
     new_model =
         { model &

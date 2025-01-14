@@ -45,7 +45,6 @@
                                                             "K",
                                                         ),
                                                     ],
-                                                    Whitespace,
                                                 ),
                                                 [
                                                     LineComment(

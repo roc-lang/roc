@@ -190,6 +190,7 @@ mod test_snapshots {
         fail/ability_first_demand_not_indented_enough.expr,
         fail/ability_non_signature_expression.expr,
         fail/alias_or_opaque_fail.expr,
+        fail/all_the_bangs.expr,
         fail/bound_variable.expr,
         fail/comment_with_tab.expr,
         fail/d_assign_return_bang.expr,
@@ -295,16 +296,17 @@ mod test_snapshots {
         pass/alias_comment_after_head.expr,
         pass/alias_parens_comment.expr,
         pass/alias_parens_comment_indent.expr,
-        pass/all_the_bangs.expr,
         pass/ann_apply_record_with_newlines.expr,
         pass/ann_closed_union.expr,
         pass/ann_effectful_fn.expr,
+        pass/ann_extra_indented_implements.expr,
         pass/ann_open_union.expr,
         pass/ann_parens_comments.expr,
         pass/ann_parens_where_implements_func.expr,
         pass/ann_pattern_comment_before_body.expr,
         pass/ann_record_pat_with_comment.expr,
         pass/ann_tag_union_newline_comment.expr,
+        pass/ann_where_e_newline_implements.expr,
         pass/annotate_tuple_func.expr,
         pass/annotated_empty_record_destructure.expr,
         pass/annotated_record_destructure.expr,
@@ -355,6 +357,7 @@ mod test_snapshots {
         pass/body_with_unneeded_parens.expr,
         pass/call_bang.expr,
         pass/call_bang_no_space.expr,
+        pass/can_ignored_field_in_import.expr,
         pass/capture_body_parens_comment.expr,
         pass/closure_arg_parens_then_comment.expr,
         pass/closure_complex_pattern_indent_issue.expr,
@@ -397,6 +400,9 @@ mod test_snapshots {
         pass/dbg_double_newline.expr,
         pass/dbg_extra_parens.expr,
         pass/dbg_newline_apply.expr,
+        pass/dbg_pnc_a_over_a.expr,
+        pass/dbg_pnc_in_double_parens.expr,
+        pass/dbg_pnc_zero_args.expr,
         pass/dbg_stmt.expr,
         pass/dbg_stmt_in_parens.expr,
         pass/dbg_stmt_multiline.expr,
@@ -430,6 +436,7 @@ mod test_snapshots {
         pass/empty_record_newline_assign.expr,
         pass/empty_record_update.expr,
         pass/empty_string.expr,
+        pass/empty_try_pnc.expr,
         pass/equals.expr,
         pass/equals_with_spaces.expr,
         pass/expect.expr,
@@ -460,11 +467,13 @@ mod test_snapshots {
         pass/implements_after_comment_with_newline.expr,
         pass/implements_annotation_comment.expr,
         pass/implements_in_pat_after_comment.expr,
+        pass/implements_in_pnc_pattern.expr,
         pass/implements_newline_in_fn_ty.expr,
         pass/implements_newlines_comments.expr,
         pass/implements_not_keyword.expr,
         pass/implements_record_destructure.expr,
         pass/import.moduledefs,
+        pass/import_backslash_as_m.expr,
         pass/import_from_package.moduledefs,
         pass/import_in_closure_with_curlies_after.expr,
         pass/import_with_alias.moduledefs,
@@ -478,6 +487,7 @@ mod test_snapshots {
         pass/int_with_underscore.expr,
         pass/lambda_in_chain.expr,
         pass/lambda_indent.expr,
+        pass/large_tuple_index.expr,
         pass/list_closing_indent_not_enough.expr,
         pass/list_closing_same_indent_no_trailing_comma.expr,
         pass/list_closing_same_indent_with_trailing_comma.expr,
@@ -519,9 +529,11 @@ mod test_snapshots {
         pass/multiline_str_and_str_in_alias.expr,
         pass/multiline_str_apply_in_parens_pat.expr,
         pass/multiline_str_crazyness.expr,
+        pass/multiline_str_in_closure_in_when_guard_wtf.expr,
         pass/multiline_str_in_pat.expr,
         pass/multiline_str_interpolation_records.expr,
         pass/multiline_str_opt_field.expr,
+        pass/multiline_str_pnc_apply_in_assignment_newline.expr,
         pass/multiline_string.expr,
         pass/multiline_string_in_apply.expr,
         pass/multiline_tuple_with_comments.expr,
@@ -542,6 +554,7 @@ mod test_snapshots {
         pass/negative_single_quote.expr,
         pass/nested_def_annotation.moduledefs,
         pass/nested_if.expr,
+        pass/nested_if_unindented.expr,
         pass/nested_list_comment_in_closure_arg.expr,
         pass/nested_parens_in_pattern.expr,
         pass/nested_when_comment_in_pat.expr,
@@ -618,6 +631,7 @@ mod test_snapshots {
         pass/parenthetical_var.expr,
         pass/parse_alias.expr,
         pass/parse_as_ann.expr,
+        pass/pat_parens_newline_before_pipe_when.expr,
         pass/pat_space_after_comma.expr,
         pass/pattern_as.expr,
         pass/pattern_as_list_rest.expr,
@@ -631,6 +645,10 @@ mod test_snapshots {
         pass/pizza_question.moduledefs,
         pass/plus_if.expr,
         pass/plus_when.expr,
+        pass/pnc_apply_comment_after_newline.expr,
+        pass/pnc_apply_neg_pattern.expr,
+        pass/pnc_dbg_parens_comment.expr,
+        pass/pnc_parens_apply_etc.expr,
         pass/pos_inf_float.expr,
         pass/positive_float.expr,
         pass/positive_int.expr,
@@ -676,6 +694,7 @@ mod test_snapshots {
         pass/single_arg_with_underscore_closure.expr,
         pass/single_underscore_closure.expr,
         pass/sneaky_implements_in_opaque_fn_type.expr,
+        pass/space_after_opt_field_pat.expr,
         pass/space_before_colon.full,
         pass/space_before_parens_space_after.expr,
         pass/space_only_after_minus.expr,
@@ -685,6 +704,7 @@ mod test_snapshots {
         pass/stmt_parens_minus.expr,
         pass/stmts_in_empty_record_assignment.expr,
         pass/str_block_multiple_newlines.expr,
+        pass/str_minus_pnc_call_multiline_str.expr,
         pass/string_without_escape.expr,
         pass/sub_var_with_spaces.expr,
         pass/sub_with_spaces.expr,
@@ -748,11 +768,13 @@ mod test_snapshots {
         pass/when_if_guard.expr,
         pass/when_in_assignment.expr,
         pass/when_in_binops.expr,
+        pass/when_in_closure_in_when_guard_wtf.expr,
         pass/when_in_function.expr,
         pass/when_in_function_python_style_indent.expr,
         pass/when_in_list.expr,
         pass/when_in_parens.expr,
         pass/when_in_parens_indented.expr,
+        pass/when_in_when_guard_wtf.expr,
         pass/when_newline_after_condition.expr,
         pass/when_newline_before_is_and_in_branch_parens.expr,
         pass/when_result_list.expr,
@@ -780,15 +802,12 @@ mod test_snapshots {
 
     /// Does the given test name expect the canonicalization process to panic?
     fn expect_canonicalize_panics(test_name: &str) -> bool {
+        #[allow(clippy::match_single_binding)]
         match test_name {
             // This is the current list as of writing.
             // We should be driving these down to zero over time.
             // Adding this protection in now to avoid accidentally adding more.
-            "all_the_bangs" | "bangs_and_tuple_accessors" => {
-                // both of these result in:
-                // "a Expr::TrySuffix expression was not completely removed in desugar_value_def_suffixed"
-                true
-            }
+            // NOTHING FOR NOW!
 
             // When adding new snapshot tests, strongly prefer fixing any canonicalization panics
             // they may run into rather than adding them to this list.
@@ -1035,7 +1054,7 @@ mod test_snapshots {
 
     #[test]
     fn string_with_interpolation_in_middle() {
-        assert_segments(r#""Hi, $(name)!""#, |arena| {
+        assert_segments(r#""Hi, ${name}!""#, |arena| {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
@@ -1051,7 +1070,7 @@ mod test_snapshots {
 
     #[test]
     fn string_with_interpolation_in_front() {
-        assert_segments(r#""$(name), hi!""#, |arena| {
+        assert_segments(r#""${name}, hi!""#, |arena| {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
@@ -1066,7 +1085,7 @@ mod test_snapshots {
 
     #[test]
     fn string_with_interpolation_in_back() {
-        assert_segments(r#""Hello $(name)""#, |arena| {
+        assert_segments(r#""Hello ${name}""#, |arena| {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
@@ -1081,7 +1100,7 @@ mod test_snapshots {
 
     #[test]
     fn string_with_multiple_interpolations() {
-        assert_segments(r#""Hi, $(name)! How is $(project) going?""#, |arena| {
+        assert_segments(r#""Hi, ${name}! How is ${project} going?""#, |arena| {
             let expr1 = arena.alloc(Var {
                 module_name: "",
                 ident: "name",

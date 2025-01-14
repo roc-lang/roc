@@ -3811,6 +3811,16 @@ mod test_fmt {
     }
 
     #[test]
+    fn pipe_pnc_application_with_comment_no_args() {
+        expr_formats_same(indoc!(
+            r"
+            combine( # This is a comment
+            )
+            "
+        ));
+    }
+
+    #[test]
     fn single_line_nested_application_with_parens() {
         expr_formats_same(indoc!(
             r"
@@ -5270,7 +5280,7 @@ mod test_fmt {
             exposes [] \
             packages {} \
             imports [] \
-            provides [mainForHost]",
+            provides [main_for_host]",
         );
     }
 
@@ -5993,32 +6003,6 @@ mod test_fmt {
     }
 
     #[test]
-    /// Test that everything under examples/ is formatted correctly
-    /// If this test fails on your diff, it probably means you need to re-format the examples.
-    /// Try this:
-    /// `cargo run -- format $(find examples -name \*.roc)`
-    fn test_fmt_examples() {
-        let mut count = 0;
-        let mut root = workspace_root();
-        root.push("examples");
-        for entry in walkdir::WalkDir::new(&root) {
-            let entry = entry.unwrap();
-            let path = entry.path();
-            if path.extension() == Some(std::ffi::OsStr::new("roc")) {
-                count += 1;
-                let src = std::fs::read_to_string(path).unwrap();
-                println!("Now trying to format {}", path.display());
-                module_formats_same(&src);
-            }
-        }
-        assert!(
-            count > 0,
-            "Expecting to find at least 1 .roc file to format under {}",
-            root.display()
-        );
-    }
-
-    #[test]
     /// Test that builtins are formatted correctly
     /// If this test fails on your diff, it probably means you need to re-format a builtin.
     /// Try this:
@@ -6233,7 +6217,7 @@ mod test_fmt {
                 exposes []
                 packages {}
                 imports []
-                provides [mainForHost]
+                provides [main_for_host]
             "#
         ));
     }
@@ -6591,13 +6575,13 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 "
-                    x = \"foo:\u{200B} $(bar).\"
+                    x = \"foo:\u{200B} ${bar}.\"
                     x
                 "
             ),
             indoc!(
                 r#"
-                    x = "foo:\u(200b) $(bar)."
+                    x = "foo:\u(200b) ${bar}."
                     x
                 "#
             ),
@@ -6611,7 +6595,7 @@ mod test_fmt {
                 "
                     x =
                         \"\"\"
-                        foo:\u{200B} $(bar).
+                        foo:\u{200B} ${bar}.
                         \"\"\"
                     x
                 "
@@ -6620,7 +6604,7 @@ mod test_fmt {
                 r#"
                     x =
                         """
-                        foo:\u(200b) $(bar).
+                        foo:\u(200b) ${bar}.
                         """
                     x
                 "#

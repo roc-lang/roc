@@ -1,7 +1,7 @@
-module [Types, shape, size, alignment, target, walkShapes, entryPoints]
+module [Types, shape, size, alignment, target, walk_shapes, entry_points]
 
 import Shape exposing [Shape]
-import TypeId exposing [TypeId, typeIDfromU64, typeIDtoU64]
+import TypeId exposing [TypeId, type_id_from_u64, type_id_to_u64]
 import Target exposing [Target]
 
 # TODO: switch AssocList uses to Dict once roc_std is updated.
@@ -15,55 +15,55 @@ Types := {
     aligns : List U32,
 
     # Needed to check for duplicates
-    typesByName : List Tuple1,
+    types_by_name : List Tuple1,
 
     ## Dependencies - that is, which type depends on which other type.
     ## This is important for declaration order in C; we need to output a
     ## type declaration earlier in the file than where it gets referenced by another type.
     deps : List Tuple2,
 
-    ## Names and types of the entry points of the program (e.g. mainForHost)
+    ## Names and types of the entry points of the program (e.g. main_for_host)
     entrypoints : List Tuple1,
     target : Target,
 }
     implements [Inspect, Encoding]
 
 target : Types -> Target
-target = \@Types types -> types.target
+target = \@Types(types) -> types.target
 
-entryPoints : Types -> List Tuple1
-entryPoints = \@Types { entrypoints } -> entrypoints
+entry_points : Types -> List Tuple1
+entry_points = \@Types({ entrypoints }) -> entrypoints
 
-walkShapes : Types, state, (state, Shape, TypeId -> state) -> state
-walkShapes = \@Types { types: shapes }, originalState, update ->
-    List.walkWithIndex shapes originalState \state, elem, index ->
-        id = typeIDfromU64 index
+walk_shapes : Types, state, (state, Shape, TypeId -> state) -> state
+walk_shapes = \@Types({ types: shapes }), original_state, update ->
+    List.walk_with_index(shapes, original_state, \state, elem, index ->
+        id = type_id_from_u64(index)
 
-        update state elem id
+        update(state, elem, id))
 
 shape : Types, TypeId -> Shape
-shape = \@Types types, id ->
-    when List.get types.types (typeIDtoU64 id) is
-        Ok answer -> answer
-        Err OutOfBounds ->
-            idStr = Num.toStr (typeIDtoU64 id)
+shape = \@Types(types), id ->
+    when List.get(types.types, type_id_to_u64(id)) is
+        Ok(answer) -> answer
+        Err(OutOfBounds) ->
+            id_str = Num.to_str(type_id_to_u64(id))
 
-            crash "TypeId #$(idStr) was not found in Types. This should never happen, and means there was a bug in `roc glue`. If you have time, please open an issue at <https://github.com/roc-lang/roc/issues>"
+            crash("TypeId #${id_str} was not found in Types. This should never happen, and means there was a bug in `roc glue`. If you have time, please open an issue at <https://github.com/roc-lang/roc/issues>")
 
 alignment : Types, TypeId -> U32
-alignment = \@Types types, id ->
-    when List.get types.aligns (typeIDtoU64 id) is
-        Ok answer -> answer
-        Err OutOfBounds ->
-            idStr = Num.toStr (typeIDtoU64 id)
+alignment = \@Types(types), id ->
+    when List.get(types.aligns, type_id_to_u64(id)) is
+        Ok(answer) -> answer
+        Err(OutOfBounds) ->
+            id_str = Num.to_str(type_id_to_u64(id))
 
-            crash "TypeId #$(idStr) was not found in Types. This should never happen, and means there was a bug in `roc glue`. If you have time, please open an issue at <https://github.com/roc-lang/roc/issues>"
+            crash("TypeId #${id_str} was not found in Types. This should never happen, and means there was a bug in `roc glue`. If you have time, please open an issue at <https://github.com/roc-lang/roc/issues>")
 
 size : Types, TypeId -> U32
-size = \@Types types, id ->
-    when List.get types.sizes (typeIDtoU64 id) is
-        Ok answer -> answer
-        Err OutOfBounds ->
-            idStr = Num.toStr (typeIDtoU64 id)
+size = \@Types(types), id ->
+    when List.get(types.sizes, type_id_to_u64(id)) is
+        Ok(answer) -> answer
+        Err(OutOfBounds) ->
+            id_str = Num.to_str(type_id_to_u64(id))
 
-            crash "TypeId #$(idStr) was not found in Types. This should never happen, and means there was a bug in `roc glue`. If you have time, please open an issue at <https://github.com/roc-lang/roc/issues>"
+            crash("TypeId #${id_str} was not found in Types. This should never happen, and means there was a bug in `roc glue`. If you have time, please open an issue at <https://github.com/roc-lang/roc/issues>")

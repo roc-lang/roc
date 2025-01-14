@@ -5,7 +5,7 @@ Parser a : List U8 -> List [Pair a (List U8)]
 any: Parser U8
 any = \inp ->
    when List.first inp is
-       Ok u -> [Pair u (List.dropFirst inp 1)]
+       Ok u -> [Pair u (List.drop_first inp 1)]
        _ -> []
 
 main = any

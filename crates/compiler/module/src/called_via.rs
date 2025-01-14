@@ -68,9 +68,6 @@ pub enum CalledVia {
     /// Calling with space, e.g. (foo bar)
     Space,
 
-    /// Calling parens-and-comms style, e.g. foo(bar)
-    ParensAndCommas,
-
     /// Calling with an operator, e.g. (bar |> foo) or (1 + 2)
     BinOp(BinOp),
 
@@ -78,25 +75,21 @@ pub enum CalledVia {
     UnaryOp(UnaryOp),
 
     /// This call is the result of desugaring string interpolation,
-    /// e.g. "$(first) $(last)" is transformed into Str.concat (Str.concat first " ") last.
+    /// e.g. "${first} ${last}" is transformed into `Str.concat(Str.concat(first, " "))` last.
     StringInterpolation,
 
     /// This call is the result of desugaring a map2-based Record Builder field. e.g.
     /// ```roc
-    /// { Task.parallel <-
-    ///     foo: get "a",
-    ///     bar: get "b",
+    /// { Result.parallel <-
+    ///     foo: get("a"),
+    ///     bar: get("b"),
     /// }
     /// ```
     /// is transformed into
     /// ```roc
-    /// Task.parallel (get "a") (get "b") \foo, bar -> { foo, bar }
+    /// Result.parallel(get("a"), get("b"), (\foo, bar -> { foo, bar }))
     /// ```
     RecordBuilder,
-
-    /// This call is the result of desugaring a Task.await from `!` syntax
-    /// e.g. Stdout.line! "Hello" becomes Task.await (Stdout.line "Hello") \{} -> ...
-    BangSuffix,
 
     /// This call is the result of desugaring a Result.try from `?` syntax
     /// e.g. Dict.get? items "key" becomes Result.try (Dict.get items "key") \item -> ...

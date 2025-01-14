@@ -10,7 +10,6 @@ use crate::annotation::IntroducedVariables;
 use crate::annotation::OwnedNamedOrAble;
 use crate::derive;
 use crate::env::Env;
-use crate::env::FxMode;
 use crate::expr::canonicalize_record;
 use crate::expr::get_lookup_symbols;
 use crate::expr::AnnotatedMark;
@@ -846,8 +845,8 @@ fn canonicalize_opaque<'a>(
                     // Did the user claim this implementation for a specialization of a different
                     // type? e.g.
                     //
-                    //   A implements [Hash {hash: myHash}]
-                    //   B implements [Hash {hash: myHash}]
+                    //   A implements [Hash {hash: my_hash}]
+                    //   B implements [Hash {hash: my_hash}]
                     //
                     // If so, that's an error and we drop the impl for this opaque type.
                     let member_impl = match scope.abilities_store.impl_key(impl_symbol) {
@@ -2454,38 +2453,33 @@ fn canonicalize_pending_value_def<'a>(
             }
         }
         IngestedFile(loc_pattern, opt_loc_ann, path_literal) => {
-            let relative_path =
-                if let ast::StrLiteral::PlainLine(ingested_path) = path_literal.value {
-                    ingested_path
-                } else {
-                    todo!(
-                    "Only plain strings are supported. Other cases should be made impossible here"
-                );
-                };
+            let expr = if let Some(relative_path) = extract_str_literal(env, path_literal) {
+                let mut file_path: PathBuf = env.module_path.into();
+                // Remove the header file name and push the new path.
+                file_path.pop();
+                file_path.push(relative_path);
 
-            let mut file_path: PathBuf = env.module_path.into();
-            // Remove the header file name and push the new path.
-            file_path.pop();
-            file_path.push(relative_path);
+                let mut bytes = vec![];
 
-            let mut bytes = vec![];
+                match fs::File::open(&file_path).and_then(|mut file| file.read_to_end(&mut bytes)) {
+                    Ok(_) => {
+                        Expr::IngestedFile(file_path.into(), Arc::new(bytes), var_store.fresh())
+                    }
+                    Err(e) => {
+                        env.problems.push(Problem::FileProblem {
+                            filename: file_path.to_path_buf(),
+                            error: e.kind(),
+                        });
 
-            let expr = match fs::File::open(&file_path)
-                .and_then(|mut file| file.read_to_end(&mut bytes))
-            {
-                Ok(_) => Expr::IngestedFile(file_path.into(), Arc::new(bytes), var_store.fresh()),
-                Err(e) => {
-                    env.problems.push(Problem::FileProblem {
-                        filename: file_path.to_path_buf(),
-                        error: e.kind(),
-                    });
-
-                    Expr::RuntimeError(RuntimeError::ReadIngestedFileError {
-                        filename: file_path.to_path_buf(),
-                        error: e.kind(),
-                        region: path_literal.region,
-                    })
+                        Expr::RuntimeError(RuntimeError::ReadIngestedFileError {
+                            filename: file_path.to_path_buf(),
+                            error: e.kind(),
+                            region: path_literal.region,
+                        })
+                    }
                 }
+            } else {
+                Expr::RuntimeError(RuntimeError::IngestedFilePathError(path_literal.region))
             };
 
             let loc_expr = Loc::at(path_literal.region, expr);
@@ -2538,6 +2532,68 @@ fn canonicalize_pending_value_def<'a>(
     }
 
     output
+}
+
+fn extract_str_literal<'a>(
+    env: &mut Env<'a>,
+    literal: Loc<ast::StrLiteral<'a>>,
+) -> Option<&'a str> {
+    let relative_path = match literal.value {
+        ast::StrLiteral::PlainLine(ingested_path) => ingested_path,
+        ast::StrLiteral::Line(text) => {
+            let mut result_text = bumpalo::collections::String::new_in(env.arena);
+            if !extract_str_segments(env, text, &mut result_text) {
+                return None;
+            }
+            result_text.into_bump_str()
+        }
+        ast::StrLiteral::Block(lines) => {
+            let mut result_text = bumpalo::collections::String::new_in(env.arena);
+            for text in lines {
+                if !extract_str_segments(env, text, &mut result_text) {
+                    return None;
+                }
+            }
+            result_text.into_bump_str()
+        }
+    };
+    Some(relative_path)
+}
+
+fn extract_str_segments<'a>(
+    env: &mut Env<'a>,
+    segments: &[ast::StrSegment<'a>],
+    result_text: &mut bumpalo::collections::String<'a>,
+) -> bool {
+    for segment in segments.iter() {
+        match segment {
+            ast::StrSegment::Plaintext(t) => {
+                result_text.push_str(t);
+            }
+            ast::StrSegment::Unicode(t) => {
+                let hex_code: &str = t.value;
+                if let Some(c) = u32::from_str_radix(hex_code, 16)
+                    .ok()
+                    .and_then(char::from_u32)
+                {
+                    result_text.push(c);
+                } else {
+                    env.problem(Problem::InvalidUnicodeCodePt(t.region));
+                    return false;
+                }
+            }
+            ast::StrSegment::EscapedChar(c) => {
+                result_text.push(c.unescape());
+            }
+            ast::StrSegment::Interpolated(e) => {
+                // TODO: maybe in the future we do want to allow building up the path with local bindings?
+                // This would require an interpreter tho; so for now we just disallow it.
+                env.problem(Problem::InterpolatedStringNotAllowed(e.region));
+                return false;
+            }
+        }
+    }
+    true
 }
 
 // TODO trim down these arguments!
@@ -3265,13 +3321,7 @@ fn to_pending_value_def<'a>(
             ))
         }
         StmtAfterExpr => PendingValue::StmtAfterExpr,
-        Stmt(expr) => {
-            if env.fx_mode == FxMode::Task {
-                internal_error!("a Stmt was not desugared correctly, should have been converted to a Body(...) in desguar")
-            }
-
-            PendingValue::Def(PendingValueDef::Stmt(expr))
-        }
+        Stmt(expr) => PendingValue::Def(PendingValueDef::Stmt(expr)),
     }
 }
 

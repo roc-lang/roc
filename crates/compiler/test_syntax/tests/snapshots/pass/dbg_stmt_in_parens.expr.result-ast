@@ -23,5 +23,6 @@
                 Newline,
             ],
         ),
+        pnc_style: false,
     },
 )

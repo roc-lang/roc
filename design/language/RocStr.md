@@ -1,3 +1,6 @@
+⚠️ This doc is almost completely outdated at this point and is wrong in many places.
+Please ask on [our zulip group chat](https://roc.zulipchat.com) if you would like to know about the internals.
+
 # RocStr
 
 This is the in-memory representation for Roc's `Str`. To explain how `Str` is laid out in memory, it's helpful to start with how `List` is laid out.

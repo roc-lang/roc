@@ -2,9 +2,9 @@ app "test" provides [main] to "./platform"
 
 entry =
     {
-        toF32: Num.toF32,
-        toF64: Num.toF64,
+        to_f32: Num.to_f32,
+        to_f64: Num.to_f64,
     }
 
 main = entry
-#      ^^^^^ { toF32 : Num * -[[Num.toF32(139)]]-> F32, toF64 : Num w_a -[[Num.toF64(141)]]-> F64 }
+#      ^^^^^ { to_f32 : Num * -[[Num.to_f32(139)]]-> F32, to_f64 : Num w_a -[[Num.to_f64(141)]]-> F64 }

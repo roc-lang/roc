@@ -1,6 +1,8 @@
 # Plans
 
-This is not a roadmap, but it is a set of current plans for the language. Plans can change, of course, but the goal here is to lay out some of the current plans. It won't be an exhaustive list, but it should give you the highlights.
+This is not a roadmap, but it is a set of current plans for the language. Plans can change, of course, but the goal here is to lay out some of the current plans.
+
+This is not an exhaustive list, it aims to highlight that there are significant changes to the language, tooling, and broader ecosystem ahead.
 
 ## [Planned Breaking Changes](#planned-breaking-changes) {#planned-breaking-changes}
 
@@ -10,17 +12,25 @@ The best time to make breaking changes (that will benefit more and more people a
 
 ### [Builtins](#builtins) {#builtins}
 
-Currently, [builtins](https://www.roc-lang.org/builtins) get breaking changes from time to time. There aren't any specific plans to make particular breaking changes to them, because typically when we decide a change is warranted, we discuss and implement the change pretty quickly.
+Currently, [builtins](https://www.roc-lang.org/builtins) get breaking changes from time to time.
 
-As an example, we had [a discussion](https://roc.zulipchat.com/#narrow/stream/304641-ideas/topic/Drop.20n.20elements.20from.20the.20end.20of.20a.20list) about changing the API for how elements get dropped from a list, and then a week later [announced](https://roc.zulipchat.com/#narrow/stream/397893-announcements/topic/List.2Edrop.2C.20dropFirst.2C.20dropLast) that the change had shipped.
+The builtins are being migrated from `camelCase` to `snake_case`. This is a breaking change, and will likely take some time to be completed across the ecosystem of packages, platforms, and example code.
 
-This has been consistently happening a few times per year. It's hard to predict exactly what the next one will be, but it's a safe bet that it will happen again.
+### [Purity Inference](#purity-inference) {#purity-inference}
 
-### [Import syntax](#import-syntax) {#import-syntax}
+Recently the changes outlined in the [design proposal for Purity Inference](https://docs.google.com/document/d/1ZVD3h5jLpQNFSDXTg2RkzPhNXz5EErUXBBjN8TuyiqQ/edit?usp=sharing) were released in the basic-cli and basic-webserver platforms (among others).
 
-Implementing the very important [module params](https://docs.google.com/document/d/110MwQi7Dpo1Y69ECFXyyvDWzF4OYv1BLojIm08qDTvg/edit?usp=sharing) feature requires a breaking syntax change to how imports work. This plan is not at all tentative; there is a high degree of confidence that it will happen!
+Therefore `Task` is no longer required and has been deprecated.
 
-Work has not started on this yet, but we'd like to have the project completed sometime in 2024.
+This is a significant upgrade to the language and will take some time for the ecosystem to upgrade.
+
+### [Static Dispatch](#static-dispatch) {#static-dispatch}
+
+There are significant changes outlined in the [static dispatch design proposal](https://docs.google.com/document/d/1OUd0f4PQjH8jb6i1vEJ5DOnfpVBJbGTjnCakpXAYeT8/edit?usp=sharing). These are being discussed and worked on, but likely to affect other features like abilities, record default fields, and potentially module params.
+
+### [Syntax changes](#syntax-changes) {#syntax-changes}
+
+There are a number of syntax changes that are planned, but not yet completed see [tracking issue](https://github.com/roc-lang/roc/issues/7106) for more information.
 
 ### [Shadowing](#shadowing) {#shadowing}
 

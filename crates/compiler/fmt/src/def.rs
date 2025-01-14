@@ -19,8 +19,8 @@ use roc_error_macros::internal_error;
 use roc_parse::ast::{
     AbilityMember, Defs, Expr, ExtractSpaces, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
     ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport,
-    ModuleImportParams, Pattern, PatternApplyStyle, Spaces, SpacesBefore, StrLiteral,
-    TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    ModuleImportParams, Pattern, Spaces, SpacesBefore, StrLiteral, TypeAnnotation, TypeDef,
+    TypeHeader, ValueDef,
 };
 use roc_parse::expr::merge_spaces;
 use roc_parse::header::Keyword;
@@ -556,7 +556,8 @@ impl<'a> Formattable for TypeHeader<'a> {
             Parens::NotNeeded,
             indent,
             self.vars.iter().any(|v| v.is_multiline()),
-            PatternApplyStyle::Whitespace,
+            false,
+            None,
         );
         buf.flags = old_flags;
     }
@@ -569,7 +570,6 @@ fn type_head_lift_spaces<'a, 'b: 'a>(
     let pat = Pattern::Apply(
         arena.alloc(Loc::at(head.name.region, Pattern::Tag(head.name.value))),
         head.vars,
-        PatternApplyStyle::Whitespace,
     );
 
     pattern_lift_spaces(arena, &pat)
@@ -891,9 +891,7 @@ impl<'a> Formattable for ValueDef<'a> {
 fn ann_pattern_needs_parens(value: &Pattern<'_>) -> bool {
     match value.extract_spaces().item {
         Pattern::Tag(_) => true,
-        Pattern::Apply(func, _args, _style)
-            if matches!(func.extract_spaces().item, Pattern::Tag(..)) =>
-        {
+        Pattern::Apply(func, _args) if matches!(func.extract_spaces().item, Pattern::Tag(..)) => {
             true
         }
         _ => false,
@@ -1016,7 +1014,6 @@ pub fn fmt_body<'a>(
     allow_simplify_empty_record_destructure: bool,
     pattern: &'a Pattern<'a>,
     body: &'a Expr<'a>,
-
     indent: u16,
 ) {
     let pattern_extracted = pattern.extract_spaces();
@@ -1085,6 +1082,13 @@ pub fn fmt_body<'a>(
                     ..
                 },
                 ..,
+            )
+            | Expr::PncApply(
+                Loc {
+                    value: Expr::Str(StrLiteral::Block(..)),
+                    ..
+                },
+                ..,
             ) => {
                 buf.spaces(1);
                 body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent + INDENT);
@@ -1148,6 +1152,7 @@ fn starts_with_expect_ident(expr: &Expr<'_>) -> bool {
     // If we removed the `{}=` in this case, that would change the meaning
     match expr {
         Expr::Apply(inner, _, _) => starts_with_expect_ident(&inner.value),
+        Expr::PncApply(inner, _) => starts_with_expect_ident(&inner.value),
         Expr::Var { module_name, ident } => {
             module_name.is_empty() && (*ident == "expect" || *ident == "expect!")
         }
@@ -1162,7 +1167,9 @@ pub fn starts_with_block_string_literal(expr: &Expr<'_>) -> bool {
             starts_with_block_string_literal(inner)
         }
         Expr::Apply(inner, _, _) => starts_with_block_string_literal(&inner.value),
-        Expr::TrySuffix { target: _, expr } => starts_with_block_string_literal(expr),
+        Expr::RecordAccess(inner, _) => starts_with_block_string_literal(inner),
+        Expr::PncApply(inner, _) => starts_with_block_string_literal(&inner.value),
+        Expr::TrySuffix(inner) => starts_with_block_string_literal(inner),
         _ => false,
     }
 }
