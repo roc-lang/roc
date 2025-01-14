@@ -19,7 +19,7 @@
         <p>Welcome to Roc!</p>
         <p>This tutorial will teach you how to build Roc applications. Along the way, you'll learn how to write tests, use the REPL, and more!</p>
         <p class="banner">
-            🚧 Roc is a <b>Work in Progress!</b> 🏗️
+            🏗️ Roc is a <b>Work in Progress!</b> 🏗️
             <br/>
             <br/>
             As of January 2025,
