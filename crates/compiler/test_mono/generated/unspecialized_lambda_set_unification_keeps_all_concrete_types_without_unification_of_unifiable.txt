@@ -192,12 +192,12 @@ procedure Num.96 (#Attr.2):
     ret Num.287;
 
 procedure Str.12 (#Attr.2):
-    let Str.250 : List U8 = lowlevel StrToUtf8 #Attr.2;
-    ret Str.250;
+    let Str.382 : List U8 = lowlevel StrToUtf8 #Attr.2;
+    ret Str.382;
 
 procedure Str.36 (#Attr.2):
-    let Str.251 : U64 = lowlevel StrCountUtf8Bytes #Attr.2;
-    ret Str.251;
+    let Str.383 : U64 = lowlevel StrCountUtf8Bytes #Attr.2;
+    ret Str.383;
 
 procedure Test.20 (Test.58):
     inc Test.58;

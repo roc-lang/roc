@@ -99,12 +99,12 @@ procedure Num.96 (#Attr.2):
     ret Num.283;
 
 procedure Str.12 (#Attr.2):
-    let Str.247 : List U8 = lowlevel StrToUtf8 #Attr.2;
-    ret Str.247;
+    let Str.379 : List U8 = lowlevel StrToUtf8 #Attr.2;
+    ret Str.379;
 
 procedure Str.36 (#Attr.2):
-    let Str.248 : U64 = lowlevel StrCountUtf8Bytes #Attr.2;
-    ret Str.248;
+    let Str.380 : U64 = lowlevel StrCountUtf8Bytes #Attr.2;
+    ret Str.380;
 
 procedure Test.20 (Test.58):
     let Test.295 : Str = CallByName Encode.23 Test.58;
