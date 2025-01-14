@@ -974,6 +974,18 @@ pub fn canonicalize_expr<'a>(
                         }),
                         Output::default(),
                     ),
+                    Err(CanonicalizeRecordProblem::InvalidIgnoredValue {
+                        field_name,
+                        field_region,
+                        record_region,
+                    }) => (
+                        Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidIgnoredValue {
+                            field_name,
+                            field_region,
+                            record_region,
+                        }),
+                        Output::default(),
+                    ),
                 }
             } else {
                 // only (optionally qualified) variables can be updated, not arbitrary expressions
@@ -1256,34 +1268,26 @@ pub fn canonicalize_expr<'a>(
                 output,
             )
         }
-        ast::Expr::AccessorFunction(field) => (
-            RecordAccessor(StructAccessorData {
-                name: scope.gen_unique_symbol(),
-                function_var: var_store.fresh(),
-                record_var: var_store.fresh(),
-                ext_var: var_store.fresh(),
-                closure_var: var_store.fresh(),
-                field_var: var_store.fresh(),
-                field: match field {
-                    Accessor::RecordField(field) => IndexOrField::Field((*field).into()),
-                    Accessor::TupleIndex(index) => IndexOrField::Index(index.parse().unwrap()),
-                },
-            }),
-            Output::default(),
-        ),
+        ast::Expr::AccessorFunction(field) => {
+            canonicalize_accessor_function(env, var_store, scope, field, region)
+        }
         ast::Expr::TupleAccess(tuple_expr, field) => {
             let (loc_expr, output) = canonicalize_expr(env, var_store, scope, region, tuple_expr);
 
-            (
+            let res = if let Ok(index) = field.parse() {
                 TupleAccess {
                     tuple_var: var_store.fresh(),
                     ext_var: var_store.fresh(),
                     elem_var: var_store.fresh(),
                     loc_expr: Box::new(loc_expr),
-                    index: field.parse().unwrap(),
-                },
-                output,
-            )
+                    index,
+                }
+            } else {
+                let error = roc_problem::can::RuntimeError::InvalidTupleIndex(region);
+                env.problem(Problem::RuntimeError(error.clone()));
+                Expr::RuntimeError(error)
+            };
+            (res, output)
         }
         ast::Expr::TrySuffix { .. } => internal_error!(
             "a Expr::TrySuffix expression was not completely removed in desugar_value_def_suffixed"
@@ -1644,6 +1648,37 @@ pub fn canonicalize_expr<'a>(
     )
 }
 
+fn canonicalize_accessor_function(
+    env: &mut Env<'_>,
+    var_store: &mut VarStore,
+    scope: &mut Scope,
+    field: &Accessor<'_>,
+    region: Region,
+) -> (Expr, Output) {
+    (
+        Expr::RecordAccessor(StructAccessorData {
+            name: scope.gen_unique_symbol(),
+            function_var: var_store.fresh(),
+            record_var: var_store.fresh(),
+            ext_var: var_store.fresh(),
+            closure_var: var_store.fresh(),
+            field_var: var_store.fresh(),
+            field: match field {
+                Accessor::RecordField(field) => IndexOrField::Field((*field).into()),
+                Accessor::TupleIndex(index) => match index.parse() {
+                    Ok(index) => IndexOrField::Index(index),
+                    Err(_) => {
+                        let error = roc_problem::can::RuntimeError::InvalidTupleIndex(region);
+                        env.problem(Problem::RuntimeError(error.clone()));
+                        return (Expr::RuntimeError(error), Output::default());
+                    }
+                },
+            },
+        }),
+        Output::default(),
+    )
+}
+
 pub fn canonicalize_record<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
@@ -1670,6 +1705,18 @@ pub fn canonicalize_record<'a>(
                 record_region,
             }) => (
                 Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidOptionalValue {
+                    field_name,
+                    field_region,
+                    record_region,
+                }),
+                Output::default(),
+            ),
+            Err(CanonicalizeRecordProblem::InvalidIgnoredValue {
+                field_name,
+                field_region,
+                record_region,
+            }) => (
+                Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidIgnoredValue {
                     field_name,
                     field_region,
                     record_region,
@@ -2016,6 +2063,11 @@ enum CanonicalizeRecordProblem {
         field_region: Region,
         record_region: Region,
     },
+    InvalidIgnoredValue {
+        field_name: Lowercase,
+        field_region: Region,
+        record_region: Region,
+    },
 }
 fn canonicalize_fields<'a>(
     env: &mut Env<'a>,
@@ -2064,6 +2116,21 @@ fn canonicalize_fields<'a>(
                     record_region: region,
                 });
             }
+            Err(CanonicalizeFieldProblem::InvalidIgnoredValue {
+                field_name,
+                field_region,
+            }) => {
+                env.problems.push(Problem::InvalidIgnoredValue {
+                    field_name: field_name.clone(),
+                    field_region,
+                    record_region: region,
+                });
+                return Err(CanonicalizeRecordProblem::InvalidIgnoredValue {
+                    field_name,
+                    field_region,
+                    record_region: region,
+                });
+            }
         }
     }
 
@@ -2072,6 +2139,10 @@ fn canonicalize_fields<'a>(
 
 enum CanonicalizeFieldProblem {
     InvalidOptionalValue {
+        field_name: Lowercase,
+        field_region: Region,
+    },
+    InvalidIgnoredValue {
         field_name: Lowercase,
         field_region: Region,
     },
@@ -2105,9 +2176,10 @@ fn canonicalize_field<'a>(
         }),
 
         // An ignored value, e.g. `{ _name: 123 }`
-        IgnoredValue(_, _, _) => {
-            internal_error!("Somehow an IgnoredValue record field was not desugared!");
-        }
+        IgnoredValue(name, _, value) => Err(CanonicalizeFieldProblem::InvalidIgnoredValue {
+            field_name: Lowercase::from(name.value),
+            field_region: Region::span_across(&name.region, &value.region),
+        }),
 
         // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
         LabelOnly(_) => {
