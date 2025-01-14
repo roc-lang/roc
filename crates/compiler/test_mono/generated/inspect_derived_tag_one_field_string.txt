@@ -290,7 +290,7 @@ procedure Str.45 (Str.189, Str.190, Str.191):
         dec Str.473;
         ret Str.189;
 
-procedure Str.61 (#Derived_gen.21, #Derived_gen.22, #Derived_gen.23, #Derived_gen.24):
+procedure Str.61 (#Derived_gen.22, #Derived_gen.23, #Derived_gen.24, #Derived_gen.25):
     joinpoint Str.382 Str.194 Str.195 Str.196 Str.197:
         inc Str.195;
         let Str.383 : [C {}, C {Str, Str}] = CallByName Str.38 Str.195 Str.196;
@@ -314,9 +314,9 @@ procedure Str.61 (#Derived_gen.21, #Derived_gen.22, #Derived_gen.23, #Derived_ge
             dec Str.195;
             ret Str.387;
     in
-    inc #Derived_gen.23;
     inc #Derived_gen.24;
-    jump Str.382 #Derived_gen.21 #Derived_gen.22 #Derived_gen.23 #Derived_gen.24;
+    inc #Derived_gen.25;
+    jump Str.382 #Derived_gen.22 #Derived_gen.23 #Derived_gen.24 #Derived_gen.25;
 
 procedure Str.62 (Str.219, Str.220):
     let Str.221 : U64 = CallByName Str.36 Str.219;
