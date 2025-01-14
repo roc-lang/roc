@@ -143,7 +143,7 @@ struct Cell {
 
 ### Enumeration
 
-A special case where a none of the tags in a tag union contains a payload. This means it can be represented as just its discriminant.
+A special case where none of the tags in a tag union contains a payload. This means it can be represented as just its discriminant.
 
 ```roc
 # in `platform.roc`
