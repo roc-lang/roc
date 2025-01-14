@@ -18,10 +18,24 @@
         <h1>Tutorial<label id="tutorial-toc-toggle-label" for="tutorial-toc-toggle">contents</label></h1>
         <p>Welcome to Roc!</p>
         <p>This tutorial will teach you how to build Roc applications. Along the way, you'll learn how to write tests, use the REPL, and more!</p>
+        <p class="banner">
+            <p>
+                🚧 Roc is a <b>Work in Progress!</b> 🏗️
+            </p>
+            <p>
+                As of January 2025,
+                <a href="/plans">several large breaking changes</a>
+                are being implemented.
+                When those are complete, this tutorial will be majorly updated
+                for flow and accuracy.
+            </p>
+            <p>
+                Until then, you may hit some surprising errors that require
+                <a href="/community">help</a>
+                to diagnose and solve.
+            </p>
+        </p>
     </section>
-    <div class="banner">
-        Roc is a <b>Work in Progress!</b> See the <a href="/plans">plans</a> page for more information.
-    </div>
     <section>
         <h2 id="installation"><a href="#installation">Installation</a></h2>
         <p>Roc doesn’t have a numbered release or an installer yet, but you can follow the install instructions for your OS<a href="/install/getting_started.html#installation"> here </a>. If you get stuck, friendly people will be happy to help if you open a topic in<a href="https://roc.zulipchat.com/#narrow/stream/231634-beginners"> #beginners </a>on<a href="https://roc.zulipchat.com/"> Roc Zulip Chat </a>and ask for assistance!</p>
