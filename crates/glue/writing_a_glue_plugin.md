@@ -293,6 +293,13 @@ struct Expr_allocation {
     union {
         Expr_Concat Concat;
         RocStr String;
+        uint8_t Tag3;
+        uint8_t Tag4;
+        uint8_t Tag5;
+        uint8_t Tag6;
+        uint8_t Tag7;
+        uint8_t Tag8;
+        uint8_t Tag9;
     } payload;
     enum {
         Concat = 0,
