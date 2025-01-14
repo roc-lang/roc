@@ -1,6 +1,7 @@
-T : [
-] #
-    where e
-    implements
-    T
+T :
+    [
+    ] #
+        where e
+        implements
+        T
 e

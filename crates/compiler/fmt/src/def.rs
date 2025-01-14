@@ -1,6 +1,5 @@
 use crate::annotation::{
-    ann_lift_spaces, ann_lift_spaces_after, is_collection_multiline, ty_is_outdentable,
-    Formattable, Newlines, Parens,
+    ann_lift_spaces_after, is_collection_multiline, Formattable, Newlines, Parens,
 };
 use crate::collection::{fmt_collection, Braces};
 use crate::expr::{
@@ -455,22 +454,15 @@ impl<'a> Formattable for TypeDef<'a> {
 
         match self {
             Alias { header, ann } => {
-                header.format(buf, indent);
-
-                buf.indent(indent);
-                buf.push_str(" :");
-                buf.spaces(1);
-
-                let ann = ann_lift_spaces(buf.text.bump(), &ann.value);
-
-                let inner_indent = if ty_is_outdentable(&ann.item) {
-                    indent
-                } else {
-                    indent + INDENT
-                };
-                fmt_comments_only(buf, ann.before.iter(), NewlineAt::Bottom, inner_indent);
-                ann.item.format(buf, inner_indent);
-                fmt_spaces(buf, ann.after.iter(), indent);
+                fmt_general_def(
+                    header,
+                    Parens::NotNeeded,
+                    buf,
+                    indent,
+                    ":",
+                    &ann.value,
+                    newlines,
+                );
             }
             Opaque {
                 header,

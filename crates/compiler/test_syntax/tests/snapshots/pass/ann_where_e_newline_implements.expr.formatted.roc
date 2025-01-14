@@ -1,4 +1,5 @@
-J : [
-] where e
-    implements T
+J :
+    [
+    ] where e
+        implements T
 i
