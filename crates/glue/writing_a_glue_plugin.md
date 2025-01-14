@@ -50,7 +50,9 @@ A number type. Either a signed integer (I8 through I128), an unsigned integer (U
 
 ## RocStr, RocList, RocDict, RocSet, RocBox
 
-Roc builtin datatypes. The Roc compiler is planned to expose parts of the standard library to glue code via C FFI to avoid having the reimplement them by hand in every host language. In the meantime, Rust implementations of the `Str`, `List`, and `Box` datatypes can be found under `crates/roc_std` for reference.
+Roc builtin datatypes. The Roc compiler is planned to expose parts of the standard library to glue code via C FFI to avoid having the reimplement them by hand in every host language. In the meantime:
+- The authoratitive Zig implementations for Roc builtins can be found under `crates/compiler/builtins/bitcode/src`. These are more made for use by the compiler, and thus are better used for reference than for human use.
+- Rust implementations of the `Str`, `List`, and `Box` datatypes can be found under `crates/roc_std`. These are made for use by humans, and as such are a better example for what their wrapper APIs might look like. Do note that these are not guaranteed to be in sync with their Zig implementations.
 
 ## Struct
 
