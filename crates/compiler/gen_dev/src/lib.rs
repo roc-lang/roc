@@ -1677,6 +1677,13 @@ trait Backend<'a> {
                     ret_layout,
                 )
             }
+            LowLevel::StrFromUtf8Lossy => self.build_fn_call(
+                sym,
+                bitcode::STR_FROM_UTF8_LOSSY.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
             LowLevel::StrRepeat => self.build_fn_call(
                 sym,
                 bitcode::STR_REPEAT.to_string(),

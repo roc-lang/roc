@@ -631,6 +631,156 @@ fn str_from_utf8_fail_surrogate_half() {
 }
 
 #[test]
+fn str_from_utf8_lossy_expected_continuation() {
+    assert_evals_to!(
+        r#"Str.from_utf8_lossy [97, 98, 0xC2, 99]"#,
+        roc_std::RocStr::from("ab�c"),
+        roc_std::RocStr
+    );
+}
+
+#[test]
+fn str_from_utf16() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when Str.from_utf16 [0x72, 0x6f, 0x63] is
+                    Ok val -> val
+                    _ -> ""
+            "#
+        ),
+        roc_std::RocStr::from("roc"),
+        roc_std::RocStr
+    )
+}
+
+// Marking this as should_panic, because it *does* panic and it is not clear why?
+// If some change magically fixes this, great, remove the should_panic attribute.
+#[test]
+#[should_panic(expected = r#"Roc failed with message: "Integer multiplication overflowed!"#)]
+fn str_from_utf16_emoji() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when Str.from_utf16 [0x72, 0xd83d, 0xdc96, 0x63] is
+                    Ok val -> val
+                    _ -> ""
+            "#
+        ),
+        roc_std::RocStr::from("r💖c"),
+        roc_std::RocStr
+    )
+}
+
+#[test]
+fn str_from_utf16_err_expected_second_surrogate_half() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when Str.from_utf16 [0x72, 0xd83d, 0x63] is
+                    Err (BadUtf16 {problem: EncodesSurrogateHalf, index: index }) -> index
+                    _ -> 42
+            "#
+        ),
+        1u64,
+        u64
+    )
+}
+
+#[test]
+fn str_from_utf16_err_unexpected_second_surrogate_half() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when Str.from_utf16 [0x72, 0xdc96, 0x63] is
+                    Err (BadUtf16 {problem: EncodesSurrogateHalf, index: index }) -> index
+                    _ -> 42
+            "#
+        ),
+        1u64,
+        u64
+    )
+}
+
+#[test]
+fn str_from_utf16_lossy() {
+    assert_evals_to!(
+        r#"Str.from_utf16_lossy [0x72, 0xdc96, 0x63]"#,
+        roc_std::RocStr::from("r�c"),
+        roc_std::RocStr
+    )
+}
+
+#[test]
+fn str_from_utf32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when Str.from_utf32 [0x72, 0x6f, 0x63] is
+                    Ok val -> val
+                    _ -> ""
+            "#
+        ),
+        roc_std::RocStr::from("roc"),
+        roc_std::RocStr
+    )
+}
+
+#[test]
+fn str_from_utf32_emoji() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when Str.from_utf32 [0x72, 0x1f496, 0x63] is
+                    Ok val -> val
+                    _ -> ""
+            "#
+        ),
+        roc_std::RocStr::from("r💖c"),
+        roc_std::RocStr
+    )
+}
+
+#[test]
+fn str_from_utf32_err_codepoint_too_large() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when Str.from_utf32 [0x72, 0x123456, 0x63] is
+                    Err (BadUtf32 {problem: CodepointTooLarge, index: index }) -> index
+                    _ -> 42
+            "#
+        ),
+        1u64,
+        u64
+    )
+}
+
+#[test]
+fn str_from_utf32_err_utf8_cannot_encode_surrogate_half() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when Str.from_utf32 [0x72, 0xd83d, 0x63] is
+                    Err (BadUtf32 {problem: EncodesSurrogateHalf, index: index }) -> index
+                    _ -> 42
+            "#
+        ),
+        1u64,
+        u64
+    )
+}
+
+#[test]
+fn str_from_utf32_lossy() {
+    assert_evals_to!(
+        r#"Str.from_utf32_lossy [0x72, 0x123456, 0x63]"#,
+        roc_std::RocStr::from("r�c"),
+        roc_std::RocStr
+    )
+}
+
+#[test]
 fn str_equality() {
     assert_evals_to!(r#""a" == "a""#, true, bool);
     assert_evals_to!(

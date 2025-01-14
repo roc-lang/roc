@@ -1449,6 +1449,105 @@ pub fn fromUtf8C(
     return fromUtf8(list, update_mode);
 }
 
+const UNICODE_REPLACEMENT: u21 = 0xfffd;
+
+const Utf8Iterator = struct {
+    bytes: []u8,
+    i: usize,
+
+    pub fn init(list: RocList) Utf8Iterator {
+        const bytes = @as([*]u8, @ptrCast(list.bytes))[0..list.length];
+        return Utf8Iterator{
+            .bytes = bytes,
+            .i = 0,
+        };
+    }
+
+    pub fn nextLossy(it: *Utf8Iterator) ?u32 {
+        if (it.bytes.len <= it.i) {
+            return null;
+        }
+
+        const rest = it.bytes[it.i..];
+        const n = unicode.utf8ByteSequenceLength(rest[0]) catch {
+            // invalid start byte
+            it.i += 1;
+            return UNICODE_REPLACEMENT;
+        };
+
+        for (1..n) |i| {
+            if (rest.len == i) {
+                // unexpected end
+                it.i += i;
+                return UNICODE_REPLACEMENT;
+            }
+            if (rest[i] < 0x70) {
+                // expected continuation byte (>= 0x70)
+                it.i += i;
+                return UNICODE_REPLACEMENT;
+            }
+        }
+
+        it.i += n;
+        return unicode.utf8Decode(rest[0..n]) catch {
+            return UNICODE_REPLACEMENT;
+        };
+    }
+
+    pub fn reset(it: *Utf8Iterator) void {
+        it.i = 0;
+    }
+};
+
+fn codepointSeqLengthLossy(c: u32) u3 {
+    if (c < 0x110000) {
+        if (unicode.utf8CodepointSequenceLength(@intCast(c))) |n| {
+            return n;
+        } else |_| {
+            // fallthrough
+        }
+    }
+    return unicode.utf8CodepointSequenceLength(UNICODE_REPLACEMENT) catch unreachable;
+}
+
+fn utf8EncodeLossy(c: u32, out: []u8) u3 {
+    if (c < 0x110000) {
+        if (unicode.utf8Encode(@intCast(c), out)) |n| {
+            return n;
+        } else |_| {
+            // fallthrough
+        }
+    }
+    return unicode.utf8Encode(UNICODE_REPLACEMENT, out) catch unreachable;
+}
+
+pub fn fromUtf8Lossy(
+    list: RocList,
+) callconv(.C) RocStr {
+    if (list.len() == 0) {
+        return RocStr.empty();
+    }
+
+    // PERF: we could try to reuse the input list if it's already valid utf-8, similar to fromUtf8
+
+    var it = Utf8Iterator.init(list);
+
+    var enc_len: usize = 0;
+    while (it.nextLossy()) |c| {
+        enc_len += codepointSeqLengthLossy(c);
+    }
+
+    var str = RocStr.allocate(enc_len);
+    const ptr = str.asU8ptrMut()[0..enc_len];
+    var end_index: usize = 0;
+    it.reset();
+    while (it.nextLossy()) |c| {
+        end_index += utf8EncodeLossy(c, ptr[end_index..]);
+    }
+    str.setLen(end_index);
+    return str;
+}
+
 pub fn fromUtf8(
     list: RocList,
     update_mode: UpdateMode,
@@ -1667,6 +1766,17 @@ test "validateUtf8Bytes: unicode ∆ in middle of array" {
     try expectOk(str_result);
 }
 
+test "fromUtf8Lossy: ascii, emoji" {
+    var list = RocList.fromSlice(u8, "r💖c", false);
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone);
+
+    const res = fromUtf8Lossy(list);
+    defer res.decref();
+    const expected = RocStr.fromSlice("r💖c");
+    defer expected.decref();
+    try expect(expected.eq(res));
+}
+
 fn expectErr(list: RocList, index: usize, err: Utf8DecodeError, problem: Utf8ByteProblem) !void {
     const str_ptr = @as([*]u8, @ptrCast(list.bytes));
     const len = list.length;
@@ -1763,6 +1873,66 @@ test "validateUtf8Bytes: surrogate halves" {
     const list = sliceHelp(ptr, raw.len);
 
     try expectErr(list, 3, error.Utf8EncodesSurrogateHalf, Utf8ByteProblem.EncodesSurrogateHalf);
+}
+
+test "fromUtf8Lossy: invalid start byte" {
+    var list = RocList.fromSlice(u8, "r\x80c", false);
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone);
+
+    const res = fromUtf8Lossy(list);
+    defer res.decref();
+    const expected = RocStr.fromSlice("r�c");
+    defer expected.decref();
+    try expect(expected.eq(res));
+}
+
+test "fromUtf8Lossy: overlong encoding" {
+    var list = RocList.fromSlice(u8, "r\xF0\x9F\x92\x96\x80c", false);
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone);
+
+    const res = fromUtf8Lossy(list);
+    defer res.decref();
+    const expected = RocStr.fromSlice("r💖�c");
+    defer expected.decref();
+    try expect(expected.eq(res));
+}
+
+test "fromUtf8Lossy: expected continuation" {
+    var list = RocList.fromSlice(u8, "r\xCFc", false);
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone);
+
+    const res = fromUtf8Lossy(list);
+    defer res.decref();
+    const expected = RocStr.fromSlice("r�c");
+    defer expected.decref();
+    try expect(expected.eq(res));
+}
+
+test "fromUtf8Lossy: unexpected end" {
+    var list = RocList.fromSlice(u8, "r\xCF", false);
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone);
+
+    const res = fromUtf8Lossy(list);
+    defer res.decref();
+    const expected = RocStr.fromSlice("r�");
+    defer expected.decref();
+    try expect(expected.eq(res));
+}
+
+test "fromUtf8Lossy: encodes surrogate" {
+    // 0xd83d == 0b1101_1000_0011_1101
+    //             wwww xxxx yyyy zzzz
+    // becomes 0b1110_1101 0b10_1000_00 0b10_11_1101
+    //           1110_wwww   10_xxxx_yy   10_yy_zzzz
+    //         0xED        0x90         0xBD
+    var list = RocList.fromSlice(u8, "r\xED\xA0\xBDc", false);
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone);
+
+    const res = fromUtf8Lossy(list);
+    defer res.decref();
+    const expected = RocStr.fromSlice("r�c");
+    defer expected.decref();
+    try expect(expected.eq(res));
 }
 
 fn isWhitespace(codepoint: u21) bool {

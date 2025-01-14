@@ -328,7 +328,6 @@
 ## Currently, the only way to get seamless slices of strings is by calling certain `Str` functions which return them. In general, `Str` functions which accept a string and return a subset of that string tend to do this. [`Str.trim`](https://www.roc-lang.org/builtins/Str#trim) is another example of a function which returns a seamless slice.
 module [
     Utf8Problem,
-    Utf8ByteProblem,
     concat,
     is_empty,
     join_with,
@@ -337,6 +336,11 @@ module [
     count_utf8_bytes,
     to_utf8,
     from_utf8,
+    from_utf16,
+    from_utf32,
+    from_utf8_lossy,
+    from_utf16_lossy,
+    from_utf32_lossy,
     starts_with,
     ends_with,
     trim,
@@ -376,7 +380,7 @@ import Result exposing [Result]
 import List
 import Num exposing [Num, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec]
 
-Utf8ByteProblem : [
+Utf8Problem : [
     InvalidStartByte,
     UnexpectedEndOfSequence,
     ExpectedContinuation,
@@ -384,8 +388,6 @@ Utf8ByteProblem : [
     CodepointTooLarge,
     EncodesSurrogateHalf,
 ]
-
-Utf8Problem : { byte_index : U64, problem : Utf8ByteProblem }
 
 ## Returns [Bool.true] if the string is empty, and [Bool.false] otherwise.
 ## ```roc
@@ -538,7 +540,7 @@ to_utf8 : Str -> List U8
 ## expect Str.from_utf8([]) == Ok("")
 ## expect Str.from_utf8([255]) |> Result.is_err
 ## ```
-from_utf8 : List U8 -> Result Str [BadUtf8 { problem : Utf8ByteProblem, index : U64 }]
+from_utf8 : List U8 -> Result Str [BadUtf8 { problem : Utf8Problem, index : U64 }]
 from_utf8 = \bytes ->
     result = from_utf8_lowlevel bytes
 
@@ -557,10 +559,241 @@ FromUtf8Result : {
     a_byte_index : U64,
     b_string : Str,
     c_is_ok : Bool,
-    d_problem_code : Utf8ByteProblem,
+    d_problem_code : Utf8Problem,
 }
 
 from_utf8_lowlevel : List U8 -> FromUtf8Result
+
+## Converts a [List] of [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit) to a string.
+## Any grouping of invalid byte sequences are replaced with a single unicode replacement character '�'.
+##
+## An invalid byte sequence is defined as
+## - a 2-byte-sequence starting byte, followed by less than 1 continuation byte
+## - a 3-byte-sequence starting byte, followed by less than 2 continuation bytes
+## - a 4-byte-sequence starting byte, followed by less than 3 continuation bytes
+## - an invalid codepoint from the surrogate pair block
+## - an invalid codepoint greater than 0x110000 encoded as a 4-byte sequence
+## - any valid codepoint encoded as an incorrect sequence, for instance a codepoint that should be a 2-byte sequence encoded as a 3- or 4-byte sequence
+##
+## ```roc
+## expect (Str.from_utf8_lossy [82, 111, 99, 240, 159, 144, 166]) == "Roc🐦"
+## expect (Str.from_utf8_lossy [82, 255, 99]) == "R�c"
+## expect (Str.from_utf8_lossy [82, 0xED, 0xA0, 0xBD, 99]) == "R�c"
+## ```
+from_utf8_lossy : List U8 -> Str
+
+expect (Str.from_utf8_lossy [82, 111, 99, 240, 159, 144, 166]) == "Roc🐦"
+expect (Str.from_utf8_lossy [82, 255, 99]) == "R�c"
+expect (Str.from_utf8_lossy [82, 0xED, 0xA0, 0xBD, 99]) == "R�c"
+
+## Converts a [List] of [U16] UTF-16 (little-endian) [code units](https://unicode.org/glossary/#code_unit) to a string.
+##
+## ```roc
+## expect Str.from_utf16([82, 111, 99]) == Ok("Roc")
+## expect Str.from_utf16([0xb9a, 0xbbf]) == Ok("சி")
+## expect Str.from_utf16([0xd83d, 0xdc26]) == Ok("🐦")
+## expect Str.from_utf16([]) == Ok("")
+## # unpaired surrogates, first and second halves
+## expect Str.from_utf16([82, 0xd83d, 99]) |> Result.isErr
+## expect Str.from_utf16([82, 0xdc96, 99]) |> Result.isErr
+## ```
+from_utf16 : List U16 -> Result Str [BadUtf16 { problem : Utf8Problem, index : U64 }]
+from_utf16 = \codeunits ->
+    mk_err = \problem, index ->
+        Err(BadUtf16({ problem, index }))
+
+    step = \state, unit ->
+        c : U32
+        c = Num.int_cast(unit)
+        when state is
+            ExpectFirst(i, utf8) ->
+                if unit < 0xd800 then
+                    when encode_utf8(utf8, c) is
+                        Ok(utf8_next) -> ExpectFirst(i + 1, utf8_next)
+                        Err(err) -> mk_err(err, i)
+                else
+                    ExpectSecond(i, utf8, c)
+
+            ExpectSecond(i, utf8, first) ->
+                if unit < 0xdc00 then
+                    mk_err(EncodesSurrogateHalf, i)
+                else
+                    joined = ((first - 0xd800) * 0x400) + (c - 0xdc00) + 0x10000
+                    when encode_utf8(utf8, joined) is
+                        Ok(utf8_next) -> ExpectFirst(i + 2, utf8_next)
+                        Err(err) -> mk_err(err, i)
+
+            Err(err) -> Err(err)
+
+    decode_res = List.walk(codeunits, ExpectFirst(0, []), step)
+
+    when decode_res is
+        ExpectFirst(_, utf8) ->
+            from_utf8(utf8)
+            |> Result.map_err(\BadUtf8(err) -> BadUtf16(err))
+
+        ExpectSecond(i, _, _) ->
+            mk_err(EncodesSurrogateHalf, i)
+
+        Err(err) -> Err(err)
+
+expect Str.from_utf16([82, 111, 99]) == Ok("Roc")
+expect Str.from_utf16([0xb9a, 0xbbf]) == Ok("சி")
+expect Str.from_utf16([0xd83d, 0xdc26]) == Ok("🐦")
+expect Str.from_utf16([]) == Ok("")
+# unpaired surrogates, first and second halves
+expect Str.from_utf16([82, 0xd83d, 99]) == Err(BadUtf16({ index: 1, problem: EncodesSurrogateHalf }))
+expect Str.from_utf16([82, 0xdc96, 99]) == Err(BadUtf16({ index: 1, problem: EncodesSurrogateHalf }))
+
+## Converts a [List] of [U16] UTF-16 (little-endian) [code units](https://unicode.org/glossary/#code_unit) to a string.
+## Any unpaired surrogate code unit is replaced with a single unicode replacement character '�'.
+##
+## ```roc
+## expect Str.from_utf16_lossy([82, 111, 99, 0xd83d, 0xdc26]) == "Roc🐦"
+## expect Str.from_utf16_lossy([82, 0xdc96, 99]) == "R�c"
+## ```
+from_utf16_lossy : List U16 -> Str
+from_utf16_lossy = \codeunits ->
+    utf8_replacement = [0xef, 0xbf, 0xbd]
+    encode_lossy = \utf8, c ->
+        when encode_utf8(utf8, c) is
+            Ok(utf8_next) -> utf8_next
+            Err(_) -> List.concat(utf8, utf8_replacement)
+
+    step = \state, unit ->
+        c : U32
+        c = Num.int_cast(unit)
+        when state is
+            ExpectFirst(utf8) ->
+                if unit < 0xd800 then
+                    ExpectFirst(encode_lossy(utf8, c))
+                else
+                    ExpectSecond(utf8, c)
+
+            ExpectSecond(utf8, first) ->
+                if c < 0xd800 then
+                    ExpectFirst(
+                        List.concat(utf8, utf8_replacement)
+                        |> encode_lossy(c),
+                    )
+                else if c < 0xdc00 then
+                    ExpectSecond(List.concat(utf8, utf8_replacement), c)
+                else
+                    joined = ((first - 0xd800) * 0x400) + (c - 0xdc00) + 0x10000
+                    ExpectFirst(encode_lossy(utf8, joined))
+
+    result = List.walk(codeunits, ExpectFirst([]), step)
+    when result is
+        ExpectFirst(utf8) -> from_utf8_lossy(utf8)
+        ExpectSecond(utf8, _) -> from_utf8_lossy(List.concat(utf8, utf8_replacement))
+
+expect Str.from_utf16_lossy([82, 111, 99, 0xd83d, 0xdc26]) == "Roc🐦"
+expect Str.from_utf16_lossy([82, 0xdc96, 99]) == "R�c"
+
+## Converts a [List] of [U32] UTF-32 [code units](https://unicode.org/glossary/#code_unit) to a string.
+##
+## ```roc
+## expect Str.from_utf32([82, 111, 99]) == Ok("Roc")
+## expect Str.from_utf32([0xb9a, 0xbbf]) == Ok("சி")
+## expect Str.from_utf32([0x1f426]) == Ok("🐦")
+## # unpaired surrogates, first and second halves
+## expect Str.from_utf32([82, 0xd83d, 99]) |> Result.isErr
+## expect Str.from_utf32([82, 0xdc96, 99]) |> Result.isErr
+## # invalid codepoint
+## expect Str.from_utf32([82, 0x110000, 99]) |> Result.isErr
+## ```
+
+from_utf32 : List U32 -> Result Str [BadUtf32 { problem : Utf8Problem, index : U64 }]
+from_utf32 = \codepoints ->
+    step = \state, c ->
+        when state is
+            Ok({ i, utf8 }) ->
+                when encode_utf8(utf8, c) is
+                    Ok(utf8_next) -> Ok({ i: i + 1, utf8: utf8_next })
+                    Err(problem) -> Err(BadUtf32({ problem, index: i }))
+
+            Err(err) -> Err(err)
+
+    List.walk(codepoints, Ok({ i: 0, utf8: [] }), step)
+    |> Result.try(
+        \state ->
+            when from_utf8(state.utf8) is
+                Ok(str) -> Ok(str)
+                Err(BadUtf8(err)) -> Err(BadUtf32(err)),
+    )
+
+encode_utf8 : List U8, U32 -> Result (List U8) [EncodesSurrogateHalf, CodepointTooLarge]
+encode_utf8 = \list, c ->
+    if c < 0x80 then
+        Ok(List.append(list, Num.int_cast(c)))
+    else if c < 0x800 then
+        Ok(
+            List.concat(
+                list,
+                [
+                    Num.int_cast(Num.bitwise_or(Num.shift_right_by(c, 6), 0b110_00000)),
+                    Num.int_cast(Num.bitwise_or(Num.bitwise_and(c, 0b111111), 0b10_000000)),
+                ],
+            ),
+        )
+    else if c < 0x10000 then
+        if (c >= 0xd800) && (c < 0xe000) then
+            Err(EncodesSurrogateHalf)
+        else
+            Ok(
+                List.concat(
+                    list,
+                    [
+                        Num.int_cast(Num.bitwise_or(Num.shift_right_by(c, 12), 0b1110_0000)),
+                        Num.int_cast(Num.bitwise_or(Num.bitwise_and(Num.shift_right_by(c, 6), 0b111111), 0b10_000000)),
+                        Num.int_cast(Num.bitwise_or(Num.bitwise_and(c, 0b111111), 0b10_000000)),
+                    ],
+                ),
+            )
+    else if c < 0x110000 then
+        Ok(
+            List.concat(
+                list,
+                [
+                    Num.int_cast(Num.bitwise_or(Num.shift_right_by(c, 18), 0b11110_000)),
+                    Num.int_cast(Num.bitwise_or(Num.bitwise_and(Num.shift_right_by(c, 12), 0b111111), 0b10_000000)),
+                    Num.int_cast(Num.bitwise_or(Num.bitwise_and(Num.shift_right_by(c, 6), 0b111111), 0b10_000000)),
+                    Num.int_cast(Num.bitwise_or(Num.bitwise_and(c, 0b111111), 0b10_000000)),
+                ],
+            ),
+        )
+    else
+        Err(CodepointTooLarge)
+
+expect Str.from_utf32([82, 111, 99]) == Ok("Roc")
+expect Str.from_utf32([0xb9a, 0xbbf]) == Ok("சி")
+expect Str.from_utf32([0x1f426]) == Ok("🐦")
+expect Str.from_utf32([]) == Ok("")
+# unpaired surrogates, first and second halves
+expect Str.from_utf32([82, 0xd83d, 99]) |> Result.is_err
+expect Str.from_utf32([82, 0xdc96, 99]) |> Result.is_err
+# codepoint out of valid range
+expect Str.from_utf32([82, 0x110000, 99]) |> Result.is_err
+
+## Converts a [List] of [U32] UTF-32 [code units](https://unicode.org/glossary/#code_unit) to a string.
+## Any invalid code points are replaced with a single unicode replacement character '�'.
+## ```roc
+## expect Str.from_utf32_lossy([82, 111, 99, 0x1f426]) == "Roc🐦"
+## expect Str.from_utf32_lossy([82, 0x110000, 99]) == "R�c"
+## ```
+from_utf32_lossy : List U32 -> Str
+from_utf32_lossy = \codepoints ->
+    step = \utf8, c ->
+        when encode_utf8(utf8, c) is
+            Ok(utf8_next) -> utf8_next
+            # utf-8 encoded replacement character
+            Err(_) -> List.concat(utf8, [0xef, 0xbf, 0xbd])
+
+    List.walk(codepoints, [], step)
+    |> from_utf8_lossy()
+
+expect Str.from_utf32_lossy([82, 111, 99, 0x1f426]) == "Roc🐦"
+expect Str.from_utf32_lossy([82, 0x110000, 99]) == "R�c"
 
 ## Check if the given [Str] starts with a value.
 ## ```roc
