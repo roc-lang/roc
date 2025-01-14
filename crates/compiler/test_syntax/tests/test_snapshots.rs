@@ -672,6 +672,7 @@ mod test_snapshots {
         pass/record_literal_field_bang.expr,
         pass/record_type_with_function.expr,
         pass/record_update.expr,
+        pass/record_update_apply_closure_comments.expr,
         pass/record_update_comment_before_ampersand.expr,
         pass/record_updater_closure_weirdness.expr,
         pass/record_updater_literal_apply.expr,

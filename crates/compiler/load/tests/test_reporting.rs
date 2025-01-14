@@ -6692,17 +6692,20 @@ All branches in an `if` must have the same type!
             )
             "
         ),
-        @r"
-    ── UNFINISHED FUNCTION in tmp/unfinished_closure_pattern_in_parens/Test.roc ────
+        @r###"
+    ── MISSING ARROW in tmp/unfinished_closure_pattern_in_parens/Test.roc ──────────
 
-    I was partway through parsing a function, but I got stuck here:
+    I am partway through parsing a function argument list, but I got stuck
+    here:
 
     4│      x = \( a
     5│      )
-             ^
+    6│
+    7│
+        ^
 
-    I just saw a pattern, so I was expecting to see a -> next.
-    "
+    I was expecting a -> next.
+    "###
     );
 
     test_report!(
