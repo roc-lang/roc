@@ -34,9 +34,10 @@ const setupSearch = () => {
   let searchForm = document.getElementById("module-search-form");
   let topSearchResultListItem = undefined;
 
-  // Hide the results whenever anyone clicks outside the search results.
+  // Hide the results whenever anyone clicks outside the search results,
+  // or on a specific search result.
   window.addEventListener("click", function (event) {
-    if (!searchForm?.contains(event.target)) {
+    if (!searchForm?.contains(event.target) || event.target.closest("#search-type-ahead a")) {
       searchTypeAhead.classList.add("hidden");
     }
   });
@@ -99,6 +100,12 @@ const setupSearch = () => {
             nextToFocus.querySelector("a").focus();
           }
 
+          break;
+        }
+        case "Enter": {
+          // In case this is just an anchor link (which will move the scroll bar but not
+          // reload the page), hide the search bar.
+          searchTypeAhead.classList.add("hidden");
           break;
         }
       }
