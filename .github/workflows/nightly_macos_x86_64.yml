@@ -27,7 +27,7 @@ jobs:
         run: ./ci/write_version.sh
 
       - name: execute rust tests
-        run: cargo test --release --locked -- --skip opaque_wrap_function --skip gen_list::bool_list_literal --skip platform_switching_swift --skip swift_ui --skip gen_tags::phantom_polymorphic_record
+        run: cargo test --release --locked -- --skip opaque_wrap_function --skip gen_list::bool_list_literal --skip gen_tags::phantom_polymorphic_record
         # swift tests are skipped because of "Could not find or use auto-linked library 'swiftCompatibilityConcurrency'" on macos x86_64 CI machine
         # this issue may be caused by using older versions of XCode
 
