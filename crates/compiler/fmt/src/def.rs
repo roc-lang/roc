@@ -1062,7 +1062,7 @@ pub fn fmt_body<'a>(buf: &mut Buf, pattern: &'a Pattern<'a>, body: &'a Expr<'a>,
                 buf.ensure_ends_with_newline();
                 body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent + INDENT);
             }
-            Expr::Defs(..) | Expr::BinOps(_, _) => {
+            Expr::Defs(..) | Expr::BinOps(..) | Expr::SpaceAfter(&Expr::BinOps(..), _) => {
                 // Binop chains always get a newline. Otherwise you can have things like:
                 //
                 //     something = foo

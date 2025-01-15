@@ -1488,7 +1488,6 @@ fn fmt_binops<'a>(
     buf: &mut Buf,
     lefts: &'a [(Loc<Expr<'a>>, Loc<BinOp>)],
     loc_right_side: &'a Loc<Expr<'a>>,
-
     indent: u16,
 ) {
     let is_multiline = loc_right_side.value.is_multiline()

@@ -4028,7 +4028,7 @@ enum OperatorOrDef {
 }
 
 fn bin_op<'a>(check_for_defs: bool) -> impl Parser<'a, BinOp, EExpr<'a>> {
-    move |_, state: State<'a>, min_indent| {
+    (move |_, state: State<'a>, min_indent| {
         let start = state.pos();
         let (_, op, state) = operator_help(EExpr::Start, EExpr::BadOperator, state, min_indent)?;
         let err_progress = if check_for_defs {
@@ -4046,7 +4046,8 @@ fn bin_op<'a>(check_for_defs: bool) -> impl Parser<'a, BinOp, EExpr<'a>> {
                 Err((err_progress, EExpr::BadOperator(":=", start)))
             }
         }
-    }
+    })
+    .trace("bin_op")
 }
 
 fn operator<'a>() -> impl Parser<'a, OperatorOrDef, EExpr<'a>> {
