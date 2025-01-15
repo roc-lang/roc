@@ -1357,6 +1357,7 @@ fn desugar_pattern<'a>(env: &mut Env<'a>, scope: &mut Scope, pattern: Pattern<'a
         | ListRest(_)
         | Malformed(_)
         | MalformedIdent(_, _)
+        | MalformedExpr(_)
         | QualifiedIdentifier { .. } => pattern,
 
         Apply(tag, arg_patterns) => {

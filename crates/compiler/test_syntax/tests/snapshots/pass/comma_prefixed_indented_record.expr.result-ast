@@ -19,9 +19,9 @@
                     header: TypeHeader {
                         name: @0-5 "Model",
                         vars: [
-                            @6-14 Identifier {
-                                ident: "position",
-                            },
+                            @6-14 Identifier(
+                                "position",
+                            ),
                         ],
                     },
                     ann: @21-164 SpaceBefore(

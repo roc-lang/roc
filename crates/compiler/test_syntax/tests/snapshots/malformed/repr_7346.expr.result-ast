@@ -32,25 +32,33 @@
                                     header: TypeHeader {
                                         name: @13-16 "CCC",
                                         vars: [
-                                            @16-18 OpaqueRef(
-                                                "@C",
-                                            ),
-                                            @23-26 SpaceBefore(
-                                                Apply(
-                                                    @23-25 Identifier {
-                                                        ident: "t!",
-                                                    },
-                                                    [
-                                                        @25-26 Tag(
-                                                            "K",
-                                                        ),
-                                                    ],
+                                            @16-18 Malformed(
+                                                OpaqueRef(
+                                                    "@C",
                                                 ),
-                                                [
-                                                    LineComment(
-                                                        "i",
+                                            ),
+                                            @23-26 Malformed(
+                                                ParensAround(
+                                                    SpaceBefore(
+                                                        Apply(
+                                                            @23-25 Var {
+                                                                module_name: "",
+                                                                ident: "t!",
+                                                            },
+                                                            [
+                                                                @25-26 Tag(
+                                                                    "K",
+                                                                ),
+                                                            ],
+                                                            Space,
+                                                        ),
+                                                        [
+                                                            LineComment(
+                                                                "i",
+                                                            ),
+                                                        ],
                                                     ),
-                                                ],
+                                                ),
                                             ),
                                         ],
                                     },

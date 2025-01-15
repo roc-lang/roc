@@ -20,9 +20,9 @@
                     vars: [
                         @3-4 SpaceAfter(
                             SpaceBefore(
-                                Identifier {
-                                    ident: "e",
-                                },
+                                Identifier(
+                                    "e",
+                                ),
                                 [
                                     Newline,
                                 ],

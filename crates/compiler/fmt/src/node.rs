@@ -1,5 +1,5 @@
 use bumpalo::{collections::Vec, Bump};
-use roc_parse::ast::{CommentOrNewline, Pattern, TypeAnnotation};
+use roc_parse::ast::{CommentOrNewline, Expr, Pattern, TypeAnnotation};
 
 use crate::{
     annotation::{Formattable, Newlines, Parens},
@@ -96,6 +96,7 @@ pub enum Node<'a> {
     // Temporary! TODO: translate these into proper Node elements
     TypeAnnotation(TypeAnnotation<'a>),
     Pattern(Pattern<'a>),
+    Expr(Expr<'a>),
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -321,6 +322,24 @@ fn fmt_sp(buf: &mut Buf, sp: Sp<'_>, indent: u16) {
     }
 }
 
+impl<'a> Formattable for NodeInfo<'a> {
+    fn is_multiline(&self) -> bool {
+        !self.before.is_empty() || self.node.is_multiline() || !self.after.is_empty()
+    }
+
+    fn format_with_options(
+        &self,
+        buf: &mut Buf,
+        _parens: Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
+        fmt_spaces(buf, self.before.iter(), indent);
+        self.node.format(buf, indent);
+        fmt_spaces(buf, self.after.iter(), indent);
+    }
+}
+
 impl<'a> Formattable for Node<'a> {
     fn is_multiline(&self) -> bool {
         match self {
@@ -350,6 +369,7 @@ impl<'a> Formattable for Node<'a> {
             Node::Literal(_) => false,
             Node::TypeAnnotation(type_annotation) => type_annotation.is_multiline(),
             Node::Pattern(pat) => pat.is_multiline(),
+            Node::Expr(expr) => expr.is_multiline(),
         }
     }
 
@@ -451,6 +471,9 @@ impl<'a> Formattable for Node<'a> {
             }
             Node::Pattern(pat) => {
                 pat.format_with_options(buf, parens, newlines, indent);
+            }
+            Node::Expr(expr) => {
+                expr.format_with_options(buf, parens, newlines, indent);
             }
         }
     }

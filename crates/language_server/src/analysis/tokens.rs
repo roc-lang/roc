@@ -790,7 +790,9 @@ impl IterTokens for Loc<Pattern<'_>> {
                 Loc::at(region, *p).iter_tokens(arena)
             }
             Pattern::QualifiedIdentifier { .. } => onetoken(Token::Variable, region, arena),
-            Pattern::Malformed(_) | Pattern::MalformedIdent(_, _) => bumpvec![in arena;],
+            Pattern::Malformed(_) | Pattern::MalformedIdent(_, _) | Pattern::MalformedExpr(_) => {
+                bumpvec![in arena;]
+            }
         }
     }
 }

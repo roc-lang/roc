@@ -4,7 +4,7 @@ use roc_can::scope::Scope;
 use roc_collections::VecSet;
 use roc_module::ident::ModuleName;
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
-use roc_parse::ast::{self, ExtractSpaces, TypeHeader};
+use roc_parse::ast::{self, ExtractSpaces, TypeHeader, TypeVar};
 use roc_parse::ast::{AssignedField, FunctionArrow};
 use roc_parse::ast::{CommentOrNewline, TypeDef, ValueDef};
 
@@ -312,7 +312,7 @@ fn generate_entry_docs(
                     let mut type_vars = Vec::new();
 
                     for var in vars.iter() {
-                        if let Pattern::Identifier { ident: ident_name } = var.value {
+                        if let TypeVar::Identifier(ident_name) = var.value {
                             type_vars.push(ident_name.to_string());
                         }
                     }
@@ -346,7 +346,7 @@ fn generate_entry_docs(
                     let mut type_vars = Vec::new();
 
                     for var in vars.iter() {
-                        if let Pattern::Identifier { ident: ident_name } = var.value {
+                        if let TypeVar::Identifier(ident_name) = var.value {
                             type_vars.push(ident_name.to_string());
                         }
                     }
@@ -370,7 +370,7 @@ fn generate_entry_docs(
                     let mut type_vars = Vec::new();
 
                     for var in vars.iter() {
-                        if let Pattern::Identifier { ident: ident_name } = var.value {
+                        if let TypeVar::Identifier(ident_name) = var.value {
                             type_vars.push(ident_name.to_string());
                         }
                     }
@@ -631,7 +631,7 @@ fn type_to_docs(in_func_type_ann: bool, type_annotation: ast::TypeAnnotation) ->
                 .vars
                 .iter()
                 .filter_map(|loc_pattern| match loc_pattern.value {
-                    ast::Pattern::Identifier { ident } => Some(ident.to_string()),
+                    ast::TypeVar::Identifier(ident) => Some(ident.to_string()),
                     _ => None,
                 })
                 .collect(),

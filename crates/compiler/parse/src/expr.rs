@@ -2,7 +2,8 @@ use crate::ast::{
     AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces, Implements,
     ImplementsAbilities, ImportAlias, ImportAsKeyword, ImportExposingKeyword, ImportedModuleName,
     IngestedFileAnnotation, IngestedFileImport, ModuleImport, ModuleImportParams, Pattern,
-    Spaceable, Spaced, Spaces, SpacesBefore, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    Spaceable, Spaced, Spaces, SpacesBefore, TypeAnnotation, TypeDef, TypeHeader, TypeVar,
+    ValueDef,
 };
 use crate::blankspace::{
     loc_space0_e, require_newline_or_eof, space0_after_e, space0_around_ee, space0_before_e,
@@ -17,8 +18,8 @@ use crate::parser::{
     collection_trailing_sep_e, either, increment_min_indent, indented_seq_skip_first, loc, map,
     map_with_arena, optional, reset_min_indent, sep_by1, sep_by1_e, set_min_indent, skip_first,
     skip_second, specialize_err, specialize_err_ref, then, two_bytes, zero_or_more, EClosure,
-    EExpect, EExpr, EIf, EImport, EImportParams, EInParens, EList, ENumber, EPattern, ERecord,
-    EReturn, EString, EType, EWhen, Either, ParseResult, Parser, SpaceProblem,
+    EExpect, EExpr, EIf, EImport, EImportParams, EInParens, EList, ENumber, ERecord, EReturn,
+    EString, EType, EWhen, Either, ParseResult, Parser, SpaceProblem,
 };
 use crate::pattern::closure_param;
 use crate::state::State;
@@ -1244,20 +1245,10 @@ fn parse_stmt_alias_or_opaque<'a>(
         let mut type_arguments = Vec::with_capacity_in(arguments.len(), arena);
 
         for argument in arguments {
-            match expr_to_pattern_help(arena, &argument.value) {
-                Ok(good) => {
-                    type_arguments.push(Loc::at(argument.region, good));
-                }
-                Err(()) => {
-                    return Err((
-                        MadeProgress,
-                        EExpr::Pattern(
-                            arena.alloc(EPattern::NotAPattern(state.pos())),
-                            state.pos(),
-                        ),
-                    ));
-                }
-            }
+            type_arguments.push(Loc::at(
+                argument.region,
+                expr_to_type_var(arena, &argument.value),
+            ));
         }
 
         match kind.value {
@@ -1342,6 +1333,29 @@ fn parse_stmt_alias_or_opaque<'a>(
     };
 
     Ok((MadeProgress, res, state))
+}
+
+fn expr_to_type_var<'a>(arena: &'a Bump, expr: &'a Expr<'a>) -> TypeVar<'a> {
+    let expr = expr.extract_spaces();
+
+    let mut ty = match expr.item {
+        Expr::Var {
+            module_name: "",
+            ident,
+        } => TypeVar::Identifier(ident),
+        _ => TypeVar::Malformed(arena.alloc(expr.item)),
+    };
+
+    // Now we re-add the spaces
+
+    if !expr.before.is_empty() {
+        ty = TypeVar::SpaceBefore(arena.alloc(ty), expr.before);
+    }
+    if !expr.after.is_empty() {
+        ty = TypeVar::SpaceAfter(arena.alloc(ty), expr.after);
+    }
+
+    ty
 }
 
 mod ability {
@@ -1464,7 +1478,7 @@ mod ability {
 fn finish_parsing_ability_def_help<'a>(
     call_min_indent: u32,
     name: Loc<&'a str>,
-    args: &'a [Loc<Pattern<'a>>],
+    args: &'a [Loc<TypeVar<'a>>],
     loc_implements: Loc<Implements<'a>>,
     arena: &'a Bump,
     state: State<'a>,
@@ -2028,16 +2042,10 @@ fn parse_ability_def<'a>(
 
     let mut arguments = Vec::with_capacity_in(expr_state.arguments.len(), arena);
     for argument in expr_state.arguments {
-        match expr_to_pattern_help(arena, &argument.value) {
-            Ok(good) => {
-                arguments.push(Loc::at(argument.region, good));
-            }
-            Err(_) => {
-                let start = argument.region.start();
-                let err = &*arena.alloc(EPattern::Start(start));
-                return Err((MadeProgress, EExpr::Pattern(err, argument.region.start())));
-            }
-        }
+        arguments.push(Loc::at(
+            argument.region,
+            expr_to_type_var(arena, &argument.value),
+        ));
     }
 
     // Attach any spaces to the `implements` keyword
@@ -3209,7 +3217,7 @@ fn stmts_to_defs<'a>(
                     if (spaces_middle.len() <= 1
                         && !ends_with_spaces_conservative(&ann_type.value)
                         && !starts_with_spaces_conservative(&loc_pattern.value))
-                        || header_to_pat(arena, header).equivalent(&loc_pattern.value)
+                        || type_header_equivalent_to_pat(&header, &loc_pattern.value)
                     {
                         // This is a case like
                         //   UserId x : [UserId Int]
@@ -3351,18 +3359,33 @@ fn starts_with_spaces_conservative(value: &Pattern<'_>) -> bool {
         Pattern::RequiredField(_, _) | Pattern::OptionalField(_, _) => false,
         Pattern::SpaceBefore(_, _) => true,
         Pattern::SpaceAfter(inner, _) => starts_with_spaces_conservative(inner),
-        Pattern::Malformed(_) | Pattern::MalformedIdent(_, _) => true,
+        Pattern::Malformed(_) | Pattern::MalformedIdent(_, _) | Pattern::MalformedExpr(_) => true,
     }
 }
 
-fn header_to_pat<'a>(arena: &'a Bump, header: TypeHeader<'a>) -> Pattern<'a> {
-    if header.vars.is_empty() {
-        Pattern::Tag(header.name.value)
-    } else {
-        Pattern::Apply(
-            arena.alloc(Loc::at(header.name.region, Pattern::Tag(header.name.value))),
-            header.vars,
-        )
+fn type_header_equivalent_to_pat<'a>(header: &TypeHeader<'a>, pat: &Pattern<'a>) -> bool {
+    match pat {
+        Pattern::Apply(func, args) => {
+            if !matches!(func.value, Pattern::Tag(tag) if header.name.value == tag) {
+                return false;
+            }
+            if args.len() != header.vars.len() {
+                return false;
+            }
+            for (arg, var) in (*args).iter().zip(header.vars) {
+                match (arg.value, var.value) {
+                    (Pattern::Identifier { ident: left }, TypeVar::Identifier(right)) => {
+                        if left != right {
+                            return false;
+                        }
+                    }
+                    _ => return false,
+                }
+            }
+            true
+        }
+        Pattern::Tag(tag) => header.vars.is_empty() && header.name.value == *tag,
+        _ => false,
     }
 }
 
@@ -3375,7 +3398,7 @@ fn ends_with_spaces_conservative(ty: &TypeAnnotation<'_>) -> bool {
         TypeAnnotation::As(_, _, type_header) => type_header
             .vars
             .last()
-            .map_or(false, |v| pat_ends_with_spaces_conservative(&v.value)),
+            .map_or(false, |v| type_var_ends_with_spaces_conservative(&v.value)),
         TypeAnnotation::Record { fields: _, ext }
         | TypeAnnotation::Tuple { elems: _, ext }
         | TypeAnnotation::TagUnion { ext, tags: _ } => {
@@ -3396,32 +3419,15 @@ fn ends_with_spaces_conservative(ty: &TypeAnnotation<'_>) -> bool {
     }
 }
 
-fn pat_ends_with_spaces_conservative(pat: &Pattern<'_>) -> bool {
-    match pat {
-        Pattern::Identifier { .. }
-        | Pattern::QualifiedIdentifier { .. }
-        | Pattern::Tag(_)
-        | Pattern::NumLiteral(_)
-        | Pattern::FloatLiteral(_)
-        | Pattern::StrLiteral(_)
-        | Pattern::Underscore(_)
-        | Pattern::SingleQuote(_)
-        | Pattern::Tuple(_)
-        | Pattern::List(_)
-        | Pattern::NonBase10Literal { .. }
-        | Pattern::ListRest(_)
-        | Pattern::As(_, _)
-        | Pattern::OpaqueRef(_)
-        | Pattern::PncApply(_, _) => false,
-        Pattern::Apply(_, args) => args
-            .last()
-            .map_or(false, |a| pat_ends_with_spaces_conservative(&a.value)),
-        Pattern::RecordDestructure(_) => false,
-        Pattern::RequiredField(_, _) => unreachable!(),
-        Pattern::OptionalField(_, _) => unreachable!(),
-        Pattern::SpaceBefore(inner, _) => pat_ends_with_spaces_conservative(inner),
-        Pattern::SpaceAfter(_, _) => true,
-        Pattern::Malformed(_) | Pattern::MalformedIdent(_, _) => false,
+fn type_var_ends_with_spaces_conservative(value: &TypeVar<'_>) -> bool {
+    match value {
+        TypeVar::Identifier(_) => false,
+        TypeVar::Malformed(_) => {
+            // conservativly assume it might end in a space
+            true
+        }
+        TypeVar::SpaceBefore(inner, _sp) => type_var_ends_with_spaces_conservative(inner),
+        TypeVar::SpaceAfter(_inner, _sp) => true,
     }
 }
 
@@ -3435,7 +3441,7 @@ pub fn join_alias_to_body<'a>(
     body_expr: &'a Loc<Expr<'a>>,
 ) -> ValueDef<'a> {
     let loc_name = arena.alloc(header.name.map(|x| Pattern::Tag(x)));
-    let ann_pattern = Pattern::Apply(loc_name, header.vars);
+    let ann_pattern = Pattern::Apply(loc_name, type_vars_to_patterns(arena, header.vars));
 
     let vars_region = Region::across_all(header.vars.iter().map(|v| &v.region));
     let region_ann_pattern = Region::span_across(&loc_name.region, &vars_region);
@@ -3447,6 +3453,35 @@ pub fn join_alias_to_body<'a>(
         lines_between: spaces_middle,
         body_pattern,
         body_expr,
+    }
+}
+
+fn type_vars_to_patterns<'a>(
+    arena: &'a Bump,
+    vars: &'a [Loc<TypeVar<'a>>],
+) -> &'a [Loc<Pattern<'a>>] {
+    let mut result = Vec::with_capacity_in(vars.len(), arena);
+    for var in vars {
+        let pat = type_var_to_pat(arena, &var.value);
+        result.push(Loc::at(var.region, pat));
+    }
+
+    result.into_bump_slice()
+}
+
+fn type_var_to_pat<'a>(arena: &'a Bump, var: &TypeVar<'a>) -> Pattern<'a> {
+    match var {
+        TypeVar::Identifier(ident) => Pattern::Identifier { ident },
+        TypeVar::Malformed(expr) => match expr_to_pattern_help(arena, expr) {
+            Ok(pat) => pat,
+            Err(()) => Pattern::MalformedExpr(expr),
+        },
+        TypeVar::SpaceBefore(inner, sp) => {
+            Pattern::SpaceBefore(arena.alloc(type_var_to_pat(arena, inner)), sp)
+        }
+        TypeVar::SpaceAfter(inner, sp) => {
+            Pattern::SpaceAfter(arena.alloc(type_var_to_pat(arena, inner)), sp)
+        }
     }
 }
 

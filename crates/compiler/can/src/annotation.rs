@@ -5,7 +5,7 @@ use roc_collections::{ImMap, MutSet, SendMap, VecMap, VecSet};
 use roc_module::ident::{Ident, IdentSuffix, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{
-    AssignedField, ExtractSpaces, FunctionArrow, Pattern, Tag, TypeAnnotation, TypeHeader,
+    AssignedField, ExtractSpaces, FunctionArrow, Tag, TypeAnnotation, TypeHeader, TypeVar,
 };
 use roc_problem::can::{Problem, ShadowKind};
 use roc_region::all::{Loc, Region};
@@ -754,9 +754,7 @@ fn can_annotation_help(
 
             for loc_var in *loc_vars {
                 let var = match loc_var.value {
-                    Pattern::Identifier { ident: name, .. }
-                        if name.chars().next().unwrap().is_lowercase() =>
-                    {
+                    TypeVar::Identifier(name) if name.chars().next().unwrap().is_lowercase() => {
                         name
                     }
                     _ => unreachable!("I thought this was validated during parsing"),

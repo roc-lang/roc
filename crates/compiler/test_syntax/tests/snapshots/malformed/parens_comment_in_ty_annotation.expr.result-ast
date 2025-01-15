@@ -19,19 +19,24 @@
                     header: TypeHeader {
                         name: @0-2 "Zx",
                         vars: [
-                            @4-5 SpaceAfter(
-                                Identifier {
-                                    ident: "e",
-                                },
-                                [
-                                    LineComment(
-                                        "",
+                            @4-5 Malformed(
+                                ParensAround(
+                                    SpaceAfter(
+                                        Var {
+                                            module_name: "",
+                                            ident: "e",
+                                        },
+                                        [
+                                            LineComment(
+                                                "",
+                                            ),
+                                        ],
                                     ),
-                                ],
+                                ),
                             ),
-                            @8-9 Identifier {
-                                ident: "f",
-                            },
+                            @8-9 Identifier(
+                                "f",
+                            ),
                         ],
                     },
                     ann: @10-11 BoundVariable(

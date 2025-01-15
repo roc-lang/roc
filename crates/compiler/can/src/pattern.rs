@@ -817,7 +817,7 @@ pub fn canonicalize_pattern<'a>(
             }
         }
 
-        Malformed(_str) => {
+        Malformed(_) | MalformedExpr(_) => {
             let problem = MalformedPatternProblem::Unknown;
             malformed_pattern(env, problem, region)
         }

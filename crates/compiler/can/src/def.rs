@@ -2858,7 +2858,7 @@ fn to_pending_alias_or_opaque<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
     name: &'a Loc<&'a str>,
-    vars: &'a [Loc<ast::Pattern<'a>>],
+    vars: &'a [Loc<ast::TypeVar<'a>>],
     ann: &'a Loc<ast::TypeAnnotation<'a>>,
     opt_derived: Option<&'a ast::ImplementsAbilities<'a>>,
     kind: AliasKind,
@@ -2870,10 +2870,9 @@ fn to_pending_alias_or_opaque<'a>(
             let mut can_rigids: Vec<Loc<Lowercase>> = Vec::with_capacity(vars.len());
 
             for loc_var in vars.iter() {
-                match loc_var.value {
-                    ast::Pattern::Identifier { ident: name, .. }
-                        if name.chars().next().unwrap().is_lowercase() =>
-                    {
+                match loc_var.value.extract_spaces().item {
+                    ast::TypeVar::Identifier(name) => {
+                        debug_assert!(name.chars().next().unwrap().is_lowercase());
                         let lowercase = Lowercase::from(name);
                         can_rigids.push(Loc {
                             value: lowercase,
@@ -2881,7 +2880,6 @@ fn to_pending_alias_or_opaque<'a>(
                         });
                     }
                     _ => {
-                        // any other pattern in this position is a syntax error.
                         let problem = Problem::InvalidAliasRigid {
                             alias_name: symbol,
                             region: loc_var.region,

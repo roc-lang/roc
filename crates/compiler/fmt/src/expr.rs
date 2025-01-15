@@ -1,6 +1,7 @@
 use crate::annotation::{except_last, is_collection_multiline, Formattable, Newlines, Parens};
 use crate::collection::{fmt_collection, Braces};
 use crate::def::{fmt_defs, valdef_lift_spaces_before};
+use crate::node::Prec;
 use crate::pattern::{
     fmt_pattern, pattern_lift_spaces, snakify_camel_ident, starts_with_inline_comment,
 };
@@ -1390,11 +1391,7 @@ pub fn expr_lift_spaces<'a, 'b: 'a>(
             before: &[],
             item: *expr,
             after: &[],
-        }, // _ => Spaces {
-           //     before: &[],
-           //     item: *expr,
-           //     after: &[],
-           // },
+        },
     }
 }
 
@@ -1407,6 +1404,54 @@ pub fn expr_lift_spaces_before<'a, 'b: 'a>(
     SpacesBefore {
         before: lifted.before,
         item: lifted.item.maybe_after(arena, lifted.after),
+    }
+}
+
+pub fn expr_prec(expr: Expr<'_>) -> Prec {
+    match expr {
+        Expr::Float(_)
+        | Expr::Num(_)
+        | Expr::NonBase10Int { .. }
+        | Expr::Str(_)
+        | Expr::SingleQuote(_)
+        | Expr::AccessorFunction(_)
+        | Expr::RecordUpdater(_)
+        | Expr::Var { .. }
+        | Expr::Underscore(_)
+        | Expr::Crash
+        | Expr::Tag(_)
+        | Expr::OpaqueRef(_)
+        | Expr::Dbg
+        | Expr::Try
+        | Expr::MalformedIdent(_, _)
+        | Expr::EmptyRecordBuilder(_)
+        | Expr::SingleFieldRecordBuilder(_)
+        | Expr::RecordAccess(_, _)
+        | Expr::TupleAccess(_, _)
+        | Expr::TrySuffix { .. }
+        | Expr::List(_)
+        | Expr::RecordUpdate { .. }
+        | Expr::Record(_)
+        | Expr::Tuple(_)
+        | Expr::RecordBuilder { .. }
+        | Expr::LowLevelTry(_, _)
+        | Expr::LowLevelDbg(_, _, _)
+        | Expr::PncApply(_, _)
+        | Expr::OptionalFieldInRecordBuilder(_, _) => Prec::Term,
+
+        Expr::Closure(_, _)
+        | Expr::Defs(_, _)
+        | Expr::DbgStmt { .. }
+        | Expr::Apply(_, _, _)
+        | Expr::BinOps(_, _)
+        | Expr::UnaryOp(_, _)
+        | Expr::If { .. }
+        | Expr::When(_, _)
+        | Expr::Return(_, _)
+        | Expr::SpaceBefore(_, _)
+        | Expr::SpaceAfter(_, _)
+        | Expr::ParensAround(_)
+        | Expr::PrecedenceConflict(_) => Prec::Apply,
     }
 }
 
