@@ -2,7 +2,7 @@ module [
     Result,
     is_ok,
     is_err,
-    map,
+    map_ok,
     map_err,
     map_both,
     map2,
@@ -60,8 +60,8 @@ with_default = \result, default ->
 ##
 ## Functions like `map` are common in Roc; see for example [List.map],
 ## `Set.map`, and `Dict.map`.
-map : Result a err, (a -> b) -> Result b err
-map = \result, transform ->
+map_ok : Result a err, (a -> b) -> Result b err
+map_ok = \result, transform ->
     when result is
         Ok(v) -> Ok(transform(v))
         Err(e) -> Err(e)
