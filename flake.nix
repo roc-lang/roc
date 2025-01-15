@@ -38,7 +38,12 @@
       let
 
         overlays = [ (import rust-overlay) ]
-        ++ (if system == "x86_64-linux" then [ nixgl.overlay ] else [ ]);
+        ++ (if system == "x86_64-linux" then [ nixgl.overlay ] else [ ])
+        ++ [(final: prev: {
+          # using a custom simple-http-server fork because of github.com/TheWaWaR/simple-http-server/issues/111
+          # the server is used for local testing of the roc website
+          simple-http-server = final.callPackage ./nix/simple-http-server.nix { };
+        })];
         pkgs = import nixpkgs { inherit system overlays; };
 
         rocBuild = import ./nix { inherit pkgs; };
@@ -105,7 +110,6 @@
           libiconv # for examples/gui
           libxkbcommon # for examples/gui
           cargo-criterion # for benchmarks
-          simple-http-server # to view roc website when trying out edits
           wasm-pack # for repl_wasm
           jq # used in several bash scripts
           cargo-nextest # used to give more info for segfaults for gen tests
