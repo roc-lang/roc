@@ -1214,6 +1214,7 @@ impl<'a> Normalize<'a> for EClosure<'a> {
             EClosure::IndentArrow(_) => EClosure::IndentArrow(Position::zero()),
             EClosure::IndentBody(_) => EClosure::IndentBody(Position::zero()),
             EClosure::IndentArg(_) => EClosure::IndentArg(Position::zero()),
+            EClosure::Bar(_) => EClosure::Bar(Position::zero()),
         }
     }
 }
