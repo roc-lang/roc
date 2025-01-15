@@ -779,6 +779,26 @@ fn to_lambda_report<'a>(
     let severity = Severity::RuntimeError;
 
     match *parse_problem {
+        EClosure::Bar(pos) => {
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc.reflow(r"I was trying to parse the arguments list for a function, but I got stuck here:"),
+                alloc.region(region, severity),
+                alloc.concat([
+                    alloc.reflow("I was expecting to find a "),
+                    alloc.parser_suggestion("|"),
+                    alloc.reflow(" next."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "MALFORMED ARGS LIST".to_string(),
+                severity,
+            }
+        }
         EClosure::Arrow(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
             Next::Token("=>") => {
                 let surroundings = Region::new(start, pos);

@@ -2335,6 +2335,53 @@ pub fn parse_top_level_defs<'a>(
 // PARSER HELPERS
 
 fn closure_help<'a>(check_for_arrow: CheckForArrow) -> impl Parser<'a, Expr<'a>, EClosure<'a>> {
+    one_of!(
+        closure_new_syntax_help(),
+        closure_old_syntax_help(check_for_arrow),
+    )
+}
+
+fn closure_new_syntax_help<'a>() -> impl Parser<'a, Expr<'a>, EClosure<'a>> {
+    move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
+        let parser = map_with_arena(
+            indented_seq_skip_first(
+                error_on_pizza(byte_indent(b'|', EClosure::Bar), EClosure::Start),
+                and(
+                    sep_by1_e(
+                        byte_indent(b',', EClosure::Comma),
+                        space0_around_ee(
+                            specialize_err(EClosure::Pattern, closure_param()),
+                            EClosure::IndentArg,
+                            EClosure::IndentArrow,
+                        ),
+                        EClosure::Arg,
+                    ),
+                    skip_first(
+                        // Parse the -> which separates params from body
+                        byte(b'|', EClosure::Bar),
+                        // Parse the body
+                        block(
+                            CheckForArrow(false),
+                            true,
+                            EClosure::IndentBody,
+                            EClosure::Body,
+                        ),
+                    ),
+                ),
+            ),
+            |arena: &'a Bump, (params, body)| {
+                let params: Vec<'a, Loc<Pattern<'a>>> = params;
+                let params: &'a [Loc<Pattern<'a>>] = params.into_bump_slice();
+                Expr::Closure(params, arena.alloc(body))
+            },
+        );
+        parser.parse(arena, state, min_indent)
+    }
+}
+
+fn closure_old_syntax_help<'a>(
+    check_for_arrow: CheckForArrow,
+) -> impl Parser<'a, Expr<'a>, EClosure<'a>> {
     // closure_help_help(options)
     map_with_arena(
         // After the first token, all other tokens must be indented past the start of the line
@@ -2369,6 +2416,19 @@ fn closure_help<'a>(check_for_arrow: CheckForArrow) -> impl Parser<'a, Expr<'a>,
             Expr::Closure(params, arena.alloc(body))
         },
     )
+}
+
+fn error_on_pizza<'a, T, E: 'a>(
+    p: impl Parser<'a, T, E>,
+    f: impl Fn(Position) -> E,
+) -> impl Parser<'a, T, E> {
+    move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
+        if state.bytes().starts_with(b"|>") || state.bytes().starts_with(b"||") {
+            Err((NoProgress, f(state.pos())))
+        } else {
+            p.parse(arena, state, min_indent)
+        }
+    }
 }
 
 mod when {

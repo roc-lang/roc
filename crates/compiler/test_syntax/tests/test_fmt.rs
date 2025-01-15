@@ -1777,6 +1777,110 @@ mod test_fmt {
     }
 
     #[test]
+    fn lambda_returns_record_new_syntax() {
+        expr_formats_to(
+            indoc!(
+                r"
+                    to_record = |_| {
+                        x: 1,
+                        y: 2,
+                        z: 3,
+                    }
+
+                    to_record
+                "
+            ),
+            indoc!(
+                r"
+                    to_record = \_ -> {
+                        x: 1,
+                        y: 2,
+                        z: 3,
+                    }
+
+                    to_record
+                "
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r"
+                        func = |_|
+                            { x: 1, y: 2, z: 3 }
+
+                        func
+                    "
+            ),
+            indoc!(
+                r"
+                        func = \_ ->
+                            { x: 1, y: 2, z: 3 }
+
+                        func
+                    "
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r"
+                    to_record = |_|
+                        val = 0
+
+                        {
+                            x: 1,
+                            y: 2,
+                            z: 3,
+                        }
+
+                    to_record
+                "
+            ),
+            indoc!(
+                r"
+                    to_record = \_ ->
+                        val = 0
+
+                        {
+                            x: 1,
+                            y: 2,
+                            z: 3,
+                        }
+
+                    to_record
+                "
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r"
+                    to_record = |_|
+                        {
+                            x: 1,
+                            y: 2,
+                            z: 3,
+                        }
+
+                    to_record
+                "
+            ),
+            indoc!(
+                r"
+                    to_record = \_ -> {
+                        x: 1,
+                        y: 2,
+                        z: 3,
+                    }
+
+                    to_record
+                "
+            ),
+        );
+    }
+
+    #[test]
     fn lambda_returns_list() {
         expr_formats_same(indoc!(
             r"

@@ -747,6 +747,7 @@ impl<'a> EInParens<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EClosure<'a> {
+    Bar(Position),
     Space(BadInputError, Position),
     Start(Position),
     Arrow(Position),
@@ -768,7 +769,8 @@ impl<'a> EClosure<'a> {
             EClosure::Body(expr, _) => expr.get_region(),
 
             // Cases with Position values
-            EClosure::Space(_, p)
+            EClosure::Bar(p)
+            | EClosure::Space(_, p)
             | EClosure::Start(p)
             | EClosure::Arrow(p)
             | EClosure::Comma(p)

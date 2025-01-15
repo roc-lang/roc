@@ -284,7 +284,7 @@ mod test_can {
         let src = indoc!(
             r"
                 f : Num.Int * -> Num.Int *
-                f = \ a -> a
+                f = | a| a
 
                 f
             "
@@ -300,7 +300,7 @@ mod test_can {
         let src = indoc!(
             r"
                 f : Num.Int * -> Num.Int * # comment
-                f = \ a -> a
+                f = | a| a
 
                 f
             "
@@ -316,7 +316,7 @@ mod test_can {
         let src = indoc!(
             r"
                 f : Num.Int * -> Num.Int *
-                g = \ a -> a
+                g = | a| a
 
                 g
             "
@@ -344,7 +344,7 @@ mod test_can {
         let src = indoc!(
             r"
                 f : Num.Int * -> Num.Int * # comment
-                g = \ a -> a
+                g = | a| a
 
                 g
             "
@@ -373,7 +373,7 @@ mod test_can {
             r"
                 f : Num.Int * -> Num.Int *
 
-                f = \ a -> a
+                f = | a| a
 
                 f 42
             "
@@ -390,7 +390,7 @@ mod test_can {
             r"
                 f : Num.Int * -> Num.Int *
                 # comment
-                f = \ a -> a
+                f = | a| a
 
                 f 42
             "
@@ -677,8 +677,8 @@ mod test_can {
     fn record_builder_desugar() {
         let src = indoc!(
             r#"
-                map2 = \a, b, combine -> combine a b
-                double = \n -> n * 2
+                map2 = |a, b, combine| combine a b
+                double = |n| n * 2
 
                 c = 3
 
@@ -1241,20 +1241,20 @@ mod test_can {
     fn recognize_tail_calls() {
         let src = indoc!(
             r"
-                g = \x ->
+                g = |x|
                     when x is
                         0 -> 0
                         _ -> g (x - 1)
 
                 # use parens to force the ordering!
                 (
-                    h = \x ->
+                    h = |x|
                         when x is
                             0 -> 0
                             _ -> g (x - 1)
 
                     (
-                        p = \x ->
+                        p = |x|
                             when x is
                                 0 -> 0
                                 1 -> g (x - 1)
@@ -1342,7 +1342,7 @@ mod test_can {
     fn when_tail_call() {
         let src = indoc!(
             r"
-                g = \x ->
+                g = |x|
                     when x is
                         0 -> 0
                         _ -> g (x + 1)
@@ -1364,7 +1364,7 @@ mod test_can {
     fn immediate_tail_call() {
         let src = indoc!(
             r"
-                f = \x -> f x
+                f = |x| f x
 
                 f 0
             "
@@ -1385,7 +1385,7 @@ mod test_can {
     fn when_condition_is_no_tail_call() {
         let src = indoc!(
             r"
-            q = \x ->
+            q = |x|
                     when q x is
                         _ -> 0
 
@@ -1406,12 +1406,12 @@ mod test_can {
     fn good_mutual_recursion() {
         let src = indoc!(
             r"
-                q = \x ->
+                q = |x|
                         when x is
                             0 -> 0
                             _ -> p (x - 1)
 
-                p = \x ->
+                p = |x|
                         when x is
                             0 -> 0
                             _ -> q (x - 1)
@@ -1437,7 +1437,7 @@ mod test_can {
     fn valid_self_recursion() {
         let src = indoc!(
             r"
-                boom = \_ -> boom {}
+                boom = |_| boom {}
 
                 boom
             "
@@ -1548,7 +1548,7 @@ mod test_can {
             r"
                 fallbackZ = 3
 
-                fn = \{ x, y, z ? fallbackZ } ->
+                fn = |{ x, y, z ? fallbackZ }|
                     { x, y, z }
 
                 fn { x: 0, y: 1 }
