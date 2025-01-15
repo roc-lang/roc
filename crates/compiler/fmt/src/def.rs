@@ -3,8 +3,8 @@ use crate::annotation::{
 };
 use crate::collection::{fmt_collection, Braces};
 use crate::expr::{
-    expr_lift_and_lower, expr_lift_spaces, expr_lift_spaces_after, expr_lift_spaces_before,
-    fmt_str_literal, is_str_multiline, merge_spaces_conservative, sub_expr_requests_parens,
+    expr_lift_spaces, expr_lift_spaces_after, expr_lift_spaces_before, fmt_str_literal,
+    is_str_multiline, merge_spaces_conservative, sub_expr_requests_parens,
 };
 use crate::node::Nodify;
 use crate::pattern::{pattern_lift_spaces, pattern_lift_spaces_before};
@@ -1004,7 +1004,12 @@ pub fn fmt_body<'a>(buf: &mut Buf, pattern: &'a Pattern<'a>, body: &'a Expr<'a>,
     let indent = buf.cur_line_indent();
     buf.push_str("=");
 
-    let body = expr_lift_and_lower(Parens::NotNeeded, buf.text.bump(), body);
+    let body_lifted = expr_lift_spaces(Parens::NotNeeded, buf.text.bump(), body);
+
+    let after = body_lifted.after;
+    let body = body_lifted
+        .item
+        .maybe_before(buf.text.bump(), body_lifted.before);
 
     if body.is_multiline() {
         match body {
@@ -1062,7 +1067,7 @@ pub fn fmt_body<'a>(buf: &mut Buf, pattern: &'a Pattern<'a>, body: &'a Expr<'a>,
                 buf.ensure_ends_with_newline();
                 body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent + INDENT);
             }
-            Expr::Defs(..) | Expr::BinOps(..) | Expr::SpaceAfter(&Expr::BinOps(..), _) => {
+            Expr::Defs(..) | Expr::BinOps(..) => {
                 // Binop chains always get a newline. Otherwise you can have things like:
                 //
                 //     something = foo
@@ -1097,6 +1102,8 @@ pub fn fmt_body<'a>(buf: &mut Buf, pattern: &'a Pattern<'a>, body: &'a Expr<'a>,
         buf.spaces(1);
         body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
     }
+
+    fmt_spaces(buf, after.iter(), indent);
 }
 
 fn starts_with_expect_ident(expr: &Expr<'_>) -> bool {

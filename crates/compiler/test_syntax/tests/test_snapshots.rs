@@ -777,6 +777,7 @@ mod test_snapshots {
         pass/when_if_guard.expr,
         pass/when_in_assignment.expr,
         pass/when_in_binop_in_assign_with_sneaky_newline.expr,
+        pass/when_in_binop_in_closure_in_when_guard_wow_fuzzer.expr,
         pass/when_in_binops.expr,
         pass/when_in_closure_in_when_guard_wtf.expr,
         pass/when_in_function.expr,

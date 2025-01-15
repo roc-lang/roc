@@ -1018,14 +1018,6 @@ pub fn fmt_str_literal(buf: &mut Buf, literal: StrLiteral, indent: u16) {
     }
 }
 
-pub fn expr_lift_and_lower<'a, 'b: 'a>(
-    _parens: Parens,
-    arena: &'a Bump,
-    expr: &Expr<'b>,
-) -> Expr<'a> {
-    lower(arena, expr_lift_spaces(Parens::NotNeeded, arena, expr))
-}
-
 pub fn expr_lift_spaces<'a, 'b: 'a>(
     parens: Parens,
     arena: &'a Bump,
@@ -1816,6 +1808,8 @@ fn guard_needs_parens(value: &Expr<'_>) -> bool {
         Expr::ParensAround(expr) | Expr::SpaceBefore(expr, _) | Expr::SpaceAfter(expr, _) => {
             guard_needs_parens(expr)
         }
+        Expr::BinOps(_lefts, right) => guard_needs_parens(&right.value),
+        Expr::UnaryOp(inner, _) => guard_needs_parens(&inner.value),
         Expr::Closure(_, body) => guard_needs_parens(&body.value),
         Expr::Defs(_, final_expr) => guard_needs_parens(&final_expr.value),
         _ => false,
