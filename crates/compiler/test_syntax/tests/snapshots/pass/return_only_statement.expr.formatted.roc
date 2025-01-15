@@ -1,4 +1,4 @@
-identityFn = \x ->
+identityFn = |x|
     return x
 
 identityFn 45

@@ -2014,7 +2014,7 @@ fn fmt_closure<'a>(
     use self::Expr::*;
 
     buf.indent(indent);
-    buf.push('\\');
+    buf.push('|');
 
     let arguments_are_multiline = loc_patterns
         .iter()
@@ -2062,12 +2062,10 @@ fn fmt_closure<'a>(
     if arguments_are_multiline {
         buf.ensure_ends_with_newline();
         buf.indent(indent);
-    } else {
-        buf.spaces(1);
     }
 
     let arrow_line_indent = buf.cur_line_indent();
-    buf.push_str("->");
+    buf.push_str("|");
     buf.spaces(1);
 
     let is_multiline = loc_ret.value.is_multiline();
