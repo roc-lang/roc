@@ -378,8 +378,7 @@ pub fn annotation_edits(
 
             let byte_range = match tag {
                 DeclarationTag::Destructure(i) => {
-                    let region = decls.destructs[i.index()].loc_pattern.region;
-                    region.start().byte_offset()..region.end().byte_offset()
+                    decls.destructs[i.index()].loc_pattern.byte_range()
                 }
                 _ => symbol.byte_range(),
             };
