@@ -335,10 +335,9 @@ fn annotate_module(loaded: &mut LoadedModule) -> String {
     let mut file_progress = 0;
 
     for (position, edit) in edits {
-        debug_assert!(
-            file_progress <= position,
-            "Module definitions are out of order"
-        );
+        if file_progress > position {
+            internal_error!("Module definitions are out of order");
+        };
 
         buffer.push_str(&src[file_progress..position]);
         buffer.push_str(&edit);
