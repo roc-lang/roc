@@ -1,6 +1,7 @@
 ---
 source: crates/cli/tests/cli_tests.rs
 expression: cli_check_out.normalize_stdout_and_stderr()
+snapshot_kind: text
 ---
 
 ── MISSING DEFINITION in tests/test-projects/known_bad/ExposedNotDefined.roc ───
@@ -12,4 +13,5 @@ from exposes.
 
 ────────────────────────────────────────────────────────────────────────────────
 
-1 error and 0 warning found in <ignored for test> ms
+1 error and 0 warnings found in <ignored for test> ms.
+

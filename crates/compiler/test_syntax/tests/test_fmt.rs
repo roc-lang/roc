@@ -29,11 +29,37 @@ mod test_fmt {
         )
     }
 
+    fn expr_formats_to_with_flags(input: &str, expected: &str, flags: MigrationFlags) {
+        Input::Expr(input.trim()).check_invariants_with_flags(
+            check_formatting(expected.trim()),
+            true,
+            Some(false),
+            flags,
+        )
+    }
+
     fn expr_formats_same(input: &str) {
         Input::Expr(input.trim()).check_invariants(
             check_formatting(input.trim()),
             true,
             Some(false),
+        )
+    }
+
+    fn pattern_formats_same(input: &str) {
+        Input::Pattern(input.trim()).check_invariants(
+            check_formatting(input.trim()),
+            true,
+            Some(false),
+        );
+    }
+
+    fn expr_formats_same_with_flags(input: &str, flags: MigrationFlags) {
+        Input::Expr(input.trim()).check_invariants_with_flags(
+            check_formatting(input.trim()),
+            true,
+            Some(false),
+            flags,
         )
     }
 
@@ -73,7 +99,7 @@ mod test_fmt {
             Ok((actual, state)) => {
                 use roc_parse::normalize::Normalize;
 
-                let flags = MigrationFlags::new(false);
+                let flags = MigrationFlags { snakify: false, parens_and_commas: false };
                 let mut buf = Buf::new_in(&arena, flags);
 
                 fmt_module_and_defs(&arena, src, &actual, state, &mut buf);
@@ -344,6 +370,65 @@ mod test_fmt {
                 "
         ));
 
+        expr_formats_to_with_flags(
+            indoc!(
+                r"
+                person : {
+                    firstName : Str,
+                    # comment
+                    lastName : Str,
+                }
+
+                person
+                ",
+            ),
+            indoc!(
+                r"
+                person : {
+                    first_name : Str,
+                    # comment
+                    last_name : Str,
+                }
+
+                person
+                ",
+            ),
+            MigrationFlags {
+                snakify: true,
+                parens_and_commas: false,
+            },
+        );
+
+        expr_formats_same(indoc!(
+            r"
+                person : {
+                    first_name : Str,
+                    # comment
+                    last_name : Str,
+                }
+
+                person
+                ",
+        ));
+
+        expr_formats_same_with_flags(
+            indoc!(
+                r"
+                person : {
+                    first_name : Str,
+                    # comment
+                    last_name : Str,
+                }
+
+                person
+                ",
+            ),
+            MigrationFlags {
+                snakify: true,
+                parens_and_commas: false,
+            },
+        );
+
         expr_formats_same(indoc!(
             r"
                 person : {
@@ -569,6 +654,65 @@ mod test_fmt {
                     firstName: "first",
                     # comment 1
                     lastName: "last",
+                }
+
+                person
+                "#
+        ));
+
+        expr_formats_to_with_flags(
+            indoc!(
+                r#"
+                person = {
+                    firstName: "first",
+                    # comment 1
+                    lastName: "last",
+                }
+
+                person
+                "#
+            ),
+            indoc!(
+                r#"
+                person = {
+                    first_name: "first",
+                    # comment 1
+                    last_name: "last",
+                }
+
+                person
+                "#
+            ),
+            MigrationFlags {
+                snakify: true,
+                parens_and_commas: false,
+            },
+        );
+
+        expr_formats_same_with_flags(
+            indoc!(
+                r#"
+                person = {
+                    first_name: "first",
+                    # comment 1
+                    last_name: "last",
+                }
+
+                person
+                "#
+            ),
+            MigrationFlags {
+                snakify: true,
+                parens_and_commas: false,
+            },
+        );
+
+        expr_formats_same(indoc!(
+            r#"
+                person = {
+                    first_name: "first",
+                    # comment 1
+                    last_name: "last",
                 }
 
                 person
@@ -1276,6 +1420,29 @@ mod test_fmt {
             \Foo a -> Foo a
             "
         ));
+
+        expr_formats_same(indoc!(
+            r"
+            \Foo someVar -> Foo someVar
+            "
+        ));
+
+        expr_formats_to_with_flags(
+            indoc!(
+                r"
+            \Foo someVar -> Foo someVar
+            "
+            ),
+            indoc!(
+                r"
+            \Foo some_var -> Foo some_var
+            "
+            ),
+            MigrationFlags {
+                snakify: true,
+                parens_and_commas: false,
+            },
+        );
     }
 
     #[test]
@@ -1586,6 +1753,110 @@ mod test_fmt {
             indoc!(
                 r"
                     to_record = \_ ->
+                        {
+                            x: 1,
+                            y: 2,
+                            z: 3,
+                        }
+
+                    to_record
+                "
+            ),
+            indoc!(
+                r"
+                    to_record = \_ -> {
+                        x: 1,
+                        y: 2,
+                        z: 3,
+                    }
+
+                    to_record
+                "
+            ),
+        );
+    }
+
+    #[test]
+    fn lambda_returns_record_new_syntax() {
+        expr_formats_to(
+            indoc!(
+                r"
+                    to_record = |_| {
+                        x: 1,
+                        y: 2,
+                        z: 3,
+                    }
+
+                    to_record
+                "
+            ),
+            indoc!(
+                r"
+                    to_record = \_ -> {
+                        x: 1,
+                        y: 2,
+                        z: 3,
+                    }
+
+                    to_record
+                "
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r"
+                        func = |_|
+                            { x: 1, y: 2, z: 3 }
+
+                        func
+                    "
+            ),
+            indoc!(
+                r"
+                        func = \_ ->
+                            { x: 1, y: 2, z: 3 }
+
+                        func
+                    "
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r"
+                    to_record = |_|
+                        val = 0
+
+                        {
+                            x: 1,
+                            y: 2,
+                            z: 3,
+                        }
+
+                    to_record
+                "
+            ),
+            indoc!(
+                r"
+                    to_record = \_ ->
+                        val = 0
+
+                        {
+                            x: 1,
+                            y: 2,
+                            z: 3,
+                        }
+
+                    to_record
+                "
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r"
+                    to_record = |_|
                         {
                             x: 1,
                             y: 2,
@@ -1939,6 +2210,27 @@ mod test_fmt {
             { shoes & leftShoe: nothing }
             "
         ));
+        expr_formats_to_with_flags(
+            indoc!(
+                r"
+            { shoes & leftShoe: nothing }
+            "
+            ),
+            indoc!(
+                r"
+            { shoes & left_shoe: nothing }
+            "
+            ),
+            MigrationFlags {
+                snakify: true,
+                parens_and_commas: false,
+            },
+        );
+        expr_formats_same(indoc!(
+            r"
+            { shoes & left_shoe: nothing }
+            "
+        ));
 
         expr_formats_to(
             indoc!(
@@ -1953,7 +2245,7 @@ mod test_fmt {
             ),
         );
 
-        expr_formats_to(
+        expr_formats_to_with_flags(
             indoc!(
                 r"
                 {   shoes  &  rightShoe : nothing }
@@ -1961,9 +2253,13 @@ mod test_fmt {
             ),
             indoc!(
                 r"
-                { shoes & rightShoe: nothing }
+                { shoes & right_shoe: nothing }
                 "
             ),
+            MigrationFlags {
+                snakify: true,
+                parens_and_commas: false,
+            },
         );
 
         expr_formats_same(indoc!(
@@ -2305,13 +2601,13 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r"
-                f : { a ?Str }
+                f : { a ??Str }
 
                 f"
             ),
             indoc!(
                 r"
-                f : { a ? Str }
+                f : { a ?? Str }
 
                 f"
             ),
@@ -2321,7 +2617,7 @@ mod test_fmt {
             indoc!(
                 r"
                 f : {
-                    a ?Str,
+                    a ??Str,
                 }
 
                 f"
@@ -2329,7 +2625,7 @@ mod test_fmt {
             indoc!(
                 r"
                 f : {
-                    a ? Str,
+                    a ?? Str,
                 }
 
                 f"
@@ -2517,6 +2813,60 @@ mod test_fmt {
 
                 f"
             ),
+        );
+
+        expr_formats_to_with_flags(
+            indoc!(
+                r"
+                f :
+                    {
+                        someField: Int * # comment 1
+                        ,
+                        # comment 2
+                    }
+
+                f"
+            ),
+            indoc!(
+                r"
+                f : {
+                    some_field : Int *, # comment 1
+                    # comment 2
+                }
+
+                f"
+            ),
+            MigrationFlags {
+                snakify: true,
+                parens_and_commas: false,
+            },
+        );
+
+        expr_formats_to_with_flags(
+            indoc!(
+                r"
+                f :
+                    {
+                        someField ?? Int * # comment 1
+                        ,
+                        # comment 2
+                    }
+
+                f"
+            ),
+            indoc!(
+                r"
+                f : {
+                    some_field ?? Int *, # comment 1
+                    # comment 2
+                }
+
+                f"
+            ),
+            MigrationFlags {
+                snakify: true,
+                parens_and_commas: false,
+            },
         );
     }
 
@@ -2999,23 +3349,6 @@ mod test_fmt {
                     f = \a, b -> {}
 
                     f
-                "
-            ),
-        );
-
-        expr_formats_to(
-            indoc!(
-                r"
-                    { } <- f a b
-
-                    {}
-                "
-            ),
-            indoc!(
-                r"
-                    {} <- f a b
-
-                    {}
                 "
             ),
         );
@@ -3512,6 +3845,116 @@ mod test_fmt {
                 chocolate
             "
         ));
+
+        expr_formats_same(indoc!(
+            r"
+            combine(
+                peanutButter,
+                chocolate,
+            )
+            "
+        ));
+
+        expr_formats_to_with_flags(
+            indoc!(
+                r"
+            combine
+                peanutButter
+                chocolate
+            "
+            ),
+            indoc!(
+                r"
+            combine(
+                peanut_butter,
+                chocolate,
+            )
+            "
+            ),
+            MigrationFlags {
+                snakify: true,
+                parens_and_commas: true,
+            },
+        );
+    }
+
+    #[test]
+    fn zero_arg_application_with_parens() {
+        expr_formats_same(indoc!(
+            r"
+            a()
+            "
+        ));
+    }
+
+    #[test]
+    fn try_then_application_with_parens() {
+        expr_formats_same(indoc!(
+            r"
+            try something!(arg)
+            "
+        ));
+    }
+
+    #[test]
+    fn dbg_then_application_with_parens() {
+        expr_formats_same(indoc!(
+            r"
+            dbg something!(arg)
+            "
+        ));
+    }
+
+    #[test]
+    fn single_line_application_with_parens() {
+        expr_formats_same(indoc!(
+            r"
+            combine(peanut_butter, chocolate)
+            "
+        ));
+    }
+
+    #[test]
+    fn pipe_pnc_application_with_comment_no_args() {
+        expr_formats_same(indoc!(
+            r"
+            combine( # This is a comment
+            )
+            "
+        ));
+    }
+
+    #[test]
+    fn single_line_nested_application_with_parens() {
+        expr_formats_same(indoc!(
+            r"
+            combine(combine(peanut_butter, honey), chocolate)
+            "
+        ));
+    }
+
+    #[test]
+    fn multi_line_application_with_parens() {
+        expr_formats_same(indoc!(
+            r"
+            combine(
+                peanut_butter,
+                chocolate,
+            )
+            "
+        ));
+    }
+
+    #[test]
+    fn multi_line_nested_application_with_parens() {
+        expr_formats_same(indoc!(
+            r"
+            combine(
+                combine(peanut_butter, honey),
+                chocolate,
+            )
+            "
+        ));
     }
 
     #[test]
@@ -3856,6 +4299,40 @@ mod test_fmt {
 
                 Simple z ->
                     z
+            "
+        ));
+    }
+
+    #[test]
+    fn multi_line_when_condition_2_pnc() {
+        expr_formats_same(indoc!(
+            r"
+            when
+                # this is quite complicated
+                complexFunction(a, b, c)
+                # Watch out
+            is
+                Complex(x, y) ->
+                    simplify(x, y)
+
+                Simple(z) ->
+                    z
+            "
+        ));
+    }
+
+    #[test]
+    fn anthony_testing() {
+        expr_formats_same(indoc!(
+            r"
+            when alter (Ok value) is
+                Ok newValue ->
+                    bucket = listGetUnsafe buckets bucketIndex
+                    newData = List.set data (Num.toU64 bucket.dataIndex) (key, newValue)
+                    @Dict { buckets, data: newData, maxBucketCapacity, maxLoadFactor, shifts }
+
+                Err Missing ->
+                    removeBucket (@Dict { buckets, data, maxBucketCapacity, maxLoadFactor, shifts }) bucketIndex
             "
         ));
     }
@@ -4907,7 +5384,7 @@ mod test_fmt {
             exposes [] \
             packages {} \
             imports [] \
-            provides [mainForHost]",
+            provides [main_for_host]",
         );
     }
 
@@ -5222,6 +5699,40 @@ mod test_fmt {
             f
             "
         ));
+        expr_formats_to_with_flags(
+            indoc!(
+                r"
+            f : [Cons aVar (ConsList aVar), Nil] as ConsList aVar -> [Just aVar, Nothing]
+            f = \list ->
+                when list is
+                    Nil ->
+                        Nothing
+
+                    Cons first _ ->
+                        Just first
+
+            f
+            "
+            ),
+            indoc!(
+                r"
+            f : [Cons a_var (ConsList a_var), Nil] as ConsList a_var -> [Just a_var, Nothing]
+            f = \list ->
+                when list is
+                    Nil ->
+                        Nothing
+
+                    Cons first _ ->
+                        Just first
+
+            f
+            "
+            ),
+            MigrationFlags {
+                snakify: true,
+                parens_and_commas: false,
+            },
+        );
     }
 
     #[test]
@@ -5257,6 +5768,27 @@ mod test_fmt {
                     4
             "
         ));
+
+        expr_formats_to_with_flags(
+            indoc!(
+                r"
+            when { x: 1 } is
+                { x: Just 4 } ->
+                    4
+            "
+            ),
+            indoc!(
+                r"
+            when { x: 1 } is
+                { x: Just(4) } ->
+                    4
+            "
+            ),
+            MigrationFlags {
+                snakify: false,
+                parens_and_commas: true,
+            },
+        );
     }
 
     #[test]
@@ -5280,113 +5812,6 @@ mod test_fmt {
                     2
 
             y
-            "
-        ));
-    }
-
-    #[test]
-    fn backpassing_simple() {
-        expr_formats_same(indoc!(
-            r"
-                get_char = \ctx ->
-                    x <- Task.await (get_char_scope scope)
-                    42
-
-                42
-            "
-        ));
-    }
-
-    #[test]
-    fn backpassing_apply_tag() {
-        expr_formats_same(indoc!(
-            r"
-                get_char = \ctx ->
-                    (T val new_scope) <- Task.await (get_char_scope scope)
-                    42
-
-                42
-            "
-        ));
-    }
-
-    #[test]
-    fn backpassing_parens_body() {
-        expr_formats_same(indoc!(
-            r"
-            Task.fromResult
-                (
-                    b <- binaryOp ctx
-                    if a == b then
-                        -1
-                    else
-                        0
-                )
-            "
-        ));
-
-        expr_formats_to(
-            indoc!(
-                r"
-                    Task.fromResult
-                        (b <- binaryOp ctx
-                            if a == b then
-                                -1
-                            else
-                                0
-                            )
-                "
-            ),
-            indoc!(
-                r"
-                    Task.fromResult
-                        (
-                            b <- binaryOp ctx
-                            if a == b then
-                                -1
-                            else
-                                0
-                        )
-                "
-            ),
-        );
-
-        expr_formats_to(
-            indoc!(
-                r"
-                    Task.fromResult
-                        (b <- binaryOp ctx
-                            if a == b then
-                                -1
-                            else
-                                0)
-                "
-            ),
-            indoc!(
-                r"
-                    Task.fromResult
-                        (
-                            b <- binaryOp ctx
-                            if a == b then
-                                -1
-                            else
-                                0
-                        )
-                "
-            ),
-        );
-    }
-
-    #[test]
-    fn backpassing_body_on_newline() {
-        expr_formats_same(indoc!(
-            r"
-                get_char = \ctx ->
-                    x <-
-                        Task.await (get_char_scope scope)
-                    42
-
-                42
             "
         ));
     }
@@ -5500,6 +5925,27 @@ mod test_fmt {
             ),
         );
 
+        expr_formats_to_with_flags(
+            indoc!(
+                r"
+                A := aVar where aVar implements Hash implements [ Eq, Hash ]
+
+                0
+                "
+            ),
+            indoc!(
+                r"
+                A := a_var where a_var implements Hash
+                    implements [Eq, Hash]
+
+                0
+                "
+            ),
+            MigrationFlags {
+                snakify: true,
+                parens_and_commas: false,
+            },
+        );
         expr_formats_to(
             indoc!(
                 r"
@@ -5658,32 +6104,6 @@ mod test_fmt {
                 a
                 "
         ));
-    }
-
-    #[test]
-    /// Test that everything under examples/ is formatted correctly
-    /// If this test fails on your diff, it probably means you need to re-format the examples.
-    /// Try this:
-    /// `cargo run -- format $(find examples -name \*.roc)`
-    fn test_fmt_examples() {
-        let mut count = 0;
-        let mut root = workspace_root();
-        root.push("examples");
-        for entry in walkdir::WalkDir::new(&root) {
-            let entry = entry.unwrap();
-            let path = entry.path();
-            if path.extension() == Some(std::ffi::OsStr::new("roc")) {
-                count += 1;
-                let src = std::fs::read_to_string(path).unwrap();
-                println!("Now trying to format {}", path.display());
-                module_formats_same(&src);
-            }
-        }
-        assert!(
-            count > 0,
-            "Expecting to find at least 1 .roc file to format under {}",
-            root.display()
-        );
     }
 
     #[test]
@@ -5901,7 +6321,7 @@ mod test_fmt {
                 exposes []
                 packages {}
                 imports []
-                provides [mainForHost]
+                provides [main_for_host]
             "#
         ));
     }
@@ -6259,13 +6679,13 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 "
-                    x = \"foo:\u{200B} $(bar).\"
+                    x = \"foo:\u{200B} ${bar}.\"
                     x
                 "
             ),
             indoc!(
                 r#"
-                    x = "foo:\u(200b) $(bar)."
+                    x = "foo:\u(200b) ${bar}."
                     x
                 "#
             ),
@@ -6279,7 +6699,7 @@ mod test_fmt {
                 "
                     x =
                         \"\"\"
-                        foo:\u{200B} $(bar).
+                        foo:\u{200B} ${bar}.
                         \"\"\"
                     x
                 "
@@ -6288,7 +6708,7 @@ mod test_fmt {
                 r#"
                     x =
                         """
-                        foo:\u(200b) $(bar).
+                        foo:\u(200b) ${bar}.
                         """
                     x
                 "#
@@ -6320,4 +6740,24 @@ mod test_fmt {
     //            "
     //        ));
     //    }
+
+    #[test]
+    fn pattern_tag_apply_with_whitespace_single_arg() {
+        pattern_formats_same(indoc!("Ok a"));
+    }
+
+    #[test]
+    fn pattern_tag_apply_with_pnc_single_arg() {
+        pattern_formats_same(indoc!("Ok(a)"));
+    }
+
+    #[test]
+    fn pattern_tag_apply_with_whitespace_multi_arg() {
+        pattern_formats_same(indoc!("Ok a b"));
+    }
+
+    #[test]
+    fn pattern_tag_apply_with_pnc_multi_arg() {
+        pattern_formats_same(indoc!("Ok(a, b)"));
+    }
 }

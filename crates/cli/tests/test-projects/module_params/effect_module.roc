@@ -1,3 +1,3 @@
 module { stdout! } -> [log!]
 
-log! = \msg, level -> stdout! "$(level):$(msg)"
+log! = \msg, level -> stdout!("${level}:${msg}")

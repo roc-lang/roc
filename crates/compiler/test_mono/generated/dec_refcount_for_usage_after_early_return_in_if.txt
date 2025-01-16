@@ -3,12 +3,12 @@ procedure Bool.11 (#Attr.2, #Attr.3):
     ret Bool.24;
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.283 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.283;
+    let Num.285 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.285;
 
 procedure Num.96 (#Attr.2):
-    let Num.282 : Str = lowlevel NumToStr #Attr.2;
-    ret Num.282;
+    let Num.284 : Str = lowlevel NumToStr #Attr.2;
+    ret Num.284;
 
 procedure Str.3 (#Attr.2, #Attr.3):
     let Str.247 : Str = lowlevel StrConcat #Attr.2 #Attr.3;

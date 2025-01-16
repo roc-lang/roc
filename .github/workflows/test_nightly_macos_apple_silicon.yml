@@ -11,6 +11,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Update PATH to use zig 13
+        run:  echo "PATH=/Users/m1ci/Downloads/zig-macos-aarch64-0.13.0:$PATH" >> $GITHUB_ENV
+      
+      - run: zig version
+
       - name: get the latest release archive
         run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_apple_silicon-latest.tar.gz
 

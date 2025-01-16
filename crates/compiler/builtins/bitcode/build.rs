@@ -174,22 +174,21 @@ fn run_command(mut command: Command, flaky_fail_counter: usize) {
                     Err(_) => format!("Failed to run \"{command_str}\""),
                 };
 
-                // Flaky test errors that only occur sometimes on MacOS ci server.
-                if error_str.contains("FileNotFound")
-                    || error_str.contains("unable to save cached ZIR code")
-                    || error_str.contains("LLVM failed to emit asm")
-                {
-                    if flaky_fail_counter == 10 {
-                        internal_error!("{} failed 10 times in a row. The following error is unlikely to be a flaky error: {}", command_str, error_str);
-                    } else {
-                        run_command(command, flaky_fail_counter + 1)
-                    }
-                } else if error_str
+                if error_str
                     .contains("lld-link: error: failed to write the output file: Permission denied")
                 {
                     internal_error!("{} failed with:\n\n  {}\n\nWorkaround:\n\n  Re-run the cargo command that triggered this build.\n\n", command_str, error_str);
                 } else {
-                    internal_error!("{} failed with:\n\n  {}\n", command_str, error_str);
+                    // We have bunch of flaky failures here on macos, particularly since upgrading to zig 13 github.com/roc-lang/roc/pull/6921
+                    if cfg!(target_os = "macos") {
+                        if flaky_fail_counter == 10 {
+                            internal_error!("{} failed 10 times in a row. The following error is unlikely to be a flaky error: {}", command_str, error_str);
+                        } else {
+                            run_command(command, flaky_fail_counter + 1)
+                        }
+                    } else {
+                        internal_error!("{} failed with:\n\n  {}\n", command_str, error_str);
+                    }
                 }
             }
         },

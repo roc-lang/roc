@@ -171,8 +171,8 @@ fn write_archive<W: Write>(path: &Path, writer: W) -> io::Result<()> {
                     builder.append_path_with_name(
                         &path,
                         // Store it without the root path, so that (for example) we don't store
-                        // `examples/cli/main.roc` and therefore end up with the root of the tarball
-                        // being an `examples/cli/` dir instead of having `main.roc` in the root.
+                        // `examples/platform-switching/zig-platform/main.roc` and therefore end up with the root of the tarball
+                        // being an `examples/platform-switching/zig-platform/` dir instead of having `main.roc` in the root.
                         path.strip_prefix(root_dir).unwrap(),
                     )?;
                 }
@@ -247,8 +247,8 @@ fn add_source_files<W: Write>(
             builder.append_path_with_name(
                 path,
                 // Store it without the root path, so that (for example) we don't store
-                // `examples/cli/main.roc` and therefore end up with the root of the tarball
-                // being an `examples/cli/` dir instead of having `main.roc` in the root.
+                // `examples/platform-switching/zig-platform/main.roc` and therefore end up with the root of the tarball
+                // being an `examples/platform-switching/zig-platform/` dir instead of having `main.roc` in the root.
                 path.strip_prefix(root_dir).unwrap(),
             )?;
         }

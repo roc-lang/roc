@@ -5,15 +5,15 @@ import pf.Effect
 main! : {} => {}
 main! = \{} ->
     ["Welcome!", "What's your name?"]
-    |> List.forEach! Effect.putLine!
+    |> List.for_each!(Effect.put_line!)
 
-    line = Effect.getLine! {}
+    line = Effect.get_line!({})
 
     if line == "secret" then
-        Effect.putLine! "You found the secret"
-        Effect.putLine! "Congratulations!"
+        Effect.put_line!("You found the secret")
+        Effect.put_line!("Congratulations!")
     else
         {}
 
-    Effect.putLine! "You entered: $(line)"
-    Effect.putLine! "It is known"
+    Effect.put_line!("You entered: ${line}")
+    Effect.put_line!("It is known")

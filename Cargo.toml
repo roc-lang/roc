@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/build/specialize_types",
     "crates/compiler/*",
     "crates/vendor/*",
     "crates/fs",
@@ -56,7 +57,7 @@ repository = "https://github.com/roc-lang/roc"
 version = "0.0.1"
 
 [workspace.dependencies]
-object = { version = "0.32.2", default-features = false, features = [
+object = { version = "0.36.7", default-features = false, features = [
     "read",
     "write",
 ] }
@@ -212,7 +213,7 @@ roc_serialize = { path = "crates/compiler/serialize" }
 roc_solve = { path = "crates/compiler/solve" }
 roc_solve_schema = { path = "crates/compiler/solve_schema" }
 roc_solve_problem = { path = "crates/compiler/solve_problem" }
-roc_specialize_types = { path = "crates/compiler/specialize_types" }
+roc_specialize_types = { path = "crates/build/specialize_types" }
 roc_std = { path = "crates/roc_std" }
 roc_target = { path = "crates/compiler/roc_target" }
 roc_test_utils = { path = "crates/test_utils" }

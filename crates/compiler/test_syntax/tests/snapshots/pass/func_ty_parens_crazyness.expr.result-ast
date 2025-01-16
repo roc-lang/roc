@@ -1,0 +1,72 @@
+@0-25 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(0),
+            ],
+            regions: [
+                @0-23,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [
+                Alias {
+                    header: TypeHeader {
+                        name: @0-1 "N",
+                        vars: [],
+                    },
+                    ann: @5-20 Function(
+                        [
+                            @5-6 BoundVariable(
+                                "f",
+                            ),
+                        ],
+                        Pure,
+                        @8-20 Function(
+                            [
+                                @8-17 Tuple {
+                                    elems: [
+                                        @12-13 SpaceBefore(
+                                            BoundVariable(
+                                                "u",
+                                            ),
+                                            [
+                                                Newline,
+                                            ],
+                                        ),
+                                    ],
+                                    ext: Some(
+                                        @16-17 Apply(
+                                            "",
+                                            "I",
+                                            [],
+                                        ),
+                                    ),
+                                },
+                            ],
+                            Pure,
+                            @19-20 Wildcard,
+                        ),
+                    ),
+                },
+            ],
+            value_defs: [],
+        },
+        @24-25 SpaceBefore(
+            Tag(
+                "I",
+            ),
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

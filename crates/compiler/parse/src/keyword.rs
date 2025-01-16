@@ -24,3 +24,10 @@ pub const PLATFORM: &str = "platform";
 pub const KEYWORDS: [&str; 11] = [
     IF, THEN, ELSE, WHEN, AS, IS, DBG, IMPORT, EXPECT, RETURN, CRASH,
 ];
+
+pub fn is_allowed_identifier(mut ident: &str) -> bool {
+    if ident.ends_with('!') {
+        ident = &ident[..ident.len() - 1];
+    }
+    !crate::keyword::KEYWORDS.iter().any(|kw| &ident == kw)
+}

@@ -1,0 +1,54 @@
+@0-21 SpaceAfter(
+    Str(
+        Block(
+            [
+                [
+                    Interpolated(
+                        @5-9 Apply(
+                            @5-8 Record(
+                                Collection {
+                                    items: [],
+                                    final_comments: [
+                                        Newline,
+                                    ],
+                                },
+                            ),
+                            [
+                                @8-9 Var {
+                                    module_name: "",
+                                    ident: "i",
+                                },
+                            ],
+                            Space,
+                        ),
+                    ),
+                    Plaintext(
+                        "\n",
+                    ),
+                    Interpolated(
+                        @13-17 Apply(
+                            @13-16 Record(
+                                Collection {
+                                    items: [],
+                                    final_comments: [
+                                        Newline,
+                                    ],
+                                },
+                            ),
+                            [
+                                @16-17 Var {
+                                    module_name: "",
+                                    ident: "i",
+                                },
+                            ],
+                            Space,
+                        ),
+                    ),
+                ],
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

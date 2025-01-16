@@ -1,13 +1,13 @@
-app [main] { pf: platform "platform/main.roc" }
+app [main!] { pf: platform "platform/main.roc" }
 
 import Issue2279Help
-import pf.PlatformTasks
+import pf.Host
 
-main =
+main! = \{} ->
     text =
         if Bool.true then
             Issue2279Help.text
         else
-            Issue2279Help.asText 42
+            Issue2279Help.as_text(42)
 
-    PlatformTasks.putLine text
+    Host.put_line!(text)

@@ -87,6 +87,11 @@ impl DocInfo {
             .rev()
             .take_while(|&a| is_roc_identifier_char(&(*a as char)))
             .count();
+
+        if symbol_len == 0 {
+            return String::from("");
+        }
+
         let symbol = &self.source[offset - symbol_len..offset];
 
         String::from(symbol)
@@ -97,7 +102,10 @@ impl DocInfo {
         let arena = &Bump::new();
 
         let ast = Ast::parse(arena, source).ok()?;
-        let flags = MigrationFlags::new(false);
+        let flags = MigrationFlags {
+            snakify: false,
+            parens_and_commas: false,
+        };
         let fmt = ast.fmt(flags);
 
         if source == fmt.as_str() {

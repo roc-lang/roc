@@ -77,12 +77,8 @@ impl<'ctx> PointerToRefcount<'ctx> {
     pub fn is_1<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>) -> IntValue<'ctx> {
         let current = self.get_refcount(env);
         let one = match env.target.ptr_width() {
-            roc_target::PtrWidth::Bytes4 => {
-                env.context.i32_type().const_int(i32::MIN as u64, false)
-            }
-            roc_target::PtrWidth::Bytes8 => {
-                env.context.i64_type().const_int(i64::MIN as u64, false)
-            }
+            roc_target::PtrWidth::Bytes4 => env.context.i32_type().const_int(1_u64, false),
+            roc_target::PtrWidth::Bytes8 => env.context.i64_type().const_int(1_u64, false),
         };
 
         env.builder
@@ -131,74 +127,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
             .allocation_alignment_bytes(layout_interner)
             .max(env.target.ptr_width() as u32);
 
-        let context = env.context;
-        let block = env.builder.get_insert_block().expect("to be in a function");
-        let di_location = env.builder.get_current_debug_location().unwrap();
-
-        let fn_name = &format!("decrement_refcounted_ptr_{alignment}");
-
-        let function = match env.module.get_function(fn_name) {
-            Some(function_value) => function_value,
-            None => {
-                // inc and dec return void
-                let fn_type = context.void_type().fn_type(
-                    &[env.context.ptr_type(AddressSpace::default()).into()],
-                    false,
-                );
-
-                let function_value = add_func(
-                    env.context,
-                    env.module,
-                    fn_name,
-                    FunctionSpec::known_fastcc(fn_type),
-                    Linkage::Internal,
-                );
-
-                let subprogram = env.new_subprogram(fn_name);
-                function_value.set_subprogram(subprogram);
-
-                debug_info_init!(env, function_value);
-
-                Self::build_decrement_function_body(env, function_value, alignment, layout);
-
-                function_value
-            }
-        };
-
-        let refcount_ptr = self.value;
-
-        env.builder.position_at_end(block);
-        env.builder.set_current_debug_location(di_location);
-
-        let call = env
-            .builder
-            .new_build_call(function, &[refcount_ptr.into()], fn_name);
-
-        call.set_call_convention(FAST_CALL_CONV);
-    }
-
-    fn build_decrement_function_body<'a, 'env>(
-        env: &Env<'a, 'ctx, 'env>,
-        parent: FunctionValue<'ctx>,
-        alignment: u32,
-        layout: LayoutRepr<'a>,
-    ) {
-        let builder = env.builder;
-        let ctx = env.context;
-
-        let entry = ctx.append_basic_block(parent, "entry");
-        builder.position_at_end(entry);
-
-        debug_info_init!(env, parent);
-
-        decref_pointer(
-            env,
-            parent.get_nth_param(0).unwrap().into_pointer_value(),
-            alignment,
-            layout,
-        );
-
-        builder.new_build_return(None);
+        decref_pointer(env, self.value, alignment, layout);
     }
 
     pub fn deallocate<'a, 'env>(

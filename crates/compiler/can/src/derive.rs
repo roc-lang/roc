@@ -29,20 +29,20 @@ fn to_encoder<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
         )]),
     );
 
-    // Encode.toEncoder payload
+    // Encode.to_encoder(payload)
     let call_member = alloc_expr(ast::Expr::Apply(
         alloc_expr(ast::Expr::Var {
             module_name: "Encode",
-            ident: "toEncoder",
+            ident: "to_encoder",
         }),
         &*env.arena.alloc([&*alloc_expr(ast::Expr::Var {
             module_name: "",
             ident: payload,
         })]),
-        roc_module::called_via::CalledVia::Space,
+        CalledVia::Space,
     ));
 
-    // \@Opaq payload -> Encode.toEncoder payload
+    // \@Opaq payload -> Encode.to_encoder(payload)
     ast::Expr::Closure(
         env.arena
             .alloc([Loc::at(DERIVED_REGION, opaque_apply_pattern)]),
@@ -57,11 +57,11 @@ fn decoder<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
         let bytes = "#bytes";
         let fmt = "#fmt";
 
-        // Decode.decodeWith bytes Decode.decoder fmt
+        // Decode.decode_with(bytes, Decode.decoder, fmt)
         let call_decode_with = ast::Expr::Apply(
             alloc_expr(ast::Expr::Var {
                 module_name: "Decode",
-                ident: "decodeWith",
+                ident: "decode_with",
             }),
             env.arena.alloc([
                 &*alloc_expr(ast::Expr::Var {
@@ -80,11 +80,11 @@ fn decoder<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
             CalledVia::Space,
         );
 
-        // Decode.mapResult (Decode.decodeWith bytes Decode.decoder fmt) @Opaq
+        // Decode.map_result(Decode.decode_with(bytes, Decode.decoder, fmt), @Opaq)
         let call_map_result = ast::Expr::Apply(
             alloc_expr(ast::Expr::Var {
                 module_name: "Decode",
-                ident: "mapResult",
+                ident: "map_result",
             }),
             env.arena.alloc([
                 &*alloc_expr(call_decode_with),
@@ -94,7 +94,7 @@ fn decoder<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
         );
 
         // \bytes, fmt ->
-        //     Decode.mapResult (Decode.decodeWith bytes Decode.decoder fmt) @Opaq
+        //     Decode.map_result(Decode.decode_with(bytes, Decode.decoder, fmt), @Opaq)
         let custom_closure = ast::Expr::Closure(
             env.arena.alloc([
                 Loc::at(DERIVED_REGION, ast::Pattern::Identifier { ident: bytes }),
@@ -134,7 +134,7 @@ fn hash<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
         )]),
     );
 
-    // Hash.hash hasher payload
+    // Hash.hash(hasher, payload)
     let call_member = alloc_expr(ast::Expr::Apply(
         alloc_expr(ast::Expr::Var {
             module_name: "Hash",
@@ -150,10 +150,10 @@ fn hash<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
                 ident: payload,
             }),
         ]),
-        roc_module::called_via::CalledVia::Space,
+        CalledVia::Space,
     ));
 
-    // \hasher, @Opaq payload -> Hash.hash hasher payload
+    // \hasher, @Opaq payload -> Hash.hash(hasher, payload)
     ast::Expr::Closure(
         env.arena.alloc([
             Loc::at(DERIVED_REGION, ast::Pattern::Identifier { ident: hasher }),
@@ -188,11 +188,11 @@ fn is_eq<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
         )]),
     );
 
-    // Bool.isEq payload1 payload2
+    // Bool.is_eq(payload1, payload2)
     let call_member = alloc_expr(ast::Expr::Apply(
         alloc_expr(ast::Expr::Var {
             module_name: "Bool",
-            ident: "isEq",
+            ident: "is_eq",
         }),
         &*env.arena.alloc([
             &*alloc_expr(ast::Expr::Var {
@@ -204,10 +204,10 @@ fn is_eq<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
                 ident: payload2,
             }),
         ]),
-        roc_module::called_via::CalledVia::Space,
+        CalledVia::Space,
     ));
 
-    // \@Opaq payload1, @Opaq payload2 -> Bool.isEq payload1 payload2
+    // \@Opaq payload1, @Opaq payload2 -> Bool.is_eq(payload1, payload2)
     ast::Expr::Closure(
         env.arena.alloc([
             Loc::at(DERIVED_REGION, opaque1),
@@ -234,20 +234,20 @@ fn to_inspector<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
         )]),
     );
 
-    // Inspect.toInspector payload
+    // Inspect.to_inspector(payload)
     let to_inspector_payload = alloc_expr(ast::Expr::Apply(
         alloc_expr(ast::Expr::Var {
             module_name: "Inspect",
-            ident: "toInspector",
+            ident: "to_inspector",
         }),
         &*env.arena.alloc([&*alloc_expr(ast::Expr::Var {
             module_name: "",
             ident: payload,
         })]),
-        roc_module::called_via::CalledVia::Space,
+        CalledVia::Space,
     ));
 
-    // Inspect.tag "@opaque" [Inspect.toInspector payload]
+    // Inspect.tag("@opaque", [Inspect.to_inspector(payload)])
     let to_inspector_list = alloc_expr(ast::Expr::List(Collection::with_items(
         &*env.arena.alloc([&*to_inspector_payload]),
     )));
@@ -259,12 +259,12 @@ fn to_inspector<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
             ident: "tag",
         }),
         &*env.arena.alloc([&*opaque_name, &*to_inspector_list]),
-        roc_module::called_via::CalledVia::Space,
+        CalledVia::Space,
     ));
 
     let fmt = "#fmt";
 
-    // \fmt -> Inspect.apply opaqueInspector fmt
+    // \fmt -> Inspect.apply(opaque_inspector, fmt)
     let apply_opaque_inspector = alloc_expr(ast::Expr::Apply(
         alloc_expr(ast::Expr::Var {
             module_name: "Inspect",
@@ -277,7 +277,7 @@ fn to_inspector<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
                 ident: fmt,
             }),
         ]),
-        roc_module::called_via::CalledVia::Space,
+        CalledVia::Space,
     ));
 
     let custom_closure = alloc_expr(ast::Expr::Closure(
@@ -320,14 +320,14 @@ pub(crate) fn synthesize_member_impl<'a>(
 
     let (impl_name, def_body): (String, ast::Expr<'a>) = match ability_member {
         Symbol::ENCODE_TO_ENCODER => (
-            format!("#{opaque_name}_toEncoder"),
+            format!("#{opaque_name}_to_encoder"),
             to_encoder(env, at_opaque),
         ),
         Symbol::DECODE_DECODER => (format!("#{opaque_name}_decoder"), decoder(env, at_opaque)),
         Symbol::HASH_HASH => (format!("#{opaque_name}_hash"), hash(env, at_opaque)),
-        Symbol::BOOL_IS_EQ => (format!("#{opaque_name}_isEq"), is_eq(env, at_opaque)),
+        Symbol::BOOL_IS_EQ => (format!("#{opaque_name}_is_eq"), is_eq(env, at_opaque)),
         Symbol::INSPECT_TO_INSPECTOR => (
-            format!("#{opaque_name}_toInspector"),
+            format!("#{opaque_name}_to_inspector"),
             to_inspector(env, at_opaque),
         ),
         other => internal_error!("{:?} is not a derivable ability member!", other),

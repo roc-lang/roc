@@ -11,7 +11,7 @@ pub extern "C" fn rust_main() {
 
     init();
 
-    let tag_union = roc_app::mainForHost();
+    let tag_union = roc_app::main_for_host();
 
     // Verify that it has all the expected traits.
 

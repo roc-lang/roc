@@ -1,0 +1,26 @@
+@0-12 SpaceAfter(
+    Apply(
+        @0-2 Str(
+            PlainLine(
+                "",
+            ),
+        ),
+        [
+            @3-12 UnaryOp(
+                @4-12 PncApply(
+                    @4-10 Str(
+                        Block(
+                            [],
+                        ),
+                    ),
+                    [],
+                ),
+                @3-4 Negate,
+            ),
+        ],
+        Space,
+    ),
+    [
+        Newline,
+    ],
+)

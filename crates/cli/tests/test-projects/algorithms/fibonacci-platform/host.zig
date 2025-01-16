@@ -11,8 +11,8 @@ const mem = std.mem;
 const Allocator = mem.Allocator;
 
 // NOTE the LLVM backend expects this signature
-// extern fn roc__mainForHost_1_exposed(i64, *i64) void;
-extern fn roc__mainForHost_1_exposed(i64) i64;
+// extern fn roc__main_for_host_1_exposed(i64, *i64) void;
+extern fn roc__main_for_host_1_exposed(i64) i64;
 
 const Align = 2 * @alignOf(usize);
 extern fn malloc(size: usize) callconv(.C) ?*align(Align) anyopaque;
@@ -110,7 +110,7 @@ comptime {
 pub export fn main() u8 {
     const stdout = std.io.getStdOut().writer();
 
-    const result = roc__mainForHost_1_exposed(10);
+    const result = roc__main_for_host_1_exposed(10);
 
     stdout.print("{d}\n", .{result}) catch unreachable;
 

@@ -2,6 +2,7 @@
 
 #[doc(hidden)]
 pub use pretty_assertions::assert_eq as _pretty_assert_eq;
+use pretty_assertions::StrComparison;
 
 #[derive(PartialEq, Eq)]
 pub struct DebugAsDisplay<T>(pub T);
@@ -16,6 +17,17 @@ impl<T: std::fmt::Display> std::fmt::Debug for DebugAsDisplay<T> {
 macro_rules! assert_multiline_str_eq {
     ($a:expr, $b:expr) => {
         $crate::_pretty_assert_eq!($crate::DebugAsDisplay($a), $crate::DebugAsDisplay($b))
+    };
+}
+
+pub fn pretty_compare_string(a: &str, b: &str) {
+    println!("{}", StrComparison::new(a, b));
+}
+
+#[macro_export]
+macro_rules! print_pretty_string_comparison {
+    ($a:expr, $b:expr) => {
+        $crate::pretty_compare_strings($a, $b)
     };
 }
 

@@ -30,13 +30,20 @@
       supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" "aarch64-linux" ];
 
       templates = import ./nix/templates { };
-    in
-    { inherit templates; } //
+    in {
+      inherit templates;
+      lib = { buildRocPackage = import ./nix/buildRocPackage.nix; };
+    } //
     flake-utils.lib.eachSystem supportedSystems (system:
       let
 
         overlays = [ (import rust-overlay) ]
-        ++ (if system == "x86_64-linux" then [ nixgl.overlay ] else [ ]);
+        ++ (if system == "x86_64-linux" then [ nixgl.overlay ] else [ ])
+        ++ [(final: prev: {
+          # using a custom simple-http-server fork because of github.com/TheWaWaR/simple-http-server/issues/111
+          # the server is used for local testing of the roc website
+          simple-http-server = final.callPackage ./nix/simple-http-server.nix { };
+        })];
         pkgs = import nixpkgs { inherit system overlays; };
 
         rocBuild = import ./nix { inherit pkgs; };
@@ -59,6 +66,7 @@
             xorg.libXi
             xorg.libxcb
             cargo-llvm-cov # to visualize code coverage
+            curl # used by www/build.sh
           ];
 
         # DevInputs are not necessary to build roc as a user
@@ -75,6 +83,8 @@
           cmake
           # provides llvm
           llvmPkgs.dev
+          # for debugging:
+          # lldb
           # faster builds - see https://github.com/roc-lang/roc/blob/main/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
           # provides lld
           pkgs.lld_18
@@ -100,7 +110,6 @@
           libiconv # for examples/gui
           libxkbcommon # for examples/gui
           cargo-criterion # for benchmarks
-          simple-http-server # to view roc website when trying out edits
           wasm-pack # for repl_wasm
           jq # used in several bash scripts
           cargo-nextest # used to give more info for segfaults for gen tests
@@ -132,10 +141,11 @@
           NIX_GLIBC_PATH =
             if pkgs.stdenv.isLinux then "${pkgs.glibc.out}/lib" else "";
 
-          LD_LIBRARY_PATH = with pkgs;
+          LD_LIBRARY_PATH =  with pkgs;
             lib.makeLibraryPath
               ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib ]
               ++ linuxDevInputs);
+
           NIXPKGS_ALLOW_UNFREE =
             1; # to run the GUI examples with NVIDIA's closed source drivers
 

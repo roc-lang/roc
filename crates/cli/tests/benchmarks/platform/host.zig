@@ -10,11 +10,7 @@ const maxInt = std.math.maxInt;
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
-extern fn roc__mainForHost_1_exposed_generic([*]u8) void;
-extern fn roc__mainForHost_1_exposed_size() i64;
-extern fn roc__mainForHost_0_caller(*const u8, [*]u8, [*]u8) void;
-extern fn roc__mainForHost_0_size() i64;
-extern fn roc__mainForHost_0_result_size() i64;
+extern fn roc__main_for_host_1_exposed() void;
 
 const Align = 2 * @alignOf(usize);
 extern fn malloc(size: usize) callconv(.C) ?*align(Align) anyopaque;
@@ -112,48 +108,12 @@ comptime {
 const Unit = extern struct {};
 
 pub export fn main() u8 {
-    // The size might be zero; if so, make it at least 8 so that we don't have a nullptr
-    const size = @max(@as(usize, @intCast(roc__mainForHost_1_exposed_size())), 8);
-    const raw_output = roc_alloc(@as(usize, @intCast(size)), @alignOf(u64)) orelse {
-        std.log.err("Memory allocation failed", .{});
-        return 1;
-    };
-    const output = @as([*]u8, @ptrCast(raw_output));
-
-    defer {
-        roc_dealloc(raw_output, @alignOf(u64));
-    }
-
-    roc__mainForHost_1_exposed_generic(output);
-
-    const closure_data_pointer = @as([*]u8, @ptrCast(output));
-
-    call_the_closure(closure_data_pointer);
+    roc__main_for_host_1_exposed();
 
     return 0;
 }
 
-fn call_the_closure(closure_data_pointer: [*]u8) void {
-    const allocator = std.heap.page_allocator;
-
-    // The size might be zero; if so, make it at least 8 so that we don't have a nullptr
-    const size = @max(roc__mainForHost_0_result_size(), 8);
-    const raw_output = allocator.alignedAlloc(u8, @alignOf(u64), @as(usize, @intCast(size))) catch unreachable;
-    const output = @as([*]u8, @ptrCast(raw_output));
-
-    defer {
-        allocator.free(raw_output);
-    }
-
-    const flags: u8 = 0;
-
-    roc__mainForHost_0_caller(&flags, closure_data_pointer, output);
-
-    // The closure returns result, nothing interesting to do with it
-    return;
-}
-
-pub export fn roc_fx_putInt(int: i64) i64 {
+pub export fn roc_fx_put_int(int: i64) i64 {
     const stdout = std.io.getStdOut().writer();
 
     stdout.print("{d}", .{int}) catch unreachable;
@@ -163,7 +123,7 @@ pub export fn roc_fx_putInt(int: i64) i64 {
     return 0;
 }
 
-export fn roc_fx_putLine(rocPath: *str.RocStr) callconv(.C) void {
+export fn roc_fx_put_line(rocPath: *str.RocStr) callconv(.C) void {
     const stdout = std.io.getStdOut().writer();
 
     for (rocPath.asSlice()) |char| {
@@ -180,14 +140,14 @@ const GetInt = extern struct {
 
 comptime {
     if (@sizeOf(usize) == 8) {
-        @export(roc_fx_getInt_64bit, .{ .name = "roc_fx_getInt" });
+        @export(roc_fx_get_int_64bit, .{ .name = "roc_fx_get_int" });
     } else {
-        @export(roc_fx_getInt_32bit, .{ .name = "roc_fx_getInt" });
+        @export(roc_fx_get_int_32bit, .{ .name = "roc_fx_get_int" });
     }
 }
 
-fn roc_fx_getInt_64bit() callconv(.C) GetInt {
-    if (roc_fx_getInt_help()) |value| {
+fn roc_fx_get_int_64bit() callconv(.C) GetInt {
+    if (roc_fx_get_int_help()) |value| {
         const get_int = GetInt{ .is_error = false, .value = value };
         return get_int;
     } else |err| switch (err) {
@@ -202,8 +162,8 @@ fn roc_fx_getInt_64bit() callconv(.C) GetInt {
     return 0;
 }
 
-fn roc_fx_getInt_32bit(output: *GetInt) callconv(.C) void {
-    if (roc_fx_getInt_help()) |value| {
+fn roc_fx_get_int_32bit(output: *GetInt) callconv(.C) void {
+    if (roc_fx_get_int_help()) |value| {
         const get_int = GetInt{ .is_error = false, .value = value };
         output.* = get_int;
     } else |err| switch (err) {
@@ -218,7 +178,7 @@ fn roc_fx_getInt_32bit(output: *GetInt) callconv(.C) void {
     return;
 }
 
-fn roc_fx_getInt_help() !i64 {
+fn roc_fx_get_int_help() !i64 {
     const stdout = std.io.getStdOut().writer();
     stdout.print("Please enter an integer\n", .{}) catch unreachable;
 

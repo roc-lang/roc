@@ -40,6 +40,8 @@ pub fn generate(
     output_path: &Path,
     spec_path: &Path,
     backend: CodeGenBackend,
+    link_type: LinkType,
+    linking_strategy: LinkingStrategy,
 ) -> io::Result<i32> {
     let target = Triple::host().into();
     // TODO: Add verification around the paths. Make sure they have the correct file extension and what not.
@@ -68,13 +70,6 @@ pub fn generate(
             );
 
             let arena = ManuallyDrop::new(Bump::new());
-            let link_type = LinkType::Dylib;
-            let linking_strategy = if roc_linker::supported(link_type, target) {
-                LinkingStrategy::Surgical
-            } else {
-                LinkingStrategy::Legacy
-            };
-
             let tempdir_res = tempfile::tempdir();
 
             // we don't need a host for glue, we will generate a dylib
@@ -97,6 +92,7 @@ pub fn generate(
                     RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
                     load_config,
                     Some(dylib_dir.path()),
+                    false,
                 ),
                 Err(_) => {
                     eprintln!("`roc glue` was unable to create a tempdir.");
@@ -251,11 +247,11 @@ fn call_roc_make_glue(
                 &roc_std::RocList<roc_type::Types>,
             );
 
-            let name_of_main = "roc__makeGlueForHost_1_exposed_generic";
+            let name_of_main = "roc__make_glue_for_host_1_exposed_generic";
 
             let make_glue: libloading::Symbol<MakeGlue> = unsafe {
                 lib.get(name_of_main.as_bytes())
-                    .unwrap_or_else(|_| panic!("Unable to load glue function"))
+                    .unwrap_or_else(|_| panic!("Unable to load glue function: {lib:?}"))
             };
             let mut files = RocCallResult::new(roc_std::RocResult::err(roc_std::RocStr::empty()));
             unsafe { make_glue(&mut files, &roc_types) };

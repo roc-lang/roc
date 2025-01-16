@@ -4,9 +4,9 @@ import pf.Effect
 
 main! : {} => {}
 main! = \{} ->
-    logged! "hello" (\{} -> Effect.putLine! "Hello, World!")
+    logged!("hello", \{} -> Effect.put_line!("Hello, World!"))
 
 logged! = \name, fx! ->
-    Effect.putLine! "Before $(name)"
-    fx! {}
-    Effect.putLine! "After $(name)"
+    Effect.put_line!("Before ${name}")
+    fx!({})
+    Effect.put_line!("After ${name}")

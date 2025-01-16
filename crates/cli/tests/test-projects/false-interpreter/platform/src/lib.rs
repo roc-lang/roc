@@ -1,9 +1,8 @@
 #![allow(non_snake_case)]
 
 use core::ffi::c_void;
-use core::mem::MaybeUninit;
 use libc;
-use roc_std::{RocList, RocResult, RocStr};
+use roc_std::{RocList, RocStr};
 use std::collections::HashMap;
 use std::env;
 use std::fs::File;
@@ -20,20 +19,8 @@ fn file_handles() -> &'static Mutex<HashMap<u64, BufReader<File>>> {
 }
 
 extern "C" {
-    #[link_name = "roc__mainForHost_1_exposed_generic"]
-    fn roc_main(output: *mut u8, args: &RocStr);
-
-    #[link_name = "roc__mainForHost_1_exposed_size"]
-    fn roc_main_size() -> i64;
-
-    #[link_name = "roc__mainForHost_0_caller"]
-    fn call_Fx(flags: *const u8, closure_data: *const u8, output: *mut u8);
-
-    #[link_name = "roc__mainForHost_0_size"]
-    fn size_Fx() -> i64;
-
-    #[link_name = "roc__mainForHost_0_result_size"]
-    fn size_Fx_result() -> i64;
+    #[link_name = "roc__main_for_host_1_exposed_generic"]
+    fn roc_main(void: *const c_void, args: *mut RocStr);
 }
 
 #[no_mangle]
@@ -114,88 +101,57 @@ pub extern "C" fn rust_main() -> i32 {
     let arg = env::args()
         .nth(1)
         .expect("Please pass a .false file as a command-line argument to the false interpreter!");
-    let arg = RocStr::from(arg.as_str());
+    let mut arg = RocStr::from(arg.as_str());
 
-    let size = unsafe { roc_main_size() } as usize;
+    unsafe { roc_main(std::ptr::null(), &mut arg) };
+    std::mem::forget(arg);
 
-    unsafe {
-        let buffer = roc_alloc(size, 1) as *mut u8;
-
-        roc_main(buffer, &arg);
-
-        // arg has been passed to roc now, and it assumes ownership.
-        // so we must not touch its refcount now
-        std::mem::forget(arg);
-
-        let result = call_the_closure(buffer);
-
-        roc_dealloc(buffer as _, 1);
-
-        result
-    };
+    // This really shouldn't need to be freed, but valgrid is picky about possibly lost.
+    *file_handles().lock().unwrap() = HashMap::default();
 
     // Exit code
     0
 }
 
-unsafe fn call_the_closure(closure_data_ptr: *const u8) -> i64 {
-    let size = size_Fx_result() as usize;
-    let buffer = roc_alloc(size, 1) as *mut u8;
-
-    call_Fx(
-        // This flags pointer will never get dereferenced
-        MaybeUninit::uninit().as_ptr(),
-        closure_data_ptr as *const u8,
-        buffer as *mut u8,
-    );
-
-    roc_dealloc(buffer as _, 1);
-    0
-}
-
 #[no_mangle]
-pub extern "C" fn roc_fx_getLine() -> RocResult<RocStr, ()> {
+pub extern "C" fn roc_fx_getLine() -> RocStr {
     let stdin = std::io::stdin();
     let line1 = stdin.lock().lines().next().unwrap().unwrap();
 
-    RocResult::ok(RocStr::from(line1.as_str()))
+    RocStr::from(line1.as_str())
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_getChar() -> RocResult<u8, ()> {
+pub extern "C" fn roc_fx_getChar() -> u8 {
     let mut buffer = [0];
 
     if let Err(ioerr) = std::io::stdin().lock().read_exact(&mut buffer[..]) {
         if ioerr.kind() == std::io::ErrorKind::UnexpectedEof {
-            RocResult::ok(u8::MAX)
+            u8::MAX
         } else {
             panic!("Got an unexpected error while reading char from stdin");
         }
     } else {
-        RocResult::ok(buffer[0])
+        buffer[0]
     }
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_putLine(line: &RocStr) -> RocResult<(), ()> {
+pub extern "C" fn roc_fx_putLine(line: &RocStr) {
     let string = line.as_str();
     println!("{}", string);
     let _ = std::io::stdout().lock().flush();
-
-    RocResult::ok(())
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_putRaw(line: &RocStr) -> RocResult<(), ()> {
+pub extern "C" fn roc_fx_putRaw(line: &RocStr) {
     let string = line.as_str();
     print!("{}", string);
     let _ = std::io::stdout().lock().flush();
-
-    RocResult::ok(())
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_getFileLine(br_id: u64) -> RocResult<RocStr, ()> {
+pub extern "C" fn roc_fx_getFileLine(br_id: u64) -> RocStr {
     let mut br_map = file_handles().lock().unwrap();
     let br = br_map.get_mut(&br_id).unwrap();
     let mut line1 = String::default();
@@ -203,11 +159,11 @@ pub extern "C" fn roc_fx_getFileLine(br_id: u64) -> RocResult<RocStr, ()> {
     br.read_line(&mut line1)
         .expect("Failed to read line from file");
 
-    RocResult::ok(RocStr::from(line1.as_str()))
+    RocStr::from(line1.as_str())
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_getFileBytes(br_id: u64) -> RocResult<RocList<u8>, ()> {
+pub extern "C" fn roc_fx_getFileBytes(br_id: u64) -> RocList<u8> {
     let mut br_map = file_handles().lock().unwrap();
     let br = br_map.get_mut(&br_id).unwrap();
     let mut buffer = [0; 0x10 /* This is intentionally small to ensure correct implementation */];
@@ -216,18 +172,16 @@ pub extern "C" fn roc_fx_getFileBytes(br_id: u64) -> RocResult<RocList<u8>, ()> 
         .read(&mut buffer[..])
         .expect("Failed to read bytes from file");
 
-    RocResult::ok(RocList::from_slice(&buffer[..count]))
+    RocList::from_slice(&buffer[..count])
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_closeFile(br_id: u64) -> RocResult<(), ()> {
+pub extern "C" fn roc_fx_closeFile(br_id: u64) {
     file_handles().lock().unwrap().remove(&br_id);
-
-    RocResult::ok(())
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_openFile(name: &RocStr) -> RocResult<u64, ()> {
+pub extern "C" fn roc_fx_openFile(name: &RocStr) -> u64 {
     let string = name.as_str();
     match File::open(string) {
         Ok(f) => {
@@ -236,7 +190,7 @@ pub extern "C" fn roc_fx_openFile(name: &RocStr) -> RocResult<u64, ()> {
 
             file_handles().lock().unwrap().insert(br_id, br);
 
-            RocResult::ok(br_id)
+            br_id
         }
         Err(_) => {
             panic!(
@@ -245,18 +199,4 @@ pub extern "C" fn roc_fx_openFile(name: &RocStr) -> RocResult<u64, ()> {
             )
         }
     }
-}
-
-#[no_mangle]
-pub extern "C" fn roc_fx_withFileOpen(_name: &RocStr, _buffer: *const u8) -> RocResult<(), ()> {
-    // TODO: figure out accepting a closure in an fx and passing data to it.
-    // let f = File::open(name.as_str()).expect("Unable to open file");
-    // let mut br = BufReader::new(f);
-
-    // unsafe {
-    //     let closure_data_ptr = buffer.offset(8);
-    //     call_the_closure(closure_data_ptr);
-    // }
-
-    RocResult::ok(())
 }

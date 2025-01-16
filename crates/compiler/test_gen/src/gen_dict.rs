@@ -111,7 +111,7 @@ fn dict_nonempty_remove() {
             empty
                 |> Dict.remove 42
                 |> Dict.len
-                |> Num.toI64
+                |> Num.to_i64
             "
         ),
         0,
@@ -128,7 +128,7 @@ fn dict_nonempty_get() {
             empty : Dict.Dict I64 F64
             empty = Dict.insert (Dict.empty {}) 42 1.23
 
-            withDefault = \x, def ->
+            with_default = \x, def ->
                 when  x is
                     Ok v -> v
                     Err _ -> def
@@ -136,7 +136,7 @@ fn dict_nonempty_get() {
             empty
                 |> Dict.insert 42 1.23f64
                 |> Dict.get 42
-                |> withDefault 0
+                |> with_default 0
             "
         ),
         1.23,
@@ -146,15 +146,15 @@ fn dict_nonempty_get() {
     assert_evals_to!(
         indoc!(
             r"
-            withDefault = \x, def ->
-                when  x is
+            with_default = \x, def ->
+                when x is
                     Ok v -> v
                     Err _ -> def
 
             Dict.empty {}
                 |> Dict.insert 42 1.23f64
                 |> Dict.get 43
-                |> withDefault 0
+                |> with_default 0
             "
         ),
         0.0,
@@ -168,15 +168,15 @@ fn keys() {
     assert_evals_to!(
         indoc!(
             r"
-            myDict : Dict.Dict I64 I64
-            myDict =
+            my_dict : Dict.Dict I64 I64
+            my_dict =
                 Dict.empty {}
                     |> Dict.insert 0 100
                     |> Dict.insert 1 100
                     |> Dict.insert 2 100
 
 
-            Dict.keys myDict
+            Dict.keys my_dict
             "
         ),
         RocList::from_slice(&[0, 1, 2]),
@@ -190,15 +190,15 @@ fn values() {
     assert_evals_to!(
         indoc!(
             r"
-            myDict : Dict.Dict I64 I64
-            myDict =
+            my_dict : Dict.Dict I64 I64
+            my_dict =
                 Dict.empty {}
                     |> Dict.insert 0 100
                     |> Dict.insert 1 200
                     |> Dict.insert 2 300
 
 
-            Dict.values myDict
+            Dict.values my_dict
             "
         ),
         RocList::from_slice(&[100, 200, 300]),
@@ -212,12 +212,12 @@ fn from_list_with_fold_simple() {
     assert_evals_to!(
         indoc!(
             r"
-            myDict : Dict.Dict I64 I64
-            myDict =
+            my_dict : Dict.Dict I64 I64
+            my_dict =
                 [1,2,3]
                     |> List.walk (Dict.empty {}) (\accum, value -> Dict.insert accum value value)
 
-            Dict.values myDict
+            Dict.values my_dict
             "
         ),
         RocList::from_slice(&[1, 2, 3]),
@@ -238,13 +238,13 @@ fn from_list_with_fold_reallocates() {
                 else
                     accum
 
-            myDict : Dict.Dict I64 I64
-            myDict =
+            my_dict : Dict.Dict I64 I64
+            my_dict =
                 # 25 elements (8 + 16 + 1) is guaranteed to overflow/reallocate at least twice
                 range 0 25 []
                     |> List.walk (Dict.empty {}) (\accum, value -> Dict.insert accum value value)
 
-            Dict.values myDict
+            Dict.values my_dict
             "
         ),
         RocList::from_slice(&[
@@ -261,12 +261,12 @@ fn small_str_keys() {
     assert_evals_to!(
         indoc!(
             r#"
-            myDict : Dict.Dict Str I64
-            myDict =
+            my_dict : Dict.Dict Str I64
+            my_dict =
                 Dict.empty {}
                     |> Dict.insert "a" 100
 
-            Dict.keys myDict
+            Dict.keys my_dict
             "#
         ),
         RocList::from_slice(&["a".into()]),
@@ -280,14 +280,14 @@ fn big_str_keys() {
     assert_evals_to!(
         indoc!(
             r#"
-            myDict : Dict.Dict Str I64
-            myDict =
+            my_dict : Dict.Dict Str I64
+            my_dict =
                 Dict.empty {}
                     |> Dict.insert "Leverage agile frameworks to provide a robust" 100
                     |> Dict.insert "synopsis for high level overviews. Iterative approaches" 200
                     |> Dict.insert "to corporate strategy foster collaborative thinking to" 300
 
-            Dict.keys myDict
+            Dict.keys my_dict
             "#
         ),
         RocList::from_slice(&[
@@ -305,14 +305,14 @@ fn big_str_values() {
     assert_evals_to!(
         indoc!(
             r#"
-            myDict : Dict.Dict I64 Str
-            myDict =
+            my_dict : Dict.Dict I64 Str
+            my_dict =
                 Dict.empty {}
                     |> Dict.insert 100 "Leverage agile frameworks to provide a robust"
                     |> Dict.insert 200 "synopsis for high level overviews. Iterative approaches"
                     |> Dict.insert 300 "to corporate strategy foster collaborative thinking to"
 
-            Dict.values myDict
+            Dict.values my_dict
             "#
         ),
         RocList::from_slice(&[
@@ -330,15 +330,15 @@ fn unit_values() {
     assert_evals_to!(
         indoc!(
             r"
-            myDict : Dict.Dict I64 {}
-            myDict =
+            my_dict : Dict.Dict I64 {}
+            my_dict =
                 Dict.empty {}
                     |> Dict.insert 0 {}
                     |> Dict.insert 1 {}
                     |> Dict.insert 2 {}
                     |> Dict.insert 3 {}
 
-            Num.toI64 (Dict.len myDict)
+            Num.to_i64 (Dict.len my_dict)
             "
         ),
         4,
@@ -352,11 +352,11 @@ fn single() {
     assert_evals_to!(
         indoc!(
             r"
-            myDict : Dict.Dict I64 {}
-            myDict =
+            my_dict : Dict.Dict I64 {}
+            my_dict =
                 Dict.single 12345 {}
 
-            Num.toI64 (Dict.len myDict)
+            Num.to_i64 (Dict.len my_dict)
             "
         ),
         1,
@@ -370,12 +370,12 @@ fn insert_all() {
     assert_evals_to!(
         indoc!(
             r"
-            myDict : Dict I64 {}
-            myDict =
-                Dict.insertAll (Dict.single 0 {}) (Dict.single 1 {})
+            my_dict : Dict I64 {}
+            my_dict =
+                Dict.insert_all (Dict.single 0 {}) (Dict.single 1 {})
 
-            Dict.len myDict
-                |> Num.toI64
+            Dict.len my_dict
+                |> Num.to_i64
             "
         ),
         2,
@@ -389,12 +389,12 @@ fn insert_all_prefer_second() {
     assert_evals_to!(
         indoc!(
             r"
-            myDict : Dict.Dict I64 I64
-            myDict =
+            my_dict : Dict.Dict I64 I64
+            my_dict =
                 (Dict.single 0 100)
-                    |> Dict.insertAll (Dict.single 0 200)
+                    |> Dict.insert_all (Dict.single 0 200)
 
-            Dict.values myDict
+            Dict.values my_dict
             "
         ),
         RocList::from_slice(&[200]),
@@ -424,9 +424,9 @@ fn keep_shared() {
                     |> Dict.insert 2 {}
                     |> Dict.insert 4 {}
 
-            Dict.keepShared dict1 dict2
+            Dict.keep_shared dict1 dict2
                 |> Dict.len
-                |> Num.toI64
+                |> Num.to_i64
             "
         ),
         2,
@@ -456,7 +456,7 @@ fn keep_shared_value_must_match() {
                     |> Dict.insert 2 2
                     |> Dict.insert 4 300
 
-            Dict.keepShared dict1 dict2
+            Dict.keep_shared dict1 dict2
                 |> Dict.values
             "
         ),
@@ -487,9 +487,9 @@ fn remove_all() {
                     |> Dict.insert 2 {}
                     |> Dict.insert 4 {}
 
-            Dict.removeAll dict1 dict2
+            Dict.remove_all dict1 dict2
                 |> Dict.len
-                |> Num.toI64
+                |> Num.to_i64
             "
         ),
         3,
@@ -519,7 +519,7 @@ fn remove_all_prefer_first() {
                     |> Dict.insert 2 200
                     |> Dict.insert 4 300
 
-            Dict.removeAll dict1 dict2
+            Dict.remove_all dict1 dict2
                 |> Dict.values
             "
         ),

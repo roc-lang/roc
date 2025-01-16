@@ -1,0 +1,48 @@
+@0-27 SpaceAfter(
+    When(
+        @5-6 SpaceAfter(
+            Var {
+                module_name: "",
+                ident: "f",
+            },
+            [
+                Newline,
+            ],
+        ),
+        [
+            WhenBranch {
+                patterns: [
+                    @10-11 SpaceBefore(
+                        Identifier {
+                            ident: "s",
+                        },
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @26-27 Var {
+                    module_name: "",
+                    ident: "e",
+                },
+                guard: Some(
+                    @14-24 Closure(
+                        [
+                            @15-16 Identifier {
+                                ident: "t",
+                            },
+                        ],
+                        @18-24 Str(
+                            Block(
+                                [],
+                            ),
+                        ),
+                    ),
+                ),
+            },
+        ],
+    ),
+    [
+        Newline,
+    ],
+)

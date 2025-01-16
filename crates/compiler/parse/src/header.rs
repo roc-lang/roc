@@ -857,10 +857,10 @@ fn imports_entry<'a>() -> impl Parser<'a, Spaced<'a, ImportsEntry<'a>>, EImports
                         shortname(),
                         byte(b'.', EImports::ShorthandDot)
                     ))),
-                    // e.g. `Task`
+                    // e.g. `List`
                     module_name_help(EImports::ModuleName)
                 ),
-                // e.g. `.{ Task, after}`
+                // e.g. `.{ List, after }`
                 optional(skip_first(
                     byte(b'.', EImports::ExposingDot),
                     collection_trailing_sep_e(
@@ -915,7 +915,7 @@ impl<'a> HeaderType<'a> {
             HeaderType::Platform { .. } | HeaderType::Package { .. } => &[],
         }
     }
-    pub fn to_string(&'a self) -> &str {
+    pub fn to_string(&self) -> &'static str {
         match self {
             HeaderType::App { .. } => "app",
             HeaderType::Hosted { .. } => "hosted",

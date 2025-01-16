@@ -2,5 +2,5 @@ app "test" provides [main] to "./platform"
 
 main : Decoder Bool _
 main = Decode.custom \bytes, fmt ->
-    Decode.decodeWith bytes Decode.decoder fmt
-    #                       ^^^^^^^^^^^^^^ Decoding#Decode.decoder(4): Decoder Bool fmt where fmt implements DecoderFormatting
+    Decode.decode_with bytes Decode.decoder fmt
+    #                        ^^^^^^^^^^^^^^ Decoding#Decode.decoder(4): Decoder Bool fmt where fmt implements DecoderFormatting

@@ -1,10 +1,10 @@
 # +opt infer:print_only_under_alias
 app "test" provides [main] to "./platform"
 
-Q := ({} -> Str) implements [Eq {isEq: isEqQ}]
+Q := ({} -> Str) implements [Eq {is_eq: is_eq_q}]
 
-isEqQ = \@Q f1, @Q f2 -> (f1 {} == f2 {})
-#^^^^^{-1} ({} -[[]]-> Str), ({} -[[]]-> Str) -[[isEqQ(2)]]-> [False, True]
+is_eq_q = \@Q f1, @Q f2 -> (f1 {} == f2 {})
+#^^^^^^^{-1} ({} -[[]]-> Str), ({} -[[]]-> Str) -[[is_eq_q(2)]]-> [False, True]
 
-main = isEqQ (@Q \{} -> "a") (@Q \{} -> "a")
-#      ^^^^^ ({} -[[6, 7]]-> Str), ({} -[[6, 7]]-> Str) -[[isEqQ(2)]]-> [False, True]
+main = is_eq_q (@Q \{} -> "a") (@Q \{} -> "a")
+#      ^^^^^^^ ({} -[[6, 7]]-> Str), ({} -[[6, 7]]-> Str) -[[is_eq_q(2)]]-> [False, True]

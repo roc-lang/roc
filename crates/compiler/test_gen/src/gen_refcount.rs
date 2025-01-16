@@ -39,7 +39,7 @@ fn str_dealloc() {
             r#"
                 s = Str.concat "A long enough string " "to be heap-allocated"
 
-                Str.isEmpty s
+                Str.is_empty s
             "#
         ),
         bool,
@@ -55,7 +55,7 @@ fn str_to_utf8() {
             r#"
                 s = Str.concat "A long enough string " "to be heap-allocated"
 
-                Str.toUtf8 s
+                Str.to_utf8 s
             "#
         ),
         RocStr,
@@ -73,8 +73,8 @@ fn str_from_utf8() {
             r#"
                 s = Str.concat "A long enough string " "to be heap-allocated"
 
-                Str.toUtf8 s
-                |> Str.fromUtf8
+                Str.to_utf8 s
+                |> Str.from_utf8
             "#
         ),
         RocStr,
@@ -92,7 +92,7 @@ fn str_to_utf8_dealloc() {
             r#"
                 s = Str.concat "A long enough string " "to be heap-allocated"
 
-                Str.toUtf8 s
+                Str.to_utf8 s
                 |> List.len
             "#
         ),
@@ -185,7 +185,7 @@ fn list_str_drop_first() {
             r#"
                 s = Str.concat "A long enough string " "to be heap-allocated"
                 list = [s, s, s]
-                List.dropFirst list 1
+                List.drop_first list 1
             "#
         ),
         RocList<RocList<RocStr>>,
@@ -206,7 +206,7 @@ fn list_str_take_first() {
             r#"
                 s = Str.concat "A long enough string " "to be heap-allocated"
                 list = [s, s, s]
-                List.takeFirst list 1
+                List.take_first list 1
             "#
         ),
         RocList<RocList<RocStr>>,
@@ -226,7 +226,7 @@ fn list_str_split_on() {
             r#"
                 s = Str.concat "A long enough string " "to be heap-allocated"
                 list = [s, s, s]
-                List.splitAt list 1
+                List.split_at list 1
             "#
         ),
         (RocList<RocStr>, RocList<RocStr>),
@@ -245,7 +245,7 @@ fn list_str_split_on_zero() {
             r#"
                 s = Str.concat "A long enough string " "to be heap-allocated"
                 list = [s, s, s]
-                List.splitAt list 0
+                List.split_at list 0
             "#
         ),
         (RocList<RocStr>, RocList<RocStr>),
@@ -265,7 +265,7 @@ fn list_get() {
                 s = Str.concat "A long enough string " "to be heap-allocated"
                 i1 = [s, s, s]
                 List.get i1 1
-                |> Result.withDefault ""
+                |> Result.with_default ""
             "#
         ),
         RocStr,
@@ -284,7 +284,7 @@ fn list_map() {
             r#"
                 s = Str.concat "A long enough string " "to be heap-allocated"
                 i1 = [s, s, s]
-                List.map i1 Str.toUtf8
+                List.map i1 Str.to_utf8
             "#
         ),
         RocList<RocStr>,
@@ -304,7 +304,7 @@ fn list_map_dealloc() {
             r#"
                 s = Str.concat "A long enough string " "to be heap-allocated"
                 i1 = [s, s, s]
-                List.map i1 Str.toUtf8
+                List.map i1 Str.to_utf8
                 |> List.len
             "#
         ),
@@ -689,17 +689,17 @@ fn union_linked_list_long_dec() {
 
                 LinkedList a : [Nil, Cons a (LinkedList a)]
 
-                prependOnes = \n, tail ->
+                prepend_ones = \n, tail ->
                     if n == 0 then
                         tail
                     else
-                        prependOnes (n-1) (Cons 1 tail)
+                        prepend_ones (n-1) (Cons 1 tail)
 
                 main =
                     n = 1_000
 
                     linked : LinkedList I64
-                    linked = prependOnes n Nil
+                    linked = prepend_ones n Nil
 
                     when linked is
                         Cons x _ -> x
@@ -801,8 +801,8 @@ fn reset_reuse_alignment_8() {
                     Val v -> v
                     ZAdd l r -> eval l + eval r
 
-            constFolding : Expr -> Expr
-            constFolding = \e ->
+            const_folding : Expr -> Expr
+            const_folding = \e ->
                 when e is
                     ZAdd e1 e2 ->
                         when Pair e1 e2 is
@@ -817,7 +817,7 @@ fn reset_reuse_alignment_8() {
             expr = ZAdd (Val 4) (Val 5)
 
             main : I64
-            main = eval (constFolding expr)
+            main = eval (const_folding expr)
             "#
         ),
         i64,
@@ -837,8 +837,8 @@ fn basic_cli_parser() {
             r#"
             in =
                 "d"
-                |> Str.toUtf8
-                |> List.keepOks \c -> Str.fromUtf8 [c]
+                |> Str.to_utf8
+                |> List.keep_oks \c -> Str.from_utf8 [c]
 
             out =
                 when in is

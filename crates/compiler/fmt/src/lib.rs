@@ -7,6 +7,7 @@ pub mod collection;
 pub mod def;
 pub mod expr;
 pub mod header;
+pub mod node;
 pub mod pattern;
 pub mod spaces;
 
@@ -24,16 +25,13 @@ pub struct Buf<'a> {
 
 #[derive(Debug, Copy, Clone)]
 pub struct MigrationFlags {
-    pub(crate) snakify: bool,
+    pub snakify: bool,
+    pub parens_and_commas: bool,
 }
 
 impl MigrationFlags {
-    pub fn new(snakify: bool) -> Self {
-        MigrationFlags { snakify }
-    }
-
     pub fn at_least_one_active(&self) -> bool {
-        self.snakify
+        self.snakify || self.parens_and_commas
     }
 }
 
@@ -69,6 +67,7 @@ impl<'a> Buf<'a> {
         self.beginning_of_line = false;
     }
 
+    #[track_caller]
     pub fn cur_line_indent(&self) -> u16 {
         debug_assert!(!self.beginning_of_line, "cur_line_indent before indent");
         self.line_indent
@@ -93,11 +92,7 @@ impl<'a> Buf<'a> {
 
     #[track_caller]
     pub fn push_str_allow_spaces(&mut self, s: &str) {
-        debug_assert!(
-            !self.beginning_of_line,
-            "push_str: `{s}` with text:\n{}",
-            self.text
-        );
+        debug_assert!(!self.beginning_of_line, "push_str: `{s}`");
 
         self.flush_spaces();
 
@@ -106,11 +101,7 @@ impl<'a> Buf<'a> {
 
     #[track_caller]
     pub fn push_str(&mut self, s: &str) {
-        debug_assert!(
-            !self.beginning_of_line,
-            "push_str: `{s}` with text:\n{}",
-            self.text
-        );
+        debug_assert!(!self.beginning_of_line, "push_str: `{s}`");
         debug_assert!(!s.contains('\n'));
         debug_assert!(!s.ends_with(' '));
 

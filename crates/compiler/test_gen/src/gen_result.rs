@@ -21,7 +21,7 @@ fn with_default_ok() {
             result : Result I64 {}
             result = Ok 12345
 
-            Result.withDefault result 0
+            Result.with_default result 0
             "
         ),
         12345,
@@ -38,7 +38,7 @@ fn with_default_err() {
             result : Result I64 {}
             result = Err {}
 
-            Result.withDefault result 0
+            Result.with_default result 0
             "
         ),
         0,
@@ -56,8 +56,8 @@ fn result_map() {
             result = Ok 2
 
             result
-                |> Result.map (\x -> x + 1)
-                |> Result.withDefault 0
+                |> Result.map_ok (\x -> x + 1)
+                |> Result.with_default 0
             "
         ),
         3,
@@ -71,8 +71,8 @@ fn result_map() {
             result = Err {}
 
             result
-                |> Result.map (\x -> x + 1)
-                |> Result.withDefault 0
+                |> Result.map_ok (\x -> x + 1)
+                |> Result.with_default 0
             "
         ),
         0,
@@ -89,7 +89,7 @@ fn result_map_err() {
             result : Result {} I64
             result = Err 2
 
-            when Result.mapErr result (\x -> x + 1) is
+            when Result.map_err result (\x -> x + 1) is
                 Err n -> n
                 Ok _ -> 0
             "
@@ -104,7 +104,7 @@ fn result_map_err() {
             result : Result {} I64
             result = Ok {}
 
-            when Result.mapErr result (\x -> x + 1) is
+            when Result.map_err result (\x -> x + 1) is
                 Err n -> n
                 Ok _ -> 0
             "
@@ -120,8 +120,8 @@ fn err_type_var() {
     assert_evals_to!(
         indoc!(
             r"
-            Result.map (Ok 3) (\x -> x + 1)
-                |> Result.withDefault -1
+            Result.map_ok (Ok 3) (\x -> x + 1)
+                |> Result.with_default -1
             "
         ),
         4,
@@ -138,8 +138,8 @@ fn err_type_var_annotation() {
             ok : Result I64 *
             ok = Ok 3
 
-            Result.map ok (\x -> x + 1)
-                |> Result.withDefault -1
+            Result.map_ok ok (\x -> x + 1)
+                |> Result.with_default -1
             "
         ),
         4,
@@ -156,8 +156,8 @@ fn err_empty_tag_union() {
             ok : Result I64 []
             ok = Ok 3
 
-            Result.map ok (\x -> x + 1)
-                |> Result.withDefault -1
+            Result.map_ok ok (\x -> x + 1)
+                |> Result.with_default -1
             "
         ),
         4,
@@ -174,7 +174,7 @@ fn is_ok() {
             result : Result I64 {}
             result = Ok 2
 
-            Result.isOk result
+            Result.is_ok result
             "
         ),
         true,
@@ -187,7 +187,7 @@ fn is_ok() {
             result : Result I64 {}
             result = Err {}
 
-            Result.isOk result
+            Result.is_ok result
             "
         ),
         false,
@@ -204,7 +204,7 @@ fn is_err() {
             result : Result I64 {}
             result = Ok 2
 
-            Result.isErr result
+            Result.is_err result
             "
         ),
         false,
@@ -217,7 +217,7 @@ fn is_err() {
             result : Result I64 {}
             result = Err {}
 
-            Result.isErr result
+            Result.is_err result
             "
         ),
         true,
@@ -284,7 +284,7 @@ fn roc_result_err() {
 fn issue_2583_specialize_errors_behind_unified_branches() {
     assert_evals_to!(
         r#"
-        if Bool.true then List.first [15] else Str.toI64 ""
+        if Bool.true then List.first [15] else Str.to_i64 ""
         "#,
         RocResult::ok(15i64),
         RocResult<i64, bool>
@@ -331,7 +331,7 @@ fn roc_result_after_err() {
             r#"
             result : Result Str I64
             result =
-              Result.onErr (Ok "already a string") \num ->
+              Result.on_err (Ok "already a string") \num ->
                 if num < 0 then Ok "negative!" else Err -num
 
             result
@@ -345,7 +345,7 @@ fn roc_result_after_err() {
         r#"
             result : Result Str I64
             result =
-              Result.onErr (Err 100) \num ->
+              Result.on_err (Err 100) \num ->
                 if num < 0 then Ok "negative!" else Err -num
 
             result
@@ -364,7 +364,7 @@ fn roc_result_map_both() {
             result : Result I64 I64
             result = Ok 42
 
-            result |> Result.mapBoth Num.toStr Num.toStr
+            result |> Result.map_both Num.to_str Num.to_str
             "#
         ),
         RocResult::ok(RocStr::from("42")),
@@ -377,7 +377,7 @@ fn roc_result_map_both() {
             result : Result I64 I64
             result = Err 24
 
-            result |> Result.mapBoth Num.toStr Num.toStr
+            result |> Result.map_both Num.to_str Num.to_str
             "#
         ),
         RocResult::err(RocStr::from("24")),

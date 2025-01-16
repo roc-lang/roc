@@ -409,10 +409,10 @@ function Graph({
         const edgeChanges: EdgeChange[] = [];
 
         while (toVariable !== undefined) {
-          const toVariableName = toVariable.toString();
+          const toVariableName = toVariable.to_string();
           if (canAddVariable(toVariableName, nodes)) {
             const newVariableNode = newVariable(
-              toVariable.toString(),
+              toVariable.to_string(),
               {
                 subs,
                 rawVariable: toVariable,
@@ -440,7 +440,7 @@ function Graph({
 
               const newEdge = addEdge({
                 id: `${fromVariable}->${toVariable}`,
-                source: fromVariable.toString(),
+                source: fromVariable.to_string(),
                 target: toVariableName,
                 markerEnd,
               });

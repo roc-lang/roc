@@ -92,6 +92,7 @@ pub const FLAG_PP_HOST: &str = "host";
 pub const FLAG_PP_PLATFORM: &str = "platform";
 pub const FLAG_PP_DYLIB: &str = "lib";
 pub const FLAG_MIGRATE: &str = "migrate";
+pub const FLAG_DOCS_ROOT: &str = "root-dir";
 
 pub const VERSION: &str = env!("ROC_VERSION");
 const DEFAULT_GENERATED_DOCS_DIR: &str = "generated-docs";
@@ -187,6 +188,12 @@ pub fn build_app() -> Command {
         .num_args(0..)
         .allow_hyphen_values(true);
 
+    let flag_docs_root_dir = Arg::new(FLAG_DOCS_ROOT)
+        .long(FLAG_DOCS_ROOT)
+        .help("Set a root directory path to be used as a prefix for URL links in the generated documentation files.")
+        .value_parser(value_parser!(Option<String>))
+        .required(false);
+
     let build_target_values_parser =
         PossibleValuesParser::new(Target::iter().map(Into::<&'static str>::into));
 
@@ -243,6 +250,13 @@ pub fn build_app() -> Command {
                     .help("Do not link\n(Instead, just output the `.o` file.)")
                     .action(ArgAction::SetTrue)
                     .required(false),
+            )
+            .arg(
+                Arg::new(FLAG_VERBOSE)
+                    .long(FLAG_VERBOSE)
+                    .help("Print detailed information while building")
+                    .action(ArgAction::SetTrue)
+                    .required(false)
             )
             .arg(
                 Arg::new(ROC_FILE)
@@ -411,6 +425,7 @@ pub fn build_app() -> Command {
                     .required(false)
                     .default_value(DEFAULT_ROC_FILENAME),
                 )
+                .arg(flag_docs_root_dir)
         )
         .subcommand(Command::new(CMD_GLUE)
             .about("Generate glue code between a platform's Roc API and its host language")
@@ -434,6 +449,7 @@ pub fn build_app() -> Command {
                     .required(false)
                     .default_value(DEFAULT_ROC_FILENAME)
             )
+            .arg(flag_linker.clone())
         )
         .subcommand(Command::new(CMD_PREPROCESS_HOST)
             .about("Runs the surgical linker preprocessor to generate `.rh` and `.rm` files.")
@@ -779,6 +795,30 @@ fn nearest_match<'a>(reference: &str, options: &'a [String]) -> Option<(&'a Stri
         .min_by(|(_, a), (_, b)| a.cmp(b))
 }
 
+pub fn default_linking_strategy(
+    matches: &ArgMatches,
+    link_type: LinkType,
+    target: Target,
+) -> LinkingStrategy {
+    let linker_support_level = roc_linker::support_level(link_type, target);
+    match matches.get_one::<String>(FLAG_LINKER).map(AsRef::as_ref) {
+        Some("legacy") => LinkingStrategy::Legacy,
+        Some("surgical") => match linker_support_level {
+            roc_linker::SupportLevel::Full => LinkingStrategy::Surgical,
+            roc_linker::SupportLevel::Wip => {
+                println!("Warning! Using an unfinished surgical linker for target {target}");
+                LinkingStrategy::Surgical
+            }
+            roc_linker::SupportLevel::None => LinkingStrategy::Legacy,
+        },
+        _ => match linker_support_level {
+            roc_linker::SupportLevel::Full => LinkingStrategy::Surgical,
+            _ => LinkingStrategy::Legacy,
+        },
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn build(
     matches: &ArgMatches,
     subcommands: &[String],
@@ -787,6 +827,7 @@ pub fn build(
     out_path: Option<&Path>,
     roc_cache_dir: RocCacheDir<'_>,
     link_type: LinkType,
+    verbose: bool,
 ) -> io::Result<i32> {
     use BuildConfig::*;
 
@@ -929,12 +970,8 @@ pub fn build(
 
     let linking_strategy = if wasm_dev_backend {
         LinkingStrategy::Additive
-    } else if !roc_linker::supported(link_type, target)
-        || matches.get_one::<String>(FLAG_LINKER).map(|s| s.as_str()) == Some("legacy")
-    {
-        LinkingStrategy::Legacy
     } else {
-        LinkingStrategy::Surgical
+        default_linking_strategy(matches, link_type, target)
     };
 
     // All hosts should be prebuilt, this flag keeps the rebuilding behvaiour
@@ -982,6 +1019,7 @@ pub fn build(
         roc_cache_dir,
         load_config,
         out_path,
+        verbose,
     );
 
     match res_binary_path {

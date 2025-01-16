@@ -456,7 +456,7 @@ fn gen_from_mono_module_dev<'a>(
 
             #[cfg(feature = "target-wasm32")]
             {
-                internal_error!("Compiler was not built with feature 'target-wasm32'.")
+                internal_error!("Compiler was built with feature 'target-wasm32'.")
             }
         }
         (_, Architecture::Aarch32) => {
@@ -725,6 +725,7 @@ pub fn build_file<'a>(
     roc_cache_dir: RocCacheDir<'_>,
     load_config: LoadConfig,
     out_path: Option<&Path>,
+    verbose: bool,
 ) -> Result<BuiltFile<'a>, BuildFileError<'a>> {
     let compilation_start = Instant::now();
 
@@ -751,6 +752,7 @@ pub fn build_file<'a>(
         loaded,
         compilation_start,
         out_path,
+        verbose,
     )
 }
 
@@ -827,6 +829,7 @@ fn build_loaded_file<'a>(
     loaded: roc_load::MonomorphizedModule<'a>,
     compilation_start: Instant,
     out_path: Option<&Path>,
+    verbose: bool,
 ) -> Result<BuiltFile<'a>, BuildFileError<'a>> {
     // get the platform path from the app header
     let platform_main_roc_path = match &loaded.entry_point {
@@ -956,6 +959,7 @@ fn build_loaded_file<'a>(
                 &roc_app_bytes,
                 &output_exe_path,
                 metadata_file,
+                verbose,
             );
         }
         (LinkingStrategy::Additive, _) | (LinkingStrategy::Legacy, LinkType::None) => {
@@ -1475,6 +1479,7 @@ pub fn build_str_test<'a>(
         loaded,
         compilation_start,
         None,
+        false,
     )
 }
 

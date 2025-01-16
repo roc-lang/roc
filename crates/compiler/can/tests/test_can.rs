@@ -284,7 +284,7 @@ mod test_can {
         let src = indoc!(
             r"
                 f : Num.Int * -> Num.Int *
-                f = \ a -> a
+                f = | a| a
 
                 f
             "
@@ -300,7 +300,7 @@ mod test_can {
         let src = indoc!(
             r"
                 f : Num.Int * -> Num.Int * # comment
-                f = \ a -> a
+                f = | a| a
 
                 f
             "
@@ -316,7 +316,7 @@ mod test_can {
         let src = indoc!(
             r"
                 f : Num.Int * -> Num.Int *
-                g = \ a -> a
+                g = | a| a
 
                 g
             "
@@ -344,7 +344,7 @@ mod test_can {
         let src = indoc!(
             r"
                 f : Num.Int * -> Num.Int * # comment
-                g = \ a -> a
+                g = | a| a
 
                 g
             "
@@ -373,7 +373,7 @@ mod test_can {
             r"
                 f : Num.Int * -> Num.Int *
 
-                f = \ a -> a
+                f = | a| a
 
                 f 42
             "
@@ -390,7 +390,7 @@ mod test_can {
             r"
                 f : Num.Int * -> Num.Int *
                 # comment
-                f = \ a -> a
+                f = | a| a
 
                 f 42
             "
@@ -677,8 +677,8 @@ mod test_can {
     fn record_builder_desugar() {
         let src = indoc!(
             r#"
-                map2 = \a, b, combine -> combine a b
-                double = \n -> n * 2
+                map2 = |a, b, combine| combine a b
+                double = |n| n * 2
 
                 c = 3
 
@@ -806,7 +806,7 @@ mod test_can {
     fn question_suffix_simple() {
         let src = indoc!(
             r#"
-                (Str.toU64 "123")?
+                (Str.to_u64 "123")?
             "#
         );
         let arena = Bump::new();
@@ -816,10 +816,10 @@ mod test_can {
 
         // Assert that we desugar to:
         //
-        // Try(Str.toU64 "123")
+        // Try(Str.to_u64 "123")
 
         let cond_expr = assert_try_expr(&out.loc_expr.value);
-        let cond_args = assert_func_call(cond_expr, "toU64", CalledVia::Space, &out.interns);
+        let cond_args = assert_func_call(cond_expr, "to_u64", CalledVia::Space, &out.interns);
 
         assert_eq!(cond_args.len(), 1);
         assert_str_value(&cond_args[0].1.value, "123");
@@ -829,7 +829,7 @@ mod test_can {
     fn question_suffix_after_function() {
         let src = indoc!(
             r#"
-                Str.toU64? "123"
+                Str.to_u64? "123"
             "#
         );
         let arena = Bump::new();
@@ -839,10 +839,10 @@ mod test_can {
 
         // Assert that we desugar to:
         //
-        // Try(Str.toU64 "123")
+        // Try(Str.to_u64 "123")
 
         let cond_expr = assert_try_expr(&out.loc_expr.value);
-        let cond_args = assert_func_call(cond_expr, "toU64", CalledVia::Try, &out.interns);
+        let cond_args = assert_func_call(cond_expr, "to_u64", CalledVia::Try, &out.interns);
 
         assert_eq!(cond_args.len(), 1);
         assert_str_value(&cond_args[0].1.value, "123");
@@ -852,7 +852,7 @@ mod test_can {
     fn question_suffix_pipe() {
         let src = indoc!(
             r#"
-                "123" |> Str.toU64?
+                "123" |> Str.to_u64?
             "#
         );
         let arena = Bump::new();
@@ -862,10 +862,10 @@ mod test_can {
 
         // Assert that we desugar to:
         //
-        // Try(Str.toU64 "123")
+        // Try(Str.to_u64 "123")
 
         let cond_expr = assert_try_expr(&out.loc_expr.value);
-        let cond_args = assert_func_call(cond_expr, "toU64", CalledVia::Try, &out.interns);
+        let cond_args = assert_func_call(cond_expr, "to_u64", CalledVia::Try, &out.interns);
 
         assert_eq!(cond_args.len(), 1);
         assert_str_value(&cond_args[0].1.value, "123");
@@ -875,7 +875,7 @@ mod test_can {
     fn question_suffix_pipe_nested() {
         let src = indoc!(
             r#"
-                "123" |> Str.toU64? (Ok 123)?
+                "123" |> Str.to_u64? (Ok 123)?
             "#
         );
         let arena = Bump::new();
@@ -885,10 +885,10 @@ mod test_can {
 
         // Assert that we desugar to:
         //
-        // Try(Str.toU64 "123" Try(Ok 123))
+        // Try(Str.to_u64 "123" Try(Ok 123))
 
         let cond_expr = assert_try_expr(&out.loc_expr.value);
-        let cond_args = assert_func_call(cond_expr, "toU64", CalledVia::Try, &out.interns);
+        let cond_args = assert_func_call(cond_expr, "to_u64", CalledVia::Try, &out.interns);
 
         assert_eq!(cond_args.len(), 2);
 
@@ -906,7 +906,7 @@ mod test_can {
     fn try_desugar_plain_prefix() {
         let src = indoc!(
             r#"
-                try Str.toU64 "123"
+                try Str.to_u64 "123"
             "#
         );
         let arena = Bump::new();
@@ -916,10 +916,10 @@ mod test_can {
 
         // Assert that we desugar to:
         //
-        // Try(Str.toU64 "123")
+        // Try(Str.to_u64 "123")
 
         let cond_expr = assert_try_expr(&out.loc_expr.value);
-        let cond_args = assert_func_call(cond_expr, "toU64", CalledVia::Try, &out.interns);
+        let cond_args = assert_func_call(cond_expr, "to_u64", CalledVia::Try, &out.interns);
 
         assert_eq!(cond_args.len(), 1);
         assert_str_value(&cond_args[0].1.value, "123");
@@ -929,7 +929,7 @@ mod test_can {
     fn try_desugar_pipe_prefix() {
         let src = indoc!(
             r#"
-                "123" |> try Str.toU64
+                "123" |> try Str.to_u64
             "#
         );
         let arena = Bump::new();
@@ -939,10 +939,10 @@ mod test_can {
 
         // Assert that we desugar to:
         //
-        // Try(Str.toU64 "123")
+        // Try(Str.to_u64 "123")
 
         let cond_expr = assert_try_expr(&out.loc_expr.value);
-        let cond_args = assert_func_call(cond_expr, "toU64", CalledVia::Try, &out.interns);
+        let cond_args = assert_func_call(cond_expr, "to_u64", CalledVia::Try, &out.interns);
 
         assert_eq!(cond_args.len(), 1);
         assert_str_value(&cond_args[0].1.value, "123");
@@ -952,7 +952,7 @@ mod test_can {
     fn try_desugar_pipe_suffix() {
         let src = indoc!(
             r#"
-                Str.toU64 "123" |> try
+                Str.to_u64 "123" |> try
             "#
         );
         let arena = Bump::new();
@@ -962,13 +962,54 @@ mod test_can {
 
         // Assert that we desugar to:
         //
-        // Try(Str.toU64 "123")
+        // Try(Str.to_u64 "123")
 
         let cond_expr = assert_try_expr(&out.loc_expr.value);
-        let cond_args = assert_func_call(cond_expr, "toU64", CalledVia::Space, &out.interns);
+        let cond_args = assert_func_call(cond_expr, "to_u64", CalledVia::Space, &out.interns);
 
         assert_eq!(cond_args.len(), 1);
         assert_str_value(&cond_args[0].1.value, "123");
+    }
+
+    #[test]
+    fn try_desugar_double_question_suffix() {
+        let src = indoc!(
+            r#"
+                Str.to_u64 "123" ?? Num.max_u64
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems, Vec::new());
+
+        // Assert that we desugar to:
+        //
+        // when Str.to_u64 "123"
+        //   Ok success_BRANCH1_0_9 -> success_BRANCH1_0_9
+        //   Err _ -> Num.max_u64
+
+        let (cond_expr, branches) = assert_when(&out.loc_expr.value);
+        let cond_args = assert_func_call(cond_expr, "to_u64", CalledVia::Space, &out.interns);
+
+        assert_eq!(cond_args.len(), 1);
+        assert_str_value(&cond_args[0].1.value, "123");
+        assert_eq!(branches.len(), 2);
+        assert_eq!(branches[0].patterns.len(), 1);
+        assert_eq!(branches[1].patterns.len(), 1);
+        assert_pattern_tag_apply_with_ident(
+            &branches[0].patterns[0].pattern.value,
+            "Ok",
+            "success_BRANCH1_0_16",
+            &out.interns,
+        );
+        assert_var_usage(
+            &branches[0].value.value,
+            "success_BRANCH1_0_16",
+            &out.interns,
+        );
+        assert_pattern_tag_apply_with_underscore(&branches[1].patterns[0].pattern.value, "Err");
+        assert_var_usage(&branches[1].value.value, "max_u64", &out.interns);
     }
 
     #[test]
@@ -1090,6 +1131,51 @@ mod test_can {
         }
     }
 
+    fn assert_pattern_tag_apply_with_ident(
+        pattern: &Pattern,
+        name: &str,
+        ident: &str,
+        interns: &roc_module::symbol::Interns,
+    ) {
+        match pattern {
+            Pattern::AppliedTag {
+                tag_name,
+                arguments,
+                ..
+            } if arguments.len() == 1 => {
+                assert_eq!(tag_name.as_ident_str().as_str(), name);
+                match arguments[0].1.value {
+                    Pattern::Identifier(sym) => assert_eq!(sym.as_str(interns), ident),
+                    _ => panic!(
+                        "The tag was expected to be applied with {:?} but we instead found {:?}",
+                        ident, arguments[0].1.value
+                    ),
+                }
+            }
+            _ => panic!("Pattern was not an applied tag: {:?}", pattern),
+        }
+    }
+
+    fn assert_pattern_tag_apply_with_underscore(pattern: &Pattern, name: &str) {
+        match pattern {
+            Pattern::AppliedTag {
+                tag_name,
+                arguments,
+                ..
+            } if arguments.len() == 1 => {
+                assert_eq!(tag_name.as_ident_str().as_str(), name);
+                match arguments[0].1.value {
+                    Pattern::Underscore => {},
+                    _ => panic!(
+                        "The tag was expected to be applied with an underscore but we instead found {:?}",
+                        arguments[0].1.value
+                    ),
+                }
+            }
+            _ => panic!("Pattern was not an applied tag: {:?}", pattern),
+        }
+    }
+
     fn assert_when(expr: &Expr) -> (&Expr, &Vec<WhenBranch>) {
         match expr {
             Expr::When {
@@ -1155,20 +1241,20 @@ mod test_can {
     fn recognize_tail_calls() {
         let src = indoc!(
             r"
-                g = \x ->
+                g = |x|
                     when x is
                         0 -> 0
                         _ -> g (x - 1)
 
                 # use parens to force the ordering!
                 (
-                    h = \x ->
+                    h = |x|
                         when x is
                             0 -> 0
                             _ -> g (x - 1)
 
                     (
-                        p = \x ->
+                        p = |x|
                             when x is
                                 0 -> 0
                                 1 -> g (x - 1)
@@ -1256,7 +1342,7 @@ mod test_can {
     fn when_tail_call() {
         let src = indoc!(
             r"
-                g = \x ->
+                g = |x|
                     when x is
                         0 -> 0
                         _ -> g (x + 1)
@@ -1278,7 +1364,7 @@ mod test_can {
     fn immediate_tail_call() {
         let src = indoc!(
             r"
-                f = \x -> f x
+                f = |x| f x
 
                 f 0
             "
@@ -1299,7 +1385,7 @@ mod test_can {
     fn when_condition_is_no_tail_call() {
         let src = indoc!(
             r"
-            q = \x ->
+            q = |x|
                     when q x is
                         _ -> 0
 
@@ -1320,12 +1406,12 @@ mod test_can {
     fn good_mutual_recursion() {
         let src = indoc!(
             r"
-                q = \x ->
+                q = |x|
                         when x is
                             0 -> 0
                             _ -> p (x - 1)
 
-                p = \x ->
+                p = |x|
                         when x is
                             0 -> 0
                             _ -> q (x - 1)
@@ -1351,7 +1437,7 @@ mod test_can {
     fn valid_self_recursion() {
         let src = indoc!(
             r"
-                boom = \_ -> boom {}
+                boom = |_| boom {}
 
                 boom
             "
@@ -1462,7 +1548,7 @@ mod test_can {
             r"
                 fallbackZ = 3
 
-                fn = \{ x, y, z ? fallbackZ } ->
+                fn = |{ x, y, z ? fallbackZ }|
                     { x, y, z }
 
                 fn { x: 0, y: 1 }
@@ -2071,10 +2157,10 @@ mod test_can {
     //         // This should NOT be string interpolation, because of the \\
     //         indoc!(
     //             r#"
-    //                      "abcd\$(efg)hij"
+    //                      "abcd\${efg}hij"
     //                      "#
     //         ),
-    //         Str(r"abcd$(efg)hij".into()),
+    //         Str(r"abcd${efg}hij".into()),
     //     );
     // }
 

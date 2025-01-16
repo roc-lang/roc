@@ -5,6 +5,7 @@ extern crate roc_load;
 use bumpalo::Bump;
 use roc_can::scope::Scope;
 use roc_collections::VecSet;
+use roc_highlight::highlight_roc_code_inline;
 use roc_load::docs::{DocEntry, TypeAnnotation};
 use roc_load::docs::{ModuleDocumentation, RecordField};
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
@@ -21,7 +22,7 @@ use std::path::{Path, PathBuf};
 
 const LINK_SVG: &str = include_str!("./static/link.svg");
 
-pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
+pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path, maybe_root_dir: Option<String>) {
     let mut loaded_module = load_module_for_docs(root_file);
     let exposed_module_docs = get_exposed_module_docs(&mut loaded_module);
 
@@ -107,7 +108,8 @@ pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
             exposed_module_docs
                 .iter()
                 .map(|(_, module)| {
-                    let href = module.name.as_str();
+                    let module_href = module.name.replace('.', "/");
+                    let href = module_href.as_str();
 
                     format!(r#"<link rel="prefetch" href="{href}"/>"#)
                 })
@@ -115,7 +117,7 @@ pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
                 .join("\n    ")
                 .as_str(),
         )
-        .replace("<!-- base -->", &base_url())
+        .replace("<!-- base -->", &base_url(maybe_root_dir.as_deref()))
         .replace(
             "<!-- Module links -->",
             render_sidebar(exposed_module_docs.iter().map(|(_, docs)| docs)).as_str(),
@@ -154,8 +156,9 @@ pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
             )
             .replace(
                 "<!-- Package Name -->",
-                render_name_link(package_name.as_str()).as_str(),
+                render_name_link(package_name.as_str(), maybe_root_dir.as_deref()).as_str(),
             )
+            .replace("<!-- Package Name String -->", package_name.as_str())
             .replace(
                 "<!-- Module Docs -->",
                 render_package_index(&exposed_module_docs).as_str(),
@@ -181,8 +184,9 @@ pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
             )
             .replace(
                 "<!-- Package Name -->",
-                render_name_link(package_name.as_str()).as_str(),
+                render_name_link(package_name.as_str(), maybe_root_dir.as_deref()).as_str(),
             )
+            .replace("<!-- Package Name String -->", package_name.as_str())
             .replace(
                 "<!-- Module Docs -->",
                 render_module_documentation(
@@ -190,6 +194,7 @@ pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
                     module_docs,
                     &loaded_module,
                     &all_exposed_symbols,
+                    maybe_root_dir.as_deref(),
                 )
                 .as_str(),
             );
@@ -234,7 +239,7 @@ fn render_package_index(docs_by_module: &[(ModuleId, ModuleDocumentation)]) -> S
         push_html(
             &mut link_buf,
             "a",
-            [("href", module.name.as_str())],
+            [("href", module.name.replace('.', "/").as_str())],
             module.name.as_str(),
         );
 
@@ -290,6 +295,7 @@ fn render_module_documentation(
     module: &ModuleDocumentation,
     root_module: &LoadedModule,
     all_exposed_symbols: &VecSet<Symbol>,
+    maybe_root_dir: Option<&str>,
 ) -> String {
     let mut buf = String::new();
     let module_name = module.name.as_str();
@@ -312,13 +318,15 @@ fn render_module_documentation(
                     let def_name = doc_def.name.as_str();
                     let href = format!("{module_name}#{def_name}");
                     let mut content = String::new();
+                    let mut anno_buf = String::new();
 
                     push_html(&mut content, "a", [("href", href.as_str())], LINK_SVG);
-                    push_html(&mut content, "strong", [], def_name);
+                    // push_html(&mut content, "strong", [], def_name);
+                    anno_buf.push_str(def_name);
 
                     for type_var in &doc_def.type_vars {
-                        content.push(' ');
-                        content.push_str(type_var.as_str());
+                        anno_buf.push(' ');
+                        anno_buf.push_str(type_var.as_str());
                     }
 
                     let type_ann = &doc_def.type_annotation;
@@ -326,13 +334,14 @@ fn render_module_documentation(
                     if !matches!(type_ann, TypeAnnotation::NoTypeAnn) {
                         // Ability declarations don't have ":" after the name, just `implements`
                         if !matches!(type_ann, TypeAnnotation::Ability { .. }) {
-                            content.push_str(" :");
+                            anno_buf.push_str(" :");
                         }
 
-                        content.push(' ');
+                        anno_buf.push(' ');
 
-                        type_annotation_to_html(0, &mut content, type_ann, false);
+                        type_annotation_to_html(0, &mut anno_buf, type_ann, false);
                     }
+                    content.push_str(highlight_roc_code_inline(anno_buf.as_str()).as_str());
 
                     push_html(
                         &mut buf,
@@ -349,6 +358,7 @@ fn render_module_documentation(
                             &module.scope,
                             docs,
                             root_module,
+                            maybe_root_dir,
                         );
                     }
 
@@ -363,6 +373,7 @@ fn render_module_documentation(
                     &module.scope,
                     docs,
                     root_module,
+                    maybe_root_dir,
                 );
             }
             DocEntry::DetachedDoc(docs) => {
@@ -373,6 +384,7 @@ fn render_module_documentation(
                     &module.scope,
                     docs,
                     root_module,
+                    maybe_root_dir,
                 );
             }
         };
@@ -406,19 +418,16 @@ where
     buf.push('>');
 }
 
-fn base_url() -> String {
-    // e.g. "builtins/" in "https://roc-lang.org/builtins/Str"
-    //
-    // TODO make this a CLI flag to the `docs` subcommand instead of an env var
-    match std::env::var("ROC_DOCS_URL_ROOT") {
-        Ok(root_builtins_path) => {
+fn base_url(maybe_root_dir: Option<&str>) -> String {
+    match maybe_root_dir {
+        Some(root_builtins_path) => {
             let mut url_str = String::with_capacity(root_builtins_path.len() + 64);
 
             if !root_builtins_path.starts_with('/') {
                 url_str.push('/');
             }
 
-            url_str.push_str(&root_builtins_path);
+            url_str.push_str(root_builtins_path);
 
             if !root_builtins_path.ends_with('/') {
                 url_str.push('/');
@@ -437,14 +446,19 @@ fn base_url() -> String {
 }
 
 // TODO render version as well
-fn render_name_link(name: &str) -> String {
+fn render_name_link(name: &str, maybe_root_dir: Option<&str>) -> String {
     let mut buf = String::new();
 
     push_html(&mut buf, "h1", [("class", "pkg-full-name")], {
         let mut link_buf = String::new();
 
         // link to root (= docs overview page)
-        push_html(&mut link_buf, "a", [("href", base_url().as_str())], name);
+        push_html(
+            &mut link_buf,
+            "a",
+            [("href", base_url(maybe_root_dir).as_str())],
+            name,
+        );
 
         link_buf
     });
@@ -456,14 +470,29 @@ fn render_sidebar<'a, I: Iterator<Item = &'a ModuleDocumentation>>(modules: I) -
     let mut buf = String::new();
 
     for module in modules {
-        let href = module.name.as_str();
+        let module_href = module.name.replace('.', "/");
+        let href = module_href.as_str();
         let mut sidebar_entry_content = String::new();
+        let mut module_link_content = String::new();
+
+        push_html(&mut module_link_content, "span", [], module.name.as_str());
+
+        push_html(
+            &mut module_link_content,
+            "button",
+            [("class", "entry-toggle")],
+            "▶",
+        );
 
         push_html(
             &mut sidebar_entry_content,
             "a",
-            [("class", "sidebar-module-link"), ("href", href)],
-            module.name.as_str(),
+            [
+                ("class", "sidebar-module-link"),
+                ("href", href),
+                ("data-module-name", module.name.as_str()),
+            ],
+            module_link_content.as_str(),
         );
 
         let entries = {
@@ -553,7 +582,7 @@ fn render_search_type_ahead<'a, I: Iterator<Item = &'a ModuleDocumentation>>(mod
 
                     let mut entry_href = String::new();
 
-                    entry_href.push_str(module_name);
+                    entry_href.push_str(&module_name.replace('.', "/"));
                     entry_href.push('#');
                     entry_href.push_str(&doc_def.name);
 
@@ -1119,6 +1148,7 @@ fn doc_url<'a>(
     interns: &'a Interns,
     mut module_name: &'a str,
     ident: &str,
+    maybe_root_dir: Option<&str>,
 ) -> Result<DocUrl, (String, LinkProblem)> {
     if module_name.is_empty() {
         // This is an unqualified lookup, so look for the ident
@@ -1172,7 +1202,7 @@ fn doc_url<'a>(
         }
     }
 
-    let mut url = base_url();
+    let mut url = base_url(maybe_root_dir);
 
     // Example:
     //
@@ -1194,6 +1224,7 @@ fn markdown_to_html(
     scope: &Scope,
     markdown: &str,
     loaded_module: &LoadedModule,
+    maybe_root_dir: Option<&str>,
 ) {
     use pulldown_cmark::{BrokenLink, CodeBlockKind, CowStr, Event, LinkType, Tag::*};
 
@@ -1231,6 +1262,7 @@ fn markdown_to_html(
                                     &loaded_module.interns,
                                     module_name,
                                     symbol_name,
+                                    maybe_root_dir,
                                 ) {
                                     Ok(DocUrl { url, title }) => Some((url.into(), title.into())),
                                     Err((link_markdown, problem)) => {
@@ -1265,6 +1297,7 @@ fn markdown_to_html(
                             &loaded_module.interns,
                             "",
                             type_name,
+                            maybe_root_dir,
                         ) {
                             Ok(DocUrl { url, title }) => Some((url.into(), title.into())),
                             Err((link_markdown, problem)) => {

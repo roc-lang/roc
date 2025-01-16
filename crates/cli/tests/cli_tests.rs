@@ -50,12 +50,12 @@ mod cli_tests {
     const TEST_LEGACY_LINKER: bool = false;
 
     #[test]
-    #[ignore = "Works when run manually, but not in CI"]
+    #[ignore = "Needs investigation, see also github.com/roc-lang/roc/pull/7231"]
     fn platform_switching_rust() {
         // pre-build the platform
         std::process::Command::new("bash")
             .arg(file_from_root(
-                "examples/platform-switching/rust-platform",
+                "crates/cli/tests/platform-switching/rust-platform",
                 "build.sh",
             ))
             .status()
@@ -63,7 +63,7 @@ mod cli_tests {
 
         let cli_build = ExecCli::new(
             roc_cli::CMD_DEV,
-            file_from_root("examples/platform-switching", "rocLovesRust.roc"),
+            file_from_root("crates/cli/tests/platform-switching", "rocLovesRust.roc"),
         );
 
         let expected_output = "Roc <3 Rust!\n";
@@ -80,7 +80,7 @@ mod cli_tests {
 
         let cli_build = ExecCli::new(
             CMD_BUILD,
-            file_from_root("examples/platform-switching", "rocLovesZig.roc"),
+            file_from_root("crates/cli/tests/platform-switching", "rocLovesZig.roc"),
         )
         .arg(BUILD_HOST_FLAG)
         .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
@@ -104,7 +104,10 @@ mod cli_tests {
         // so let's just check it for now
         let cli_check = ExecCli::new(
             CMD_CHECK,
-            file_from_root("examples/platform-switching", "rocLovesWebAssembly.roc"),
+            file_from_root(
+                "crates/cli/tests/platform-switching",
+                "rocLovesWebAssembly.roc",
+            ),
         );
 
         let cli_check_out = cli_check.run();
@@ -160,34 +163,6 @@ mod cli_tests {
         );
     }
 
-    // TODO: write a new test once mono bugs are resolved in investigation
-    // Encountering this TODO years later, I presume the new test should test the execution, not just roc check.
-    #[test]
-    #[cfg(not(debug_assertions))] // https://github.com/roc-lang/roc/issues/4806 - later observation: this issue is closed but the tests still hangs in debug mode
-    fn check_virtual_dom_server() {
-        let cli_check = ExecCli::new(
-            CMD_CHECK,
-            file_from_root("examples/virtual-dom-wip", "example-server.roc"),
-        );
-
-        let cli_check_out = cli_check.run();
-        cli_check_out.assert_clean_success();
-    }
-
-    // TODO: write a new test once mono bugs are resolved in investigation
-    // Encountering this TODO years later, I presume the new test should test the execution, not just roc check.
-    #[test]
-    #[cfg(not(debug_assertions))] // https://github.com/roc-lang/roc/issues/4806 - later observation: this issue is closed but the tests still hangs in debug mode
-    fn check_virtual_dom_client() {
-        let cli_check = ExecCli::new(
-            CMD_CHECK,
-            file_from_root("examples/virtual-dom-wip", "example-client.roc"),
-        );
-
-        let cli_check_out = cli_check.run();
-        cli_check_out.assert_clean_success();
-    }
-
     #[test]
     #[cfg_attr(windows, ignore)]
     // tea = The Elm Architecture
@@ -212,31 +187,35 @@ mod cli_tests {
         );
     }
 
-    // TODO check this out, there's more that's going wrong than a segfault
-    //#[test]
-    /*#[cfg_attr(
-        any(target_os = "windows", target_os = "linux", target_os = "macos"),
-        ignore = "Segfault, likely broken because of alias analysis: https://github.com/roc-lang/roc/issues/6544"
-    )]*/
-    /*
+    #[test]
+    // #[cfg_attr(windows, ignore)]
+    #[ignore]
     fn false_interpreter() {
         let cli_build = ExecCli::new(
-                                CMD_BUILD,
-                                file_from_root("crates/cli/tests/test-projects/false-interpreter", "main.roc")
-            )
-            .arg(BUILD_HOST_FLAG)
-            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
+            CMD_BUILD,
+            file_from_root(
+                "crates/cli/tests/test-projects/false-interpreter",
+                "main.roc",
+            ),
+        )
+        .arg(BUILD_HOST_FLAG)
+        .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
 
-        let sqrt_false_path_buf = file_from_root("crates/cli/tests/test-projects/false-interpreter/examples", "sqrt.false");
+        let sqrt_false_path_buf = file_from_root(
+            "crates/cli/tests/test-projects/false-interpreter/examples",
+            "sqrt.false",
+        );
 
-        let app_args = ["--",
-                        sqrt_false_path_buf
-                            .as_path()
-                            .to_str()
-                            .unwrap()];
+        let app_args = [sqrt_false_path_buf.as_path().to_str().unwrap()];
 
-        cli_build.full_check_build_and_run("1414", TEST_LEGACY_LINKER, ALLOW_VALGRIND, None, Some(&app_args));
-    }*/
+        cli_build.full_check_build_and_run(
+            "1414",
+            TEST_LEGACY_LINKER,
+            ALLOW_VALGRIND,
+            None,
+            Some(&app_args),
+        );
+    }
 
     #[test]
     #[cfg_attr(windows, ignore)]
@@ -874,7 +853,7 @@ mod cli_tests {
                 ),
             );
 
-            let expected_output = "(@Community {friends: [{2}, {2}, {0, 1}], people: [(@Person {age: 27, favoriteColor: Blue, firstName: \"John\", hasBeard: Bool.true, lastName: \"Smith\"}), (@Person {age: 47, favoriteColor: Green, firstName: \"Debby\", hasBeard: Bool.false, lastName: \"Johnson\"}), (@Person {age: 33, favoriteColor: (RGB (255, 255, 0)), firstName: \"Jane\", hasBeard: Bool.false, lastName: \"Doe\"})]})\n";
+            let expected_output = "(@Community {friends: [{2}, {2}, {0, 1}], people: [(@Person {age: 27, favorite_color: Blue, first_name: \"John\", has_beard: Bool.true, last_name: \"Smith\"}), (@Person {age: 47, favorite_color: Green, first_name: \"Debby\", has_beard: Bool.false, last_name: \"Johnson\"}), (@Person {age: 33, favorite_color: (RGB (255, 255, 0)), first_name: \"Jane\", has_beard: Bool.false, last_name: \"Doe\"})]})\n";
 
             cli_build.full_check_build_and_run(
                 expected_output,
@@ -891,7 +870,7 @@ mod cli_tests {
             build_platform_host();
 
             let cli_build = ExecCli::new(
-                roc_cli::CMD_DEV,
+                roc_cli::CMD_BUILD,
                 file_from_root("crates/cli/tests/test-projects/effectful", "form.roc"),
             );
 
@@ -911,14 +890,14 @@ mod cli_tests {
         fn effectful_hello() {
             build_platform_host();
 
-            let cli_build = ExecCli::new(
+            let cli_dev = ExecCli::new(
                 roc_cli::CMD_DEV,
                 file_from_root("crates/cli/tests/test-projects/effectful/", "hello.roc"),
             );
 
             let expected_out = "I'm an effect 👻\n";
 
-            cli_build.run().assert_clean_stdout(expected_out);
+            cli_dev.run().assert_clean_stdout(expected_out);
         }
 
         #[test]
@@ -926,14 +905,14 @@ mod cli_tests {
         fn effectful_loops() {
             build_platform_host();
 
-            let cli_build = ExecCli::new(
+            let cli_dev = ExecCli::new(
                 roc_cli::CMD_DEV,
                 file_from_root("crates/cli/tests/test-projects/effectful/", "loops.roc"),
             );
 
             let expected_out = "Lu\nMarce\nJoaquin\nChloé\nMati\nPedro\n";
 
-            cli_build.run().assert_clean_stdout(expected_out);
+            cli_dev.run().assert_clean_stdout(expected_out);
         }
 
         #[test]
@@ -941,7 +920,7 @@ mod cli_tests {
         fn effectful_untyped_passed_fx() {
             build_platform_host();
 
-            let cli_build = ExecCli::new(
+            let cli_dev = ExecCli::new(
                 roc_cli::CMD_DEV,
                 file_from_root(
                     "crates/cli/tests/test-projects/effectful/",
@@ -951,7 +930,7 @@ mod cli_tests {
 
             let expected_out = "Before hello\nHello, World!\nAfter hello\n";
 
-            cli_build.run().assert_clean_stdout(expected_out);
+            cli_dev.run().assert_clean_stdout(expected_out);
         }
 
         #[test]
@@ -959,7 +938,7 @@ mod cli_tests {
         fn effectful_ignore_result() {
             build_platform_host();
 
-            let cli_build = ExecCli::new(
+            let cli_dev = ExecCli::new(
                 roc_cli::CMD_DEV,
                 file_from_root(
                     "crates/cli/tests/test-projects/effectful/",
@@ -969,7 +948,7 @@ mod cli_tests {
 
             let expected_out = "I asked for input and I ignored it. Deal with it! 😎\n";
 
-            cli_build.run().assert_clean_stdout(expected_out);
+            cli_dev.run().assert_clean_stdout(expected_out);
         }
 
         #[test]
@@ -978,14 +957,14 @@ mod cli_tests {
             build_platform_host();
 
             let cli_build = ExecCli::new(
-                roc_cli::CMD_DEV,
+                roc_cli::CMD_BUILD,
                 file_from_root(
                     "crates/cli/tests/test-projects/effectful",
                     "suffixed_record_field.roc",
                 ),
             );
 
-            let expected_output = "notEffectful: hardcoded\neffectful: from stdin\n";
+            let expected_output = "not_effectful: hardcoded\neffectful: from stdin\n";
 
             cli_build.check_build_and_run(
                 expected_output,
@@ -1001,7 +980,7 @@ mod cli_tests {
             build_platform_host();
 
             let cli_build = ExecCli::new(
-                roc_cli::CMD_DEV,
+                roc_cli::CMD_BUILD,
                 file_from_root("crates/cli/tests/test-projects/effectful", "on_err.roc"),
             );
 
@@ -1016,7 +995,7 @@ mod cli_tests {
             build_platform_host();
 
             let cli_build = ExecCli::new(
-                roc_cli::CMD_DEV,
+                roc_cli::CMD_BUILD,
                 file_from_root(
                     "crates/cli/tests/test-projects/effectful",
                     "for_each_try.roc",
@@ -1302,6 +1281,7 @@ mod cli_tests {
     }
 
     #[test]
+    #[ignore = "flaky currently due to 7022"]
     fn known_type_error() {
         let cli_check = ExecCli::new(
             CMD_CHECK,

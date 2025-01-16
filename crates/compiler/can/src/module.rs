@@ -4,7 +4,7 @@ use crate::abilities::{AbilitiesStore, ImplKey, PendingAbilitiesStore, ResolvedI
 use crate::annotation::{canonicalize_annotation, AnnotationFor};
 use crate::def::{canonicalize_defs, report_unused_imports, Def, DefKind};
 use crate::desugar::desugar_record_destructures;
-use crate::env::{Env, FxMode};
+use crate::env::Env;
 use crate::expr::{ClosureData, Declarations, ExpectLookup, Expr, Output, PendingDerives};
 use crate::pattern::{
     canonicalize_record_destructs, BindingsFromPattern, Pattern, PermitShadows, RecordDestruct,
@@ -224,7 +224,6 @@ pub fn canonicalize_module_defs<'a>(
     symbols_from_requires: &[(Loc<Symbol>, Loc<TypeAnnotation<'a>>)],
     var_store: &mut VarStore,
     opt_shorthand: Option<&'a str>,
-    fx_mode: FxMode,
 ) -> ModuleOutput {
     let mut can_exposed_imports = MutMap::default();
 
@@ -246,7 +245,6 @@ pub fn canonicalize_module_defs<'a>(
         dep_idents,
         qualified_module_ids,
         opt_shorthand,
-        fx_mode,
     );
 
     for (name, alias) in aliases.into_iter() {
@@ -268,7 +266,7 @@ pub fn canonicalize_module_defs<'a>(
     // operators, and then again on *their* nested operators, ultimately applying the
     // rules multiple times unnecessarily.
 
-    crate::desugar::desugar_defs_node_values(&mut env, &mut scope, loc_defs, true);
+    crate::desugar::desugar_defs_node_values(&mut env, &mut scope, loc_defs);
 
     let mut rigid_variables = RigidVariables::default();
 
@@ -535,7 +533,13 @@ pub fn canonicalize_module_defs<'a>(
                             };
 
                             let hosted_def = crate::effect_module::build_host_exposed_def(
-                                &mut scope, *symbol, &ident, var_store, annotation,
+                                &mut scope,
+                                *symbol,
+                                def_annotation.region,
+                                &ident,
+                                var_store,
+                                &mut env.problems,
+                                annotation,
                             );
 
                             declarations.update_builtin_def(index, hosted_def);
@@ -588,7 +592,13 @@ pub fn canonicalize_module_defs<'a>(
                             };
 
                             let hosted_def = crate::effect_module::build_host_exposed_def(
-                                &mut scope, *symbol, &ident, var_store, annotation,
+                                &mut scope,
+                                *symbol,
+                                def_annotation.region,
+                                &ident,
+                                var_store,
+                                &mut env.problems,
+                                annotation,
                             );
 
                             declarations.update_builtin_def(index, hosted_def);

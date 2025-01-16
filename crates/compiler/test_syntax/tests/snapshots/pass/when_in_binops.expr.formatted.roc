@@ -4,6 +4,5 @@ di
     when
         b
     is
-        7 -> 7e
-)
+        7 -> 7e)
     zl

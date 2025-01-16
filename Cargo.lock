@@ -216,7 +216,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "miniz_oxide",
- "object",
+ "object 0.32.2",
  "rustc-demangle",
 ]
 
@@ -724,7 +724,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "978747c1d849a7d2ee5e8adc0159961c48fb7e5db2f06af6723b80123bb53856"
 dependencies = [
  "cfg-if",
- "hashbrown",
+ "hashbrown 0.14.3",
  "lock_api",
  "once_cell",
  "parking_lot_core",
@@ -933,6 +933,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 
 [[package]]
+name = "foldhash"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0d2fde1f7b3d48b8395d5f2de76c18a528bd6a9cdde438df747bfcba3e05d6f"
+
+[[package]]
 name = "form_urlencoded"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1115,6 +1121,15 @@ checksum = "290f1a1d9242c78d09ce40a5e87e7554ee637af1351968159f4952f028f75604"
 dependencies = [
  "ahash",
  "allocator-api2",
+]
+
+[[package]]
+name = "hashbrown"
+version = "0.15.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf151400ff0baff5465007dd2f3e717f3fe502074ca563069ce3a6629d07b289"
+dependencies = [
+ "foldhash",
 ]
 
 [[package]]
@@ -1302,7 +1317,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d530e1a18b1cb4c484e6e34556a0d948706958449fca0cab753d649f2bce3d1f"
 dependencies = [
  "equivalent",
- "hashbrown",
+ "hashbrown 0.14.3",
 ]
 
 [[package]]
@@ -1720,8 +1735,17 @@ version = "0.32.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6a622008b6e321afc04970976f62ee297fdbaa6f95318ca343e3eebb9648441"
 dependencies = [
+ "memchr",
+]
+
+[[package]]
+name = "object"
+version = "0.36.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "62948e14d923ea95ea2c7c86c71013138b66525b86bdc08d2dcc262bdb497b87"
+dependencies = [
  "crc32fast",
- "hashbrown",
+ "hashbrown 0.15.2",
  "indexmap",
  "memchr",
 ]
@@ -2368,7 +2392,6 @@ dependencies = [
  "bitvec",
  "bumpalo",
  "indoc",
- "insta",
  "pretty_assertions",
  "roc_collections",
  "roc_error_macros",
@@ -2468,7 +2491,7 @@ dependencies = [
  "bitvec",
  "bumpalo",
  "fnv",
- "hashbrown",
+ "hashbrown 0.14.3",
  "im",
  "im-rc",
  "smallvec",
@@ -2598,7 +2621,7 @@ version = "0.0.1"
 dependencies = [
  "bumpalo",
  "capstone",
- "object",
+ "object 0.36.7",
  "packed_struct",
  "roc_builtins",
  "roc_can",
@@ -2759,7 +2782,7 @@ dependencies = [
  "libc",
  "mach_object",
  "memmap2 0.5.10",
- "object",
+ "object 0.36.7",
  "roc_collections",
  "roc_error_macros",
  "roc_load",
@@ -2877,7 +2900,7 @@ dependencies = [
  "arrayvec 0.7.4",
  "bitvec",
  "bumpalo",
- "hashbrown",
+ "hashbrown 0.14.3",
  "indoc",
  "parking_lot",
  "roc_builtins",
@@ -3179,7 +3202,7 @@ dependencies = [
  "arrayvec 0.7.4",
  "bitvec",
  "bumpalo",
- "hashbrown",
+ "hashbrown 0.14.3",
  "indoc",
  "parking_lot",
  "pretty_assertions",

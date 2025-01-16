@@ -480,7 +480,7 @@ mod tests {
             + indoc! {r#"
             main =
               when a is
-                inn as outer -> 
+                inn as outer ->
                   "#};
 
         let (inner, url) = test_setup(suffix.clone()).await;
@@ -522,7 +522,7 @@ mod tests {
             + indoc! {r#"
             main =
               when a is
-                {one,two} as outer -> 
+                {one,two} as outer ->
                   "#};
 
         let (inner, url) = test_setup(doc.clone()).await;
@@ -586,7 +586,7 @@ mod tests {
     async fn test_completion_closure() {
         let actual = completion_test_labels(
             indoc! {r"
-            main = [] |> List.map \ param1 , param2-> 
+            main = [] |> List.map \ param1 , param2->
               "},
             "par",
             Position::new(4, 3),
@@ -628,6 +628,30 @@ mod tests {
                                 },
                             ),
                         ),
+                    ),
+                ],
+            )
+        "#]]
+        .assert_debug_eq(&actual);
+    }
+
+    #[tokio::test]
+    async fn test_completion_on_utf8() {
+        let actual = completion_test(
+            indoc! {r"
+            main =
+              "},
+            "ç",
+            Position::new(4, 3),
+        )
+        .await;
+
+        expect![[r#"
+            Some(
+                [
+                    (
+                        "main",
+                        None,
                     ),
                 ],
             )

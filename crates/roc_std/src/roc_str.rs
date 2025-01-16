@@ -21,7 +21,7 @@ use core::{
 use std::ffi::{CStr, CString};
 use std::{ops::Range, ptr::NonNull};
 
-use crate::{roc_realloc, RocList, RocRefcounted};
+use crate::{roc_realloc, RocList, RocRefcounted, ROC_REFCOUNT_CONSTANT};
 
 #[repr(transparent)]
 pub struct RocStr(RocStrInner);
@@ -925,7 +925,7 @@ impl BigString {
         let ptr = self.ptr_to_refcount();
         let rc = unsafe { std::ptr::read(ptr) as isize };
 
-        rc == isize::MIN
+        rc == 1
     }
 
     fn is_readonly(&self) -> bool {
@@ -943,14 +943,20 @@ impl BigString {
         assert_ne!(self.capacity(), 0);
 
         let ptr = self.ptr_to_refcount();
-        unsafe { std::ptr::write(ptr, 0) }
+        // Only safe to write to the pointer if it is not constant (0)
+        if unsafe { std::ptr::read(ptr) } != ROC_REFCOUNT_CONSTANT {
+            unsafe { std::ptr::write(ptr, ROC_REFCOUNT_CONSTANT) }
+        }
     }
 
     fn inc(&mut self) {
         let ptr = self.ptr_to_refcount();
         unsafe {
             let value = std::ptr::read(ptr);
-            std::ptr::write(ptr, Ord::max(0, ((value as isize) + 1) as usize));
+            // Only safe to write to the pointer if it is not constant (0)
+            if value != ROC_REFCOUNT_CONSTANT {
+                std::ptr::write(ptr, (value as isize + 1) as usize);
+            }
         }
     }
 
@@ -967,7 +973,7 @@ impl BigString {
                 0 => {
                     // static lifetime, do nothing
                 }
-                isize::MIN => {
+                1 => {
                     // refcount becomes zero; free allocation
                     crate::roc_dealloc(self.ptr_to_allocation().cast(), 1);
                 }

@@ -1,0 +1,43 @@
+@0-13 SpaceAfter(
+    List(
+        [
+            @1-12 List(
+                [
+                    @2-11 Apply(
+                        @2-9 UnaryOp(
+                            @3-9 UnaryOp(
+                                @4-9 Closure(
+                                    [
+                                        @5-6 Tag(
+                                            "L",
+                                        ),
+                                    ],
+                                    @8-9 Var {
+                                        module_name: "",
+                                        ident: "t",
+                                    },
+                                ),
+                                @3-4 Not,
+                            ),
+                            @2-3 Not,
+                        ),
+                        [
+                            @10-11 SpaceBefore(
+                                Tag(
+                                    "M",
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
+                        ],
+                        Space,
+                    ),
+                ],
+            ),
+        ],
+    ),
+    [
+        Newline,
+    ],
+)

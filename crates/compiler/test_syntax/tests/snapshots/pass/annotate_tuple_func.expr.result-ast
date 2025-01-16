@@ -21,16 +21,16 @@
                 ),
                 @2-13 Tuple {
                     elems: [
-                        @3-4 SpaceAfter(
-                            BoundVariable(
-                                "f",
-                            ),
+                        @3-11 Function(
                             [
-                                Newline,
-                            ],
-                        ),
-                        @6-11 Function(
-                            [
+                                @3-4 SpaceAfter(
+                                    BoundVariable(
+                                        "f",
+                                    ),
+                                    [
+                                        Newline,
+                                    ],
+                                ),
                                 @6-8 BoundVariable(
                                     "ww",
                                 ),

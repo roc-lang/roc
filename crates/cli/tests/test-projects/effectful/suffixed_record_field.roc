@@ -3,20 +3,20 @@ app [main!] { pf: platform "../test-platform-effects-zig/main.roc" }
 import pf.Effect
 
 Fx : {
-    getLine!: {} => Str,
+    get_line! : {} => Str,
 }
 
 main! : {} => {}
 main! = \{} ->
-    notEffectful : Fx
-    notEffectful = {
-        getLine!: \{} -> "hardcoded"
+    not_effectful : Fx
+    not_effectful = {
+        get_line!: \{} -> "hardcoded",
     }
 
     effectful : Fx
     effectful = {
-        getLine!: Effect.getLine!
+        get_line!: Effect.get_line!,
     }
 
-    Effect.putLine! "notEffectful: $(notEffectful.getLine! {})"
-    Effect.putLine! "effectful: $(effectful.getLine! {})"
+    Effect.put_line!("not_effectful: ${not_effectful.get_line!({})}")
+    Effect.put_line!("effectful: ${effectful.get_line!({})}")

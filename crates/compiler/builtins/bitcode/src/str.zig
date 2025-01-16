@@ -366,20 +366,16 @@ pub const RocStr = extern struct {
     }
 
     fn isRefcountOne(self: RocStr) bool {
-        return self.refcountMachine() == utils.REFCOUNT_ONE;
+        return utils.rcUnique(@bitCast(self.refcount()));
     }
 
-    fn refcountMachine(self: RocStr) usize {
+    fn refcount(self: RocStr) usize {
         if ((self.getCapacity() == 0 and !self.isSeamlessSlice()) or self.isSmallStr()) {
-            return utils.REFCOUNT_ONE;
+            return 1;
         }
 
         const ptr: [*]usize = @as([*]usize, @ptrCast(@alignCast(self.bytes)));
         return (ptr - 1)[0];
-    }
-
-    fn refcountHuman(self: RocStr) usize {
-        return self.refcountMachine() - utils.REFCOUNT_ONE + 1;
     }
 
     pub fn asSlice(self: *const RocStr) []const u8 {
@@ -2057,7 +2053,7 @@ test "strTrim: null byte" {
     defer original_with_capacity.decref();
 
     try expectEqual(@as(usize, 1), original_with_capacity.len());
-    try expectEqual(@as(usize, 64), original_with_capacity.getCapacity());
+    try expectEqual(@as(usize, 41), original_with_capacity.getCapacity());
 
     const trimmed = strTrim(original.clone());
     defer trimmed.decref();

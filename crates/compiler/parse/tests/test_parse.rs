@@ -160,17 +160,17 @@ mod test_parse {
 
     #[test]
     fn escaped_interpolation() {
-        assert_segments(r#""Hi, \$(name)!""#, |arena| {
+        assert_segments(r#""Hi, \${name}!""#, |arena| {
             bumpalo::vec![in arena;
                  Plaintext("Hi, "),
                  EscapedChar(EscapedChar::Dollar),
-                 Plaintext("(name)!"),
+                 Plaintext("{name}!"),
             ]
         });
     }
 
     #[test]
-    fn string_with_interpolation_in_middle() {
+    fn string_with_old_interpolation_still_works_for_now() {
         assert_segments(r#""Hi, $(name)!""#, |arena| {
             let expr = arena.alloc(Var {
                 module_name: "",
@@ -186,8 +186,30 @@ mod test_parse {
     }
 
     #[test]
+    fn string_with_mixed_new_and_old_interpolation_braces_fails() {
+        assert_parsing_fails(r#""${foo)""#, SyntaxError::Unexpected(Region::zero()));
+        assert_parsing_fails(r#""$(foo}""#, SyntaxError::Unexpected(Region::zero()));
+    }
+
+    #[test]
+    fn string_with_interpolation_in_middle() {
+        assert_segments(r#""Hi, ${name}!""#, |arena| {
+            let expr = arena.alloc(Var {
+                module_name: "",
+                ident: "name",
+            });
+
+            bumpalo::vec![in arena;
+                 Plaintext("Hi, "),
+                 Interpolated(Loc::new(7, 11, expr)),
+                 Plaintext("!")
+            ]
+        });
+    }
+
+    #[test]
     fn string_with_interpolation_in_front() {
-        assert_segments(r#""$(name), hi!""#, |arena| {
+        assert_segments(r#""${name}, hi!""#, |arena| {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
@@ -232,7 +254,7 @@ mod test_parse {
 
     #[test]
     fn string_with_interpolation_in_back() {
-        assert_segments(r#""Hello $(name)""#, |arena| {
+        assert_segments(r#""Hello ${name}""#, |arena| {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
@@ -247,7 +269,7 @@ mod test_parse {
 
     #[test]
     fn string_with_multiple_interpolations() {
-        assert_segments(r#""Hi, $(name)! How is $(project) going?""#, |arena| {
+        assert_segments(r#""Hi, ${name}! How is ${project} going?""#, |arena| {
             let expr1 = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
@@ -271,7 +293,7 @@ mod test_parse {
     #[test]
     fn string_with_non_interpolation_dollar_signs() {
         assert_segments(
-            r#""$a Hi, $(name)! $b How is $(project) going? $c""#,
+            r#""$a Hi, ${name}! $b How is ${project} going? $c""#,
             |arena| {
                 let expr1 = arena.alloc(Var {
                     module_name: "",

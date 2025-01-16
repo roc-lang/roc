@@ -8,7 +8,7 @@ fuzz_target!(|data: &[u8]| {
         let input = Input::Full(input);
         let arena = Bump::new();
         if input.parse_in(&arena).is_ok() {
-            input.check_invariants(|_| (), true);
+            input.check_invariants(|_| (), true, None);
         }
     }
 });

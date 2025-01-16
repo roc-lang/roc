@@ -519,9 +519,6 @@ pub enum EExpr<'a> {
     ElmStyleFunction(Region, Position),
     MalformedPattern(Position),
     QualifiedTag(Position),
-    BackpassComma(Position),
-    BackpassArrow(Position),
-    BackpassContinue(Position),
     DbgContinue(Position),
 
     When(EWhen<'a>, Position),
@@ -603,9 +600,6 @@ impl<'a> EExpr<'a> {
             | EExpr::ElmStyleFunction(_, p)
             | EExpr::MalformedPattern(p)
             | EExpr::QualifiedTag(p)
-            | EExpr::BackpassComma(p)
-            | EExpr::BackpassArrow(p)
-            | EExpr::BackpassContinue(p)
             | EExpr::DbgContinue(p)
             | EExpr::Underscore(p)
             | EExpr::Crash(p)
@@ -642,6 +636,8 @@ pub enum EString<'a> {
     FormatEnd(Position),
     MultilineInsufficientIndent(Position),
     ExpectedDoubleQuoteGotSingleQuote(Position),
+    InvalidUnicodeCodepoint(Region),
+    UnicodeEscapeTooLarge(Region),
 }
 
 impl<'a> EString<'a> {
@@ -663,6 +659,9 @@ impl<'a> EString<'a> {
             | EString::FormatEnd(p)
             | EString::MultilineInsufficientIndent(p)
             | EString::ExpectedDoubleQuoteGotSingleQuote(p) => Region::from_pos(*p),
+            EString::InvalidUnicodeCodepoint(region) | EString::UnicodeEscapeTooLarge(region) => {
+                *region
+            }
         }
     }
 }
@@ -684,6 +683,7 @@ pub enum ERecord<'a> {
     UnderscoreField(Position),
     Colon(Position),
     QuestionMark(Position),
+    SecondQuestionMark(Position),
     Arrow(Position),
     Ampersand(Position),
 
@@ -707,6 +707,7 @@ impl<'a> ERecord<'a> {
             | ERecord::UnderscoreField(p)
             | ERecord::Colon(p)
             | ERecord::QuestionMark(p)
+            | ERecord::SecondQuestionMark(p)
             | ERecord::Arrow(p)
             | ERecord::Ampersand(p)
             | ERecord::Space(_, p) => Region::from_pos(*p),
@@ -746,6 +747,7 @@ impl<'a> EInParens<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EClosure<'a> {
+    Bar(Position),
     Space(BadInputError, Position),
     Start(Position),
     Arrow(Position),
@@ -767,7 +769,8 @@ impl<'a> EClosure<'a> {
             EClosure::Body(expr, _) => expr.get_region(),
 
             // Cases with Position values
-            EClosure::Space(_, p)
+            EClosure::Bar(p)
+            | EClosure::Space(_, p)
             | EClosure::Start(p)
             | EClosure::Arrow(p)
             | EClosure::Comma(p)
@@ -1066,6 +1069,10 @@ pub enum EPattern<'a> {
 
     AccessorFunction(Position),
     RecordUpdaterFunction(Position),
+    Str(EString<'a>, Position),
+
+    ParenStart(Position),
+    ParenEnd(Position),
 }
 
 impl<'a> EPattern<'a> {
@@ -1075,6 +1082,7 @@ impl<'a> EPattern<'a> {
             EPattern::Record(expr, _) => expr.get_region(),
             EPattern::List(expr, _) => expr.get_region(),
             EPattern::PInParens(expr, _) => expr.get_region(),
+            EPattern::Str(e_string, _) => e_string.get_region(),
 
             // Cases with Position values
             EPattern::AsKeyword(position)
@@ -1089,7 +1097,9 @@ impl<'a> EPattern<'a> {
             | EPattern::IndentEnd(position)
             | EPattern::AsIndentStart(position)
             | EPattern::AccessorFunction(position)
-            | EPattern::RecordUpdaterFunction(position) => Region::from_pos(*position),
+            | EPattern::RecordUpdaterFunction(position)
+            | EPattern::ParenStart(position)
+            | EPattern::ParenEnd(position) => Region::from_pos(*position),
         }
     }
 }
@@ -1101,7 +1111,8 @@ pub enum PRecord<'a> {
 
     Field(Position),
     Colon(Position),
-    Optional(Position),
+    OptionalFirst(Position),
+    OptionalSecond(Position),
 
     Pattern(&'a EPattern<'a>, Position),
     Expr(&'a EExpr<'a>, Position),
@@ -1121,7 +1132,8 @@ impl<'a> PRecord<'a> {
             | PRecord::Open(p)
             | PRecord::Field(p)
             | PRecord::Colon(p)
-            | PRecord::Optional(p)
+            | PRecord::OptionalFirst(p)
+            | PRecord::OptionalSecond(p)
             | PRecord::Space(_, p) => Region::from_pos(*p),
         }
     }
@@ -1238,7 +1250,8 @@ pub enum ETypeRecord<'a> {
 
     Field(Position),
     Colon(Position),
-    Optional(Position),
+    OptionalFirst(Position),
+    OptionalSecond(Position),
     Type(&'a EType<'a>, Position),
 
     Space(BadInputError, Position),
@@ -1260,7 +1273,8 @@ impl<'a> ETypeRecord<'a> {
             | ETypeRecord::Open(p)
             | ETypeRecord::Field(p)
             | ETypeRecord::Colon(p)
-            | ETypeRecord::Optional(p)
+            | ETypeRecord::OptionalFirst(p)
+            | ETypeRecord::OptionalSecond(p)
             | ETypeRecord::Space(_, p)
             | ETypeRecord::IndentOpen(p)
             | ETypeRecord::IndentColon(p)
@@ -1388,6 +1402,7 @@ pub enum ETypeAbilityImpl<'a> {
 
     Prefix(Position),
     QuestionMark(Position),
+    SecondQuestionMark(Position),
     Ampersand(Position),
     Expr(&'a EExpr<'a>, Position),
     IndentBar(Position),
@@ -1410,6 +1425,7 @@ impl<'a> ETypeAbilityImpl<'a> {
             | ETypeAbilityImpl::Space(_, p)
             | ETypeAbilityImpl::Prefix(p)
             | ETypeAbilityImpl::QuestionMark(p)
+            | ETypeAbilityImpl::SecondQuestionMark(p)
             | ETypeAbilityImpl::Ampersand(p)
             | ETypeAbilityImpl::IndentBar(p)
             | ETypeAbilityImpl::IndentAmpersand(p) => Region::from_pos(*p),
@@ -1429,6 +1445,7 @@ impl<'a> From<ERecord<'a>> for ETypeAbilityImpl<'a> {
             ERecord::Space(s, p) => ETypeAbilityImpl::Space(s, p),
             ERecord::Prefix(p) => ETypeAbilityImpl::Prefix(p),
             ERecord::QuestionMark(p) => ETypeAbilityImpl::QuestionMark(p),
+            ERecord::SecondQuestionMark(p) => ETypeAbilityImpl::SecondQuestionMark(p),
             ERecord::Ampersand(p) => ETypeAbilityImpl::Ampersand(p),
             ERecord::Expr(e, p) => ETypeAbilityImpl::Expr(e, p),
         }
@@ -2574,6 +2591,10 @@ where
     P: Parser<'a, T, X>,
 {
     move |arena, state, _min_indent| parser.parse(arena, state, 0)
+}
+
+pub fn capture_line_indent<'a, X: 'a>() -> impl Parser<'a, u32, X> {
+    move |_arena, state: State<'a>, _min_indent| Ok((NoProgress, state.line_indent(), state))
 }
 
 pub fn set_min_indent<'a, P, T, X: 'a>(min_indent: u32, parser: P) -> impl Parser<'a, T, X>

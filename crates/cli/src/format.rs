@@ -199,7 +199,7 @@ pub enum FormatProblem {
 
 pub fn format_src(arena: &Bump, src: &str, flags: MigrationFlags) -> Result<String, FormatProblem> {
     let ast = arena.alloc(parse_all(arena, src).unwrap_or_else(|e| {
-        user_error!("Unexpected parse failure when parsing this formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, e)
+        user_error!("Unexpected parse failure when parsing this formatting:\n\n{src}\n\nParse error was:\n\n{:#?}\n\n", e)
     }));
     let mut buf = Buf::new_in(arena, flags);
     fmt_all(&mut buf, ast);
@@ -438,14 +438,14 @@ import pf.Stdin
 main =
     Stdout.line! "What's your name?"
     name = Stdin.line!
-    Stdout.line! "Hi $(name)!""#;
+    Stdout.line! "Hi ${name}!""#;
 
     const UNFORMATTED_ROC: &str = r#"app [main] { pf: platform "platform/main.roc" }
 
 main =
         Stdout.line! "What's your name?"
         name = Stdin.line!
-        Stdout.line! "Hi $(name)!"
+        Stdout.line! "Hi ${name}!"
 "#;
 
     fn setup_test_file(dir: &Path, file_name: &str, contents: &str) -> PathBuf {
@@ -465,7 +465,10 @@ main =
     fn test_single_file_needs_reformatting() {
         let dir = tempdir().unwrap();
         let file_path = setup_test_file(dir.path(), "test1.roc", UNFORMATTED_ROC);
-        let flags = MigrationFlags::new(false);
+        let flags = MigrationFlags {
+            snakify: false,
+            parens_and_commas: false,
+        };
 
         let result = format_files(vec![file_path.clone()], FormatMode::CheckOnly, flags);
         assert!(result.is_err());
@@ -485,7 +488,10 @@ main =
         let dir = tempdir().unwrap();
         let file1 = setup_test_file(dir.path(), "test1.roc", UNFORMATTED_ROC);
         let file2 = setup_test_file(dir.path(), "test2.roc", UNFORMATTED_ROC);
-        let flags = MigrationFlags::new(false);
+        let flags = MigrationFlags {
+            snakify: false,
+            parens_and_commas: false,
+        };
 
         let result = format_files(vec![file1, file2], FormatMode::CheckOnly, flags);
         assert!(result.is_err());
@@ -499,7 +505,10 @@ main =
     fn test_no_files_need_reformatting() {
         let dir = tempdir().unwrap();
         let file_path = setup_test_file(dir.path(), "formatted.roc", FORMATTED_ROC);
-        let flags = MigrationFlags::new(false);
+        let flags = MigrationFlags {
+            snakify: false,
+            parens_and_commas: false,
+        };
 
         let result = format_files(vec![file_path], FormatMode::CheckOnly, flags);
         assert!(result.is_ok());
@@ -513,7 +522,10 @@ main =
         let file_formatted = setup_test_file(dir.path(), "formatted.roc", FORMATTED_ROC);
         let file1_unformated = setup_test_file(dir.path(), "test1.roc", UNFORMATTED_ROC);
         let file2_unformated = setup_test_file(dir.path(), "test2.roc", UNFORMATTED_ROC);
-        let flags = MigrationFlags::new(false);
+        let flags = MigrationFlags {
+            snakify: false,
+            parens_and_commas: false,
+        };
 
         let result = format_files(
             vec![file_formatted, file1_unformated, file2_unformated],

@@ -1,46 +1,46 @@
-procedure Inspect.278 (Inspect.279, Inspect.277):
-    let Inspect.318 : Str = CallByName Num.96 Inspect.277;
-    let Inspect.317 : Str = CallByName Inspect.63 Inspect.279 Inspect.318;
-    dec Inspect.318;
-    ret Inspect.317;
+procedure Inspect.273 (Inspect.274, Inspect.272):
+    let Inspect.313 : Str = CallByName Num.96 Inspect.272;
+    let Inspect.312 : Str = CallByName Inspect.63 Inspect.274 Inspect.313;
+    dec Inspect.313;
+    ret Inspect.312;
 
 procedure Inspect.30 (Inspect.147):
     ret Inspect.147;
 
 procedure Inspect.33 (Inspect.152):
-    let Inspect.322 : Str = CallByName Inspect.5 Inspect.152;
-    let Inspect.321 : Str = CallByName Inspect.64 Inspect.322;
-    ret Inspect.321;
+    let Inspect.317 : Str = CallByName Inspect.5 Inspect.152;
+    let Inspect.316 : Str = CallByName Inspect.64 Inspect.317;
+    ret Inspect.316;
 
-procedure Inspect.39 (Inspect.301):
-    let Inspect.311 : Str = "";
-    ret Inspect.311;
+procedure Inspect.39 (Inspect.296):
+    let Inspect.306 : Str = "";
+    ret Inspect.306;
 
 procedure Inspect.5 (Inspect.150):
-    let Inspect.312 : I64 = CallByName Inspect.57 Inspect.150;
-    let Inspect.309 : {} = Struct {};
-    let Inspect.308 : Str = CallByName Inspect.39 Inspect.309;
-    let Inspect.307 : Str = CallByName Inspect.278 Inspect.308 Inspect.312;
-    ret Inspect.307;
-
-procedure Inspect.57 (Inspect.277):
-    let Inspect.313 : I64 = CallByName Inspect.30 Inspect.277;
-    ret Inspect.313;
-
-procedure Inspect.63 (Inspect.300, Inspect.296):
-    let Inspect.320 : Str = CallByName Str.3 Inspect.300 Inspect.296;
-    ret Inspect.320;
-
-procedure Inspect.64 (Inspect.302):
+    let Inspect.307 : I64 = CallByName Inspect.57 Inspect.150;
+    let Inspect.304 : {} = Struct {};
+    let Inspect.303 : Str = CallByName Inspect.39 Inspect.304;
+    let Inspect.302 : Str = CallByName Inspect.273 Inspect.303 Inspect.307;
     ret Inspect.302;
 
+procedure Inspect.57 (Inspect.272):
+    let Inspect.308 : I64 = CallByName Inspect.30 Inspect.272;
+    ret Inspect.308;
+
+procedure Inspect.63 (Inspect.295, Inspect.291):
+    let Inspect.315 : Str = CallByName Str.3 Inspect.295 Inspect.291;
+    ret Inspect.315;
+
+procedure Inspect.64 (Inspect.297):
+    ret Inspect.297;
+
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.281 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.281;
+    let Num.283 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.283;
 
 procedure Num.96 (#Attr.2):
-    let Num.282 : Str = lowlevel NumToStr #Attr.2;
-    ret Num.282;
+    let Num.284 : Str = lowlevel NumToStr #Attr.2;
+    ret Num.284;
 
 procedure Str.3 (#Attr.2, #Attr.3):
     let Str.246 : Str = lowlevel StrConcat #Attr.2 #Attr.3;

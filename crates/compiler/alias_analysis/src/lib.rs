@@ -28,7 +28,7 @@ pub const MOD_APP: ModName = ModName(b"UserApp");
 pub const STATIC_STR_NAME: ConstName = ConstName(&Symbol::STR_ALIAS_ANALYSIS_STATIC.to_ne_bytes());
 pub const STATIC_LIST_NAME: ConstName = ConstName(b"THIS IS A STATIC LIST");
 
-const DEFAULT_ENTRY_POINT_NAME: &[u8] = b"mainForHost";
+const DEFAULT_ENTRY_POINT_NAME: &[u8] = b"main_for_host";
 
 pub fn func_name_bytes(proc: &Proc) -> [u8; SIZE] {
     let bytes = func_name_bytes_help(
@@ -358,7 +358,16 @@ where
 
     match opt_level {
         OptLevel::Development | OptLevel::Normal => morphic_lib::solve_trivial(program),
-        OptLevel::Optimize | OptLevel::Size => morphic_lib::solve(program),
+        // TODO(#7367): Change this back to `morphic_lib::solve`.
+        // For now, using solve_trivial to avoid bug with loops.
+        // Note: when disabling this, there was not much of a change in performance.
+        // Notably, NQueens was about 5% slower. False interpreter was 0-5% faster (depending on input).
+        // cFold and derive saw minor gains ~1.5%. rBTreeCk saw a big gain of ~4%.
+        // This feels wrong, morphic should not really be able to slow down code.
+        // Likely, noise or the bug and wrong inplace mutation lead to these perf changes.
+        // When re-enabling this, we should analysis the perf and inplace mutations of a few apps.
+        // It might be the case that our current benchmarks just aren't affected by morphic much.
+        OptLevel::Optimize | OptLevel::Size => morphic_lib::solve_trivial(program),
     }
 }
 
@@ -1026,10 +1035,10 @@ fn lowlevel_spec<'a>(
             let _unit1 = builder.add_touch(block, cell)?;
             let _unit2 = builder.add_update(block, update_mode_var, cell)?;
 
-            builder.add_bag_insert(block, bag, to_insert)?;
+            let new_bag = builder.add_bag_insert(block, bag, to_insert)?;
 
-            let old_value = builder.add_bag_get(block, bag)?;
-            let new_list = with_new_heap_cell(builder, block, bag)?;
+            let old_value = builder.add_bag_get(block, new_bag)?;
+            let new_list = with_new_heap_cell(builder, block, new_bag)?;
 
             // depending on the types, the list or value will come first in the struct
             let fields = match interner.get_repr(layout) {

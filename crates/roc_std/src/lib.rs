@@ -323,81 +323,82 @@ impl RocDec {
 
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(value: &str) -> Option<Self> {
-        // Split the string into the parts before and after the "."
-        let mut parts = value.split('.');
-
-        let before_point = match parts.next() {
-            Some(answer) => answer,
-            None => {
-                return None;
-            }
+        let (sign, value) = match value.chars().next() {
+            Some('+') => (1i128, &value[1..]),
+            Some('-') => (-1i128, &value[1..]),
+            _ => (1i128, value),
         };
+        let mut digits = vec![];
+        let mut point = None;
+        let mut epow = 0;
+        for (i, c) in value.char_indices() {
+            match c {
+                '.' => {
+                    if point.is_some() {
+                        // there should only be one "." in the string
+                        return None;
+                    } else {
+                        point = Some(digits.len());
+                    }
+                }
+                '_' => {} // ignore
 
-        let opt_after_point = parts
-            .next()
-            .map(|answer| &answer[..Ord::min(answer.len(), Self::DECIMAL_PLACES)]);
-
-        // There should have only been one "." in the string!
-        if parts.next().is_some() {
+                // parse e<num> suffix
+                'e' => match value[i + 1..].parse() {
+                    Ok(pow) => {
+                        epow = pow;
+                        break;
+                    }
+                    Err(_) => return None,
+                },
+                _ => digits.push(c.to_digit(10)?),
+            }
+        }
+        if digits.is_empty() {
+            // no digits parsed
             return None;
         }
 
-        // Calculate the low digits - the ones after the decimal point.
-        let lo = match opt_after_point {
-            Some(after_point) => {
-                match after_point.parse::<i128>() {
-                    Ok(answer) => {
-                        // Translate e.g. the 1 from 0.1 into 10000000000000000000
-                        // by "restoring" the elided trailing zeroes to the number!
-                        let trailing_zeroes = Self::DECIMAL_PLACES - after_point.len();
-                        let lo = answer * 10i128.pow(trailing_zeroes as u32);
-
-                        if !before_point.starts_with('-') {
-                            lo
-                        } else {
-                            -lo
-                        }
-                    }
-                    Err(_) => {
-                        return None;
-                    }
-                }
+        let mut point = point.unwrap_or(digits.len());
+        // eg for "1.3e2" we want a string like "130", so move point and append 0's as necessary
+        while epow > 0 {
+            if point == digits.len() {
+                digits.push(0);
             }
-            None => 0,
-        };
-
-        // Calculate the high digits - the ones before the decimal point.
-        let (is_pos, digits) = match before_point.chars().next() {
-            Some('+') => (true, &before_point[1..]),
-            Some('-') => (false, &before_point[1..]),
-            _ => (true, before_point),
-        };
-
-        let mut hi: i128 = 0;
-        macro_rules! adjust_hi {
-            ($op:ident) => {{
-                for digit in digits.chars() {
-                    if digit == '_' {
-                        continue;
-                    }
-
-                    let digit = digit.to_digit(10)?;
-                    hi = hi.checked_mul(10)?;
-                    hi = hi.$op(digit as _)?;
-                }
-            }};
+            point += 1;
+            epow -= 1;
+        }
+        // eg for "1e-1" we want a string like "0.1", so insert 0's as necessary
+        while (point as i32) + epow < 1 {
+            digits.insert(0, 0);
+            point += 1;
         }
 
-        if is_pos {
-            adjust_hi!(checked_add);
-        } else {
-            adjust_hi!(checked_sub);
-        }
+        let (before_point, after_point) = digits.split_at(point);
 
-        match hi.checked_mul(Self::ONE_POINT_ZERO) {
-            Some(hi) => hi.checked_add(lo).map(|num| Self(num.to_ne_bytes())),
-            None => None,
+        let mut hi = 0i128;
+        for &d in before_point {
+            hi = hi.checked_mul(10)?;
+            hi = hi.checked_add(d.into())?;
         }
+        let hi = hi.checked_mul(sign)?;
+
+        let mut lo = 0i128;
+        for &d in after_point
+            .iter()
+            // add infinite trailing 0's, then truncate by Self::DECIMAL_PLACES
+            // so eg ".123" becomes ".12300000000000000000", and ".0000000000000000000123" becomes ".00000000000000000001"
+            .chain(std::iter::repeat(&0))
+            .take(Self::DECIMAL_PLACES)
+        {
+            lo = lo.checked_mul(10)?;
+            lo = lo.checked_add(d.into())?;
+        }
+        let lo = lo.checked_mul(sign)?;
+
+        let num = hi.checked_mul(Self::ONE_POINT_ZERO)?.checked_add(lo)?;
+
+        Some(Self(num.to_ne_bytes()))
     }
 
     /// This is private because RocDec being an i128 is an implementation detail
@@ -580,6 +581,12 @@ impl Hash for U128 {
         u128::from(*self).hash(state);
     }
 }
+
+pub const ROC_REFCOUNT_CONSTANT: usize = 0;
+// The top bit indicates if refcounts should be atomic.
+pub const ROC_REFCOUNT_IS_ATOMIC: usize = isize::MIN as usize;
+// The remaining bits are the actual refcount.
+pub const ROC_REFCOUNT_VALUE_MASK: usize = !ROC_REFCOUNT_IS_ATOMIC;
 
 /// All Roc types that are refcounted must implement this trait.
 ///

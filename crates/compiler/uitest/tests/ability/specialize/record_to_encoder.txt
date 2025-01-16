@@ -1,6 +1,6 @@
 app "test"
-    imports [Encode.{ toEncoder }]
+    imports [Encode.{ to_encoder }]
     provides [main] to "./platform"
 
-main = toEncoder { a: "" }
-     # ^^^^^^^^^ Encoding#toEncoder(2): { a : Str } -[[#Derived.toEncoder_{a}(0)]]-> Encoder fmt where fmt implements EncoderFormatting
+main = to_encoder { a: "" }
+     # ^^^^^^^^^^ Encoding#to_encoder(2): { a : Str } -[[#Derived.to_encoder_{a}(0)]]-> Encoder fmt where fmt implements EncoderFormatting
