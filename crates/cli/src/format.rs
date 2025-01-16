@@ -372,6 +372,7 @@ pub fn annotation_edits(
                 )
                 | abilities.is_specialization_name(symbol.value)
                 | matches!(subs.get_content_without_compacting(var), Content::Error)
+                | matches!(tag, DeclarationTag::MutualRecursion { .. })
             {
                 return None;
             }
