@@ -963,6 +963,7 @@ fn push_op(buf: &mut Buf, op: BinOp) {
         called_via::BinOp::Or => buf.push_str("||"),
         called_via::BinOp::Pizza => buf.push_str("|>"),
         called_via::BinOp::DoubleQuestion => buf.push_str("??"),
+        called_via::BinOp::SingleQuestion => buf.push_str("?"),
     }
 }
 
@@ -2284,7 +2285,8 @@ pub fn sub_expr_requests_parens(expr: &Expr<'_>) -> bool {
                     | BinOp::And
                     | BinOp::Or
                     | BinOp::Pizza
-                    | BinOp::DoubleQuestion => true,
+                    | BinOp::DoubleQuestion
+                    | BinOp::SingleQuestion => true,
                 })
         }
         Expr::If { .. } => true,
