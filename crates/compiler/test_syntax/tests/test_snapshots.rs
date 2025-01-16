@@ -693,6 +693,8 @@ mod test_snapshots {
         pass/single_arg_closure.expr,
         pass/single_arg_with_underscore_closure.expr,
         pass/single_underscore_closure.expr,
+        pass/single_question_binop_closure.expr,
+        pass/single_question_binop_tag.expr,
         pass/sneaky_implements_in_opaque_fn_type.expr,
         pass/space_after_opt_field_pat.expr,
         pass/space_before_colon.full,

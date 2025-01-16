@@ -4097,6 +4097,7 @@ where
 
             good!(OperatorOrDef::BinOp(BinOp::Minus), 1)
         }
+        "?" => good!(OperatorOrDef::BinOp(BinOp::SingleQuestion), 1),
         "*" => good!(OperatorOrDef::BinOp(BinOp::Star), 1),
         "/" => good!(OperatorOrDef::BinOp(BinOp::Slash), 1),
         "%" => good!(OperatorOrDef::BinOp(BinOp::Percent), 1),

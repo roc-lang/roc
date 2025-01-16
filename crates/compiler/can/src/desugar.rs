@@ -4,7 +4,7 @@ use crate::env::Env;
 use crate::scope::Scope;
 use bumpalo::collections::Vec;
 use roc_error_macros::internal_error;
-use roc_module::called_via::BinOp::{DoubleQuestion, Pizza};
+use roc_module::called_via::BinOp::{DoubleQuestion, SingleQuestion, Pizza};
 use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
@@ -213,62 +213,135 @@ fn new_op_call_expr<'a>(
             let left = desugar_expr(env, scope, left);
             let right = desugar_expr(env, scope, right);
 
-            let mut branches = Vec::with_capacity_in(2, env.arena);
-            let mut branch_1_patts = Vec::with_capacity_in(1, env.arena);
-            let mut branch_1_patts_args = Vec::with_capacity_in(1, env.arena);
-            let success_var = env.arena.alloc_str(
-                format!(
-                    "success_BRANCH1_{}_{}",
+            let ok_var = env.arena.alloc_str(
+                &format!(
+                    "double_question_ok_{}_{}",
                     left.region.start().offset,
                     left.region.end().offset
                 )
-                .as_str(),
             );
-            branch_1_patts_args.push(Loc::at(
+
+            let ok_branch_pattern_args = env.arena.alloc([Loc::at(
                 left.region,
-                Pattern::Identifier { ident: success_var },
-            ));
-            let branch_1_tag: &Loc<Pattern<'a>> =
-                env.arena.alloc(Loc::at(left.region, Pattern::Tag("Ok")));
-            branch_1_patts.push(Loc::at(
+                Pattern::Identifier { ident: ok_var },
+            )]);
+            let ok_branch_patterns = env.arena.alloc([Loc::at(
                 left.region,
                 Pattern::PncApply(
-                    branch_1_tag,
-                    Collection::with_items(branch_1_patts_args.into_bump_slice()),
+                    env.arena.alloc(Loc::at(left.region, Pattern::Tag("Ok"))),
+                    Collection::with_items(ok_branch_pattern_args),
                 ),
-            ));
-            let branch_one: &WhenBranch<'_> = env.arena.alloc(WhenBranch {
-                patterns: branch_1_patts.into_bump_slice(),
+            )]);
+            let ok_branch = &*env.arena.alloc(WhenBranch {
+                patterns: ok_branch_patterns,
                 value: Loc::at(
                     left.region,
                     Expr::Var {
                         module_name: "",
-                        ident: success_var,
+                        ident: ok_var,
                     },
                 ),
                 guard: None,
             });
-            branches.push(branch_one);
-            let mut branch_2_patts = Vec::with_capacity_in(1, env.arena);
-            let mut branch_2_patts_args = Vec::with_capacity_in(1, env.arena);
-            branch_2_patts_args.push(Loc::at(right.region, Pattern::Underscore("")));
-            let branch_2_tag: &Loc<Pattern<'a>> =
-                env.arena.alloc(Loc::at(left.region, Pattern::Tag("Err")));
-            branch_2_patts.push(Loc::at(
+
+            let err_branch_pattern_args = env.arena.alloc([(Loc::at(right.region, Pattern::Underscore("")))]);
+            let err_branch_patterns = env.arena.alloc([Loc::at(
                 right.region,
                 Pattern::PncApply(
-                    branch_2_tag,
-                    Collection::with_items(branch_2_patts_args.into_bump_slice()),
+                    env.arena.alloc(Loc::at(left.region, Pattern::Tag("Err"))),
+                    Collection::with_items(err_branch_pattern_args),
                 ),
-            ));
-            let branch_two: &WhenBranch<'_> = env.arena.alloc(WhenBranch {
-                patterns: branch_2_patts.into_bump_slice(),
+            )]);
+            let err_branch = &*env.arena.alloc(WhenBranch {
+                patterns: err_branch_patterns,
                 value: *right,
                 guard: None,
             });
-            branches.push(branch_two);
 
-            When(left, branches.into_bump_slice())
+            When(left, &*env.arena.alloc([ok_branch, err_branch]))
+        }
+        SingleQuestion => {
+            let left = desugar_expr(env, scope, left);
+            let right = desugar_expr(env, scope, right);
+
+            let ok_var = env.arena.alloc_str(
+                &format!(
+                    "single_question_ok_{}_{}",
+                    left.region.start().offset,
+                    left.region.end().offset
+                )
+            );
+
+            let ok_branch_pattern_args = env.arena.alloc([Loc::at(
+                left.region,
+                Pattern::Identifier { ident: ok_var },
+            )]);
+            let ok_branch_patterns = env.arena.alloc([Loc::at(
+                left.region,
+                Pattern::PncApply(
+                    env.arena.alloc(Loc::at(left.region, Pattern::Tag("Ok"))),
+                    Collection::with_items(ok_branch_pattern_args),
+                ),
+            )]);
+            let ok_branch = &*env.arena.alloc(WhenBranch {
+                patterns: ok_branch_patterns,
+                value: Loc::at(
+                    left.region,
+                    Expr::Var {
+                        module_name: "",
+                        ident: ok_var,
+                    },
+                ),
+                guard: None,
+            });
+
+            let err_var = env.arena.alloc_str(
+                &format!(
+                    "single_question_err_{}_{}",
+                    left.region.start().offset,
+                    left.region.end().offset
+                )
+            );
+
+            let err_branch_pattern_args = env.arena.alloc([(Loc::at(
+                right.region,
+                Pattern::Identifier { ident: err_var },
+            ))]);
+            let err_branch_patterns = env.arena.alloc([Loc::at(
+                right.region,
+                Pattern::PncApply(
+                    env.arena.alloc(Loc::at(left.region, Pattern::Tag("Err"))),
+                    Collection::with_items(err_branch_pattern_args),
+                ),
+            )]);
+            let map_err_expr = &*env.arena.alloc(Loc::at(right.region, Expr::PncApply(
+                right,
+                Collection::with_items(&*env.arena.alloc([
+                    &*env.arena.alloc(Loc::at(
+                        left.region,
+                        Expr::Var { module_name: "", ident: err_var },
+                    ))
+                ])),
+            )));
+            let err_branch = &*env.arena.alloc(WhenBranch {
+                patterns: err_branch_patterns,
+                value: Loc::at(
+                    region,
+                    Expr::Return(
+                        env.arena.alloc(Loc::at(
+                            region,
+                            Expr::PncApply(
+                                env.arena.alloc(Loc::at(region, Expr::Tag("Err"))),
+                                Collection::with_items(&*env.arena.alloc([map_err_expr])),
+                            ),
+                        )),
+                        None,
+                    ),
+                ),
+                guard: None,
+            });
+
+            When(left, &*env.arena.alloc([ok_branch, err_branch]))
         }
         binop => {
             let left = desugar_expr(env, scope, left);
@@ -1575,6 +1648,7 @@ fn binop_to_function(binop: BinOp) -> (&'static str, &'static str) {
         Or => (ModuleName::BOOL, "or"),
         Pizza => unreachable!("Cannot desugar the |> operator"),
         DoubleQuestion => unreachable!("Cannot desugar the ?? operator"),
+        SingleQuestion => unreachable!("Cannot desugar the ? operator"),
     }
 }
 
