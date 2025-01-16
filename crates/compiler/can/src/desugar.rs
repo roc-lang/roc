@@ -4,7 +4,7 @@ use crate::env::Env;
 use crate::scope::Scope;
 use bumpalo::collections::Vec;
 use roc_error_macros::internal_error;
-use roc_module::called_via::BinOp::{DoubleQuestion, SingleQuestion, Pizza};
+use roc_module::called_via::BinOp::{DoubleQuestion, Pizza, SingleQuestion};
 use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
@@ -213,18 +213,15 @@ fn new_op_call_expr<'a>(
             let left = desugar_expr(env, scope, left);
             let right = desugar_expr(env, scope, right);
 
-            let ok_var = env.arena.alloc_str(
-                &format!(
-                    "double_question_ok_{}_{}",
-                    left.region.start().offset,
-                    left.region.end().offset
-                )
-            );
+            let ok_var = env.arena.alloc_str(&format!(
+                "double_question_ok_{}_{}",
+                left.region.start().offset,
+                left.region.end().offset
+            ));
 
-            let ok_branch_pattern_args = env.arena.alloc([Loc::at(
-                left.region,
-                Pattern::Identifier { ident: ok_var },
-            )]);
+            let ok_branch_pattern_args = env
+                .arena
+                .alloc([Loc::at(left.region, Pattern::Identifier { ident: ok_var })]);
             let ok_branch_patterns = env.arena.alloc([Loc::at(
                 left.region,
                 Pattern::PncApply(
@@ -244,7 +241,9 @@ fn new_op_call_expr<'a>(
                 guard: None,
             });
 
-            let err_branch_pattern_args = env.arena.alloc([(Loc::at(right.region, Pattern::Underscore("")))]);
+            let err_branch_pattern_args = env
+                .arena
+                .alloc([(Loc::at(right.region, Pattern::Underscore("")))]);
             let err_branch_patterns = env.arena.alloc([Loc::at(
                 right.region,
                 Pattern::PncApply(
@@ -264,18 +263,15 @@ fn new_op_call_expr<'a>(
             let left = desugar_expr(env, scope, left);
             let right = desugar_expr(env, scope, right);
 
-            let ok_var = env.arena.alloc_str(
-                &format!(
-                    "single_question_ok_{}_{}",
-                    left.region.start().offset,
-                    left.region.end().offset
-                )
-            );
+            let ok_var = env.arena.alloc_str(&format!(
+                "single_question_ok_{}_{}",
+                left.region.start().offset,
+                left.region.end().offset
+            ));
 
-            let ok_branch_pattern_args = env.arena.alloc([Loc::at(
-                left.region,
-                Pattern::Identifier { ident: ok_var },
-            )]);
+            let ok_branch_pattern_args = env
+                .arena
+                .alloc([Loc::at(left.region, Pattern::Identifier { ident: ok_var })]);
             let ok_branch_patterns = env.arena.alloc([Loc::at(
                 left.region,
                 Pattern::PncApply(
@@ -295,18 +291,15 @@ fn new_op_call_expr<'a>(
                 guard: None,
             });
 
-            let err_var = env.arena.alloc_str(
-                &format!(
-                    "single_question_err_{}_{}",
-                    left.region.start().offset,
-                    left.region.end().offset
-                )
-            );
+            let err_var = env.arena.alloc_str(&format!(
+                "single_question_err_{}_{}",
+                left.region.start().offset,
+                left.region.end().offset
+            ));
 
-            let err_branch_pattern_args = env.arena.alloc([(Loc::at(
-                right.region,
-                Pattern::Identifier { ident: err_var },
-            ))]);
+            let err_branch_pattern_args = env
+                .arena
+                .alloc([(Loc::at(right.region, Pattern::Identifier { ident: err_var }))]);
             let err_branch_patterns = env.arena.alloc([Loc::at(
                 right.region,
                 Pattern::PncApply(
@@ -314,15 +307,19 @@ fn new_op_call_expr<'a>(
                     Collection::with_items(err_branch_pattern_args),
                 ),
             )]);
-            let map_err_expr = &*env.arena.alloc(Loc::at(right.region, Expr::PncApply(
-                right,
-                Collection::with_items(&*env.arena.alloc([
-                    &*env.arena.alloc(Loc::at(
+            let map_err_expr = &*env.arena.alloc(Loc::at(
+                right.region,
+                Expr::PncApply(
+                    right,
+                    Collection::with_items(&*env.arena.alloc([&*env.arena.alloc(Loc::at(
                         left.region,
-                        Expr::Var { module_name: "", ident: err_var },
-                    ))
-                ])),
-            )));
+                        Expr::Var {
+                            module_name: "",
+                            ident: err_var,
+                        },
+                    ))])),
+                ),
+            ));
             let err_branch = &*env.arena.alloc(WhenBranch {
                 patterns: err_branch_patterns,
                 value: Loc::at(

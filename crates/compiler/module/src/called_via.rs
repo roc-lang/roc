@@ -174,7 +174,8 @@ impl BinOp {
     /// how wide this operator is when typed out
     pub fn width(self) -> u16 {
         match self {
-            Caret | Star | Slash | Percent | Plus | Minus | LessThan | GreaterThan | SingleQuestion => 1,
+            Caret | Star | Slash | Percent | Plus | Minus | LessThan | GreaterThan
+            | SingleQuestion => 1,
             DoubleSlash | Equals | NotEquals | LessThanOrEq | GreaterThanOrEq | And | Or
             | Pizza | DoubleQuestion => 2,
         }
