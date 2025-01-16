@@ -254,7 +254,6 @@ impl IterTokens for AppHeader<'_> {
 
         (provides.iter_tokens(arena).into_iter())
             .chain(packages.value.iter_tokens(arena))
-            .chain(provides.iter_tokens(arena))
             .chain(old_imports.iter().flat_map(|i| i.item.iter_tokens(arena)))
             .collect_in(arena)
     }
