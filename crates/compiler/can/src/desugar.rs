@@ -214,7 +214,7 @@ fn new_op_call_expr<'a>(
             let right = desugar_expr(env, scope, right);
 
             let ok_var = env.arena.alloc_str(&format!(
-                "double_question_ok_{}_{}",
+                "#double_question_ok_{}_{}",
                 left.region.start().offset,
                 left.region.end().offset
             ));
@@ -264,7 +264,7 @@ fn new_op_call_expr<'a>(
             let right = desugar_expr(env, scope, right);
 
             let ok_var = env.arena.alloc_str(&format!(
-                "single_question_ok_{}_{}",
+                "#single_question_ok_{}_{}",
                 left.region.start().offset,
                 left.region.end().offset
             ));
@@ -292,7 +292,7 @@ fn new_op_call_expr<'a>(
             });
 
             let err_var = env.arena.alloc_str(&format!(
-                "single_question_err_{}_{}",
+                "#single_question_err_{}_{}",
                 left.region.start().offset,
                 left.region.end().offset
             ));

@@ -986,7 +986,7 @@ mod test_can {
         // Assert that we desugar to:
         //
         // when Str.to_u64("123")
-        //   Ok(double_question_ok_0_17) -> Ok(double_question_ok_0_17)
+        //   Ok(#double_question_ok_0_17) -> Ok(#double_question_ok_0_17)
         //   Err(_) -> Num.max_u64
 
         let (cond_expr, branches) = assert_when(&out.loc_expr.value);
@@ -1002,12 +1002,12 @@ mod test_can {
         assert_pattern_tag_apply_with_ident(
             &branches[0].patterns[0].pattern.value,
             "Ok",
-            "double_question_ok_0_17",
+            "#double_question_ok_0_17",
             &out.interns,
         );
         assert_var_usage(
             &branches[0].value.value,
-            "double_question_ok_0_17",
+            "#double_question_ok_0_17",
             &out.interns,
         );
 
@@ -1030,8 +1030,8 @@ mod test_can {
         // Assert that we desugar to:
         //
         // when Str.to_u64("123")
-        //   Ok(single_question_ok_0_17) -> single_question_ok_0_17
-        //   Err(single_question_err_0_17) -> return Err(FailedToConvert(single_question_err_0_17))
+        //   Ok(#single_question_ok_0_17) -> #single_question_ok_0_17
+        //   Err(#single_question_err_0_17) -> return Err(FailedToConvert(#single_question_err_0_17))
 
         let (cond_expr, branches) = assert_when(&out.loc_expr.value);
         let cond_args = assert_func_call(cond_expr, "to_u64", CalledVia::Space, &out.interns);
@@ -1046,19 +1046,19 @@ mod test_can {
         assert_pattern_tag_apply_with_ident(
             &branches[0].patterns[0].pattern.value,
             "Ok",
-            "single_question_ok_0_17",
+            "#single_question_ok_0_17",
             &out.interns,
         );
         assert_var_usage(
             &branches[0].value.value,
-            "single_question_ok_0_17",
+            "#single_question_ok_0_17",
             &out.interns,
         );
 
         assert_pattern_tag_apply_with_ident(
             &branches[1].patterns[0].pattern.value,
             "Err",
-            "single_question_err_0_17",
+            "#single_question_err_0_17",
             &out.interns,
         );
 
@@ -1069,7 +1069,7 @@ mod test_can {
         assert_eq!(inner_err.len(), 1);
         assert_var_usage(
             &inner_err[0].1.value,
-            "single_question_err_0_17",
+            "#single_question_err_0_17",
             &out.interns,
         );
     }
