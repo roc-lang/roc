@@ -123,11 +123,11 @@ DecoderFormatting implements
 ##         _ -> { result: Err(TooShort), rest: bytes }
 ## ```
 custom : (List U8, fmt -> DecodeResult val) -> Decoder val fmt where fmt implements DecoderFormatting
-custom = \decode -> @Decoder(decode)
+custom = |decode| @Decoder(decode)
 
 ## Decode a `List U8` utf-8 bytes using a specific [Decoder] function
 decode_with : List U8, Decoder val fmt, fmt -> DecodeResult val where fmt implements DecoderFormatting
-decode_with = \bytes, @Decoder(decode), fmt -> decode(bytes, fmt)
+decode_with = |bytes, @Decoder(decode), fmt| decode(bytes, fmt)
 
 ## Decode a `List U8` utf-8 bytes and return a [DecodeResult](#DecodeResult)
 ## ```roc
@@ -139,7 +139,7 @@ decode_with = \bytes, @Decoder(decode), fmt -> decode(bytes, fmt)
 ##     actual.result == expected
 ## ```
 from_bytes_partial : List U8, fmt -> DecodeResult val where val implements Decoding, fmt implements DecoderFormatting
-from_bytes_partial = \bytes, fmt -> decode_with(bytes, decoder, fmt)
+from_bytes_partial = |bytes, fmt| decode_with(bytes, decoder, fmt)
 
 ## Decode a `List U8` utf-8 bytes and return a [Result] with no leftover bytes
 ## expected. If successful returns `Ok val`, however, if there are bytes
@@ -153,7 +153,7 @@ from_bytes_partial = \bytes, fmt -> decode_with(bytes, decoder, fmt)
 ##     actual == expected
 ## ```
 from_bytes : List U8, fmt -> Result val [Leftover (List U8)]DecodeError where val implements Decoding, fmt implements DecoderFormatting
-from_bytes = \bytes, fmt ->
+from_bytes = |bytes, fmt|
     when from_bytes_partial(bytes, fmt) is
         { result, rest } ->
             if List.is_empty(rest) then
@@ -165,4 +165,4 @@ from_bytes = \bytes, fmt ->
 
 ## Transform the `val` of a [DecodeResult]
 map_result : DecodeResult a, (a -> b) -> DecodeResult b
-map_result = \{ result, rest }, mapper -> { result: Result.map_ok(result, mapper), rest }
+map_result = |{ result, rest }, mapper| { result: Result.map_ok(result, mapper), rest }

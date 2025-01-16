@@ -618,7 +618,7 @@ is_gte : Num a, Num a -> Bool
 ## If either argument is [*NaN*](Num.is_nan), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
 is_approx_eq : Frac a, Frac a, { rtol ?? Frac a, atol ?? Frac a } -> Bool
-is_approx_eq = \x, y, { rtol ?? 0.00001, atol ?? 0.00000001 } ->
+is_approx_eq = |x, y, { rtol ?? 0.00001, atol ?? 0.00000001 }|
     eq = x <= y && x >= y
     meets_tolerance = Num.abs_diff(x, y) <= Num.max(atol, (rtol * Num.max(Num.abs(x), Num.abs(y))))
     eq || meets_tolerance
@@ -630,21 +630,21 @@ is_zero : Num a -> Bool
 ##
 ## Examples of even numbers: 0, 2, 4, 6, 8, -2, -4, -6, -8
 is_even : Int a -> Bool
-is_even = \x -> Num.is_multiple_of(x, 2)
+is_even = |x| Num.is_multiple_of(x, 2)
 
 ## A number is odd if dividing it by 2 gives a remainder of 1.
 ##
 ## Examples of odd numbers: 1, 3, 5, 7, -1, -3, -5, -7
 is_odd : Int a -> Bool
-is_odd = \x -> Bool.not(Num.is_multiple_of(x, 2))
+is_odd = |x| Bool.not(Num.is_multiple_of(x, 2))
 
 ## Positive numbers are greater than `0`.
 is_positive : Num a -> Bool
-is_positive = \x -> x > 0
+is_positive = |x| x > 0
 
 ## Negative numbers are less than `0`.
 is_negative : Num a -> Bool
-is_negative = \x -> x < 0
+is_negative = |x| x < 0
 
 to_frac : Num * -> Frac *
 
@@ -709,7 +709,7 @@ abs : Num a -> Num a
 ## *overflow*. For [F64] and [F32], overflow results in an answer of either
 ## ∞ or -∞. For all other number types, overflow results in a panic.
 abs_diff : Num a, Num a -> Num a
-abs_diff = \a, b ->
+abs_diff = |a, b|
     if a > b then
         a - b
     else
@@ -812,7 +812,7 @@ mul : Num a, Num a -> Num a
 ## Num.min(3.0, -3.0)
 ## ```
 min : Num a, Num a -> Num a
-min = \a, b ->
+min = |a, b|
     if a < b then
         a
     else
@@ -826,7 +826,7 @@ min = \a, b ->
 ## Num.max(3.0, -3.0)
 ## ```
 max : Num a, Num a -> Num a
-max = \a, b ->
+max = |a, b|
     if a > b then
         a
     else
@@ -868,7 +868,7 @@ atan : Frac a -> Frac a
 sqrt : Frac a -> Frac a
 
 sqrt_checked : Frac a -> Result (Frac a) [SqrtOfNegative]
-sqrt_checked = \x ->
+sqrt_checked = |x|
     if x < 0.0 then
         Err(SqrtOfNegative)
     else
@@ -878,7 +878,7 @@ sqrt_checked = \x ->
 log : Frac a -> Frac a
 
 log_checked : Frac a -> Result (Frac a) [LogNeedsPositive]
-log_checked = \x ->
+log_checked = |x|
     if x <= 0.0 then
         Err(LogNeedsPositive)
     else
@@ -918,7 +918,7 @@ log_checked = \x ->
 div : Frac a, Frac a -> Frac a
 
 div_checked : Frac a, Frac a -> Result (Frac a) [DivByZero]
-div_checked = \a, b ->
+div_checked = |a, b|
     if Num.is_zero(b) then
         Err(DivByZero)
     else
@@ -927,7 +927,7 @@ div_checked = \a, b ->
 div_ceil : Int a, Int a -> Int a
 
 div_ceil_checked : Int a, Int a -> Result (Int a) [DivByZero]
-div_ceil_checked = \a, b ->
+div_ceil_checked = |a, b|
     if Num.is_zero(b) then
         Err(DivByZero)
     else
@@ -950,14 +950,14 @@ div_ceil_checked = \a, b ->
 ## Num.div_trunc(8, -3)
 ## ```
 div_trunc : Int a, Int a -> Int a
-div_trunc = \a, b ->
+div_trunc = |a, b|
     if Num.is_zero(b) then
         crash("Integer division by 0!")
     else
         Num.div_trunc_unchecked(a, b)
 
 div_trunc_checked : Int a, Int a -> Result (Int a) [DivByZero]
-div_trunc_checked = \a, b ->
+div_trunc_checked = |a, b|
     if Num.is_zero(b) then
         Err(DivByZero)
     else
@@ -979,14 +979,14 @@ div_trunc_unchecked : Int a, Int a -> Int a
 ## Num.rem(-8, -3)
 ## ```
 rem : Int a, Int a -> Int a
-rem = \a, b ->
+rem = |a, b|
     if Num.is_zero(b) then
         crash("Integer division by 0!")
     else
         Num.rem_unchecked(a, b)
 
 rem_checked : Int a, Int a -> Result (Int a) [DivByZero]
-rem_checked = \a, b ->
+rem_checked = |a, b|
     if Num.is_zero(b) then
         Err(DivByZero)
     else
@@ -1013,7 +1013,7 @@ bitwise_or : Int a, Int a -> Int a
 ## Returns the complement of x - the number you get by switching each 1 for a
 ## 0 and each 0 for a 1. This is the same as -x - 1.
 bitwise_not : Int a -> Int a
-bitwise_not = \n ->
+bitwise_not = |n|
     bitwise_xor(n, sub_wrap(0, 1))
 
 ## Bitwise left shift of a number by another
@@ -1134,7 +1134,7 @@ add_saturated : Num a, Num a -> Num a
 ## This is the same as [Num.add] except if the operation overflows, instead of
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
 add_checked : Num a, Num a -> Result (Num a) [Overflow]
-add_checked = \a, b ->
+add_checked = |a, b|
     result = add_checked_lowlevel(a, b)
 
     if result.b then
@@ -1160,7 +1160,7 @@ sub_saturated : Num a, Num a -> Num a
 ## This is the same as [Num.sub] except if the operation overflows, instead of
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
 sub_checked : Num a, Num a -> Result (Num a) [Overflow]
-sub_checked = \a, b ->
+sub_checked = |a, b|
     result = sub_checked_lowlevel(a, b)
 
     if result.b then
@@ -1184,7 +1184,7 @@ mul_saturated : Num a, Num a -> Num a
 ## This is the same as [Num.mul] except if the operation overflows, instead of
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
 mul_checked : Num a, Num a -> Result (Num a) [Overflow]
-mul_checked = \a, b ->
+mul_checked = |a, b|
     result = mul_checked_lowlevel(a, b)
 
     if result.b then
@@ -1464,7 +1464,7 @@ f64_from_parts : { sign : Bool, exponent : U16, fraction : U64 } -> F64
 ## expect Num.from_bool(Bool.false) == 0
 ## ```
 from_bool : Bool -> Num *
-from_bool = \bool ->
+from_bool = |bool|
     if bool then
         1
     else

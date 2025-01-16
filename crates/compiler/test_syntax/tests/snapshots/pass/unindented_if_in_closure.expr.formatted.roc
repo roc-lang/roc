@@ -1,4 +1,4 @@
-\A ->
+|A|
     if !s! then
         f
     else

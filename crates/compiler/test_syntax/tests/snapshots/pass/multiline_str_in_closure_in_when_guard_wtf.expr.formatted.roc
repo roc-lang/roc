@@ -1,6 +1,6 @@
 when
     f
 is
-    s if \t ->
+    s if |t|
         """
         """ -> e

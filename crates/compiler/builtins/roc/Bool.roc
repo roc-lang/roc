@@ -34,7 +34,7 @@ Eq implements
 ## `Bool` implements the `Eq` ability.
 Bool := [True, False] implements [Eq { is_eq: bool_is_eq }]
 
-bool_is_eq = \@Bool(b1), @Bool(b2) -> structural_eq(b1, b2)
+bool_is_eq = |@Bool(b1), @Bool(b2)| structural_eq(b1, b2)
 
 ## The boolean true value.
 true : Bool
@@ -115,7 +115,7 @@ not : Bool -> Bool
 ## expect "Apples" != "Oranges"
 ## ```
 is_not_eq : a, a -> Bool where a implements Eq
-is_not_eq = \a, b -> structural_not_eq(a, b)
+is_not_eq = |a, b| structural_not_eq(a, b)
 
 # INTERNAL COMPILER USE ONLY: used to lower calls to `is_eq` to structural
 # equality via the `Eq` low-level for derived types.

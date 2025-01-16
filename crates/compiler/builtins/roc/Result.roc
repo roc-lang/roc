@@ -23,7 +23,7 @@ Result ok err : [Ok ok, Err err]
 ## Result.is_ok(Ok(5))
 ## ```
 is_ok : Result ok err -> Bool
-is_ok = \result ->
+is_ok = |result|
     when result is
         Ok(_) -> Bool.true
         Err(_) -> Bool.false
@@ -33,7 +33,7 @@ is_ok = \result ->
 ## Result.is_err(Err("uh oh"))
 ## ```
 is_err : Result ok err -> Bool
-is_err = \result ->
+is_err = |result|
     when result is
         Ok(_) -> Bool.false
         Err(_) -> Bool.true
@@ -45,7 +45,7 @@ is_err = \result ->
 ## Result.with_default(Err("uh oh"), 42)
 ## ```
 with_default : Result ok err, ok -> ok
-with_default = \result, default ->
+with_default = |result, default|
     when result is
         Ok(value) -> value
         Err(_) -> default
@@ -61,7 +61,7 @@ with_default = \result, default ->
 ## Functions like `map` are common in Roc; see for example [List.map],
 ## `Set.map`, and `Dict.map`.
 map_ok : Result a err, (a -> b) -> Result b err
-map_ok = \result, transform ->
+map_ok = |result, transform|
     when result is
         Ok(v) -> Ok(transform(v))
         Err(e) -> Err(e)
@@ -74,14 +74,14 @@ map_ok = \result, transform ->
 ## Result.map_err(Ok(12), Str.is_empty)
 ## ```
 map_err : Result ok a, (a -> b) -> Result ok b
-map_err = \result, transform ->
+map_err = |result, transform|
     when result is
         Ok(v) -> Ok(v)
         Err(e) -> Err(transform(e))
 
 ## Maps both the `Ok` and `Err` values of a `Result` to new values.
 map_both : Result ok1 err1, (ok1 -> ok2), (err1 -> err2) -> Result ok2 err2
-map_both = \result, ok_transform, err_transform ->
+map_both = |result, ok_transform, err_transform|
     when result is
         Ok(val) -> Ok(ok_transform(val))
         Err(err) -> Err(err_transform(err))
@@ -89,7 +89,7 @@ map_both = \result, ok_transform, err_transform ->
 ## Maps the `Ok` values of two `Result`s to a new value using a given transformation,
 ## or returns the first `Err` value encountered.
 map2 : Result a err, Result b err, (a, b -> c) -> Result c err
-map2 = \first_result, second_result, transform ->
+map2 = |first_result, second_result, transform|
     when (first_result, second_result) is
         (Ok(first), Ok(second)) -> Ok(transform(first, second))
         (Err(err), _) -> Err(err)
@@ -103,7 +103,7 @@ map2 = \first_result, second_result, transform ->
 ## Result.try(Err("yipes!"), (\num -> if num < 0 then Err("negative!") else Ok(-num)))
 ## ```
 try : Result a err, (a -> Result b err) -> Result b err
-try = \result, transform ->
+try = |result, transform|
     when result is
         Ok(v) -> transform(v)
         Err(e) -> Err(e)
@@ -116,7 +116,7 @@ try = \result, transform ->
 ## Result.on_err(Err("42"), (\error_num -> Str.to_u64(error_num)))
 ## ```
 on_err : Result a err, (err -> Result a other_err) -> Result a other_err
-on_err = \result, transform ->
+on_err = |result, transform|
     when result is
         Ok(v) -> Ok(v)
         Err(e) -> transform(e)
@@ -132,7 +132,7 @@ on_err = \result, transform ->
 ## )
 ## ```
 on_err! : Result a err, (err => Result a other_err) => Result a other_err
-on_err! = \result, transform! ->
+on_err! = |result, transform!|
     when result is
         Ok(v) -> Ok(v)
         Err(e) -> transform!(e)

@@ -752,7 +752,7 @@ fn parse_stmt_operator_chain<'a>(
                 // try an operator
                 return parse_stmt_after_apply(
                     arena,
-                    state,
+                    state.clone(),
                     min_indent,
                     call_min_indent,
                     expr_state,
@@ -1902,6 +1902,10 @@ fn parse_stmt_after_apply<'a>(
 ) -> ParseResult<'a, Stmt<'a>, EExpr<'a>> {
     let before_op = state.clone();
     match loc(operator()).parse(arena, state.clone(), call_min_indent) {
+        Err((MadeProgress, EExpr::BadOperator("|", _))) => {
+            let expr = parse_expr_final(expr_state, arena);
+            return Ok((MadeProgress, Stmt::Expr(expr), state));
+        }
         Err((MadeProgress, f)) => Err((MadeProgress, f)),
         Ok((_, loc_op, state)) => {
             expr_state.consume_spaces(arena);
@@ -2342,41 +2346,38 @@ fn closure_help<'a>(check_for_arrow: CheckForArrow) -> impl Parser<'a, Expr<'a>,
 }
 
 fn closure_new_syntax_help<'a>() -> impl Parser<'a, Expr<'a>, EClosure<'a>> {
-    move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
-        let parser = map_with_arena(
-            indented_seq_skip_first(
-                error_on_pizza(byte_indent(b'|', EClosure::Bar), EClosure::Start),
-                and(
-                    sep_by1_e(
-                        byte_indent(b',', EClosure::Comma),
-                        space0_around_ee(
-                            specialize_err(EClosure::Pattern, closure_param()),
-                            EClosure::IndentArg,
-                            EClosure::IndentArrow,
-                        ),
-                        EClosure::Arg,
+    map_with_arena(
+        indented_seq_skip_first(
+            error_on_pizza(byte_indent(b'|', EClosure::Bar), EClosure::Start),
+            and(
+                sep_by1_e(
+                    byte_indent(b',', EClosure::Comma),
+                    space0_around_ee(
+                        specialize_err(EClosure::Pattern, closure_param()),
+                        EClosure::IndentArg,
+                        EClosure::IndentArrow,
                     ),
-                    skip_first(
-                        // Parse the -> which separates params from body
-                        byte(b'|', EClosure::Bar),
-                        // Parse the body
-                        block(
-                            CheckForArrow(false),
-                            true,
-                            EClosure::IndentBody,
-                            EClosure::Body,
-                        ),
+                    EClosure::Arg,
+                ),
+                skip_first(
+                    // Parse the -> which separates params from body
+                    byte(b'|', EClosure::Bar),
+                    // Parse the body
+                    block(
+                        CheckForArrow(false),
+                        true,
+                        EClosure::IndentBody,
+                        EClosure::Body,
                     ),
                 ),
             ),
-            |arena: &'a Bump, (params, body)| {
-                let params: Vec<'a, Loc<Pattern<'a>>> = params;
-                let params: &'a [Loc<Pattern<'a>>] = params.into_bump_slice();
-                Expr::Closure(params, arena.alloc(body))
-            },
-        );
-        parser.parse(arena, state, min_indent)
-    }
+        ),
+        |arena: &'a Bump, (params, body)| {
+            let params: Vec<'a, Loc<Pattern<'a>>> = params;
+            let params: &'a [Loc<Pattern<'a>>] = params.into_bump_slice();
+            Expr::Closure(params, arena.alloc(body))
+        },
+    )
 }
 
 fn closure_old_syntax_help<'a>(
@@ -3069,6 +3070,11 @@ fn parse_stmt_seq<'a, E: SpaceProblem + 'a>(
                     // If this expr might be followed by an arrow (e.g. in a when branch guard),
                     // then we also need to treat that as a terminator.
                     if !check_for_arrow.0 && new_state.bytes().starts_with(b"->") {
+                        state = state_before_space;
+                        break;
+                    }
+
+                    if new_state.bytes().starts_with(b"|") {
                         state = state_before_space;
                         break;
                     }
