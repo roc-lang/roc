@@ -30,6 +30,11 @@ const MIN_SECTION_ALIGNMENT: usize = 0x40;
 const PLT_ADDRESS_OFFSET: u64 = 0x10;
 const STUB_ADDRESS_OFFSET: u64 = 0x06;
 
+// We assume existence of __ROC_TEXT,__text, __ROC_DATA_CONST,__const, __ROC_DATA,__data and __ROC_DATA,__bss.
+// This will mostly grow in size as the linker matures.
+const NUM_ROC_SEGMENTS: u32 = 3;
+const NUM_ROC_SECTIONS: u32 = 4;
+
 // struct MachoDynamicDeps {
 //     got_app_syms: Vec<(String, usize)>,
 //     got_sections: Vec<(usize, usize)>,
@@ -630,9 +635,7 @@ fn gen_macho_le(
     // https://github.com/kubkon/zignature
     // https://github.com/kubkon/zig-deploy
 
-    use macho::{
-        Section64, SegmentCommand64, VM_PROT_EXECUTE as E, VM_PROT_READ as R, VM_PROT_WRITE as W,
-    };
+    use macho::{VM_PROT_EXECUTE as E, VM_PROT_READ as R, VM_PROT_WRITE as W};
 
     let exec_header = load_struct_inplace::<macho::MachHeader64<LE>>(exec_data, 0);
     let size_of_header = mem::size_of::<macho::MachHeader64<LE>>();
@@ -640,11 +643,7 @@ fn gen_macho_le(
     let size_of_cmds = exec_header.sizeofcmds.get(LE) as usize;
 
     // Add a new text segment and data segment load commands.
-    // We assume existence of __ROC_TEXT,__text, __ROC_DATA_CONST,__const, __ROC_DATA,__data and __ROC_DATA,__bss.
-    let segment_cmd_size = mem::size_of::<SegmentCommand64<LE>>();
-    let section_size = mem::size_of::<Section64<LE>>();
-    let num_roc_cmds = 3u32;
-    let required_size = segment_cmd_size * num_roc_cmds as usize + section_size * 4;
+    let required_size = headerpad_size();
 
     // We need the full command size, including the dynamic-length string at the end.
     // To get that, we need to load the command.
@@ -655,7 +654,13 @@ fn gen_macho_le(
         md.start_of_first_section - (size_of_cmds + size_of_header - total_cmd_size);
 
     if available_size < required_size {
-        internal_error!("Not enough free space between end of load commands and start of first section\nConsider recompiling the host with -headerpad <size> linker flag");
+        // TODO I wrongly assumed that Roc controls the 'host' build process, however, that is not the case.
+        // Therefore, we have no way of automatically enforcing that the host will have enough headarpad space.
+        // I need to check if the previous approach of shifting everything in file offsets is actually possible.
+        println!();
+        println!("Not enough free space between end of load commands and start of first section in the host.");
+        println!("Consider recompiling the host with -headerpad 0x{required_size:x} linker flag.");
+        println!();
     }
 
     md.exec_len = exec_data.len() as u64;
@@ -752,7 +757,7 @@ fn gen_macho_le(
     }
 
     let out_header = load_struct_inplace_mut::<macho::MachHeader64<LE>>(&mut out_mmap, 0);
-    let num_load_cmds = num_load_cmds + num_roc_cmds - 1;
+    let num_load_cmds = num_load_cmds + NUM_ROC_SEGMENTS - 1;
     let size_of_cmds = (size_of_cmds - total_cmd_size + required_size) as u32;
     out_header.ncmds.set(LE, num_load_cmds);
     out_header.sizeofcmds.set(LE, size_of_cmds);
@@ -1602,4 +1607,13 @@ fn page_size(arch: Architecture) -> u64 {
         Architecture::Aarch64 => 0x4000,
         _ => unreachable!(),
     }
+}
+
+/// Calculate the required headerpad size, that is, free space between the end of any set of existing
+/// load commands and the start of first section.
+pub(crate) fn headerpad_size() -> usize {
+    use macho::{Section64, SegmentCommand64};
+    let segment_cmd_size = mem::size_of::<SegmentCommand64<LE>>();
+    let section_size = mem::size_of::<Section64<LE>>();
+    segment_cmd_size * NUM_ROC_SEGMENTS as usize + section_size * NUM_ROC_SECTIONS as usize
 }
