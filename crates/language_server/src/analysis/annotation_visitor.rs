@@ -92,8 +92,7 @@ pub fn find_declaration_at(
 
         fn visit_expr(&mut self, expr: &Expr, region: Region, var: Variable) {
             if self.should_visit(region) {
-                if let Expr::Call(_, args, CalledVia::BangSuffix | CalledVia::QuestionSuffix) = expr
-                {
+                if let Expr::Call(_, args, CalledVia::QuestionSuffix) = expr {
                     let Expr::Closure(ClosureData { arguments, .. }) = &args[1].1.value else {
                         internal_error!("Suffixed expression did not contain a closure")
                     };

@@ -687,7 +687,7 @@ mod tests {
     #[tokio::test]
     async fn test_annotate_single() {
         let edit = code_action_edits(
-            DOC_LIT.to_string() + "main = Task.ok {}",
+            DOC_LIT.to_string() + r#"main = "Hello, world!""#,
             Position::new(3, 2),
             "Add signature",
         )
@@ -706,7 +706,7 @@ mod tests {
                             character: 0,
                         },
                     },
-                    new_text: "main : Task {} *\n",
+                    new_text: "main : Str\n",
                 },
             ]
         "#]]
@@ -719,7 +719,7 @@ mod tests {
             DOC_LIT.to_string()
                 + indoc! {r#"
                 other = \_ ->
-                    Task.ok {}
+                    "Something else?"
 
                 main =
                     other {}
@@ -742,7 +742,7 @@ mod tests {
                             character: 0,
                         },
                     },
-                    new_text: "other : * -> Task {} *\n",
+                    new_text: "other : * -> Str\n",
                 },
                 TextEdit {
                     range: Range {
@@ -755,7 +755,7 @@ mod tests {
                             character: 0,
                         },
                     },
-                    new_text: "main : Task {} *\n",
+                    new_text: "main : Str\n",
                 },
             ]
         "#]]

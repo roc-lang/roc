@@ -566,13 +566,13 @@ main =
         let before = HEADER.to_string()
             + indoc! {r#"
             main =
-                Task.ok {}"#};
+                "Hello, World!""#};
 
         let after = HEADER.to_string()
             + indoc! {r#"
-            main : Task {} *
+            main : Str
             main =
-                Task.ok {}
+                "Hello, World!"
             "#};
 
         let annotated = annotate_string(before);
@@ -593,16 +593,16 @@ main =
     fn test_annotate_destructure() {
         let before = HEADER.to_string()
             + indoc! {r#"
-            {a, b} = {a: Task.ok {}, b: (1, 2)}
+            {a, b} = {a: "zero", b: (1, 2)}
 
             main = a"#};
 
         let after = HEADER.to_string()
             + indoc! {r#"
-            {a, b} : { a : Task {} *, b : ( Num *, Num * )* }
-            {a, b} = {a: Task.ok {}, b: (1, 2)}
+            {a, b} : { a : Str, b : ( Num *, Num * )* }
+            {a, b} = {a: "zero", b: (1, 2)}
 
-            main : Task {} *
+            main : Str
             main = a
             "#};
 
