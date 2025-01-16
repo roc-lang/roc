@@ -63,8 +63,8 @@ struct Metadata {
     surgeries: MutMap<String, Vec<SurgeryEntry>>,
     dynamic_symbol_indices: MutMap<String, u64>,
     roc_symbol_vaddresses: MutMap<String, u64>,
-    exec_len: u64,
-    load_align_constraint: u64,
+    exec_len: usize,
+    load_align_constraint: usize,
     last_vaddr: u64,
     // Offset just after the last load command.
     // TODO: this is easy to re-calculate on the fly from just the header.
@@ -654,18 +654,16 @@ fn gen_macho_le(
         md.start_of_first_section - (size_of_cmds + size_of_header - total_cmd_size);
 
     if available_size < required_size {
-        // TODO I wrongly assumed that Roc controls the 'host' build process, however, that is not the case.
-        // Therefore, we have no way of automatically enforcing that the host will have enough headarpad space.
-        // I need to check if the previous approach of shifting everything in file offsets is actually possible.
-        println!();
-        println!("Not enough free space between end of load commands and start of first section in the host.");
-        println!("Consider recompiling the host with -headerpad 0x{required_size:x} linker flag.");
-        println!();
+        // Inform the user that the host has to be relinked with `-headerpad <size>` flag so that the surgical linker
+        // can add Roc specific load commands and not clobber the first section.
+        let optimal_headerpad_size = align_by_constraint(required_size, md.load_align_constraint);
+        internal_error!("Not enough free space between end of load commands and start of first section in the host.
+            Consider recompiling the host with \"-Wl,-headerpad,0x{optimal_headerpad_size:x}\" linker flag.");
     }
 
-    md.exec_len = exec_data.len() as u64;
+    md.exec_len = exec_data.len();
 
-    let mut out_mmap = open_mmap_mut(out_filename, md.exec_len as usize);
+    let mut out_mmap = open_mmap_mut(out_filename, md.exec_len);
     let end_of_cmds = size_of_cmds + mem::size_of_val(exec_header);
 
     // Copy load commands over making space for Roc-specific commands
@@ -953,8 +951,8 @@ pub(crate) fn surgery_macho(
     let loading_metadata_duration = loading_metadata_start.elapsed();
 
     let load_and_mmap_start = Instant::now();
-    let max_out_len = md.exec_len + roc_app_bytes.len() as u64 + md.load_align_constraint;
-    let mut exec_mmap = open_mmap_mut(executable_path, max_out_len as usize);
+    let max_out_len = md.exec_len + roc_app_bytes.len() + md.load_align_constraint;
+    let mut exec_mmap = open_mmap_mut(executable_path, max_out_len);
     let load_and_mmap_duration = load_and_mmap_start.elapsed();
 
     let out_gen_start = Instant::now();
@@ -1026,15 +1024,12 @@ fn surgery_macho_help(
     offset_ref: &mut usize, // TODO return this instead of taking a mutable reference to it
     app_obj: object::File,
 ) {
-    let mut offset = align_by_constraint(md.exec_len as usize, MIN_SECTION_ALIGNMENT);
+    let mut offset = align_by_constraint(md.exec_len, MIN_SECTION_ALIGNMENT);
     // let new_rodata_section_offset = offset;
 
     // Align physical and virtual address of new segment.
-    let mut virt_offset = align_to_offset_by_constraint(
-        md.last_vaddr as usize,
-        offset,
-        md.load_align_constraint as usize,
-    );
+    let mut virt_offset =
+        align_to_offset_by_constraint(md.last_vaddr as usize, offset, md.load_align_constraint);
     let new_rodata_section_vaddr = virt_offset;
     if verbose {
         println!();
@@ -1093,8 +1088,7 @@ fn surgery_macho_help(
         .chain(text_sections.iter())
     {
         offset = align_by_constraint(offset, MIN_SECTION_ALIGNMENT);
-        virt_offset =
-            align_to_offset_by_constraint(virt_offset, offset, md.load_align_constraint as usize);
+        virt_offset = align_to_offset_by_constraint(virt_offset, offset, md.load_align_constraint);
         if verbose {
             println!(
                 "Section, {}, is being put at offset: {:+x}(virt: {:+x})",
@@ -1285,7 +1279,7 @@ fn surgery_macho_help(
 
     // Flush app only data to speed up write to disk.
     exec_mmap
-        .flush_async_range(md.exec_len as usize, offset - md.exec_len as usize)
+        .flush_async_range(md.exec_len, offset - md.exec_len)
         .unwrap_or_else(|e| internal_error!("{}", e));
 
     // TODO: look into merging symbol tables, debug info, and eh frames to enable better debugger experience.
@@ -1601,7 +1595,7 @@ fn format_load_command(cmd: u32) -> impl std::fmt::Display {
     Inner(cmd)
 }
 
-fn page_size(arch: Architecture) -> u64 {
+fn page_size(arch: Architecture) -> usize {
     match arch {
         Architecture::X86_64 => 0x1000,
         Architecture::Aarch64 => 0x4000,
