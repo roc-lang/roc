@@ -1384,7 +1384,7 @@ map_try = \list, to_result ->
         list,
         [],
         \state, elem ->
-            Result.map(
+            Result.map_ok(
                 to_result(elem),
                 \ok ->
                     List.append(state, ok),

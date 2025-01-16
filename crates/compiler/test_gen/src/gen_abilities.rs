@@ -337,7 +337,7 @@ fn decode() {
             # impl MDecoding for MyU8
             decoder = @MDecoder \lst, fmt ->
                 { result, rest } = decode_with lst u8 fmt
-                { result: Result.map result (\n -> @MyU8 n), rest }
+                { result: Result.map_ok result (\n -> @MyU8 n), rest }
 
             myU8 =
                 when from_bytes [15] (@Linear {}) is
@@ -2210,7 +2210,7 @@ fn issue_4772_weakened_monomorphic_destructure() {
                             Err (ParsingFailure "not a number")
 
                 main =
-                    get_number |> Result.map .val |> Result.with_default 0
+                    get_number |> Result.map_ok .val |> Result.with_default 0
                 "#
             ),
             1234i64,

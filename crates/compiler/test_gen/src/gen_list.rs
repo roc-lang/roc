@@ -554,7 +554,7 @@ fn list_split_first() {
     assert_evals_to!(
         r"
                List.split_first [2, 3, 0, 4, 0, 6, 0, 8, 9] 0
-               |> Result.map .before
+               |> Result.map_ok .before
         ",
         RocResult::ok(RocList::<i64>::from_slice(&[2, 3])),
         RocResult<RocList<i64>, ()>
@@ -562,7 +562,7 @@ fn list_split_first() {
     assert_evals_to!(
         r"
                List.split_first [2, 3, 0, 4, 0, 6, 0, 8, 9] 0
-               |> Result.map .after
+               |> Result.map_ok .after
         ",
         RocResult::ok(RocList::<i64>::from_slice(&[4, 0, 6, 0, 8, 9])),
         RocResult<RocList<i64>, ()>
@@ -587,7 +587,7 @@ fn list_split_last() {
     assert_evals_to!(
         r"
                List.split_last [2, 3, 0, 4, 0, 6, 0, 8, 9] 0
-               |> Result.map .before
+               |> Result.map_ok .before
         ",
         RocResult::ok(RocList::<i64>::from_slice(&[2, 3, 0, 4, 0, 6])),
         RocResult<RocList<i64>, ()>
@@ -595,7 +595,7 @@ fn list_split_last() {
     assert_evals_to!(
         r"
                List.split_last [2, 3, 0, 4, 0, 6, 0, 8, 9] 0
-               |> Result.map .after
+               |> Result.map_ok .after
         ",
         RocResult::ok(RocList::<i64>::from_slice(&[8, 9])),
         RocResult<RocList<i64>, ()>
@@ -2164,7 +2164,7 @@ fn first_wildcard_empty_list() {
     assert_evals_to!(
         indoc!(
             r"
-            List.last [] |> Result.map (\_ -> 0i64)
+            List.last [] |> Result.map_ok (\_ -> 0i64)
             "
         ),
         RocResult::err(()),
@@ -2209,7 +2209,7 @@ fn last_wildcard_empty_list() {
     assert_evals_to!(
         indoc!(
             r"
-            List.last [] |> Result.map (\_ -> 0i64)
+            List.last [] |> Result.map_ok (\_ -> 0i64)
             "
         ),
         RocResult::err(()),
@@ -2261,7 +2261,7 @@ fn get_wildcard_empty_list() {
         indoc!(
             r"
             List.get [] 0
-            |> Result.map (\_ -> {})
+            |> Result.map_ok (\_ -> {})
             "
         ),
         RocResult::err(()),
@@ -2978,7 +2978,7 @@ fn list_min() {
         indoc!(
             r"
             List.min []
-            |> Result.map (\_ -> {})
+            |> Result.map_ok (\_ -> {})
             "
         ),
         RocResult::err(()),
@@ -3003,7 +3003,7 @@ fn list_max() {
         indoc!(
             r"
             List.max []
-            |> Result.map (\_ -> {})
+            |> Result.map_ok (\_ -> {})
             "
         ),
         RocResult::err(()),

@@ -30,7 +30,7 @@ procedure Test.2 (Test.6):
         let Test.9 : List [<r>C List [<r>C List *self, C *self], C [<r>C List *self, C *self]] = UnionAtIndex (Id 0) (Index 0) Test.6;
         joinpoint #Derived_gen.3:
             dec Test.9;
-            let Test.21 : Str = "ValueNotExposed { module_name: ModuleName(IdentStr { string: \"Result\" }), ident: Ident(IdentStr { string: \"withDefault\" }), region: @662-680, exposed_values: ['is_err', 'on_err', 'map', 'map_err', 'with_default', 'try', 'is_ok', 'map_both', 'map2', 'on_err!'] }";
+            let Test.21 : Str = "ValueNotExposed { module_name: ModuleName(IdentStr { string: \"Result\" }), ident: Ident(IdentStr { string: \"withDefault\" }), region: @662-680, exposed_values: ['is_err', 'on_err', 'map_ok', 'map_err', 'with_default', 'try', 'is_ok', 'map_both', 'map2', 'on_err!'] }";
             Crash Test.21
         in
         let #Derived_gen.4 : Int1 = lowlevel RefCountIsUnique Test.6;

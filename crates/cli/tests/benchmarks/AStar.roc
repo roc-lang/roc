@@ -32,7 +32,7 @@ cheapest_open = \cost_fn, model ->
     )
     |> Quicksort.sort_by(.cost)
     |> List.first
-    |> Result.map(.position)
+    |> Result.map_ok(.position)
     |> Result.map_err(\_ -> {})
 
 reconstruct_path : Dict position position, position -> List position where position implements Hash & Eq

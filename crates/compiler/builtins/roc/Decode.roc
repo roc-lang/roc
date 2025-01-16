@@ -165,4 +165,4 @@ from_bytes = \bytes, fmt ->
 
 ## Transform the `val` of a [DecodeResult]
 map_result : DecodeResult a, (a -> b) -> DecodeResult b
-map_result = \{ result, rest }, mapper -> { result: Result.map(result, mapper), rest }
+map_result = \{ result, rest }, mapper -> { result: Result.map_ok(result, mapper), rest }
