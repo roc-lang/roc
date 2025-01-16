@@ -12,7 +12,7 @@ main! = \{} ->
 closure1 : {} -> Result {} []
 closure1 = \_ ->
     Ok(foo(to_unit_borrowed, "a long string such that it's malloced"))
-    |> Result.map(\_ -> {})
+    |> Result.map_ok(\_ -> {})
 
 to_unit_borrowed = \x -> Str.count_utf8_bytes(x)
 
@@ -25,8 +25,8 @@ closure2 = \_ ->
     x = "a long string such that it's malloced"
 
     Ok({})
-    |> Result.map(\_ -> x)
-    |> Result.map(to_unit)
+    |> Result.map_ok(\_ -> x)
+    |> Result.map_ok(to_unit)
 
 to_unit = \_ -> {}
 
@@ -37,7 +37,7 @@ closure3 = \_ ->
     x = "a long string such that it's malloced"
 
     Ok({})
-    |> Result.try(\_ -> Ok(x) |> Result.map(\_ -> {}))
+    |> Result.try(\_ -> Ok(x) |> Result.map_ok(\_ -> {}))
 
 # # ---
 closure4 : {} -> Result {} []
@@ -47,4 +47,4 @@ closure4 = \_ ->
 
     Ok({})
     |> Result.try(\_ -> Ok(x))
-    |> Result.map(\_ -> {})
+    |> Result.map_ok(\_ -> {})

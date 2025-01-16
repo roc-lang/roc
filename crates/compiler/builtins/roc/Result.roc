@@ -54,8 +54,8 @@ with_default = \result, default ->
 ## function on it. Then returns a new `Ok` holding the transformed value. If the
 ## result is `Err`, this has no effect. Use [map_err] to transform an `Err`.
 ## ```roc
-## Result.map(Ok(12), Num.neg)
-## Result.map(Err("yipes!"), Num.neg)
+## Result.map_ok(Ok(12), Num.neg)
+## Result.map_ok(Err("yipes!"), Num.neg)
 ## ```
 ##
 ## Functions like `map` are common in Roc; see for example [List.map],

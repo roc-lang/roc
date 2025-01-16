@@ -37,7 +37,7 @@ decoder = @MDecoder \lst, fmt ->
 #^^^^^^^{-1} MyU8#decoder(12): MDecoder MyU8 fmt where fmt implements MDecoderFormatting
     when decode_with lst u8 fmt is
         { result, rest } ->
-            { result: Result.map result (\n -> @MyU8 n), rest }
+            { result: Result.map_ok result (\n -> @MyU8 n), rest }
 
 my_u8 : Result MyU8 _
 my_u8 = from_bytes [15] (@Linear {})
