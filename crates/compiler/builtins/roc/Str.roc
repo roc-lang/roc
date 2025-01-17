@@ -1107,4 +1107,4 @@ drop_suffix = |haystack, suffix|
 ## To do a case-insensitive comparison of the ASCII characters in a string, use [`caseless_ascii_equals`](#caseless_ascii_equals).
 with_ascii_lowercased : Str -> Str
 
-expect Str.with_ascii_lowercased "cOFFÉ" == "XYZFÉ"
+expect Str.with_ascii_lowercased("cOFFÉ") == "coffÉ"
