@@ -1143,14 +1143,34 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                 inner
             }
             TypeAnnotation::Function(args, purity, res) => {
-                let (first, rest) = args.split_first().expect("args must not be empty");
-                let first_node = first
-                    .value
-                    .to_node(arena, flags)
-                    .add_parens(arena, Parens::InFunctionType);
-                let mut last_after: &'_ [CommentOrNewline<'_>] = &[];
+                let (first_node, rest, mut multiline): (_, &[Loc<TypeAnnotation<'a>>], bool) =
+                    match args.split_first() {
+                        None => (
+                            NodeInfo::item(Node::DelimitedSequence {
+                                braces: Braces::Round,
+                                indent_items: false,
+                                items: &[],
+                                after: Sp::empty(),
+                            }),
+                            &[],
+                            false,
+                        ),
+                        Some((first, rest)) => {
+                            let first_node = first
+                                .value
+                                .to_node(arena, flags)
+                                .add_parens(arena, Parens::InFunctionType);
+
+                            (
+                                first_node,
+                                rest,
+                                first_node.node.is_multiline() || !first_node.after.is_empty(),
+                            )
+                        }
+                    };
+
                 let mut rest_nodes = Vec::with_capacity_in(rest.len() + 2, arena);
-                let mut multiline = first_node.node.is_multiline() || !first_node.after.is_empty();
+                let mut last_after: &'_ [CommentOrNewline<'_>] = &[];
 
                 for item in rest {
                     let node = item

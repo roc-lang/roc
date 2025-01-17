@@ -1467,6 +1467,7 @@ impl<'a> Normalize<'a> for ETypeInParens<'a> {
             ETypeInParens::Type(inner_err, _) => {
                 ETypeInParens::Type(arena.alloc(inner_err.normalize(arena)), Position::zero())
             }
+            ETypeInParens::AfterZeroArgs(_) => ETypeInParens::AfterZeroArgs(Position::zero()),
             ETypeInParens::Space(inner_err, _) => {
                 ETypeInParens::Space(*inner_err, Position::zero())
             }

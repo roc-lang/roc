@@ -24,7 +24,7 @@ use crate::parser::{
 use crate::pattern::closure_param;
 use crate::state::State;
 use crate::string_literal::{self, StrLikeLiteral};
-use crate::type_annotation;
+use crate::type_annotation::{self, IsTrailingCommaValid};
 use crate::{header, keyword};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -1175,18 +1175,27 @@ fn import_ingested_file_annotation<'a>() -> impl Parser<'a, IngestedFileAnnotati
             backtrackable(space0_e(EImport::IndentColon)),
             byte(b':', EImport::Colon)
         ),
-        annotation: specialize_err(EImport::Annotation, type_annotation::located(false))
+        annotation: specialize_err(
+            EImport::Annotation,
+            type_annotation::located(IsTrailingCommaValid(false))
+        )
     })
 }
 
 fn alias_signature<'a>() -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EExpr<'a>> {
-    increment_min_indent(specialize_err(EExpr::Type, type_annotation::located(false)))
+    increment_min_indent(specialize_err(
+        EExpr::Type,
+        type_annotation::located(IsTrailingCommaValid(false)),
+    ))
 }
 
 fn opaque_signature<'a>(
 ) -> impl Parser<'a, (Loc<TypeAnnotation<'a>>, Option<&'a ImplementsAbilities<'a>>), EExpr<'a>> {
     and(
-        specialize_err(EExpr::Type, type_annotation::located_opaque_signature(true)),
+        specialize_err(
+            EExpr::Type,
+            type_annotation::located_opaque_signature(IsTrailingCommaValid(true)),
+        ),
         optional(map_with_arena(
             specialize_err(EExpr::Type, type_annotation::implements_abilities()),
             |arena, item| &*arena.alloc(item),
@@ -1298,7 +1307,10 @@ fn parse_stmt_alias_or_opaque<'a>(
                 let parser = specialize_err(
                     EExpr::Type,
                     space0_before_e(
-                        set_min_indent(indented_more, type_annotation::located(false)),
+                        set_min_indent(
+                            indented_more,
+                            type_annotation::located(IsTrailingCommaValid(false)),
+                        ),
                         EType::TIndentStart,
                     ),
                 );
@@ -1379,7 +1391,10 @@ mod ability {
                         space0_e(EAbility::DemandName),
                         byte(b':', EAbility::DemandColon),
                     ),
-                    specialize_err(EAbility::Type, type_annotation::located(true)),
+                    specialize_err(
+                        EAbility::Type,
+                        type_annotation::located(IsTrailingCommaValid(true)),
+                    ),
                 ),
             ),
             |(name, typ): (Loc<&'a str>, Loc<TypeAnnotation<'a>>)| AbilityMember {

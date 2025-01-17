@@ -1318,6 +1318,7 @@ pub enum ETypeInParens<'a> {
     ///
     Type(&'a EType<'a>, Position),
 
+    AfterZeroArgs(Position),
     ///
     Space(BadInputError, Position),
     ///
@@ -1335,6 +1336,7 @@ impl<'a> ETypeInParens<'a> {
             ETypeInParens::Empty(p)
             | ETypeInParens::End(p)
             | ETypeInParens::Open(p)
+            | ETypeInParens::AfterZeroArgs(p)
             | ETypeInParens::Space(_, p)
             | ETypeInParens::IndentOpen(p)
             | ETypeInParens::IndentEnd(p) => Region::from_pos(*p),

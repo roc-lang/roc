@@ -18,7 +18,7 @@ use crate::parser::{
 use crate::pattern::record_pattern_fields;
 use crate::state::State;
 use crate::string_literal::{self, parse_str_literal};
-use crate::type_annotation;
+use crate::type_annotation::{self, IsTrailingCommaValid};
 use roc_module::ident::IdentSuffix;
 use roc_module::symbol::ModuleId;
 use roc_region::all::{Loc, Position, Region};
@@ -800,7 +800,7 @@ pub fn typed_ident<'a>() -> impl Parser<'a, Spaced<'a, TypedIdent<'a>>, ETypedId
                 space0_before_e(
                     specialize_err(
                         ETypedIdent::Type,
-                        reset_min_indent(type_annotation::located(true)),
+                        reset_min_indent(type_annotation::located(IsTrailingCommaValid(true))),
                     ),
                     ETypedIdent::IndentType,
                 ),

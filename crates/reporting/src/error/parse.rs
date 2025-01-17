@@ -811,6 +811,8 @@ fn to_lambda_report<'a>(
                     alloc.concat([
                         alloc.reflow("I was expecting a "),
                         alloc.parser_suggestion("->"),
+                        alloc.reflow(" or a "),
+                        alloc.parser_suggestion("=>"),
                         alloc.reflow(" next."),
                     ]),
                 ]);
@@ -3415,6 +3417,31 @@ fn to_tinparens_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED PARENTHESES".to_string(),
+                severity,
+            }
+        }
+
+        ETypeInParens::AfterZeroArgs(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc
+                    .reflow(r"I am partway through parsing a function type, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
+                alloc.concat([
+                    alloc.reflow("I was expecting a "),
+                    alloc.parser_suggestion("->"),
+                    alloc.reflow(" or a "),
+                    alloc.parser_suggestion("=>"),
+                    alloc.reflow(" next."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "MISSING ARROW".to_string(),
                 severity,
             }
         }
