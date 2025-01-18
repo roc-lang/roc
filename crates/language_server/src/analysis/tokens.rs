@@ -254,7 +254,6 @@ impl IterTokens for AppHeader<'_> {
 
         (provides.iter_tokens(arena).into_iter())
             .chain(packages.value.iter_tokens(arena))
-            .chain(provides.iter_tokens(arena))
             .chain(old_imports.iter().flat_map(|i| i.item.iter_tokens(arena)))
             .collect_in(arena)
     }
@@ -790,7 +789,9 @@ impl IterTokens for Loc<Pattern<'_>> {
                 Loc::at(region, *p).iter_tokens(arena)
             }
             Pattern::QualifiedIdentifier { .. } => onetoken(Token::Variable, region, arena),
-            Pattern::Malformed(_) | Pattern::MalformedIdent(_, _) => bumpvec![in arena;],
+            Pattern::Malformed(_) | Pattern::MalformedIdent(_, _) | Pattern::MalformedExpr(_) => {
+                bumpvec![in arena;]
+            }
         }
     }
 }

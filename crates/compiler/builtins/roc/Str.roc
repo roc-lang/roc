@@ -541,7 +541,7 @@ to_utf8 : Str -> List U8
 ## expect Str.from_utf8([255]) |> Result.is_err
 ## ```
 from_utf8 : List U8 -> Result Str [BadUtf8 { problem : Utf8Problem, index : U64 }]
-from_utf8 = \bytes ->
+from_utf8 = |bytes|
     result = from_utf8_lowlevel bytes
 
     if result.c_is_ok then
@@ -598,11 +598,11 @@ expect (Str.from_utf8_lossy [82, 0xED, 0xA0, 0xBD, 99]) == "R�c"
 ## expect Str.from_utf16([82, 0xdc96, 99]) |> Result.isErr
 ## ```
 from_utf16 : List U16 -> Result Str [BadUtf16 { problem : Utf8Problem, index : U64 }]
-from_utf16 = \codeunits ->
-    mk_err = \problem, index ->
+from_utf16 = |codeunits|
+    mk_err = |problem, index|
         Err(BadUtf16({ problem, index }))
 
-    step = \state, unit ->
+    step = |state, unit|
         c : U32
         c = Num.int_cast(unit)
         when state is
@@ -630,7 +630,7 @@ from_utf16 = \codeunits ->
     when decode_res is
         ExpectFirst(_, utf8) ->
             from_utf8(utf8)
-            |> Result.map_err(\BadUtf8(err) -> BadUtf16(err))
+            |> Result.map_err(|BadUtf8(err)| BadUtf16(err))
 
         ExpectSecond(i, _, _) ->
             mk_err(EncodesSurrogateHalf, i)
@@ -653,14 +653,14 @@ expect Str.from_utf16([82, 0xdc96, 99]) == Err(BadUtf16({ index: 1, problem: Enc
 ## expect Str.from_utf16_lossy([82, 0xdc96, 99]) == "R�c"
 ## ```
 from_utf16_lossy : List U16 -> Str
-from_utf16_lossy = \codeunits ->
+from_utf16_lossy = |codeunits|
     utf8_replacement = [0xef, 0xbf, 0xbd]
-    encode_lossy = \utf8, c ->
+    encode_lossy = |utf8, c|
         when encode_utf8(utf8, c) is
             Ok(utf8_next) -> utf8_next
             Err(_) -> List.concat(utf8, utf8_replacement)
 
-    step = \state, unit ->
+    step = |state, unit|
         c : U32
         c = Num.int_cast(unit)
         when state is
@@ -704,8 +704,8 @@ expect Str.from_utf16_lossy([82, 0xdc96, 99]) == "R�c"
 ## ```
 
 from_utf32 : List U32 -> Result Str [BadUtf32 { problem : Utf8Problem, index : U64 }]
-from_utf32 = \codepoints ->
-    step = \state, c ->
+from_utf32 = |codepoints|
+    step = |state, c|
         when state is
             Ok({ i, utf8 }) ->
                 when encode_utf8(utf8, c) is
@@ -716,14 +716,14 @@ from_utf32 = \codepoints ->
 
     List.walk(codepoints, Ok({ i: 0, utf8: [] }), step)
     |> Result.try(
-        \state ->
+        |state|
             when from_utf8(state.utf8) is
                 Ok(str) -> Ok(str)
                 Err(BadUtf8(err)) -> Err(BadUtf32(err)),
     )
 
 encode_utf8 : List U8, U32 -> Result (List U8) [EncodesSurrogateHalf, CodepointTooLarge]
-encode_utf8 = \list, c ->
+encode_utf8 = |list, c|
     if c < 0x80 then
         Ok(List.append(list, Num.int_cast(c)))
     else if c < 0x800 then
@@ -782,8 +782,8 @@ expect Str.from_utf32([82, 0x110000, 99]) |> Result.is_err
 ## expect Str.from_utf32_lossy([82, 0x110000, 99]) == "R�c"
 ## ```
 from_utf32_lossy : List U32 -> Str
-from_utf32_lossy = \codepoints ->
-    step = \utf8, c ->
+from_utf32_lossy = |codepoints|
+    step = |utf8, c|
         when encode_utf8(utf8, c) is
             Ok(utf8_next) -> utf8_next
             # utf-8 encoded replacement character
@@ -836,7 +836,7 @@ trim_end : Str -> Str
 ## expect Str.to_dec("not a number") == Err(InvalidNumStr)
 ## ```
 to_dec : Str -> Result Dec [InvalidNumStr]
-to_dec = \string -> str_to_num_help(string)
+to_dec = |string| str_to_num_help(string)
 
 ## Encode a [Str] to a [F64]. A [F64] value is a 64-bit
 ## [floating-point number](https://en.wikipedia.org/wiki/IEEE_754) and can be
@@ -846,7 +846,7 @@ to_dec = \string -> str_to_num_help(string)
 ## expect Str.to_f64("not a number") == Err(InvalidNumStr)
 ## ```
 to_f64 : Str -> Result F64 [InvalidNumStr]
-to_f64 = \string -> str_to_num_help(string)
+to_f64 = |string| str_to_num_help(string)
 
 ## Encode a [Str] to a [F32].A [F32] value is a 32-bit
 ## [floating-point number](https://en.wikipedia.org/wiki/IEEE_754) and can be
@@ -856,7 +856,7 @@ to_f64 = \string -> str_to_num_help(string)
 ## expect Str.to_f32("not a number") == Err(InvalidNumStr)
 ## ```
 to_f32 : Str -> Result F32 [InvalidNumStr]
-to_f32 = \string -> str_to_num_help(string)
+to_f32 = |string| str_to_num_help(string)
 
 ## Encode a [Str] to an unsigned [U128] integer. A [U128] value can hold numbers
 ## from `0` to `340_282_366_920_938_463_463_374_607_431_768_211_455` (over
@@ -868,7 +868,7 @@ to_f32 = \string -> str_to_num_help(string)
 ## expect Str.to_u128("not a number") == Err(InvalidNumStr)
 ## ```
 to_u128 : Str -> Result U128 [InvalidNumStr]
-to_u128 = \string -> str_to_num_help(string)
+to_u128 = |string| str_to_num_help(string)
 
 ## Encode a [Str] to a signed [I128] integer. A [I128] value can hold numbers
 ## from `-170_141_183_460_469_231_731_687_303_715_884_105_728` to
@@ -881,7 +881,7 @@ to_u128 = \string -> str_to_num_help(string)
 ## expect Str.to_i128("not a number") == Err(InvalidNumStr)
 ## ```
 to_i128 : Str -> Result I128 [InvalidNumStr]
-to_i128 = \string -> str_to_num_help(string)
+to_i128 = |string| str_to_num_help(string)
 
 ## Encode a [Str] to an unsigned [U64] integer. A [U64] value can hold numbers
 ## from `0` to `18_446_744_073_709_551_615` (over 18 quintillion). It
@@ -893,7 +893,7 @@ to_i128 = \string -> str_to_num_help(string)
 ## expect Str.to_u64("not a number") == Err(InvalidNumStr)
 ## ```
 to_u64 : Str -> Result U64 [InvalidNumStr]
-to_u64 = \string -> str_to_num_help(string)
+to_u64 = |string| str_to_num_help(string)
 
 ## Encode a [Str] to a signed [I64] integer. A [I64] value can hold numbers
 ## from `-9_223_372_036_854_775_808` to `9_223_372_036_854_775_807`. It can be
@@ -905,7 +905,7 @@ to_u64 = \string -> str_to_num_help(string)
 ## expect Str.to_i64("not a number") == Err(InvalidNumStr)
 ## ```
 to_i64 : Str -> Result I64 [InvalidNumStr]
-to_i64 = \string -> str_to_num_help(string)
+to_i64 = |string| str_to_num_help(string)
 
 ## Encode a [Str] to an unsigned [U32] integer. A [U32] value can hold numbers
 ## from `0` to `4_294_967_295` (over 4 billion). It can be specified with
@@ -917,7 +917,7 @@ to_i64 = \string -> str_to_num_help(string)
 ## expect Str.to_u32("not a number") == Err(InvalidNumStr)
 ## ```
 to_u32 : Str -> Result U32 [InvalidNumStr]
-to_u32 = \string -> str_to_num_help(string)
+to_u32 = |string| str_to_num_help(string)
 
 ## Encode a [Str] to a signed [I32] integer. A [I32] value can hold numbers
 ## from `-2_147_483_648` to `2_147_483_647`. It can be
@@ -929,7 +929,7 @@ to_u32 = \string -> str_to_num_help(string)
 ## expect Str.to_i32("not a number") == Err(InvalidNumStr)
 ## ```
 to_i32 : Str -> Result I32 [InvalidNumStr]
-to_i32 = \string -> str_to_num_help(string)
+to_i32 = |string| str_to_num_help(string)
 
 ## Encode a [Str] to an unsigned [U16] integer. A [U16] value can hold numbers
 ## from `0` to `65_535`. It can be specified with a u16 suffix.
@@ -940,7 +940,7 @@ to_i32 = \string -> str_to_num_help(string)
 ## expect Str.to_u16("not a number") == Err(InvalidNumStr)
 ## ```
 to_u16 : Str -> Result U16 [InvalidNumStr]
-to_u16 = \string -> str_to_num_help(string)
+to_u16 = |string| str_to_num_help(string)
 
 ## Encode a [Str] to a signed [I16] integer. A [I16] value can hold numbers
 ## from `-32_768` to `32_767`. It can be
@@ -952,7 +952,7 @@ to_u16 = \string -> str_to_num_help(string)
 ## expect Str.to_i16("not a number") == Err(InvalidNumStr)
 ## ```
 to_i16 : Str -> Result I16 [InvalidNumStr]
-to_i16 = \string -> str_to_num_help(string)
+to_i16 = |string| str_to_num_help(string)
 
 ## Encode a [Str] to an unsigned [U8] integer. A [U8] value can hold numbers
 ## from `0` to `255`. It can be specified with a u8 suffix.
@@ -963,7 +963,7 @@ to_i16 = \string -> str_to_num_help(string)
 ## expect Str.to_u8("1500") == Err(InvalidNumStr)
 ## ```
 to_u8 : Str -> Result U8 [InvalidNumStr]
-to_u8 = \string -> str_to_num_help(string)
+to_u8 = |string| str_to_num_help(string)
 
 ## Encode a [Str] to a signed [I8] integer. A [I8] value can hold numbers
 ## from `-128` to `127`. It can be
@@ -974,7 +974,7 @@ to_u8 = \string -> str_to_num_help(string)
 ## expect Str.to_i8("not a number") == Err(InvalidNumStr)
 ## ```
 to_i8 : Str -> Result I8 [InvalidNumStr]
-to_i8 = \string -> str_to_num_help(string)
+to_i8 = |string| str_to_num_help(string)
 
 ## Get the byte at the given index, without performing a bounds check.
 get_unsafe : Str, U64 -> U8
@@ -996,7 +996,7 @@ substring_unsafe : Str, U64, U64 -> Str
 ## expect Str.replace_each("not here", "/", "_") == "not here"
 ## ```
 replace_each : Str, Str, Str -> Str
-replace_each = \haystack, needle, flower ->
+replace_each = |haystack, needle, flower|
     when split_first(haystack, needle) is
         Ok({ before, after }) ->
             # We found at least one needle, so start the buffer off with
@@ -1009,7 +1009,7 @@ replace_each = \haystack, needle, flower ->
         Err(NotFound) -> haystack
 
 replace_each_help : Str, Str, Str, Str -> Str
-replace_each_help = \buf, haystack, needle, flower ->
+replace_each_help = |buf, haystack, needle, flower|
     when split_first(haystack, needle) is
         Ok({ before, after }) ->
             buf
@@ -1030,7 +1030,7 @@ expect Str.replace_each("abcdefg", "nothing", "_") == "abcdefg"
 ## expect Str.replace_first("no slashes here", "/", "_") == "no slashes here"
 ## ```
 replace_first : Str, Str, Str -> Str
-replace_first = \haystack, needle, flower ->
+replace_first = |haystack, needle, flower|
     when split_first(haystack, needle) is
         Ok({ before, after }) ->
             "${before}${flower}${after}"
@@ -1048,7 +1048,7 @@ expect Str.replace_first("abcdefg", "nothing", "_") == "abcdefg"
 ## expect Str.replace_last("no slashes here", "/", "_") == "no slashes here"
 ## ```
 replace_last : Str, Str, Str -> Str
-replace_last = \haystack, needle, flower ->
+replace_last = |haystack, needle, flower|
     when split_last(haystack, needle) is
         Ok({ before, after }) ->
             "${before}${flower}${after}"
@@ -1066,7 +1066,7 @@ expect Str.replace_last("abcdefg", "nothing", "_") == "abcdefg"
 ## expect Str.split_first("no slashes here", "/") == Err(NotFound)
 ## ```
 split_first : Str, Str -> Result { before : Str, after : Str } [NotFound]
-split_first = \haystack, needle ->
+split_first = |haystack, needle|
     when first_match(haystack, needle) is
         Some(index) ->
             remaining = Str.count_utf8_bytes(haystack) - Str.count_utf8_bytes(needle) - index
@@ -1095,7 +1095,7 @@ expect split_first("hullabaloo", "ab") == Ok({ before: "hull", after: "aloo" })
 expect split_first("foo", "foo") == Ok({ before: "", after: "" })
 
 first_match : Str, Str -> [Some U64, None]
-first_match = \haystack, needle ->
+first_match = |haystack, needle|
     haystack_length = Str.count_utf8_bytes(haystack)
     needle_length = Str.count_utf8_bytes(needle)
     last_possible = Num.sub_saturated(haystack_length, needle_length)
@@ -1103,7 +1103,7 @@ first_match = \haystack, needle ->
     first_match_help(haystack, needle, 0, last_possible)
 
 first_match_help : Str, Str, U64, U64 -> [Some U64, None]
-first_match_help = \haystack, needle, index, last_possible ->
+first_match_help = |haystack, needle, index, last_possible|
     if index <= last_possible then
         if matches_at(haystack, index, needle) then
             Some(index)
@@ -1120,7 +1120,7 @@ first_match_help = \haystack, needle, index, last_possible ->
 ## expect Str.split_last("no slashes here", "/") == Err(NotFound)
 ## ```
 split_last : Str, Str -> Result { before : Str, after : Str } [NotFound]
-split_last = \haystack, needle ->
+split_last = |haystack, needle|
     when last_match(haystack, needle) is
         Some(index) ->
             remaining = Str.count_utf8_bytes(haystack) - Str.count_utf8_bytes(needle) - index
@@ -1146,7 +1146,7 @@ expect Str.split_last("hullabaloo", "ab") == Ok({ before: "hull", after: "aloo" 
 expect Str.split_last("foo", "foo") == Ok({ before: "", after: "" })
 
 last_match : Str, Str -> [Some U64, None]
-last_match = \haystack, needle ->
+last_match = |haystack, needle|
     haystack_length = Str.count_utf8_bytes(haystack)
     needle_length = Str.count_utf8_bytes(needle)
     last_possible_index = Num.sub_saturated(haystack_length, needle_length)
@@ -1154,7 +1154,7 @@ last_match = \haystack, needle ->
     last_match_help(haystack, needle, last_possible_index)
 
 last_match_help : Str, Str, U64 -> [Some U64, None]
-last_match_help = \haystack, needle, index ->
+last_match_help = |haystack, needle, index|
     if matches_at(haystack, index, needle) then
         Some(index)
     else
@@ -1165,10 +1165,10 @@ last_match_help = \haystack, needle, index ->
             Err(_) ->
                 None
 
-min = \x, y -> if x < y then x else y
+min = |x, y| if x < y then x else y
 
 matches_at : Str, U64, Str -> Bool
-matches_at = \haystack, haystack_index, needle ->
+matches_at = |haystack, haystack_index, needle|
     haystack_length = Str.count_utf8_bytes(haystack)
     needle_length = Str.count_utf8_bytes(needle)
     end_index = min(Num.add_saturated(haystack_index, needle_length), haystack_length)
@@ -1184,7 +1184,7 @@ matches_at = \haystack, haystack_index, needle ->
         },
     )
 
-matches_at_help = \state ->
+matches_at_help = |state|
     { haystack, haystack_index, needle, needle_index, needle_length, end_index } = state
     is_at_end_of_haystack = haystack_index >= end_index
 
@@ -1216,11 +1216,11 @@ matches_at_help = \state ->
 ## expect Str.walk_utf8_with_index("ABC", [], f) == [65, 66, 67]
 ## ```
 walk_utf8_with_index : Str, state, (state, U8, U64 -> state) -> state
-walk_utf8_with_index = \string, state, step ->
+walk_utf8_with_index = |string, state, step|
     walk_utf8_with_index_help(string, state, step, 0, Str.count_utf8_bytes(string))
 
 walk_utf8_with_index_help : Str, state, (state, U8, U64 -> state), U64, U64 -> state
-walk_utf8_with_index_help = \string, state, step, index, length ->
+walk_utf8_with_index_help = |string, state, step, index, length|
     if index < length then
         byte = Str.get_unsafe(string, index)
         new_state = step(state, byte, index)
@@ -1241,11 +1241,11 @@ walk_utf8_with_index_help = \string, state, step, index, length ->
 ## expect sum_of_utf8_bytes == 105
 ## ```
 walk_utf8 : Str, state, (state, U8 -> state) -> state
-walk_utf8 = \str, initial, step ->
+walk_utf8 = |str, initial, step|
     walk_utf8_help(str, initial, step, 0, Str.count_utf8_bytes(str))
 
 walk_utf8_help : Str, state, (state, U8 -> state), U64, U64 -> state
-walk_utf8_help = \str, state, step, index, length ->
+walk_utf8_help = |str, state, step, index, length|
     if index < length then
         byte = Str.get_unsafe(str, index)
         new_state = step(state, byte)
@@ -1264,7 +1264,7 @@ release_excess_capacity : Str -> Str
 str_to_num : Str -> { berrorcode : U8, aresult : Num * }
 
 str_to_num_help : Str -> Result (Num a) [InvalidNumStr]
-str_to_num_help = \string ->
+str_to_num_help = |string|
     result : { berrorcode : U8, aresult : Num a }
     result = str_to_num(string)
 
@@ -1278,7 +1278,7 @@ str_to_num_help = \string ->
 ## expect Str.with_prefix("Awesome", "Roc") == "RocAwesome"
 ## ```
 with_prefix : Str, Str -> Str
-with_prefix = \str, prefix -> Str.concat(prefix, str)
+with_prefix = |str, prefix| Str.concat(prefix, str)
 
 ## Determines whether or not the first Str contains the second.
 ## ```roc
@@ -1287,7 +1287,7 @@ with_prefix = \str, prefix -> Str.concat(prefix, str)
 ## expect Str.contains("anything", "")
 ## ```
 contains : Str, Str -> Bool
-contains = \haystack, needle ->
+contains = |haystack, needle|
     when first_match(haystack, needle) is
         Some(_index) -> Bool.true
         None -> Bool.false
@@ -1300,7 +1300,7 @@ contains = \haystack, needle ->
 ## expect Str.drop_prefix("foobar", "foo") == "bar"
 ## ```
 drop_prefix : Str, Str -> Str
-drop_prefix = \haystack, prefix ->
+drop_prefix = |haystack, prefix|
     if Str.starts_with(haystack, prefix) then
         start = Str.count_utf8_bytes(prefix)
         len = Num.sub_wrap(Str.count_utf8_bytes(haystack), start)
@@ -1317,7 +1317,7 @@ drop_prefix = \haystack, prefix ->
 ## expect Str.drop_suffix("barfoo", "foo") == "bar"
 ## ```
 drop_suffix : Str, Str -> Str
-drop_suffix = \haystack, suffix ->
+drop_suffix = |haystack, suffix|
     if Str.ends_with(haystack, suffix) then
         start = 0
         len = Num.sub_wrap(Str.count_utf8_bytes(haystack), Str.count_utf8_bytes(suffix))

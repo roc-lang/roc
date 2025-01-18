@@ -37,7 +37,7 @@ cheapest_open = \cost_function, model ->
                             Ok(smallest_so_far)
 
     Set.walk(model.open_set, Err(KeyNotFound), folder)
-    |> Result.map(\x -> x.position)
+    |> Result.map_ok(\x -> x.position)
 
 reconstruct_path : Map position position, position -> List position
 reconstruct_path = \came_from, goal ->

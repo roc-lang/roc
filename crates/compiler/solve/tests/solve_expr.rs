@@ -3479,7 +3479,7 @@ mod solve_expr {
                                     Ok { position, cost: 0.0 }
 
                     Set.walk model.open_set (Ok { position: boom {}, cost: 0.0 }) folder
-                        |> Result.map (\x -> x.position)
+                        |> Result.map_ok (\x -> x.position)
 
                 astar : Model position -> Result position [KeyNotFound] where position implements Hash & Eq
                 astar = \model -> cheapest_open model

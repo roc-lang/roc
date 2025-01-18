@@ -1525,7 +1525,7 @@ define_builtins! {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias
         1 RESULT_IS_ERR: "is_err"
         2 RESULT_ON_ERR: "on_err"
-        3 RESULT_MAP: "map"
+        3 RESULT_MAP_OK: "map_ok"
         4 RESULT_MAP_ERR: "map_err"
         5 RESULT_WITH_DEFAULT: "with_default"
         6 RESULT_TRY: "try"

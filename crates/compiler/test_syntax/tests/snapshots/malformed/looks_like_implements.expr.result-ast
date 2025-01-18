@@ -19,14 +19,23 @@
                     header: TypeHeader {
                         name: @0-1 "N",
                         vars: [
-                            @3-13 Identifier {
-                                ident: "implements",
-                            },
-                            @15-16 Identifier {
-                                ident: "h",
-                            },
-                            @18-19 NumLiteral(
-                                "0",
+                            @3-13 Malformed(
+                                ParensAround(
+                                    Var {
+                                        module_name: "",
+                                        ident: "implements",
+                                    },
+                                ),
+                            ),
+                            @15-16 Identifier(
+                                "h",
+                            ),
+                            @18-19 Malformed(
+                                ParensAround(
+                                    Num(
+                                        "0",
+                                    ),
+                                ),
                             ),
                         ],
                     },

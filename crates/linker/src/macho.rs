@@ -30,6 +30,11 @@ const MIN_SECTION_ALIGNMENT: usize = 0x40;
 const PLT_ADDRESS_OFFSET: u64 = 0x10;
 const STUB_ADDRESS_OFFSET: u64 = 0x06;
 
+// We assume existence of __ROC_TEXT,__text, __ROC_DATA_CONST,__const, __ROC_DATA,__data and __ROC_DATA,__bss.
+// This will mostly grow in size as the linker matures.
+const NUM_ROC_SEGMENTS: u32 = 3;
+const NUM_ROC_SECTIONS: u32 = 4;
+
 // struct MachoDynamicDeps {
 //     got_app_syms: Vec<(String, usize)>,
 //     got_sections: Vec<(usize, usize)>,
@@ -58,8 +63,8 @@ struct Metadata {
     surgeries: MutMap<String, Vec<SurgeryEntry>>,
     dynamic_symbol_indices: MutMap<String, u64>,
     roc_symbol_vaddresses: MutMap<String, u64>,
-    exec_len: u64,
-    load_align_constraint: u64,
+    exec_len: usize,
+    load_align_constraint: usize,
     last_vaddr: u64,
     // Offset just after the last load command.
     // TODO: this is easy to re-calculate on the fly from just the header.
@@ -630,9 +635,7 @@ fn gen_macho_le(
     // https://github.com/kubkon/zignature
     // https://github.com/kubkon/zig-deploy
 
-    use macho::{
-        Section64, SegmentCommand64, VM_PROT_EXECUTE as E, VM_PROT_READ as R, VM_PROT_WRITE as W,
-    };
+    use macho::{VM_PROT_EXECUTE as E, VM_PROT_READ as R, VM_PROT_WRITE as W};
 
     let exec_header = load_struct_inplace::<macho::MachHeader64<LE>>(exec_data, 0);
     let size_of_header = mem::size_of::<macho::MachHeader64<LE>>();
@@ -640,11 +643,7 @@ fn gen_macho_le(
     let size_of_cmds = exec_header.sizeofcmds.get(LE) as usize;
 
     // Add a new text segment and data segment load commands.
-    // We assume existence of __ROC_TEXT,__text, __ROC_DATA_CONST,__const, __ROC_DATA,__data and __ROC_DATA,__bss.
-    let segment_cmd_size = mem::size_of::<SegmentCommand64<LE>>();
-    let section_size = mem::size_of::<Section64<LE>>();
-    let num_roc_cmds = 3u32;
-    let required_size = segment_cmd_size * num_roc_cmds as usize + section_size * 4;
+    let required_size = headerpad_size();
 
     // We need the full command size, including the dynamic-length string at the end.
     // To get that, we need to load the command.
@@ -655,12 +654,16 @@ fn gen_macho_le(
         md.start_of_first_section - (size_of_cmds + size_of_header - total_cmd_size);
 
     if available_size < required_size {
-        internal_error!("Not enough free space between end of load commands and start of first section\nConsider recompiling the host with -headerpad <size> linker flag");
+        // Inform the user that the host has to be relinked with `-headerpad <size>` flag so that the surgical linker
+        // can add Roc specific load commands and not clobber the first section.
+        let optimal_headerpad_size = align_by_constraint(required_size, md.load_align_constraint);
+        internal_error!("Not enough free space between end of load commands and start of first section in the host.
+            Consider recompiling the host with \"-Wl,-headerpad,0x{optimal_headerpad_size:x}\" linker flag.");
     }
 
-    md.exec_len = exec_data.len() as u64;
+    md.exec_len = exec_data.len();
 
-    let mut out_mmap = open_mmap_mut(out_filename, md.exec_len as usize);
+    let mut out_mmap = open_mmap_mut(out_filename, md.exec_len);
     let end_of_cmds = size_of_cmds + mem::size_of_val(exec_header);
 
     // Copy load commands over making space for Roc-specific commands
@@ -752,7 +755,7 @@ fn gen_macho_le(
     }
 
     let out_header = load_struct_inplace_mut::<macho::MachHeader64<LE>>(&mut out_mmap, 0);
-    let num_load_cmds = num_load_cmds + num_roc_cmds - 1;
+    let num_load_cmds = num_load_cmds + NUM_ROC_SEGMENTS - 1;
     let size_of_cmds = (size_of_cmds - total_cmd_size + required_size) as u32;
     out_header.ncmds.set(LE, num_load_cmds);
     out_header.sizeofcmds.set(LE, size_of_cmds);
@@ -948,8 +951,8 @@ pub(crate) fn surgery_macho(
     let loading_metadata_duration = loading_metadata_start.elapsed();
 
     let load_and_mmap_start = Instant::now();
-    let max_out_len = md.exec_len + roc_app_bytes.len() as u64 + md.load_align_constraint;
-    let mut exec_mmap = open_mmap_mut(executable_path, max_out_len as usize);
+    let max_out_len = md.exec_len + roc_app_bytes.len() + md.load_align_constraint;
+    let mut exec_mmap = open_mmap_mut(executable_path, max_out_len);
     let load_and_mmap_duration = load_and_mmap_start.elapsed();
 
     let out_gen_start = Instant::now();
@@ -1021,15 +1024,12 @@ fn surgery_macho_help(
     offset_ref: &mut usize, // TODO return this instead of taking a mutable reference to it
     app_obj: object::File,
 ) {
-    let mut offset = align_by_constraint(md.exec_len as usize, MIN_SECTION_ALIGNMENT);
+    let mut offset = align_by_constraint(md.exec_len, MIN_SECTION_ALIGNMENT);
     // let new_rodata_section_offset = offset;
 
     // Align physical and virtual address of new segment.
-    let mut virt_offset = align_to_offset_by_constraint(
-        md.last_vaddr as usize,
-        offset,
-        md.load_align_constraint as usize,
-    );
+    let mut virt_offset =
+        align_to_offset_by_constraint(md.last_vaddr as usize, offset, md.load_align_constraint);
     let new_rodata_section_vaddr = virt_offset;
     if verbose {
         println!();
@@ -1088,8 +1088,7 @@ fn surgery_macho_help(
         .chain(text_sections.iter())
     {
         offset = align_by_constraint(offset, MIN_SECTION_ALIGNMENT);
-        virt_offset =
-            align_to_offset_by_constraint(virt_offset, offset, md.load_align_constraint as usize);
+        virt_offset = align_to_offset_by_constraint(virt_offset, offset, md.load_align_constraint);
         if verbose {
             println!(
                 "Section, {}, is being put at offset: {:+x}(virt: {:+x})",
@@ -1280,7 +1279,7 @@ fn surgery_macho_help(
 
     // Flush app only data to speed up write to disk.
     exec_mmap
-        .flush_async_range(md.exec_len as usize, offset - md.exec_len as usize)
+        .flush_async_range(md.exec_len, offset - md.exec_len)
         .unwrap_or_else(|e| internal_error!("{}", e));
 
     // TODO: look into merging symbol tables, debug info, and eh frames to enable better debugger experience.
@@ -1596,10 +1595,19 @@ fn format_load_command(cmd: u32) -> impl std::fmt::Display {
     Inner(cmd)
 }
 
-fn page_size(arch: Architecture) -> u64 {
+fn page_size(arch: Architecture) -> usize {
     match arch {
         Architecture::X86_64 => 0x1000,
         Architecture::Aarch64 => 0x4000,
         _ => unreachable!(),
     }
+}
+
+/// Calculate the required headerpad size, that is, free space between the end of any set of existing
+/// load commands and the start of first section.
+pub(crate) fn headerpad_size() -> usize {
+    use macho::{Section64, SegmentCommand64};
+    let segment_cmd_size = mem::size_of::<SegmentCommand64<LE>>();
+    let section_size = mem::size_of::<Section64<LE>>();
+    segment_cmd_size * NUM_ROC_SEGMENTS as usize + section_size * NUM_ROC_SECTIONS as usize
 }

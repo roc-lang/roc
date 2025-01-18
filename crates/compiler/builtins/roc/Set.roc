@@ -47,14 +47,14 @@ Set k := Dict.Dict k {} where k implements Hash & Eq
     ]
 
 is_eq : Set k, Set k -> Bool
-is_eq = \xs, ys ->
+is_eq = |xs, ys|
     if len(xs) != len(ys) then
         Bool.false
     else
         walk_until(
             xs,
             Bool.true,
-            \_, elem ->
+            |_, elem|
                 if contains(ys, elem) then
                     Continue(Bool.true)
                 else
@@ -62,12 +62,12 @@ is_eq = \xs, ys ->
         )
 
 hash_set : hasher, Set k -> hasher where hasher implements Hasher
-hash_set = \hasher, @Set(inner) -> Hash.hash(hasher, inner)
+hash_set = |hasher, @Set(inner)| Hash.hash(hasher, inner)
 
 to_inspector_set : Set k -> Inspector f where k implements Inspect & Hash & Eq, f implements InspectFormatter
-to_inspector_set = \set ->
+to_inspector_set = |set|
     Inspect.custom(
-        \fmt ->
+        |fmt|
             Inspect.apply(Inspect.set(set, walk, Inspect.to_inspector), fmt),
     )
 
@@ -79,25 +79,25 @@ to_inspector_set = \set ->
 ## expect count_values == 0
 ## ```
 empty : {} -> Set *
-empty = \{} -> @Set(Dict.empty({}))
+empty = |{}| @Set(Dict.empty({}))
 
 ## Return a set with space allocated for a number of entries. This
 ## may provide a performance optimization if you know how many entries will be
 ## inserted.
 with_capacity : U64 -> Set *
-with_capacity = \cap ->
+with_capacity = |cap|
     @Set(Dict.with_capacity(cap))
 
 ## Enlarge the set for at least capacity additional elements
 reserve : Set k, U64 -> Set k
-reserve = \@Set(dict), requested ->
+reserve = |@Set(dict), requested|
     @Set(Dict.reserve(dict, requested))
 
 ## Shrink the memory footprint of a set such that capacity is as small as possible.
 ## This function will require regenerating the metadata if the size changes.
 ## There will still be some overhead due to dictionary metadata always being a power of 2.
 release_excess_capacity : Set k -> Set k
-release_excess_capacity = \@Set(dict) ->
+release_excess_capacity = |@Set(dict)|
     @Set(Dict.release_excess_capacity(dict))
 
 ## Creates a new `Set` with a single value.
@@ -108,7 +108,7 @@ release_excess_capacity = \@Set(dict) ->
 ## expect count_values == 1
 ## ```
 single : k -> Set k
-single = \key ->
+single = |key|
     Dict.single(key, {}) |> @Set
 
 ## Insert a value into a `Set`.
@@ -124,7 +124,7 @@ single = \key ->
 ## expect count_values == 3
 ## ```
 insert : Set k, k -> Set k
-insert = \@Set(dict), key ->
+insert = |@Set(dict), key|
     Dict.insert(dict, key, {}) |> @Set
 
 # Inserting a duplicate key has no effect.
@@ -157,7 +157,7 @@ expect
 ## expect count_values == 3
 ## ```
 len : Set * -> U64
-len = \@Set(dict) ->
+len = |@Set(dict)|
     Dict.len(dict)
 
 ## Returns the max number of elements the set can hold before requiring a rehash.
@@ -169,7 +169,7 @@ len = \@Set(dict) ->
 ## capacity_of_set = Set.capacity(food_set)
 ## ```
 capacity : Set * -> U64
-capacity = \@Set(dict) ->
+capacity = |@Set(dict)|
     Dict.capacity(dict)
 
 ## Check if the set is empty.
@@ -179,7 +179,7 @@ capacity = \@Set(dict) ->
 ## Set.is_empty(Set.empty({}))
 ## ```
 is_empty : Set * -> Bool
-is_empty = \@Set(dict) ->
+is_empty = |@Set(dict)|
     Dict.is_empty(dict)
 
 # Inserting a duplicate key has no effect on length.
@@ -209,7 +209,7 @@ expect
 ## expect has20 == Bool.true
 ## ```
 remove : Set k, k -> Set k
-remove = \@Set(dict), key ->
+remove = |@Set(dict), key|
     Dict.remove(dict, key) |> @Set
 
 ## Test if a value is in the `Set`.
@@ -228,7 +228,7 @@ remove = \@Set(dict), key ->
 ## expect has_banana == Bool.false
 ## ```
 contains : Set k, k -> Bool
-contains = \@Set(dict), key ->
+contains = |@Set(dict), key|
     Dict.contains(dict, key)
 
 ## Retrieve the values in a `Set` as a `List`.
@@ -241,7 +241,7 @@ contains = \@Set(dict), key ->
 ## expect Set.to_list(numbers) == values
 ## ```
 to_list : Set k -> List k
-to_list = \@Set(dict) ->
+to_list = |@Set(dict)|
     Dict.keys(dict)
 
 ## Create a `Set` from a `List` of values.
@@ -255,9 +255,9 @@ to_list = \@Set(dict) ->
 ## expect Set.from_list([Pear, Apple, Banana]) == values
 ## ```
 from_list : List k -> Set k
-from_list = \list ->
+from_list = |list|
     list
-    |> List.map(\k -> (k, {}))
+    |> List.map(|k| (k, {}))
     |> Dict.from_list
     |> @Set
 
@@ -272,7 +272,7 @@ from_list = \list ->
 ## expect Set.union(set1, set2) == Set.from_list([Left, Right])
 ## ```
 union : Set k, Set k -> Set k
-union = \@Set(dict1), @Set(dict2) ->
+union = |@Set(dict1), @Set(dict2)|
     Dict.insert_all(dict1, dict2) |> @Set
 
 ## Combine two `Set`s by keeping the [intersection](https://en.wikipedia.org/wiki/Intersection_(set_theory))
@@ -285,7 +285,7 @@ union = \@Set(dict1), @Set(dict2) ->
 ## expect Set.intersection(set1, set2) == Set.single(Left)
 ## ```
 intersection : Set k, Set k -> Set k
-intersection = \@Set(dict1), @Set(dict2) ->
+intersection = |@Set(dict1), @Set(dict2)|
     Dict.keep_shared(dict1, dict2) |> @Set
 
 ## Remove the values in the first `Set` that are also in the second `Set`
@@ -299,7 +299,7 @@ intersection = \@Set(dict1), @Set(dict2) ->
 ## expect Set.difference(first, second) == Set.from_list([Up, Down])
 ## ```
 difference : Set k, Set k -> Set k
-difference = \@Set(dict1), @Set(dict2) ->
+difference = |@Set(dict1), @Set(dict2)|
     Dict.remove_all(dict1, dict2) |> @Set
 
 ## Iterate through the values of a given `Set` and build a value.
@@ -322,20 +322,20 @@ difference = \@Set(dict1), @Set(dict2) ->
 ## expect result == 2
 ## ```
 walk : Set k, state, (state, k -> state) -> state
-walk = \@Set(dict), state, step ->
-    Dict.walk(dict, state, \s, k, _ -> step(s, k))
+walk = |@Set(dict), state, step|
+    Dict.walk(dict, state, |s, k, _| step(s, k))
 
 ## Convert each value in the set to something new, by calling a conversion
 ## function on each of them which receives the old value. Then return a
 ## new set containing the converted values.
 map : Set a, (a -> b) -> Set b
-map = \set, transform ->
+map = |set, transform|
     init = with_capacity(capacity(set))
 
     walk(
         set,
         init,
-        \answer, k ->
+        |answer, k|
             insert(answer, transform(k)),
     )
 
@@ -345,13 +345,13 @@ map = \set, transform ->
 ##
 ## You may know a similar function named `concat_map` in other languages.
 join_map : Set a, (a -> Set b) -> Set b
-join_map = \set, transform ->
+join_map = |set, transform|
     init = with_capacity(capacity(set)) # Might be a pessimization
 
     walk(
         set,
         init,
-        \answer, k ->
+        |answer, k|
             union(answer, transform(k)),
     )
 
@@ -371,8 +371,8 @@ join_map = \set, transform ->
 ## expect result == FoundTheAnswer
 ## ```
 walk_until : Set k, state, (state, k -> [Continue state, Break state]) -> state
-walk_until = \@Set(dict), state, step ->
-    Dict.walk_until(dict, state, \s, k, _ -> step(s, k))
+walk_until = |@Set(dict), state, step|
+    Dict.walk_until(dict, state, |s, k, _| step(s, k))
 
 ## Run the given function on each element in the `Set`, and return
 ## a `Set` with just the elements for which the function returned `Bool.true`.
@@ -382,8 +382,8 @@ walk_until = \@Set(dict), state, step ->
 ##     |> Bool.is_eq(Set.from_list([3,4,5]))
 ## ```
 keep_if : Set k, (k -> Bool) -> Set k
-keep_if = \@Set(dict), predicate ->
-    @Set(Dict.keep_if(dict, \(k, _v) -> predicate(k)))
+keep_if = |@Set(dict), predicate|
+    @Set(Dict.keep_if(dict, |(k, _v)| predicate(k)))
 
 ## Run the given function on each element in the `Set`, and return
 ## a `Set` with just the elements for which the function returned `Bool.false`.
@@ -393,8 +393,8 @@ keep_if = \@Set(dict), predicate ->
 ##     |> Bool.is_eq(Set.from_list([1,2]))
 ## ```
 drop_if : Set k, (k -> Bool) -> Set k
-drop_if = \@Set(dict), predicate ->
-    @Set(Dict.drop_if(dict, \(k, _v) -> predicate(k)))
+drop_if = |@Set(dict), predicate|
+    @Set(Dict.drop_if(dict, |(k, _v)| predicate(k)))
 
 expect
     first =
@@ -498,10 +498,10 @@ expect
 
 expect
     Set.from_list([1, 2, 3, 4, 5])
-    |> Set.keep_if(\k -> k >= 3)
+    |> Set.keep_if(|k| k >= 3)
     |> Bool.is_eq(Set.from_list([3, 4, 5]))
 
 expect
     Set.from_list([1, 2, 3, 4, 5])
-    |> Set.drop_if(\k -> k >= 3)
+    |> Set.drop_if(|k| k >= 3)
     |> Bool.is_eq(Set.from_list([1, 2]))

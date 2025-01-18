@@ -4,7 +4,7 @@ Roc is a language for making delightful software. It does not have an 0.1 releas
 certainly don't recommend using it in production in its current state! However, it can be fun to
 play around with as long as you have a tolerance for missing features and compiler bugs. :)
 
-The [tutorial](/tutorial) is the best place to learn about how to use the language - it assumes no prior knowledge of Roc or similar languages. (If you already know [Elm](https://elm-lang.org/), then [Roc for Elm Programmers](https://github.com/roc-lang/roc/blob/main/roc-for-elm-programmers.md) may be of interest.)
+The [tutorial](/tutorial) is the best place to learn about how to use the language - it assumes no prior knowledge of Roc or similar languages.
 
 If you have a specific question, the [FAQ](/faq) might have an answer, although [Roc Zulip chat](https://roc.zulipchat.com) is overall the best place to ask questions and get help! It's also where we discuss [ideas](https://roc.zulipchat.com/#narrow/stream/304641-ideas) for the language. If you want to get involved in contributing to the language, Zulip is also a great place to ask about good first projects.
 

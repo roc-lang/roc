@@ -1,0 +1,85 @@
+Defs {
+    tags: [
+        EitherIndex(2147483648),
+    ],
+    regions: [
+        @0-62,
+    ],
+    space_before: [
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+    ],
+    space_after: [
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
+    ],
+    spaces: [
+        Newline,
+    ],
+    type_defs: [],
+    value_defs: [
+        Body(
+            @0-6 Identifier {
+                ident: "my_var",
+            },
+            @14-62 SpaceBefore(
+                Defs(
+                    Defs {
+                        tags: [
+                            EitherIndex(2147483648),
+                        ],
+                        regions: [
+                            @14-43,
+                        ],
+                        space_before: [
+                            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                        ],
+                        space_after: [
+                            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                        ],
+                        spaces: [],
+                        type_defs: [],
+                        value_defs: [
+                            Stmt(
+                                @14-43 BinOps(
+                                    [
+                                        (
+                                            @14-22 SpaceAfter(
+                                                Var {
+                                                    module_name: "",
+                                                    ident: "some_var",
+                                                },
+                                                [
+                                                    LineComment(
+                                                        " c",
+                                                    ),
+                                                ],
+                                            ),
+                                            @30-32 Or,
+                                        ),
+                                    ],
+                                    @32-43 Var {
+                                        module_name: "",
+                                        ident: "other_thing",
+                                    },
+                                ),
+                            ),
+                        ],
+                    },
+                    @52-62 SpaceBefore(
+                        Var {
+                            module_name: "",
+                            ident: "final_expr",
+                        },
+                        [
+                            LineComment(
+                                " ^D",
+                            ),
+                        ],
+                    ),
+                ),
+                [
+                    Newline,
+                ],
+            ),
+        ),
+    ],
+}

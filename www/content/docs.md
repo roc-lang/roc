@@ -10,7 +10,6 @@ In the future, a language reference will be on this page too.
 ## [Guides](#guides) {#guides}
 
 - [Frequently Asked Questions](https://www.roc-lang.org/faq.html)
-- [Roc for Elm Programmers](https://github.com/roc-lang/roc/blob/main/roc-for-elm-programmers.md)
 - [Tutorial](/tutorial)
 
 ## [Language Reference](#language-reference) {#language-reference}

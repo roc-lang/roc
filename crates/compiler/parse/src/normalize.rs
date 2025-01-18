@@ -3,7 +3,7 @@ use bumpalo::Bump;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
 
-use crate::ast::ImplementsAbilities;
+use crate::ast::{ImplementsAbilities, TypeVar};
 use crate::{
     ast::{
         AbilityImpls, AbilityMember, AssignedField, Collection, Defs, Expr, FullAst, Header,
@@ -386,6 +386,18 @@ impl<'a> Normalize<'a> for TypeDef<'a> {
                 loc_implements: loc_has.normalize(arena),
                 members: members.normalize(arena),
             },
+        }
+    }
+}
+
+impl<'a> Normalize<'a> for TypeVar<'a> {
+    fn normalize(&self, arena: &'a Bump) -> Self {
+        match self {
+            TypeVar::Identifier(ident) => TypeVar::Identifier(ident),
+            TypeVar::Malformed(expr) => TypeVar::Malformed(expr.normalize(arena)),
+            TypeVar::SpaceBefore(inner, _sp) | TypeVar::SpaceAfter(inner, _sp) => {
+                *inner.normalize(arena)
+            }
         }
     }
 }
@@ -919,6 +931,7 @@ impl<'a> Normalize<'a> for Pattern<'a> {
             Pattern::StrLiteral(a) => Pattern::StrLiteral(a.normalize(arena)),
             Pattern::Underscore(a) => Pattern::Underscore(a),
             Pattern::Malformed(a) => Pattern::Malformed(a),
+            Pattern::MalformedExpr(a) => Pattern::MalformedExpr(arena.alloc(a.normalize(arena))),
             Pattern::MalformedIdent(a, b) => Pattern::MalformedIdent(a, remove_spaces_bad_ident(b)),
             Pattern::QualifiedIdentifier { module_name, ident } => {
                 Pattern::QualifiedIdentifier { module_name, ident }
@@ -1201,6 +1214,7 @@ impl<'a> Normalize<'a> for EClosure<'a> {
             EClosure::IndentArrow(_) => EClosure::IndentArrow(Position::zero()),
             EClosure::IndentBody(_) => EClosure::IndentBody(Position::zero()),
             EClosure::IndentArg(_) => EClosure::IndentArg(Position::zero()),
+            EClosure::Bar(_) => EClosure::Bar(Position::zero()),
         }
     }
 }

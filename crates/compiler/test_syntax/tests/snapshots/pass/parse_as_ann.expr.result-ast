@@ -37,12 +37,12 @@
                         TypeHeader {
                             name: @25-29 "Blah",
                             vars: [
-                                @30-31 Identifier {
-                                    ident: "a",
-                                },
-                                @32-33 Identifier {
-                                    ident: "b",
-                                },
+                                @30-31 Identifier(
+                                    "a",
+                                ),
+                                @32-33 Identifier(
+                                    "b",
+                                ),
                             ],
                         },
                     ),

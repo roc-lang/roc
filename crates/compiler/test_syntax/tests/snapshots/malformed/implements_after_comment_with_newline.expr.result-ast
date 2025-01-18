@@ -19,8 +19,10 @@
                     header: TypeHeader {
                         name: @0-1 "C",
                         vars: [
-                            @2-3 NumLiteral(
-                                "4",
+                            @2-3 Malformed(
+                                Num(
+                                    "4",
+                                ),
                             ),
                         ],
                     },

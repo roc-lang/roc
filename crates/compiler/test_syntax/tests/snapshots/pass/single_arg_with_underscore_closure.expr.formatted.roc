@@ -1,1 +1,1 @@
-\the_answer -> 42
+|the_answer| 42

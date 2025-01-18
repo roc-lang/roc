@@ -56,7 +56,7 @@ fn result_map() {
             result = Ok 2
 
             result
-                |> Result.map (\x -> x + 1)
+                |> Result.map_ok (\x -> x + 1)
                 |> Result.with_default 0
             "
         ),
@@ -71,7 +71,7 @@ fn result_map() {
             result = Err {}
 
             result
-                |> Result.map (\x -> x + 1)
+                |> Result.map_ok (\x -> x + 1)
                 |> Result.with_default 0
             "
         ),
@@ -120,7 +120,7 @@ fn err_type_var() {
     assert_evals_to!(
         indoc!(
             r"
-            Result.map (Ok 3) (\x -> x + 1)
+            Result.map_ok (Ok 3) (\x -> x + 1)
                 |> Result.with_default -1
             "
         ),
@@ -138,7 +138,7 @@ fn err_type_var_annotation() {
             ok : Result I64 *
             ok = Ok 3
 
-            Result.map ok (\x -> x + 1)
+            Result.map_ok ok (\x -> x + 1)
                 |> Result.with_default -1
             "
         ),
@@ -156,7 +156,7 @@ fn err_empty_tag_union() {
             ok : Result I64 []
             ok = Ok 3
 
-            Result.map ok (\x -> x + 1)
+            Result.map_ok ok (\x -> x + 1)
                 |> Result.with_default -1
             "
         ),
