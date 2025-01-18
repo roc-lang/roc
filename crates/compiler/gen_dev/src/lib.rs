@@ -1268,20 +1268,6 @@ trait Backend<'a> {
                     internal_error!("bitwise xor on a non-integer")
                 }
             }
-            LowLevel::And => {
-                if let LayoutRepr::Builtin(Builtin::Bool) = self.interner().get_repr(*ret_layout) {
-                    self.build_int_bitwise_and(sym, &args[0], &args[1], IntWidth::U8)
-                } else {
-                    internal_error!("bitwise and on a non-integer")
-                }
-            }
-            LowLevel::Or => {
-                if let LayoutRepr::Builtin(Builtin::Bool) = self.interner().get_repr(*ret_layout) {
-                    self.build_int_bitwise_or(sym, &args[0], &args[1], IntWidth::U8)
-                } else {
-                    internal_error!("bitwise or on a non-integer")
-                }
-            }
             LowLevel::NumShiftLeftBy => {
                 if let LayoutRepr::Builtin(Builtin::Int(int_width)) =
                     self.interner().get_repr(*ret_layout)

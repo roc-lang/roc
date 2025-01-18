@@ -4,7 +4,6 @@ use crate::env::Env;
 use crate::scope::Scope;
 use bumpalo::collections::Vec;
 use roc_error_macros::internal_error;
-use roc_module::called_via::BinOp::{DoubleQuestion, Pizza, SingleQuestion};
 use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
@@ -36,7 +35,7 @@ fn new_op_call_expr<'a>(
 
     let value = match loc_op.value {
         // Rewrite the Pizza operator into an Apply
-        Pizza => {
+        BinOp::Pizza => {
             // Allow `left |> try (optional)` to desugar to `try left (optional)`
             let right_without_spaces = without_spaces(&right.value);
             match right_without_spaces {
@@ -190,7 +189,7 @@ fn new_op_call_expr<'a>(
 
                     let args = args.into_bump_slice();
 
-                    Apply(function, args, CalledVia::BinOp(Pizza))
+                    Apply(function, args, CalledVia::BinOp(BinOp::Pizza))
                 }
                 PncApply(function, arguments) => {
                     let mut args = Vec::with_capacity_in(1 + arguments.len(), env.arena);
@@ -200,16 +199,20 @@ fn new_op_call_expr<'a>(
 
                     let args = args.into_bump_slice();
 
-                    Apply(function, args, CalledVia::BinOp(Pizza))
+                    Apply(function, args, CalledVia::BinOp(BinOp::Pizza))
                 }
                 Dbg => *desugar_dbg_expr(env, scope, left, region),
                 _ => {
                     // e.g. `1 |> (if b then (\a -> a) else (\c -> c))`
-                    Apply(right, env.arena.alloc([left]), CalledVia::BinOp(Pizza))
+                    Apply(
+                        right,
+                        env.arena.alloc([left]),
+                        CalledVia::BinOp(BinOp::Pizza),
+                    )
                 }
             }
         }
-        DoubleQuestion => {
+        BinOp::DoubleQuestion => {
             let left = desugar_expr(env, scope, left);
             let right = desugar_expr(env, scope, right);
 
@@ -259,7 +262,7 @@ fn new_op_call_expr<'a>(
 
             When(left, &*env.arena.alloc([ok_branch, err_branch]))
         }
-        SingleQuestion => {
+        BinOp::SingleQuestion => {
             let left = desugar_expr(env, scope, left);
             let right = desugar_expr(env, scope, right);
 
@@ -339,6 +342,41 @@ fn new_op_call_expr<'a>(
             });
 
             When(left, &*env.arena.alloc([ok_branch, err_branch]))
+        }
+        BinOp::And => {
+            let left = desugar_expr(env, scope, left);
+            let right = desugar_expr(env, scope, right);
+
+            Expr::If {
+                if_thens: env.arena.alloc([(*left, *right)]),
+                final_else: env.arena.alloc(Loc::at(
+                    right.region,
+                    Expr::Var {
+                        module_name: ModuleName::BOOL,
+                        ident: "false",
+                    },
+                )),
+                indented_else: false,
+            }
+        }
+        BinOp::Or => {
+            let left = desugar_expr(env, scope, left);
+            let right = desugar_expr(env, scope, right);
+
+            Expr::If {
+                if_thens: env.arena.alloc([(
+                    *left,
+                    Loc::at(
+                        right.region,
+                        Expr::Var {
+                            module_name: ModuleName::BOOL,
+                            ident: "true",
+                        },
+                    ),
+                )]),
+                final_else: right,
+                indented_else: false,
+            }
         }
         binop => {
             let left = desugar_expr(env, scope, left);
@@ -1641,8 +1679,8 @@ fn binop_to_function(binop: BinOp) -> (&'static str, &'static str) {
         GreaterThan => (ModuleName::NUM, "is_gt"),
         LessThanOrEq => (ModuleName::NUM, "is_lte"),
         GreaterThanOrEq => (ModuleName::NUM, "is_gte"),
-        And => (ModuleName::BOOL, "and"),
-        Or => (ModuleName::BOOL, "or"),
+        And => unreachable!("Cannot desugar the `and` operator"),
+        Or => unreachable!("Cannot desugar the `or` operator"),
         Pizza => unreachable!("Cannot desugar the |> operator"),
         DoubleQuestion => unreachable!("Cannot desugar the ?? operator"),
         SingleQuestion => unreachable!("Cannot desugar the ? operator"),
