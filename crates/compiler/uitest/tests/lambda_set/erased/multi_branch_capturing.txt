@@ -14,8 +14,8 @@ main = (f "") {}
 
 # -emit:mono
 procedure Bool.2 ():
-    let Bool.23 : Int1 = true;
-    ret Bool.23;
+    let Bool.21 : Int1 = true;
+    ret Bool.21;
 
 procedure Test.1 (Test.2):
     let Test.34 : Int1 = CallByName Bool.2;

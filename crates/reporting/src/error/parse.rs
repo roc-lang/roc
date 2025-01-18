@@ -247,8 +247,6 @@ fn to_expr_report<'a>(
             let suggestion = match *op {
                 "|" => vec![
                     alloc.reflow("Maybe you want "),
-                    alloc.parser_suggestion("||"),
-                    alloc.reflow(" or "),
                     alloc.parser_suggestion("|>"),
                     alloc.reflow(" instead?"),
                 ],

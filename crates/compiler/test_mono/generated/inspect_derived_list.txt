@@ -14,12 +14,12 @@ procedure #Derived.4 (#Derived.5, #Derived.1):
     ret #Derived_gen.3;
 
 procedure Bool.1 ():
-    let Bool.24 : Int1 = false;
-    ret Bool.24;
+    let Bool.22 : Int1 = false;
+    ret Bool.22;
 
 procedure Bool.2 ():
-    let Bool.23 : Int1 = true;
-    ret Bool.23;
+    let Bool.21 : Int1 = true;
+    ret Bool.21;
 
 procedure Inspect.156 (Inspect.157, #Attr.12):
     let Inspect.155 : {} = StructAtIndex 2 #Attr.12;

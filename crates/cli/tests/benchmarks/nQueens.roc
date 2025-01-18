@@ -50,7 +50,7 @@ safe = \queen, diagonal, xs ->
     when xs is
         Nil -> Bool.true
         Cons(q, t) ->
-            if queen != q && queen != q + diagonal && queen != q - diagonal then
+            if queen != q and queen != q + diagonal and queen != q - diagonal then
                 safe(queen, (diagonal + 1), t)
             else
                 Bool.false

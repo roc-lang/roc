@@ -1284,30 +1284,6 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 rhs_layout,
             )
         }
-        And => {
-            // The (&&) operator
-            arguments!(lhs_arg, rhs_arg);
-
-            let bool_val = env.builder.new_build_and(
-                lhs_arg.into_int_value(),
-                rhs_arg.into_int_value(),
-                "bool_and",
-            );
-
-            BasicValueEnum::IntValue(bool_val)
-        }
-        Or => {
-            // The (||) operator
-            arguments!(lhs_arg, rhs_arg);
-
-            let bool_val = env.builder.new_build_or(
-                lhs_arg.into_int_value(),
-                rhs_arg.into_int_value(),
-                "bool_or",
-            );
-
-            BasicValueEnum::IntValue(bool_val)
-        }
         Not => {
             // The (!) operator
             arguments!(arg);

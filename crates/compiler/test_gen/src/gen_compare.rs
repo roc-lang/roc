@@ -121,7 +121,7 @@ fn bool_logic() {
                 bool2 = Bool.false
                 bool3 = !bool1
 
-                (bool1 && bool2) || bool2 && bool3
+                (bool1 and bool2) or bool2 and bool3
                 "#
         ),
         false,
@@ -132,19 +132,19 @@ fn bool_logic() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn and_bool() {
-    assert_evals_to!("Bool.true && Bool.true", true, bool);
-    assert_evals_to!("Bool.true && Bool.false", false, bool);
-    assert_evals_to!("Bool.false && Bool.true", false, bool);
-    assert_evals_to!("Bool.false && Bool.false", false, bool);
+    assert_evals_to!("Bool.true and Bool.true", true, bool);
+    assert_evals_to!("Bool.true and Bool.false", false, bool);
+    assert_evals_to!("Bool.false and Bool.true", false, bool);
+    assert_evals_to!("Bool.false and Bool.false", false, bool);
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn or_bool() {
-    assert_evals_to!("Bool.true || Bool.true", true, bool);
-    assert_evals_to!("Bool.true || Bool.false", true, bool);
-    assert_evals_to!("Bool.false || Bool.true", true, bool);
-    assert_evals_to!("Bool.false || Bool.false", false, bool);
+    assert_evals_to!("Bool.true or Bool.true", true, bool);
+    assert_evals_to!("Bool.true or Bool.false", true, bool);
+    assert_evals_to!("Bool.false or Bool.true", true, bool);
+    assert_evals_to!("Bool.false or Bool.false", false, bool);
 }
 
 #[test]
@@ -544,7 +544,7 @@ fn eq_different_rosetrees() {
 
                 cd = c2 == d2
 
-                ab && cd
+                ab and cd
         "#
         ),
         true,

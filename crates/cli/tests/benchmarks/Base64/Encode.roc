@@ -148,19 +148,19 @@ is_valid_char = \c ->
 
 is_alpha_num : U8 -> Bool
 is_alpha_num = \key ->
-    (key >= 48 && key <= 57) || (key >= 64 && key <= 90) || (key >= 97 && key <= 122)
+    (key >= 48 and key <= 57) or (key >= 64 and key <= 90) or (key >= 97 and key <= 122)
 
 # Convert a base64 character/digit to its index
 # See also [Wikipedia](https://en.wikipedia.org/wiki/Base64#Base64_table)
 unsafe_convert_char : U8 -> U8
 unsafe_convert_char = \key ->
-    if key >= 65 && key <= 90 then
+    if key >= 65 and key <= 90 then
         # A-Z
         key - 65
-    else if key >= 97 && key <= 122 then
+    else if key >= 97 and key <= 122 then
         # a-z
         (key - 97) + 26
-    else if key >= 48 && key <= 57 then
+    else if key >= 48 and key <= 57 then
         # 0-9
         (key - 48) + 26 + 26
     else

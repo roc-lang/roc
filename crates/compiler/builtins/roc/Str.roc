@@ -972,7 +972,7 @@ matches_at_help = |state|
                 },
             )
 
-        does_this_match && does_rest_match
+        does_this_match and does_rest_match
 
 ## Walks over the `UTF-8` bytes of the given [Str] and calls a function to update
 ## state for each byte. The index for that byte in the string is provided

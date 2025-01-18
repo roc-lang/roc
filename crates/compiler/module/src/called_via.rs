@@ -62,8 +62,8 @@ const DISPLAY_STRINGS: [(BinOp, &str); 18] = [
     (GreaterThan, ">"),
     (LessThanOrEq, "<="),
     (GreaterThanOrEq, ">="),
-    (And, "&&"),
-    (Or, "||"),
+    (And, "and"),
+    (Or, "or"),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -199,7 +199,7 @@ pub enum Associativity {
     /// right-associative operators:
     ///
     /// exponentiation: ^
-    /// boolean: && ||
+    /// boolean: and or
     /// application: <|
     RightAssociative,
 

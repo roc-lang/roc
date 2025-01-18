@@ -31,8 +31,8 @@ procedure #Derived.7 (#Derived.8, #Derived.9, #Attr.12):
     jump #Derived_gen.5 #Derived_gen.6;
 
 procedure Bool.2 ():
-    let Bool.23 : Int1 = true;
-    ret Bool.23;
+    let Bool.21 : Int1 = true;
+    ret Bool.21;
 
 procedure Encode.23 (Encode.100):
     ret Encode.100;

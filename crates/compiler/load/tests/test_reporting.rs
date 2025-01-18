@@ -6036,7 +6036,7 @@ All branches in an `if` must have the same type!
         double_binop,
         indoc!(
             r"
-            key >= 97 && <= 122
+            key >= 97 and <= 122
             "
         ),
         @r"

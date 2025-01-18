@@ -1355,16 +1355,14 @@ define_builtins! {
         0 BOOL_BOOL: "Bool" exposed_type=true // the Bool.Bool type alias
         1 BOOL_FALSE: "false"
         2 BOOL_TRUE: "true"
-        3 BOOL_AND: "and"
-        4 BOOL_OR: "or"
-        5 BOOL_NOT: "not"
-        6 BOOL_XOR: "xor"
-        7 BOOL_NEQ: "is_not_eq"
-        8 BOOL_EQ: "Eq" exposed_type=true
-        9 BOOL_IS_EQ: "is_eq"
-        10 BOOL_IS_EQ_IMPL: "bool_is_eq"
-        unexposed 11 BOOL_STRUCTURAL_EQ: "structural_eq"
-        unexposed 12 BOOL_STRUCTURAL_NOT_EQ: "structural_not_eq"
+        3 BOOL_NOT: "not"
+        4 BOOL_XOR: "xor"
+        5 BOOL_NEQ: "is_not_eq"
+        6 BOOL_EQ: "Eq" exposed_type=true
+        7 BOOL_IS_EQ: "is_eq"
+        8 BOOL_IS_EQ_IMPL: "bool_is_eq"
+        unexposed 9 BOOL_STRUCTURAL_EQ: "structural_eq"
+        unexposed 10 BOOL_STRUCTURAL_NOT_EQ: "structural_not_eq"
     }
     5 STR: "Str" => {
         0 STR_STR: "Str" exposed_apply_type=true // the Str.Str type alias
