@@ -51,6 +51,8 @@ pub fn apply_trmc<'a, 'i>(
 
     for proc in procs.values_mut() {
         use self::SelfRecursive::*;
+        #[allow(clippy::dbg_macro)]
+        let _ = dbg!(proc.name, proc.is_self_recursive);
         if let SelfRecursive(id) = proc.is_self_recursive {
             let trmc_candidate_symbols = trmc_candidates(env.interner, proc);
 
