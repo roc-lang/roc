@@ -1314,6 +1314,7 @@ mod test_can {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     fn assert_if_expr(expr: &Expr) -> (&[(Loc<Expr>, Loc<Expr>)], &Loc<Expr>) {
         match expr {
             Expr::If {

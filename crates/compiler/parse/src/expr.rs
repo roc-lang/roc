@@ -4032,15 +4032,15 @@ where
     G: Fn(&'a str, Position) -> E,
     E: 'a,
 {
-    match state.bytes() {
-        &[b'o', b'r', ..] => {
+    match *state.bytes() {
+        [b'o', b'r', ..] => {
             return Ok((
                 MadeProgress,
                 OperatorOrDef::BinOp(BinOp::Or),
                 state.advance(2),
             ))
         }
-        &[b'a', b'n', b'd', ..] => {
+        [b'a', b'n', b'd', ..] => {
             return Ok((
                 MadeProgress,
                 OperatorOrDef::BinOp(BinOp::And),
