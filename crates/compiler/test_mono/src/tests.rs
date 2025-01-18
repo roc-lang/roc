@@ -451,7 +451,7 @@ fn when_on_two_values() {
 #[mono_test]
 fn dict() {
     r"
-    Dict.len (Dict.empty {})
+    Dict.len(Dict.empty())
     "
 }
 
@@ -1301,7 +1301,7 @@ fn monomorphized_ints_aliased() {
             w1 = y
             w2 = y
 
-            f = \_, _ -> 1
+            f = |_, _| 1
 
             f1 : U8, U32 -> U64
             f1 = f
@@ -1309,7 +1309,7 @@ fn monomorphized_ints_aliased() {
             f2 : U32, U8 -> U64
             f2 = f
 
-            f1 w1 w2 + f2 w1 w2
+            f1(w1, w2) + f2(w1, w2)
         "#
     )
 }

@@ -4333,7 +4333,7 @@ fn to_requires_report<'a>(
                     alloc.reflow(" keyword next, like"),
                 ]),
                 alloc
-                    .parser_suggestion("requires { main! : {} => Result I64 Str }")
+                    .parser_suggestion("requires { main! : () => Result I64 Str }")
                     .indent(4),
             ]);
 
@@ -4360,7 +4360,7 @@ fn to_requires_report<'a>(
                     alloc.reflow(" keyword next, like"),
                 ]),
                 alloc
-                    .parser_suggestion("requires { main! : {} => Result I64 Str }")
+                    .parser_suggestion("requires { main! : () => Result I64 Str }")
                     .indent(4),
             ]);
 
@@ -4389,7 +4389,7 @@ fn to_requires_report<'a>(
                     alloc.reflow(" definition looks like"),
                 ]),
                 alloc
-                    .parser_suggestion("requires { Model, Msg } { main! : {} => Result {} [] }")
+                    .parser_suggestion("requires { Model, Msg } { main! : () => Result {} [] }")
                     .indent(4),
             ]);
 
@@ -4418,7 +4418,7 @@ fn to_requires_report<'a>(
                     alloc.reflow(" definition looks like"),
                 ]),
                 alloc
-                    .parser_suggestion("requires { Model, Msg } { main! : {} => Result {} [] }")
+                    .parser_suggestion("requires { Model, Msg } { main! : () => Result {} [] }")
                     .indent(4),
             ]);
 

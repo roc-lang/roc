@@ -1195,9 +1195,9 @@ fn explicit_builtin_type_import() {
 
                 my_dict : Dict * *
                 my_dict =
-                    Dict.empty {}
+                    Dict.empty()
 
-                main = is_empty my_dict
+                main = is_empty(my_dict)
                 "#
         ),
     )];

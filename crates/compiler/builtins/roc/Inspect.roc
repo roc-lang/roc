@@ -44,7 +44,7 @@ KeyValWalker state collection key val : collection, state, (state, key, val -> s
 ElemWalker state collection elem : collection, state, (state, elem -> state) -> state
 
 InspectFormatter implements
-    init : {} -> f where f implements InspectFormatter
+    init : () -> f where f implements InspectFormatter
 
     tag : Str, List (Inspector f) -> Inspector f where f implements InspectFormatter
     tuple : List (Inspector f) -> Inspector f where f implements InspectFormatter
@@ -92,7 +92,7 @@ Inspect implements
 inspect : val -> f where val implements Inspect, f implements InspectFormatter
 inspect = |val|
     @Inspector(val_fn) = to_inspector(val)
-    val_fn(init({}))
+    val_fn(init())
 
 to_str : val -> Str where val implements Inspect
 to_str = |val|
@@ -133,8 +133,8 @@ DbgFormatter := { data : Str }
         },
     ]
 
-dbg_init : {} -> DbgFormatter
-dbg_init = |{}| @DbgFormatter({ data: "" })
+dbg_init : () -> DbgFormatter
+dbg_init = || @DbgFormatter({ data: "" })
 
 dbg_list : list, ElemWalker (DbgFormatter, Bool) list elem, (elem -> Inspector DbgFormatter) -> Inspector DbgFormatter
 dbg_list = |content, walk_fn, to_dbg_inspector|

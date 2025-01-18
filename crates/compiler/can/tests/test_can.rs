@@ -1654,7 +1654,7 @@ mod test_can {
     fn dict() {
         let src = indoc!(
             r"
-                x = Dict.empty {}
+                x = Dict.empty()
 
                 Dict.len x
             "

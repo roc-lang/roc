@@ -202,8 +202,8 @@ add : StatsDB, Str, { score : Dec, average : Dec } -> StatsDB
 add = \@StatsDB db, name, stats -> db |> Dict.insert name stats |> @StatsDB
 
 expect
-    db1 = Dict.empty {} |> @StatsDB |> add "John" { score: 10, average: 10 }
-    db2 = Dict.empty {} |> @StatsDB |> add "John" { score: 10, average: 10 }
+    db1 = Dict.empty() |> @StatsDB |> add("John", { score: 10, average: 10 })
+    db2 = Dict.empty() |> @StatsDB |> add("John", { score: 10, average: 10 })
 
     db1 == db2 # true
 ```

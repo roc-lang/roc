@@ -5159,7 +5159,7 @@ mod test_reporting {
             app "dict" imports [] provides [main] to "./platform"
 
             my_dict : Dict Num.I64 Str
-            my_dict = Dict.insert (Dict.empty {}) "foo" 42
+            my_dict = Dict.insert(Dict.empty(), "foo", 42)
 
             main = my_dict
             "#
@@ -9737,22 +9737,22 @@ All branches in an `if` must have the same type!
             "
         ),
         @r"
-        ── CIRCULAR DEFINITION in /code/proj/Main.roc ──────────────────────────────────
+    ── CIRCULAR DEFINITION in /code/proj/Main.roc ──────────────────────────────────
 
-        The `t1` definition is causing a very tricky infinite loop:
+    The `t1` definition is causing a very tricky infinite loop:
 
-        7│      t1 = \_ -> force (\_ -> t2)
-                ^^
+    7│      t1 = || force(|| t2)
+            ^^
 
-        The `t1` value depends on itself through the following chain of
-        definitions:
+    The `t1` value depends on itself through the following chain of
+    definitions:
 
-            ┌─────┐
-            │     t1
-            │     ↓
-            │     t2
-            └─────┘
-        "
+        ┌─────┐
+        │     t1
+        │     ↓
+        │     t2
+        └─────┘
+    "
     );
 
     test_report!(
@@ -9830,22 +9830,22 @@ All branches in an `if` must have the same type!
                 "#
         ),
         @r"
-            ── CIRCULAR DEFINITION in /code/proj/Main.roc ──────────────────────────────────
+    ── CIRCULAR DEFINITION in /code/proj/Main.roc ──────────────────────────────────
 
-            The `t1` definition is causing a very tricky infinite loop:
+    The `t1` definition is causing a very tricky infinite loop:
 
-            6│  t1 = \_ -> force (\_ -> t2)
-                ^^
+    6│  t1 = || force(|| t2)
+        ^^
 
-            The `t1` value depends on itself through the following chain of
-            definitions:
+    The `t1` value depends on itself through the following chain of
+    definitions:
 
-                ┌─────┐
-                │     t1
-                │     ↓
-                │     t2
-                └─────┘
-            "
+        ┌─────┐
+        │     t1
+        │     ↓
+        │     t2
+        └─────┘
+    "
     );
 
     test_report!(
@@ -10291,29 +10291,30 @@ All branches in an `if` must have the same type!
             "
         ),
         @r"
-        ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
-        Something is off with the body of the `with_open` definition:
+    Something is off with the body of the `with_open` definition:
 
-        10│       with_open : (Handle -> Result {} *) -> Result {} *
-        11│       with_open = \callback ->
-        12│>          await (open {}) \handle ->
-        13│>              await (callback handle) \_ ->
-        14│>                  close handle
+    10│       with_open : (Handle -> Result {} *) -> Result {} *
+    11│       with_open = |callback|
+    12│>          await(open(), |handle|
+    13│>              await(callback(handle), |_|
+    14│>                  close handle
+    15│>              )
+    16│>          )
 
-        The type annotation on `with_open` says this `await` call should have the
-        type:
+    The type annotation on `with_open` says this `await` call should have the
+    type:
 
-            Result {} *
+        Result {} *
 
-        However, the type of this `await` call is connected to another type in a
-        way that isn't reflected in this annotation.
+    However, the type of this `await` call is connected to another type in a
+    way that isn't reflected in this annotation.
 
-        Tip: Any connection between types must use a named type variable, not
-        a `*`! Maybe the annotation  on `with_open` should have a named type
-        variable in place of the `*`?
-
-        "
+    Tip: Any connection between types must use a named type variable, not
+    a `*`! Maybe the annotation  on `with_open` should have a named type
+    variable in place of the `*`?
+    "
     );
 
     test_report!(
@@ -11478,7 +11479,7 @@ All branches in an `if` must have the same type!
             decode_list : Decoder elem (ErrDecoder) -> Decoder (List elem) (ErrDecoder)
             decode_list = |_| Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
             decode_record : state, (state, Str -> [Keep (Decoder state (ErrDecoder)), Skip]), (state, (ErrDecoder) -> Result val DecodeError) -> Decoder val (ErrDecoder)
-            decode_record = |_, _, _| Decode.custom(rest, @ErrDecoder({})| { result: Err TooShort, rest })
+            decode_record = |_, _, _| Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
             decode_tuple : state, (state, U64 -> [Next (Decoder state (ErrDecoder)), TooLong]), (state -> Result val DecodeError) -> Decoder val (ErrDecoder)
             decode_tuple = |_, _, _| Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
 
@@ -11489,20 +11490,20 @@ All branches in an `if` must have the same type!
                     _ -> "something went wrong"
             "#
         ),
-    @r###"
+    @r"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    48│          Ok rcd -> rcd.first rcd.second
-                           ^^^^^^^^^
+    48│          Ok(rcd) -> rcd.first(rcd.second)
+                            ^^^^^^^^^
 
     I can't generate an implementation of the `Decoding` ability for
 
         * -> *
 
     Note: `Decoding` cannot be generated for functions.
-    "###
+    "
     );
 
     test_report!(
@@ -12110,7 +12111,7 @@ All branches in an `if` must have the same type!
 
              foo : a -> {} where a implements Hash
 
-             main = foo("", || {})
+             main = foo(("", || {}))
              "#
         ),
         @r#"
@@ -12118,8 +12119,8 @@ All branches in an `if` must have the same type!
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    5│  main = foo("", || {})
-                  ^^^^^^^^^^^
+    5│  main = foo(("", || {}))
+                   ^^^^^^^^^^^
 
     I can't generate an implementation of the `Hash` ability for
 
@@ -13814,12 +13815,11 @@ All branches in an `if` must have the same type!
 
     These 2 definitions are only used in mutual recursion with themselves:
 
-    3│>  f = \{} -> if Bool.true then "" else g {}
-    4│>  g = \{} -> if Bool.true then "" else f {}
+    3│>  f = || if Bool.true then "" else g()
+    4│>  g = || if Bool.true then "" else f()
 
     If you don't intend to use or export any of them, they should all be
     removed!
-
     "#
     );
 
@@ -13851,8 +13851,8 @@ All branches in an `if` must have the same type!
 
     This definition is only used in recursion with itself:
 
-    3│      g = \{} -> if Bool.true then "" else g {}
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    3│      g = || if Bool.true then "" else g()
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     If you don't intend to use or export this definition, it should be
     removed!
@@ -13958,8 +13958,8 @@ All branches in an `if` must have the same type!
 
     Something is off with the `else` branch of this `if` expression:
 
-    3│  main : {} -> [One]
-    4│  main = \{} ->
+    3│  main : () -> [One]
+    4│  main = ||
     5│      if Bool.true
     6│      then One
     7│      else Two
@@ -13995,8 +13995,8 @@ All branches in an `if` must have the same type!
 
     Something is off with the `else` branch of this `if` expression:
 
-    5│  main : {} -> R
-    6│  main = \{} ->
+    5│  main : () -> R
+    6│  main = ||
     7│      if Bool.true
     8│      then One
     9│      else Two
@@ -14128,7 +14128,7 @@ All branches in an `if` must have the same type!
             import Decode exposing [decoder]
 
             main =
-                my_decoder : Decoder (U32, () -> {}) fmt where fmt implements DecoderFormatting
+                my_decoder : Decoder (U32, {} -> {}) fmt where fmt implements DecoderFormatting
                 my_decoder = decoder
 
                 my_decoder
@@ -14144,7 +14144,7 @@ All branches in an `if` must have the same type!
 
     I can't generate an implementation of the `Decoding` ability for
 
-        U32, () -> {}
+        U32, {} -> {}
 
     Note: `Decoding` cannot be generated for functions.
     "
@@ -14169,7 +14169,7 @@ All branches in an `if` must have the same type!
             r#"
             app "test" imports [] provides [main] to "./platform"
 
-            x : (U32, () -> {})
+            x : (U32, {} -> {})
 
             main = Encode.to_encoder x
             "#
@@ -14731,23 +14731,23 @@ All branches in an `if` must have the same type!
                 Ok {}
             "#
         ),
-        @r###"
-        ── IGNORED RESULT in /code/proj/Main.roc ───────────────────────────────────────
-        
-        The result of this expression is ignored:
-        
-        19│      try List.get [1, 2, 3] 5
-                 ^^^^^^^^^^^^^^^^^^^^^^^^
-        
-        Standalone statements are required to produce an empty record, but the
-        type of this one is:
-        
-            Num *
-        
-        If you still want to ignore it, assign it to `_`, like this:
-        
-            _ = File.delete! "data.json"
-        "###
+        @r#"
+    ── IGNORED RESULT in /code/proj/Main.roc ───────────────────────────────────────
+
+    The result of this expression is ignored:
+
+    19│      List.get([1, 2, 3], 5)?
+             ^^^^^^^^^^^^^^^^^^^^^^^
+
+    Standalone statements are required to produce an empty record, but the
+    type of this one is:
+
+        Num *
+
+    If you still want to ignore it, assign it to `_`, like this:
+
+        _ = File.delete! "data.json"
+    "#
     );
 
     test_report!(
@@ -14782,10 +14782,10 @@ All branches in an `if` must have the same type!
 
     The result of this expression is ignored:
 
-    16│>      when List.get [1, 2, 3] 5 is
-    17│>          Ok item -> item
-    18│>          Err err ->
-    19│>              return Err err
+    16│>      when List.get([1, 2, 3], 5) is
+    17│>          Ok(item) -> item
+    18│>          Err(err) ->
+    19│>              return Err(err)
 
     Standalone statements are required to produce an empty record, but the
     type of this one is:
@@ -14854,23 +14854,23 @@ All branches in an `if` must have the same type!
                 Ok({})
             "#
         ),
-        @r###"
-        ── IGNORED RESULT in /code/proj/Main.roc ───────────────────────────────────────
-        
-        The result of this expression is ignored:
-        
-        9│      try List.get [1, 2, 3] 5
-                ^^^^^^^^^^^^^^^^^^^^^^^^
-        
-        Standalone statements are required to produce an empty record, but the
-        type of this one is:
-        
-            Num *
-        
-        If you still want to ignore it, assign it to `_`, like this:
-        
-            _ = File.delete! "data.json"
-        "###
+        @r#"
+    ── IGNORED RESULT in /code/proj/Main.roc ───────────────────────────────────────
+
+    The result of this expression is ignored:
+
+    9│      List.get([1, 2, 3], 5)?
+            ^^^^^^^^^^^^^^^^^^^^^^^
+
+    Standalone statements are required to produce an empty record, but the
+    type of this one is:
+
+        Num *
+
+    If you still want to ignore it, assign it to `_`, like this:
+
+        _ = File.delete! "data.json"
+    "#
     );
 
     test_report!(
@@ -14912,10 +14912,10 @@ All branches in an `if` must have the same type!
 
     The result of this expression is ignored:
 
-     9│>      when List.get [1, 2, 3] 5 is
-    10│>          Ok item -> item
-    11│>          Err err ->
-    12│>              return Err err
+     9│>      when List.get([1, 2, 3], 5) is
+    10│>          Ok(item) -> item
+    11│>          Err(err) ->
+    12│>              return Err(err)
 
     Standalone statements are required to produce an empty record, but the
     type of this one is:
@@ -14949,7 +14949,7 @@ All branches in an `if` must have the same type!
 
     The result of this call to `Num.to_str` is ignored:
 
-    8│      Num.to_str 123
+    8│      Num.to_str(123)
             ^^^^^^^^^^
 
     Standalone statements are required to produce an empty record, but the
@@ -14965,8 +14965,8 @@ All branches in an `if` must have the same type!
 
     This statement does not produce any effects:
 
-    8│      Num.to_str 123
-            ^^^^^^^^^^^^^^
+    8│      Num.to_str(123)
+            ^^^^^^^^^^^^^^^
 
     Standalone statements are only useful if they call effectful
     functions.
@@ -14996,7 +14996,7 @@ All branches in an `if` must have the same type!
 
     This assignment doesn't introduce any new variables:
 
-    8│      _ignored = Num.to_str 123
+    8│      _ignored = Num.to_str(123)
             ^^^^^^^^
 
     Since it doesn't call any effectful functions, this assignment cannot
@@ -15138,11 +15138,11 @@ All branches in an `if` must have the same type!
     This returns something that's incompatible with the return type of the
     enclosing function:
 
-    5│           x = try Err 123
+    5│           x = Err(123)?
     6│
-    7│>          y = try Err "abc"
+    7│>          y = Err("abc")?
     8│
-    9│           Ok (x + y)
+    9│           Ok(x + y)
 
     This returns an `Err` of type:
 
@@ -15276,19 +15276,19 @@ All branches in an `if` must have the same type!
             identity = |x| x
             "#
         ),
-        @r###"
+        @r"
     ── LEFTOVER STATEMENT in /code/proj/Main.roc ───────────────────────────────────
 
     This statement does not produce any effects:
 
-    6│      identity {}
-            ^^^^^^^^^^^
+    6│      identity({})
+            ^^^^^^^^^^^^
 
     Standalone statements are only useful if they call effectful
     functions.
 
     Did you forget to use its result? If not, feel free to remove it.
-    "###
+    "
     );
 
     test_report!(
@@ -15314,8 +15314,8 @@ All branches in an `if` must have the same type!
 
     This call to `Effect.get_line!` might produce an effect:
 
-    10│      name = Effect.get_line! {}
-                    ^^^^^^^^^^^^^^^^^^^
+    10│      name = Effect.get_line!()
+                    ^^^^^^^^^^^^^^^^^^
 
     However, the type of the enclosing function requires that it's pure:
 
@@ -15416,7 +15416,7 @@ All branches in an `if` must have the same type!
     The result of this call to `Effect.get_line!` is ignored:
 
     6│      Effect.get_line!()
-            ^^^^^^^^^^^^^^^^^^
+            ^^^^^^^^^^^^^^^^
 
     Standalone statements are required to produce an empty record, but the
     type of this one is:
@@ -15486,18 +15486,18 @@ All branches in an `if` must have the same type!
                 "hello"
             "#
         ),
-        @r###"
+        @r"
     ── UNNECESSARY EXCLAMATION in /code/proj/Main.roc ──────────────────────────────
 
     This function is pure, but its name suggests otherwise:
 
-    8│  hello! = \{} ->
+    8│  hello! = ||
         ^^^^^^
 
     The exclamation mark at the end is reserved for effectful functions.
 
     Hint: Did you forget to run an effect? Is the type annotation wrong?
-    "###
+    "
     );
 
     test_report!(
@@ -15521,13 +15521,13 @@ All branches in an `if` must have the same type!
 
     This call to `Effect.put_line!` might produce an effect:
 
-    6│      Effect.put_line! "calling hello!"
+    6│      Effect.put_line!("calling hello!")
             ^^^^^^^^^^^^^^^^
 
     However, it appears in a top-level def instead of a function. If we
     allowed this, importing this module would produce a side effect.
 
-    Tip: If you don't need any arguments, use an empty record:
+    Tip: Try wrapping your value in a function, like this one:
 
         ask_name! : () => Str
         ask_name! = ||
@@ -15617,7 +15617,7 @@ All branches in an `if` must have the same type!
     The type of this record field is an effectful function, but its name
     does not indicate so:
 
-    4│      get_line: {} => Str
+    4│      get_line: () => Str
             ^^^^^^^^^^^^^^^^^^^
 
     Add an exclamation mark at the end, like:
@@ -15645,7 +15645,7 @@ All branches in an `if` must have the same type!
     The type of this record field is a pure function, but its name
     suggests otherwise:
 
-    4│      get_line!: {} -> Str
+    4│      get_line!: () -> Str
             ^^^^^^^^^^^^^^^^^^^^
 
     The exclamation mark at the end is reserved for effectful functions.
@@ -15680,7 +15680,7 @@ All branches in an `if` must have the same type!
 
     This function is effectful, but its name does not indicate so:
 
-    10│  for_each! = \l, f ->
+    10│  for_each! = |l, f|
                          ^
 
     Add an exclamation mark at the end, like:
@@ -15717,7 +15717,7 @@ All branches in an `if` must have the same type!
 
     This function is pure, but its name suggests otherwise:
 
-    12│  map_ok = \result, fn! ->
+    12│  map_ok = |result, fn!|
                            ^^^
 
     The exclamation mark at the end is reserved for effectful functions.
@@ -15813,12 +15813,12 @@ All branches in an `if` must have the same type!
                 put("Hi, ${name}")
             "#
         ),
-        @r###"
+        @r"
     ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
 
     This function is effectful, but its name does not indicate so:
 
-    6│      Tag get put = Tag Effect.get_line! Effect.put_line!
+    6│      Tag(get, put) = Tag(Effect.get_line!, Effect.put_line!)
                 ^^^
 
     Add an exclamation mark at the end, like:
@@ -15831,15 +15831,15 @@ All branches in an `if` must have the same type!
 
     This function is effectful, but its name does not indicate so:
 
-    6│      Tag get put = Tag Effect.get_line! Effect.put_line!
-                    ^^^
+    6│      Tag(get, put) = Tag(Effect.get_line!, Effect.put_line!)
+                     ^^^
 
     Add an exclamation mark at the end, like:
 
         put!
 
     This will help readers identify it as a source of effects.
-    "###
+    "
     );
 
     test_report!(
@@ -15856,18 +15856,18 @@ All branches in an `if` must have the same type!
                 Effect.put_line!(trim!(msg))
             "#
         ),
-        @r###"
+        @r#"
     ── UNNECESSARY EXCLAMATION in /code/proj/Main.roc ──────────────────────────────
 
     This function is pure, but its name suggests otherwise:
 
-    6│      Tag msg trim! = Tag " hi " Str.trim
-                    ^^^^^
+    6│      Tag(msg, trim!) = Tag(" hi ", Str.trim)
+                     ^^^^^
 
     The exclamation mark at the end is reserved for effectful functions.
 
     Hint: Did you forget to run an effect? Is the type annotation wrong?
-    "###
+    "#
     );
 
     test_report!(
@@ -15886,12 +15886,12 @@ All branches in an `if` must have the same type!
                 put("Hi!")
             "#
         ),
-        @r###"
+        @r"
     ── MISSING EXCLAMATION in /code/proj/Main.roc ──────────────────────────────────
 
     This function is effectful, but its name does not indicate so:
 
-    8│      @PutLine put = @PutLine Effect.put_line!
+    8│      @PutLine(put) = @PutLine(Effect.put_line!)
                      ^^^
 
     Add an exclamation mark at the end, like:
@@ -15899,7 +15899,7 @@ All branches in an `if` must have the same type!
         put!
 
     This will help readers identify it as a source of effects.
-    "###
+    "
     );
 
     test_report!(
@@ -15918,18 +15918,18 @@ All branches in an `if` must have the same type!
                 Effect.put_line!(trim!(" hi "))
             "#
         ),
-        @r###"
+        @r"
     ── UNNECESSARY EXCLAMATION in /code/proj/Main.roc ──────────────────────────────
 
     This function is pure, but its name suggests otherwise:
 
-    8│      @Trim trim! = @Trim Str.trim
+    8│      @Trim(trim!) = @Trim(Str.trim)
                   ^^^^^
 
     The exclamation mark at the end is reserved for effectful functions.
 
     Hint: Did you forget to run an effect? Is the type annotation wrong?
-    "###
+    "
     );
 
     test_report!(
@@ -15951,7 +15951,7 @@ All branches in an `if` must have the same type!
 
     This 1st argument to `pure_higher_order` has an unexpected type:
 
-    6│      pure_higher_order Effect.put_line! "hi"
+    6│      pure_higher_order(Effect.put_line!, "hi")
                               ^^^^^^^^^^^^^^^^
 
     This `Effect.put_line!` value is a:
@@ -15984,7 +15984,7 @@ All branches in an `if` must have the same type!
 
     This 1st argument to `pure_higher_order` has an unexpected type:
 
-    6│      pure_higher_order Effect.put_line! "hi"
+    6│      pure_higher_order(Effect.put_line!, "hi")
                               ^^^^^^^^^^^^^^^^
 
     This `Effect.put_line!` value is a:

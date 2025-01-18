@@ -1506,7 +1506,7 @@ for_each_try! = |list, func!|
 ##
 ## ```roc
 ## now_multiples = List.walk!([1, 2, 3], [], \nums, i ->
-##      now = Utc.now!({}) |> Utc.to_millis_since_epoch
+##      now = Utc.now!() |> Utc.to_millis_since_epoch
 ##      List.append(nums, now * i)
 ## )
 ## ```
@@ -1533,7 +1533,7 @@ walk! = |list, state, func!|
 ##         [],
 ##         \accumulator, which ->
 ##             Stdout.write!("${which} name: ")?
-##             name = Stdin.line!({})?
+##             name = Stdin.line!()?
 ##             Ok(List.append(accumulator, name)),
 ##     )?
 ## ```

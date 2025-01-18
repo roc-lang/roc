@@ -625,7 +625,7 @@ fn build_object<'a, B: Backend<'a>>(
     // Build procedures from user code
     let mut relocations = bumpalo::vec![in arena];
     for (fn_name, section_id, proc_id, proc) in procs {
-        dbg!(&fn_name);
+        // dbg!(&fn_name);
         build_proc(
             &mut output,
             &mut backend,
@@ -1061,15 +1061,15 @@ fn build_proc<'a, B: Backend<'a>>(
                 if let Some(sym_id) = output.symbol_id(name.as_bytes()) {
                     create_relocation(target, sym_id, offset + proc_offset)
                 } else {
-                    dbg!((
-                        name,
-                        offset,
-                        relocations,
-                        data_section,
-                        fn_name,
-                        section_id,
-                        proc_id,
-                    ));
+                    // dbg!((
+                    //     name,
+                    //     offset,
+                    //     relocations,
+                    //     data_section,
+                    //     fn_name,
+                    //     section_id,
+                    //     proc_id,
+                    // ));
 
                     internal_error!("failed to find fn symbol for {:?}", name);
                 }

@@ -36,7 +36,7 @@ empty = @Community({ people: [], friends: [] })
 add_person = \@Community({ people, friends }), person ->
     @Community({
         people: List.append(people, @Person(person)),
-        friends: List.append(friends, Set.empty({})),
+        friends: List.append(friends, Set.empty()),
     })
 
 add_friend = \@Community({ people, friends }), from, to ->
@@ -66,7 +66,7 @@ walk_friend_names = \@Community({ people, friends }), s0, next_fn ->
                 |> Str.concat(person.last_name)
 
             friend_names =
-                Set.walk(friend_set, Set.empty({}), \friends_set, friend_id ->
+                Set.walk(friend_set, Set.empty(), |friends_set, friend_id|
                     @Person(friend) =
                         when List.get(people, friend_id) is
                             Ok(v) -> v
@@ -75,7 +75,8 @@ walk_friend_names = \@Community({ people, friends }), s0, next_fn ->
                         friend.first_name
                         |> Str.concat(" ")
                         |> Str.concat(friend.last_name)
-                    Set.insert(friends_set, friend_name))
+                    Set.insert(friends_set, friend_name)
+                )
 
             (next_fn(s1, person_name, friend_names), id + 1))
 

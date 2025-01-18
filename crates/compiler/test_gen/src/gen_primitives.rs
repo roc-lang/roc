@@ -3140,7 +3140,7 @@ fn recursively_build_effect() {
             XEffect a := () -> a
 
             always : a -> XEffect a
-            always = |x| @XEffect(\{} -> x)
+            always = |x| @XEffect(|| x)
 
             after : XEffect a, (a -> XEffect b) -> XEffect b
             after = |@XEffect(e), to_b|
