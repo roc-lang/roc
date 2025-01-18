@@ -1,6 +1,6 @@
-procedure Bool.11 (#Attr.2, #Attr.3):
-    let Bool.23 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
-    ret Bool.23;
+procedure Bool.9 (#Attr.2, #Attr.3):
+    let Bool.21 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
+    ret Bool.21;
 
 procedure Str.3 (#Attr.2, #Attr.3):
     let Str.247 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
@@ -29,7 +29,7 @@ procedure Test.0 ():
     let Test.14 : [<r>C List *self, C Str] = CallByName Test.3;
     let Test.16 : Str = "";
     let Test.15 : [<r>C List *self, C Str] = TagId(1) Test.16;
-    let Test.13 : Int1 = CallByName Bool.11 Test.14 Test.15;
+    let Test.13 : Int1 = CallByName Bool.9 Test.14 Test.15;
     joinpoint #Derived_gen.0:
         dec Test.14;
         ret Test.13;

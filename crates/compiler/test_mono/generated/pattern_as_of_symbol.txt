@@ -1,9 +1,9 @@
-procedure Bool.11 (#Attr.2, #Attr.3):
-    let Bool.23 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
-    ret Bool.23;
+procedure Bool.9 (#Attr.2, #Attr.3):
+    let Bool.21 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
+    ret Bool.21;
 
 procedure Test.0 ():
     let Test.3 : Str = "foo";
-    let Test.4 : Int1 = CallByName Bool.11 Test.3 Test.3;
+    let Test.4 : Int1 = CallByName Bool.9 Test.3 Test.3;
     dec Test.3;
     ret Test.4;

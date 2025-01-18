@@ -1,6 +1,6 @@
-procedure Bool.11 (#Attr.2, #Attr.3):
-    let Bool.23 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
-    ret Bool.23;
+procedure Bool.9 (#Attr.2, #Attr.3):
+    let Bool.21 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
+    ret Bool.21;
 
 procedure Num.20 (#Attr.2, #Attr.3):
     let Num.284 : U8 = lowlevel NumSub #Attr.2 #Attr.3;
@@ -13,7 +13,7 @@ procedure Num.21 (#Attr.2, #Attr.3):
 procedure Test.1 (#Derived_gen.0, #Derived_gen.1):
     joinpoint Test.11 Test.2 Test.3:
         let Test.26 : U8 = 0i64;
-        let Test.22 : Int1 = CallByName Bool.11 Test.2 Test.26;
+        let Test.22 : Int1 = CallByName Bool.9 Test.2 Test.26;
         if Test.22 then
             let Test.24 : U8 = 1i64;
             let Test.25 : U8 = GetTagId Test.3;

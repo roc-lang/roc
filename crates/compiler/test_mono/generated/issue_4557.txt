@@ -1,45 +1,48 @@
-procedure Bool.11 (#Attr.2, #Attr.3):
-    let Bool.24 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
-    ret Bool.24;
+procedure Bool.2 ():
+    let Bool.22 : Int1 = true;
+    ret Bool.22;
 
-procedure Bool.4 (#Attr.2, #Attr.3):
-    let Bool.23 : Int1 = lowlevel Or #Attr.2 #Attr.3;
-    ret Bool.23;
+procedure Bool.9 (#Attr.2, #Attr.3):
+    let Bool.21 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
+    ret Bool.21;
 
 procedure Test.1 (Test.2, Test.3):
     let Test.17 : {Int1, Int1} = Struct {Test.2, Test.3};
     let Test.32 : Int1 = StructAtIndex 0 Test.17;
     let Test.31 : Int1 = StructAtIndex 1 Test.17;
-    let Test.19 : Int1 = CallByName Test.1 Test.31 Test.32;
-    let Test.26 : {} = Struct {};
-    joinpoint Test.27 Test.21:
-        let Test.23 : {} = Struct {};
-        joinpoint Test.24 Test.22:
-            let Test.20 : Int1 = CallByName Bool.11 Test.21 Test.22;
-            dec Test.21;
-            dec Test.22;
-            let Test.18 : Int1 = CallByName Bool.4 Test.19 Test.20;
-            ret Test.18;
+    let Test.27 : Int1 = CallByName Test.1 Test.31 Test.32;
+    if Test.27 then
+        let Test.28 : Int1 = CallByName Bool.2;
+        ret Test.28;
+    else
+        let Test.24 : {} = Struct {};
+        joinpoint Test.25 Test.19:
+            let Test.21 : {} = Struct {};
+            joinpoint Test.22 Test.20:
+                let Test.18 : Int1 = CallByName Bool.9 Test.19 Test.20;
+                dec Test.20;
+                dec Test.19;
+                ret Test.18;
+            in
+            switch Test.31:
+                case 0:
+                    let Test.23 : Str = CallByName Test.9 Test.21;
+                    jump Test.22 Test.23;
+            
+                default:
+                    let Test.23 : Str = CallByName Test.11 Test.21;
+                    jump Test.22 Test.23;
+            
         in
-        switch Test.31:
+        switch Test.32:
             case 0:
-                let Test.25 : Str = CallByName Test.9 Test.23;
-                jump Test.24 Test.25;
+                let Test.26 : Str = CallByName Test.9 Test.24;
+                jump Test.25 Test.26;
         
             default:
-                let Test.25 : Str = CallByName Test.11 Test.23;
-                jump Test.24 Test.25;
+                let Test.26 : Str = CallByName Test.11 Test.24;
+                jump Test.25 Test.26;
         
-    in
-    switch Test.32:
-        case 0:
-            let Test.28 : Str = CallByName Test.9 Test.26;
-            jump Test.27 Test.28;
-    
-        default:
-            let Test.28 : Str = CallByName Test.11 Test.26;
-            jump Test.27 Test.28;
-    
 
 procedure Test.11 (Test.34):
     let Test.35 : Str = "a";
