@@ -212,8 +212,6 @@ map_symbol_to_lowlevel_and_arity! {
 
     Eq; BOOL_STRUCTURAL_EQ; 2,
     NotEq; BOOL_STRUCTURAL_NOT_EQ; 2,
-    And; BOOL_AND; 2,
-    Or; BOOL_OR; 2,
     Not; BOOL_NOT; 1,
     BoxExpr; BOX_BOX_FUNCTION; 1,
     UnboxExpr; BOX_UNBOX; 1,

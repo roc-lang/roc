@@ -66,7 +66,7 @@ fn build_app_mono<'a>(
 
     let or1_expr = Expr::Call(Call {
         call_type: CallType::LowLevel {
-            op: LowLevel::Or,
+            op: LowLevel::NumBitwiseOr,
             update_mode: UpdateModeId::BACKEND_DUMMY,
         },
         arguments: arena.alloc([js_call_result, host_call_result]),
@@ -74,7 +74,7 @@ fn build_app_mono<'a>(
 
     let or2_expr = Expr::Call(Call {
         call_type: CallType::LowLevel {
-            op: LowLevel::Or,
+            op: LowLevel::NumBitwiseOr,
             update_mode: UpdateModeId::BACKEND_DUMMY,
         },
         arguments: arena.alloc([or1, bitflag]),

@@ -1,13 +1,13 @@
-procedure Bool.11 (#Attr.2, #Attr.3):
-    let Bool.24 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
-    ret Bool.24;
+procedure Bool.1 ():
+    let Bool.21 : Int1 = false;
+    ret Bool.21;
 
-procedure Bool.11 (#Attr.2, #Attr.3):
-    let Bool.25 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
-    ret Bool.25;
+procedure Bool.9 (#Attr.2, #Attr.3):
+    let Bool.22 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
+    ret Bool.22;
 
-procedure Bool.3 (#Attr.2, #Attr.3):
-    let Bool.23 : Int1 = lowlevel And #Attr.2 #Attr.3;
+procedure Bool.9 (#Attr.2, #Attr.3):
+    let Bool.23 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
     ret Bool.23;
 
 procedure Inspect.245 (Inspect.246, Inspect.244):
@@ -100,16 +100,16 @@ procedure Num.77 (#Attr.2, #Attr.3):
     ret Num.293;
 
 procedure Str.20 (#Attr.2):
-    let Str.313 : Str = lowlevel StrWithCapacity #Attr.2;
-    ret Str.313;
+    let Str.314 : Str = lowlevel StrWithCapacity #Attr.2;
+    ret Str.314;
 
 procedure Str.3 (#Attr.2, #Attr.3):
     let Str.246 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
     ret Str.246;
 
 procedure Str.35 (#Attr.2, #Attr.3):
-    let Str.303 : U8 = lowlevel StrGetUnsafe #Attr.2 #Attr.3;
-    ret Str.303;
+    let Str.304 : U8 = lowlevel StrGetUnsafe #Attr.2 #Attr.3;
+    ret Str.304;
 
 procedure Str.36 (#Attr.2):
     let Str.266 : U64 = lowlevel StrCountUtf8Bytes #Attr.2;
@@ -147,24 +147,24 @@ procedure Str.38 (Str.112, Str.113):
 
 procedure Str.45 (Str.91, Str.92, Str.93):
     inc Str.91;
-    let Str.341 : [C {}, C {Str, Str}] = CallByName Str.38 Str.91 Str.92;
-    let Str.349 : U8 = 1i64;
-    let Str.350 : U8 = GetTagId Str.341;
-    let Str.351 : Int1 = lowlevel Eq Str.349 Str.350;
-    if Str.351 then
-        let Str.348 : {Str, Str} = UnionAtIndex (Id 1) (Index 0) Str.341;
-        let Str.95 : Str = StructAtIndex 0 Str.348;
-        let Str.94 : Str = StructAtIndex 1 Str.348;
-        let Str.346 : U64 = CallByName Str.36 Str.91;
+    let Str.342 : [C {}, C {Str, Str}] = CallByName Str.38 Str.91 Str.92;
+    let Str.350 : U8 = 1i64;
+    let Str.351 : U8 = GetTagId Str.342;
+    let Str.352 : Int1 = lowlevel Eq Str.350 Str.351;
+    if Str.352 then
+        let Str.349 : {Str, Str} = UnionAtIndex (Id 1) (Index 0) Str.342;
+        let Str.95 : Str = StructAtIndex 0 Str.349;
+        let Str.94 : Str = StructAtIndex 1 Str.349;
+        let Str.347 : U64 = CallByName Str.36 Str.91;
         dec Str.91;
-        let Str.345 : Str = CallByName Str.20 Str.346;
-        let Str.344 : Str = CallByName Str.3 Str.345 Str.94;
+        let Str.346 : Str = CallByName Str.20 Str.347;
+        let Str.345 : Str = CallByName Str.3 Str.346 Str.94;
         dec Str.94;
-        let Str.343 : Str = CallByName Str.3 Str.344 Str.93;
-        let Str.342 : Str = CallByName Str.56 Str.343 Str.95 Str.92 Str.93;
-        ret Str.342;
+        let Str.344 : Str = CallByName Str.3 Str.345 Str.93;
+        let Str.343 : Str = CallByName Str.56 Str.344 Str.95 Str.92 Str.93;
+        ret Str.343;
     else
-        dec Str.341;
+        dec Str.342;
         ret Str.91;
 
 procedure Str.56 (#Derived_gen.5, #Derived_gen.6, #Derived_gen.7, #Derived_gen.8):
@@ -228,8 +228,8 @@ procedure Str.58 (#Derived_gen.1, #Derived_gen.2, #Derived_gen.3, #Derived_gen.4
     jump Str.278 #Derived_gen.1 #Derived_gen.2 #Derived_gen.3 #Derived_gen.4;
 
 procedure Str.61 (Str.152, Str.153):
-    let Str.308 : Int1 = CallByName Num.22 Str.152 Str.153;
-    if Str.308 then
+    let Str.309 : Int1 = CallByName Num.22 Str.152 Str.153;
+    if Str.309 then
         ret Str.152;
     else
         ret Str.153;
@@ -237,12 +237,12 @@ procedure Str.61 (Str.152, Str.153):
 procedure Str.62 (Str.154, Str.155, Str.156):
     let Str.157 : U64 = CallByName Str.36 Str.154;
     let Str.158 : U64 = CallByName Str.36 Str.156;
-    let Str.306 : U64 = CallByName Num.53 Str.155 Str.158;
-    let Str.159 : U64 = CallByName Str.61 Str.306 Str.157;
-    let Str.305 : U64 = 0i64;
+    let Str.307 : U64 = CallByName Num.53 Str.155 Str.158;
+    let Str.159 : U64 = CallByName Str.61 Str.307 Str.157;
+    let Str.306 : U64 = 0i64;
     inc Str.156;
     inc Str.154;
-    let Str.287 : {U64, Str, U64, Str, U64, U64} = Struct {Str.159, Str.154, Str.155, Str.156, Str.305, Str.158};
+    let Str.287 : {U64, Str, U64, Str, U64, U64} = Struct {Str.159, Str.154, Str.155, Str.156, Str.306, Str.158};
     let Str.286 : Int1 = CallByName Str.63 Str.287;
     ret Str.286;
 
@@ -257,24 +257,27 @@ procedure Str.63 (Str.160):
     if Str.167 then
         dec Str.163;
         dec Str.161;
-        let Str.168 : Int1 = CallByName Bool.11 Str.164 Str.165;
+        let Str.168 : Int1 = CallByName Bool.9 Str.164 Str.165;
         ret Str.168;
     else
-        let Str.301 : U8 = CallByName Str.35 Str.161 Str.162;
-        let Str.302 : U8 = CallByName Str.35 Str.163 Str.164;
-        let Str.169 : Int1 = CallByName Bool.11 Str.301 Str.302;
-        let Str.291 : U64 = StructAtIndex 0 Str.160;
-        let Str.292 : Str = StructAtIndex 1 Str.160;
-        let Str.294 : Str = StructAtIndex 3 Str.160;
-        let Str.296 : U64 = StructAtIndex 5 Str.160;
+        let Str.302 : U8 = CallByName Str.35 Str.161 Str.162;
+        let Str.303 : U8 = CallByName Str.35 Str.163 Str.164;
+        let Str.169 : Int1 = CallByName Bool.9 Str.302 Str.303;
+        let Str.292 : U64 = StructAtIndex 0 Str.160;
+        let Str.293 : Str = StructAtIndex 1 Str.160;
+        let Str.295 : Str = StructAtIndex 3 Str.160;
+        let Str.297 : U64 = StructAtIndex 5 Str.160;
+        let Str.301 : U64 = 1i64;
+        let Str.299 : U64 = CallByName Num.51 Str.164 Str.301;
         let Str.300 : U64 = 1i64;
-        let Str.298 : U64 = CallByName Num.51 Str.164 Str.300;
-        let Str.299 : U64 = 1i64;
-        let Str.297 : U64 = CallByName Num.51 Str.162 Str.299;
-        let Str.290 : {U64, Str, U64, Str, U64, U64} = Struct {Str.291, Str.292, Str.297, Str.294, Str.298, Str.296};
-        let Str.170 : Int1 = CallByName Str.63 Str.290;
-        let Str.289 : Int1 = CallByName Bool.3 Str.169 Str.170;
-        ret Str.289;
+        let Str.298 : U64 = CallByName Num.51 Str.162 Str.300;
+        let Str.291 : {U64, Str, U64, Str, U64, U64} = Struct {Str.292, Str.293, Str.298, Str.295, Str.299, Str.297};
+        let Str.170 : Int1 = CallByName Str.63 Str.291;
+        if Str.169 then
+            ret Str.170;
+        else
+            let Str.289 : Int1 = CallByName Bool.1;
+            ret Str.289;
 
 procedure Test.0 ():
     let Test.2 : Str = "abc";

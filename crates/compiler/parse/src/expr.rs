@@ -738,7 +738,7 @@ fn parse_stmt_operator_chain<'a>(
                     | Expr::Apply(
                         Loc {
                             region: _,
-                            value: Expr::Tag(..)
+                            value: Expr::Tag(_)
                         },
                         &[],
                         _
@@ -752,7 +752,7 @@ fn parse_stmt_operator_chain<'a>(
                 // try an operator
                 return parse_stmt_after_apply(
                     arena,
-                    state.clone(),
+                    state,
                     min_indent,
                     call_min_indent,
                     expr_state,
@@ -1948,43 +1948,6 @@ fn parse_stmt_after_apply<'a>(
         }
     }
 }
-
-// #[allow(clippy::too_many_arguments)]
-// fn parse_expr_after_apply<'a>(
-//     arena: &'a Bump,
-//     state: State<'a>,
-//     min_indent: u32,
-//     call_min_indent: u32,
-//     check_for_arrow: CheckForArrow,
-//     check_for_defs: bool,
-//     mut expr_state: ExprState<'a>,
-//     before_op: State<'a>,
-//     initial_state: State<'a>,
-// ) -> Result<(Progress, Expr<'a>, State<'a>), (Progress, EExpr<'a>)> {
-//     match loc(bin_op(check_for_defs)).parse(arena, state.clone(), call_min_indent) {
-//         Err((MadeProgress, f)) => Err((MadeProgress, f)),
-//         Ok((_, loc_op, state)) => {
-//             expr_state.consume_spaces(arena);
-//             let initial_state = before_op;
-//             parse_expr_operator(
-//                 arena,
-//                 state,
-//                 min_indent,
-//                 call_min_indent,
-//                 options,
-//                 check_for_defs,
-//                 expr_state,
-//                 loc_op,
-//                 initial_state,
-//             )
-//         }
-//         Err((NoProgress, _)) => {
-//             let expr = parse_expr_final(expr_state, arena);
-//             // roll back space parsing
-//             Ok((MadeProgress, expr, initial_state))
-//         }
-//     }
-// }
 
 #[allow(clippy::too_many_arguments)]
 fn parse_apply_arg<'a>(
@@ -4084,6 +4047,24 @@ where
     G: Fn(&'a str, Position) -> E,
     E: 'a,
 {
+    match *state.bytes() {
+        [b'o', b'r', ..] => {
+            return Ok((
+                MadeProgress,
+                OperatorOrDef::BinOp(BinOp::Or),
+                state.advance(2),
+            ))
+        }
+        [b'a', b'n', b'd', ..] => {
+            return Ok((
+                MadeProgress,
+                OperatorOrDef::BinOp(BinOp::And),
+                state.advance(3),
+            ))
+        }
+        _ => {}
+    }
+
     let chomped = chomp_ops(state.bytes());
 
     macro_rules! good {

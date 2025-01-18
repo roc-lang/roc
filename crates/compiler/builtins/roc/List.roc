@@ -1361,7 +1361,7 @@ split_last = |list, delimiter|
 ## result is an empty list.
 chunks_of : List a, U64 -> List (List a)
 chunks_of = |list, chunk_size|
-    if chunk_size == 0 || List.is_empty(list) then
+    if chunk_size == 0 or List.is_empty(list) then
         []
     else
         chunk_capacity = Num.div_ceil(List.len(list), chunk_size)

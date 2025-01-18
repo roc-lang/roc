@@ -1,6 +1,6 @@
-procedure Bool.11 (#Attr.2, #Attr.3):
-    let Bool.23 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
-    ret Bool.23;
+procedure Bool.9 (#Attr.2, #Attr.3):
+    let Bool.21 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
+    ret Bool.21;
 
 procedure Str.26 (Str.83):
     let Str.246 : [C {}, C U64] = CallByName Str.66 Str.83;
@@ -14,7 +14,7 @@ procedure Str.66 (Str.191):
     let Str.192 : {U64, U8} = CallByName Str.42 Str.191;
     let Str.252 : U8 = StructAtIndex 1 Str.192;
     let Str.253 : U8 = 0i64;
-    let Str.249 : Int1 = CallByName Bool.11 Str.252 Str.253;
+    let Str.249 : Int1 = CallByName Bool.9 Str.252 Str.253;
     if Str.249 then
         let Str.251 : U64 = StructAtIndex 0 Str.192;
         let Str.250 : [C {}, C U64] = TagId(1) Str.251;

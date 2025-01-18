@@ -1,6 +1,6 @@
-procedure Bool.11 (#Attr.2, #Attr.3):
-    let Bool.23 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
-    ret Bool.23;
+procedure Bool.9 (#Attr.2, #Attr.3):
+    let Bool.21 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
+    ret Bool.21;
 
 procedure List.116 (List.563, List.564, List.565):
     let List.693 : U64 = 0i64;
@@ -99,7 +99,7 @@ procedure Test.0 (Test.1):
     let Test.11 : {} = Struct {};
     let Test.2 : U64 = CallByName List.26 Test.1 Test.10 Test.11;
     let Test.9 : U64 = 0i64;
-    let Test.7 : Int1 = CallByName Bool.11 Test.2 Test.9;
+    let Test.7 : Int1 = CallByName Bool.9 Test.2 Test.9;
     if Test.7 then
         ret Test.1;
     else

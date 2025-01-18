@@ -170,7 +170,7 @@ reserve = |@Dict({ buckets, data, max_bucket_capacity: original_max_bucket_capac
     size = Num.min(requested_size, max_size)
 
     requested_shifts = calc_shifts_for_size(size, max_load_factor)
-    if List.is_empty(buckets) || requested_shifts > shifts then
+    if List.is_empty(buckets) or requested_shifts > shifts then
         (buckets0, max_bucket_capacity) = alloc_buckets_from_shift(requested_shifts, max_load_factor)
         buckets1 = fill_buckets_from_data(buckets0, data, requested_shifts)
         @Dict(
@@ -915,7 +915,7 @@ calc_shifts_for_size_helper = |shifts, size, max_load_factor|
         |> Num.to_f32
         |> Num.mul(max_load_factor)
         |> Num.floor
-    if shifts > 0 && max_bucket_capacity < size then
+    if shifts > 0 and max_bucket_capacity < size then
         calc_shifts_for_size_helper(Num.sub_wrap(shifts, 1), size, max_load_factor)
     else
         shifts
@@ -1087,7 +1087,7 @@ expect
         |> insert("bar", {})
         |> insert("baz", {})
 
-    contains(dict, "baz") && !(contains(dict, "other"))
+    contains(dict, "baz") and !(contains(dict, "other"))
 
 expect
     dict =
@@ -1145,17 +1145,17 @@ expect
         |> insert("l", 11)
 
     (get(dict, "a") == Ok(0))
-    && (get(dict, "b") == Ok(1))
-    && (get(dict, "c") == Ok(2))
-    && (get(dict, "d") == Ok(3))
-    && (get(dict, "e") == Ok(4))
-    && (get(dict, "f") == Ok(5))
-    && (get(dict, "g") == Ok(6))
-    && (get(dict, "h") == Ok(7))
-    && (get(dict, "i") == Ok(8))
-    && (get(dict, "j") == Ok(9))
-    && (get(dict, "k") == Ok(10))
-    && (get(dict, "l") == Ok(11))
+    and (get(dict, "b") == Ok(1))
+    and (get(dict, "c") == Ok(2))
+    and (get(dict, "d") == Ok(3))
+    and (get(dict, "e") == Ok(4))
+    and (get(dict, "f") == Ok(5))
+    and (get(dict, "g") == Ok(6))
+    and (get(dict, "h") == Ok(7))
+    and (get(dict, "i") == Ok(8))
+    and (get(dict, "j") == Ok(9))
+    and (get(dict, "k") == Ok(10))
+    and (get(dict, "l") == Ok(11))
 
 # Force rehash.
 expect
@@ -1197,18 +1197,18 @@ expect
         |> insert("m", 12)
 
     (get(dict, "a") == Ok(0))
-    && (get(dict, "b") == Ok(1))
-    && (get(dict, "c") == Ok(2))
-    && (get(dict, "d") == Ok(3))
-    && (get(dict, "e") == Ok(4))
-    && (get(dict, "f") == Ok(5))
-    && (get(dict, "g") == Ok(6))
-    && (get(dict, "h") == Ok(7))
-    && (get(dict, "i") == Ok(8))
-    && (get(dict, "j") == Ok(9))
-    && (get(dict, "k") == Ok(10))
-    && (get(dict, "l") == Ok(11))
-    && (get(dict, "m") == Ok(12))
+    and (get(dict, "b") == Ok(1))
+    and (get(dict, "c") == Ok(2))
+    and (get(dict, "d") == Ok(3))
+    and (get(dict, "e") == Ok(4))
+    and (get(dict, "f") == Ok(5))
+    and (get(dict, "g") == Ok(6))
+    and (get(dict, "h") == Ok(7))
+    and (get(dict, "i") == Ok(8))
+    and (get(dict, "j") == Ok(9))
+    and (get(dict, "k") == Ok(10))
+    and (get(dict, "l") == Ok(11))
+    and (get(dict, "m") == Ok(12))
 
 expect
     empty({})
@@ -1266,7 +1266,7 @@ expect
             bad_keys,
             Bool.true,
             |acc, k|
-                acc && Dict.contains(dict, k),
+                acc and Dict.contains(dict, k),
         )
 
     all_inserted_correctly

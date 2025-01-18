@@ -1,10 +1,10 @@
 procedure Bool.1 ():
-    let Bool.23 : Int1 = false;
-    ret Bool.23;
+    let Bool.21 : Int1 = false;
+    ret Bool.21;
 
 procedure Bool.2 ():
-    let Bool.24 : Int1 = true;
-    ret Bool.24;
+    let Bool.22 : Int1 = true;
+    ret Bool.22;
 
 procedure Test.0 ():
     let Test.4 : Int1 = CallByName Bool.2;

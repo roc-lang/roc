@@ -19,10 +19,8 @@ to_str = \@Variable(char) ->
 from_utf8 : U8 -> Result Variable [InvalidVariableUtf8]
 from_utf8 = \char ->
     if
-        char
-        >= 0x61 # "a"
-        && char
-        <= 0x7A # "z"
+        char >= 0x61 # "a"
+        and char <= 0x7A # "z"
     then
         Ok(@Variable(char))
     else

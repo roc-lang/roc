@@ -109,8 +109,6 @@ pub enum LowLevel {
     NumF64FromParts,
     Eq,
     NotEq,
-    And,
-    Or,
     Not,
     Hash,
     PtrCast,
@@ -343,8 +341,6 @@ map_symbol_to_lowlevel! {
     NumF64FromParts <= NUM_F64_FROM_PARTS;
     Eq <= BOOL_STRUCTURAL_EQ;
     NotEq <= BOOL_STRUCTURAL_NOT_EQ;
-    And <= BOOL_AND;
-    Or <= BOOL_OR;
     Not <= BOOL_NOT;
     Unreachable <= LIST_UNREACHABLE;
     DictPseudoSeed <= DICT_PSEUDO_SEED;

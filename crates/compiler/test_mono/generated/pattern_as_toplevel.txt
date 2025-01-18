@@ -1,10 +1,10 @@
 procedure Bool.1 ():
-    let Bool.24 : Int1 = false;
-    ret Bool.24;
+    let Bool.22 : Int1 = false;
+    ret Bool.22;
 
-procedure Bool.11 (#Attr.2, #Attr.3):
-    let Bool.23 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
-    ret Bool.23;
+procedure Bool.9 (#Attr.2, #Attr.3):
+    let Bool.21 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
+    ret Bool.21;
 
 procedure Test.1 ():
     let Test.8 : I64 = 42i64;
@@ -19,7 +19,7 @@ procedure Test.0 ():
     let Test.13 : Int1 = lowlevel Eq Test.12 Test.11;
     if Test.13 then
         let Test.6 : {I64, Str} = CallByName Test.1;
-        let Test.5 : Int1 = CallByName Bool.11 Test.6 Test.4;
+        let Test.5 : Int1 = CallByName Bool.9 Test.6 Test.4;
         dec Test.6;
         let #Derived_gen.0 : Str = StructAtIndex 1 Test.4;
         dec #Derived_gen.0;

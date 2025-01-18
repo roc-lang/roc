@@ -9,7 +9,7 @@
                 patterns: [
                     @14-21 SpaceBefore(
                         Malformed(
-                            "Foo.and",
+                            "Foo.val",
                         ),
                         [
                             Newline,

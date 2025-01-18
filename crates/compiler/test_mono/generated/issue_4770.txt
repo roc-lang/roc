@@ -1,10 +1,10 @@
 procedure Bool.1 ():
-    let Bool.25 : Int1 = false;
-    ret Bool.25;
+    let Bool.23 : Int1 = false;
+    ret Bool.23;
 
 procedure Bool.2 ():
-    let Bool.24 : Int1 = true;
-    ret Bool.24;
+    let Bool.22 : Int1 = true;
+    ret Bool.22;
 
 procedure List.106 (#Derived_gen.1, #Derived_gen.2, #Derived_gen.3, #Derived_gen.4, #Derived_gen.5, #Derived_gen.6):
     joinpoint List.713 List.291 List.292 List.293 List.294 List.295 List.296:
