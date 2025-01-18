@@ -14,6 +14,6 @@ put_line! : Str => {}
 
 put_raw! : Str => {}
 
-get_line! : {} => Str
+get_line! : () => Str
 
-get_char! : {} => U8
+get_char! : () => U8

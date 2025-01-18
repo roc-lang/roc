@@ -511,42 +511,25 @@ fn rest_of_zero_arg_function<'a>(
                 specialize_err(|_, pos| ETypeInParens::AfterZeroArgs(pos), arrow()),
                 ETypeInParens::AfterZeroArgs,
             ),
-            and(
-                specialize_err_ref(
-                    ETypeInParens::Type,
-                    space0_before_e(arrow_sequence(), EType::TIndentStart),
-                ),
-                loc(space0_e(ETypeInParens::IndentEnd)),
+            specialize_err_ref(
+                ETypeInParens::Type,
+                space0_before_e(arrow_sequence(), EType::TIndentStart),
             ),
         ),
-        move |arena, (arrow, (return_type, final_comments))| {
-            let zero_arg_function = Loc {
-                region: Region::between(opening_bracket_position, return_type.region.end()),
-                value: if arrow.before.is_empty() {
-                    TypeAnnotation::Function(&[], arrow.item, arena.alloc(return_type))
-                } else {
-                    TypeAnnotation::SpaceBefore(
-                        arena.alloc(TypeAnnotation::Function(
-                            &[],
-                            arrow.item,
-                            arena.alloc(return_type),
-                        )),
-                        arrow.before,
-                    )
-                },
-            };
-
-            if final_comments.value.is_empty() {
-                zero_arg_function
+        move |arena, (arrow, return_type)| Loc {
+            region: Region::between(opening_bracket_position, return_type.region.end()),
+            value: if arrow.before.is_empty() {
+                TypeAnnotation::Function(&[], arrow.item, arena.alloc(return_type))
             } else {
-                Loc {
-                    region: Region::span_across(&zero_arg_function.region, &final_comments.region),
-                    value: TypeAnnotation::SpaceAfter(
-                        arena.alloc(zero_arg_function.value),
-                        final_comments.value,
-                    ),
-                }
-            }
+                TypeAnnotation::SpaceBefore(
+                    arena.alloc(TypeAnnotation::Function(
+                        &[],
+                        arrow.item,
+                        arena.alloc(return_type),
+                    )),
+                    arrow.before,
+                )
+            },
         },
     )
 }

@@ -1685,9 +1685,7 @@ When we call `main!`, the host will provide the arguments passed from the cli `_
 
 The `Stdout.line!` function here returns a `Result` when called. If it succeeds it returns the unit value `{}`, or if it fails it returns the tag `StdoutErr` with an `IOErr` payload.
 
-In contrast, when `Stdin.line! : {} => Result Str [EndOfFile, StdinErr IOErr]` finishes reading a line from [standard input](<https://en.wikipedia.org/wiki/Standard_streams#Standard_input_(stdin)>), it produces either a `Str` or else `EndOfFile` or a `StdinErr` error tag if standard input reached its end (which can happen if the user types Ctrl+D on UNIX systems or Ctrl+Z on Windows). These possibilities can all be seen just in the type definition of the function.
-
-Note that to call this `Stdin.line!`, you need to provide the unit value `{}` as an argument.
+In contrast, when `Stdin.line! : () => Result Str [EndOfFile, StdinErr IOErr]` finishes reading a line from [standard input](<https://en.wikipedia.org/wiki/Standard_streams#Standard_input_(stdin)>), it produces either a `Str` or else `EndOfFile` or a `StdinErr` error tag if standard input reached its end (which can happen if the user types Ctrl+D on UNIX systems or Ctrl+Z on Windows). These possibilities can all be seen just in the type definition of the function.
 
 ### [Reading values](#reading-values) {#reading-values}
 
@@ -1699,12 +1697,12 @@ app [main!] { pf: platform "https://github.com/roc-lang/basic-cli/releases/downl
 import pf.Stdout
 import pf.Stdin
 
-main! = \_args ->
-    try Stdout.line! "Type in something and press Enter:"
-    input = try Stdin.line! {}
-    try Stdout.line! "Your input was: ${input}"
+main! = |_args|
+    Stdout.line!("Type in something and press Enter:")?
+    input = Stdin.line!()?
+    Stdout.line!("Your input was: ${input}")?
 
-    Ok {}
+    Ok({})
 ```
 
 If you run this program, it will print "Type in something and press Enter:" and then pause.
@@ -1806,13 +1804,13 @@ main! = \_args ->
             StdinErr _ -> Exit 2i32 "Error writing to stdin."
             EndOfFile -> Exit 3i32 "End of file reached."
 
-my_function! : {} => Result {} [EndOfFile, StdinErr _, StdoutErr _]
-my_function! = \{} ->
-    try Stdout.line! "Type in something and press Enter:"
-    input = try Stdin.line! {}
-    try Stdout.line! "Your input was: ${input}"
+my_function! : () => Result {} [EndOfFile, StdinErr _, StdoutErr _]
+my_function! = ||
+    Stdout.line!("Type in something and press Enter:")?
+    input = Stdin.line!()?
+    Stdout.line!("Your input was: ${input}")?
 
-    Ok {}
+    Ok({})
 ```
 
 The `Result.mapErr` function translates one error into another. Here, we're translating the `EndOfFile`, `StdoutErr` and `StdinErr` errors into `Exit` errors which include a different exit code plus a message that will print to stderr to explain what happened.
@@ -1850,11 +1848,12 @@ app [main!] { pf: platform "https://github.com/roc-lang/basic-cli/releases/downl
 import pf.Stdout
 import pf.Stdin
 
-main! = \_args ->
-    try Stdout.line! "Type in something and press Enter:"
-    input = try Stdin.line! {}
-    try Stdout.line! "Your input was: ${input}"
-    Ok {}
+main! = |_args|
+    Stdout.line!("Type in something and press Enter:")?
+    input = Stdin.line!()?
+    Stdout.line!("Your input was: ${input}")?
+
+    Ok({})
 ```
 
 It looks like this block goes "expression, assignment, expression", but expressions are only allowed on the last line of a block. What's happening here?
@@ -1864,14 +1863,14 @@ Since `Stdout.line! : Str => Result {} [StdoutErr IOErr]`, in the above we are u
 An alternative option, is to just ignore the return value entirely:
 
 ```roc
-main! = \_args ->
-    _ = Stdout.line! "Type in something and press Enter:"
-    when Stdin.line! {} is
-        Ok input ->
-            _ = Stdout.line! "Your input was: ${input}"
-            Ok {}
-        Err _ ->
-            Ok {}
+main! = |_args|
+    _ = Stdout.line!("Type in something and press Enter:")
+    when Stdin.line!() is
+        Ok(input) ->
+            _ = Stdout.line!("Your input was: ${input}")
+            Ok({})
+        Err(_) ->
+            Ok({})
 ```
 
 ### [Tagging errors](#tagging-errors) {#tagging-errors}
@@ -1879,11 +1878,12 @@ main! = \_args ->
 Although it's rare, it is possible that either of the `Stdout.line!` operations in our example could fail:
 
 ```roc
-main! = \_args ->
-    try Stdout.line! "Type something and press Enter."
-    input = try Stdin.line! {}
-    try Stdout.line! "You entered: ${input}"
-    Ok {}
+main! = |_args|
+    Stdout.line!("Type something and press Enter.")
+    input = Stdin.line!()?
+    Stdout.line!("You entered: ${input}")?
+
+    Ok({})
 ```
 
 (In this particular example, it's very unlikely that this would come up at all, and even if it did, we might not care which one caused the problem. But you can imagine having multiple HTTP requests, or file writes, and wanting to know which of them was the one that failed.)

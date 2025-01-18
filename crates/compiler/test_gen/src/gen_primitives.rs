@@ -292,10 +292,10 @@ fn apply_unnamed_identity() {
     assert_evals_to!(
         indoc!(
             r"
-            wrapper = \{} ->
-                (\a -> a) 5
+            wrapper = ||
+                (|a| a)(5)
 
-            wrapper {}
+            wrapper()
             "
         ),
         5,
@@ -309,14 +309,14 @@ fn return_unnamed_fn() {
     assert_evals_to!(
         indoc!(
             r"
-            wrapper = \{} ->
+            wrapper = ||
                 always_float_identity : Int * -> (Frac a -> Frac a)
-                always_float_identity = \_ ->
-                    (\a -> a)
+                always_float_identity = |_|
+                    (|a| a)
 
-                (always_float_identity 2) 1.23f64
+                (always_float_identity(2))(1.23f64)
 
-            wrapper {}
+            wrapper()
             "
         ),
         1.23,
@@ -1038,11 +1038,11 @@ fn simple_closure() {
 
             x = 42
 
-            f = \{} -> x
+            f = || x
 
 
             main =
-                f {}
+                f()
             "#
         ),
         42,
@@ -1058,15 +1058,15 @@ fn nested_closure() {
             r#"
             app "test" provides [main] to "./platform"
 
-            foo = \{} ->
+            foo = ||
                 x = 41
                 y = 1
-                f = \{} -> x + y
+                f = || x + y
                 f
 
             main =
-                g = foo {}
-                g {}
+                g = foo()
+                g()
             "#
         ),
         42,
@@ -1084,15 +1084,15 @@ fn closure_in_list() {
             r#"
             app "test" provides [main] to "./platform"
 
-            foo = \{} ->
+            foo = ||
                 x = 41
 
-                f = \{} -> x
+                f = || x
 
                 [f]
 
             main =
-                items = foo {}
+                items = foo()
 
                 items
             "#
@@ -1112,21 +1112,21 @@ fn specialize_closure() {
             r#"
             app "test" provides [main] to "./platform"
 
-            foo = \{} ->
+            foo = ||
                 x = 41
                 y = [1]
 
-                f = \{} -> x
-                g = \{} -> x + Num.int_cast (List.len y)
+                f = || x
+                g = || x + Num.int_cast(List.len(y))
 
                 [f, g]
 
-            apply = \f -> f {}
+            apply = |f| f()
 
             main =
-                items = foo {}
+                items = foo()
 
-                List.map items apply
+                List.map(items, apply)
             "#
         ),
         RocList::from_slice(&[41, 42]),
@@ -1142,21 +1142,21 @@ fn io_poc_effect() {
             r#"
             app "test" provides [main] to "./platform"
 
-            Effect a := {} -> a
+            Effect a := () -> a
 
             succeed : a -> Effect a
-            succeed = \x -> @Effect \{} -> x
+            succeed = |x| @Effect(|| x)
 
             run_effect : Effect a -> a
-            run_effect = \@Effect thunk -> thunk {}
+            run_effect = |@Effect(thunk)| thunk()
 
             foo : Effect F64
             foo =
-                succeed 1.23
+                succeed(1.23)
 
             main : F64
             main =
-                run_effect foo
+                run_effect(foo)
 
             "#
         ),
@@ -1173,19 +1173,19 @@ fn io_poc_desugared() {
             r#"
             app "test" provides [main] to "./platform"
 
-            # succeed : a -> ({} -> a)
-            succeed = \x -> \_ -> x
+            # succeed : a -> (() -> a)
+            succeed = |x| (|_| x)
 
             foo : Str -> F64
             foo =
-                succeed 1.23
+                succeed(1.23)
 
-            # run_effect : ({} ->  a) -> a
-            run_effect = \thunk -> thunk ""
+            # run_effect : (() -> a) -> a
+            run_effect = |thunk| thunk()
 
             main : F64
             main =
-                run_effect foo
+                run_effect(foo)
             "#
         ),
         1.23,
@@ -1201,10 +1201,10 @@ fn return_wrapped_function_a() {
             r#"
             app "test" provides [main] to "./platform"
 
-            Effect a := {} -> a
+            Effect a := () -> a
 
             foo : Effect {}
-            foo = @Effect \{} -> {}
+            foo = @Effect(|| {})
 
             main : Effect {}
             main = foo
@@ -1244,13 +1244,13 @@ fn return_wrapped_closure() {
             r#"
             app "test" provides [main] to "./platform"
 
-            Effect a := {} -> a
+            Effect a := () -> a
 
             foo : Effect {}
             foo =
                 x = 5
 
-                @Effect (\{} -> if x > 3 then {} else {})
+                @Effect(|| if x > 3 then {} else {})
 
             main : Effect {}
             main = foo
@@ -1271,13 +1271,13 @@ fn linked_list_is_singleton() {
 
             ConsList a : [Cons a (ConsList a), Nil]
 
-            empty : {} -> ConsList a
-            empty = \{} -> Nil
+            empty : () -> ConsList a
+            empty = || Nil
 
             is_singleton : ConsList a -> Bool
-            is_singleton = \list ->
+            is_singleton = |list|
                 when list is
-                    Cons _ Nil ->
+                    Cons(_, Nil) ->
                         Bool.true
 
                     _ ->
@@ -1286,9 +1286,9 @@ fn linked_list_is_singleton() {
             main : Bool
             main =
                 my_list : ConsList I64
-                my_list = empty {}
+                my_list = empty()
 
-                is_singleton my_list
+                is_singleton(my_list)
             "#
         ),
         false,
@@ -1306,13 +1306,13 @@ fn linked_list_is_empty_1() {
 
             ConsList a : [Cons a (ConsList a), Nil]
 
-            empty : {} -> ConsList a
-            empty = \{} -> Nil
+            empty : () -> ConsList a
+            empty = || Nil
 
             is_empty : ConsList a -> Bool
-            is_empty = \list ->
+            is_empty = |list|
                 when list is
-                    Cons _ _ ->
+                    Cons(_, _) ->
                         Bool.false
 
                     Nil ->
@@ -1321,9 +1321,9 @@ fn linked_list_is_empty_1() {
             main : Bool
             main =
                 my_list : ConsList U8
-                my_list = empty {}
+                my_list = empty()
 
-                is_empty my_list
+                is_empty(my_list)
             "#
         ),
         true,
@@ -1342,9 +1342,9 @@ fn linked_list_is_empty_2() {
             ConsList a : [Cons a (ConsList a), Nil]
 
             is_empty : ConsList a -> Bool
-            is_empty = \list ->
+            is_empty = |list|
                 when list is
-                    Cons _ _ ->
+                    Cons(_, _) ->
                         Bool.false
 
                     Nil ->
@@ -1353,9 +1353,9 @@ fn linked_list_is_empty_2() {
             main : Bool
             main =
                 my_list : ConsList I64
-                my_list = Cons 0x1 Nil
+                my_list = Cons(0x1, Nil)
 
-                is_empty my_list
+                is_empty(my_list)
             "#
         ),
         false,
@@ -1825,14 +1825,14 @@ fn unified_empty_closure_bool() {
             r#"
             app "test" provides [main] to "./platform"
 
-            foo = \{} ->
+            foo = ||
                 when A is
-                    A -> (\_ -> 1.23f64)
-                    B -> (\_ -> 1.23f64)
+                    A -> |_| 1.23f64
+                    B -> |_| 1.23f64
 
             main : F64
             main =
-                (foo {}) 0
+                (foo())(0)
             "#
         ),
         1.23,
@@ -1850,15 +1850,15 @@ fn unified_empty_closure_byte() {
             r#"
             app "test" provides [main] to "./platform"
 
-            foo = \{} ->
+            foo = ||
                 when A is
-                    A -> (\_ -> 1.23f64)
-                    B -> (\_ -> 1.23f64)
-                    C -> (\_ -> 1.23)
+                    A -> |_| 1.23f64
+                    B -> |_| 1.23f64
+                    C -> |_| 1.23
 
             main : F64
             main =
-                (foo {}) 0
+                (foo())(0)
             "#
         ),
         1.23,
@@ -1874,20 +1874,20 @@ fn wildcard_rigid() {
             r#"
             app "test" provides [main] to "./platform"
 
-            Effect a := {} -> a
+            Effect a := () -> a
 
             MyTask a err : Effect (Result a err)
 
             # this failed because of the `*`, but worked with `err`
             always : a -> MyTask a *
-            always = \x ->
-                inner = \{} -> (Ok x)
+            always = |x|
+                inner = || Ok(x)
 
-                @Effect inner
+                @Effect(inner)
 
 
             main : MyTask {} (Frac *)
-            main = always {}
+            main = always({})
             "#
         ),
         (),
@@ -1908,14 +1908,14 @@ fn alias_of_alias_with_type_arguments() {
             MyTask a err : Effect (Result a err)
 
             always : a -> MyTask a *
-            always = \x ->
-                inner = (Ok x)
+            always = |x|
+                inner = Ok(x)
 
-                @Effect inner
+                @Effect(inner)
 
 
             main : MyTask {} F64
-            main = always {}
+            main = always({})
             "#
         ),
         (),
@@ -1933,37 +1933,38 @@ fn todo_bad_error_message() {
             r#"
             app "test" provides [main] to "./platform"
 
-            Effect a := {} -> a
+            Effect a := () -> a
 
             effect_always : a -> Effect a
-            effect_always = \x ->
-                inner = \{} -> x
+            effect_always = |x|
+                inner = || x
 
-                @Effect inner
+                @Effect(inner)
 
             effect_after : Effect a, (a -> Effect b) -> Effect b
-            effect_after = \(@Effect thunk), transform -> transform (thunk {})
+            effect_after = |@Effect(thunk), transform| transform(thunk())
 
             MyTask a err : Effect (Result a err)
 
             always : a -> MyTask a (Frac *)
-            always = \x -> effect_always (Ok x)
+            always = |x| effect_always(Ok(x))
 
             # the problem is that this restricts to `MyTask {} *`
             fail : err -> MyTask {} err
-            fail = \x -> effect_always (Err x)
+            fail = |x| effect_always(Err(x))
 
             after : MyTask a err, (a -> MyTask b err) -> MyTask b err
-            after = \task, transform ->
-                effect_after task \res ->
+            after = |task, transform|
+                effect_after(task, |res|
                     when res is
-                        Ok x -> transform x
+                        Ok(x) -> transform(x)
                         # but here it must be `forall b. MyTask b {}`
-                        Err e -> fail e
+                        Err(e) -> fail(e)
+                )
 
             main : MyTask {} (Frac *)
             main =
-                after (always "foo") (\_ -> always {})
+                after(always("foo"), |_| always({}))
             "#
         ),
         0,
@@ -1979,9 +1980,9 @@ fn hof_conditional() {
     assert_evals_to!(
         indoc!(
             r"
-                pass_true = \f -> f Bool.true
+                pass_true = |f| f(Bool.true)
 
-                pass_true (\true_val -> if true_val then Bool.false else Bool.true)
+                pass_true(|true_val| if true_val then Bool.false else Bool.true)
             "
         ),
         0,
@@ -2395,7 +2396,7 @@ fn build_then_apply_closure() {
             main =
                 x = "long string that is malloced"
 
-                (\_ -> x) {}
+                (|_| x)({})
             "#
         ),
         RocStr::from("long string that is malloced"),
@@ -2459,9 +2460,9 @@ fn call_invalid_layout() {
         indoc!(
             r"
                 f : I64 -> I64
-                f = \x -> x
+                f = |x| x
 
-                f {}
+                f({})
             "
         ),
         3,
@@ -2737,8 +2738,8 @@ fn list_walk_until() {
             app "test" provides [main] to "./platform"
 
 
-            satisfy_a : {} -> List {}
-            satisfy_a = \_ -> []
+            satisfy_a : () -> List {}
+            satisfy_a = || []
 
             one_of_result =
                 List.walk_until [satisfy_a] [] \_, _ -> Break []
@@ -3123,30 +3124,31 @@ fn recursively_build_effect() {
                 "${hi}, ${name}!"
 
             main =
-                when nest_help 4 is
+                when nest_help(4) is
                     _ -> greeting
 
             nest_help : I64 -> XEffect {}
-            nest_help = \m ->
+            nest_help = |m|
                 when m is
                     0 ->
-                        always {}
+                        always({})
 
                     _ ->
-                        always {} |> after \_ -> nest_help (m - 1)
+                        always({}) |> after(|_| nest_help(m - 1))
 
 
-            XEffect a := {} -> a
+            XEffect a := () -> a
 
             always : a -> XEffect a
-            always = \x -> @XEffect (\{} -> x)
+            always = |x| @XEffect(\{} -> x)
 
             after : XEffect a, (a -> XEffect b) -> XEffect b
-            after = \(@XEffect e), toB ->
-                @XEffect \{} ->
-                    when toB (e {}) is
-                        @XEffect e2 ->
-                            e2 {}
+            after = |@XEffect(e), to_b|
+                @XEffect(||
+                    when to_b(e()) is
+                        @XEffect(e2) ->
+                            e2()
+                )
             "#
         ),
         RocStr::from("Hello, World!"),
@@ -3164,14 +3166,14 @@ fn polymophic_expression_captured_inside_closure() {
             app "test" provides [main] to "./platform"
 
             as_u8 : U8 -> U8
-            as_u8 = \_ -> 30
+            as_u8 = |_| 30
 
             main =
                 a = 15
-                f = \{} ->
-                    as_u8 a
+                f = ||
+                    as_u8(a)
 
-                f {}
+                f()
             "#
         ),
         30,
@@ -3185,10 +3187,10 @@ fn issue_2322() {
     assert_evals_to!(
         indoc!(
             r"
-            double = \x -> x * 2
-            double_bind = \x -> (\_ -> double x)
-            double_three = double_bind 3
-            double_three {}
+            double = |x| x * 2
+            double_bind = |x| (|_| double(x))
+            double_three = double_bind(3)
+            double_three({})
             "
         ),
         6,
@@ -3413,10 +3415,10 @@ fn closure_called_in_its_defining_scope() {
                 g : Str
                 g = "hello world"
 
-                get_g : {} -> Str
-                get_g = \{} -> g
+                get_g : () -> Str
+                get_g = || g
 
-                get_g {}
+                get_g()
             "#
         ),
         RocStr::from("hello world"),
@@ -3438,13 +3440,13 @@ fn issue_2894() {
                 g : { x : U32 }
                 g = { x: 1u32 }
 
-                get_g : {} -> { x : U32 }
-                get_g = \{} -> g
+                get_g : () -> { x : U32 }
+                get_g = || g
 
-                h : {} -> U32
-                h = \{} -> (get_g {}).x
+                h : () -> U32
+                h = || get_g().x
 
-                h {}
+                h()
             "#
         ),
         1u32,
@@ -3459,13 +3461,13 @@ fn polymorphic_def_used_in_closure() {
         indoc!(
             r"
             a : I64 -> _
-            a = \g ->
+            a = |g|
                 f = { r: g, h: 32 }
 
                 h1 : U64
-                h1 = (\{} -> f.h) {}
+                h1 = (|| f.h)()
                 h1
-            a 1
+            a(1)
             "
         ),
         32,
@@ -3479,11 +3481,11 @@ fn polymorphic_lambda_set_usage() {
     assert_evals_to!(
         indoc!(
             r"
-            id1 = \x -> x
-            id2 = \y -> y
+            id1 = |x| x
+            id2 = |y| y
             id = if Bool.true then id1 else id2
 
-            id 9u8
+            id(9u8)
             "
         ),
         9,
@@ -3568,10 +3570,10 @@ fn polymorphic_lambda_captures_polymorphic_value() {
             r"
             x = 2
 
-            f1 = \_ -> x
+            f1 = || x
 
             f = if Bool.true then f1 else f1
-            f {}
+            f()
             "
         ),
         2,
@@ -3585,21 +3587,20 @@ fn lambda_capture_niche_u64_vs_u8_capture() {
     assert_evals_to!(
         indoc!(
             r"
-            capture : _ -> ({} -> Str)
-            capture = \val ->
-                \{} ->
-                    Num.to_str val
+            capture : _ -> (() -> Str)
+            capture = |val|
+                || Num.to_str(val)
 
             x : Bool
             x = Bool.true
 
             fun =
                 if x then
-                    capture 123u64
+                    capture(123u64)
                 else
-                    capture 18u8
+                    capture(18u8)
 
-            fun {}
+            fun()
             "
         ),
         RocStr::from("123"),
@@ -3613,22 +3614,21 @@ fn lambda_capture_niches_with_other_lambda_capture() {
     assert_evals_to!(
         indoc!(
             r#"
-            capture : _ -> ({} -> Str)
-            capture = \val ->
-                \{} ->
-                    Num.to_str val
+            capture : _ -> (() -> Str)
+            capture = |val|
+                || Num.to_str(val)
 
-            capture2 = \val -> \{} -> val
+            capture2 = |val| (|| val)
 
-            f = \x ->
+            f = |x|
                 g =
                     when x is
-                        A -> capture 11u8
-                        B -> capture2 "lisa"
-                        C -> capture 187128u64
-                g {}
+                        A -> capture(11u8)
+                        B -> capture2("lisa")
+                        C -> capture(187128u64)
+                g()
 
-            {a: f A, b: f B, c: f C}
+            { a: f(A), b: f(B), c: f(C) }
             "#
         ),
         (
@@ -3646,22 +3646,21 @@ fn lambda_capture_niches_with_non_capturing_function() {
     assert_evals_to!(
         indoc!(
             r#"
-            capture : _ -> ({} -> Str)
-            capture = \val ->
-                \{} ->
-                    Num.to_str val
+            capture : _ -> (() -> Str)
+            capture = |val|
+                || Num.to_str(val)
 
-            triv = \{} -> "triv"
+            triv = || "triv"
 
-            f = \x ->
+            f = |x|
                 g =
                     when x is
-                        A -> capture 11u8
+                        A -> capture(11u8)
                         B -> triv
-                        C -> capture 187128u64
-                g {}
+                        C -> capture(187128u64)
+                g()
 
-            {a: f A, b: f B, c: f C}
+            { a: f(A), b: f(B), c: f(C) }
             "#
         ),
         (
@@ -3679,27 +3678,27 @@ fn lambda_capture_niches_have_captured_function_in_closure() {
     assert_evals_to!(
         indoc!(
             r#"
-            Lazy a : {} -> a
+            Lazy a : () -> a
 
             after : Lazy a, (a -> Lazy b) -> Lazy b
-            after = \effect, map ->
-                thunk = \{} ->
-                    when map (effect {}) is
-                        b -> b {}
+            after = |effect, map|
+                thunk = ||
+                    when map(effect()) is
+                        b -> b()
                 thunk
 
-            f = \_ -> \_ -> "fun f"
-            g = \{ s1 } -> \_ -> s1
+            f = |_| (|_| "fun f")
+            g = |{ s1 }| (|_| s1)
 
-            fun = \x ->
+            fun = |x|
                 h =
                     if x then
-                        after (\{} -> "") f
+                        after(|| "", f)
                     else
-                        after (\{} -> {s1: "s1"}) g
-                h {}
+                        after(|| { s1: "s1" }, g)
+                h()
 
-            {a: fun Bool.false, b: fun Bool.true}
+            { a: fun(Bool.false), b: fun(Bool.true) }
             "#
         ),
         (RocStr::from("s1"), RocStr::from("fun f")),
@@ -3969,14 +3968,14 @@ fn local_binding_aliases_function() {
             r#"
             app "test" provides [ main ] to "./platform"
 
-            f : {} -> List a
-            f = \_ -> []
+            f : () -> List a
+            f = || []
 
             main : List U8
             main =
                 g = f
 
-                g {}
+                g()
             "#
         ),
         RocList::<u8>::from_slice(&[]),
@@ -3992,12 +3991,12 @@ fn local_binding_aliases_function_inferred() {
             r#"
             app "test" provides [ main ] to "./platform"
 
-            f = \_ -> []
+            f = || []
 
             main =
                 g = f
 
-                g {}
+                g()
             "#
         ),
         RocList::from_slice(&[]),
@@ -4013,11 +4012,11 @@ fn transient_captures() {
             r#"
             x = "abc"
 
-            get_x = \{} -> x
+            get_x = || x
 
-            h = \{} -> get_x {}
+            h = || get_x()
 
-            h {}
+            h()
             "#
         ),
         RocStr::from("abc"),
@@ -4031,13 +4030,13 @@ fn transient_captures_after_def_ordering() {
     assert_evals_to!(
         indoc!(
             r#"
-            h = \{} -> get_x {}
+            h = || get_x()
 
-            get_x = \{} -> x
+            get_x = || x
 
             x = "abc"
 
-            h {}
+            h()
             "#
         ),
         RocStr::from("abc"),
@@ -4053,13 +4052,13 @@ fn deep_transient_capture_chain() {
             r#"
             z = "abc"
 
-            get_x = \{} -> get_y {}
-            get_y = \{} -> get_z {}
-            get_z = \{} -> z
+            get_x = || get_y()
+            get_y = || get_z()
+            get_z = || z
 
-            h = \{} -> get_x {}
+            h = || get_x()
 
-            h {}
+            h()
             "#
         ),
         RocStr::from("abc"),
@@ -4078,13 +4077,13 @@ fn deep_transient_capture_chain_with_multiple_captures() {
             y = "y"
             z = "z"
 
-            get_x = \{} -> Str.concat x (get_y {})
-            get_y = \{} -> Str.concat y (get_z {})
-            get_z = \{} -> z
+            get_x = || Str.concat(x, get_y())
+            get_y = || Str.concat(y, get_z())
+            get_z = || z
 
-            get_h = \{} -> Str.concat h (get_x {})
+            get_h = || Str.concat(h, get_x())
 
-            get_h {}
+            get_h()
             "#
         ),
         RocStr::from("hxyz"),
@@ -4100,11 +4099,11 @@ fn transient_captures_from_outer_scope() {
             r#"
             x = "abc"
 
-            get_x = \{} -> x
+            get_x = || x
 
             inner_scope =
-                h = \{} -> get_x {}
-                h {}
+                h = || get_x()
+                h()
 
             inner_scope
             "#
@@ -4129,10 +4128,10 @@ fn mutually_recursive_captures() {
             a = "foo"
             b = "bar"
 
-            foo = \{} -> if x then a else bar {}
-            bar = \{} -> if y then b else foo {}
+            foo = || if x then a else bar()
+            bar = || if y then b else foo()
 
-            bar {}
+            bar()
             "#
         ),
         RocStr::from("foo"),
@@ -4146,13 +4145,13 @@ fn int_let_generalization() {
     assert_evals_to!(
         indoc!(
             r#"
-            many_aux : {} -> I32
-            many_aux = \_ ->
-                output = \_ -> 42
+            many_aux : _ -> I32
+            many_aux = ||
+                output = || 42
 
-                output {}
+                output()
 
-            when many_aux {} is
+            when many_aux() is
                 _ -> "done"
             "#
         ),
@@ -4236,20 +4235,20 @@ fn issue_4712() {
             v2 = "cd"
 
             apply : Parser (a -> Str), a -> Parser Str
-            apply = \fn_parser, val_parser ->
-                \{} ->
-                    (fn_parser {}) (val_parser)
+            apply = |fn_parser, val_parser|
+                ||
+                    (fn_parser())(val_parser)
 
             map : a, (a -> Str) -> Parser Str
-            map = \simple_parser, transform ->
-                apply (\{} -> transform) simple_parser
+            map = |simple_parser, transform|
+                apply(|| transform, simple_parser)
 
-            gen = \{} ->
-                [ map v1 (\{} -> "ab"), map v2 (\s -> s) ]
-                |> List.map (\f -> f {})
-                |> Str.join_with  ","
+            gen = ||
+                [map(v1, || "ab"), map(v2, |s| s)]
+                |> List.map(|f| f())
+                |> Str.join_with(",")
 
-            main = gen {}
+            main = gen()
             "#
         ),
         RocStr::from("ab,cd"),
@@ -4289,8 +4288,8 @@ fn pattern_as_nested() {
             record = { a: 42i64, b: "foo" }
 
             main =
-                when Pair {} record is
-                    Pair {} ({ a: 42i64 } as r) -> record == r
+                when Pair({}, record) is
+                    Pair({}, ({ a: 42i64 } as r)) -> record == r
                     _ -> Bool.false
             "#
         ),
@@ -4325,13 +4324,13 @@ fn function_specialization_information_in_lambda_set_thunk() {
             r#"
             app "test" provides [main] to "./platform"
 
-            and_then = \{} ->
+            and_then = ||
                 x = 10u8
-                \new_fn -> Num.add (new_fn {}) x
+                |new_fn| Num.add(new_fn(), x)
 
-            between = and_then {}
+            between = and_then()
 
-            main = between \{} -> between \{} -> 10u8
+            main = between(|| between(|| 10u8))
             "#
         ),
         30,
@@ -4347,15 +4346,15 @@ fn function_specialization_information_in_lambda_set_thunk_independent_defs() {
             r#"
             app "test" provides [main] to "./platform"
 
-            and_then = \{} ->
+            and_then = ||
                 x = 10u8
-                \new_fn -> Num.add (new_fn {}) x
+                |new_fn| Num.add(new_fn(), x)
 
-            between1 = and_then {}
+            between1 = and_then()
 
-            between2 = and_then {}
+            between2 = and_then()
 
-            main = between1 \{} -> between2 \{} -> 10u8
+            main = between1(|| between2(|| 10u8))
             "#
         ),
         30,
@@ -4372,13 +4371,13 @@ fn when_guard_appears_multiple_times_in_compiled_decision_tree_issue_5176() {
             app "test" provides [main] to "./platform"
 
             go : U8 -> U8
-            go = \byte ->
+            go = |byte|
                 when byte is
                     15 if Bool.true -> 1
                     b if Bool.true -> b + 2
                     _ -> 3
 
-            main = go '.'
+            main = go('.')
             "#
         ),
         b'.' + 2,

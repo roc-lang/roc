@@ -3,8 +3,8 @@ app [main!] { pf: platform "platform/main.roc" }
 import Base64
 import pf.Host
 
-main! : {} => {}
-main! = \{} ->
+main! : () => {}
+main! = ||
     when Base64.from_bytes(Str.to_utf8("Hello World")) is
         Err(_) -> Host.put_line!("sadness")
         Ok(encoded) ->

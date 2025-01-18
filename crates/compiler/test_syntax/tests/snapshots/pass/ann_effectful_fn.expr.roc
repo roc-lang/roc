@@ -1,5 +1,5 @@
-launchTheNukes : {} => Result Bool LaunchNukeErr
-launchTheNukes = \{} ->
+launchTheNukes : () => Result Bool LaunchNukeErr
+launchTheNukes = ||
     crash "todo"
 
 launchTheNukes

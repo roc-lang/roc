@@ -1,4 +1,4 @@
 {
     answer: 42,
-    launchTheNukes!: \{} -> boom
+    launchTheNukes!: || boom
 }

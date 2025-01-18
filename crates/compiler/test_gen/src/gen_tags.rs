@@ -527,12 +527,12 @@ fn if_guard_pattern_false() {
     assert_evals_to!(
         indoc!(
             r"
-                wrapper = \{} ->
+                wrapper = ||
                     when 2 is
                         2 if Bool.false -> 0
                         _ -> 42
 
-                wrapper {}
+                wrapper()
                 "
         ),
         42,
@@ -546,12 +546,12 @@ fn if_guard_switch() {
     assert_evals_to!(
         indoc!(
             r"
-                wrapper = \{} ->
+                wrapper = ||
                     when 2 is
                         2 | 3 if Bool.false -> 0
                         _ -> 42
 
-                wrapper {}
+                wrapper()
                 "
         ),
         42,
@@ -565,12 +565,12 @@ fn if_guard_pattern_true() {
     assert_evals_to!(
         indoc!(
             r"
-                wrapper = \{} ->
+                wrapper = ||
                     when 2 is
                         2 if Bool.true -> 42
                         _ -> 0
 
-                wrapper {}
+                wrapper()
                 "
         ),
         42,
@@ -584,12 +584,12 @@ fn if_guard_exhaustiveness() {
     assert_evals_to!(
         indoc!(
             r"
-                wrapper = \{} ->
+                wrapper = ||
                     when 2 is
                         _ if Bool.false -> 0
                         _ -> 42
 
-                wrapper {}
+                wrapper()
                 "
         ),
         42,
@@ -656,10 +656,10 @@ fn pattern_matching_unit() {
     assert_evals_to!(
         indoc!(
             r"
-                f : {} -> I64
-                f = \{} -> 42
+                f : () -> I64
+                f = || 42
 
-                f {}
+                f()
                 "
         ),
         42,
@@ -758,7 +758,7 @@ fn join_point_when() {
     assert_evals_to!(
         indoc!(
             r"
-            wrapper = \{} ->
+            wrapper = ||
                 x : [Red, White, Blue]
                 x = Blue
 
@@ -770,7 +770,7 @@ fn join_point_when() {
 
                 y
 
-            wrapper {}
+            wrapper()
             "
         ),
         3.1,
@@ -784,7 +784,7 @@ fn join_point_with_cond_expr() {
     assert_evals_to!(
         indoc!(
             r"
-                wrapper = \{} ->
+                wrapper = ||
                     y =
                         when 1 + 2 is
                             3 -> 3
@@ -793,7 +793,7 @@ fn join_point_with_cond_expr() {
 
                     y
 
-                wrapper {}
+                wrapper()
             "
         ),
         3,
@@ -1172,10 +1172,10 @@ fn monomorphized_tag() {
     assert_evals_to!(
         indoc!(
             r"
-            b = \{} -> Bar
+            b = || Bar
             f : [Foo, Bar], [Bar, Baz] -> U8
-            f = \_, _ -> 18
-            f (b {}) (b {})
+            f = |_, _| 18
+            f(b(), b())
             "
         ),
         18,
@@ -1214,22 +1214,22 @@ fn monomorphized_tag_with_polymorphic_arg() {
             app "test" provides [main] to "./platform"
 
             main =
-                a = \{} -> A
-                wrap = \{} -> Wrapped (a {})
+                a = || A
+                wrap = || Wrapped(a())
 
                 use_wrap1 : [Wrapped [A], Other] -> U8
-                use_wrap1 =
-                    \w -> when w is
-                        Wrapped A -> 2
+                use_wrap1 = |w|
+                    when w is
+                        Wrapped(A) -> 2
                         Other -> 3
 
                 use_wrap2 : [Wrapped [A, B]] -> U8
-                use_wrap2 =
-                    \w -> when w is
-                        Wrapped A -> 5
-                        Wrapped B -> 7
+                use_wrap2 = |w|
+                    when w is
+                        Wrapped(A) -> 5
+                        Wrapped(B) -> 7
 
-                if Bool.true then use_wrap1 (wrap {}) else use_wrap2 (wrap {})
+                if Bool.true then use_wrap1(wrap()) else use_wrap2(wrap())
             "#
         ),
         2,
@@ -1248,22 +1248,22 @@ fn monomorphized_tag_with_polymorphic_and_monomorphic_arg() {
             main =
                 mono : U8
                 mono = 15
-                poly = \{} -> A
-                wrap = \{} -> Wrapped (poly {}) mono
+                poly = || A
+                wrap = || Wrapped(poly(), mono)
 
                 use_wrap1 : [Wrapped [A] U8, Other] -> U8
-                use_wrap1 =
-                    \w -> when w is
-                        Wrapped A n -> n
+                use_wrap1 = |w|
+                    when w is
+                        Wrapped(A, n) -> n
                         Other -> 0
 
                 use_wrap2 : [Wrapped [A, B] U8] -> U8
-                use_wrap2 =
-                    \w -> when w is
-                        Wrapped A n -> n
-                        Wrapped B _ -> 0
+                use_wrap2 = |w|
+                    when w is
+                        Wrapped(A, n) -> n
+                        Wrapped(B, _) -> 0
 
-                use_wrap1 (wrap {}) * use_wrap2 (wrap {})
+                use_wrap1(wrap()) * use_wrap2(wrap())
             "#
         ),
         225,
@@ -1282,13 +1282,13 @@ fn issue_2365_monomorphize_tag_with_non_empty_ext_var() {
             Single a : [A, B, C]a
             Compound a : Single [D, E, F]a
 
-            single : {} -> Single *
-            single = \{} -> C
+            single : () -> Single *
+            single = || C
 
-            compound : {} -> Compound *
-            compound = \{} -> single {}
+            compound : () -> Compound *
+            compound = || single()
 
-            main = compound {}
+            main = compound()
             "#
         ),
         2, // C
@@ -1308,16 +1308,16 @@ fn issue_2365_monomorphize_tag_with_non_empty_ext_var_wrapped() {
             Compound a : Single [D, E, F]a
             Padding : { a: U64, b: U64, c: U64 }
 
-            single : {} -> Result Padding (Single *)
-            single = \{} -> Err C
+            single : () -> Result Padding (Single *)
+            single = || Err(C)
 
-            compound : {} -> Result Padding (Compound *)
-            compound = \{} ->
-                when single {} is
-                    Ok s -> Ok s
-                    Err e -> Err e
+            compound : () -> Result Padding (Compound *)
+            compound = ||
+                when single() is
+                    Ok(s) -> Ok(s)
+                    Err(e) -> Err(e)
 
-            main = compound {}
+            main = compound()
             "#
         ),
         (0, 2), // Err, C
@@ -1341,16 +1341,16 @@ fn issue_2365_monomorphize_tag_with_non_empty_ext_var_wrapped_nested() {
             Padding : { a: U64, b: U64, c: U64 }
 
             main =
-                single : {} -> Result Padding (Single *)
-                single = \{} -> Err C
+                single : () -> Result Padding (Single *)
+                single = || Err(C)
 
-                compound : {} -> Result Padding (Compound *)
-                compound = \{} ->
-                    when single {} is
-                        Ok s -> Ok s
-                        Err e -> Err e
+                compound : () -> Result Padding (Compound *)
+                compound = ||
+                    when single() is
+                        Ok(s) -> Ok(s)
+                        Err(e) -> Err(e)
 
-                compound {}
+                compound()
             "#
         ),
         (0, 2), // Err, C
@@ -1691,20 +1691,20 @@ fn instantiate_annotated_as_recursive_alias_multiple_polymorphic_expr() {
             main =
                 Value : [Nil, Array (List Value)]
 
-                foo : {} -> [Nil]
-                foo = \{} -> Nil
+                foo : () -> [Nil]
+                foo = || Nil
 
                 v1 : Value
-                v1 = foo {}
+                v1 = foo()
 
                 Value2 : [Nil, B U16, Array (List Value)]
 
                 v2 : Value2
-                v2 = foo {}
+                v2 = foo()
 
-                when {v1, v2} is
-                    {v1: Nil, v2: Nil} -> 123i64
-                    {v1: _, v2: _} -> -1i64
+                when { v1, v2 } is
+                    { v1: Nil, v2: Nil } -> 123i64
+                    { v1: _, v2: _ } -> -1i64
             "#
         ),
         123,
@@ -1902,13 +1902,13 @@ fn tag_union_let_generalization() {
     assert_evals_to!(
         indoc!(
             r#"
-            many_aux : {} -> [ Loop, Done ]
-            many_aux = \_ ->
+            many_aux : () -> [ Loop, Done ]
+            many_aux = ||
                 output = Done
 
                 output
 
-            when many_aux {} is
+            when many_aux() is
                 Loop -> "loop"
                 Done -> "done"
             "#
@@ -2163,30 +2163,29 @@ fn refcount_nullable_unwrapped_needing_no_refcount_issue_5027() {
             r#"
             app "test" provides [main] to "./platform"
 
-            Effect : {} -> Str
+            Effect : () -> Str
 
-            after = \effect, build_next ->
-                \{} ->
-                    when build_next (effect {}) is
-                        thunk -> thunk {}
+            after = |effect, build_next|
+                ||
+                    when build_next(effect()) is
+                        thunk -> thunk()
 
             line : Effect
-            line = \{} -> "done"
+            line = || "done"
 
             await : Effect, (Str -> Effect) -> Effect
-            await = \fx, cont ->
-                after
-                    fx
-                    cont
+            await = |fx, cont|
+                after(fx, cont)
 
-            succeed : {} -> Effect
-            succeed = \{} -> (\{} -> "success")
+            succeed : () -> Effect
+            succeed = || (|| "success")
 
             test =
-                await line \s ->
-                    if s == "done" then succeed {} else test
+                await(line, |s|
+                    if s == "done" then succeed() else test
+                )
 
-            main = test {}
+            main = test()
             "#
         ),
         RocStr::from("success"),

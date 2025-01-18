@@ -6,7 +6,7 @@ app [main!] { pf: platform "../test-platform-effects-zig/main.roc" }
 import pf.Effect
 import Community
 
-main! = \{} ->
+main! = ||
     Community.empty
     |> Community.add_person({
         first_name: "John",

@@ -3,9 +3,9 @@ app [main!] { pf: platform "platform/main.roc" }
 import pf.Host
 
 # based on: https://github.com/koka-lang/koka/blob/master/test/bench/haskell/deriv.hs
-main! : {} => {}
-main! = \{} ->
-    { value, is_error } = Host.get_int!({})
+main! : () => {}
+main! = ||
+    { value, is_error } = Host.get_int!()
     input_result =
         if is_error then
             Err(GetIntError)

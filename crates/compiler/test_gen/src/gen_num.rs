@@ -1565,12 +1565,12 @@ fn if_guard_bind_variable_false() {
     assert_evals_to!(
         indoc!(
             r"
-                wrapper = \{} ->
+                wrapper = ||
                     when 10 is
                         x if x == 5 -> 0
                         _ -> 42
 
-                wrapper {}
+                wrapper()
                 "
         ),
         42,
@@ -1584,12 +1584,12 @@ fn if_guard_bind_variable_true() {
     assert_evals_to!(
         indoc!(
             r"
-                wrapper = \{} ->
+                wrapper = ||
                     when 10 is
                         x if x == 10 -> 42
                         _ -> 0
 
-                wrapper {}
+                wrapper()
                 "
         ),
         42,
@@ -3437,9 +3437,9 @@ fn monomorphized_ints_aliased() {
             app "test" provides [main] to "./platform"
 
             main =
-                y = \{} -> 100
-                w1 = \{} -> y {}
-                w2 = \{} -> y {}
+                y = || 100
+                w1 = || y()
+                w2 = || y()
 
                 f1 : U8, U32 -> U8
                 f1 = \_, _ -> 1
@@ -3855,15 +3855,15 @@ fn bool_in_switch() {
             r#"
             app "test" provides [main] to "./platform"
 
-            loop : [ Continue {}, Break {} ]
-            loop = Continue {}
+            loop : [ Continue, Break ]
+            loop = Continue
 
-            all = \{} ->
+            all = ||
                 when loop is
-                    Continue {} -> Bool.true
-                    Break {} -> Bool.false
+                    Continue -> Bool.true
+                    Break -> Bool.false
 
-            main = all {}
+            main = all()
             "#
         ),
         true,

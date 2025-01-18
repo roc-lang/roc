@@ -3,7 +3,7 @@ app [main!] { pf: platform "platform/main.roc" }
 import pf.Host
 import AStar
 
-main! = \{} ->
+main! = ||
     Host.put_line!(show_bool(test1))
 
 show_bool : Bool -> Str

@@ -356,9 +356,9 @@ pub fn type_problem<'b>(
                 alloc.reflow("However, it appears in a top-level def instead of a function. If we allowed this, importing this module would produce a side effect."),
                 alloc.concat([
                     alloc.tip(),
-                    alloc.reflow("If you don't need any arguments, use an empty record:"),
+                    alloc.reflow("Try wrapping your value in a function, like this one:"),
                 ]),
-                alloc.parser_suggestion("    askName! : {} => Str\n    askName! = \\{} ->\n        Stdout.line! \"What's your name?\"\n        Stdin.line! {}"),
+                alloc.parser_suggestion("    ask_name! : () => Str\n    ask_name! = ||\n        Stdout.line!(\"What's your name?\")\n        Stdin.line!()"),
                 alloc.reflow("This will allow the caller to control when the effects run."),
             ];
 
@@ -4420,7 +4420,11 @@ mod report_text {
         ret: RocDocBuilder<'b>,
     ) -> RocDocBuilder<'b> {
         let function_doc = alloc.concat([
-            alloc.intersperse(args, alloc.reflow(", ")),
+            if args.is_empty() {
+                alloc.text("()")
+            } else {
+                alloc.intersperse(args, alloc.reflow(", "))
+            },
             match fx {
                 ErrorFunctionFx::Pure => alloc.text(" -> "),
                 ErrorFunctionFx::Effectful => alloc.text(" => "),

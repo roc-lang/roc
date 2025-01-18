@@ -4,4 +4,4 @@ hosted Effect
 
 put_line! : Str => {}
 
-get_line! : {} => Str
+get_line! : () => Str

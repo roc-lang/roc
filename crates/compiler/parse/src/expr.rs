@@ -17,9 +17,9 @@ use crate::parser::{
     self, and, backtrackable, between, byte, byte_indent, capture_line_indent, collection_inner,
     collection_trailing_sep_e, either, increment_min_indent, indented_seq_skip_first, loc, map,
     map_with_arena, optional, reset_min_indent, sep_by1, sep_by1_e, set_min_indent, skip_first,
-    skip_second, specialize_err, specialize_err_ref, then, two_bytes, zero_or_more, EClosure,
-    EExpect, EExpr, EIf, EImport, EImportParams, EInParens, EList, ENumber, ERecord, EReturn,
-    EString, EType, EWhen, Either, ParseResult, Parser, SpaceProblem,
+    skip_second, specialize_err, specialize_err_ref, then, trailing_sep_by0, two_bytes,
+    zero_or_more, EClosure, EExpect, EExpr, EIf, EImport, EImportParams, EInParens, EList, ENumber,
+    ERecord, EReturn, EString, EType, EWhen, Either, ParseResult, Parser, SpaceProblem,
 };
 use crate::pattern::closure_param;
 use crate::state::State;
@@ -179,6 +179,7 @@ fn loc_term_or_underscore_or_conditional<'a>(
         loc_term_or_closure(check_for_arrow).parse(arena, state, min_indent)
     }
 }
+
 fn loc_conditional<'a>(
     check_for_arrow: CheckForArrow,
 ) -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
@@ -2328,14 +2329,13 @@ fn closure_new_syntax_help<'a>() -> impl Parser<'a, Expr<'a>, EClosure<'a>> {
         indented_seq_skip_first(
             error_on_pizza(byte_indent(b'|', EClosure::Bar), EClosure::Start),
             and(
-                sep_by1_e(
+                trailing_sep_by0(
                     byte_indent(b',', EClosure::Comma),
                     space0_around_ee(
                         specialize_err(EClosure::Pattern, closure_param()),
                         EClosure::IndentArg,
                         EClosure::IndentArrow,
                     ),
-                    EClosure::Arg,
                 ),
                 skip_first(
                     // Parse the -> which separates params from body
@@ -2402,7 +2402,7 @@ fn error_on_pizza<'a, T, E: 'a>(
     f: impl Fn(Position) -> E,
 ) -> impl Parser<'a, T, E> {
     move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
-        if state.bytes().starts_with(b"|>") || state.bytes().starts_with(b"||") {
+        if state.bytes().starts_with(b"|>") {
             Err((NoProgress, f(state.pos())))
         } else {
             p.parse(arena, state, min_indent)
@@ -4120,7 +4120,15 @@ where
         ">=" => good!(OperatorOrDef::BinOp(BinOp::GreaterThanOrEq), 2),
         "<=" => good!(OperatorOrDef::BinOp(BinOp::LessThanOrEq), 2),
         "&&" => good!(OperatorOrDef::BinOp(BinOp::And), 2),
-        "||" => good!(OperatorOrDef::BinOp(BinOp::Or), 2),
+        "||" => {
+            // Require indent to avoid ambiguity with zero-arg closures.
+            // Not great, but this will be removed soon anyway.
+            if state.column() > min_indent {
+                good!(OperatorOrDef::BinOp(BinOp::Or), 2)
+            } else {
+                Err((NoProgress, to_error("||", state.pos())))
+            }
+        }
         "//" => good!(OperatorOrDef::BinOp(BinOp::DoubleSlash), 2),
         "->" => {
             // makes no progress, so it does not interfere with `_ if isGood -> ...`

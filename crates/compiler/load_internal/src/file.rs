@@ -2944,16 +2944,16 @@ fn update<'a>(
                     //   # Default module
                     //   module [default, getDefault]
                     //
-                    //   Default implements default : {} -> a where a implements Default
+                    //   Default implements default : () -> a where a implements Default
                     //
-                    //   getDefault = \{} -> default {}
+                    //   getDefault = || default()
                     //
                     //   # App module
                     //   app "test" provides [main] imports [Default.{default, getDefault}]
                     //
                     //   Foo := {}
                     //
-                    //   default = \{} -> @Foo {}
+                    //   default = || @Foo({})
                     //
                     //   main =
                     //     f : Foo

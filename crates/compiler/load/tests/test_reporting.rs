@@ -6359,7 +6359,7 @@ All branches in an `if` must have the same type!
             indoc!(
                 r#"
                 platform "folkertdev/foo"
-                    requires { main! : {} => Result {} [] }
+                    requires { main! : () => Result {} [] }
                     exposes []
                     packages {}
                     imports []
@@ -6379,13 +6379,13 @@ All branches in an `if` must have the same type!
                 I am partway through parsing a header, but I got stuck here:
 
                 1│  platform "folkertdev/foo"
-                2│      requires { main! : {} => Result {} [] }
+                2│      requires { main! : () => Result {} [] }
                                    ^
 
                 I am expecting a list of type names like `{}` or `{ Model }` next. A full
                 `requires` definition looks like
 
-                    requires { Model, Msg } { main! : {} => Result {} [] }
+                    requires { Model, Msg } { main! : () => Result {} [] }
             "#
             ),
         )
@@ -7355,7 +7355,7 @@ All branches in an `if` must have the same type!
         nested_datatype_inline,
         indoc!(
             r"
-            f : {} -> [Chain a (Nested (List a)), Term] as Nested a
+            f : () -> [Chain a (Nested (List a)), Term] as Nested a
 
             f
             "
@@ -7365,12 +7365,12 @@ All branches in an `if` must have the same type!
 
     `Nested` is a nested datatype. Here is one recursive usage of it:
 
-    4│      f : {} -> [Chain a (Nested (List a)), Term] as Nested a
+    4│      f : () -> [Chain a (Nested (List a)), Term] as Nested a
                                 ^^^^^^^^^^^^^^^
 
     But recursive usages of `Nested` must match its definition:
 
-    4│      f : {} -> [Chain a (Nested (List a)), Term] as Nested a
+    4│      f : () -> [Chain a (Nested (List a)), Term] as Nested a
                                                            ^^^^^^^^
 
     Nested datatypes are not supported in Roc.
@@ -8973,7 +8973,7 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [] to "./platform"
 
-            Ability implements ab : {} -> {}
+            Ability implements ab : () -> {}
             "#
         ),
         @r"
@@ -8982,7 +8982,7 @@ All branches in an `if` must have the same type!
         The definition of the ability member `ab` does not include an `implements`
         clause binding a type variable to the ability `Ability`:
 
-        3│  Ability implements ab : {} -> {}
+        3│  Ability implements ab : () -> {}
                                ^^
 
         Ability members must include an `implements` clause binding a type
@@ -8996,7 +8996,7 @@ All branches in an `if` must have the same type!
 
         `Ability` is not used anywhere in your code.
 
-        3│  Ability implements ab : {} -> {}
+        3│  Ability implements ab : () -> {}
             ^^^^^^^
 
         If you didn't intend on using `Ability` then remove it so future readers
@@ -9603,12 +9603,12 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [main] to "./platform"
 
-            Default implements default : {} -> a where a implements Default
+            Default implements default : () -> a where a implements Default
 
             main =
                 A := {} implements [Default {default}]
-                default = \{} -> @A {}
-                default {}
+                default = || @A({})
+                default()
             "#
         ),
         @r"
@@ -9617,7 +9617,7 @@ All branches in an `if` must have the same type!
         This specialization of the `default` ability member is in a nested
         scope:
 
-        7│      default = \{} -> @A {}
+        7│      default = || @A({})
                 ^^^^^^^
 
         Specializations can only be defined on the top-level of a module.
@@ -9633,7 +9633,7 @@ All branches in an `if` must have the same type!
             job : Job Str
 
             when job is
-                Job lst -> lst == ""
+                Job(lst) -> lst == ""
             "#
         ),
         @r#"
@@ -9641,8 +9641,8 @@ All branches in an `if` must have the same type!
 
     This 2nd argument to == has an unexpected type:
 
-    9│          Job lst -> lst == ""
-                                  ^^
+    9│          Job(lst) -> lst == ""
+                                   ^^
 
     The argument is a string of type:
 
@@ -9726,12 +9726,12 @@ All branches in an `if` must have the same type!
         cycle_through_non_function,
         indoc!(
             r"
-            force : ({} -> I64) -> I64
-            force = \eval -> eval {}
+            force : (() -> I64) -> I64
+            force = \eval -> eval()
 
-            t1 = \_ -> force (\_ -> t2)
+            t1 = || force(|| t2)
 
-            t2 = t1 {}
+            t2 = t1()
 
             t2
             "
@@ -9821,12 +9821,12 @@ All branches in an `if` must have the same type!
             r#"
                 app "test" provides [t2] to "./platform"
 
-                force : ({} -> I64) -> I64
-                force = \eval -> eval {}
+                force : (() -> I64) -> I64
+                force = |eval| eval()
 
-                t1 = \_ -> force (\_ -> t2)
+                t1 = || force(|| t2)
 
-                t2 = t1 {}
+                t2 = t1()
                 "#
         ),
         @r"
@@ -10276,14 +10276,16 @@ All branches in an `if` must have the same type!
             Handle := {}
 
             await : Result a err, (a -> Result b err) -> Result b err
-            open : {} -> Result Handle *
+            open : () -> Result Handle *
             close : Handle -> Result {} *
 
             with_open : (Handle -> Result {} *) -> Result {} *
-            with_open = \callback ->
-                await (open {}) \handle ->
-                    await (callback handle) \_ ->
+            with_open = |callback|
+                await(open(), |handle|
+                    await(callback(handle), |_|
                         close handle
+                    )
+                )
 
             with_open
             "
@@ -11458,32 +11460,32 @@ All branches in an `if` must have the same type!
                 record: decode_record,
                 tuple: decode_tuple,
             }]
-            decode_u8 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
-            decode_u16 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
-            decode_u32 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
-            decode_u64 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
-            decode_u128 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
-            decode_i8 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
-            decode_i16 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
-            decode_i32 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
-            decode_i64 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
-            decode_i128 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
-            decode_f32 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
-            decode_f64 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
-            decode_dec = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
-            decode_bool = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
-            decode_string = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decode_u8 = Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
+            decode_u16 = Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
+            decode_u32 = Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
+            decode_u64 = Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
+            decode_u128 = Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
+            decode_i8 = Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
+            decode_i16 = Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
+            decode_i32 = Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
+            decode_i64 = Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
+            decode_i128 = Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
+            decode_f32 = Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
+            decode_f64 = Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
+            decode_dec = Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
+            decode_bool = Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
+            decode_string = Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
             decode_list : Decoder elem (ErrDecoder) -> Decoder (List elem) (ErrDecoder)
-            decode_list = \_ -> Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decode_list = |_| Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
             decode_record : state, (state, Str -> [Keep (Decoder state (ErrDecoder)), Skip]), (state, (ErrDecoder) -> Result val DecodeError) -> Decoder val (ErrDecoder)
-            decode_record =\_, _, _ ->  Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decode_record = |_, _, _| Decode.custom(rest, @ErrDecoder({})| { result: Err TooShort, rest })
             decode_tuple : state, (state, U64 -> [Next (Decoder state (ErrDecoder)), TooLong]), (state -> Result val DecodeError) -> Decoder val (ErrDecoder)
-            decode_tuple = \_, _, _ -> Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decode_tuple = |_, _, _| Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
 
             main =
-                decoded = Str.to_utf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.from_bytes (@ErrDecoder {})
+                decoded = Str.to_utf8("{\"first\":\"ab\",\"second\":\"cd\"}") |> Decode.from_bytes(@ErrDecoder({}))
                 when decoded is
-                    Ok rcd -> rcd.first rcd.second
+                    Ok(rcd) -> rcd.first(rcd.second)
                     _ -> "something went wrong"
             "#
         ),
@@ -12108,7 +12110,7 @@ All branches in an `if` must have the same type!
 
              foo : a -> {} where a implements Hash
 
-             main = foo ("", \{} -> {})
+             main = foo("", || {})
              "#
         ),
         @r#"
@@ -12116,19 +12118,19 @@ All branches in an `if` must have the same type!
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    5│  main = foo ("", \{} -> {})
-                   ^^^^^^^^^^^^^^^
+    5│  main = foo("", || {})
+                  ^^^^^^^^^^^
 
     I can't generate an implementation of the `Hash` ability for
 
         (
             Str,
-            {}a -> {},
+            () -> {},
         )a
 
     In particular, an implementation for
 
-        {}a -> {}
+        () -> {}
 
     cannot be generated.
 
@@ -12620,7 +12622,7 @@ All branches in an `if` must have the same type!
 
             F a : a where a implements Hash
 
-            f : F ({} -> {})
+            f : F (() -> {})
             "#
         ),
     @r"
@@ -12628,12 +12630,12 @@ All branches in an `if` must have the same type!
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    5│  f : F ({} -> {})
+    5│  f : F (() -> {})
                ^^^^^^^^
 
     I can't generate an implementation of the `Hash` ability for
 
-        {} -> {}
+        () -> {}
 
     Note: `Hash` cannot be generated for functions.
     "
@@ -12895,7 +12897,7 @@ All branches in an `if` must have the same type!
         unnecessary_extension_variable,
         indoc!(
             r"
-            f : {} -> [A, B]*
+            f : () -> [A, B]*
             f
             "
         ),
@@ -12905,7 +12907,7 @@ All branches in an `if` must have the same type!
     This type annotation has a wildcard type variable (`*`) that isn't
     needed.
 
-    4│      f : {} -> [A, B]*
+    4│      f : () -> [A, B]*
                             ^
 
     Annotations for tag unions which are constants, or which are returned
@@ -13769,9 +13771,9 @@ All branches in an `if` must have the same type!
         indoc!(
             r#"
             app "test" provides [f] to "./platform"
-            f = h {}
-            h = \{} -> 1
-            g = \{} -> if Bool.true then "" else g {}
+            f = h()
+            h = || 1
+            g = || if Bool.true then "" else g()
             "#
         ),
     @r#"
@@ -13779,8 +13781,8 @@ All branches in an `if` must have the same type!
 
     This definition is only used in recursion with itself:
 
-    4│  g = \{} -> if Bool.true then "" else g {}
-        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    4│  g = || if Bool.true then "" else g()
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     If you don't intend to use or export this definition, it should be
     removed!
@@ -13792,7 +13794,7 @@ All branches in an `if` must have the same type!
         indoc!(
             r#"
             app "test" provides [g] to "./platform"
-            g = \{} -> if Bool.true then "" else g {}
+            g = || if Bool.true then "" else g()
             "#
         )
     );
@@ -13803,8 +13805,8 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [h] to "./platform"
             h = ""
-            f = \{} -> if Bool.true then "" else g {}
-            g = \{} -> if Bool.true then "" else f {}
+            f = || if Bool.true then "" else g()
+            g = || if Bool.true then "" else f()
             "#
         ),
     @r#"
@@ -13826,8 +13828,8 @@ All branches in an `if` must have the same type!
         indoc!(
             r#"
             app "test" provides [f] to "./platform"
-            f = \{} -> if Bool.true then "" else g {}
-            g = \{} -> if Bool.true then "" else f {}
+            f = || if Bool.true then "" else g()
+            g = || if Bool.true then "" else f()
             "#
         ),
     @r"
@@ -13840,7 +13842,7 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [main] to "./platform"
             main =
-                g = \{} -> if Bool.true then "" else g {}
+                g = || if Bool.true then "" else g()
                 ""
             "#
         ),
@@ -13863,7 +13865,7 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [main] to "./platform"
             main =
-                g = \{} -> if Bool.true then "" else g {}
+                g = || if Bool.true then "" else g()
                 g
             "#
         )
@@ -13875,8 +13877,8 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [main] to "./platform"
             main =
-                f = \{} -> if Bool.true then "" else g {}
-                g = \{} -> if Bool.true then "" else f {}
+                f = || if Bool.true then "" else g()
+                g = || if Bool.true then "" else f()
                 ""
             "#
         ),
@@ -13885,8 +13887,8 @@ All branches in an `if` must have the same type!
 
     These 2 definitions are only used in mutual recursion with themselves:
 
-    3│>      f = \{} -> if Bool.true then "" else g {}
-    4│>      g = \{} -> if Bool.true then "" else f {}
+    3│>      f = || if Bool.true then "" else g()
+    4│>      g = || if Bool.true then "" else f()
 
     If you don't intend to use or export any of them, they should all be
     removed!
@@ -13900,8 +13902,8 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [main] to "./platform"
             main =
-                f = \{} -> if Bool.true then "" else g {}
-                g = \{} -> if Bool.true then "" else f {}
+                f = || if Bool.true then "" else g()
+                g = || if Bool.true then "" else f()
                 f
             "#
         ),
@@ -13944,8 +13946,8 @@ All branches in an `if` must have the same type!
             r#"
             app "test" provides [main] to "./platform"
 
-            main : {} -> [One]
-            main = \{} ->
+            main : () -> [One]
+            main = ||
                 if Bool.true
                 then One
                 else Two
@@ -13981,8 +13983,8 @@ All branches in an `if` must have the same type!
 
             R : [One]
 
-            main : {} -> R
-            main = \{} ->
+            main : () -> R
+            main = ||
                 if Bool.true
                 then One
                 else Two
@@ -14126,7 +14128,7 @@ All branches in an `if` must have the same type!
             import Decode exposing [decoder]
 
             main =
-                my_decoder : Decoder (U32, {} -> {}) fmt where fmt implements DecoderFormatting
+                my_decoder : Decoder (U32, () -> {}) fmt where fmt implements DecoderFormatting
                 my_decoder = decoder
 
                 my_decoder
@@ -14142,7 +14144,7 @@ All branches in an `if` must have the same type!
 
     I can't generate an implementation of the `Decoding` ability for
 
-        U32, {} -> {}
+        U32, () -> {}
 
     Note: `Decoding` cannot be generated for functions.
     "
@@ -14167,7 +14169,7 @@ All branches in an `if` must have the same type!
             r#"
             app "test" imports [] provides [main] to "./platform"
 
-            x : (U32, {} -> {})
+            x : (U32, () -> {})
 
             main = Encode.to_encoder x
             "#
@@ -14716,15 +14718,15 @@ All branches in an `if` must have the same type!
                 else
                     Err TooBig
 
-            main! = \{} ->
-                Effect.put_line! "hello"
+            main! = ||
+                Effect.put_line!("hello")
 
                 # this returns {}, so it's ignored
-                try validate_num 10
+                validate_num(10)?
 
                 # this returns a value, so we are incorrectly
                 # dropping the parsed value
-                try List.get [1, 2, 3] 5
+                List.get([1, 2, 3], 5)?
 
                 Ok {}
             "#
@@ -14756,23 +14758,23 @@ All branches in an `if` must have the same type!
 
             import pf.Effect
 
-            main! = \{} ->
-                Effect.put_line! "hello"
+            main! = ||
+                Effect.put_line!("hello")
 
                 # this outputs {}, so it's ignored
                 if 7 > 5 then
                     {}
                 else
-                    return Err TooBig
+                    return Err(TooBig)
 
                 # this outputs a value, so we are incorrectly
                 # dropping the parsed value
-                when List.get [1, 2, 3] 5 is
-                    Ok item -> item
-                    Err err ->
-                        return Err err
+                when List.get([1, 2, 3], 5) is
+                    Ok(item) -> item
+                    Err(err) ->
+                        return Err(err)
 
-                Ok {}
+                Ok({})
             "#
         ),
         @r#"
@@ -14839,17 +14841,17 @@ All branches in an `if` must have the same type!
 
             import pf.Effect
 
-            main! = \{} ->
-                Effect.put_line! "hello"
+            main! = ||
+                Effect.put_line!("hello")
 
                 # not ignored, warning
-                try List.get [1, 2, 3] 5
+                List.get([1, 2, 3], 5)?
 
                 # ignored, OK
-                _ = try List.get [1, 2, 3] 5
-                _ignored = try List.get [1, 2, 3] 5
+                _ = List.get([1, 2, 3], 5)?
+                _ignored = List.get([1, 2, 3], 5)?
 
-                Ok {}
+                Ok({})
             "#
         ),
         @r###"
@@ -14879,30 +14881,30 @@ All branches in an `if` must have the same type!
 
             import pf.Effect
 
-            main! = \{} ->
-                Effect.put_line! "hello"
+            main! = ||
+                Effect.put_line!("hello")
 
                 # not ignored, warning
-                when List.get [1, 2, 3] 5 is
-                    Ok item -> item
-                    Err err ->
-                        return Err err
+                when List.get([1, 2, 3], 5) is
+                    Ok(item) -> item
+                    Err(err) ->
+                        return Err(err)
 
                 # ignored, OK
                 _ =
-                    when List.get [1, 2, 3] 5 is
-                        Ok item -> item
-                        Err err ->
-                            return Err err
+                    when List.get([1, 2, 3], 5) is
+                        Ok(item) -> item
+                        Err(err) ->
+                            return Err(err)
 
                 # also ignored, also OK
                 _ignored =
-                    when List.get [1, 2, 3] 5 is
-                        Ok item -> item
-                        Err err ->
-                            return Err err
+                    when List.get([1, 2, 3], 5) is
+                        Ok(item) -> item
+                        Err(err) ->
+                            return Err(err)
 
-                Ok {}
+                Ok({})
             "#
         ),
         @r#"
@@ -14934,12 +14936,12 @@ All branches in an `if` must have the same type!
 
             import pf.Effect
 
-            main! = \{} ->
-                Effect.put_line! "hello"
+            main! = ||
+                Effect.put_line!("hello")
 
-                Num.to_str 123
+                Num.to_str(123)
 
-                Ok {}
+                Ok({})
             "#
         ),
         @r#"
@@ -14981,12 +14983,12 @@ All branches in an `if` must have the same type!
 
             import pf.Effect
 
-            main! = \{} ->
-                Effect.put_line! "hello"
+            main! = ||
+                Effect.put_line!("hello")
 
-                _ignored = Num.to_str 123
+                _ignored = Num.to_str(123)
 
-                Ok {}
+                Ok({})
             "#
         ),
         @r"
@@ -15062,13 +15064,13 @@ All branches in an `if` must have the same type!
         keyword_try_with_non_result_target,
         indoc!(
             r#"
-            invalid_try = \{} ->
+            invalid_try = ||
                 non_result = "abc"
                 x = try non_result
 
-                Ok (x * 2)
+                Ok(x * 2)
 
-            invalid_try {}
+            invalid_try()
             "#
         ),
         @r"
@@ -15091,13 +15093,13 @@ All branches in an `if` must have the same type!
         question_try_with_non_result_target,
         indoc!(
             r#"
-            invalid_try = \{} ->
+            invalid_try = ||
                 non_result = "abc"
                 x = non_result?
 
-                Ok (x * 2)
+                Ok(x * 2)
 
-            invalid_try {}
+            invalid_try()
             "#
         ),
         @r"
@@ -15120,14 +15122,14 @@ All branches in an `if` must have the same type!
         incompatible_try_errs,
         indoc!(
             r#"
-            incompatible_trys = \{} ->
-                x = try Err 123
+            incompatible_trys = ||
+                x = Err(123)?
 
-                y = try Err "abc"
+                y = Err("abc")?
 
-                Ok (x + y)
+                Ok(x + y)
 
-            incompatible_trys {}
+            incompatible_trys()
             "#
         ),
         @r#"
@@ -15266,12 +15268,12 @@ All branches in an `if` must have the same type!
 
             import pf.Effect
 
-            main! = \{} ->
-                identity {}
+            main! = ||
+                identity({})
 
-                Effect.put_line! "hello"
+                Effect.put_line!("hello")
 
-            identity = \x -> x
+            identity = |x| x
             "#
         ),
         @r###"
@@ -15297,12 +15299,12 @@ All branches in an `if` must have the same type!
 
             import pf.Effect
 
-            main! = \{} ->
-                Effect.put_line! (get_cheer "hello")
+            main! = ||
+                Effect.put_line!(get_cheer("hello"))
 
             get_cheer : Str -> Str
-            get_cheer = \msg ->
-                name = Effect.get_line! {}
+            get_cheer = |msg|
+                name = Effect.get_line!()
 
                 "${msg}, ${name}!"
             "#
@@ -15335,13 +15337,13 @@ All branches in an `if` must have the same type!
 
             import pf.Effect
 
-            main! = \{} ->
-                trim "hello "
+            main! = ||
+                trim("hello ")
 
             trim : Str -> Str
-            trim = \msg ->
+            trim = |msg|
                 Effect.put_line!("Trimming ${msg}")
-                Str.trim msg
+                Str.trim(msg)
             "#
         ),
         @r#"
@@ -15372,11 +15374,11 @@ All branches in an `if` must have the same type!
 
             import pf.Effect
 
-            main! = \{} ->
-                print_hello = \{} ->
-                    Effect.put_line! "hello"
+            main! = ||
+                print_hello = ||
+                    Effect.put_line!("hello")
 
-                print_hello {}
+                print_hello()
             "#
         ),
         @r"
@@ -15384,7 +15386,7 @@ All branches in an `if` must have the same type!
 
     This function is effectful, but its name does not indicate so:
 
-    6│      print_hello = \{} ->
+    6│      print_hello = ||
             ^^^^^^^^^^^
 
     Add an exclamation mark at the end, like:
@@ -15403,8 +15405,8 @@ All branches in an `if` must have the same type!
 
             import pf.Effect
 
-            main! = \{} ->
-                Effect.get_line! {}
+            main! = ||
+                Effect.get_line!()
                 {}
             "#
         ),
@@ -15413,8 +15415,8 @@ All branches in an `if` must have the same type!
 
     The result of this call to `Effect.get_line!` is ignored:
 
-    6│      Effect.get_line! {}
-            ^^^^^^^^^^^^^^^^
+    6│      Effect.get_line!()
+            ^^^^^^^^^^^^^^^^^^
 
     Standalone statements are required to produce an empty record, but the
     type of this one is:
@@ -15435,9 +15437,9 @@ All branches in an `if` must have the same type!
 
             import pf.Effect
 
-            main! = \{} ->
+            main! = ||
                 Effect.get_line!
-                Effect.put_line! "hi"
+                Effect.put_line!("hi")
             "#
         ),
         @r"
@@ -15451,7 +15453,7 @@ All branches in an `if` must have the same type!
     Standalone statements are required to produce an empty record, but the
     type of this one is:
 
-        {} => Str
+        () => Str
 
     Hint: Did you forget to call the function?
 
@@ -15477,10 +15479,10 @@ All branches in an `if` must have the same type!
 
             import pf.Effect
 
-            main! = \{} ->
-                Effect.put_line! (hello! {})
+            main! = ||
+                Effect.put_line!(hello!())
 
-            hello! = \{} ->
+            hello! = ||
                 "hello"
             "#
         ),
@@ -15507,11 +15509,11 @@ All branches in an `if` must have the same type!
             import pf.Effect
 
             hello =
-                Effect.put_line! "calling hello!"
+                Effect.put_line!("calling hello!")
                 "hello"
 
-            main! = \{} ->
-                Effect.put_line! hello
+            main! = ||
+                Effect.put_line!(hello)
             "#
         ),
         @r#"
@@ -15527,10 +15529,10 @@ All branches in an `if` must have the same type!
 
     Tip: If you don't need any arguments, use an empty record:
 
-        askName! : {} => Str
-        askName! = \{} ->
-            Stdout.line! "What's your name?"
-            Stdin.line! {}
+        ask_name! : () => Str
+        ask_name! = ||
+            Stdout.line!("What's your name?")
+            Stdin.line!()
 
     This will allow the caller to control when the effects run.
     "#
@@ -15544,8 +15546,8 @@ All branches in an `if` must have the same type!
 
             import pf.Effect
 
-            main! = \{} ->
-                print_ln "Hello"
+            main! = ||
+                print_ln("Hello")
 
             print_ln = Effect.put_line!
             "#
@@ -15574,11 +15576,11 @@ All branches in an `if` must have the same type!
 
             import pf.Effect
 
-            main! = \{} ->
+            main! = ||
                 fx = {
                     put_line: Effect.put_line!
                 }
-                fx.put_line "hello world!"
+                fx.put_line("hello world!")
             "#
         ),
         @r"
@@ -15605,7 +15607,7 @@ All branches in an `if` must have the same type!
             module [Fx]
 
             Fx : {
-                get_line: {} => Str
+                get_line: () => Str
             }
             "#
         ),
@@ -15633,7 +15635,7 @@ All branches in an `if` must have the same type!
             module [Fx]
 
             Fx : {
-                get_line!: {} -> Str
+                get_line!: () -> Str
             }
             "#
         ),
@@ -15660,17 +15662,17 @@ All branches in an `if` must have the same type!
 
             import pf.Effect
 
-            main! = \{} ->
+            main! = ||
                 ["Hello", "world!"]
-                |> for_each! Effect.put_line!
+                |> for_each!(Effect.put_line!)
 
             for_each! : List a, (a => {}) => {}
-            for_each! = \l, f ->
+            for_each! = |l, f|
                 when l is
                     [] -> {}
                     [x, .. as xs] ->
-                        f x
-                        for_each! xs f
+                        f(x)
+                        for_each!(xs, f)
             "#
         ),
         @r"
@@ -15697,17 +15699,17 @@ All branches in an `if` must have the same type!
 
             import pf.Effect
 
-            main! = \{} ->
-                Ok " hi "
-                |> map_ok  Str.trim
-                |> Result.with_default ""
+            main! = ||
+                Ok(" hi ")
+                |> map_ok(Str.trim)
+                |> Result.with_default("")
                 |> Effect.put_line!
 
             map_ok : Result a err, (a -> b) -> Result b err
-            map_ok = \result, fn! ->
+            map_ok = |result, fn!|
                 when result is
-                    Ok x -> Ok (fn! x)
-                    Err e -> Err e
+                    Ok(x) -> Ok(fn!(x))
+                    Err(e) -> Err(e)
             "#
         ),
         @r"
@@ -15732,11 +15734,11 @@ All branches in an `if` must have the same type!
 
             import pf.Effect
 
-            main! = \{} ->
+            main! = ||
                 (get, put) = (Effect.get_line!, Effect.put_line!)
 
-                name = get {}
-                put "Hi, ${name}"
+                name = get()
+                put("Hi, ${name}")
             "#
         ),
         @r###"
@@ -15776,10 +15778,10 @@ All branches in an `if` must have the same type!
 
             import pf.Effect
 
-            main! = \{} ->
+            main! = ||
                 (msg, trim!) = (" hi ", Str.trim)
 
-                Effect.put_line! (trim! msg)
+                Effect.put_line!(trim!(msg))
             "#
         ),
         @r###"
@@ -15804,11 +15806,11 @@ All branches in an `if` must have the same type!
 
             import pf.Effect
 
-            main! = \{} ->
-                Tag get put = Tag Effect.get_line! Effect.put_line!
+            main! = ||
+                Tag(get, put) = Tag(Effect.get_line!, Effect.put_line!)
 
-                name = get {}
-                put "Hi, ${name}"
+                name = get()
+                put("Hi, ${name}")
             "#
         ),
         @r###"
@@ -15848,10 +15850,10 @@ All branches in an `if` must have the same type!
 
             import pf.Effect
 
-            main! = \{} ->
-                Tag msg trim! = Tag " hi " Str.trim
+            main! = ||
+                Tag(msg, trim!) = Tag(" hi ", Str.trim)
 
-                Effect.put_line! (trim! msg)
+                Effect.put_line!(trim!(msg))
             "#
         ),
         @r###"
@@ -15878,10 +15880,10 @@ All branches in an `if` must have the same type!
 
             PutLine := Str => {}
 
-            main! = \{} ->
-                @PutLine put = @PutLine Effect.put_line!
+            main! = ||
+                @PutLine(put) = @PutLine(Effect.put_line!)
 
-                put "Hi!"
+                put("Hi!")
             "#
         ),
         @r###"
@@ -15910,10 +15912,10 @@ All branches in an `if` must have the same type!
 
             Trim := Str -> Str
 
-            main! = \{} ->
-                @Trim trim! = @Trim Str.trim
+            main! = ||
+                @Trim(trim!) = @Trim(Str.trim)
 
-                Effect.put_line! (trim! " hi ")
+                Effect.put_line!(trim!(" hi "))
             "#
         ),
         @r###"
@@ -15938,10 +15940,10 @@ All branches in an `if` must have the same type!
 
             import pf.Effect
 
-            main! = \{} ->
-                pure_higher_order Effect.put_line! "hi"
+            main! = ||
+                pure_higher_order(Effect.put_line!, "hi")
 
-            pure_higher_order = \f, x -> f x
+            pure_higher_order = |f, x| f(x)
             "#
         ),
         @r#"
@@ -15970,11 +15972,11 @@ All branches in an `if` must have the same type!
 
             import pf.Effect
 
-            main! = \{} ->
-                pure_higher_order Effect.put_line! "hi"
+            main! = ||
+                pure_higher_order(Effect.put_line!, "hi")
 
             pure_higher_order : _, _ -> _
-            pure_higher_order = \f, x -> f x
+            pure_higher_order = |f, x| f(x)
             "#
         ),
         @r#"

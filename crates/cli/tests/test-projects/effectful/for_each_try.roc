@@ -2,8 +2,8 @@ app [main!] { pf: platform "../test-platform-effects-zig/main.roc" }
 
 import pf.Effect
 
-main! : {} => {}
-main! = \{} ->
+main! : () => {}
+main! = ||
     good = [0, 2, 4] |> List.for_each_try!(validate!)
     expect good == Ok({})
 

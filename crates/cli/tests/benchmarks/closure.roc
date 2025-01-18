@@ -1,7 +1,7 @@
 app [main!] { pf: platform "platform/main.roc" }
 
-main! : {} => {}
-main! = \{} ->
+main! : () => {}
+main! = ||
     closure1({})
     |> Result.try(closure2)
     |> Result.try(closure3)

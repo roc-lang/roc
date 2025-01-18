@@ -377,7 +377,7 @@ step_exec_ctx! = \ctx, char ->
 
         0x5E ->
             # `^` read char as int
-            in = Stdin.char!({})
+            in = Stdin.char!()
             if in == 255 then
                 # max char sent on EOF. Change to -1
                 Ok(Context.push_stack(ctx, Number(-1)))

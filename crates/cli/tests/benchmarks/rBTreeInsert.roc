@@ -2,8 +2,8 @@ app [main!] { pf: platform "platform/main.roc" }
 
 import pf.Host
 
-main! : {} => {}
-main! = \{} ->
+main! : () => {}
+main! = ||
     tree : RedBlackTree I64 {}
     tree = insert(0, {}, Empty)
 

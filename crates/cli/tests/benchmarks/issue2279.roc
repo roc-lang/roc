@@ -3,7 +3,7 @@ app [main!] { pf: platform "platform/main.roc" }
 import Issue2279Help
 import pf.Host
 
-main! = \{} ->
+main! = ||
     text =
         if Bool.true then
             Issue2279Help.text

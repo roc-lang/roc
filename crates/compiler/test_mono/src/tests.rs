@@ -53,27 +53,27 @@ ErrDecoder := {} implements [
             tuple: decode_tuple,
         },
     ]
-decode_u8 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decode_u16 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decode_u32 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decode_u64 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decode_u128 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decode_i8 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decode_i16 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decode_i32 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decode_i64 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decode_i128 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decode_f32 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decode_f64 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decode_dec = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decode_bool = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decode_string = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decode_u8 = Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
+decode_u16 = Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
+decode_u32 = Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
+decode_u64 = Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
+decode_u128 = Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
+decode_i8 = Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
+decode_i16 = Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
+decode_i32 = Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
+decode_i64 = Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
+decode_i128 = Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
+decode_f32 = Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
+decode_f64 = Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
+decode_dec = Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
+decode_bool = Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
+decode_string = Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
 decode_list : Decoder elem ErrDecoder -> Decoder (List elem) ErrDecoder
-decode_list = \_ -> Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decode_list = |_| Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
 decode_record : state, (state, Str -> [Keep (Decoder state ErrDecoder), Skip]), (state, ErrDecoder -> Result val DecodeError) -> Decoder val ErrDecoder
-decode_record = \_, _, _ -> Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decode_record = |_, _, _| Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
 decode_tuple : state, (state, U64 -> [Next (Decoder state ErrDecoder), TooLong]), (state -> Result val DecodeError) -> Decoder val ErrDecoder
-decode_tuple = \_, _, _ -> Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decode_tuple = |_, _, _| Decode.custom(|rest, @ErrDecoder({})| { result: Err TooShort, rest })
 "#;
 
 /// Without this, some tests pass in `cargo test --release` but fail without
@@ -408,12 +408,12 @@ fn one_element_tag() {
 #[mono_test]
 fn guard_pattern_true() {
     r"
-    wrapper = \{} ->
+    wrapper = ||
         when 2 is
             2 if Bool.false -> 42
             _ -> 0
 
-    wrapper {}
+    wrapper()
     "
 }
 
@@ -458,9 +458,9 @@ fn dict() {
 #[mono_test]
 fn list_append_closure() {
     r"
-    my_function = \l -> List.append l 42
+    my_function = |l| List.append(l, 42)
 
-    my_function [1, 2]
+    my_function([1, 2])
     "
 }
 
@@ -486,7 +486,7 @@ fn list_len() {
 #[mono_test]
 fn when_joinpoint() {
     r"
-    wrapper = \{} ->
+    wrapper = ||
         x : [Red, White, Blue]
         x = Blue
 
@@ -498,7 +498,7 @@ fn when_joinpoint() {
 
         y
 
-    wrapper {}
+    wrapper()
     "
 }
 
@@ -527,7 +527,7 @@ fn if_multi_branch() {
 #[mono_test]
 fn when_on_result() {
     r"
-    wrapper = \{} ->
+    wrapper = ||
         x : Result I64 I64
         x = Ok 2
 
@@ -538,7 +538,7 @@ fn when_on_result() {
                 Err _ -> 3
         y
 
-    wrapper {}
+    wrapper()
     "
 }
 
@@ -563,12 +563,12 @@ fn let_with_record_pattern_list() {
 #[mono_test]
 fn if_guard_bind_variable_false() {
     r"
-    wrapper = \{} ->
+    wrapper = ||
         when 10 is
             x if x == 5 -> 0
             _ -> 42
 
-    wrapper {}
+    wrapper()
     "
 }
 
@@ -605,69 +605,69 @@ fn branch_store_variable() {
 fn list_pass_to_function() {
     r"
     x : List I64
-    x = [1,2,3]
+    x = [1, 2, 3]
 
     id : List I64 -> List I64
-    id = \y -> List.set y 0 0
+    id = |y| List.set(y, 0, 0)
 
-    id x
+    id(x)
     "
 }
 
 #[mono_test]
 fn record_optional_field_let_no_use_default() {
     r"
-    f = \r ->
+    f = |r|
         { x ? 10, y } = r
         x + y
 
 
-    f { x: 4, y: 9 }
+    f({ x: 4, y: 9 })
     "
 }
 
 #[mono_test]
 fn record_optional_field_let_use_default() {
     r"
-    f = \r ->
+    f = |r|
         { x ? 10, y } = r
         x + y
 
 
-    f { y: 9 }
+    f({ y: 9 })
     "
 }
 
 #[mono_test]
 fn record_optional_field_function_no_use_default() {
     r"
-    f = \{ x ? 10, y } -> x + y
+    f = |{ x ? 10, y }| x + y
 
 
-    f { x: 4, y: 9 }
+    f({ x: 4, y: 9 })
     "
 }
 
 #[mono_test]
 fn record_optional_field_function_use_default() {
     r"
-    f = \{ x ? 10, y } -> x + y
+    f = |{ x ? 10, y }| x + y
 
 
-    f { y: 9 }
+    f({ y: 9 })
     "
 }
 
 #[mono_test]
 fn record_as_pattern_in_closure_arg() {
     r"
-    f = \{x, y, w, h} -> (x + w, y + h)
+    f = |{ x, y, w, h }| (x + w, y + h)
 
-    g = \({ x, y } as box) ->
-        (right, bottom) = f box
+    g = |{ x, y } as box| ->
+        (right, bottom) = f(box)
         (x, y, right, bottom)
 
-    g { x: 1, y: 2, w: 3, h: 4 }
+    g({ x: 1, y: 2, w: 3, h: 4 })
     "
 }
 
@@ -676,10 +676,10 @@ fn opaque_as_pattern_in_closure_arg() {
     r"
     Opaque := U64
 
-    f = \(@Opaque x) -> x * 2
-    g = \(@Opaque x as s) -> (x, f s)
+    f = |@Opaque(x)| x * 2
+    g = |@Opaque(x) as s| (x, f s)
 
-    g (@Opaque 42)
+    g(@Opaque(42))
     "
 }
 
@@ -688,17 +688,17 @@ fn quicksort_help() {
     // do we still need with_larger_debug_stack?
     r"
     quicksort_help : List (Num a), I64, I64 -> List (Num a)
-    quicksort_help = \list, low, high ->
+    quicksort_help = |list, low, high|
         if low < high then
-            (Pair partition_index partitioned) = Pair 0 []
+            Pair(partition_index, partitioned) = Pair(0, [])
 
             partitioned
-            |> quicksort_help low (partition_index - 1)
-            |> quicksort_help (partition_index + 1) high
+            |> quicksort_help(low, partition_index - 1)
+            |> quicksort_help(partition_index + 1, high)
         else
             list
 
-    quicksort_help [] 0 0
+    quicksort_help([], 0, 0)
     "
 }
 
@@ -708,18 +708,18 @@ fn quicksort_swap() {
         r#"
         app "test" provides [main] to "./platform"
 
-        swap = \list ->
-            when Pair (List.get list 0) (List.get list 0) is
-                Pair (Ok at_i) (Ok at_j) ->
+        swap = |list|
+            when Pair(List.get(list, 0), List.get(list, 0)) is
+                Pair(Ok(at_i), Ok(at_j)) ->
                     list
-                    |> List.set 0 at_j
-                    |> List.set 0 at_i
+                    |> List.set(0, at_j)
+                    |> List.set(0, at_i)
 
                 _ ->
                     []
 
         main =
-            swap [1, 2]
+            swap([1, 2])
         "#
     )
 }
@@ -732,22 +732,22 @@ fn quicksort_swap() {
 //         app "test" provides [main] to "./platform"
 
 //         partition_help : I64, I64, List (Num a), I64, (Num a) -> [Pair I64 (List (Num a))]
-//         partition_help = \i, j, list, high, pivot ->
+//         partition_help = |i, j, list, high, pivot|
 //             if j < high then
-//                 when List.get list j is
-//                     Ok value ->
+//                 when List.get(list, j) is
+//                     Ok(value) ->
 //                         if value <= pivot then
-//                             partition_help (i + 1) (j + 1) (swap (i + 1) j list) high pivot
+//                             partition_help(i + 1, j + 1, swap(i + 1, j, list), high, pivot)
 //                         else
-//                             partition_help i (j + 1) list high pivot
+//                             partition_help(i, j + 1, list, high, pivot)
 
 //                     Err _ ->
-//                         Pair i list
+//                         Pair(i, list)
 //             else
-//                 Pair i list
+//                 Pair(i, list)
 
 //         main =
-//             partition_help 0 0 [] 0 0
+//             partition_help(0, 0, [], 0, 0)
 //         "#
 //     )
 // }
@@ -760,59 +760,59 @@ fn quicksort_swap() {
 //         app "test" provides [main] to "./platform"
 
 //         quicksort_help : List (Num a), I64, I64 -> List (Num a)
-//         quicksort_help = \list, low, high ->
+//         quicksort_help = |list, low, high|
 //             if low < high then
-//                 (Pair partition_index partitioned) = partition low high list
+//                 Pair(partition_index, partitioned) = partition(low, high, list)
 
 //                 partitioned
-//                     |> quicksort_help low (partition_index - 1)
-//                     |> quicksort_help (partition_index + 1) high
+//                     |> quicksort_help(low, partition_index - 1)
+//                     |> quicksort_help(partition_index + 1, high)
 //             else
 //                 list
 
 //         swap : I64, I64, List a -> List a
-//         swap = \i, j, list ->
-//             when Pair (List.get list i) (List.get list j) is
-//                 Pair (Ok at_i) (Ok at_j) ->
+//         swap = |i, j, list|
+//             when Pair(List.get(list, i), List.get(list, j)) is
+//                 Pair(Ok(at_i), Ok(at_j)) ->
 //                     list
-//                         |> List.set i at_j
-//                         |> List.set j at_i
+//                         |> List.set(i, at_j)
+//                         |> List.set(j, at_i)
 
 //                 _ ->
 //                     []
 
 //         partition : I64, I64, List (Num a) -> [Pair I64 (List (Num a))]
-//         partition = \low, high, initial_list ->
-//             when List.get initial_list high is
-//                 Ok pivot ->
-//                     when partition_help (low - 1) low initial_list high pivot is
-//                         Pair new_i newList ->
-//                             Pair (new_i + 1) (swap (new_i + 1) high newList)
+//         partition = |low, high, initial_list|
+//             when List.get(initial_list, high) is
+//                 Ok(pivot) ->
+//                     when partition_help(low - 1, low, initial_list, high, pivot) is
+//                         Pair(new_i, new_list) ->
+//                             Pair(new_i + 1, swap(new_i + 1, high, new_list))
 
 //                 Err _ ->
-//                     Pair (low - 1) initial_list
+//                     Pair(low - 1, initial_list)
 
 //         partition_help : I64, I64, List (Num a), I64, (Num a) -> [Pair I64 (List (Num a))]
-//         partition_help = \i, j, list, high, pivot ->
+//         partition_help = |i, j, list, high, pivot|
 //             if j < high then
-//                 when List.get list j is
-//                     Ok value ->
+//                 when List.get(list, j) is
+//                     Ok(value) ->
 //                         if value <= pivot then
-//                             partition_help (i + 1) (j + 1) (swap (i + 1) j list) high pivot
+//                             partition_help(i + 1, j + 1 swap(i + 1, j, list), high, pivot)
 //                         else
-//                             partition_help i (j + 1) list high pivot
+//                             partition_help(i, j + 1, list, high, pivot)
 
 //                     Err _ ->
-//                         Pair i list
+//                         Pair(i, list)
 //             else
-//                 Pair i list
+//                 Pair(i, list)
 
-//         quicksort = \original_list ->
-//             n = List.len original_list
-//             quicksort_help original_list 0 (n - 1)
+//         quicksort = |original_list|
+//             n = List.len(original_list)
+//             quicksort_help(original_list, 0, n - 1)
 
 //         main =
-//             quicksort [1,2,3]
+//             quicksort([1, 2, 3])
 //         "#
 //     )
 // }
@@ -820,15 +820,15 @@ fn quicksort_swap() {
 #[mono_test]
 fn factorial() {
     r"
-    factorial = \n, accum ->
+    factorial = |n, accum|
         when n is
             0 ->
                 accum
 
             _ ->
-                factorial (n - 1) (n * accum)
+                factorial(n - 1, n * accum)
 
-    factorial 10 1
+    factorial(10, 1)
     "
 }
 
@@ -838,12 +838,12 @@ fn is_nil() {
     ConsList a : [Cons a (ConsList a), Nil]
 
     is_nil : ConsList a -> Bool
-    is_nil = \list ->
+    is_nil = |list|
         when list is
             Nil -> Bool.true
-            Cons _ _ -> Bool.false
+            Cons(_, _) -> Bool.false
 
-    is_nil (Cons 0x2 Nil)
+    is_nil(Cons(0x2, Nil))
     "
 }
 
@@ -855,13 +855,13 @@ fn has_none() {
     ConsList a : [Cons a (ConsList a), Nil]
 
     has_none : ConsList (Maybe a) -> Bool
-    has_none = \list ->
+    has_none = |list|
         when list is
             Nil -> Bool.false
-            Cons Nothing _ -> Bool.true
-            Cons (Just _) xs -> has_none xs
+            Cons(Nothing, _) -> Bool.true
+            Cons(Just(_), xs) -> has_none(xs)
 
-    has_none (Cons (Just 3) Nil)
+    has_none(Cons(Just(3), Nil))
     "
 }
 
@@ -871,10 +871,10 @@ fn mk_pair_of() {
         r#"
         app "test" provides [main] to "./platform"
 
-        mk_pair_of = \x -> Pair x x
+        mk_pair_of = |x| Pair(x, x)
 
         main =
-            mk_pair_of [1,2,3]
+            mk_pair_of([1, 2, 3])
         "#
     )
 }
@@ -885,10 +885,10 @@ fn fst() {
         r#"
         app "test" provides [main] to "./platform"
 
-        fst = \x, _ -> x
+        fst = |x, _| x
 
         main =
-            fst [1,2,3] [3,2,1]
+            fst([1, 2, 3], [3, 2, 1])
         "#
     )
 }
@@ -900,13 +900,13 @@ fn list_cannot_update_inplace() {
         app "test" provides [main] to "./platform"
 
         x : List I64
-        x = [1,2,3]
+        x = [1, 2, 3]
 
         add : List I64 -> List I64
-        add = \y -> List.set y 0 0
+        add = |y| List.set(y, 0, 0)
 
         main =
-            List.len (add x) + List.len x
+            List.len(add(x)) + List.len(x)
         "#
     )
 }
@@ -914,10 +914,10 @@ fn list_cannot_update_inplace() {
 #[mono_test]
 fn list_get() {
     r"
-    wrapper = \{} ->
-        List.get [1,2,3] 0
+    wrapper = ||
+        List.get([1, 2, 3], 0)
 
-    wrapper {}
+    wrapper()
     "
 }
 
@@ -927,7 +927,7 @@ fn peano() {
     Peano : [S Peano, Z]
 
     three : Peano
-    three = S (S (S Z))
+    three = S(S(S(Z)))
 
     three
     "
@@ -939,11 +939,11 @@ fn peano1() {
     Peano : [S Peano, Z]
 
     three : Peano
-    three = S (S (S Z))
+    three = S(S(S(Z)))
 
     when three is
         Z -> 0
-        S _ -> 1
+        S(_) -> 1
     "
 }
 
@@ -953,11 +953,11 @@ fn peano2() {
     Peano : [S Peano, Z]
 
     three : Peano
-    three = S (S (S Z))
+    three = S(S(S(Z)))
 
     when three is
-        S (S _) -> 1
-        S (_) -> 0
+        S(S(_)) -> 1
+        S(_) -> 0
         Z -> 0
     "
 }
@@ -965,15 +965,15 @@ fn peano2() {
 #[mono_test]
 fn optional_when() {
     r"
-    f = \r ->
+    f = |r|
         when r is
             { x: Blue, y ? 3 } -> y
             { x: Red, y ? 5 } -> y
 
-    a = f { x: Blue, y: 7 }
-    b = f { x: Blue }
-    c = f { x: Red, y: 11 }
-    d = f { x: Red }
+    a = f({ x: Blue, y: 7 })
+    b = f({ x: Blue })
+    c = f({ x: Red, y: 11 })
+    d = f({ x: Red })
 
     a * b * c * d
     "
@@ -1109,14 +1109,14 @@ fn nested_closure() {
         r#"
         app "test" provides [main] to "./platform"
 
-        foo = \{} ->
+        foo = ||
             x = 42
-            f = \{} -> x
+            f = || x
             f
 
         main =
-            f = foo {}
-            f {}
+            f = foo()
+            f()
         "#
     )
 }
@@ -1127,17 +1127,17 @@ fn closure_in_list() {
         r#"
         app "test" provides [main] to "./platform"
 
-        foo = \{} ->
+        foo = ||
             x = 41
 
-            f = \{} -> x
+            f = || x
 
             [f]
 
         main =
-            items = foo {}
+            items = foo()
 
-            List.len items
+            List.len(items)
         "#
     )
 }
@@ -1321,10 +1321,10 @@ fn monomorphized_tag() {
         app "test" provides [main] to "./platform"
 
         main =
-            b = \{} -> Bar
+            b = || Bar
             f : [Foo, Bar], [Bar, Baz] -> U8
-            f = \_, _ -> 18
-            f (b {}) (b {})
+            f = |_, _| 18
+            f(b(), b())
         "#
     )
 }
@@ -1338,9 +1338,9 @@ fn monomorphized_tag_with_aliased_args() {
         main =
             b = Bool.false
             c = Bool.false
-            a = A b c
+            a = A(b, c)
             f : [A Bool Bool] -> U64
-            f = \_ -> 1
+            f = |_| 1
             f a
         "#
     )
@@ -1353,12 +1353,12 @@ fn monomorphized_list() {
         app "test" provides [main] to "./platform"
 
         main =
-            l = \{} -> [1, 2, 3]
+            l = || [1, 2, 3]
 
             f : List U8, List U16 -> U64
-            f = \_, _ -> 18
+            f = |_, _| 18
 
-            f (l {}) (l {})
+            f(l(), l())
         "#
     )
 }
@@ -1387,9 +1387,9 @@ fn aliased_polymorphic_closure() {
         r"
         n : U8
         n = 1
-        f = \{} -> (\a -> n)
-        g = f {}
-        g {}
+        f = || (|a| n)
+        g = f()
+        g()
         "
     )
 }
@@ -1513,15 +1513,15 @@ fn encode() {
 
         Linear := {} implements [Format {u8}]
 
-        u8 = \n -> @MEncoder (\lst, @Linear {} -> List.append lst n)
+        u8 = |n| @MEncoder(|lst, @Linear({})| List.append(lst, n))
 
         MyU8 := U8 implements [MEncoding {to_encoder}]
 
-        to_encoder = \@MyU8 n -> u8 n
+        to_encoder = |@MyU8(n)| -> u8(n)
 
         my_u8_bytes =
-            when to_encoder (@MyU8 15) is
-                @MEncoder do_encode -> do_encode [] (@Linear {})
+            when to_encoder(@MyU8(15)) is
+                @MEncoder(do_encode) -> do_encode([], @Linear({}))
         "#
     )
 }
@@ -1537,10 +1537,10 @@ fn encode() {
 //         main =
 //             x = "long string that is malloced"
 
-//             f : {} -> Str
-//             f = (\_ -> x)
+//             f : () -> Str
+//             f = || x
 
-//             f {}
+//             f()
 //         "#
 //     )
 // }
@@ -1703,12 +1703,12 @@ fn tail_call_elimination() {
 fn tail_call_with_same_layout_different_lambda_sets() {
     indoc!(
         r#"
-        chain = \in, build_lazy ->
-            \{} ->
-                thunk = build_lazy in
-                thunk {}
+        chain = |in, build_lazy|
+            ||
+                thunk = build_lazy(in)
+                thunk()
 
-        chain 1u8 \_ -> chain 1u8 \_ -> (\{} -> "")
+        chain(1u8, |_| chain(1u8, |_| (|| "")))
         "#
     )
 }
@@ -1717,12 +1717,12 @@ fn tail_call_with_same_layout_different_lambda_sets() {
 fn tail_call_with_different_layout() {
     indoc!(
         r#"
-        chain = \in, build_lazy ->
-            \{} ->
-                thunk = build_lazy in
-                thunk {}
+        chain = |in, build_lazy|
+            ||
+                thunk = build_lazy(in)
+                thunk()
 
-        chain 1u8 \_ -> chain 1u16 \_ -> (\{} -> "")
+        chain(1u8, |_| chain(1u16, |_| (|| "")))
         "#
     )
 }
@@ -1731,20 +1731,20 @@ fn tail_call_with_different_layout() {
 fn lambda_capture_niche_u8_vs_u64() {
     indoc!(
         r"
-        capture : _ -> ({} -> Str)
-        capture = \val ->
-            \{} ->
-                Num.to_str val
+        capture : _ -> (() -> Str)
+        capture = |val|
+            ||
+                Num.to_str(val)
 
         x : [True, False]
         x = True
 
         fun =
             when x is
-                True -> capture 123u64
-                False -> capture 18u8
+                True -> capture(123u64)
+                False -> capture(18u8)
 
-        fun {}
+        fun()
         "
     )
 }
@@ -1753,24 +1753,24 @@ fn lambda_capture_niche_u8_vs_u64() {
 fn lambda_capture_niches_with_other_lambda_capture() {
     indoc!(
         r#"
-        capture : a -> ({} -> Str)
-        capture = \val ->
-            \{} ->
+        capture : a -> (() -> Str)
+        capture = |val|
+            ||
                 when val is
                     _ -> ""
 
-        capture2 = \val -> \{} -> "${val}"
+        capture2 = |val| (|| "${val}")
 
         x : [A, B, C]
         x = A
 
         fun =
             when x is
-                A -> capture {}
-                B -> capture2 "foo"
-                C -> capture 1u64
+                A -> capture()
+                B -> capture2("foo")
+                C -> capture(1u64)
 
-        fun {}
+        fun()
         "#
     )
 }
@@ -1779,24 +1779,24 @@ fn lambda_capture_niches_with_other_lambda_capture() {
 fn lambda_capture_niches_with_non_capturing_function() {
     indoc!(
         r#"
-        capture : a -> ({} -> Str)
-        capture = \val ->
-            \{} ->
+        capture : a -> (() -> Str)
+        capture = |val|
+            ||
                 when val is
                     _ -> ""
 
-        triv = \{} -> ""
+        triv = || ""
 
         x : [A, B, C]
         x = A
 
         fun =
             when x is
-                A -> capture {}
+                A -> capture({})
                 B -> triv
-                C -> capture 1u64
+                C -> capture(1u64)
 
-        fun {}
+        fun()
         "#
     )
 }
@@ -1805,27 +1805,27 @@ fn lambda_capture_niches_with_non_capturing_function() {
 fn lambda_capture_niches_have_captured_function_in_closure() {
     indoc!(
         r#"
-        Lazy a : {} -> a
+        Lazy a : () -> a
 
         after : Lazy a, (a -> Lazy b) -> Lazy b
         after = \effect, map ->
-            thunk = \{} ->
-                when map (effect {}) is
-                    b -> b {}
+            thunk = ||
+                when map(effect()) is
+                    b -> b()
             thunk
 
-        f = \_ -> \_ -> ""
-        g = \{ s1 } -> \_ -> s1
+        f = |_| (|_| "")
+        g = |{ s1 }| (|_| s1)
 
         x : [True, False]
         x = True
 
         fun =
             when x is
-                True -> after (\{} -> "") f
-                False -> after (\{} -> {s1: "s1"}) g
+                True -> after((|| ""), f)
+                False -> after((|| { s1: "s1" }), g)
 
-        fun {}
+        fun()
         "#
     )
 }
@@ -1834,10 +1834,10 @@ fn lambda_capture_niches_have_captured_function_in_closure() {
 fn lambda_set_niche_same_layout_different_constructor() {
     indoc!(
         r#"
-        capture : a -> ({} -> Str)
-        capture = \val ->
+        capture : a -> (() -> Str)
+        capture = |val|
             thunk =
-                \{} ->
+                ||
                     when val is
                         _ -> ""
             thunk
@@ -1847,8 +1847,9 @@ fn lambda_set_niche_same_layout_different_constructor() {
 
         fun =
             when x is
-                True -> capture {a: ""}
-                False -> capture (A "")
+                True -> capture({ a: "" })
+                False -> capture(A(""))
+
         fun
         "#
     )
@@ -1903,9 +1904,9 @@ fn recursive_call_capturing_function() {
 fn call_function_in_empty_list() {
     indoc!(
         r"
-        lst : List ({} -> {})
+        lst : List (() -> {})
         lst = []
-        List.map lst \f -> f {}
+        List.map(lst, |f| f())
         "
     )
 }
@@ -1915,7 +1916,7 @@ fn call_function_in_empty_list_unbound() {
     indoc!(
         r"
         lst = []
-        List.map lst \f -> f {}
+        List.map(lst, |f| f())
         "
     )
 }
@@ -1966,18 +1967,18 @@ fn instantiate_annotated_as_recursive_alias_multiple_polymorphic_expr() {
         main =
             Value : [Nil, Array (List Value)]
 
-            foo : {} -> [Nil]_
-            foo = \{} -> Nil
+            foo : () -> [Nil]_
+            foo = || Nil
 
             v1 : Value
-            v1 = foo {}
+            v1 = foo()
 
             Value2 : [Nil, B U16, Array (List Value)]
 
             v2 : Value2
-            v2 = foo {}
+            v2 = foo()
 
-            {v1, v2}
+            { v1, v2 }
         "#
     )
 }
@@ -2176,10 +2177,10 @@ fn unreachable_branch_is_eliminated_but_produces_lambda_specializations() {
         r#"
         app "test" provides [main] to "./platform"
 
-        provide_thunk = \x ->
+        provide_thunk = |x|
             when x is
                 Ok _ ->
-                    t1 = \{} -> "t1"
+                    t1 = || "t1"
                     t1
                 # During specialization of `main` we specialize this function,
                 # which leads to elimination of this branch, because it is unreachable
@@ -2194,16 +2195,16 @@ fn unreachable_branch_is_eliminated_but_produces_lambda_specializations() {
                 # So, this test verifies that we eliminate this branch, but still specialize
                 # everything we need.
                 Err _ ->
-                    t2 = \{} -> "t2"
+                    t2 = || "t2"
                     t2
 
         main =
             x : Result Str []
-            x = Ok "abc"
+            x = Ok("abc")
 
-            thunk = provide_thunk x
+            thunk = provide_thunk(x)
 
-            thunk {}
+            thunk()
         "#
     )
 }
@@ -2272,13 +2273,13 @@ fn function_pointer_lambda_set() {
         r#"
         app "test" provides [main] to "./platform"
 
-        number = \{} -> 1u64
+        number = || 1u64
 
-        parse = \parser -> parser {}
+        parse = |parser| parser()
 
         main =
             parser = number
-            parse parser
+            parse(parser)
         "#
     )
 }
@@ -2292,8 +2293,8 @@ fn anonymous_closure_lifted_to_named_issue_2403() {
         main =
             f =
                 n = 1
-                \{} -> n
-            g = f {}
+                || n
+            g = f()
             g
         "#
     )
@@ -2348,11 +2349,11 @@ fn issue_4705() {
         interface Test exposes [] imports []
 
         go : {} -> Bool
-        go = \{} -> Bool.true
+        go = |{}| Bool.true
 
         expect
             input = {}
-            x = go input
+            x = go(input)
             x
         "
     )
@@ -2382,15 +2383,15 @@ fn lambda_set_with_imported_toplevels_issue_4733() {
         r"
         interface Test exposes [] imports []
 
-        fn = \{} ->
+        fn = ||
             instr : [ Op (U64, U64 -> U64) ]
-            instr = if Bool.true then (Op Num.mul) else (Op Num.add)
+            instr = if Bool.true then Op(Num.mul) else Op(Num.add)
 
-            Op op = instr
+            Op(op) = instr
 
-            \a -> op a a
+            |a| op(a, a)
 
-        expect ((fn {}) 3) == 9
+        expect (fn())(3) == 9
         "
     )
 }
@@ -2459,10 +2460,11 @@ fn issue_4557() {
         r#"
         app "test" provides [main] to "./platform"
 
-        is_eq_q = \q1, q2 -> when T q1 q2 is
-            T (U f1) (U f2) -> (is_eq_q (U f2) (U f1)) or (f1 {} == f2 {})
+        is_eq_q = |q1, q2|
+            when T(q1, q2) is
+                T(U(f1), U(f2)) -> is_eq_q(U(f2), U(f1)) or f1() == f2()
 
-        main = is_eq_q (U \{} -> "a") (U \{} -> "a")
+        main = is_eq_q(U(|| "a"), U(|| "a"))
         "#
     )
 }
@@ -2544,13 +2546,13 @@ fn function_specialization_information_in_lambda_set_thunk() {
         r#"
         app "test" provides [main] to "./platform"
 
-        and_then = \{} ->
+        and_then = ||
             x = 10
-            \new_fn -> Num.add (new_fn {}) x
+            |new_fn| Num.add(new_fn(), x)
 
-        between = and_then {}
+        between = and_then()
 
-        main = between \{} -> between \{} -> 10
+        main = between(|| between(|| 10))
         "#
     )
 }
@@ -2563,15 +2565,15 @@ fn function_specialization_information_in_lambda_set_thunk_independent_defs() {
         r#"
         app "test" provides [main] to "./platform"
 
-        and_then = \{} ->
+        and_then = ||
             x = 10u8
-            \new_fn -> Num.add (new_fn {}) x
+            |new_fn| Num.add(new_fn(), x)
 
-        between1 = and_then {}
+        between1 = and_then()
 
-        between2 = and_then {}
+        between2 = and_then()
 
-        main = between1 \{} -> between2 \{} -> 10u8
+        main = between1(|| between2(|| 10u8))
         "#
     )
 }
@@ -2639,30 +2641,31 @@ fn recursively_build_effect() {
             "${hi}, ${name}!"
 
         main =
-            when nest_help 4 is
+            when nest_help(4) is
                 _ -> greeting
 
         nest_help : I64 -> XEffect {}
-        nest_help = \m ->
+        nest_help = |m|
             when m is
                 0 ->
-                    always {}
+                    always({})
 
                 _ ->
-                    always {} |> after \_ -> nest_help (m - 1)
+                    always({}) |> after(|{}| nest_help(m - 1))
 
 
-        XEffect a := {} -> a
+        XEffect a := () -> a
 
         always : a -> XEffect a
-        always = \x -> @XEffect (\{} -> x)
+        always = |x| @XEffect(|| x)
 
         after : XEffect a, (a -> XEffect b) -> XEffect b
-        after = \(@XEffect e), toB ->
-            @XEffect \{} ->
-                when toB (e {}) is
-                    @XEffect e2 ->
-                        e2 {}
+        after = |@XEffect(e), to_b|
+            @XEffect(||
+                when to_b(e()) is
+                    @XEffect(e2) ->
+                        e2()
+            )
         "#
     )
 }
@@ -2673,16 +2676,16 @@ fn recursive_lambda_set_has_nested_non_recursive_lambda_sets_issue_5026() {
         r#"
         app "test" provides [looper] to "./platform"
 
-        Effect : {} -> Str
+        Effect : () -> Str
 
-        after = \build_next ->
-            after_inner = \{} -> (build_next "foobar") {}
+        after = |build_next|
+            after_inner = || (build_next("foobar"))()
             after_inner
 
         await : (Str -> Effect) -> Effect
-        await = \cont -> after (\result -> cont result)
+        await = |cont| after(|result| cont(result))
 
-        looper = await \_ -> if Bool.true then looper else \{} -> "done"
+        looper = await |_| if Bool.true then looper else || "done"
         "#
     )
 }
@@ -2703,16 +2706,16 @@ fn unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unifica
     // `to_encoder t.b` wind up in the same lambda set, that is in
     //
     // tag : @MEncoder (Bytes, Linear -[[] + @MU8:to_encoder:1 + @MStr:to_encoder+1] -> Bytes)
-    //       -[lTag]->
-    //       @MEncoder (Bytes, Linear -[[Linear:lTag:3 { @MEncoder (Bytes, Linear -[[] + @MU8:to_encoder:1 + @MStr:to_encoder:1] -> Bytes) }]] -> Bytes)
+    //       -[l_tag]->
+    //       @MEncoder (Bytes, Linear -[[Linear:l_tag:3 { @MEncoder (Bytes, Linear -[[] + @MU8:to_encoder:1 + @MStr:to_encoder:1] -> Bytes) }]] -> Bytes)
     //
     // rather than forcing the lambda set inside to `tag` to become disjoint, as e.g.
     //
     // tag : @MEncoder (Bytes, Linear -[[] + @MU8:to_encoder:1 + @MStr:to_encoder+1] -> Bytes)
-    //       -[lTag]->
+    //       -[l_tag]->
     //       @MEncoder (Bytes, Linear -[[
-    //                      Linear:lTag:3 { @MEncoder (Bytes, Linear -[[] + @MU8:to_encoder:1] -> Bytes) },
-    //                      Linear:lTag:3 { @MEncoder (Bytes, Linear -[[] + @MStr:to_encoder:1] -> Bytes) },
+    //                      Linear:l_tag:3 { @MEncoder (Bytes, Linear -[[] + @MU8:to_encoder:1] -> Bytes) },
+    //                      Linear:l_tag:3 { @MEncoder (Bytes, Linear -[[] + @MStr:to_encoder:1] -> Bytes) },
     //                  ]] -> Bytes)
     indoc!(
         r#"
@@ -2724,39 +2727,41 @@ fn unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unifica
           to_encoder : val -> MEncoder fmt where val implements MEncoding, fmt implements Format
 
         Format implements
-          u8 : {} -> MEncoder fmt where fmt implements Format
-          str : {} -> MEncoder fmt where fmt implements Format
+          u8 : () -> MEncoder fmt where fmt implements Format
+          str : () -> MEncoder fmt where fmt implements Format
           tag : MEncoder fmt -> MEncoder fmt where fmt implements Format
 
-        Linear := {} implements [Format {u8: lU8, str: lStr, tag: lTag}]
+        Linear := {} implements [Format {u8: lU8, str: lStr, tag: l_tag}]
 
         MU8 := U8 implements [MEncoding {to_encoder: to_encoder_u8}]
         MStr := Str implements [MEncoding {to_encoder: to_encoder_str}]
 
         Q a b := { a: a, b: b }
 
-        lU8 = \{} -> @MEncoder (\lst, @Linear {} -> lst)
-        lStr = \{} -> @MEncoder (\lst, @Linear {} -> lst)
+        lU8 = || @MEncoder(|lst, @Linear({})| lst)
+        lStr = || @MEncoder(|lst, @Linear({})| lst)
 
-        lTag = \@MEncoder doFormat -> @MEncoder (\lst, @Linear {} ->
-            doFormat lst (@Linear {})
+        l_tag = |@MEncoder(do_format)| @MEncoder(|lst, @Linear({})|
+            do_format(lst, @Linear({}))
         )
 
-        to_encoder_u8 = \@MU8 _ -> u8 {}
+        to_encoder_u8 = |@MU8(_)| -> u8()
 
-        to_encoder_str = \@MStr _ -> str {}
+        to_encoder_str = |@MStr(_)| -> str()
 
-        to_encoder_q =
-            \@Q t -> \fmt ->
-                @MEncoder doit = if Bool.true
-                    then tag (to_encoder t.a)
-                    else tag (to_encoder t.b)
+        to_encoder_q = |@Q(t)|
+            |fmt|
+                @MEncoder(doit) =
+                    if Bool.true then
+                        tag(to_encoder(t.a))
+                    else
+                        tag(to_encoder(t.b))
 
-                doit [] fmt
+                doit([], fmt)
 
         main =
-            fmt = to_encoder_q (@Q {a : @MStr "", b: @MU8 7})
-            fmt (@Linear {})
+            fmt = to_encoder_q(@Q({ a: @MStr(""), b: @MU8(7) }))
+            fmt(@Linear({}))
         "#
     )
 }
@@ -2894,16 +2899,16 @@ fn recursive_closure_with_transiently_used_capture() {
         r#"
         app "test" provides [f] to "./platform"
 
-        then_do = \x, callback ->
-            callback x
+        then_do = |x, callback|
+            callback(x)
 
-        f = \{} ->
+        f = ||
             code = 10u16
 
-            bf = \{} ->
-                then_do code \_ -> bf {}
+            bf = ||
+                then_do(code, |_| bf())
 
-            bf {}
+            bf()
         "#
     )
 }
@@ -2915,13 +2920,13 @@ fn when_guard_appears_multiple_times_in_compiled_decision_tree_issue_5176() {
         app "test" provides [main] to "./platform"
 
         go : U8 -> U8
-        go = \byte ->
+        go = |byte|
             when byte is
                 15 if Bool.true -> 1
                 b if Bool.true -> b + 2
                 _ -> 3
 
-        main = go '.'
+        main = go('.')
         "#
     )
 }
@@ -2932,14 +2937,14 @@ fn recursive_lambda_set_resolved_only_upon_specialization() {
         r#"
         app "test" provides [main] to "./platform"
 
-        fact_cps = \n, cont ->
+        fact_cps = |n, cont|
             if n == 0u8 then
-                cont 1u8
+                cont(1u8)
             else
-                fact_cps (n - 1) \value -> cont (n * value)
+                fact_cps(n - 1, |value| cont(n * value))
 
         main =
-            fact_cps 5 \x -> x
+            fact_cps(5, |x| x)
         "#
     )
 }
@@ -3382,40 +3387,43 @@ fn capture_void_layout_task() {
         r#"
         app "test" provides [main] to "./platform"
 
-        Fx a : {} -> a
+        Fx a : () -> a
 
         OtherTask ok err : Fx (Result ok err)
 
         succeed : ok -> OtherTask ok *
-        succeed = \ok -> \{} -> Ok ok
+        succeed = |ok| (|| Ok(ok))
 
         after : Fx a, (a -> Fx b) -> Fx b
-        after = \fx, to_next ->
-            after_inner = \{} ->
-                fx_out = fx {}
-                next = to_next fx_out
-                next {}
+        after = |fx, to_next|
+            after_inner = ||
+                fx_out = fx()
+                next = to_next(fx_out)
+                next()
 
             after_inner
 
         await : OtherTask a err, (a -> OtherTask b err) -> OtherTask b err
-        await = \fx, to_next ->
-            inner = after fx \result ->
-                when result is
-                    Ok a ->
-                        b_fx = to_next a
-                        b_fx
-                    Err e -> (\{} -> Err e)
+        await = |fx, to_next|
+            inner =
+                after(fx, |result|
+                    when result is
+                        Ok(a) ->
+                            b_fx = to_next(a)
+                            b_fx
+                        Err e -> || Err(e)
+                )
             inner
 
         for_each : List a, (a -> OtherTask {} err) -> OtherTask {} err
-        for_each = \list, from_elem ->
-            List.walk list (succeed {}) \task, elem ->
-                await task \{} -> from_elem elem
+        for_each = |list, from_elem|
+            List.walk(list, succeed(), |task, elem|
+                await(task, || from_elem(elem))
+            )
 
         main : OtherTask {} []
         main =
-            for_each [] \_ -> succeed {}
+            for_each([], |_| succeed())
         "#
     )
 }
@@ -3436,7 +3444,7 @@ fn non_nullable_unwrapped_instead_of_nullable_wrapped() {
             when x is
                 A -> "A"
                 B -> "B"
-                C _ _ -> "C"
+                C(_, _) -> "C"
         "#
     )
 }
@@ -3453,12 +3461,13 @@ fn inspect_custom_type() {
         HelloWorld := {} implements [Inspect { to_inspector: my_to_inspector }]
 
         my_to_inspector : HelloWorld -> Inspector f where f implements InspectFormatter
-        my_to_inspector = \@HellowWorld {} ->
-            Inspect.custom \fmt ->
-                Inspect.apply (Inspect.str "Hello, World!\n") fmt
+        my_to_inspector = |@HellowWorld({})|
+            Inspect.custom(|fmt|
+                Inspect.apply(Inspect.str("Hello, World!\n"), fmt)
+            )
 
         main =
-            Inspect.inspect (@HelloWorld {})
+            Inspect.inspect(@HelloWorld({}))
         "#
     )
 }
