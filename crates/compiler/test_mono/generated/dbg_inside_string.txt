@@ -167,7 +167,7 @@ procedure Str.45 (Str.91, Str.92, Str.93):
         dec Str.344;
         ret Str.91;
 
-procedure Str.56 (#Derived_gen.5, #Derived_gen.6, #Derived_gen.7, #Derived_gen.8):
+procedure Str.56 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2, #Derived_gen.3):
     joinpoint Str.252 Str.96 Str.97 Str.98 Str.99:
         inc Str.97;
         let Str.253 : [C {}, C {Str, Str}] = CallByName Str.38 Str.97 Str.98;
@@ -191,9 +191,9 @@ procedure Str.56 (#Derived_gen.5, #Derived_gen.6, #Derived_gen.7, #Derived_gen.8
             dec Str.97;
             ret Str.257;
     in
-    inc #Derived_gen.7;
-    inc #Derived_gen.8;
-    jump Str.252 #Derived_gen.5 #Derived_gen.6 #Derived_gen.7 #Derived_gen.8;
+    inc #Derived_gen.3;
+    inc #Derived_gen.2;
+    jump Str.252 #Derived_gen.0 #Derived_gen.1 #Derived_gen.2 #Derived_gen.3;
 
 procedure Str.57 (Str.121, Str.122):
     let Str.123 : U64 = CallByName Str.36 Str.121;
@@ -203,7 +203,7 @@ procedure Str.57 (Str.121, Str.122):
     let Str.278 : [C , C U64] = CallByName Str.58 Str.121 Str.122 Str.279 Str.125;
     ret Str.278;
 
-procedure Str.58 (#Derived_gen.1, #Derived_gen.2, #Derived_gen.3, #Derived_gen.4):
+procedure Str.58 (#Derived_gen.4, #Derived_gen.5, #Derived_gen.6, #Derived_gen.7):
     joinpoint Str.280 Str.126 Str.127 Str.128 Str.129:
         let Str.282 : Int1 = CallByName Num.23 Str.128 Str.129;
         if Str.282 then
@@ -223,9 +223,9 @@ procedure Str.58 (#Derived_gen.1, #Derived_gen.2, #Derived_gen.3, #Derived_gen.4
             let Str.281 : [C , C U64] = TagId(0) ;
             ret Str.281;
     in
-    inc #Derived_gen.1;
-    inc #Derived_gen.2;
-    jump Str.280 #Derived_gen.1 #Derived_gen.2 #Derived_gen.3 #Derived_gen.4;
+    inc #Derived_gen.5;
+    inc #Derived_gen.4;
+    jump Str.280 #Derived_gen.4 #Derived_gen.5 #Derived_gen.6 #Derived_gen.7;
 
 procedure Str.61 (Str.152, Str.153):
     let Str.311 : Int1 = CallByName Num.22 Str.152 Str.153;

@@ -2,7 +2,7 @@ procedure Bool.2 ():
     let Bool.21 : Int1 = true;
     ret Bool.21;
 
-procedure List.101 (#Derived_gen.5, #Derived_gen.6, #Derived_gen.7, #Derived_gen.8, #Derived_gen.9):
+procedure List.101 (#Derived_gen.7, #Derived_gen.8, #Derived_gen.9, #Derived_gen.10, #Derived_gen.11):
     joinpoint List.678 List.175 List.176 List.177 List.178 List.179:
         let List.680 : Int1 = CallByName Num.22 List.178 List.179;
         if List.680 then
@@ -15,8 +15,8 @@ procedure List.101 (#Derived_gen.5, #Derived_gen.6, #Derived_gen.7, #Derived_gen
             dec List.175;
             ret List.176;
     in
-    inc #Derived_gen.5;
-    jump List.678 #Derived_gen.5 #Derived_gen.6 #Derived_gen.7 #Derived_gen.8 #Derived_gen.9;
+    inc #Derived_gen.7;
+    jump List.678 #Derived_gen.7 #Derived_gen.8 #Derived_gen.9 #Derived_gen.10 #Derived_gen.11;
 
 procedure List.18 (List.172, List.173, List.174):
     let List.676 : U64 = 0i64;
@@ -47,7 +47,7 @@ procedure Str.3 (#Attr.2, #Attr.3):
 procedure Test.1 (Test.5):
     ret Test.5;
 
-procedure Test.11 (#Derived_gen.10, #Derived_gen.11):
+procedure Test.11 (#Derived_gen.5, #Derived_gen.6):
     joinpoint Test.27 Test.12 #Attr.12:
         let Test.34 : Int1 = UnionAtIndex (Id 2) (Index 1) #Attr.12;
         let Test.33 : [<rnw><null>, C *self Int1, C *self Int1] = UnionAtIndex (Id 2) (Index 0) #Attr.12;
@@ -87,7 +87,7 @@ procedure Test.11 (#Derived_gen.10, #Derived_gen.11):
             decref #Attr.12;
             jump #Derived_gen.14;
     in
-    jump Test.27 #Derived_gen.10 #Derived_gen.11;
+    jump Test.27 #Derived_gen.5 #Derived_gen.6;
 
 procedure Test.2 (Test.13):
     ret Test.13;
