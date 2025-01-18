@@ -708,7 +708,7 @@ impl<'a> Specialized<'a> {
         }
 
         // the key/layout combo was not found; insert it
-        self.symbols.push(symbol);
+        self.symbols.push(dbg!(symbol));
         self.proc_layouts.push(layout);
         self.procedures.push(InProgressProc::InProgress);
     }
@@ -758,7 +758,7 @@ impl<'a> Specialized<'a> {
         // the key/layout combo was not found; insert it
         let i = self.symbols.len();
 
-        self.symbols.push(symbol);
+        self.symbols.push(dbg!(symbol));
         self.proc_layouts.push(layout);
         self.procedures.push(InProgressProc::Done(proc));
 
