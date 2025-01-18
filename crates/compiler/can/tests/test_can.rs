@@ -972,7 +972,59 @@ mod test_can {
     }
 
     #[test]
-    fn try_desugar_double_question_binop() {
+    fn try_desugar_works_elsewhere() {
+        let src = indoc!(
+            r#"
+                when Foo 123 is
+                    Foo try -> try
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems, Vec::new());
+
+        // Assert that we don't treat `try` as a keyword here
+        // by desugaring to:
+        //
+        // when Foo 123 is
+        //     Foo try -> try
+
+        let (cond_expr, branches) = assert_when_expr(&out.loc_expr.value);
+        match cond_expr {
+            Expr::Tag {
+                name, arguments, ..
+            } => {
+                assert_eq!(name.0.to_string(), "Foo");
+                assert_eq!(arguments.len(), 1);
+                assert_num_value(&arguments[0].1.value, 123);
+            }
+            _ => panic!("cond_expr was not a Tag: {:?}", cond_expr),
+        }
+
+        assert_eq!(branches.len(), 1);
+        assert_eq!(branches[0].patterns.len(), 1);
+        assert!(!branches[0].patterns[0].degenerate);
+
+        match &branches[0].patterns[0].pattern.value {
+            Pattern::AppliedTag {
+                tag_name,
+                arguments,
+                ..
+            } => {
+                assert_eq!(tag_name.0.to_string(), "Foo");
+                assert_eq!(arguments.len(), 1);
+                assert_pattern_name(&arguments[0].1.value, "try", &out.interns);
+            }
+            other => panic!("First argument was not an applied tag: {:?}", other),
+        }
+
+        assert_var_usage(&branches[0].value.value, "try", &out.interns);
+        assert!(&branches[0].guard.is_none());
+    }
+
+    #[test]
+    fn desugar_double_question_binop() {
         let src = indoc!(
             r#"
                 Str.to_u64("123") ?? Num.max_u64
@@ -989,7 +1041,7 @@ mod test_can {
         //   Ok(#double_question_ok_0_17) -> Ok(#double_question_ok_0_17)
         //   Err(_) -> Num.max_u64
 
-        let (cond_expr, branches) = assert_when(&out.loc_expr.value);
+        let (cond_expr, branches) = assert_when_expr(&out.loc_expr.value);
         let cond_args = assert_func_call(cond_expr, "to_u64", CalledVia::Space, &out.interns);
 
         assert_eq!(cond_args.len(), 1);
@@ -1016,7 +1068,7 @@ mod test_can {
     }
 
     #[test]
-    fn try_desugar_single_question_binop() {
+    fn desugar_single_question_binop() {
         let src = indoc!(
             r#"
                 Str.to_u64("123") ? FailedToConvert
@@ -1033,7 +1085,7 @@ mod test_can {
         //   Ok(#single_question_ok_0_17) -> #single_question_ok_0_17
         //   Err(#single_question_err_0_17) -> return Err(FailedToConvert(#single_question_err_0_17))
 
-        let (cond_expr, branches) = assert_when(&out.loc_expr.value);
+        let (cond_expr, branches) = assert_when_expr(&out.loc_expr.value);
         let cond_args = assert_func_call(cond_expr, "to_u64", CalledVia::Space, &out.interns);
 
         assert_eq!(cond_args.len(), 1);
@@ -1075,11 +1127,13 @@ mod test_can {
     }
 
     #[test]
-    fn try_desugar_works_elsewhere() {
+    fn desugar_and_operator() {
         let src = indoc!(
             r#"
-                when Foo 123 is
-                    Foo try -> try
+                left = Bool.true
+                right = Bool.false
+
+                left and right
             "#
         );
         let arena = Bump::new();
@@ -1087,43 +1141,49 @@ mod test_can {
 
         assert_eq!(out.problems, Vec::new());
 
-        // Assert that we don't treat `try` as a keyword here
-        // by desugaring to:
+        // Assert that we desugar to:
         //
-        // when Foo 123 is
-        //     Foo try -> try
+        // if left then right else Bool.false
 
-        let (cond_expr, branches) = assert_when(&out.loc_expr.value);
-        match cond_expr {
-            Expr::Tag {
-                name, arguments, ..
-            } => {
-                assert_eq!(name.0.to_string(), "Foo");
-                assert_eq!(arguments.len(), 1);
-                assert_num_value(&arguments[0].1.value, 123);
-            }
-            _ => panic!("cond_expr was not a Tag: {:?}", cond_expr),
-        }
+        let continuation1 = assert_let_expr(&out.loc_expr.value);
+        let continuation2 = assert_let_expr(&continuation1.value);
+        let (branches, final_else) = assert_if_expr(&continuation2.value);
 
         assert_eq!(branches.len(), 1);
-        assert_eq!(branches[0].patterns.len(), 1);
-        assert!(!branches[0].patterns[0].degenerate);
 
-        match &branches[0].patterns[0].pattern.value {
-            Pattern::AppliedTag {
-                tag_name,
-                arguments,
-                ..
-            } => {
-                assert_eq!(tag_name.0.to_string(), "Foo");
-                assert_eq!(arguments.len(), 1);
-                assert_pattern_name(&arguments[0].1.value, "try", &out.interns);
-            }
-            other => panic!("First argument was not an applied tag: {:?}", other),
-        }
+        assert_var_usage(&branches[0].0.value, "left", &out.interns);
+        assert_var_usage(&branches[0].1.value, "right", &out.interns);
+        assert_var_usage(&final_else.value, "false", &out.interns);
+    }
 
-        assert_var_usage(&branches[0].value.value, "try", &out.interns);
-        assert!(&branches[0].guard.is_none());
+    #[test]
+    fn desugar_or_operator() {
+        let src = indoc!(
+            r#"
+                left = Bool.true
+                right = Bool.false
+
+                left or right
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems, Vec::new());
+
+        // Assert that we desugar to:
+        //
+        // if left then Bool.true else right
+
+        let continuation1 = assert_let_expr(&out.loc_expr.value);
+        let continuation2 = assert_let_expr(&continuation1.value);
+        let (branches, final_else) = assert_if_expr(&continuation2.value);
+
+        assert_eq!(branches.len(), 1);
+
+        assert_var_usage(&branches[0].0.value, "left", &out.interns);
+        assert_var_usage(&branches[0].1.value, "true", &out.interns);
+        assert_var_usage(&final_else.value, "right", &out.interns);
     }
 
     fn assert_num_value(expr: &Expr, num: usize) {
@@ -1238,11 +1298,29 @@ mod test_can {
         }
     }
 
-    fn assert_when(expr: &Expr) -> (&Expr, &Vec<WhenBranch>) {
+    fn assert_let_expr(expr: &Expr) -> &Loc<Expr> {
+        match expr {
+            Expr::LetNonRec(_, continuation) | Expr::LetRec(_, continuation, _) => continuation,
+            _ => panic!("Expr was not a Let(Non)?Rec: {expr:?}",),
+        }
+    }
+
+    fn assert_when_expr(expr: &Expr) -> (&Expr, &Vec<WhenBranch>) {
         match expr {
             Expr::When {
                 loc_cond, branches, ..
             } => (&loc_cond.value, branches),
+            _ => panic!("Expr was not a When: {:?}", expr),
+        }
+    }
+
+    fn assert_if_expr(expr: &Expr) -> (&[(Loc<Expr>, Loc<Expr>)], &Loc<Expr>) {
+        match expr {
+            Expr::If {
+                branches,
+                final_else,
+                ..
+            } => (&branches, &**final_else),
             _ => panic!("Expr was not a When: {:?}", expr),
         }
     }

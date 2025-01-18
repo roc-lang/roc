@@ -5022,8 +5022,8 @@ mod test_fmt {
                 r#"
             if
                 (1 == 1)
-                && (2 == 1)
-                && (3 == 2)
+                and (2 == 1)
+                and (3 == 2)
             then
                 "true"
             else
@@ -5317,18 +5317,63 @@ mod test_fmt {
     }
 
     #[test]
-    fn multi_line_binary_op_1() {
+    fn multi_line_binary_op_and() {
+        expr_formats_to(
+            indoc!(
+                r"
+                is_last
+                && is_empty
+                && is_loaded
+                "
+            ),
+            indoc!(
+                r"
+                is_last
+                and is_empty
+                and is_loaded
+                "
+            ),
+        );
+
         expr_formats_same(indoc!(
             r"
-            isLast
-            && isEmpty
-            && isLoaded
+            is_last
+            and is_empty
+            and is_loaded
             "
         ));
     }
 
     #[test]
-    fn multi_line_binary_op_2() {
+    fn multi_line_binary_op_or() {
+        expr_formats_to(
+            indoc!(
+                r"
+                is_last
+                || is_empty
+                || is_loaded
+                "
+            ),
+            indoc!(
+                r"
+                is_last
+                or is_empty
+                or is_loaded
+                "
+            ),
+        );
+
+        expr_formats_same(indoc!(
+            r"
+            is_last
+            or is_empty
+            or is_loaded
+            "
+        ));
+    }
+
+    #[test]
+    fn multi_line_binary_op_symbol() {
         expr_formats_to(
             indoc!(
                 r"
@@ -5398,15 +5443,15 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r"
-                isGreenLight
-                    && isRedLight && isYellowLight
+                is_green_light
+                    && is_red_light && is_yellow_light
                 "
             ),
             indoc!(
                 r"
-                isGreenLight
-                && isRedLight
-                && isYellowLight
+                is_green_light
+                and is_red_light
+                and is_yellow_light
                 "
             ),
         );
