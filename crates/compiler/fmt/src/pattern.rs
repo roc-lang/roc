@@ -294,7 +294,8 @@ fn fmt_pattern_only(
             is_negative,
         } => {
             buf.indent(indent);
-            let needs_parens = parens == Parens::InClosurePattern;
+            let needs_parens = parens == Parens::InClosurePattern
+                || (parens == Parens::InPncApplyFunc && *is_negative);
             if needs_parens {
                 buf.push('(');
             }
@@ -317,7 +318,8 @@ fn fmt_pattern_only(
         }
         Pattern::FloatLiteral(string) => {
             buf.indent(indent);
-            let needs_parens = parens == Parens::InClosurePattern;
+            let needs_parens = parens == Parens::InClosurePattern
+                || (parens == Parens::InPncApplyFunc && string.starts_with('-'));
             if needs_parens {
                 buf.push('(');
             }

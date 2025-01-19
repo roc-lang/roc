@@ -1,20 +1,20 @@
 use crate::annotation::{
-    ann_lift_spaces, ann_lift_spaces_after, is_collection_multiline, ty_is_outdentable,
-    Formattable, Newlines, Parens,
+    ann_lift_spaces_after, is_collection_multiline, Formattable, Newlines, Parens,
 };
 use crate::collection::{fmt_collection, Braces};
 use crate::expr::{
-    expr_lift_and_lower, expr_lift_spaces, expr_lift_spaces_after, expr_lift_spaces_before,
-    fmt_str_literal, is_str_multiline, merge_spaces_conservative, sub_expr_requests_parens,
+    expr_lift_spaces, expr_lift_spaces_after, expr_lift_spaces_before, fmt_str_literal,
+    is_str_multiline, merge_spaces_conservative, sub_expr_requests_parens,
 };
 use crate::node::Nodify;
-use crate::pattern::pattern_lift_spaces_before;
+use crate::pattern::{pattern_lift_spaces, pattern_lift_spaces_before};
 use crate::spaces::{
     fmt_comments_only, fmt_default_newline, fmt_default_spaces, fmt_spaces, NewlineAt, INDENT,
 };
 use crate::Buf;
 use bumpalo::Bump;
 use roc_error_macros::internal_error;
+use roc_parse::ast::Spaceable;
 use roc_parse::ast::{
     AbilityMember, Defs, Expr, ExtractSpaces, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
     ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport,
@@ -182,16 +182,29 @@ pub fn valdef_lift_spaces<'a, 'b: 'a>(
             }
         }
         ValueDef::Body(pat, expr) => {
-            let pat_lifted = pattern_lift_spaces_before(arena, &pat.value);
-            let expr_lifted = expr_lift_spaces_after(Parens::NotNeeded, arena, &expr.value);
+            let pat_lifted = pattern_lift_spaces(arena, &pat.value);
 
-            Spaces {
-                before: pat_lifted.before,
-                item: ValueDef::Body(
-                    arena.alloc(Loc::at(pat.region, pat_lifted.item)),
-                    arena.alloc(Loc::at(expr.region, expr_lifted.item)),
-                ),
-                after: expr_lifted.after,
+            // Don't format the `{} =` for defs with this pattern
+            if is_body_unit_assignment(&pat_lifted, &expr.extract_spaces()) {
+                let lifted = expr_lift_spaces(Parens::NotNeeded, arena, &expr.value);
+                Spaces {
+                    before: lifted.before,
+                    item: ValueDef::Stmt(arena.alloc(Loc::at_zero(lifted.item))),
+                    after: lifted.after,
+                }
+            } else {
+                let lifted = expr_lift_spaces(Parens::NotNeeded, arena, &expr.value);
+                Spaces {
+                    before: pat_lifted.before,
+                    item: ValueDef::Body(
+                        arena.alloc(Loc::at(
+                            pat.region,
+                            pat_lifted.item.maybe_after(arena, pat_lifted.after),
+                        )),
+                        expr,
+                    ),
+                    after: lifted.after,
+                }
             }
         }
         ValueDef::AnnotatedBody {
@@ -312,11 +325,26 @@ pub fn valdef_lift_spaces_before<'a, 'b: 'a>(
             }
         }
         ValueDef::Body(pat, expr) => {
-            let pat_lifted = pattern_lift_spaces_before(arena, &pat.value);
+            let pat_lifted = pattern_lift_spaces(arena, &pat.value);
 
-            SpacesBefore {
-                before: pat_lifted.before,
-                item: ValueDef::Body(arena.alloc(Loc::at(pat.region, pat_lifted.item)), expr),
+            // Don't format the `{} =` for defs with this pattern
+            if is_body_unit_assignment(&pat_lifted, &expr.extract_spaces()) {
+                let lifted = expr_lift_spaces_before(Parens::NotNeeded, arena, &expr.value);
+                SpacesBefore {
+                    before: lifted.before,
+                    item: ValueDef::Stmt(arena.alloc(Loc::at_zero(lifted.item))),
+                }
+            } else {
+                SpacesBefore {
+                    before: pat_lifted.before,
+                    item: ValueDef::Body(
+                        arena.alloc(Loc::at(
+                            pat.region,
+                            pat_lifted.item.maybe_after(arena, pat_lifted.after),
+                        )),
+                        expr,
+                    ),
+                }
             }
         }
         ValueDef::AnnotatedBody {
@@ -396,6 +424,20 @@ pub fn valdef_lift_spaces_before<'a, 'b: 'a>(
     }
 }
 
+fn is_body_unit_assignment(pat: &Spaces<'_, Pattern<'_>>, body: &Spaces<'_, Expr<'_>>) -> bool {
+    if let Pattern::RecordDestructure(collection) = pat.item {
+        collection.is_empty()
+            && pat.before.iter().all(|s| s.is_newline())
+            && pat.after.iter().all(|s| s.is_newline())
+            && !matches!(body.item, Expr::Defs(..))
+            && !matches!(body.item, Expr::Return(..))
+            && !matches!(body.item, Expr::DbgStmt { .. })
+            && !starts_with_expect_ident(&body.item)
+    } else {
+        false
+    }
+}
+
 impl<'a> Formattable for TypeDef<'a> {
     fn is_multiline(&self) -> bool {
         use roc_parse::ast::TypeDef::*;
@@ -412,22 +454,15 @@ impl<'a> Formattable for TypeDef<'a> {
 
         match self {
             Alias { header, ann } => {
-                header.format(buf, indent);
-
-                buf.indent(indent);
-                buf.push_str(" :");
-                buf.spaces(1);
-
-                let ann = ann_lift_spaces(buf.text.bump(), &ann.value);
-
-                let inner_indent = if ty_is_outdentable(&ann.item) {
-                    indent
-                } else {
-                    indent + INDENT
-                };
-                fmt_comments_only(buf, ann.before.iter(), NewlineAt::Bottom, inner_indent);
-                ann.item.format(buf, inner_indent);
-                fmt_spaces(buf, ann.after.iter(), indent);
+                fmt_general_def(
+                    header,
+                    Parens::NotNeeded,
+                    buf,
+                    indent,
+                    ":",
+                    &ann.value,
+                    newlines,
+                );
             }
             Opaque {
                 header,
@@ -797,7 +832,7 @@ impl<'a> Formattable for ValueDef<'a> {
                 );
             }
             Body(loc_pattern, loc_expr) => {
-                fmt_body(buf, true, &loc_pattern.value, &loc_expr.value, indent);
+                fmt_body(buf, &loc_pattern.value, &loc_expr.value, indent);
             }
             Dbg { condition, .. } => fmt_dbg_in_def(buf, condition, self.is_multiline(), indent),
             Expect { condition, .. } => fmt_expect(buf, condition, self.is_multiline(), indent),
@@ -826,7 +861,7 @@ impl<'a> Formattable for ValueDef<'a> {
                 fmt_annotated_body_comment(buf, indent, lines_between);
 
                 buf.newline();
-                fmt_body(buf, false, &body_pattern.value, &body_expr.value, indent);
+                fmt_body(buf, &body_pattern.value, &body_expr.value, indent);
             }
             ModuleImport(module_import) => module_import.format(buf, indent),
             IngestedFileImport(ingested_file_import) => ingested_file_import.format(buf, indent),
@@ -957,34 +992,7 @@ pub fn fmt_annotated_body_comment<'a>(
     }
 }
 
-pub fn fmt_body<'a>(
-    buf: &mut Buf,
-    allow_simplify_empty_record_destructure: bool,
-    pattern: &'a Pattern<'a>,
-    body: &'a Expr<'a>,
-    indent: u16,
-) {
-    let pattern_extracted = pattern.extract_spaces();
-    // Check if this is an assignment into the unit value
-    let is_unit_assignment = if let Pattern::RecordDestructure(collection) = pattern_extracted.item
-    {
-        allow_simplify_empty_record_destructure
-            && collection.is_empty()
-            && pattern_extracted.before.iter().all(|s| s.is_newline())
-            && pattern_extracted.after.iter().all(|s| s.is_newline())
-            && !matches!(body.extract_spaces().item, Expr::Defs(..))
-            && !matches!(body.extract_spaces().item, Expr::Return(..))
-            && !matches!(body.extract_spaces().item, Expr::DbgStmt { .. })
-            && !starts_with_expect_ident(body)
-    } else {
-        false
-    };
-
-    // Don't format the `{} =` for defs with this pattern
-    if is_unit_assignment {
-        return body.format_with_options(buf, Parens::NotNeeded, Newlines::No, indent);
-    }
-
+pub fn fmt_body<'a>(buf: &mut Buf, pattern: &'a Pattern<'a>, body: &'a Expr<'a>, indent: u16) {
     pattern.format_with_options(buf, Parens::InApply, Newlines::No, indent);
 
     if pattern.is_multiline() {
@@ -996,7 +1004,12 @@ pub fn fmt_body<'a>(
     let indent = buf.cur_line_indent();
     buf.push_str("=");
 
-    let body = expr_lift_and_lower(Parens::NotNeeded, buf.text.bump(), body);
+    let body_lifted = expr_lift_spaces(Parens::NotNeeded, buf.text.bump(), body);
+
+    let after = body_lifted.after;
+    let body = body_lifted
+        .item
+        .maybe_before(buf.text.bump(), body_lifted.before);
 
     if body.is_multiline() {
         match body {
@@ -1009,10 +1022,7 @@ pub fn fmt_body<'a>(
                     _ => false,
                 };
 
-                if is_unit_assignment {
-                    fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
-                    sub_def.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
-                } else if should_outdent {
+                if should_outdent {
                     buf.spaces(1);
                     sub_def.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
                 } else {
@@ -1057,7 +1067,7 @@ pub fn fmt_body<'a>(
                 buf.ensure_ends_with_newline();
                 body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent + INDENT);
             }
-            Expr::Defs(..) | Expr::BinOps(_, _) => {
+            Expr::Defs(..) | Expr::BinOps(..) => {
                 // Binop chains always get a newline. Otherwise you can have things like:
                 //
                 //     something = foo
@@ -1092,6 +1102,8 @@ pub fn fmt_body<'a>(
         buf.spaces(1);
         body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
     }
+
+    fmt_spaces(buf, after.iter(), indent);
 }
 
 fn starts_with_expect_ident(expr: &Expr<'_>) -> bool {
@@ -1116,6 +1128,7 @@ pub fn starts_with_block_string_literal(expr: &Expr<'_>) -> bool {
         }
         Expr::Apply(inner, _, _) => starts_with_block_string_literal(&inner.value),
         Expr::RecordAccess(inner, _) => starts_with_block_string_literal(inner),
+        Expr::TupleAccess(inner, _) => starts_with_block_string_literal(inner),
         Expr::PncApply(inner, _) => starts_with_block_string_literal(&inner.value),
         Expr::TrySuffix(inner) => starts_with_block_string_literal(inner),
         _ => false,

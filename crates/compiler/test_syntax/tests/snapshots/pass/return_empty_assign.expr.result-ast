@@ -1,0 +1,58 @@
+@0-18 SpaceAfter(
+    Return(
+        @0-18 SpaceBefore(
+            Defs(
+                Defs {
+                    tags: [
+                        EitherIndex(2147483648),
+                    ],
+                    regions: [
+                        @8-15,
+                    ],
+                    space_before: [
+                        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                    ],
+                    space_after: [
+                        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                    ],
+                    spaces: [],
+                    type_defs: [],
+                    value_defs: [
+                        Body(
+                            @8-10 RecordDestructure(
+                                [],
+                            ),
+                            @14-15 SpaceBefore(
+                                Var {
+                                    module_name: "",
+                                    ident: "s",
+                                },
+                                [
+                                    LineComment(
+                                        "",
+                                    ),
+                                ],
+                            ),
+                        ),
+                    ],
+                },
+                @17-18 SpaceBefore(
+                    Var {
+                        module_name: "",
+                        ident: "r",
+                    },
+                    [
+                        Newline,
+                    ],
+                ),
+            ),
+            [
+                Newline,
+            ],
+        ),
+        None,
+    ),
+    [
+        Newline,
+    ],
+)

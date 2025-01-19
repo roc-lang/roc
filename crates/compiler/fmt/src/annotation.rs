@@ -1206,7 +1206,6 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                     before: first_node.before,
                     node: Node::CommaSequence {
                         allow_blank_lines: false,
-                        allow_newlines: true,
                         indent_rest: false,
                         first: arena.alloc(first_node.node),
                         rest: rest_nodes.into_bump_slice(),
@@ -1313,11 +1312,12 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                     .to_node(arena, flags)
                     .add_parens(arena, Parens::NotNeeded);
 
-                let mut needs_indent = annot.needs_indent || !annot.after.is_empty();
+                let before = filter_newlines(arena, annot.after);
+                let mut needs_indent = annot.needs_indent || !before.is_empty();
 
                 items.push(Item {
                     comma_before: false,
-                    before: annot.after,
+                    before,
                     newline: false,
                     space: true,
                     node: Node::Literal(roc_parse::keyword::WHERE),
@@ -1327,7 +1327,8 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
 
                 for (i, clause) in implements_clauses.iter().enumerate() {
                     let node = clause.value.to_node(arena, flags);
-                    let before = merge_spaces_conservative(arena, last_after, node.before);
+                    let before =
+                        filter_newlines(arena, merge_spaces(arena, last_after, node.before));
                     last_after = node.after;
                     items.push(Item {
                         before,
@@ -1346,8 +1347,7 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                         first: arena.alloc(annot.node),
                         rest: arena.alloc_slice_copy(&items),
                         allow_blank_lines: false,
-                        allow_newlines: false,
-                        indent_rest: false,
+                        indent_rest: true,
                     },
                     after: last_after,
                     needs_indent,
@@ -1355,6 +1355,24 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                 }
             }
         }
+    }
+}
+
+fn filter_newlines<'a, 'b: 'a>(
+    arena: &'a Bump,
+    items: &'b [CommentOrNewline<'b>],
+) -> &'a [CommentOrNewline<'a>] {
+    let count = items.iter().filter(|i| i.is_newline()).count();
+    if count > 0 {
+        let mut new_items = Vec::with_capacity_in(items.len() - count, arena);
+        for item in items {
+            if !item.is_newline() {
+                new_items.push(*item);
+            }
+        }
+        arena.alloc_slice_copy(&new_items)
+    } else {
+        items
     }
 }
 
@@ -1451,7 +1469,6 @@ impl<'a> Nodify<'a> for ImplementsClause<'a> {
                 first: arena.alloc(var.node),
                 rest: arena.alloc_slice_copy(&items),
                 allow_blank_lines: false,
-                allow_newlines: true,
                 indent_rest: false,
             },
             after: last_after,
