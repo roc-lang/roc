@@ -4123,6 +4123,7 @@ where
         "<=" => good!(OperatorOrDef::BinOp(BinOp::LessThanOrEq), 2),
         "&&" => good!(OperatorOrDef::BinOp(BinOp::And), 2),
         "||" => good!(OperatorOrDef::BinOp(BinOp::Or), 2),
+        "|" => Err((NoProgress, to_error("|", state.pos()))),
         "//" => good!(OperatorOrDef::BinOp(BinOp::DoubleSlash), 2),
         "->" => {
             // makes no progress, so it does not interfere with `_ if isGood -> ...`

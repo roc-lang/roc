@@ -351,6 +351,7 @@ mod test_snapshots {
         pass/arg_pattern_as.expr,
         pass/as_in_func_type_args.expr,
         pass/assign_parens_item_newline_comment.expr,
+        pass/backslash_closure_last_expr.expr,
         pass/bang_newline_double_accessor.expr,
         pass/bangs_and_tuple_accessors.expr,
         pass/basic_apply.expr,
