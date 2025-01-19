@@ -53,11 +53,10 @@ impl fmt::Debug for Mark {
 
 bitflags! {
     pub struct ErrorTypeContext : u8 {
-        const NONE = 1 << 0;
         /// List all number types that satisfy number range constraints.
-        const EXPAND_RANGES = 1 << 1;
+        const EXPAND_RANGES = 1 << 0;
         /// Re-write non-generalized types like to inference variables.
-        const NON_GENERALIZED_AS_INFERRED = 1 << 2;
+        const NON_GENERALIZED_AS_INFERRED = 1 << 1;
     }
 }
 
