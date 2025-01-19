@@ -6,7 +6,7 @@ procedure Bool.2 ():
     let Bool.22 : Int1 = true;
     ret Bool.22;
 
-procedure List.106 (#Derived_gen.1, #Derived_gen.2, #Derived_gen.3, #Derived_gen.4, #Derived_gen.5, #Derived_gen.6):
+procedure List.106 (#Derived_gen.6, #Derived_gen.7, #Derived_gen.8, #Derived_gen.9, #Derived_gen.10, #Derived_gen.11):
     joinpoint List.713 List.291 List.292 List.293 List.294 List.295 List.296:
         let List.715 : Int1 = CallByName Num.22 List.295 List.296;
         if List.715 then
@@ -24,9 +24,9 @@ procedure List.106 (#Derived_gen.1, #Derived_gen.2, #Derived_gen.3, #Derived_gen
             dec List.292;
             ret List.293;
     in
-    inc #Derived_gen.1;
-    inc #Derived_gen.2;
-    jump List.713 #Derived_gen.1 #Derived_gen.2 #Derived_gen.3 #Derived_gen.4 #Derived_gen.5 #Derived_gen.6;
+    inc #Derived_gen.6;
+    inc #Derived_gen.7;
+    jump List.713 #Derived_gen.6 #Derived_gen.7 #Derived_gen.8 #Derived_gen.9 #Derived_gen.10 #Derived_gen.11;
 
 procedure List.116 (List.563, List.564, List.565):
     let List.689 : U64 = 0i64;
@@ -91,7 +91,7 @@ procedure List.71 (#Attr.2, #Attr.3):
     let List.720 : List {[<r>C I64, C List *self], [<r>C I64, C List *self]} = lowlevel ListAppendUnsafe #Attr.2 #Attr.3;
     ret List.720;
 
-procedure List.80 (#Derived_gen.7, #Derived_gen.8, #Derived_gen.9, #Derived_gen.10, #Derived_gen.11):
+procedure List.80 (#Derived_gen.1, #Derived_gen.2, #Derived_gen.3, #Derived_gen.4, #Derived_gen.5):
     joinpoint List.691 List.566 List.567 List.568 List.569 List.570:
         let List.693 : Int1 = CallByName Num.22 List.569 List.570;
         if List.693 then
@@ -116,8 +116,8 @@ procedure List.80 (#Derived_gen.7, #Derived_gen.8, #Derived_gen.9, #Derived_gen.
             let List.692 : [C {}, C {}] = TagId(1) List.567;
             ret List.692;
     in
-    inc #Derived_gen.7;
-    jump List.691 #Derived_gen.7 #Derived_gen.8 #Derived_gen.9 #Derived_gen.10 #Derived_gen.11;
+    inc #Derived_gen.1;
+    jump List.691 #Derived_gen.1 #Derived_gen.2 #Derived_gen.3 #Derived_gen.4 #Derived_gen.5;
 
 procedure Num.148 (Num.226, Num.227):
     let Num.290 : Int1 = CallByName Num.22 Num.226 Num.227;

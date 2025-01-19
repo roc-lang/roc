@@ -150,7 +150,7 @@ procedure Inspect.63 (Inspect.295, Inspect.291):
 procedure Inspect.64 (Inspect.297):
     ret Inspect.297;
 
-procedure List.101 (#Derived_gen.18, #Derived_gen.19, #Derived_gen.20, #Derived_gen.21, #Derived_gen.22):
+procedure List.101 (#Derived_gen.16, #Derived_gen.17, #Derived_gen.18, #Derived_gen.19, #Derived_gen.20):
     joinpoint List.678 List.175 List.176 List.177 List.178 List.179:
         let List.680 : Int1 = CallByName Num.22 List.178 List.179;
         if List.680 then
@@ -164,8 +164,8 @@ procedure List.101 (#Derived_gen.18, #Derived_gen.19, #Derived_gen.20, #Derived_
             dec List.175;
             ret List.176;
     in
-    inc #Derived_gen.18;
-    jump List.678 #Derived_gen.18 #Derived_gen.19 #Derived_gen.20 #Derived_gen.21 #Derived_gen.22;
+    inc #Derived_gen.16;
+    jump List.678 #Derived_gen.16 #Derived_gen.17 #Derived_gen.18 #Derived_gen.19 #Derived_gen.20;
 
 procedure List.18 (List.172, List.173, List.174):
     let List.676 : U64 = 0i64;
