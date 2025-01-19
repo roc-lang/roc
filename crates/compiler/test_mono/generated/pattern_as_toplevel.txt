@@ -21,11 +21,11 @@ procedure Test.0 ():
         let Test.6 : {I64, Str} = CallByName Test.1;
         let Test.5 : Int1 = CallByName Bool.9 Test.6 Test.4;
         dec Test.6;
-        let #Derived_gen.0 : Str = StructAtIndex 1 Test.4;
-        dec #Derived_gen.0;
+        let Bool.23 : Str = StructAtIndex 1 Test.4;
+        dec Bool.23;
         ret Test.5;
     else
-        let #Derived_gen.1 : Str = StructAtIndex 1 Test.4;
-        dec #Derived_gen.1;
+        let Bool.24 : Str = StructAtIndex 1 Test.4;
+        dec Bool.24;
         let Test.10 : Int1 = CallByName Bool.1;
         ret Test.10;

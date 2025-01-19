@@ -1,6 +1,7 @@
 [workspace]
 members = [
-    "crates/build/specialize_types",
+    "crates/build/*",
+    "crates/check/*",
     "crates/compiler/*",
     "crates/vendor/*",
     "crates/fs",
@@ -174,6 +175,7 @@ roc_bitcode_bc = { path = "crates/compiler/builtins/bitcode/bc" }
 roc_build = { path = "crates/compiler/build" }
 roc_builtins = { path = "crates/compiler/builtins" }
 roc_can = { path = "crates/compiler/can" }
+roc_can_solo = { path = "crates/check/can_solo" }
 roc_checkmate = { path = "crates/compiler/checkmate" }
 roc_checkmate_schema = { path = "crates/compiler/checkmate_schema" }
 roc_cli = { path = "crates/cli" }

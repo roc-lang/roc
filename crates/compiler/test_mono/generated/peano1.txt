@@ -5,7 +5,7 @@ procedure Test.0 ():
     let Test.2 : [<rnu><null>, C *self] = TagId(0) Test.13;
     let Test.10 : U8 = 1i64;
     let Test.11 : U8 = GetTagId Test.2;
-    joinpoint #Derived_gen.0:
+    joinpoint Bool.21:
         let Test.12 : Int1 = lowlevel Eq Test.10 Test.11;
         if Test.12 then
             let Test.8 : I64 = 0i64;
@@ -14,11 +14,11 @@ procedure Test.0 ():
             let Test.9 : I64 = 1i64;
             ret Test.9;
     in
-    let #Derived_gen.1 : Int1 = lowlevel RefCountIsUnique Test.2;
-    if #Derived_gen.1 then
+    let Bool.22 : Int1 = lowlevel RefCountIsUnique Test.2;
+    if Bool.22 then
         dec Test.13;
         free Test.2;
-        jump #Derived_gen.0;
+        jump Bool.21;
     else
         decref Test.2;
-        jump #Derived_gen.0;
+        jump Bool.21;

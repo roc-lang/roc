@@ -8,7 +8,7 @@ procedure Test.0 ():
     let Test.18 : Int1 = lowlevel Eq Test.16 Test.17;
     if Test.18 then
         let Test.12 : [<rnu><null>, C *self] = UnionAtIndex (Id 0) (Index 0) Test.2;
-        joinpoint #Derived_gen.0:
+        joinpoint Bool.21:
             let Test.13 : U8 = 0i64;
             let Test.14 : U8 = GetTagId Test.12;
             dec Test.12;
@@ -20,14 +20,14 @@ procedure Test.0 ():
                 let Test.9 : I64 = 0i64;
                 ret Test.9;
         in
-        let #Derived_gen.1 : Int1 = lowlevel RefCountIsUnique Test.2;
-        if #Derived_gen.1 then
+        let Bool.22 : Int1 = lowlevel RefCountIsUnique Test.2;
+        if Bool.22 then
             free Test.2;
-            jump #Derived_gen.0;
+            jump Bool.21;
         else
             inc Test.12;
             decref Test.2;
-            jump #Derived_gen.0;
+            jump Bool.21;
     else
         let Test.10 : I64 = 0i64;
         ret Test.10;

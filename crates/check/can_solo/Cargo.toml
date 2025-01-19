@@ -1,6 +1,6 @@
 [package]
-name = "roc_can"
-description = "Canonicalize a roc abstract syntax tree, resolving symbols, re-ordering definitions, and preparing a module for type inference."
+name = "roc_can_solo"
+description = "Canonicalize a Roc module in preparation for typechecking without any knowledge of other modules."
 
 authors.workspace = true
 edition.workspace = true
@@ -8,7 +8,6 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-roc_can_solo.workspace = true
 roc_collections.workspace = true
 roc_error_macros.workspace = true
 roc_exhaustive.workspace = true
@@ -26,5 +25,6 @@ soa.workspace = true
 
 [dev-dependencies]
 indoc.workspace = true
+insta.workspace = true
 pretty_assertions.workspace = true
 test_compile.workspace = true
