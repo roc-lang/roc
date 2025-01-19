@@ -1,6 +1,6 @@
 use crate::annotation::{except_last, is_collection_multiline, Formattable, Newlines, Parens};
 use crate::collection::{fmt_collection, Braces};
-use crate::def::{fmt_defs, valdef_lift_spaces_before, starts_with_block_string_literal};
+use crate::def::{fmt_defs, starts_with_block_string_literal, valdef_lift_spaces_before};
 use crate::node::Prec;
 use crate::pattern::{
     fmt_pattern, pattern_lift_spaces, snakify_camel_ident, starts_with_inline_comment,
