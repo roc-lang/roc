@@ -11,6 +11,7 @@ use bumpalo::{
 use roc_module::low_level::LowLevel;
 use roc_module::{low_level, symbol};
 use roc_mono::ir::Literal;
+use crate::Env;
 use roc_mono::{
     ir,
     layout::{InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner},
@@ -18,7 +19,7 @@ use roc_mono::{
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::hash::Hash;
-use crate::Env;
+use std::collections::hash_map::Entry;
 type SymbolMap<T> = Map<symbol::Symbol, T>;
 
 ///The type given as output by mono
@@ -37,7 +38,7 @@ pub fn build_roar<'a,'b : 'a>(
     env: &'b Env<'a>,
     
 ) -> Result<Section<'b>> {
-    let mut converter = Converter::new(layout_interner,&env.arena);
+    let converter: &mut Converter<'_, '_> = env.arena.alloc(Converter::new(layout_interner,env));
     converter.build_section(&input)
 }
 ///A expression that requires statements, ie splitting apart a variable
@@ -133,7 +134,7 @@ pub(crate) struct Converter<'a, 'b> {
     ///The interner for Mono type layouts
     layout_interner: &'b mut STLayoutInterner<'a>,
     ///The arena, as this controls the Mono -> ROAR phase
-    arena: &'a bumpalo::Bump,
+    env: &'b Env<'a>,
     ///Register names that have not been yet allocated
     register_alloc: RegisterAllocater,
     ///Refrences from the symbol of a type to a given procedure
@@ -159,8 +160,7 @@ pub(super) fn arg_info<'a>(
 }
 
 impl<'c, 'a: 'c, 'b: 'c> Converter<'a, 'b>
-where
-    'b: 'a,
+where 'b: 'a,
 {
     pub fn new_register(&'c mut self) -> Register {
         self.register_alloc.new_register()
@@ -170,18 +170,21 @@ where
         self.register_alloc.new_float_register()
     }
     ///Create a converter
-    pub fn new(layout_interner: &'b mut STLayoutInterner<'a>, arena: &'b bumpalo::Bump) -> Self {
+    pub fn new(layout_interner: &'b mut STLayoutInterner<'a>, env: &'b Env<'a>) -> Self {
         Self {
             layout_interner: layout_interner,
-            arena: arena,
+            env : env,
             register_alloc: RegisterAllocater::new(),
             proc_map: Map::new(),
-            proc_queue: RefCell::new(vec![in &arena]),
+            proc_queue: RefCell::new(vec![in &env.arena]),
         }
     }
     ///Get the internal interner
     pub fn intern(&'c self) -> &'c STLayoutInterner<'a> {
         self.layout_interner
+    }
+    pub fn arena(&'c self) -> &'a bumpalo::Bump {
+        self.env.arena
     }
     ///From an interned layout get a regular layout and if it's possible to store it in a register
     /// Note that this will remove indirection if it exists, ie (Literal,&Int) -> (Ref,Int)
@@ -206,17 +209,19 @@ where
     }
 
     ///Convert the mono input into Roar
-    pub fn build_section(&'c mut self, input: &MonoInput<'a>) -> Result<Section<'c>> {
-        let mut procs = vec![in &self.arena];
-        for ((symbol, layout), proc) in input {
-            procs.push(self.build_proc(symbol, layout, proc).unwrap());
-        }
+    pub fn build_section(self : &'c mut Self, input: &MonoInput<'a>) -> Result<Section<'c>> {
+        let arena = self.arena();
+        //TODO FIXME BUG REALLY THIS IS UNSAFE NEED TO FIX THIS, JUST A LITTLE BIT OF SCOTCH TAPE
+        let other_self: *mut Converter<'a, 'b> = self;
+        let procs = input.into_iter().map(|((symbol, layout), proc)| {
+            unsafe { other_self.as_mut().expect("").build_proc(symbol, layout, proc).unwrap() }
+        }).collect_in(arena);
         // let procs = input
         //     .into_iter()
         //     .map(|((symbol, layout), proc)| self.build_proc(symbol, layout, proc).unwrap()) //TODO
         //     .collect_in::<bumpalo::collections::Vec<Proc>>(&self.arena);
         //let mut roar = Section::new(&self.arena);
-        let (roar, refs) = Section::new(self.arena).add_procs(procs,self.arena);
+        let (roar, refs) = Section::new(arena).add_procs(procs,arena);
         Ok(roar)
     }
     ///Build a single Mono procedure
@@ -237,7 +242,7 @@ where
                 Output::Register(new_reg)
             })
             .collect();
-        let mut roar_proc = Proc::new(args, self.arena);
+        let mut roar_proc = Proc::new(args, self.arena());
         Ok(roar_proc.add_ops(self.build_stmt(&proc.body, &mut sym_map)?))
     }
     ///Build a single Mono "statement". Because Mono uses a `let in` structure of binding while ROAR uses an imperiative style of simply setting values, a single Mono statement almost always corresponds to mutiple ROAR statements
@@ -302,8 +307,25 @@ where
                         update_mode,
                     } => todo!(),
                 };
-                if let Some((reg, layout, ref form)) = sym_map.get(symbol) {
-                    sym_map.insert(*symbol, (reg.clone(), self.intern().get_repr(*in_layout), *form));
+                let res = sym_map.entry(*symbol).or_insert_with(|| {
+                    let new_reg = match r_expr.form() {
+                        Some(Form::ByFloat) => Output::FloatRegister(self.new_float_register()),
+                        Some(_) => Output::Register(self.new_register()),
+                        None => todo!(),
+                        //_ => self.register_alloc.new_register()
+                    };
+                    let new_form = match r_expr.form() {
+                        Some(form) => form.clone(),
+                        None => self.get_form(in_layout).unwrap().1, //TODO Fix unwrap
+                    };
+                    (new_reg.clone(), self.intern().get_repr(*in_layout), new_form)
+                });
+                if let Entry::Occupied(entry) = sym_map.entry(*symbol) {
+                    let (reg, layout, ref form) = entry.get() else {
+                        todo!()
+                    };
+                    //TODO Add consistency checking
+                    //sym_map.insert(*symbol, (reg.clone(), self.intern().get_repr(*in_layout), *form));
                     r_expr.to_stmts(reg.clone())
                 } else {
                     let new_reg = match r_expr.form() {
