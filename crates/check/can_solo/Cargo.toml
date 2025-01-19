@@ -10,7 +10,6 @@ version.workspace = true
 [dependencies]
 roc_collections.workspace = true
 roc_error_macros.workspace = true
-roc_exhaustive.workspace = true
 roc_module.workspace = true
 roc_parse.workspace = true
 roc_problem.workspace = true
@@ -22,9 +21,3 @@ bitvec.workspace = true
 bumpalo.workspace = true
 static_assertions.workspace = true
 soa.workspace = true
-
-[dev-dependencies]
-indoc.workspace = true
-insta.workspace = true
-pretty_assertions.workspace = true
-test_compile.workspace = true

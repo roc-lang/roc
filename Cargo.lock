@@ -2415,12 +2415,8 @@ version = "0.0.1"
 dependencies = [
  "bitvec",
  "bumpalo",
- "indoc",
- "insta",
- "pretty_assertions",
  "roc_collections",
  "roc_error_macros",
- "roc_exhaustive",
  "roc_module",
  "roc_parse",
  "roc_problem",
@@ -2429,7 +2425,6 @@ dependencies = [
  "roc_types",
  "soa",
  "static_assertions",
- "test_compile",
  "ven_pretty",
 ]
 
