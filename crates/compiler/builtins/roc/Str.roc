@@ -738,7 +738,7 @@ encode_utf8 = |list, c|
             ),
         )
     else if c < 0x10000 then
-        if (c >= 0xd800) && (c < 0xe000) then
+        if (c >= 0xd800) and (c < 0xe000) then
             Err(EncodesSurrogateHalf)
         else
             Ok(
