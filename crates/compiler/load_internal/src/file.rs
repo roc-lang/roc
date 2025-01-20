@@ -2740,13 +2740,6 @@ fn update<'a>(
             // in the future, layouts will be in SoA form and we'll want to hold on to this data
             let _ = layout_cache;
 
-            {
-                let proc_keys = procedures
-                    .keys()
-                    .map(|t| (t, std::hash::BuildHasher::hash_one(&default_hasher(), t)))
-                    .collect::<Vec<_>>();
-                dbg!(proc_keys);
-            }
             state.procedures.extend(procedures);
             state
                 .host_exposed_lambda_sets
